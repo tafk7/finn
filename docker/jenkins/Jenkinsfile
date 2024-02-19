@@ -61,7 +61,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Multiple markers with pytest needs its own script
-                createMultiMarkerScript("util or brevitas_export or streamline or transform or notebooks", "${env.TEST_NAME}", "--cov --cov-report=html:coverage_sanity_ut")
+                createMultiMarkerScript("util or brevitas_export or streamline or transform or notebooks", "${env.TEST_NAME}", "--cov --cov-report=html:coverage_sanity_ut -n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
                 sh './run-docker.sh ./run-tests.sh'
 
                 // Stash the test results file(s)
@@ -312,6 +312,8 @@ void cleanPreviousBuildFiles(String buildDir) {
 void createMultiMarkerScript(String markers, String testResultsFilename, String additionalOptions) {
   // Passing multiple markers when running ./run-docker.sh does not work with bash.
   // Therefore, create a script to maintain the single quotes that surround the markers
+  // First ensure there is no existing script
+  sh 'rm -rf run-tests.sh'
   sh """echo "#!/bin/bash
 python -m pytest -m \'${markers}\' --junitxml=${testResultsFilename}.xml --html=${testResultsFilename}.html --self-contained-html ${additionalOptions}" >> run-tests.sh
     """
