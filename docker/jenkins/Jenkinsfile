@@ -27,7 +27,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Pass in the marker to run with pytest and the XML test results filename
-                runDockerPytestWithMarker("sanity_bnn", "${env.TEST_NAME}", '')
+                runDockerPytestWithMarker("sanity_bnn", "${env.TEST_NAME}", "-n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
 
                 // Find the board's build files (bitstreams/xclbins) and zip for use on the boards themselves
                 findCopyZip("Pynq-Z1", env.FINN_HOST_BUILD_DIR, env.TEST_NAME)
@@ -93,7 +93,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Pass in the marker to run with pytest and the XML test results filename
-                runDockerPytestWithMarker("fpgadataflow", "${env.TEST_NAME}", "--cov --cov-report=html:coverage_fpgadataflow")
+                runDockerPytestWithMarker("fpgadataflow", "${env.TEST_NAME}", "--cov --cov-report=html:coverage_fpgadataflow -n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
 
                 // Stash the test results file(s)
                 stash name: env.TEST_NAME, includes: "${env.TEST_NAME}.xml,${env.TEST_NAME}.html"
@@ -156,7 +156,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Pass in the marker to run with pytest and the XML test results filename
-                runDockerPytestWithMarker("bnn_u250", "${env.TEST_NAME}_${env.BOARD}", '')
+                runDockerPytestWithMarker("bnn_u250", "${env.TEST_NAME}_${env.BOARD}", "-n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
                 findCopyZip(env.BOARD, env.FINN_HOST_BUILD_DIR, env.TEST_NAME)
 
                 // Stash the test results file(s)
@@ -188,7 +188,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Pass in the marker to run with pytest and the XML test results filename
-                runDockerPytestWithMarker("bnn_pynq", "${env.TEST_NAME}_${env.BOARD}", '')
+                runDockerPytestWithMarker("bnn_pynq", "${env.TEST_NAME}_${env.BOARD}", "-n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
                 findCopyZip(env.BOARD, env.FINN_HOST_BUILD_DIR, env.TEST_NAME)
 
                 // Stash the test results file(s)
@@ -220,7 +220,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Pass in the marker to run with pytest and the XML test results filename
-                runDockerPytestWithMarker("bnn_zcu104", "${env.TEST_NAME}_${env.BOARD}", '')
+                runDockerPytestWithMarker("bnn_zcu104", "${env.TEST_NAME}_${env.BOARD}", "-n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
                 findCopyZip(env.BOARD, env.FINN_HOST_BUILD_DIR, env.TEST_NAME)
 
                 // Stash the test results file(s)
@@ -252,7 +252,7 @@ pipeline {
                 cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
                 // Pass in the marker to run with pytest and the XML test results filename
-                runDockerPytestWithMarker("bnn_kv260", "${env.TEST_NAME}_${env.BOARD}", '')
+                runDockerPytestWithMarker("bnn_kv260", "${env.TEST_NAME}_${env.BOARD}", "-n ${env.NUM_PYTEST_WORKERS} --dist worksteal")
                 findCopyZip(env.BOARD, env.FINN_HOST_BUILD_DIR, env.TEST_NAME)
 
                 // Stash the test results file(s)
