@@ -79,7 +79,8 @@ module mvu_4sx4u #(
 	assign	vld = L[5];
 
 	// Stages #1 - #3: DSP Lanes + cross-lane canaries duplicated with SIMD parallelism
-	localparam int unsigned  D[4:0] = '{ ACCU_WIDTH+22, 22, 15, 8, 0 }; // Lane offsets
+	localparam bit  SPILL_HI = ACCU_WIDTH+22 > 48;
+	localparam int unsigned  D[4:0] = '{ SPILL_HI? 48 : ACCU_WIDTH+22, 22, 15, 8, 0 }; // Lane offsets
 
 	localparam int unsigned  PIPE_COUNT = (PE+3)/4;
 	for(genvar  c = 0; c < PIPE_COUNT; c++) begin : genPipes
@@ -88,8 +89,8 @@ module mvu_4sx4u #(
 		localparam int unsigned  PE_END = PE < 4*(c+1)? PE : 4*(c+1);
 		localparam int unsigned  PE_REM = 4*(c+1) - PE_END;
 
-		uwire        [57:0]  p3[SIMD];
-		uwire signed [ 1:0]  h3[SIMD][3];
+		uwire        [47:0]  p3[SIMD];
+		uwire signed [ 1:0]  h3[SIMD][3+SPILL_HI];
 		for(genvar  s = 0; s < SIMD; s++) begin : genSIMD
 
 			// Input Lane Assembly
@@ -438,6 +439,19 @@ module mvu_4sx4u #(
 			for(genvar  i = 0; i < 3; i++) begin
 				assign	h3[s][i] = pp[D[i+1]+:2] - X3[i+1];
 			end
+			if(SPILL_HI) begin
+				// Monitor top two MSBs so as to track spill out of leftmost lane
+				uwire [1:0]  sn = pp[47:46];
+				logic [1:0]  Sz = 0;
+				always_ff @(posedge clk) begin
+					if(rst)  Sz <= 0;
+					else     Sz <= L[3]? 0 : sn;
+				end
+				assign	h3[s][3] =
+					({ Sz, sn } == 4'b0011)? -1 :
+					({ Sz, sn } == 4'b1100)?  1 :
+					/* else */                0;
+			end
 			assign	p3[s] = pp;
 
 		end : genSIMD
@@ -448,37 +462,19 @@ module mvu_4sx4u #(
 		localparam leave_load_t  LEAVE_LOAD = SIMD > 1 ? init_leave_loads() : '{ default: 1}; // SIMD=1 requires no adder tree, so zero-ing out, otherwise init_leave_loads ends up in infinite loop
 
 		uwire signed [ACCU_WIDTH  -1:0]  up4;
-		uwire signed [ACCU_WIDTH  -8:0]  hi4[3];
-		uwire        [$clog2(SIMD)+7:0]  lo4[3];
-		for(genvar  i = 0; i < 4; i++) begin
+		uwire signed [ACCU_WIDTH  -8:0]  hi4[0:3];
+		uwire        [$clog2(SIMD)+7:0]  lo4[0:3];
+		for(genvar  i = 0; i < PE_REM; i++) begin
+			assign	hi4[i] = 0;
+			assign	lo4[i] = 0;
+		end
+		for(genvar  i = PE_REM; i < 4; i++) begin
 			localparam int unsigned  LO_WIDTH = D[i+1] - D[i];
 			localparam int unsigned  HI_WIDTH = ACCU_WIDTH - LO_WIDTH;
 
-			// Conclusive high part accumulation
-			if(i >= PE_REM && i < 3) begin : genHi
-				// Adder Tree across all SIMD high contributions, each from [-1:1]
-				uwire signed [2*SIMD-2:0][$clog2(1+SIMD):0]  tree;
-				for(genvar  s = 0; s < SIMD;   s++)  assign  tree[SIMD-1+s] = h3[s][i];
-				for(genvar  n = 0; n < SIMD-1; n++) begin
-					// Sum truncated to actual maximum bit width at this node
-					uwire signed [$clog2(1+LEAVE_LOAD[n]):0]  s = $signed(tree[2*n+1]) + $signed(tree[2*n+2]);
-					assign  tree[n] = s;
-				end
+			// Conclusive low part accumulation across all SIMD lanes
+			if(1) begin : blkLo
 
-				// High Sideband Accumulation
-				logic signed [HI_WIDTH-1:0]  Hi4 = 0;
-				always_ff @(posedge clk) begin
-					if(rst)      Hi4 <= 0;
-					else if(en)  Hi4 <= (L[4]? 0 : Hi4) + $signed(tree[0]);
-				end
-				assign	hi4[i] = Hi4;
-			end : genHi
-			else if (i < 3) begin : genHiZero
-				assign hi4[i] = '0;
-			end : genHiZero
-
-			// Conclusive low part accumulation
-			if(i >= PE_REM) begin : blkLo
 				// Adder Tree across all SIMD low contributions
 				localparam int unsigned  ROOT_WIDTH = $clog2(1 + SIMD*(2**LO_WIDTH-1));
 				uwire [2*SIMD-2:0][ROOT_WIDTH-1:0]  tree;
@@ -496,12 +492,34 @@ module mvu_4sx4u #(
 					else if(en)  Lo4 <= tree[0];
 				end
 
-				if(i == 3)  assign  up4 = Lo4;
+				if(i == 3)  assign  up4[LO_WIDTH-1:0] = Lo4;
 				else  assign  lo4[i] = Lo4;
+
 			end : blkLo
-			else begin : blkLoZero
-				assign lo4[i] = '0;
-			end : blkLoZero
+
+			// Conclusive high part accumulation across all SIMD lane boundaries
+			if(i < 3+SPILL_HI) begin : genHi
+
+				// Adder Tree across all SIMD high contributions, each from [-1:1]
+				uwire signed [2*SIMD-2:0][$clog2(1+SIMD):0]  tree;
+				for(genvar  s = 0; s < SIMD;   s++)  assign  tree[SIMD-1+s] = h3[s][i];
+				for(genvar  n = 0; n < SIMD-1; n++) begin
+					// Sum truncated to actual maximum bit width at this node
+					uwire signed [$clog2(1+LEAVE_LOAD[n]):0]  s = $signed(tree[2*n+1]) + $signed(tree[2*n+2]);
+					assign  tree[n] = s;
+				end
+
+				// High Sideband Accumulation
+				logic signed [HI_WIDTH-1:0]  Hi4 = 0;
+				always_ff @(posedge clk) begin
+					if(rst)      Hi4 <= 0;
+					else if(en)  Hi4 <= (L[4]? 0 : Hi4) + $signed(tree[0]);
+				end
+
+				if(i == 3)  assign  up4[ACCU_WIDTH-1:LO_WIDTH] = Hi4;
+				else  assign  hi4[i] = Hi4;
+
+			end : genHi
 
 		end
 
