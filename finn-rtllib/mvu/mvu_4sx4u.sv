@@ -441,16 +441,28 @@ module mvu_4sx4u #(
 			end
 			if(SPILL_HI) begin
 				// Monitor top two MSBs so as to track spill out of leftmost lane
-				uwire [1:0]  sn = pp[47:46];
-				logic [1:0]  Sz = 0;
+				/**
+				 *  -> |   00   01   10    11
+				 * ----+-----------------------
+				 *  00 |    0   +1  (x)   *-1*
+				 *  01 |   -1    0   +1   (x)
+				 *  10 |  (x)   -1    0    +1
+				 *  11 |  *+1* (x)   -1     0
+				 *
+				 * A spill beyond the datapath bits only happens in the identified
+				 * transitions flipping the two highest bits.
+				 * Due to the adjacent impossible transitions detection can rely
+				 * on the MSB of the previous value alone.
+				 */
+				logic  Sz = 0;
 				always_ff @(posedge clk) begin
 					if(rst)  Sz <= 0;
-					else     Sz <= L[3]? 0 : sn;
+					else     Sz <= L[3]? 0 : pp[$left(pp)];
 				end
 				assign	h3[s][3] =
-					({ Sz, sn } == 4'b0011)? -1 :
-					({ Sz, sn } == 4'b1100)?  1 :
-					/* else */                0;
+					({ Sz, pp[$left(pp)-:2] } == 3'b011)? -1 :
+					({ Sz, pp[$left(pp)-:2] } == 3'b100)?  1 :
+					/* else */                             0;
 			end
 			assign	p3[s] = pp;
 
