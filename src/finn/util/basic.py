@@ -125,6 +125,19 @@ def get_finn_root():
         )
 
 
+def get_vivado_root():
+    "Return the root directory that Vivado is installed into."
+
+    try:
+        return os.environ["XILINX_VIVADO"]
+    except KeyError:
+        raise Exception(
+            """Environment variable XILINX_VIVADO must be set
+        correctly. Please ensure you have launched the Docker contaier correctly.
+        """
+        )
+
+
 def pyverilate_get_liveness_threshold_cycles():
     """Return the number of no-output cycles rtlsim will wait before assuming
     the simulation is not finishing and throwing an exception."""
@@ -292,10 +305,10 @@ def memutil(req_mem_spec, primitive_spec):
 
 def is_versal(fpgapart):
     """Returns whether board is part of the Versal family"""
-    return (
-        fpgapart[0:4] in ["xcvc", "xcve", "xcvp", "xcvm", "xqvc", "xqvm"]
-        or fpgapart[0:5] == "xqrvc"
-    )
+    return fpgapart[0:4] in ["xcvc", "xcve", "xcvp", "xcvm", "xqvc", "xqvm"] or fpgapart[0:5] in [
+        "xqrvc",
+        "xcv80",
+    ]
 
 
 def get_dsp_block(fpgapart):
