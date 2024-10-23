@@ -39,8 +39,8 @@
 #include "rmsnorm.hpp"
 #include "utils.hpp"
 
-constexpr unsigned  SIMD = 32;//${p1_RMSnorm_0_PE};
-using  T = ap_int<4>;//<${TL_Activation_width}>;
+constexpr unsigned  SIMD = 4;
+using  T = ap_int<4>;
 constexpr unsigned W = 384;
 
 void rmsnorm(

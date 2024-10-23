@@ -1,3 +1,3 @@
 #!/bin/bash
 
-vitis_hls --source rmsnorm.tcl
+vitis_hls rmsnorm.tcl

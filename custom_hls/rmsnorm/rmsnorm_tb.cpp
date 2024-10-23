@@ -42,7 +42,9 @@
 
 // how much to test
 constexpr unsigned ROUNDS = 3;
-constexpr unsigned W = 128;
+constexpr unsigned W = 384;
+constexpr unsigned SIMD = 4;
+using T = ap_int<4>;
 
 // Function to calculate square-mean
 float sq_mean(float* array, int size) {  
@@ -65,10 +67,8 @@ bool closeEnough(double num1, double num2, double tolerance) {
 }
 
 void rmsnorm(
-    //hls::stream<hls::vector<ap_int<${TL_Activation_width}>, ${p1_RMSnorm_0_PE}>> &src,
-	// hls::stream<hls::vector<float, ${p1_RMSnorm_0_PE}>> &dst
-	hls::stream<hls::vector<ap_int<4>, 32>> &src,
-	hls::stream<hls::vector<float, 32>> &dst
+	hls::stream<hls::vector<T, SIMD>> &src,
+	hls::stream<hls::vector<float, SIMD>> &dst
 );
 
 template<unsigned W, unsigned SIMD, typename T>
@@ -114,6 +114,8 @@ bool test() {
 				if (!closeEnough(y[j],ref_out[out_count], 1e-5)) {
 					std::cout << "Error: "  << y[j] << " !=  " << ref_out[out_count] << "\n";
 					ok = false;
+				} else {
+					std::cout << "OK: " << y[j] << " == " << ref_out[out_count] << "\n";
 				}
 				out_count = (out_count + 1) % W;
 				total++;
@@ -131,8 +133,7 @@ bool test() {
 
 int main() {
 	
-	// bool ok = test<W, ${p1_RMSnorm_0_PE}, ap_int<${TL_Activation_width}>>();
-    bool ok = test<W, 32, ap_int<4>>();
+    bool ok = test<W, SIMD, T>();
 	if (ok) {
 		std::cout << "Test completed okay\n";
 		return 0;
