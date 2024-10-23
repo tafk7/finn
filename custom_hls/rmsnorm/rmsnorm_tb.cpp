@@ -44,7 +44,8 @@
 constexpr unsigned ROUNDS = 3;
 constexpr unsigned W = 384;
 constexpr unsigned SIMD = 4;
-using T = ap_int<4>;
+using TI = float; 
+using TO = float; 
 
 // Function to calculate square-mean
 float sq_mean(float* array, int size) {  
@@ -67,14 +68,14 @@ bool closeEnough(double num1, double num2, double tolerance) {
 }
 
 void rmsnorm(
-	hls::stream<hls::vector<T, SIMD>> &src,
-	hls::stream<hls::vector<float, SIMD>> &dst
+	hls::stream<hls::vector<TI, SIMD>> &src,
+	hls::stream<hls::vector<TO, SIMD>> &dst
 );
 
-template<unsigned W, unsigned SIMD, typename T>
+template<typename TI, typename TO, unsigned W, unsigned SIMD>
 bool test() {
-	hls::stream<hls::vector<T,SIMD>> src;
-	hls::stream<hls::vector<float,SIMD>> dst;
+	hls::stream<hls::vector<TI,SIMD>> src;
+	hls::stream<hls::vector<TO,SIMD>> dst;
 
 	// Reference input and output
 	float ref_in[W*ROUNDS];
@@ -82,13 +83,13 @@ bool test() {
 
 	// Create the input stream (and test stream)
 	std::srand(static_cast<unsigned int>(std::time(0)));
-	T ref_val = 0;
+	TI ref_val = TI(0);
 	for(unsigned r=0; r<ROUNDS; r++){
 		for (unsigned i=0; i<W; i+=SIMD) {
-			hls::vector<T, SIMD> t;
+			hls::vector<TI, SIMD> t;
 			for(unsigned j=0; j<SIMD; j++) {
 				ref_val = i + j;
-				t[j] = ref_val;
+				t[j] = TI(ref_val);
 				ref_in[i+j] = float(ref_val);
 			}
 			src.write(t);
@@ -133,7 +134,7 @@ bool test() {
 
 int main() {
 	
-    bool ok = test<W, SIMD, T>();
+    bool ok = test<TI, TO,W, SIMD>();
 	if (ok) {
 		std::cout << "Test completed okay\n";
 		return 0;
