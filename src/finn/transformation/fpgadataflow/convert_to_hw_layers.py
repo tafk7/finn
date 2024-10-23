@@ -2119,3 +2119,93 @@ class InferQuantAsFloat2Int(Transformation):
         # Return the transformed model and indicate whether the graph actually
         # has been transformed
         return model, graph_modified
+
+
+
+
+
+
+
+class InferLayerNorm1D(Transformation):
+    """Convert LayerNorm into HW"""
+    def apply(self, model):
+        graph = model.graph
+        node_ind = 0
+        graph_modified = False
+        for node in graph.node:
+            node_ind += 1
+            if node.op_type == "LayerNormalization":
+                # assuming input[0] is dynamic
+                node_in = node.input[0]
+                weight = node.input[1]
+                bias = node.input[2]
+                node_out = node.output[0]
+
+                shape_in = model.get_tensor_shape(node_in)
+                shape_weight = list(model.get_initializer(weight).shape)
+                # Check datatypes
+                idt = model.get_tensor_datatype(node_in)
+                wdt = model.get_tensor_datatype(weight)
+                bdt = model.get_tensor_datatype(bias)
+                odt = model.get_tensor_datatype(node_out)
+
+                # Skip node if weight/bias aren't constant
+                if model.get_initializer(weight) is None:
+                    continue
+                if bias is not None:
+                    if model.get_initializer(bias) is None:
+                        continue
+
+                # check layout of inputs/outputs, and convert if needed
+                # check layout and convert if necessary
+                norm_axis = node.get_nodeattr("axis")
+                if model.get_tensor_layout(node_in) == DataLayout.NCHW:
+                    node_in = nchw_to_nhwc(node_in, model, node_ind)
+                    node_ind += 1
+                    shape_in = model.get_tensor_shape(node_in)
+                    # shift axis for norm appropriately
+                    norm_axis = (norm_axis+2)%4
+
+                # keep track of where we need to insert the HLS Op
+                # it has to be ahead of the output transform
+                insert_point = node_ind
+                if model.get_tensor_layout(node_out) == DataLayout.NCHW:
+                    node_out = nchw_to_nhwc(node_out, model, node_ind, reverse=True)
+                    node_ind += 1
+
+                # Check if 1D, norming on channel axis
+                ch = shape_in[-1]
+                if norm_axis == -1 or norm_axis == len(shape_in)-1:
+                    if not np.prod(shape_weight) == ch:
+                        continue
+                else:
+                    continue
+
+                # create node with no parallelization first
+                simd = 1
+                assert ch % simd == 0, "Requirement IFC divisable by PE is violated."
+                # create and insert node
+                new_node = helper.make_node(
+                    "LayerNorm",
+                    [node_in, weight, bias],
+                    [node_out],
+                    domain="finn.custom_op.fpgadataflow",
+                    backend="fpgadataflow",
+                    SIMD=simd,
+                    W=ch,
+                    inputDataType=idt.name,
+                    weightDataType=wdt.name,
+                    biasDataType=bdt.name,
+                    outputDataType=odt.name,
+                    name="LayerNorm_" + node.name,
+                )
+                graph.node.insert(insert_point, new_node)
+                # remove old node
+                graph.node.remove(node)
+                graph_modified = True
+
+        if graph_modified:
+            model = model.transform(InferShapes())
+            model = model.transform(InferDataTypes())
+        return (model, graph_modified)
+
