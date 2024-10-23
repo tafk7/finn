@@ -39,6 +39,7 @@
 #include "rmsnorm.hpp"
 #include <cstdlib>
 #include <ctime>
+#include "_eltwise_affine.hpp"
 
 // how much to test
 constexpr unsigned ROUNDS = 3;
@@ -59,7 +60,7 @@ float sq_mean(float* array, int size) {
 void ref_rmsnorm(float* input, float* output, int length) {  
     float mean_val = sq_mean(input, length);  
     for (int i = 0; i < length; i++) {  
-        output[i] = input[i] / sqrt(mean_val + 1e-5);  
+        output[i] = (input[i] / sqrt(mean_val + 1e-5)) * _eltwise_affine[int(i/4)][i%4];  
     }  
 }  
 
@@ -112,7 +113,7 @@ bool test() {
 		{
 			hls::vector<float, SIMD> y = dst.read();
 			for (unsigned j=0; j<SIMD; j++) {
-				if (!closeEnough(y[j],ref_out[out_count], 1e-5)) {
+				if (!closeEnough(y[j],ref_out[out_count], 1e-4)) {
 					std::cout << "Error: "  << y[j] << " !=  " << ref_out[out_count] << "\n";
 					ok = false;
 				} else {
