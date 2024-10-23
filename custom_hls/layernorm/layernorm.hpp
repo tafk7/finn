@@ -45,6 +45,7 @@
 #include <hls_math.h>
 #include <functional>
 #include "utils.hpp"
+#include "_eltwise_affine.hpp"
 
 constexpr float epsilon = 1e-5;
 
@@ -53,28 +54,28 @@ constexpr float epsilon = 1e-5;
 // Trigger: Data available on src input stream
 //
 // Desc: Performs a mean calculation across N elements. 
-template<unsigned N, unsigned SIMD, typename T>
+template<typename TI, typename TO, unsigned N, unsigned SIMD>
 void mean_stage(
-	hls::stream<hls::vector<T, SIMD>> &in_s,
-	hls::stream<hls::vector<float, SIMD>> &out_s,
-	hls::stream<float> &mean_s
+	hls::stream<hls::vector<TI, SIMD>> &in_s,
+	hls::stream<hls::vector<TO, SIMD>> &out_s,
+	hls::stream<TO> &mean_s
 ) {
 #pragma HLS pipeline II=1 style=flp
 
 	static ap_uint<clog2(N)> count = 0; 
-	static float sum = 0.0f;
-	static float mean = 0.0f;
+	static TO sum = TO(0.0f);
+	static TO mean = TO(0.0f);
 #pragma HLS reset variable=count
 #pragma HLS reset variable=sum
 #pragma HLS reset variable=mean
 	
 	if (!in_s.empty()) {
-		hls::vector<float,SIMD> out;
-		hls::vector<T,SIMD> const in = in_s.read();
+		hls::vector<TO,SIMD> out;
+		hls::vector<TI,SIMD> const in = in_s.read();
 
 		for(unsigned i=0; i<SIMD; i++) {
 #pragma HLS UNROLL
-			out[i] = float(in[i]);	
+			out[i] = TO(in[i]);	
 		}
 		out_s.write(out);
 
@@ -86,8 +87,8 @@ void mean_stage(
 		if (count == N) {
 			count = 0;
 			mean_s.write(mean); 
-			mean = 0.0f;
-			sum = 0.0f;
+			mean = TO(0.0f);
+			sum = TO(0.0f);
 		}
 		
 	}
@@ -97,9 +98,10 @@ void mean_stage(
 // For the output of the second stage we are
 // calculating the variance but also want to
 // pass along the mean value from stage1.
+template<typename T>
 struct varmean_t {
-	float mean;
-	float var;
+	T mean;
+	T var;
 };
 
 // Second pipeline stage
@@ -107,19 +109,19 @@ struct varmean_t {
 // Trigger: On data being available on the mean value stream 
 //
 // Desc: Performs a variance calculation across N elements. 
-template<unsigned N, unsigned SIMD>
+template<typename TO, unsigned N, unsigned SIMD>
 void var_stage(
-	hls::stream<hls::vector<float, SIMD>> &in_s,
-	hls::stream<float> &mean_s,
+	hls::stream<hls::vector<TO, SIMD>> &in_s,
+	hls::stream<TO> &mean_s,
 
-	hls::stream<hls::vector<float,SIMD>> &out_s,
-	hls::stream<varmean_t> &varmean_s
+	hls::stream<hls::vector<TO,SIMD>> &out_s,
+	hls::stream<varmean_t<TO>> &varmean_s
 ) {
 #pragma HLS pipeline II=1 style=flp 
 	static ap_uint<clog2(N)> count = 0; 
-	static float pow_sum = 0.0f;
-	static float var = 0.0f;
-	static float mean = 0.0f;
+	static TO pow_sum = TO(0.0f);
+	static TO var = TO(0.0f);
+	static TO mean = TO(0.0f);
 	static bool valid = false;
 #pragma HLS reset variable=count
 #pragma HLS reset variable=pow_sum
@@ -130,7 +132,7 @@ void var_stage(
 	if (count == N) {
 		count = 0; 
 		valid = false;
-		varmean_t x = { mean, var };
+		varmean_t<TO> x = { mean, var };
 		varmean_s.write(x);
 		pow_sum = 0.0f;
 		var = 0.0f;	
@@ -138,10 +140,10 @@ void var_stage(
 	}
 
 	if (valid && !in_s.empty()) {
-		hls::vector<float, SIMD> const in = in_s.read();
+		hls::vector<TO, SIMD> const in = in_s.read();
 		out_s.write(in); // Pass the bulk of the data along
 
-		hls::vector<float, SIMD> pow_res;
+		hls::vector<TO, SIMD> pow_res;
 		for(unsigned i=0; i<SIMD; i++) {
 #pragma HLS UNROLL
 			pow_res[i] = hls::pow((in[i] - mean), 2.0f); 
@@ -164,18 +166,18 @@ void var_stage(
 // Trigger: On data being available on the varmean value stream 
 //
 // Desc: Performs a variance calculation across N elements. 
-template<unsigned N, unsigned SIMD>
+template<typename TO, unsigned N, unsigned SIMD>
 void inv_sqrt_stage(
-	hls::stream<hls::vector<float, SIMD>> &in_s,
-	hls::stream<varmean_t> &varmean_s,
+	hls::stream<hls::vector<TO, SIMD>> &in_s,
+	hls::stream<varmean_t<TO>> &varmean_s,
 
-	hls::stream<hls::vector<float, SIMD>> &out_s
+	hls::stream<hls::vector<TO, SIMD>> &out_s
 ) {
 #pragma HLS pipeline II=1 style=flp
 
 	static ap_uint<clog2(N/SIMD)+1> count = 0; 
 	static bool valid = false;
-	static varmean_t vm;
+	static varmean_t<TO> vm;
 #pragma HLS reset variable=count
 #pragma HLS reset variable=valid
 #pragma HLS reset variable=vm
@@ -187,8 +189,8 @@ void inv_sqrt_stage(
 	}
 
 	if (valid && !in_s.empty()) {
-		hls::vector<float, SIMD> const in = in_s.read();
-		hls::vector<float, SIMD> out;
+		hls::vector<TO, SIMD> const in = in_s.read();
+		hls::vector<TO, SIMD> out;
 		for (unsigned i=0; i<SIMD; i++) {
 #pragma HLS UNROLL
 			out[i] = (in[i] - vm.mean) / hls::sqrt(vm.var + epsilon);  
@@ -204,25 +206,71 @@ void inv_sqrt_stage(
 	}
 }
 
-template<unsigned N, unsigned SIMD, typename T>
+// Forth pipeline stage
+//
+// Trigger: On data being available on the varmean value stream 
+//
+// Desc: Performs an eltwise_affine elementwise multiplication and addition of a bias 
+template<typename TO, typename TB,  unsigned N, unsigned SIMD>
+void bias_and_eltwise_affine_stage(
+	const TB bias_in, // scalar bias in value static at compile time
+	hls::stream<hls::vector<TO, SIMD>> &in_s,
+	hls::stream<varmean_t<TO>> &varmean_s,
+	hls::stream<hls::vector<TO, SIMD>> &out_s
+) {
+#pragma HLS pipeline II=1 style=flp
+
+	static ap_uint<clog2(N/SIMD)+1> count = 0; 
+	static bool valid = false;
+	static varmean_t<TO> vm;
+#pragma HLS reset variable=count
+#pragma HLS reset variable=valid
+#pragma HLS reset variable=vm
+
+	if(count == (N/SIMD)) {
+		count = 0; 
+		return;
+	}
+
+	if (!in_s.empty()) {
+		hls::vector<TO, SIMD> const in = in_s.read();
+		hls::vector<TO, SIMD> out;
+		hls::vector<TO, SIMD> _eltwise = _eltwise_affine[count++];
+		for (unsigned i=0; i<SIMD; i++) {
+#pragma HLS UNROLL
+			out[i] = (in[i] * _eltwise[i]) + bias;  
+		}
+		out_s.write(out);
+	}
+}
+
+template<typename TI, // Input type
+       	 typename TO, // output type 
+       	 typename TB, // Bias type 
+	 unsigned N, 
+	 unsigned SIMD>
 void layernorm_pipeline(
-	hls::stream<hls::vector<T, SIMD>> &src,
-	hls::stream<hls::vector<float, SIMD>> &dst
+	const TB bias,
+	hls::stream<hls::vector<TI, SIMD>> &src,
+	hls::stream<hls::vector<TO, SIMD>> &dst
 ) {
 #pragma HLS DATAFLOW disable_start_propagation
 
-	static hls::stream<hls::vector<float, SIMD>> stage1_s;
+	static hls::stream<hls::vector<TO, SIMD>> stage1_s;
 #pragma HLS stream variable=stage1_s depth=N
-	static hls::stream<float> mean_s;
+	static hls::stream<TO> mean_s;
 #pragma HLS stream variable=mean_s depth=2
-	static hls::stream<hls::vector<float, SIMD>> stage2_s;
+	static hls::stream<hls::vector<TO, SIMD>> stage2_s;
 #pragma HLS stream variable=stage2_s depth=N
-	static hls::stream<varmean_t> varmean_s; // Stream of the variance and mean combined
+	static hls::stream<hls::vector<TO, SIMD>> stage3_s;
+#pragma HLS stream variable=stage2_s depth=N
+	static hls::stream<varmean_t<TO>> varmean_s; // Stream of the variance and mean combined
 #pragma HLS stream variable=varmean_s depth=2
 
-	mean_stage<N, SIMD,T>(src, stage1_s, mean_s);
-	var_stage<N, SIMD>(stage1_s, mean_s, stage2_s, varmean_s);
-	inv_sqrt_stage<N, SIMD>(stage2_s, varmean_s, dst);
+	mean_stage<TI, TO, N, SIMD>(src, stage1_s, mean_s);
+	var_stage<TO, N, SIMD>(stage1_s, mean_s, stage2_s, varmean_s);
+	inv_sqrt_stage<TO, N, SIMD>(stage2_s, varmean_s, stage3_s);
+	bias_and_eltwise_affine_stage<TO, TB,N, SIMD>(bias, stage3_s, dst);
 }
 
 #endif
