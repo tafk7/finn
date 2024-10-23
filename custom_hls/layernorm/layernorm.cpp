@@ -40,12 +40,15 @@
 #include "utils.hpp"
 
 constexpr unsigned  SIMD = 4;
-using  T = ap_int<8>;
+using  TI = float;
+using  TO = float;
+using  TB = float;
 constexpr unsigned W = 384;
+constexpr float bias = 0.4f;
 
 void layernorm(
-	hls::stream<hls::vector<T,SIMD>> &src,
-	hls::stream<hls::vector<float,SIMD>> &dst
+	hls::stream<hls::vector<TI,SIMD>> &src,
+	hls::stream<hls::vector<TO,SIMD>> &dst
 ) {
 #pragma HLS interface AXIS port=src
 #pragma HLS interface AXIS port=dst
@@ -55,6 +58,6 @@ void layernorm(
 #pragma HLS interface ap_ctrl_none port=return
 #pragma HLS dataflow disable_start_propagation
 
-	layernorm_pipeline<W,SIMD,T>(src, dst);
+	layernorm_pipeline<TI, TO, TB, W,SIMD>(bias, src, dst);
 
 } 

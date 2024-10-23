@@ -142,32 +142,34 @@ void inv_sqrt_stage(
 
 // - - - - - - - - - - - - - - - 
 // Third pipeline stage
-// Performs 
+// Performs element_affine elementwise multiplication
+// _elementwise_affine.hpp is statically generated from
+// the FINN compiler.
 // - - - - - - - - - - - - - - - 
 template<typename T, unsigned N, unsigned SIMD>
 void eltwise_affine_stage(
 	hls::stream<hls::vector<T, SIMD>> &in_s,
 	hls::stream<hls::vector<T, SIMD>> &out_s
 ) {
+#pragma HLS pipeline II=1 style=flp
 
 	static ap_uint<clog2(N/SIMD)+1> count = 0;
 #pragma HLS reset variable=count
-	
-	if(count == (N/SIMD)) {
-		count = 0;
-		return;
-	}	
 
 	if (!in_s.empty()) {
 		hls::vector<T, SIMD> const in = in_s.read();
 		hls::vector<T, SIMD> out;
-		hls::vector<T, SIMD> _eltwise = _eltwise_affine[count];
+		hls::vector<T, SIMD> _eltwise = _eltwise_affine[count++];
 		for(unsigned i=0; i<SIMD; i++) {
 #pragma HLS UNROLL
 			out[i] = in[i] *  _eltwise[i];
 		}
 		out_s.write(out);
-		count++;
+	}
+
+
+	if(count == (N/SIMD)) {
+		count = 0;
 	}
 }
 
@@ -184,7 +186,7 @@ void rmsnorm_pipeline(
 	static hls::stream<TO> mean_s;
 #pragma HLS stream variable=mean_s depth=2
 	static hls::stream<hls::vector<TI, SIMD>> stage2_s;
-#pragma HLS stream variable=stage1_s depth=N
+#pragma HLS stream variable=stage1_s depth=2
 
 	square_mean_stage<TI, TO, N, SIMD>(src, stage1_s, mean_s);
 	inv_sqrt_stage<TO, N, SIMD>(stage1_s, stage2_s, mean_s);
