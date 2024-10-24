@@ -2172,7 +2172,7 @@ class InferLayerNorm1D(Transformation):
                 # Check if 1D, norming on channel axis
                 if not (norm_axis == -1 or norm_axis == len(shape_in)-1):
                     continue
-                
+
                 # create node with no parallelization first
                 simd = 1
                 assert ch % simd == 0, "Requirement IFC divisable by PE is violated."
@@ -2187,7 +2187,7 @@ class InferLayerNorm1D(Transformation):
                     W=ch,
                     epsilon=node.get_nodeattr("epsilon"),
                     inputDataType=idt.name,
-                    outputDataType=idt.name,
+                    outputDataType=odt.name,
                     name="LayerNorm_" + node.name,
                 )
                 graph.node.insert(insert_point, new_node)
