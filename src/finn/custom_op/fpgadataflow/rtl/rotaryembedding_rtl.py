@@ -79,7 +79,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
             assert (
                 inp.shape == exp_ishape
             ), """Input shape doesn't
-            match expected shape (1, ImgDim_h, ImgDim_w, NumChannels)."""
+            match expected shape (1, ImgDim_h, ImgDim_w, HiddenDimension)."""
             export_idt = self.get_input_datatype()
 
             reshaped_input = inp.reshape(folded_ishape)
@@ -158,10 +158,10 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
     def generate_hdl(self, model, fpgapart, clk):
         rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/rope/hdl"
         template_path = rtlsrc + "/rope_template.v"
-        chans = self.get_nodeattr("NumChannels")
+        hidden = self.get_nodeattr("HiddenDimension")
         simd  = self.get_nodeattr("SIMD")
         idt = self.get_input_datatype()
-        code_gen_dict = self.get_template_values(chans, simd, idt)
+        code_gen_dict = self.get_template_values(hidden, simd, idt)
         # save top module name so we can refer to it after this node has been renamed
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
         self.set_nodeattr("gen_top_module", self.get_verilog_top_module_name())

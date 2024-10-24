@@ -62,16 +62,12 @@ test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
 
 
-def make_single_rope_modelwrapper(num_ch, idt, simd, impl_style):
+def make_single_rope_modelwrapper(hidden, idt, simd, impl_style):
     # Define the input tensor
-    input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, 1, num_ch])
+    input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, 1, hidden])
 
     # Define the output tensor
-    output_tensor = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, [1, 1, 1, num_ch])
-
-    # Define the cached tensors
-    #cos_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
-    #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
+    output_tensor = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, [1, 1, 1, hidden])
 
     #cos_tensor = numpy_helper.from_array(cos_values, name='cos')
     #sin_tensor = numpy_helper.from_array(sin_values, name='sin')
@@ -85,7 +81,7 @@ def make_single_rope_modelwrapper(num_ch, idt, simd, impl_style):
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
         backend="fpgadataflow",
-        NumChannels=num_ch,
+        HiddenDimension=hidden,
         inputDataType=str(idt.name),
         numInputVectors=1,
         SIMD=simd,
@@ -106,16 +102,17 @@ def make_single_rope_modelwrapper(num_ch, idt, simd, impl_style):
         #]  # Initializers
     )
 
-    # Save the model to a file
-    onnx.save(helper.make_model(graph, producer_name='custom_rope_model'), 'rope_node.onnx')
-
     # Create the model
     #model = helper.make_model(graph, producer_name='custom_rope_model')
     model = qonnx_make_model(graph, producer_name="rope-model")
     model = ModelWrapper(model)
 
     model.set_tensor_datatype("input", idt)
+    #model.set_tensor_datatype("cos", idt)
     model.set_tensor_datatype("output", idt)
+
+    # Save the model to a file
+    onnx.save(helper.make_model(graph, producer_name='custom_rope_model'), 'rope_node.onnx')
 
     return model
 
@@ -123,7 +120,7 @@ def make_single_rope_modelwrapper(num_ch, idt, simd, impl_style):
 # input image dimension
 #@pytest.mark.parametrize("idim", [[8, 8], [10, 8]])
 # number of channels
-@pytest.mark.parametrize("num_ch", [128])
+@pytest.mark.parametrize("hidden", [128])
 # Input parallelism
 @pytest.mark.parametrize("simd", [1])
 # FINN input datatype
@@ -135,7 +132,7 @@ def make_single_rope_modelwrapper(num_ch, idt, simd, impl_style):
 @pytest.mark.fpgadataflow
 @pytest.mark.slow
 @pytest.mark.vivado
-def test_fpgadataflow_rope(num_ch, idt, simd, impl_style):
+def test_fpgadataflow_rope(hidden, idt, simd, impl_style):
     #if num_ch % simd != 0:
     #    pytest.skip(" num_ch % simd != 0, skipping")
 
@@ -150,18 +147,26 @@ def test_fpgadataflow_rope(num_ch, idt, simd, impl_style):
     #y_expected = np.pad(x, ((0, 0), (pad[0], pad[2]), (pad[1], pad[3]), (0, 0)), "constant")
     #expected_oshape = (1, odim_h, odim_w, num_ch)
 
-    print("idt=",idt)
-    model = make_single_rope_modelwrapper(num_ch, idt, simd, impl_style)
+    # Define the cached tensors
+    #cos_values = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
+    #cos_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
+    #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
 
-    #inp = np.random.rand(1, num_ch).astype(np.float32)
-    x = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
+    x = gen_finn_dt_tensor(idt, [1, 1, 1, hidden])
     print("x=",x)
     input_dict = {"input": x}
-    outp = input_dict["input"]
+    y_expected = input_dict["input"]
+    #import pdb; pdb.set_trace()
 
-    # y_produced = oxe.execute_onnx(model, input_dict)["outp"]
+    print("idt=",idt)
+    model = make_single_rope_modelwrapper(hidden, idt, simd, impl_style)
+
+    #inp = np.random.rand(1, num_ch).astype(np.float32)
+
+    y_produced_cpu = oxe.execute_onnx(model, input_dict)["output"]
+    print("output_cpu=",y_produced_cpu)
     # assert y_produced.shape == expected_oshape
-    # assert (y_produced == y_expected).all(), "HW layer execution failed"
+    assert (y_produced_cpu == y_expected).all(), "HW layer execution failed"
 
     model = model.transform(SpecializeLayers(test_fpga_part))
     model = model.transform(InferShapes())
@@ -185,7 +190,7 @@ def test_fpgadataflow_rope(num_ch, idt, simd, impl_style):
     print("output=",y_produced)
 
     # assert y_produced.shape == expected_oshape
-    assert (y_produced == outp).all()
+    assert (y_produced == y_expected).all()
 
     # if mode == "rtlsim":
     op_type = "RotaryEmbedding_" + "rtl"

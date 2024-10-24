@@ -43,7 +43,7 @@ class RotaryEmbedding(HWCustomOp):
     def get_nodeattr_types(self):
         my_attrs = {
             # number of channels in input image
-            "NumChannels": ("i", True, 0),
+            "HiddenDimension": ("i", True, 0),
             # SIMD Input parallelism
             "SIMD": ("i", False, 1),
             # FINN input datatype
@@ -58,29 +58,29 @@ class RotaryEmbedding(HWCustomOp):
         return 0
 
     def get_normal_input_shape(self, ind=0):
-        num_ch = self.get_nodeattr("NumChannels")
-        ishape = (1, 1, 1, num_ch)
+        hidden = self.get_nodeattr("HiddenDimension")
+        ishape = (1, 1, 1, hidden)
         return ishape
 
     def get_normal_output_shape(self, ind=0):
-        num_ch = self.get_nodeattr("NumChannels")
-        oshape = (1, 1, 1, num_ch)
+        hidden = self.get_nodeattr("HiddenDimension")
+        oshape = (1, 1, 1, hidden)
         return oshape
 
     def get_folded_input_shape(self, ind=0):
         normal_ishape = list(self.get_normal_input_shape())
-        ifm_ch = self.get_nodeattr("NumChannels")
+        hidden = self.get_nodeattr("HiddenDimension")
         simd = self.get_nodeattr("SIMD")
-        assert ifm_ch % simd == 0, "SIMD must divide input channels"
+        assert hidden % simd == 0, "SIMD must divide input channels"
         fold = int(normal_ishape[-1] / simd)
         folded_ishape = normal_ishape[:-1] + [fold, simd]
         return tuple(folded_ishape)
 
     def get_folded_output_shape(self, ind=0):
         normal_oshape = list(self.get_normal_output_shape())
-        ifm_ch = self.get_nodeattr("NumChannels")
+        hidden = self.get_nodeattr("HiddenDimension")
         simd = self.get_nodeattr("SIMD")
-        assert ifm_ch % simd == 0, "SIMD must divide input channels"
+        assert hidden % simd == 0, "SIMD must divide input channels"
         fold = int(normal_oshape[-1] / simd)
         folded_oshape = normal_oshape[:-1] + [fold, simd]
         return tuple(folded_oshape)
@@ -124,4 +124,9 @@ class RotaryEmbedding(HWCustomOp):
         return np.prod(folded_oshape[:-1])
 
     def execute_node(self, context, graph):
-        raise NotImplementedError("This Method is not implemented")
+        # Behavioral Model Code
+        node = self.onnx_node
+        # pass thru
+        context[node.output[0]] = context[node.input[0]]
+
+
