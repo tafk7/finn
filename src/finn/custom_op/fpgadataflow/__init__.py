@@ -36,6 +36,7 @@ from finn.custom_op.fpgadataflow.convolutioninputgenerator import (
 from finn.custom_op.fpgadataflow.downsampler import DownSampler
 from finn.custom_op.fpgadataflow.duplicatestreams import DuplicateStreams
 from finn.custom_op.fpgadataflow.fmpadding import FMPadding
+from finn.custom_op.fpgadataflow.rotaryembedding import RotaryEmbedding
 from finn.custom_op.fpgadataflow.fmpadding_pixel import FMPadding_Pixel
 from finn.custom_op.fpgadataflow.globalaccpool import GlobalAccPool
 from finn.custom_op.fpgadataflow.labelselect import LabelSelect
@@ -76,6 +77,7 @@ custom_op["GlobalAccPool"] = GlobalAccPool
 custom_op["LabelSelect"] = LabelSelect
 custom_op["Lookup"] = Lookup
 custom_op["Pool"] = Pool
+custom_op["RotaryEmbedding"] = RotaryEmbedding
 custom_op["StreamingConcat"] = StreamingConcat
 custom_op["StreamingDataWidthConverter"] = StreamingDataWidthConverter
 custom_op["StreamingEltwise"] = StreamingEltwise
