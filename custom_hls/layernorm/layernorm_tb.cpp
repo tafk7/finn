@@ -37,14 +37,12 @@
 //
 // THIS COPYRIGHT NOTICE AND DISCLAIMER MUST BE RETAINED AS PART OF THIS FILE AT ALL TIMES.
 #include "layernorm.hpp"
-#include "_eltwise_affine.hpp"
 #include <cstdlib>
 #include <ctime>
 
 // how much to test
 constexpr unsigned ROUNDS = 3;
 constexpr unsigned W = 384;
-constexpr float bias = 0.4f;
 
 // Function to calculate mean  
 float mean(float* array, int size) {  
@@ -71,7 +69,6 @@ void ref_layernorm(float* input, float* output, int length) {
   
     for (int i = 0; i < length; i++) {  
         output[i] = (input[i] - mean_val) / sqrt(variance_val + 1e-5);  
-	output[i] = output[i] * _eltwise_affine[int(i/4)][i%4] + bias;
     }  
 }  
 
@@ -80,12 +77,11 @@ bool closeEnough(double num1, double num2, double tolerance) {
 }
 
 void layernorm(
-	const float bias,	
 	hls::stream<hls::vector<float, 4>> &src,
 	hls::stream<hls::vector<float, 4>> &dst
 );
 
-template<unsigned W, unsigned SIMD>
+template<typename T, unsigned W, unsigned SIMD>
 bool test() {
 	hls::stream<hls::vector<float,SIMD>> src;
 	hls::stream<hls::vector<float,SIMD>> dst;
