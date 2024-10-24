@@ -46,7 +46,6 @@
 #include <functional>
 #include "utils.hpp"
 
-constexpr float epsilon = 1e-5;
 
 // First pipeline stage
 //
@@ -167,6 +166,7 @@ void var_stage(
 // Desc: Performs a variance calculation across N elements. 
 template<typename TO, unsigned N, unsigned SIMD>
 void inv_sqrt_stage(
+	const TO epsilon,
 	hls::stream<hls::vector<TO, SIMD>> &in_s,
 	hls::stream<varmean_t<TO>> &varmean_s,
 
@@ -210,6 +210,7 @@ template<typename TI, // Input type
 	 unsigned N, 
 	 unsigned SIMD>
 void layernorm_pipeline(
+	const TO epsilon,
 	hls::stream<hls::vector<TI, SIMD>> &src,
 	hls::stream<hls::vector<TO, SIMD>> &dst
 ) {
@@ -226,7 +227,7 @@ void layernorm_pipeline(
 
 	mean_stage<TI, TO, N, SIMD>(src, stage1_s, mean_s);
 	var_stage<TO, N, SIMD>(stage1_s, mean_s, stage2_s, varmean_s);
-	inv_sqrt_stage<TO, N, SIMD>(stage2_s, varmean_s, dst);
+	inv_sqrt_stage<TO, N, SIMD>(epsilon, stage2_s, varmean_s, dst);
 }
 
 #endif

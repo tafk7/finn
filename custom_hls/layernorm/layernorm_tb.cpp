@@ -43,6 +43,7 @@
 // how much to test
 constexpr unsigned ROUNDS = 3;
 constexpr unsigned W = 384;
+constexpr float epsilon = 1e-5;
 
 // Function to calculate mean  
 float mean(float* array, int size) {  
