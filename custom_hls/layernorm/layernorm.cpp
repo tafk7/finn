@@ -42,9 +42,8 @@
 constexpr unsigned  SIMD = 4;
 using  TI = float;
 using  TO = float;
-using  TB = float;
 constexpr unsigned W = 384;
-constexpr float bias = 0.4f;
+constexpr float epsilon = 1e-5;
 
 void layernorm(
 	hls::stream<hls::vector<TI,SIMD>> &src,
@@ -58,6 +57,6 @@ void layernorm(
 #pragma HLS interface ap_ctrl_none port=return
 #pragma HLS dataflow disable_start_propagation
 
-	layernorm_pipeline<TI, TO, TB, W,SIMD>(bias, src, dst);
+	layernorm_pipeline<TI, TO, W,SIMD>(epsilon, src, dst);
 
 } 

@@ -78,7 +78,7 @@ void square_mean_stage(
         // Elemwise square and pass along input
 		for(unsigned i=0; i<SIMD; i++) {
 #pragma HLS UNROLL
-            sq_res[i] = TO(in[i]*in[i]);
+            		sq_res[i] = TO(in[i]*in[i]);
 			out[i] = TO(in[i]);
 		}
 		out_s.write(out);
