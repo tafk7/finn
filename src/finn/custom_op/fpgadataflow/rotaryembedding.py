@@ -42,7 +42,9 @@ class RotaryEmbedding(HWCustomOp):
 
     def get_nodeattr_types(self):
         my_attrs = {
-            # number of channels in input image
+            # Sequence Length of the Input
+            "SequenceLength": ("i", True, 0),
+            # hidden dimension of the input
             "HiddenDimension": ("i", True, 0),
             # SIMD Input parallelism
             "SIMD": ("i", False, 1),
@@ -58,13 +60,15 @@ class RotaryEmbedding(HWCustomOp):
         return 0
 
     def get_normal_input_shape(self, ind=0):
+        seq_len = self.get_nodeattr("SequenceLength")
         hidden = self.get_nodeattr("HiddenDimension")
-        ishape = (1, 1, 1, hidden)
+        ishape = (1, 1, seq_len, hidden)
         return ishape
 
     def get_normal_output_shape(self, ind=0):
+        seq_len = self.get_nodeattr("SequenceLength")
         hidden = self.get_nodeattr("HiddenDimension")
-        oshape = (1, 1, 1, hidden)
+        oshape = (1, 1, seq_len, hidden)
         return oshape
 
     def get_folded_input_shape(self, ind=0):

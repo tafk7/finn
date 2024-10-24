@@ -49,7 +49,7 @@ output	[$STREAM_BITS$-1:0]  out_V_TDATA
 
 
 rope_axi #(
-.NUM_CHANNELS($NUM_CHANNELS$),
+.HIDDEN_DIM($HIDDEN_DIM$),
 .SIMD($SIMD$),
 .ELEM_BITS($ELEM_BITS$)
 )

@@ -33,7 +33,7 @@
  *****************************************************************************/
 
 module rope_axi #(
-	int unsigned  NUM_CHANNELS,
+	int unsigned  HIDDEN_DIM,
 	int unsigned  SIMD,
 	int unsigned  ELEM_BITS,
 

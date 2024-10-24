@@ -119,12 +119,12 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
                 )
             )
 
-    def get_template_values(self, chans, simd, idt):
+    def get_template_values(self, seq_len, hidden, simd, idt):
         topname = self.get_verilog_top_module_name()
         stream_bits = idt.bitwidth() * simd
         stream_bits = int(roundup_to_integer_multiple(stream_bits, 8))
         code_gen_dict = {
-            "NUM_CHANNELS": int(chans),
+            "HIDDEN_DIM": int(hidden),
             "SIMD": int(simd),
             "ELEM_BITS": idt.bitwidth(),
             "TOP_MODULE_NAME": topname,
@@ -158,10 +158,11 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
     def generate_hdl(self, model, fpgapart, clk):
         rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/rope/hdl"
         template_path = rtlsrc + "/rope_template.v"
-        hidden = self.get_nodeattr("HiddenDimension")
+        hidden  = self.get_nodeattr("HiddenDimension")
+        seq_len = self.get_nodeattr("SequenceLength")
         simd  = self.get_nodeattr("SIMD")
         idt = self.get_input_datatype()
-        code_gen_dict = self.get_template_values(hidden, simd, idt)
+        code_gen_dict = self.get_template_values(seq_len, hidden, simd, idt)
         # save top module name so we can refer to it after this node has been renamed
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
         self.set_nodeattr("gen_top_module", self.get_verilog_top_module_name())

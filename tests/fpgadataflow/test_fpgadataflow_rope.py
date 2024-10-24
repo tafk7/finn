@@ -62,12 +62,12 @@ test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
 
 
-def make_single_rope_modelwrapper(hidden, idt, simd, impl_style):
+def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
     # Define the input tensor
-    input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, 1, hidden])
+    input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, seq_len, hidden])
 
     # Define the output tensor
-    output_tensor = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, [1, 1, 1, hidden])
+    output_tensor = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, [1, 1, seq_len, hidden])
 
     #cos_tensor = numpy_helper.from_array(cos_values, name='cos')
     #sin_tensor = numpy_helper.from_array(sin_values, name='sin')
@@ -82,6 +82,7 @@ def make_single_rope_modelwrapper(hidden, idt, simd, impl_style):
         domain="finn.custom_op.fpgadataflow",
         backend="fpgadataflow",
         HiddenDimension=hidden,
+        SequenceLength=seq_len,
         inputDataType=str(idt.name),
         numInputVectors=1,
         SIMD=simd,
@@ -120,6 +121,7 @@ def make_single_rope_modelwrapper(hidden, idt, simd, impl_style):
 # input image dimension
 #@pytest.mark.parametrize("idim", [[8, 8], [10, 8]])
 # number of channels
+@pytest.mark.parametrize("seq_len", [2])
 @pytest.mark.parametrize("hidden", [128])
 # Input parallelism
 @pytest.mark.parametrize("simd", [1])
@@ -132,7 +134,7 @@ def make_single_rope_modelwrapper(hidden, idt, simd, impl_style):
 @pytest.mark.fpgadataflow
 @pytest.mark.slow
 @pytest.mark.vivado
-def test_fpgadataflow_rope(hidden, idt, simd, impl_style):
+def test_fpgadataflow_rope(seq_len, hidden, idt, simd, impl_style):
     #if num_ch % simd != 0:
     #    pytest.skip(" num_ch % simd != 0, skipping")
 
@@ -152,14 +154,14 @@ def test_fpgadataflow_rope(hidden, idt, simd, impl_style):
     #cos_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
     #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
 
-    x = gen_finn_dt_tensor(idt, [1, 1, 1, hidden])
+    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden])
     print("x=",x)
     input_dict = {"input": x}
     y_expected = input_dict["input"]
     #import pdb; pdb.set_trace()
 
     print("idt=",idt)
-    model = make_single_rope_modelwrapper(hidden, idt, simd, impl_style)
+    model = make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style)
 
     #inp = np.random.rand(1, num_ch).astype(np.float32)
 
