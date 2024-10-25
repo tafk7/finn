@@ -27,6 +27,7 @@ def build_Layernorm_graph(
     model = ModelWrapper(model)
 
     Quant_0_out = helper.make_tensor_value_info("Quant_0_out", TensorProto.FLOAT, list(idm))
+    # Create node
     Quant_0 = helper.make_node(
             'Quant',
             domain='finn.custom_op.general',
@@ -37,7 +38,7 @@ def build_Layernorm_graph(
             rounding_mode="ROUND",
             name="Quant_0"
     )
-    model.graph.node.insert(0, Quant_0)
+    model.graph.node.append(Quant_0)
     model.graph.value_info.append(Quant_0_out)
 
     Quant_LayerNorm_scale_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, [last_dim])
@@ -51,7 +52,7 @@ def build_Layernorm_graph(
             rounding_mode="ROUND",
             name="LayerNorm_Scale_Quant"
     )
-    model.graph.node.insert(3, Quant_LayerNorm_scale)
+    model.graph.node.append(Quant_LayerNorm_scale)
     model.graph.value_info.append(Quant_LayerNorm_scale_out)
 
     Quant_LayerNorm_bias_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, [last_dim])
@@ -76,7 +77,7 @@ def build_Layernorm_graph(
         domain="ai.onnx v18",
         name='Layernorm_1',
     )
-    model.graph.node.insert(1, LayerNorm_0)
+    model.graph.node.append(LayerNorm_0)
     model.graph.value_info.append(LayerNorm_0_out)
     epsilon0_attr = helper.make_attribute("epsilon", epsilon)
     LayerNorm_0.attribute.append(epsilon0_attr)
@@ -89,7 +90,7 @@ def build_Layernorm_graph(
         domain="finn.custom_op.fpgadataflow.hls",
         name='ElementwiseMul_hls_0',
     )
-    model.graph.node.insert(4, ElementWiseMul_hls_0)
+    model.graph.node.append(ElementWiseMul_hls_0)
     model.graph.value_info.append(ElementWiseMul_hls_0_out)
 
     ElementWiseAdd_hls_0_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, list(idm))
@@ -100,9 +101,10 @@ def build_Layernorm_graph(
         domain="finn.custom_op.fpgadataflow.hls",
         name='ElementwiseAdd_hls_0',
     )
-    model.graph.node.insert(4, ElementWiseAdd_hls_0)
+    model.graph.node.append(ElementWiseAdd_hls_0)
     model.graph.value_info.append(ElementWiseAdd_hls_0_out)
 
+    # Create node
     Quant_1 = helper.make_node(
             'Quant',
             domain='finn.custom_op.general',
@@ -113,27 +115,27 @@ def build_Layernorm_graph(
             rounding_mode="ROUND",
             name="Quant_1"
     )
-    model.graph.node.insert(2, Quant_1)
+    model.graph.node.append(Quant_1)
 
+    model.set_initializer("quant0_scale", np.asarray(input_quant_params[0], dtype=np.float32))
+    model.set_initializer("quant0_zeropt", np.asarray(input_quant_params[1], dtype=np.float32))
+    model.set_initializer("quant0_bitwidth", np.asarray(input_quant_params[2], dtype=np.float32))
 
-    model.set_initializer("quant0_scale", np.asarray(1, dtype=np.float32))
-    model.set_initializer("quant0_zeropt", np.asarray(0, dtype=np.float32))
-    model.set_initializer("quant0_bitwidth", np.asarray(8, dtype=np.float32))
+    model.set_initializer("quant1_scale", np.asarray(output_quant_params[0], dtype=np.float32))
+    model.set_initializer("quant1_zeropt", np.asarray(output_quant_params[1], dtype=np.float32))
+    model.set_initializer("quant1_bitwidth", np.asarray(output_quant_params[2], dtype=np.float32))
 
-    model.set_initializer("quant1_scale", np.asarray(1, dtype=np.float32))
-    model.set_initializer("quant1_zeropt", np.asarray(0, dtype=np.float32))
-    model.set_initializer("quant1_bitwidth", np.asarray(8, dtype=np.float32))
+    model.set_initializer("layernorm_bias_quant_scale", np.asarray(bias_quant_params[0], dtype=np.float32))
+    model.set_initializer("layernorm_bias_quant_zeropt", np.asarray(bias_quant_params[1], dtype=np.float32))
+    model.set_initializer("layernorm_bias_quant_bitwidth", np.asarray(bias_quant_params[2], dtype=np.float32))
 
-    model.set_initializer("layernorm_bias_quant_scale", np.asarray(1, dtype=np.float32))
-    model.set_initializer("layernorm_bias_quant_zeropt", np.asarray(0, dtype=np.float32))
-    model.set_initializer("layernorm_bias_quant_bitwidth", np.asarray(8, dtype=np.float32))
+    model.set_initializer("layernorm_scale_quant_scale", np.asarray(scale_quant_params[0], dtype=np.float32))
+    model.set_initializer("layernorm_scale_quant_zeropt", np.asarray(scale_quant_params[1], dtype=np.float32))
+    model.set_initializer("layernorm_scale_quant_bitwidth", np.asarray(scale_quant_params[2], dtype=np.float32))
 
-    model.set_initializer("layernorm_scale_quant_scale", np.asarray(1, dtype=np.float32))
-    model.set_initializer("layernorm_scale_quant_zeropt", np.asarray(0, dtype=np.float32))
-    model.set_initializer("layernorm_scale_quant_bitwidth", np.asarray(8, dtype=np.float32))
+    model.set_initializer("layernorm0_scale_param", np.zeros((last_dim), dtype=np.float32))
+    model.set_initializer("layernorm0_b_param", np.zeros((last_dim), dtype=np.float32))
+    model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
 
-    model.set_initializer("layernorm0_scale_param", np.zeros((384), dtype=np.float32))
-    model.set_initializer("layernorm0_b_param", np.zeros((384), dtype=np.float32))
-    model.set_initializer("layernorm0_epsilon_param", np.asarray(1e-5, dtype=np.float32))
     return model
 
