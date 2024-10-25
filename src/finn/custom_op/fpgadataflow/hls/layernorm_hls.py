@@ -31,71 +31,67 @@ import os
 
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
-from finn.custom_op.fpgadataflow.quantsoftmax import QuantSoftmax
+from finn.custom_op.fpgadataflow.layernorm import LayerNorm
 from finn.util.basic import CppBuilder
 
 
-class QuantSoftmax_hls(QuantSoftmax, HLSBackend):
+class LayerNorm_hls(LayerNorm, HLSBackend):
     def __init__(self, onnx_node, **kwargs):
         super().__init__(onnx_node, **kwargs)
 
     def get_nodeattr_types(self):
         my_attrs = {}
-        my_attrs.update(QuantSoftmax.get_nodeattr_types(self))
+        my_attrs.update(LayerNorm.get_nodeattr_types(self))
         my_attrs.update(HLSBackend.get_nodeattr_types(self))
         return my_attrs
 
     def global_includes(self):
         self.code_gen_dict["$GLOBALS$"] = [
             "#include <hls_vector.h>",
-            '#include "softmax.hpp"',
+            '#include "layernorm.hpp"',
             '#include "utils.hpp"',
         ]
 
     def defines(self, var):
         simd = self.get_nodeattr("simd")
+        w = self.get_nodeattr("ifm_dim")[-1]
+        epsilon = self.get_nodeattr("epsilon")
         idtype = self.get_input_datatype()
         odtype = self.get_output_datatype()
-        w = self.get_nodeattr("ifm_dim")[-1]
         self.code_gen_dict["$DEFINES$"] = [
             f"""
-            constexpr unsigned  SIMD = {simd};
-            constexpr unsigned  W = {w};
-            using  TI = {idtype.get_hls_datatype_str()};
-            using  TO = {odtype.get_hls_datatype_str()};
-            using  F = float;
+            constexpr unsigned SIMD = {simd};
+            constexpr unsigned W = {w};
+            constexpr unsigned epsilon = {epsilon};
+            using TI = {idtype.get_hls_datatype_str()};
+            using TO = {odtype.get_hls_datatype_str()};
            """
         ]
 
     def docompute(self):
         self.code_gen_dict["$DOCOMPUTE$"] = [
             f"""
-                static hls::stream<hls::vector<TI,SIMD>>  src0;
-                static hls::stream<hls::vector<TO,SIMD>>  dst0;
-
-                move(in0_{self.hls_sname()}, src0);
-                smaxquant<W,SIMD,TI,TO>(src0, dst0);
-                move(dst0, out_{self.hls_sname()});
-        """
+                layernorm_pipeline<TI, TO, W, SIMD>(epsilon, src, dst);
+            """
         ]
 
     def blackboxfunction(self):
         self.code_gen_dict["$BLACKBOXFUNCTION$"] = [
             f"""
             void {self.onnx_node.name}(
-                hls::stream<hls::vector<TI,SIMD>> &in0_{self.hls_sname()},
-                hls::stream<hls::vector<TO,SIMD>> &out_{self.hls_sname()}
-                )
+                hls::stream<hls::vector<TI,SIMD>> &src,
+                hls::stream<hls::vector<TO,SIMD>> &dst
+            )
             """
         ]
 
     def pragmas(self):
         self.code_gen_dict["$PRAGMAS$"] = [
             f"""
-            #pragma HLS interface AXIS port=in0_{self.hls_sname()}
-            #pragma HLS interface AXIS port=out_{self.hls_sname()}
-            #pragma HLS aggregate  variable=in0_{self.hls_sname()} compact=bit
-            #pragma HLS aggregate  variable=out_{self.hls_sname()} compact=bit
+            #pragma HLS interface AXIS port=src
+            #pragma HLS interface AXIS port=dst
+            #pragma HLS aggregate variable=src compact=bit
+            #pragma HLS aggregate variable=dst compact=bit
 
             #pragma HLS interface ap_ctrl_none port=return
             #pragma HLS dataflow disable_start_propagation
@@ -169,7 +165,7 @@ class QuantSoftmax_hls(QuantSoftmax, HLSBackend):
             int stream_size = in0_V.size();
 
             while(out_V.size() != stream_size){{
-                smaxquant<W, SIMD, TI, TO>(in0_V, out_V);
+                layernorm_pipeline<TI, TO, W, SIMD>(epsilon, in0_V, out_V);
             }}
 
             vectorstream2npy<TO, float, SIMD>(out_V,{oshape_str}, "{path}/output.npy");
@@ -189,4 +185,4 @@ class QuantSoftmax_hls(QuantSoftmax, HLSBackend):
 
     def prepare_rtlsim(self):
         # this node currently does not support rtlsim
-        raise NotImplementedError("QuantSoftmax_hls does not support rtlsim")
+        raise NotImplementedError("LayerNorm_hls does not support rtlsim")

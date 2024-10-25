@@ -2121,11 +2121,6 @@ class InferQuantAsFloat2Int(Transformation):
         return model, graph_modified
 
 
-
-
-
-
-
 class InferLayerNorm1D(Transformation):
     """Convert LayerNorm into HW, only norming over channel dim"""
     def apply(self, model):
@@ -2144,11 +2139,8 @@ class InferLayerNorm1D(Transformation):
                 idt = model.get_tensor_datatype(act_in)
                 odt = model.get_tensor_datatype(act_out)
                 
-                # Skip node if weight isn't constant
-                if node.input[1] is None:
-                    continue
-                # If bias, skip if it isn't constant
-                if node.input[2] is None:
+                # Weight & bias should be stripped out
+                if node.input[1] is not None or node.input[2] is not None:
                     continue
 
                 # check layout of inputs/outputs, and convert if needed
@@ -2184,7 +2176,7 @@ class InferLayerNorm1D(Transformation):
                     domain="finn.custom_op.fpgadataflow",
                     backend="fpgadataflow",
                     SIMD=simd,
-                    W=ch,
+                    ifm_dim=shape_in,
                     epsilon=node.get_nodeattr("epsilon"),
                     inputDataType=idt.name,
                     outputDataType=odt.name,
