@@ -7,6 +7,7 @@ import numpy as np
 
 def build_Layernorm_graph(
         idm:tuple, # Input dimension
+        epsilon:float,
         input_quant_params:tuple[int,int,int], #(scale, zero_point, bitwidth)
         scale_quant_params:tuple[int,int,int], #(scale, zero_point, bitwidth)
         bias_quant_params:tuple[int,int,int],  #(scale, zero_point, bitwidth)
@@ -77,7 +78,7 @@ def build_Layernorm_graph(
     )
     model.graph.node.insert(1, LayerNorm_0)
     model.graph.value_info.append(LayerNorm_0_out)
-    epsilon0_attr = helper.make_attribute("epsilon", 9.999999960041972e-13)
+    epsilon0_attr = helper.make_attribute("epsilon", epsilon)
     LayerNorm_0.attribute.append(epsilon0_attr)
 
     ElementWiseMul_hls_0_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, list(idm))
