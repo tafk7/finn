@@ -50,6 +50,7 @@ class RotaryEmbedding(HWCustomOp):
             "SIMD": ("i", False, 1),
             # FINN input datatype
             "inputDataType": ("s", True, ""),
+            "weightDataType": ("s", True, ""),
             # shape describing input vecs per execution
             "numInputVectors": ("i", False, 1),
         }
@@ -109,6 +110,11 @@ class RotaryEmbedding(HWCustomOp):
         # is able to represent zeros
         return ret
 
+    def get_weight_datatype(self, ind=0):
+        """Returns FINN DataType of weights."""
+        ret = DataType[self.get_nodeattr("weightDataType")]
+        return ret
+
     def get_output_datatype(self, ind=0):
         """Returns FINN DataType of output. (Same as input datatype)"""
         return self.get_input_datatype()
@@ -131,6 +137,6 @@ class RotaryEmbedding(HWCustomOp):
         # Behavioral Model Code
         node = self.onnx_node
         # pass thru
-        context[node.output[0]] = context[node.input[0]]
+        context[node.output[0]] = context[node.input[0]] * context[node.input[1]]
 
 

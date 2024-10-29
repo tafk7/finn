@@ -35,7 +35,7 @@ from qonnx.util.basic import roundup_to_integer_multiple
 from finn.custom_op.fpgadataflow.rotaryembedding import RotaryEmbedding
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import get_rtlsim_trace_depth, make_build_dir
-from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy, pack_innermost_dim_as_hex_string
 
 try:
     from pyverilator import PyVerilator
@@ -124,11 +124,13 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         stream_bits = idt.bitwidth() * simd
         stream_bits = int(roundup_to_integer_multiple(stream_bits, 8))
         code_gen_dict = {
+            "SEQ_LEN": int(seq_len),
             "HIDDEN_DIM": int(hidden),
             "SIMD": int(simd),
             "ELEM_BITS": idt.bitwidth(),
             "TOP_MODULE_NAME": topname,
             "STREAM_BITS": int(stream_bits),
+            "INIT_FILE": '\"cos_values.dat\"'
         }
         return code_gen_dict
 
@@ -162,7 +164,13 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         seq_len = self.get_nodeattr("SequenceLength")
         simd  = self.get_nodeattr("SIMD")
         idt = self.get_input_datatype()
+        wdt = self.get_weight_datatype()
         code_gen_dict = self.get_template_values(seq_len, hidden, simd, idt)
+        self.make_weight_file(
+            "cos_values.dat",
+            wdt,
+            model.get_initializer("cos"),
+        )
         # save top module name so we can refer to it after this node has been renamed
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
         self.set_nodeattr("gen_top_module", self.get_verilog_top_module_name())
@@ -181,7 +189,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         ) as f:
             f.write(template)
 
-        sv_files = ["rope_axi.sv"]
+        sv_files = ["rope_axi.sv", "../../memstream/hdl/memstream.sv"]
         for sv_file in sv_files:
             shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
         # set ipgen_path and ip_path so that HLS-Synth transformation
@@ -202,6 +210,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         verilog_paths = [code_gen_dir]
         verilog_files = [
             "rope_axi.sv",
+            "memstream.sv",
             self.get_nodeattr("gen_top_module") + ".v",
         ]
 
@@ -223,6 +232,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
 
         sourcefiles = [
              "rope_axi.sv",
+             "memstream.sv",
              self.get_nodeattr("gen_top_module") + ".v",
         ]
 
@@ -236,3 +246,30 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)
         ]
         return cmd
+
+
+    def make_weight_file(self, weight_file_name, wdt, weights):
+
+        weight_stream = []
+
+        simd = self.get_nodeattr("SIMD")
+        bw_hexdigit = simd * wdt.bitwidth()
+        print("bw_hexdigit: ", bw_hexdigit)
+
+        # iterate over the file weight dimension
+        print(weights.shape)
+        for seq in weights[0, 0, :]:
+            for w in seq:
+                t_packed = pack_innermost_dim_as_hex_string(
+                    [w], wdt, bw_hexdigit, prefix=""
+                ).item()
+                weight_stream.append(t_packed)
+
+            #t_packed = pack_innermost_dim_as_hex_string(
+            #                    [w], wdt, bw_hexdigit, prefix=""
+            #                ).item()
+            #weight_stream.append(t_packed)
+        print("weight file name:", weight_file_name)
+        with open(weight_file_name, "w") as f:
+                for val in weight_stream:
+                    f.write(val + "\n")

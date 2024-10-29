@@ -49,9 +49,11 @@ output	[$STREAM_BITS$-1:0]  out_V_TDATA
 
 
 rope_axi #(
+.SEQ_LEN($SEQ_LEN$),
 .HIDDEN_DIM($HIDDEN_DIM$),
 .SIMD($SIMD$),
-.ELEM_BITS($ELEM_BITS$)
+.ELEM_BITS($ELEM_BITS$),
+.INIT_FILE($INIT_FILE$)
 )
 impl
 (

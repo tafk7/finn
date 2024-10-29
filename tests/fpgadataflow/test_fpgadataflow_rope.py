@@ -62,7 +62,7 @@ test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
 
 
-def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
+def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_style):
     # Define the input tensor
     input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, seq_len, hidden])
 
@@ -76,7 +76,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
     rope_node = helper.make_node(
         'RotaryEmbedding',  # Custom node name
         #['input', 'cos', 'sin'],  # Inputs
-        ['input'],
+        ['input', 'cos'],
         ['output'],  # Outputs
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
@@ -84,10 +84,10 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
         HiddenDimension=hidden,
         SequenceLength=seq_len,
         inputDataType=str(idt.name),
+        weightDataType=str(wdt.name),
         numInputVectors=1,
         SIMD=simd,
         preferred_impl_style=impl_style,
-        rtlsim_trace="whole.vcd",
     )
 
     # Create the graph
@@ -97,10 +97,10 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
         [input_tensor],  # Inputs
         [output_tensor],  # Outputs
 
-        #initializer=[
-        #    helper.make_tensor('cos', onnx.TensorProto.FLOAT, cos_values.shape, cos_values),
+        initializer=[
+            helper.make_tensor('cos', onnx.TensorProto.INT8, cos.shape, cos),
         #    helper.make_tensor('sin', onnx.TensorProto.FLOAT, sin_values.shape, sin_values)
-        #]  # Initializers
+        ]  # Initializers
     )
 
     # Create the model
@@ -109,8 +109,11 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
     model = ModelWrapper(model)
 
     model.set_tensor_datatype("input", idt)
-    #model.set_tensor_datatype("cos", idt)
+    model.set_tensor_datatype("cos", wdt)
     model.set_tensor_datatype("output", idt)
+
+    model.set_metadata_prop("rtlsim_trace", "trace.vcd")
+    os.environ["RTLSIM_TRACE_DEPTH"] = "45"
 
     # Save the model to a file
     onnx.save(helper.make_model(graph, producer_name='custom_rope_model'), 'rope_node.onnx')
@@ -127,6 +130,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
 @pytest.mark.parametrize("simd", [1])
 # FINN input datatype
 @pytest.mark.parametrize("idt", [DataType["INT8"]])
+@pytest.mark.parametrize("wdt", [DataType["INT8"]])
 # execution mode
 #@pytest.mark.parametrize("mode", ["cppsim", "rtlsim"])
 # implementation style
@@ -134,7 +138,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style):
 @pytest.mark.fpgadataflow
 @pytest.mark.slow
 @pytest.mark.vivado
-def test_fpgadataflow_rope(seq_len, hidden, idt, simd, impl_style):
+def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
     #if num_ch % simd != 0:
     #    pytest.skip(" num_ch % simd != 0, skipping")
 
@@ -151,23 +155,27 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, simd, impl_style):
 
     # Define the cached tensors
     #cos_values = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
-    #cos_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
+    cos = np.random.randint(-10, 10, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+
     #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
 
-    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden])
+    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden]) % 10
+    #cos = gen_finn_dt_tensor(wdt, [1, 1, seq_len, hidden])
     print("x=",x)
     input_dict = {"input": x}
-    y_expected = input_dict["input"]
+    y_expected = x * cos
     #import pdb; pdb.set_trace()
 
     print("idt=",idt)
-    model = make_single_rope_modelwrapper(seq_len, hidden, idt, simd, impl_style)
+    print("wdt=",wdt)
+    model = make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_style)
 
     #inp = np.random.rand(1, num_ch).astype(np.float32)
 
     y_produced_cpu = oxe.execute_onnx(model, input_dict)["output"]
     print("output_cpu=",y_produced_cpu)
     # assert y_produced.shape == expected_oshape
+    print("y_expected=", y_expected)
     assert (y_produced_cpu == y_expected).all(), "HW layer execution failed"
 
     model = model.transform(SpecializeLayers(test_fpga_part))
@@ -187,10 +195,12 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, simd, impl_style):
     #     model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
     #     model = model.transform(HLSSynthIP())
     #     model = model.transform(PrepareRTLSim())
+    #import pdb; pdb.set_trace()
     model.set_metadata_prop("exec_mode", "rtlsim")
     y_produced = oxe.execute_onnx(model, input_dict)["output"]
-    print("output=",y_produced)
-
+    print("cos=",cos)
+    print("rtl output=",y_produced)
+    print("y_expected=",y_expected)
     # assert y_produced.shape == expected_oshape
     assert (y_produced == y_expected).all()
 
