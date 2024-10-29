@@ -66,6 +66,7 @@ coverage.xml
 
 # Build and docs folder/files
 build/*
+finn_temp_files/*
 dist/*
 sdist/*
 docs/api/*
