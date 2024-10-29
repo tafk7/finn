@@ -136,7 +136,7 @@ class RotaryEmbedding(HWCustomOp):
     def execute_node(self, context, graph):
         # Behavioral Model Code
         node = self.onnx_node
-        # pass thru
-        context[node.output[0]] = context[node.input[0]] * context[node.input[1]]
+        # Rope Computation
+        context[node.output[0]] = context[node.input[0]] * context[node.input[1]] + context[node.input[0]] * context[node.input[2]]
 
 

@@ -62,7 +62,7 @@ test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
 
 
-def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_style):
+def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, impl_style):
     # Define the input tensor
     input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, seq_len, hidden])
 
@@ -76,7 +76,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_sty
     rope_node = helper.make_node(
         'RotaryEmbedding',  # Custom node name
         #['input', 'cos', 'sin'],  # Inputs
-        ['input', 'cos'],
+        ['input', 'cos', 'sin'],
         ['output'],  # Outputs
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
@@ -99,6 +99,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_sty
 
         initializer=[
             helper.make_tensor('cos', onnx.TensorProto.INT8, cos.shape, cos),
+            helper.make_tensor('sin', onnx.TensorProto.INT8, sin.shape, sin),
         #    helper.make_tensor('sin', onnx.TensorProto.FLOAT, sin_values.shape, sin_values)
         ]  # Initializers
     )
@@ -110,6 +111,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_sty
 
     model.set_tensor_datatype("input", idt)
     model.set_tensor_datatype("cos", wdt)
+    model.set_tensor_datatype("sin", wdt)
     model.set_tensor_datatype("output", idt)
 
     model.set_metadata_prop("rtlsim_trace", "trace.vcd")
@@ -156,6 +158,7 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
     # Define the cached tensors
     #cos_values = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
     cos = np.random.randint(-10, 10, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+    sin = np.random.randint(-10, 10, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
 
     #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
 
@@ -163,12 +166,12 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
     #cos = gen_finn_dt_tensor(wdt, [1, 1, seq_len, hidden])
     print("x=",x)
     input_dict = {"input": x}
-    y_expected = x * cos
+    y_expected = x * cos + x * sin
     #import pdb; pdb.set_trace()
 
     print("idt=",idt)
     print("wdt=",wdt)
-    model = make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, simd, impl_style)
+    model = make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, impl_style)
 
     #inp = np.random.rand(1, num_ch).astype(np.float32)
 
