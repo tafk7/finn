@@ -168,7 +168,7 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
                 layernorm_pipeline<TI, TO, W, SIMD>(epsilon, in0_V, out_V);
             }}
 
-            vectorstream2npy<TO, float, SIMD>(out_V,{oshape_str}, "{path}/output.npy");
+            vectorstream2npy<TO, float, SIMD>(out_V, {oshape_str}, "{path}/output.npy");
             """
         ]
         self.save_as_npy()

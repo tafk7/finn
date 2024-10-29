@@ -2121,7 +2121,7 @@ class InferQuantAsFloat2Int(Transformation):
         return model, graph_modified
 
 
-class InferLayerNorm1D(Transformation):
+class InferLayerNorm(Transformation):
     """Convert LayerNorm into HW, only norming over channel dim"""
     def apply(self, model):
         graph = model.graph
@@ -2169,7 +2169,7 @@ class InferLayerNorm1D(Transformation):
                 simd = 1
                 assert ch % simd == 0, "Requirement IFC divisable by PE is violated."
                 # create and insert nodes
-                new_node += helper.make_node(
+                new_node = helper.make_node(
                     "LayerNorm",
                     [act_in],
                     [act_out],

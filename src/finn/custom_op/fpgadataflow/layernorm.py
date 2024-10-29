@@ -27,8 +27,9 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import math
+import torch
 import numpy as np
-import onnxruntime as rt
+from torch.nn.functional import layer_norm
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import qonnx_make_model
@@ -54,7 +55,7 @@ class LayerNorm(HWCustomOp):
 
     def get_nodeattr_types(self):
         my_attrs = {
-            "SIMD": ("i", True, 0),
+            "simd": ("i", True, 0),
             "ifm_dim": ("ints", True, []),
             "epsilon": ("f", True, 1e-5),
             # FINN DataTypes for inputs, weight, bias, outputs
@@ -67,38 +68,15 @@ class LayerNorm(HWCustomOp):
     def execute_node(self, context, graph):
         node = self.onnx_node
         # Get tensor values
-        act_values = context[node.input[0]]
+        in_values = context[node.input[0]]
+        out_values = context[node.output[0]]
         # Get any shape info that needs reuse
-        ishape = act_values.shape
-        wshape = node.input[0].shape
-        oshape = node.output[0].shape
-        # Make dummy weight (already extracted in previous step)
-        dummy_w = np.ones(wshape)
-        # Get tensor information for ort
-        in_act = helper.make_tensor_value_info(node.input[0], TensorProto.FLOAT, ishape)
-        w = helper.make_tensor_value_info(node.input[1], TensorProto.FLOAT, wshape)
-        out_act = helper.make_tensor_value_info(node.output[0], TensorProto.FLOAT, oshape)
-        # Define ONNX node, graph
-        node_func = helper.make_node(
-            "LayerNormalization",
-            inputs=[node.input[0], node.input[1]],
-            outputs=[node.output[0]],
-            epsilon=self.get_nodeattr("epsilon")
-        )
-        graph_func = helper.make_graph(
-            nodes=[node_func],
-            name="layer-norm-exec",
-            inputs=[in_act, w],
-            outputs=[out_act],
-        )
-        opset_version = self.onnx_opset_version
-        opset_imports = [helper.make_opsetid("", opset_version)]
-        onnx_kwargs = {"opset_imports": opset_imports}
-        model_func = qonnx_make_model(graph_func, **onnx_kwargs)
-        idict = {node.input[0]: act_values, node.input[1]: dummy_w}
-        sess = rt.InferenceSession(model_func.SerializeToString())
-        result = sess.run(None, idict)
-        context[node.output[0]] = np.asarray(result, dtype=np.float32).reshape(oshape)
+        ishape = in_values.shape
+        oshape = out_values.shape
+        # Functionally verify with PyTorch implementation, since weight & bias are removed
+        in_act = torch.from_numpy(in_values)
+        out_act = layer_norm(in_act, [ishape[-1]], eps=self.get_nodeattr("epsilon"))
+        context[node.output[0]] = np.asarray(out_act, dtype=np.float32).reshape(oshape)
 
     # Verifies the node attributes, inputs and outputs
     def verify_node(self):
@@ -160,12 +138,12 @@ class LayerNorm(HWCustomOp):
 
     def get_instream_width(self, ind=0):
         i_bits = self.get_input_datatype().bitwidth()
-        in_width = i_bits * self.get_nodeattr("SIMD")
+        in_width = i_bits * self.get_nodeattr("simd")
         return in_width
 
     def get_outstream_width(self, ind=0):
         o_bits = self.get_output_datatype().bitwidth()
-        out_width = o_bits * self.get_nodeattr("PE")
+        out_width = o_bits * self.get_nodeattr("simd")
         return out_width
 
     def calc_wmem(self):
