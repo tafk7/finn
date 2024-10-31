@@ -55,8 +55,8 @@ def build_layernorm_graph(
             bw += [16]
         elif dt == "FLOAT32":
             bw += [32]
-        else:
-            raise ValueError(f"LayerNorm only supports FP16/FP32 inputs. Invalid input: {dt}")
+        # else:
+        #     raise ValueError(f"LayerNorm only supports FP16/FP32 inputs. Invalid input: {dt}")
     
     #(scale, zero_point, bitwidth)
     input_quant_params  = [1.0, 0.0, bw[0]]
@@ -251,13 +251,14 @@ def make_single_layernorm_modelwrapper(impl_style="hls", simd=1, idt=DataType["F
 @pytest.mark.fpgadataflow
 def test_convert_to_hw_layernorm_layer(exec_mode, simd):
     '''
-    This test checks that the layernorm layer can be converted to a HW layer.
+    This test checks that the FINN LayerNorm layer can be converted to a HW layer.
     '''
     if (exec_mode == "stitched_ip" or exec_mode == "rtlsim") and simd != "simd1":
         pytest.skip("Skipping this test to avoid long test times")
     # Create the qonnx model
     io_shape = (1, 1, 128, 384)
     # input = torch.randn(io_shape)
+    
     input = gen_finn_dt_tensor(DataType["FLOAT32"], io_shape)
     input_t = {"global_in": input}
 
@@ -311,29 +312,35 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
 
 @pytest.mark.parametrize("impl_style", ["hls"])
 @pytest.mark.parametrize("simd", ["simd1", "simd2", "simd3", "simd4"])
-@pytest.mark.parametrize("idt", ["FLOAT32", "FLOAT32"])
-@pytest.mark.parametrize("odt", ["FLOAT32", "FLOAT32"])
+@pytest.mark.parametrize("idt", ["FLOAT16", "FLOAT32"])
+@pytest.mark.parametrize("wdt", ["FLOAT16", "FLOAT32"])
+@pytest.mark.parametrize("bdt", ["FLOAT16", "FLOAT32"])
+@pytest.mark.parametrize("odt", ["FLOAT16", "FLOAT32"])
 @pytest.mark.parametrize("ifm_dim", [(1, 128, 384), (1, 12, 12, 128)])
 @pytest.mark.fpgadataflow
-def test_fpga_dataflow_layernorm(impl_style, simd, idt,  odt, ifm_dim):
-    idt = DataType[idt]
-    odt = DataType[odt]
+def test_fpga_dataflow_layernorm(impl_style, simd, idt, wdt, bdt, odt, ifm_dim):
+    '''
+    This test checks that the ONNX LayerNormalization can lowered to FINN LayerNorm
+    '''
     simd = int(simd[-1])
     io_shape = ifm_dim
     tolerance = 2
 
     epsilon = 1e-05
     
-    # model = make_single_layernorm_modelwrapper(impl_style, simd, idt, odt, ifm_dim)
-    model = build_layernorm_graph(idt,idt,idt,odt,epsilon,ifm_dim)
-    
+    model = build_layernorm_graph(idt, wdt, bdt, odt, epsilon, ifm_dim)
     model = model.transform(InferShapes())
-    model.save(export_onnx_path_1)
+    model.save(export_onnx_path_0)
 
     if(ifm_dim[-1] % simd != 0):
-        pytest.skip(f"Skipping this test because the inner dimension is not a multiple of {simd}")
+        pytest.skip(f"Skipping this test because the channel dimension is not a multiple of {simd}")
 
-    input = gen_finn_dt_tensor(idt, io_shape)
+    # TODO: gen_finn_dt_tensor doesn't have FP16 support
+    if idt == 'FLOAT16':
+        input = np.random.randn(*io_shape).astype(np.float16)
+        input = input.astype(np.float32)
+    else:
+        input = gen_finn_dt_tensor(idt, io_shape)
     in_name = model.graph.input[0].name
     out_name = model.graph.output[0].name
     input_t = {in_name: input}
@@ -364,4 +371,4 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt,  odt, ifm_dim):
             print(f"Index: {i}, Expected: {y_ref_flat[i]}, Got: {y_hw_flat[i]}")
 
     assert np.allclose(y_ref, y_hw, atol=tolerance), "Model output does not match expected output"
-    print('We did it!')
+    print('')

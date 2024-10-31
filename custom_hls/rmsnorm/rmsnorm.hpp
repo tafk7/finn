@@ -44,17 +44,14 @@
 #include <hls_vector.h>
 #include <hls_math.h>
 #include <functional>
-#include "utils.hpp"
-#include "_eltwise_affine.hpp"
+#include "rn_utils.hpp"
 
-constexpr float epsilon = 1e-5;
 
 // First pipeline stage
 //
 // Trigger: Data available on src input stream
 //
 // Desc: Performs elemwise-square and calculate mean for N elements
-
 template<typename TI, typename TO, unsigned N, unsigned SIMD>
 void square_mean_stage(
 	hls::stream<hls::vector<TI, SIMD>> &in_s,
@@ -104,6 +101,7 @@ void square_mean_stage(
 // Desc: Divide by sqroot of square-mean
 template<typename T, unsigned N, unsigned SIMD>
 void inv_sqrt_stage(
+	const T epsilon,
 	hls::stream<hls::vector<T, SIMD>> &in_s,
 	hls::stream<hls::vector<T, SIMD>> &out_s,
 	hls::stream<T> &mean_s
@@ -140,42 +138,12 @@ void inv_sqrt_stage(
 	}
 }
 
-// - - - - - - - - - - - - - - - 
-// Third pipeline stage
-// Performs element_affine elementwise multiplication
-// _elementwise_affine.hpp is statically generated from
-// the FINN compiler.
-// - - - - - - - - - - - - - - - 
-template<typename T, unsigned N, unsigned SIMD>
-void eltwise_affine_stage(
-	hls::stream<hls::vector<T, SIMD>> &in_s,
-	hls::stream<hls::vector<T, SIMD>> &out_s
-) {
-#pragma HLS pipeline II=1 style=flp
-
-	static ap_uint<clog2(N/SIMD)+1> count = 0;
-#pragma HLS reset variable=count
-
-	if (!in_s.empty()) {
-		hls::vector<T, SIMD> const in = in_s.read();
-		hls::vector<T, SIMD> out;
-		hls::vector<T, SIMD> _eltwise = _eltwise_affine[count++];
-		for(unsigned i=0; i<SIMD; i++) {
-#pragma HLS UNROLL
-			out[i] = in[i] *  _eltwise[i];
-		}
-		out_s.write(out);
-	}
-
-
-	if(count == (N/SIMD)) {
-		count = 0;
-	}
-}
-
-
-template<typename TI, typename TO, unsigned N, unsigned SIMD>
+template<typename TI, // Input type
+         typename TO, // Output type
+         unsigned N, 
+         unsigned SIMD>
 void rmsnorm_pipeline(
+    const TO epsilon,
 	hls::stream<hls::vector<TI, SIMD>> &src,
 	hls::stream<hls::vector<TO, SIMD>> &dst
 ) {
@@ -185,12 +153,9 @@ void rmsnorm_pipeline(
 #pragma HLS stream variable=stage1_s depth=N
 	static hls::stream<TO> mean_s;
 #pragma HLS stream variable=mean_s depth=2
-	static hls::stream<hls::vector<TI, SIMD>> stage2_s;
-#pragma HLS stream variable=stage1_s depth=2
 
 	square_mean_stage<TI, TO, N, SIMD>(src, stage1_s, mean_s);
-	inv_sqrt_stage<TO, N, SIMD>(stage1_s, stage2_s, mean_s);
-	eltwise_affine_stage<TO, N, SIMD>(stage2_s, dst);
+	inv_sqrt_stage<TO, N, SIMD>(epsilon, stage1_s, dst, mean_s);
 }
 
 #endif

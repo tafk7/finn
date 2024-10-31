@@ -47,7 +47,6 @@
 #include "ln_utils.hpp"
 
 
-
 // First pipeline stage
 //
 // Trigger: Data available on src input stream
@@ -159,7 +158,6 @@ void var_stage(
 	}
 }
 
-
 // Third pipeline stage
 //
 // Trigger: On data being available on the varmean value stream 
@@ -169,9 +167,8 @@ template<typename TO, unsigned N, unsigned SIMD>
 void inv_sqrt_stage(
 	const TO epsilon,
 	hls::stream<hls::vector<TO, SIMD>> &in_s,
-	hls::stream<varmean_t<TO>> &varmean_s,
-
 	hls::stream<hls::vector<TO, SIMD>> &out_s
+	hls::stream<varmean_t<TO>> &varmean_s,
 ) {
 #pragma HLS pipeline II=1 style=flp
 
@@ -199,7 +196,6 @@ void inv_sqrt_stage(
 		count++;
 	}
 
-
 	if (!varmean_s.empty() && !valid) {
 		vm = varmean_s.read();
 		valid = true;
@@ -207,9 +203,9 @@ void inv_sqrt_stage(
 }
 
 template<typename TI, // Input type
-       	 typename TO, // output type 
-	 unsigned N, 
-	 unsigned SIMD>
+       	 typename TO, // Output type 
+	     unsigned N, 
+	     unsigned SIMD>
 void layernorm_pipeline(
 	const TO epsilon,
 	hls::stream<hls::vector<TI, SIMD>> &src,
@@ -228,7 +224,7 @@ void layernorm_pipeline(
 
 	mean_stage<TI, TO, N, SIMD>(src, stage1_s, mean_s);
 	var_stage<TO, N, SIMD>(stage1_s, mean_s, stage2_s, varmean_s);
-	inv_sqrt_stage<TO, N, SIMD>(epsilon, stage2_s, varmean_s, dst);
+	inv_sqrt_stage<TO, N, SIMD>(epsilon, stage2_s, dst, varmean_s);
 }
 
 #endif

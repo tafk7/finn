@@ -37,7 +37,7 @@
 //
 // THIS COPYRIGHT NOTICE AND DISCLAIMER MUST BE RETAINED AS PART OF THIS FILE AT ALL TIMES.
 #include "layernorm.hpp"
-#include "utils.hpp"
+#include "ln_utils.hpp"
 
 constexpr unsigned SIMD = 4;
 constexpr unsigned W = 384;
