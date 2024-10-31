@@ -1,6 +1,7 @@
 from typing import Tuple
 import pytest
 import torch
+import onnx
 import torch.nn as nn
 import brevitas.nn as qnn
 import finn.core.onnx_exec as oxe
@@ -125,7 +126,6 @@ def build_layernorm_graph(
         'LayerNormalization',
         inputs=[Quant_0_out.name, "layernorm0_scale_param", "layernorm0_b_param"],
         outputs=[LayerNorm_0_out.name],
-        domain="ai.onnx v18",
         name='Layernorm_1',
     )
     model.graph.node.append(LayerNorm_0)
@@ -193,8 +193,17 @@ def build_layernorm_graph(
     model.set_initializer("layernorm0_scale_param", np.zeros((last_dim), dtype=np.float32))
     model.set_initializer("layernorm0_b_param", np.zeros((last_dim), dtype=np.float32))
     model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
+
     model.save(export_onnx_path_0)
-    return model
+
+    # Force the opset to 17 (TODO: Must be a better way to do this)
+    _model = onnx.load(export_onnx_path_0)
+    op = onnx.OperatorSetIdProto()
+    op.version = 17
+    _model_opset17 = helper.make_model(_model.graph, opset_imports=[op])    
+    onnx.save(_model_opset17, export_onnx_path_0)
+
+    return ModelWrapper(export_onnx_path_0) 
 
 
 def make_single_layernorm_modelwrapper(impl_style="hls", simd=1, idt=DataType["FLOAT32"], odt=DataType["FLOAT32"], ifm_dim=(128, 384)):
