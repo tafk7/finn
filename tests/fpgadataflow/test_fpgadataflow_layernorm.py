@@ -141,6 +141,8 @@ def build_layernorm_graph(
         domain="finn.custom_op.fpgadataflow.hls",
         rhs_shape=scale_bias_shape,
         lhs_shape=idm,
+        rhs_dtype=str(weight_datatype),
+        lhs_dtype=str(input_datatype),
         out_shape=idm,
         name='ElementwiseMul_hls_0',
     )
@@ -155,6 +157,8 @@ def build_layernorm_graph(
         domain="finn.custom_op.fpgadataflow.hls",
         rhs_shape=scale_bias_shape,
         lhs_shape=idm,
+        rhs_dtype=str(bias_datatype),
+        lhs_dtype=str(input_datatype),
         out_shape=idm,
         name='ElementwiseAdd_hls_0',
     )
