@@ -90,7 +90,9 @@ def build_layernorm_graph(
     model.graph.node.append(Quant_0)
     model.graph.value_info.append(Quant_0_out)
 
-    Quant_LayerNorm_scale_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, [last_dim])
+    scale_bias_shape = [last_dim]
+
+    Quant_LayerNorm_scale_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, scale_bias_shape)
     Quant_LayerNorm_scale = helper.make_node(
             'Quant',
             domain='qonnx.custom_op.general',
@@ -104,7 +106,7 @@ def build_layernorm_graph(
     model.graph.node.append(Quant_LayerNorm_scale)
     model.graph.value_info.append(Quant_LayerNorm_scale_out)
 
-    Quant_LayerNorm_bias_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, [last_dim])
+    Quant_LayerNorm_bias_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, scale_bias_shape)
     Quant_LayerNorm_bias = helper.make_node(
             'Quant',
             domain='qonnx.custom_op.general',
@@ -137,6 +139,9 @@ def build_layernorm_graph(
         inputs=[LayerNorm_0_out.name, Quant_LayerNorm_scale_out.name],
         outputs=[ElementWiseMul_hls_0_out.name],
         domain="finn.custom_op.fpgadataflow.hls",
+        rhs_shape=scale_bias_shape,
+        lhs_shape=idm,
+        out_shape=idm,
         name='ElementwiseMul_hls_0',
     )
     model.graph.node.append(ElementWiseMul_hls_0)
@@ -148,6 +153,9 @@ def build_layernorm_graph(
         inputs=[ElementWiseMul_hls_0_out.name, Quant_LayerNorm_bias_out.name],
         outputs=[ElementWiseAdd_hls_0_out.name],
         domain="finn.custom_op.fpgadataflow.hls",
+        rhs_shape=scale_bias_shape,
+        lhs_shape=idm,
+        out_shape=idm,
         name='ElementwiseAdd_hls_0',
     )
     model.graph.node.append(ElementWiseAdd_hls_0)
