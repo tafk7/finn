@@ -97,7 +97,7 @@ def build_layernorm_graph(
     Quant_LayerNorm_scale = helper.make_node(
             'Quant',
             domain='qonnx.custom_op.general',
-            inputs=["layernorm0_scale_param", 'layernorn_scale_quant_scale', 'layernorm_scale_quant_zeropt', 'layernorm_scale_quant_bitwidth'],
+            inputs=["layernorm0_scale_param", 'layernorm_scale_quant_scale', 'layernorm_scale_quant_zeropt', 'layernorm_scale_quant_bitwidth'],
             outputs=[Quant_LayerNorm_scale_out.name],
             narrow=0,
             signed=1,
@@ -111,7 +111,7 @@ def build_layernorm_graph(
     Quant_LayerNorm_bias = helper.make_node(
             'Quant',
             domain='qonnx.custom_op.general',
-            inputs=["layernorm0_b_param", 'layernorn_bias_quant_scale', 'layernorm_bias_quant_zeropt', 'layernorm_bias_quant_bitwidth'],
+            inputs=["layernorm0_b_param", 'layernorm_bias_quant_scale', 'layernorm_bias_quant_zeropt', 'layernorm_bias_quant_bitwidth'],
             outputs=[Quant_LayerNorm_bias_out.name],
             narrow=0,
             signed=1,
@@ -323,8 +323,8 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt,  odt, ifm_dim):
     # model = make_single_layernorm_modelwrapper(impl_style, simd, idt, odt, ifm_dim)
     model = build_layernorm_graph(idt,idt,idt,odt,epsilon,ifm_dim)
     
-    # model.save(export_onnx_path_1)
     model = model.transform(InferShapes())
+    model.save(export_onnx_path_1)
 
     if(ifm_dim[-1] % simd != 0):
         pytest.skip(f"Skipping this test because the inner dimension is not a multiple of {simd}")
