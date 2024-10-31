@@ -79,7 +79,7 @@ def build_layernorm_graph(
     # Create node
     Quant_0 = helper.make_node(
             'Quant',
-            domain='finn.custom_op.general',
+            domain='qonnx.custom_op.general',
             inputs=[inp.name, 'quant0_scale', 'quant0_zeropt', 'quant0_bitwidth'],
             outputs=[Quant_0_out.name],
             narrow=0,
@@ -93,7 +93,7 @@ def build_layernorm_graph(
     Quant_LayerNorm_scale_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, [last_dim])
     Quant_LayerNorm_scale = helper.make_node(
             'Quant',
-            domain='finn.custom_op.general',
+            domain='qonnx.custom_op.general',
             inputs=["layernorm0_scale_param", 'layernorn_scale_quant_scale', 'layernorm_scale_quant_zeropt', 'layernorm_scale_quant_bitwidth'],
             outputs=[Quant_LayerNorm_scale_out.name],
             narrow=0,
@@ -107,7 +107,7 @@ def build_layernorm_graph(
     Quant_LayerNorm_bias_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, [last_dim])
     Quant_LayerNorm_bias = helper.make_node(
             'Quant',
-            domain='finn.custom_op.general',
+            domain='qonnx.custom_op.general',
             inputs=["layernorm0_b_param", 'layernorn_bias_quant_scale', 'layernorm_bias_quant_zeropt', 'layernorm_bias_quant_bitwidth'],
             outputs=[Quant_LayerNorm_bias_out.name],
             narrow=0,
@@ -156,7 +156,7 @@ def build_layernorm_graph(
     # Create node
     Quant_1 = helper.make_node(
             'Quant',
-            domain='finn.custom_op.general',
+            domain='qonnx.custom_op.general',
             inputs=[ElementWiseAdd_hls_0_out.name, 'quant1_scale', 'quant1_zeropt', 'quant1_bitwidth'],
             outputs=[outp.name],
             narrow=0,
