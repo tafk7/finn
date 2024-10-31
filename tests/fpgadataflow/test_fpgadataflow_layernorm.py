@@ -34,26 +34,26 @@ import finn.transformation.streamline.absorb as absorb
 import numpy as np
 test_fpga_part = "xczu3eg-sbva484-1-e"
 target_clk_ns = 5
-export_onnx_path = "pytest_layernorm_dut.onnx"
+export_onnx_path_0 = "pytest_layernorm_dut_0.onnx"
+export_onnx_path_1 = "pytest_layernorm_dut_1.onnx"
 
 
 def build_layernorm_graph(
-        idm:tuple, # Input dimension
-        epsilon:float,
         input_datatype:str,
         weight_datatype:str,
         bias_datatype:str,
         output_datatype:str,
-        impl_style:str
+        epsilon:float,
+        idm:tuple, # Input dimension
 ) -> ModelWrapper:
 
     # Datatypes restricted to "FLOAT16" or "FLOAT32" in current implementation
     bw = []
     for dt in [input_datatype, weight_datatype, bias_datatype, output_datatype]:
         if dt == "FLOAT16":
-            bw += 16
+            bw += [16]
         elif dt == "FLOAT32":
-            bw += 32
+            bw += [32]
         else:
             raise ValueError(f"LayerNorm only supports FP16/FP32 inputs. Invalid input: {dt}")
     
@@ -185,7 +185,7 @@ def build_layernorm_graph(
     model.set_initializer("layernorm0_scale_param", np.zeros((last_dim), dtype=np.float32))
     model.set_initializer("layernorm0_b_param", np.zeros((last_dim), dtype=np.float32))
     model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
-    model.save(export_onnx_path)
+    model.save(export_onnx_path_0)
     return model
 
 
@@ -264,6 +264,7 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
         model = model.transform(ApplyConfig(folding_config))
         model = model.transform(SpecializeLayers(test_fpga_part))
         model = model.transform(GiveUniqueNodeNames())
+        model.save(export_onnx_path_1)
         if exec_mode == "cppsim":
             model = model.transform(SetExecMode("cppsim"))
             model = model.transform(PrepareCppSim())
@@ -276,7 +277,7 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
                 model = model.transform(PrepareRTLSim())
                 pytest.fail("PrepareRTLSim should have failed")
             except Exception as e:
-                # expected to fail because this node do not support rtlsim
+                print('expected to fail because this node do not support rtlsim')
                 pass
         elif exec_mode == "stitched_ip":
             model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
@@ -284,6 +285,7 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
             model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
     except Exception as e:
         pytest.fail(f"Failed to transform the model: {str(e)}")
+    print('We did it!')
 
 
 @pytest.mark.parametrize("impl_style", ["hls"])
@@ -298,9 +300,13 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt,  odt, ifm_dim):
     simd = int(simd[-1])
     io_shape = ifm_dim
     tolerance = 2
-    
-    model = make_single_layernorm_modelwrapper(impl_style, simd, idt, odt, ifm_dim)
 
+    epsilon = 1e-05
+    
+    # model = make_single_layernorm_modelwrapper(impl_style, simd, idt, odt, ifm_dim)
+    model = build_layernorm_graph(idt,idt,idt,odt,epsilon,ifm_dim)
+    
+    # model.save(export_onnx_path_1)
     model = model.transform(InferShapes())
 
     if(ifm_dim[-1] % simd != 0):
@@ -328,6 +334,7 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt,  odt, ifm_dim):
 
     # run the model
     y_hw = oxe.execute_onnx(model, input_t)[out_name]
+    model.save(export_onnx_path_1)
 
     y_hw_flat = y_hw.flatten()
     y_ref_flat = y_ref.flatten()
@@ -336,3 +343,4 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt,  odt, ifm_dim):
             print(f"Index: {i}, Expected: {y_ref_flat[i]}, Got: {y_hw_flat[i]}")
 
     assert np.allclose(y_ref, y_hw, atol=tolerance), "Model output does not match expected output"
+    print('We did it!')

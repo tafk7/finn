@@ -49,7 +49,8 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         self.code_gen_dict["$GLOBALS$"] = [
             "#include <hls_vector.h>",
             '#include "layernorm.hpp"',
-            '#include "utils.hpp"',
+            '#include "ln_utils.hpp"',
+            '#include "npy2vectorstream.hpp"'
         ]
 
     def defines(self, var):
@@ -121,7 +122,7 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
         builder = CppBuilder()
         # to enable additional debug features please uncommand the next line
-        # builder.append_includes("-DDEBUG")
+        builder.append_includes("-DDEBUG")
         builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
         builder.append_includes("-I$FINN_ROOT/deps/cnpy/")
         builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")

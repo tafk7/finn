@@ -44,7 +44,8 @@
 #include <hls_vector.h>
 #include <hls_math.h>
 #include <functional>
-#include "utils.hpp"
+#include "ln_utils.hpp"
+
 
 
 // First pipeline stage
