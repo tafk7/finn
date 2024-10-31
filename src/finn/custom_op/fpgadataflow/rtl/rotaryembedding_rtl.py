@@ -130,7 +130,8 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
             "ELEM_BITS": idt.bitwidth(),
             "TOP_MODULE_NAME": topname,
             "STREAM_BITS": int(stream_bits),
-            "INIT_FILE": '\"cos_values.dat\"'
+            "COS_INIT_FILE": '\"cos_values.dat\"',
+            "SIN_INIT_FILE": '\"sin_values.dat\"'
         }
         return code_gen_dict
 
@@ -170,6 +171,11 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
             "cos_values.dat",
             wdt,
             model.get_initializer("cos"),
+        )
+        self.make_weight_file(
+            "sin_values.dat",
+            wdt,
+            model.get_initializer("sin"),
         )
         # save top module name so we can refer to it after this node has been renamed
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)

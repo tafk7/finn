@@ -32,10 +32,10 @@
  * @author	Josh Monson <joshmonson@microsoft.com>
  *****************************************************************************/
 
-module vv_mul #(
+module vv_op #(
 	parameter int unsigned  SIMD = 1,
 	parameter int unsigned  ELEM_BITS = 32,
-
+	parameter               OP = "mul",
 	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8)
 ) (
 	//- Global Control ------------------
@@ -69,7 +69,13 @@ module vv_mul #(
 		for (i=0; i<SIMD; i=i+1) begin : vv_mul
 			always_ff @(posedge ap_clk) begin
 				if (active) begin
-					results[i] <= s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] * s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
+					if (OP == "mul") begin
+						results[i] <= s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] * s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
+					end else if (OP == "add") begin
+						results[i] <= s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] + s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
+					end else begin
+						results[i] <= 0;
+					end
 				end
 				if (!ap_rst_n) begin
 					results[i] <= 0;
@@ -103,7 +109,8 @@ module rope_axi #(
 	int unsigned  ELEM_BITS,
 
 	// INITIALIZE WEIGHTS
-	parameter  INIT_FILE = "",
+	parameter COS_INIT_FILE = "",
+	parameter SIN_INIT_FILE = "",
 
 	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8),
 	localparam int unsigned  WEIGHT_DEPTH = SEQ_LEN * HIDDEN_DIM
@@ -123,14 +130,14 @@ module rope_axi #(
 	output	logic [STREAM_BITS-1:0]  m_axis_tdata
 );
 
-  logic  s_axis_c_weights_tready;
-  logic  s_axis_c_weights_tvalid;
-  logic [STREAM_BITS-1:0]  s_axis_c_weights_tdata;
+  logic  m_axis_c_weights_tready;
+  logic  m_axis_c_weights_tvalid;
+  logic [STREAM_BITS-1:0]  m_axis_c_weights_tdata;
 
   memstream #(
 	.DEPTH(WEIGHT_DEPTH),
 	.WIDTH(STREAM_BITS),
-	.INIT_FILE(INIT_FILE),
+	.INIT_FILE(COS_INIT_FILE),
 	.RAM_STYLE("auto")
   ) c_weight (
 	.clk(ap_clk),
@@ -146,15 +153,20 @@ module rope_axi #(
 	.config_q0(),
 
 	// Continuous output stream
-	.ordy(s_axis_c_weights_tready),
-	.ovld(s_axis_c_weights_tvalid),
-	.odat(s_axis_c_weights_tdata)
+	.ordy(m_axis_c_weights_tready),
+	.ovld(m_axis_c_weights_tvalid),
+	.odat(m_axis_c_weights_tdata)
 );
 
-  vv_mul #(
+  logic  m_axis_c_mul_tready;
+  logic  m_axis_c_mul_tvalid;
+  logic [STREAM_BITS-1:0]  m_axis_c_mul_tdata;
+
+  vv_op #(
 	.SIMD(SIMD),
-	.ELEM_BITS(ELEM_BITS)
-  ) vv_mul_array (
+	.ELEM_BITS(ELEM_BITS),
+	.OP("mul")
+  ) vv_c_mul_array (
 	//- Global Control ------------------
 	.ap_clk(ap_clk),
 	.ap_rst_n(ap_rst_n),
@@ -165,9 +177,91 @@ module rope_axi #(
 	.s_axis_a_tdata(s_axis_tdata),
 
 	//- AXI Stream - Input --------------
-	.s_axis_b_tready(s_axis_c_weights_tready),
-	.s_axis_b_tvalid(s_axis_c_weights_tvalid),
-	.s_axis_b_tdata(s_axis_c_weights_tdata),
+	.s_axis_b_tready(m_axis_c_weights_tready),
+	.s_axis_b_tvalid(m_axis_c_weights_tvalid),
+	.s_axis_b_tdata(m_axis_c_weights_tdata),
+
+	//- AXI Stream - Output -------------
+	.m_axis_c_tready(m_axis_c_mul_tready),
+	.m_axis_c_tvalid(m_axis_c_mul_tvalid),
+	.m_axis_c_tdata(m_axis_c_mul_tdata)
+  );
+
+  logic  m_axis_s_weights_tready;
+  logic  m_axis_s_weights_tvalid;
+  logic [STREAM_BITS-1:0]  m_axis_s_weights_tdata;
+
+  memstream #(
+	.DEPTH(WEIGHT_DEPTH),
+	.WIDTH(STREAM_BITS),
+	.INIT_FILE(SIN_INIT_FILE),
+	.RAM_STYLE("auto")
+  ) s_weight (
+	.clk(ap_clk),
+	.rst(~ap_rst_n),
+
+	// Configuration and readback interface - compatible with ap_memory
+	.config_ce(),
+	.config_we(),
+	.config_address(),
+	.config_d0(),
+
+	.config_rack(),
+	.config_q0(),
+
+	// Continuous output stream
+	.ordy(m_axis_s_weights_tready),
+	.ovld(m_axis_s_weights_tvalid),
+	.odat(m_axis_s_weights_tdata)
+);
+
+  logic  m_axis_s_mul_tready;
+  logic  m_axis_s_mul_tvalid;
+  logic [STREAM_BITS-1:0]  m_axis_s_mul_tdata;
+
+  vv_op #(
+	.SIMD(SIMD),
+	.ELEM_BITS(ELEM_BITS),
+	.OP("mul")
+  ) vv_s_mul_array (
+	//- Global Control ------------------
+	.ap_clk(ap_clk),
+	.ap_rst_n(ap_rst_n),
+
+	//- AXI Stream - Input --------------
+	.s_axis_a_tready(s_axis_tready),
+	.s_axis_a_tvalid(s_axis_tvalid),
+	.s_axis_a_tdata(s_axis_tdata),
+
+	//- AXI Stream - Input --------------
+	.s_axis_b_tready(m_axis_s_weights_tready),
+	.s_axis_b_tvalid(m_axis_s_weights_tvalid),
+	.s_axis_b_tdata(m_axis_s_weights_tdata),
+
+	//- AXI Stream - Output -------------
+	.m_axis_c_tready(m_axis_s_mul_tready),
+	.m_axis_c_tvalid(m_axis_s_mul_tvalid),
+	.m_axis_c_tdata(m_axis_s_mul_tdata)
+  );
+
+  vv_op #(
+	.SIMD(SIMD),
+	.ELEM_BITS(ELEM_BITS),
+	.OP("add")
+  ) vv_add_array (
+	//- Global Control ------------------
+	.ap_clk(ap_clk),
+	.ap_rst_n(ap_rst_n),
+
+	//- AXI Stream - Input --------------
+	.s_axis_a_tready(m_axis_c_mul_tready),
+	.s_axis_a_tvalid(m_axis_c_mul_tvalid),
+	.s_axis_a_tdata(m_axis_c_mul_tdata),
+
+	//- AXI Stream - Input --------------
+	.s_axis_b_tready(m_axis_s_mul_tready),
+	.s_axis_b_tvalid(m_axis_s_mul_tvalid),
+	.s_axis_b_tdata(m_axis_s_mul_tdata),
 
 	//- AXI Stream - Output -------------
 	.m_axis_c_tready(m_axis_tready),

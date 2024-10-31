@@ -157,12 +157,12 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
 
     # Define the cached tensors
     #cos_values = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
-    cos = np.random.randint(-10, 10, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
-    sin = np.random.randint(-10, 10, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+    cos = np.random.randint(-7, 7, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+    sin = np.random.randint(-7, 7, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
 
     #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
 
-    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden]) % 10
+    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden]) % 8
     #cos = gen_finn_dt_tensor(wdt, [1, 1, seq_len, hidden])
     print("x=",x)
     input_dict = {"input": x}
@@ -201,9 +201,10 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
     #import pdb; pdb.set_trace()
     model.set_metadata_prop("exec_mode", "rtlsim")
     y_produced = oxe.execute_onnx(model, input_dict)["output"]
-    print("cos=",cos)
-    print("rtl output=",y_produced)
+    print("x*cos=", x * cos)
+    print("x*sin=", x * sin)
     print("y_expected=",y_expected)
+    print("rtl output=",y_produced)
     # assert y_produced.shape == expected_oshape
     assert (y_produced == y_expected).all()
 
