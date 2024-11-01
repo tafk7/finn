@@ -32,6 +32,240 @@
  * @author	Josh Monson <joshmonson@microsoft.com>
  *****************************************************************************/
 
+module concat #(
+    parameter int unsigned  SIMD = 1,
+	parameter int unsigned  ELEM_BITS = 32,
+	parameter int unsigned  SLICE_0_STARTS = 0,
+	parameter int unsigned  SLICE_0_ENDS = 1,
+    parameter int unsigned  SLICE_1_STARTS = 0,
+	parameter int unsigned  SLICE_1_ENDS = 1,
+	parameter int unsigned  SLICE_DIM_SIZE = 1,
+	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8)
+) (
+	//- Global Control ------------------
+	input	logic  ap_clk,
+	input	logic  ap_rst_n,
+
+    //- AXI Stream - Input --------------
+	output	logic  s_axis_slice_0_tready,
+	input	logic  s_axis_slice_0_tvalid,
+	input	logic [STREAM_BITS-1:0]  s_axis_slice_0_tdata,
+
+	output	logic  s_axis_slice_1_tready,
+	input	logic  s_axis_slice_1_tvalid,
+	input	logic [STREAM_BITS-1:0]  s_axis_slice_1_tdata,
+
+	//- AXI Stream - Output -------------
+	input	logic  m_axis_tready,
+	output	logic  m_axis_tvalid,
+	output	logic [STREAM_BITS-1:0]  m_axis_tdata,
+);
+
+	logic [SLICE_DIM_SIZE-1:0] c_slice_index_low, n_slice_index_low;
+	logic [SLICE_DIM_SIZE-1:0] c_slice_index_high, n_slice_index_high;
+
+	logic [ELEM_BITS-1:0] to_output_data[SIMD];
+	logic                 to_output_valid[SIMD];
+
+	genvar i;
+	generate
+		for (i=0; i<SIMD; i=i+1) begin : concat
+			always_comb begin
+				if (c_slice_index_low + i < SLICE_0_ENDS) begin
+					to_output_data[i] = s_axis_slice_0_tdata[i*ELEM_BITS +: ELEM_BITS];
+					to_output_valid[i] = s_axis_slice_0_tvalid;
+				end else begin
+					to_output_data[i]  = s_axis_slice_1_tdata[i*ELEM_BITS +: ELEM_BITS];
+					to_output_valid[i] = s_axis_slice_1_tvalid;
+				end
+			end
+		end
+	endgenerate
+
+	always_comb begin
+		m_axis_tdata      =  {to_output_data};
+		m_axis_tvalid     = |{to_output_valid};
+		increment_indices =   m_axis_tvalid & m_axis_tready;
+	end
+
+	always_comb begin
+		n_slice_index_low  = c_slice_index_low;
+		n_slice_index_high = c_slice_index_high;
+
+		if (increment_indices && c_slice_index_high + SIMD < ENDS) begin
+			n_slice_index_low  = c_slice_index_low + SIMD;
+			n_slice_index_high = c_slice_index_high + SIMD;
+		end else begin
+			n_slice_index_low  = 0;
+			n_slice_index_high = SIMD-1;
+		end
+   end
+
+   always_ff @(posedge ap_clk) begin
+		c_slice_index_low <= n_slice_index_low;
+		c_slice_index_high <= n_slice_index_high;
+
+		if (!ap_rst_n) begin
+			c_slice_index_high <= SIMD-1;
+			c_slice_index_low <= 0;
+		end
+   end
+
+endmodule
+
+module slice #(
+	parameter int unsigned  SIMD = 1,
+	parameter int unsigned  ELEM_BITS = 32,
+	parameter int unsigned  SLICE_0_STARTS = 0,
+	parameter int unsigned  SLICE_0_ENDS = 1,
+    parameter int unsigned  SLICE_1_STARTS = 0,
+	parameter int unsigned  SLICE_1_ENDS = 1,
+	parameter int unsigned  SLICE_DIM_SIZE = 1,
+	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8)
+) (
+	//- Global Control ------------------
+	input	logic  ap_clk,
+	input	logic  ap_rst_n,
+
+	//- AXI Stream - Input --------------
+	output	logic  s_axis_tready,
+	input	logic  s_axis_tvalid,
+	input	logic [STREAM_BITS-1:0]  s_axis_tdata,
+
+	//- AXI Stream - Output -------------
+	input	logic  m_axis_slice_0_tready,
+	output	logic  m_axis_slice_0_tvalid,
+	output	logic [STREAM_BITS-1:0]  m_axis_slice_0_tdata,
+
+	input	logic  m_axis_slice_1_tready,
+	output	logic  m_axis_slice_1_tvalid,
+	output	logic [STREAM_BITS-1:0]  m_axis_slice_1_tdata
+);
+
+   localparam FIFO_COUNT_WIDTH = $clog2(FIFO_DEPTH     + 1);
+   localparam SLICE_DIM_WIDTH  = $clog2(SLICE_DIM_SIZE + 1);
+
+   logic [SLICE_DIM_WIDTH-1:0] c_slice_index_low, n_slice_index_low;
+   logic [SLICE_DIM_WIDTH-1:0] c_slice_index_high, n_slice_index_high;
+
+   logic  increment_indices;
+
+   logic  in_slice_0_range;
+   logic  in_slice_1_range;
+
+   assign in_slice_0_range = (c_slice_index_low >= SLICE_0_STARTS) && (c_slice_index_high < SLICE_0_ENDS);
+   assign in_slice_1_range = (c_slice_index_low >= SLICE_1_STARTS) && (c_slice_index_high < SLICE_1_ENDS);
+
+   assign m_axis_slice_0_tdata = s_axis_tdata;
+
+   always_comb begin
+	  s_axis_tready         = 1'b0;
+	  increment_indices     = 1'b0;
+	  m_axis_slice_0_tvalid = 1'b0;
+	  m_axis_slice_1_tvalid = 1'b0;
+
+	  if(s_axis_tvalid) begin
+		  case ({in_slice_1_range, in_slice_0_range})
+		    "2'b00": begin
+			  s_axis_tready         = 1'b0;
+  			  increment_indices     = 1'b0;
+	  		  m_axis_slice_0_tvalid = 1'b0;
+	          m_axis_slice_1_tvalid = 1'b0;
+			end
+			"2'b01": begin
+				if (m_axis_slice_0_tready) begin
+					s_axis_tready         = 1'b1;
+					increment_indices     = 1'b1;
+					m_axis_slice_0_tvalid = 1'b1;
+				end
+			end
+			"2'b10": begin
+				if (m_axis_slice_1_tready) begin
+					s_axis_tready         = 1'b1;
+					increment_indices     = 1'b1;
+					m_axis_slice_1_tvalid = 1'b1;
+				end
+			end
+			"2'b11": begin
+				if (m_axis_slice_0_tready && m_axis_slice_1_tready) begin
+					s_axis_tready         = 1'b1;
+					increment_indices     = 1'b1;
+					m_axis_slice_0_tvalid = 1'b1;
+					m_axis_slice_1_tvalid = 1'b1;
+				end
+			end
+		  endcase
+	  end
+   end
+
+   always_comb begin
+		n_slice_index_low  = c_slice_index_low;
+		n_slice_index_high = c_slice_index_high;
+
+		if (increment_indices && c_slice_index_high + SIMD < ENDS) begin
+			n_slice_index_low  = c_slice_index_low + SIMD;
+			n_slice_index_high = c_slice_index_high + SIMD;
+		end else begin
+			n_slice_index_low  = 0;
+			n_slice_index_high = SIMD-1;
+		end
+   end
+
+   always_ff @(posedge ap_clk) begin
+		c_slice_index_low <= n_slice_index_low;
+		c_slice_index_high <= n_slice_index_high;
+
+		if (!ap_rst_n) begin
+			c_slice_index_high <= SIMD-1;
+			c_slice_index_low <= 0;
+		end
+   end
+
+endmodule
+
+module v_unary_op #(
+	parameter int unsigned  SIMD = 1,
+	parameter int unsigned  ELEM_BITS = 32,
+	parameter               OP = "neg",
+	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8)
+) (
+	//- Global Control ------------------
+	input	logic  ap_clk,
+	input	logic  ap_rst_n,
+
+	//- AXI Stream - Input --------------
+	output	logic  s_axis_tready,
+	input	logic  s_axis_tvalid,
+	input	logic [STREAM_BITS-1:0]  s_axis_tdata,
+
+	//- AXI Stream - Output -------------
+	input	logic  m_axis_tready,
+	output	logic  m_axis_tvalid,
+	output	logic [STREAM_BITS-1:0]  m_axis_tdata
+);
+	genvar i;
+	generate
+		for (i=0; i<SIMD; i=i+1) begin : unary_op
+			always_ff @(posedge ap_clk) begin
+				if (s_axis_tvalid && m_axis_tready) begin
+					if (OP == "neg") begin
+						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= -s_axis_tdata[i*ELEM_BITS +: ELEM_BITS];
+					end else if (OP == "abs") begin
+						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= $abs(s_axis_tdata[i*ELEM_BITS +: ELEM_BITS]);
+					end else begin
+						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= 0;
+					end
+				end
+				if (!ap_rst_n) begin
+					m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= 0;
+				end
+			end
+		end
+	endgenerate
+
+endmodule
+
+
 module vv_op #(
 	parameter int unsigned  SIMD = 1,
 	parameter int unsigned  ELEM_BITS = 32,
@@ -130,9 +364,126 @@ module rope_axi #(
 	output	logic [STREAM_BITS-1:0]  m_axis_tdata
 );
 
-  logic  m_axis_c_weights_tready;
-  logic  m_axis_c_weights_tvalid;
-  logic [STREAM_BITS-1:0]  m_axis_c_weights_tdata;
+	logic m_axis_0_to_half_tready;
+	logic m_axis_0_to_half_tvalid;
+	logic [STREAM_BITS-1:0] m_axis_0_to_half_tdata;
+
+	logic m_axis_half_to_end_tready;
+	logic m_axis_half_to_end_tvalid;
+	logic [STREAM_BITS-1:0] m_axis_half_to_end_tdata;
+
+	slice #(
+		.SIMD(SIMD),
+		.ELEM_BITS(ELEM_BITS),
+		.STARTS(0),
+		.ENDS((HIDDEN_DIM + 1)/2),
+		.SLICE_DIM_SIZE(HIDDEN_DIM),
+		.FIFO_DEPTH(2*HIDDEN_DIM),
+	) slice_0_to_half(
+		//- Global Control ------------------
+		.ap_clk(ap_clk),
+		.ap_rst_n(ap_rst_n),
+
+		//- AXI Stream - Input --------------
+		.s_axis_tready(s_axis_tready),
+		.s_axis_tvalid(s_axis_tvalid),
+		.s_axis_tdata(s_axis_tdata),
+
+		//- AXI Stream - Output -------------
+		.m_axis_0_to_half_tready(m_axis_0_to_half_tready),
+		.m_axis_0_to_half_tvalid(m_axis_0_to_half_tvalid),
+		.m_axis_0_to_half_tdata(m_axis_0_to_half_tdata),
+
+		//- AXI Stream - Output -------------
+		.m_axis_half_to_end_tready(m_axis_half_to_end_tready),
+		.m_axis_half_to_end_tvalid(m_axis_half_to_end_tvalid),
+		.m_axis_half_to_end_tdata(m_axis_half_to_end_tdata)
+	);
+
+	localparam int unsigned FIFO_COUNT_WIDTH = $clog2(2*HIDDEN_DIM) + 1;
+	logic [FIFO_COUNT_WIDTH-1:0] count;
+	logic [FIFO_COUNT_WIDTH-1:0] maxcount;
+
+	logic m_axis_fifo_tready;
+	logic m_axis_fifo_tvalid;
+	logic [STREAM_BITS-1:0] m_axis_fifo_tdata;
+
+	Q_srl #(
+		.depth(2*HIDDEN_DIM),
+		.width(STREAM_BITS)
+	) fifo_impl (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(count),
+		.maxcount(maxcount),
+		.i_d(m_axis_0_to_half_tdata),
+		.i_v(m_axis_0_to_half_tvalid),
+		.i_r(m_axis_0_to_half_tready),
+		.o_d(m_axis_fifo_tdata),
+		.o_v(m_axis_fifo_tvalid),
+		.o_r(m_axis_fifo_tready)
+	);
+
+
+	logic  m_axis_neg_tready;
+	logic  m_axis_neg_tvalid;
+	logic [STREAM_BITS-1:0]  m_axis_neg_tdata;
+
+	v_unary_op #(
+		.SIMD(SIMD),
+		.ELEM_BITS(ELEM_BITS),
+		.OP("neg")
+	) negative_op (
+		//- Global Control ------------------
+		.ap_clk(ap_clk),
+		.ap_rst_n(ap_rst_n),
+
+		//- AXI Stream - Input --------------
+		.s_axis_tready(m_axis_half_to_end_tready),
+		.s_axis_tvalid(m_axis_half_to_end_tvalid),
+		.s_axis_tdata(m_axis_half_to_end_tdata),
+
+		//- AXI Stream - Output -------------
+		.m_axis_tready(m_axis_neg_tready),
+		.m_axis_tvalid(m_axis_neg_tvalid),
+		.m_axis_tdata(m_axis_neg_tdata)
+	);
+
+	logic m_axis_concat_0_tready;
+	logic m_axis_concat_0_tvalid;
+    logic [STREAM_BITS-1:0] m_axis_concat_0_tdata;
+
+    concat #(
+    	.SIMD(SIMD),
+	    .ELEM_BITS(ELEM_BITS),
+		.SLICE_0_STARTS(0),
+	    .SLICE_0_ENDS((HIDDEN_DIM + 1)/2),
+        .SLICE_1_STARTS((HIDDEN_DIM + 1)/2+1),
+	    .SLICE_1_ENDS(HIDDEN_DIM),
+	    .SLICE_DIM_SIZE(HIDDEN_DIM)
+	) concat_0 (
+		//- Global Control ------------------
+		.ap_clk(ap_clk),
+		.ap_rst_n(ap_rst_n),
+
+		//- AXI Stream - Input --------------
+		.s_axis_slice_0_tready(m_axis_neg_tready),
+		.s_axis_slice_0_tvalid(m_axis_neg_tvalid),
+		.s_axis_slice_0_tdata(m_axis_neg_tdata),
+
+		.s_axis_slice_1_tready(m_axis_fifo_tdata),
+		.s_axis_slice_1_tvalid(m_axis_fifo_tvalid),
+		.s_axis_slice_1_tdata(m_axis_fifo_tready),
+
+		//- AXI Stream - Output -------------
+		.m_axis_tready(m_axis_concat_0_tready),
+		.m_axis_tvalid(m_axis_concat_0_tvalid),
+		.m_axis_tdata(m_axis_concat_0_tdata)
+	);
+
+	logic  m_axis_c_weights_tready;
+	logic  m_axis_c_weights_tvalid;
+	logic [STREAM_BITS-1:0]  m_axis_c_weights_tdata;
 
   memstream #(
 	.DEPTH(WEIGHT_DEPTH),
@@ -229,9 +580,9 @@ module rope_axi #(
 	.ap_rst_n(ap_rst_n),
 
 	//- AXI Stream - Input --------------
-	.s_axis_a_tready(s_axis_tready),
-	.s_axis_a_tvalid(s_axis_tvalid),
-	.s_axis_a_tdata(s_axis_tdata),
+	.s_axis_a_tready(m_axis_concat_0_tready),
+	.s_axis_a_tvalid(m_axis_concat_0_tvalid),
+	.s_axis_a_tdata(m_axis_concat_0_tdata),
 
 	//- AXI Stream - Input --------------
 	.s_axis_b_tready(m_axis_s_weights_tready),
