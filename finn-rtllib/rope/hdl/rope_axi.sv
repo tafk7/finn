@@ -65,18 +65,18 @@ module concat #(
 	logic [31:0] c_slice_index_low, n_slice_index_low;
 	logic [31:0] c_slice_index_high, n_slice_index_high;
 
-	logic [ELEM_BITS-1:0] to_output_data[SIMD];
-	logic                 to_output_valid[SIMD];
+	logic  [STREAM_BITS-1:0] to_output_data;
+	logic  [SIMD-1:0]        to_output_valid;
 
 	genvar i;
 	generate
 		for (i=0; i<SIMD; i=i+1) begin : concat
 			always_comb begin
 				if (c_slice_index_low + i < SLICE_0_ENDS) begin
-					to_output_data[i] = s_axis_slice_0_tdata[i*ELEM_BITS +: ELEM_BITS];
+					to_output_data[i*ELEM_BITS +: ELEM_BITS] = s_axis_slice_0_tdata[i*ELEM_BITS +: ELEM_BITS];
 					to_output_valid[i] = s_axis_slice_0_tvalid;
 				end else begin
-					to_output_data[i]  = s_axis_slice_1_tdata[i*ELEM_BITS +: ELEM_BITS];
+					to_output_data[i*ELEM_BITS +: ELEM_BITS]  = s_axis_slice_1_tdata[i*ELEM_BITS +: ELEM_BITS];
 					to_output_valid[i] = s_axis_slice_1_tvalid;
 				end
 			end
@@ -86,8 +86,8 @@ module concat #(
 	logic increment_indices;
 
 	always_comb begin
-		m_axis_tdata      =  {to_output_data};
-		m_axis_tvalid     = |{to_output_valid};
+		m_axis_tdata = to_output_data;
+		m_axis_tvalid     = |to_output_valid;
 		increment_indices =   m_axis_tvalid & m_axis_tready;
 	end
 
