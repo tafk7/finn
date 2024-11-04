@@ -195,7 +195,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         ) as f:
             f.write(template)
 
-        sv_files = ["rope_axi.sv", "../../memstream/hdl/memstream.sv"]
+        sv_files = ["rope_axi.sv", "../../memstream/hdl/memstream.sv", "../../fifo/hdl/Q_srl.v"]
         for sv_file in sv_files:
             shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
         # set ipgen_path and ip_path so that HLS-Synth transformation
@@ -217,6 +217,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         verilog_files = [
             "rope_axi.sv",
             "memstream.sv",
+            "Q_srl.v",
             self.get_nodeattr("gen_top_module") + ".v",
         ]
 
@@ -239,6 +240,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         sourcefiles = [
              "rope_axi.sv",
              "memstream.sv",
+             "Q_srl.v",
              self.get_nodeattr("gen_top_module") + ".v",
         ]
 

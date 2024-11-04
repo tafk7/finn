@@ -40,7 +40,8 @@ module concat #(
     parameter int unsigned  SLICE_1_STARTS = 0,
 	parameter int unsigned  SLICE_1_ENDS = 1,
 	parameter int unsigned  SLICE_DIM_SIZE = 1,
-	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8)
+	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8),
+	localparam int unsigned SLICE_DIM_WIDTH = $clog2(SLICE_DIM_SIZE) + 1
 ) (
 	//- Global Control ------------------
 	input	logic  ap_clk,
@@ -58,11 +59,11 @@ module concat #(
 	//- AXI Stream - Output -------------
 	input	logic  m_axis_tready,
 	output	logic  m_axis_tvalid,
-	output	logic [STREAM_BITS-1:0]  m_axis_tdata,
+	output	logic [STREAM_BITS-1:0]  m_axis_tdata
 );
 
-	logic [SLICE_DIM_SIZE-1:0] c_slice_index_low, n_slice_index_low;
-	logic [SLICE_DIM_SIZE-1:0] c_slice_index_high, n_slice_index_high;
+	logic [31:0] c_slice_index_low, n_slice_index_low;
+	logic [31:0] c_slice_index_high, n_slice_index_high;
 
 	logic [ELEM_BITS-1:0] to_output_data[SIMD];
 	logic                 to_output_valid[SIMD];
@@ -82,6 +83,8 @@ module concat #(
 		end
 	endgenerate
 
+	logic increment_indices;
+
 	always_comb begin
 		m_axis_tdata      =  {to_output_data};
 		m_axis_tvalid     = |{to_output_valid};
@@ -92,7 +95,7 @@ module concat #(
 		n_slice_index_low  = c_slice_index_low;
 		n_slice_index_high = c_slice_index_high;
 
-		if (increment_indices && c_slice_index_high + SIMD < ENDS) begin
+		if (increment_indices && c_slice_index_high + SIMD < SLICE_DIM_SIZE) begin
 			n_slice_index_low  = c_slice_index_low + SIMD;
 			n_slice_index_high = c_slice_index_high + SIMD;
 		end else begin
@@ -142,11 +145,10 @@ module slice #(
 	output	logic [STREAM_BITS-1:0]  m_axis_slice_1_tdata
 );
 
-   localparam FIFO_COUNT_WIDTH = $clog2(FIFO_DEPTH     + 1);
    localparam SLICE_DIM_WIDTH  = $clog2(SLICE_DIM_SIZE + 1);
 
-   logic [SLICE_DIM_WIDTH-1:0] c_slice_index_low, n_slice_index_low;
-   logic [SLICE_DIM_WIDTH-1:0] c_slice_index_high, n_slice_index_high;
+   logic [31:0] c_slice_index_low, n_slice_index_low;
+   logic [31:0] c_slice_index_high, n_slice_index_high;
 
    logic  increment_indices;
 
@@ -166,27 +168,27 @@ module slice #(
 
 	  if(s_axis_tvalid) begin
 		  case ({in_slice_1_range, in_slice_0_range})
-		    "2'b00": begin
+		    2'b00: begin
 			  s_axis_tready         = 1'b0;
   			  increment_indices     = 1'b0;
 	  		  m_axis_slice_0_tvalid = 1'b0;
 	          m_axis_slice_1_tvalid = 1'b0;
 			end
-			"2'b01": begin
+			2'b01: begin
 				if (m_axis_slice_0_tready) begin
 					s_axis_tready         = 1'b1;
 					increment_indices     = 1'b1;
 					m_axis_slice_0_tvalid = 1'b1;
 				end
 			end
-			"2'b10": begin
+			2'b10: begin
 				if (m_axis_slice_1_tready) begin
 					s_axis_tready         = 1'b1;
 					increment_indices     = 1'b1;
 					m_axis_slice_1_tvalid = 1'b1;
 				end
 			end
-			"2'b11": begin
+			2'b11: begin
 				if (m_axis_slice_0_tready && m_axis_slice_1_tready) begin
 					s_axis_tready         = 1'b1;
 					increment_indices     = 1'b1;
@@ -202,7 +204,7 @@ module slice #(
 		n_slice_index_low  = c_slice_index_low;
 		n_slice_index_high = c_slice_index_high;
 
-		if (increment_indices && c_slice_index_high + SIMD < ENDS) begin
+		if (increment_indices && c_slice_index_high + SIMD < SLICE_DIM_SIZE) begin
 			n_slice_index_low  = c_slice_index_low + SIMD;
 			n_slice_index_high = c_slice_index_high + SIMD;
 		end else begin
@@ -250,8 +252,6 @@ module v_unary_op #(
 				if (s_axis_tvalid && m_axis_tready) begin
 					if (OP == "neg") begin
 						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= -s_axis_tdata[i*ELEM_BITS +: ELEM_BITS];
-					end else if (OP == "abs") begin
-						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= $abs(s_axis_tdata[i*ELEM_BITS +: ELEM_BITS]);
 					end else begin
 						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= 0;
 					end
@@ -375,11 +375,12 @@ module rope_axi #(
 	slice #(
 		.SIMD(SIMD),
 		.ELEM_BITS(ELEM_BITS),
-		.STARTS(0),
-		.ENDS((HIDDEN_DIM + 1)/2),
-		.SLICE_DIM_SIZE(HIDDEN_DIM),
-		.FIFO_DEPTH(2*HIDDEN_DIM),
-	) slice_0_to_half(
+		.SLICE_0_STARTS(0),
+	    .SLICE_0_ENDS((HIDDEN_DIM + 1)/2),
+        .SLICE_1_STARTS((HIDDEN_DIM + 1)/2+1),
+		.SLICE_1_ENDS(HIDDEN_DIM),
+		.SLICE_DIM_SIZE(HIDDEN_DIM)
+	) slice_0_to_half (
 		//- Global Control ------------------
 		.ap_clk(ap_clk),
 		.ap_rst_n(ap_rst_n),
@@ -390,14 +391,14 @@ module rope_axi #(
 		.s_axis_tdata(s_axis_tdata),
 
 		//- AXI Stream - Output -------------
-		.m_axis_0_to_half_tready(m_axis_0_to_half_tready),
-		.m_axis_0_to_half_tvalid(m_axis_0_to_half_tvalid),
-		.m_axis_0_to_half_tdata(m_axis_0_to_half_tdata),
+		.m_axis_slice_0_tready(m_axis_0_to_half_tready),
+		.m_axis_slice_0_tvalid(m_axis_0_to_half_tvalid),
+		.m_axis_slice_0_tdata(m_axis_0_to_half_tdata),
 
 		//- AXI Stream - Output -------------
-		.m_axis_half_to_end_tready(m_axis_half_to_end_tready),
-		.m_axis_half_to_end_tvalid(m_axis_half_to_end_tvalid),
-		.m_axis_half_to_end_tdata(m_axis_half_to_end_tdata)
+		.m_axis_slice_1_tready(m_axis_half_to_end_tready),
+		.m_axis_slice_1_tvalid(m_axis_half_to_end_tvalid),
+		.m_axis_slice_1_tdata(m_axis_half_to_end_tdata)
 	);
 
 	localparam int unsigned FIFO_COUNT_WIDTH = $clog2(2*HIDDEN_DIM) + 1;
@@ -471,9 +472,9 @@ module rope_axi #(
 		.s_axis_slice_0_tvalid(m_axis_neg_tvalid),
 		.s_axis_slice_0_tdata(m_axis_neg_tdata),
 
-		.s_axis_slice_1_tready(m_axis_fifo_tdata),
+		.s_axis_slice_1_tready(m_axis_fifo_tready),
 		.s_axis_slice_1_tvalid(m_axis_fifo_tvalid),
-		.s_axis_slice_1_tdata(m_axis_fifo_tready),
+		.s_axis_slice_1_tdata(m_axis_fifo_tdata),
 
 		//- AXI Stream - Output -------------
 		.m_axis_tready(m_axis_concat_0_tready),
