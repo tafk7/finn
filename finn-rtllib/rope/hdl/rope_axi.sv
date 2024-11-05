@@ -32,6 +32,68 @@
  * @author	Josh Monson <joshmonson@microsoft.com>
  *****************************************************************************/
 
+module range_indicator #(
+	parameter int unsigned RANGE_STEP = 1,
+	parameter int unsigned RANGE_MIN  = 0,
+	parameter int unsigned RANGE_MAX  = 1,
+	parameter int unsigned RANGE_COUNT = 4,
+	parameter int unsigned RANGE_0_START = 0,
+	parameter int unsigned RANGE_0_END   = 1,
+	parameter int unsigned RANGE_1_START = 0,
+	parameter int unsigned RANGE_1_END   = 1,
+	parameter int unsigned RANGE_2_START = 0,
+	parameter int unsigned RANGE_2_END   = 1,
+	parameter int unsigned RANGE_3_START = 0,
+	parameter int unsigned RANGE_3_END   = 1
+) (
+	input logic ap_clk,
+	input logic ap_rst_n,
+	input logic increment_range_indices,
+	output logic [RANGE_COUNT-1:0] range_indicators,
+	output logic [31:0] range_index_low
+);
+
+   logic [31:0] c_range_index_low, n_range_index_low;
+   logic [31:0] c_range_index_high, n_range_index_high;
+
+	localparam int unsigned RANGE_STARTS[3:0] = '{ RANGE_3_START, RANGE_2_START, RANGE_1_START, RANGE_0_START };
+	localparam int unsigned RANGE_ENDS[3:0]   = '{ RANGE_3_END, RANGE_2_END, RANGE_1_END, RANGE_0_END };
+
+	genvar i;
+	generate
+		for (i=0; i<RANGE_COUNT; i=i+1) begin : range_indicator
+   			assign range_indicators[i] = (c_range_index_low >= RANGE_STARTS[i]) && (c_range_index_high <= RANGE_ENDS[i]);
+		end
+	endgenerate
+
+	always_comb begin
+		n_range_index_low  = c_range_index_low;
+		n_range_index_high = c_range_index_high;
+
+		if (increment_range_indices) begin
+			if (c_range_index_high + RANGE_STEP < RANGE_MAX) begin
+				n_range_index_low  = c_range_index_low + RANGE_STEP;
+				n_range_index_high = c_range_index_high + RANGE_STEP;
+			end else if(c_range_index_high + RANGE_STEP >= RANGE_MAX)  begin
+				n_range_index_low  = RANGE_MIN;
+				n_range_index_high = RANGE_MIN + RANGE_STEP - 1;
+			end
+		end
+   end
+
+   always_ff @(posedge ap_clk) begin
+		c_range_index_low <= n_range_index_low;
+		c_range_index_high <= n_range_index_high;
+
+		if (!ap_rst_n) begin
+			c_range_index_low  <= RANGE_MIN;
+			c_range_index_high <= RANGE_MIN + RANGE_STEP - 1;
+		end
+   end
+
+	assign range_index_low = c_range_index_low;
+endmodule
+
 module concat #(
     parameter int unsigned  SIMD = 1,
 	parameter int unsigned  ELEM_BITS = 32,
@@ -62,57 +124,73 @@ module concat #(
 	output	logic [STREAM_BITS-1:0]  m_axis_tdata
 );
 
-	logic [31:0] c_slice_index_low, n_slice_index_low;
-	logic [31:0] c_slice_index_high, n_slice_index_high;
+	logic [31:0]            range_index_low;
+	logic [1:0]             range_indicators;
 
-	logic  [STREAM_BITS-1:0] to_output_data;
-	logic  [SIMD-1:0]        to_output_valid;
+	logic [STREAM_BITS-1:0] stream_fifo_0_tdata;
+	logic                   stream_fifo_0_tvalid;
+	logic                   stream_fifo_0_tready;
+
+	logic [SIMD-1:0]        element_tvalid;
 
 	genvar i;
 	generate
 		for (i=0; i<SIMD; i=i+1) begin : concat
 			always_comb begin
-				if (c_slice_index_low + i < SLICE_0_ENDS) begin
-					to_output_data[i*ELEM_BITS +: ELEM_BITS] = s_axis_slice_0_tdata[i*ELEM_BITS +: ELEM_BITS];
-					to_output_valid[i] = s_axis_slice_0_tvalid;
+				if (range_index_low + i < SLICE_0_ENDS) begin
+					stream_fifo_0_tdata[i*ELEM_BITS +: ELEM_BITS] = s_axis_slice_0_tdata[i*ELEM_BITS +: ELEM_BITS];
+					element_tvalid[i] = s_axis_slice_0_tvalid;
 				end else begin
-					to_output_data[i*ELEM_BITS +: ELEM_BITS]  = s_axis_slice_1_tdata[i*ELEM_BITS +: ELEM_BITS];
-					to_output_valid[i] = s_axis_slice_1_tvalid;
+					stream_fifo_0_tdata[i*ELEM_BITS +: ELEM_BITS]  = s_axis_slice_1_tdata[i*ELEM_BITS +: ELEM_BITS];
+					element_tvalid[i] = s_axis_slice_1_tvalid;
 				end
 			end
 		end
 	endgenerate
 
+	assign stream_fifo_0_tvalid = &element_tvalid;
+
 	logic increment_indices;
 
 	always_comb begin
-		m_axis_tdata = to_output_data;
-		m_axis_tvalid     = |to_output_valid;
-		increment_indices =   m_axis_tvalid & m_axis_tready;
+		increment_indices =  stream_fifo_0_tvalid & stream_fifo_0_tready;
+
+		s_axis_slice_0_tready = range_indicators[0] & stream_fifo_0_tready;
+		s_axis_slice_1_tready = range_indicators[1] & stream_fifo_0_tready;
 	end
 
-	always_comb begin
-		n_slice_index_low  = c_slice_index_low;
-		n_slice_index_high = c_slice_index_high;
+	range_indicator #(
+		.RANGE_STEP(SIMD),
+		.RANGE_MIN(0),
+		.RANGE_MAX(SLICE_DIM_SIZE),
+		.RANGE_COUNT(2),
+		.RANGE_0_START(SLICE_0_STARTS),
+		.RANGE_0_END(SLICE_0_ENDS),
+		.RANGE_1_START(SLICE_1_STARTS),
+		.RANGE_1_END(SLICE_1_ENDS)
+	) range_indicator_inst(
+			.ap_clk(ap_clk),
+			.ap_rst_n(ap_rst_n),
+			.increment_range_indices(increment_indices),
+			.range_indicators(range_indicators),
+			.range_index_low(range_index_low)
+	);
 
-		if (increment_indices && c_slice_index_high + SIMD < SLICE_DIM_SIZE) begin
-			n_slice_index_low  = c_slice_index_low + SIMD;
-			n_slice_index_high = c_slice_index_high + SIMD;
-		end else begin
-			n_slice_index_low  = 0;
-			n_slice_index_high = SIMD-1;
-		end
-   end
-
-   always_ff @(posedge ap_clk) begin
-		c_slice_index_low <= n_slice_index_low;
-		c_slice_index_high <= n_slice_index_high;
-
-		if (!ap_rst_n) begin
-			c_slice_index_high <= SIMD-1;
-			c_slice_index_low <= 0;
-		end
-   end
+	Q_srl #(
+		.depth(16),
+		.width(STREAM_BITS)
+	) stream_fifo_0 (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(),
+		.maxcount(),
+		.i_d(stream_fifo_0_tdata),
+		.i_v(stream_fifo_0_tvalid),
+		.i_r(stream_fifo_0_tready),
+		.o_d(m_axis_tdata),
+		.o_v(m_axis_tvalid),
+		.o_r(m_axis_tready)
+	);
 
 endmodule
 
@@ -147,18 +225,28 @@ module slice #(
 
    localparam SLICE_DIM_WIDTH  = $clog2(SLICE_DIM_SIZE + 1);
 
-   logic [31:0] c_slice_index_low, n_slice_index_low;
-   logic [31:0] c_slice_index_high, n_slice_index_high;
-
+   logic  in_slice_0_range, in_slice_1_range;
    logic  increment_indices;
 
-   logic  in_slice_0_range;
-   logic  in_slice_1_range;
-
-   assign in_slice_0_range = (c_slice_index_low >= SLICE_0_STARTS) && (c_slice_index_high < SLICE_0_ENDS);
-   assign in_slice_1_range = (c_slice_index_low >= SLICE_1_STARTS) && (c_slice_index_high < SLICE_1_ENDS);
-
    assign m_axis_slice_0_tdata = s_axis_tdata;
+   assign m_axis_slice_1_tdata = s_axis_tdata;
+
+   range_indicator #(
+	.RANGE_STEP(SIMD),
+	.RANGE_MIN(0),
+	.RANGE_MAX(SLICE_DIM_SIZE),
+	.RANGE_COUNT(2),
+	.RANGE_0_START(SLICE_0_STARTS),
+	.RANGE_0_END(SLICE_0_ENDS),
+	.RANGE_1_START(SLICE_1_STARTS),
+	.RANGE_1_END(SLICE_1_ENDS)
+   ) range_indicator_inst(
+		.ap_clk(ap_clk),
+		.ap_rst_n(ap_rst_n),
+		.increment_range_indices(increment_indices),
+		.range_indicators({in_slice_1_range, in_slice_0_range}),
+		.range_index_low()
+	);
 
    always_comb begin
 	  s_axis_tready         = 1'b0;
@@ -200,29 +288,6 @@ module slice #(
 	  end
    end
 
-   always_comb begin
-		n_slice_index_low  = c_slice_index_low;
-		n_slice_index_high = c_slice_index_high;
-
-		if (increment_indices && c_slice_index_high + SIMD < SLICE_DIM_SIZE) begin
-			n_slice_index_low  = c_slice_index_low + SIMD;
-			n_slice_index_high = c_slice_index_high + SIMD;
-		end else begin
-			n_slice_index_low  = 0;
-			n_slice_index_high = SIMD-1;
-		end
-   end
-
-   always_ff @(posedge ap_clk) begin
-		c_slice_index_low <= n_slice_index_low;
-		c_slice_index_high <= n_slice_index_high;
-
-		if (!ap_rst_n) begin
-			c_slice_index_high <= SIMD-1;
-			c_slice_index_low <= 0;
-		end
-   end
-
 endmodule
 
 module v_unary_op #(
@@ -245,23 +310,33 @@ module v_unary_op #(
 	output	logic  m_axis_tvalid,
 	output	logic [STREAM_BITS-1:0]  m_axis_tdata
 );
+	logic [STREAM_BITS-1:0] results;
 	genvar i;
 	generate
 		for (i=0; i<SIMD; i=i+1) begin : unary_op
-			always_ff @(posedge ap_clk) begin
-				if (s_axis_tvalid && m_axis_tready) begin
-					if (OP == "neg") begin
-						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= -s_axis_tdata[i*ELEM_BITS +: ELEM_BITS];
-					end else begin
-						m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= 0;
-					end
-				end
-				if (!ap_rst_n) begin
-					m_axis_tdata[i*ELEM_BITS +: ELEM_BITS] <= 0;
-				end
+			if (OP == "neg") begin
+				assign results[i*ELEM_BITS +: ELEM_BITS] = -s_axis_tdata[i*ELEM_BITS +: ELEM_BITS];
+			end else begin
+				assign results[i*ELEM_BITS +: ELEM_BITS] = 0;
 			end
 		end
 	endgenerate
+
+	Q_srl #(
+		.depth(16),
+		.width(STREAM_BITS)
+	) stream_0_fifo (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(),
+		.maxcount(),
+		.i_d(results),
+		.i_v(s_axis_tvalid),
+		.i_r(s_axis_tready),
+		.o_d(m_axis_tdata),
+		.o_v(m_axis_tvalid),
+		.o_r(m_axis_tready)
+	);
 
 endmodule
 
@@ -289,50 +364,105 @@ module vv_op #(
 	//- AXI Stream - Output -------------
 	input	logic  m_axis_c_tready,
 	output	logic  m_axis_c_tvalid,
-	output	logic [STREAM_BITS-1:0]  m_axis_c_tdata
+	output	logic [STREAM_BITS-1:0] m_axis_c_tdata
 );
 
-	logic [ELEM_BITS-1 : 0] results[SIMD];
-	logic                           valid;
-	logic                          active;
+	logic [STREAM_BITS-1:0] stream_fifo_0_tdata;
+	logic stream_fifo_0_tvalid;
+	logic stream_fifo_0_tready;
 
-	assign active = s_axis_a_tvalid && s_axis_b_tvalid && m_axis_c_tready;
-
+	assign stream_fifo_0_tvalid = s_axis_a_tvalid & s_axis_b_tvalid;
+	assign s_axis_a_tready        = stream_fifo_0_tvalid & stream_fifo_0_tready;
+	assign s_axis_b_tready		  = stream_fifo_0_tvalid & stream_fifo_0_tready;
     genvar i;
 	generate
 		for (i=0; i<SIMD; i=i+1) begin : vv_mul
-			always_ff @(posedge ap_clk) begin
-				if (active) begin
-					if (OP == "mul") begin
-						results[i] <= s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] * s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
-					end else if (OP == "add") begin
-						results[i] <= s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] + s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
-					end else begin
-						results[i] <= 0;
-					end
-				end
-				if (!ap_rst_n) begin
-					results[i] <= 0;
-				end
+			if (OP == "mul") begin
+				assign stream_fifo_0_tdata[i*ELEM_BITS +: ELEM_BITS] = s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] * s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
+			end else if (OP == "add") begin
+				assign stream_fifo_0_tdata[i*ELEM_BITS +: ELEM_BITS] = s_axis_a_tdata[i*ELEM_BITS +: ELEM_BITS] + s_axis_b_tdata[i*ELEM_BITS +: ELEM_BITS];
+			end else  begin
+				assign stream_fifo_0_tdata[i*ELEM_BITS +: ELEM_BITS] = 0;
 			end
-			assign m_axis_c_tdata[i*ELEM_BITS +: ELEM_BITS] = results[i];
 		end
 	endgenerate
 
-	always_ff @(posedge ap_clk) begin
-		if (active) begin
-			valid <= 1;
-		end else begin
-			valid <= 0;
-		end
-		if (!ap_rst_n) begin
-			valid <= 0;
-		end
-	end
+	Q_srl #(
+		.depth(16),
+		.width(STREAM_BITS)
+	) stream_fifo_0 (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(),
+		.maxcount(),
+		.i_d(stream_fifo_0_tdata),
+		.i_v(stream_fifo_0_tvalid),
+		.i_r(stream_fifo_0_tready),
+		.o_d(m_axis_c_tdata),
+		.o_v(m_axis_c_tvalid),
+		.o_r(m_axis_c_tready)
+	);
 
-	assign m_axis_c_tvalid = valid;
-	assign s_axis_a_tready = 1'b1;
-	assign s_axis_b_tready = 1'b1;
+endmodule
+
+module duplicate_stream #(
+	parameter int unsigned   SIMD = 1,
+	parameter int unsigned   ELEM_BITS = 32,
+	parameter int unsigned   HIDDEN_DIM = 1,
+	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8)
+) (
+	input logic ap_clk,
+	input logic ap_rst_n,
+
+	//- AXI Stream - Input --------------
+	output	logic  s_axis_tready,
+	input	logic  s_axis_tvalid,
+	input	logic [STREAM_BITS-1:0]  s_axis_tdata,
+
+	input	logic  m_axis_0_tready,
+	output	logic  m_axis_0_tvalid,
+	output	logic [STREAM_BITS-1:0]  m_axis_0_tdata,
+
+	input	logic  m_axis_1_tready,
+	output	logic  m_axis_1_tvalid,
+	output	logic [STREAM_BITS-1:0]  m_axis_1_tdata
+);
+	logic stream_0_fifo_tready;
+	logic stream_1_fifo_tready;
+
+	assign s_axis_tready = stream_0_fifo_tready & stream_1_fifo_tready;
+
+	Q_srl #(
+		.depth(HIDDEN_DIM),
+		.width(STREAM_BITS)
+	) stream_0_fifo (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(),
+		.maxcount(),
+		.i_d(s_axis_tdata),
+		.i_v(s_axis_tvalid),
+		.i_r(stream_0_fifo_tready),
+		.o_d(m_axis_0_tdata),
+		.o_v(m_axis_0_tvalid),
+		.o_r(m_axis_0_tready)
+	);
+
+	Q_srl #(
+		.depth(HIDDEN_DIM),
+		.width(STREAM_BITS)
+	) stream_1_fifo (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(),
+		.maxcount(),
+		.i_d(s_axis_tdata),
+		.i_v(s_axis_tvalid),
+		.i_r(stream_1_fifo_tready),
+		.o_d(m_axis_1_tdata),
+		.o_v(m_axis_1_tvalid),
+		.o_r(m_axis_1_tready)
+	);
 
 endmodule
 
@@ -364,6 +494,36 @@ module rope_axi #(
 	output	logic [STREAM_BITS-1:0]  m_axis_tdata
 );
 
+	logic m_axis_dup_0_tready;
+	logic m_axis_dup_0_tvalid;
+	logic [STREAM_BITS-1:0] m_axis_dup_0_tdata;
+
+	logic m_axis_dup_1_tready;
+	logic m_axis_dup_1_tvalid;
+	logic [STREAM_BITS-1:0] m_axis_dup_1_tdata;
+
+	duplicate_stream #(
+	  .SIMD(SIMD),
+	  .ELEM_BITS(ELEM_BITS),
+	  .HIDDEN_DIM(HIDDEN_DIM)
+	) duplicate_stream_inst (
+		.ap_clk(ap_clk),
+		.ap_rst_n(ap_rst_n),
+
+		.s_axis_tready(s_axis_tready),
+		.s_axis_tvalid(s_axis_tvalid),
+		.s_axis_tdata(s_axis_tdata),
+
+		.m_axis_0_tready(m_axis_dup_0_tready),
+		.m_axis_0_tvalid(m_axis_dup_0_tvalid),
+		.m_axis_0_tdata(m_axis_dup_0_tdata),
+
+		.m_axis_1_tready(m_axis_dup_1_tready),
+		.m_axis_1_tvalid(m_axis_dup_1_tvalid),
+		.m_axis_1_tdata(m_axis_dup_1_tdata)
+	);
+
+
 	logic m_axis_0_to_half_tready;
 	logic m_axis_0_to_half_tvalid;
 	logic [STREAM_BITS-1:0] m_axis_0_to_half_tdata;
@@ -376,19 +536,19 @@ module rope_axi #(
 		.SIMD(SIMD),
 		.ELEM_BITS(ELEM_BITS),
 		.SLICE_0_STARTS(0),
-	    .SLICE_0_ENDS((HIDDEN_DIM + 1)/2),
-        .SLICE_1_STARTS((HIDDEN_DIM + 1)/2+1),
-		.SLICE_1_ENDS(HIDDEN_DIM),
+	    .SLICE_0_ENDS((HIDDEN_DIM + 1)/2 - 1),
+        .SLICE_1_STARTS((HIDDEN_DIM + 1)/2),
+		.SLICE_1_ENDS(HIDDEN_DIM-1),
 		.SLICE_DIM_SIZE(HIDDEN_DIM)
-	) slice_0_to_half (
+	) slice_inst (
 		//- Global Control ------------------
 		.ap_clk(ap_clk),
 		.ap_rst_n(ap_rst_n),
 
 		//- AXI Stream - Input --------------
-		.s_axis_tready(s_axis_tready),
-		.s_axis_tvalid(s_axis_tvalid),
-		.s_axis_tdata(s_axis_tdata),
+		.s_axis_tready(m_axis_dup_0_tready),
+		.s_axis_tvalid(m_axis_dup_0_tvalid),
+		.s_axis_tdata(m_axis_dup_0_tdata),
 
 		//- AXI Stream - Output -------------
 		.m_axis_slice_0_tready(m_axis_0_to_half_tready),
@@ -524,9 +684,9 @@ module rope_axi #(
 	.ap_rst_n(ap_rst_n),
 
 	//- AXI Stream - Input --------------
-	.s_axis_a_tready(s_axis_tready),
-	.s_axis_a_tvalid(s_axis_tvalid),
-	.s_axis_a_tdata(s_axis_tdata),
+	.s_axis_a_tready(m_axis_dup_1_tready),
+	.s_axis_a_tvalid(m_axis_dup_1_tvalid),
+	.s_axis_a_tdata(m_axis_dup_1_tdata),
 
 	//- AXI Stream - Input --------------
 	.s_axis_b_tready(m_axis_c_weights_tready),
@@ -538,6 +698,26 @@ module rope_axi #(
 	.m_axis_c_tvalid(m_axis_c_mul_tvalid),
 	.m_axis_c_tdata(m_axis_c_mul_tdata)
   );
+
+  logic m_axis_c_fifo_tready;
+  logic m_axis_c_fifo_tvalid;
+  logic [STREAM_BITS-1:0] m_axis_c_fifo_tdata;
+
+  Q_srl #(
+		.depth(2*HIDDEN_DIM),
+		.width(STREAM_BITS)
+	) c_fifo_impl (
+		.clock(ap_clk),
+		.reset(!ap_rst_n),
+		.count(count),
+		.maxcount(maxcount),
+		.i_d(m_axis_c_mul_tdata),
+		.i_v(m_axis_c_mul_tvalid),
+		.i_r(m_axis_c_mul_tready),
+		.o_d(m_axis_c_fifo_tdata),
+		.o_v(m_axis_c_fifo_tvalid),
+		.o_r(m_axis_c_fifo_tready)
+	);
 
   logic  m_axis_s_weights_tready;
   logic  m_axis_s_weights_tvalid;
@@ -606,9 +786,9 @@ module rope_axi #(
 	.ap_rst_n(ap_rst_n),
 
 	//- AXI Stream - Input --------------
-	.s_axis_a_tready(m_axis_c_mul_tready),
-	.s_axis_a_tvalid(m_axis_c_mul_tvalid),
-	.s_axis_a_tdata(m_axis_c_mul_tdata),
+	.s_axis_a_tready(m_axis_c_fifo_tready),
+	.s_axis_a_tvalid(m_axis_c_fifo_tvalid),
+	.s_axis_a_tdata(m_axis_c_fifo_tdata),
 
 	//- AXI Stream - Input --------------
 	.s_axis_b_tready(m_axis_s_mul_tready),
