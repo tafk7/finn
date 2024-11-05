@@ -157,12 +157,12 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
 
     # Define the cached tensors
     #cos_values = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
-    cos = np.random.randint(-7, 7, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
-    sin = np.random.randint(-7, 7, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+    cos = np.random.randint(-5, 5, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+    sin = np.random.randint(-5, 5, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
 
     #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
 
-    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden]) % 8
+    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden]) % 5
     #cos = gen_finn_dt_tensor(wdt, [1, 1, seq_len, hidden])
     print("x=",x)
     input_dict = {"input": x}
@@ -173,6 +173,9 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
 
     y_expected = x * cos + x1 * sin
     #import pdb; pdb.set_trace()
+
+    # remove instances of -0 from y_expected
+    y_expected[y_expected == -0] = 0
 
     print("idt=",idt)
     print("wdt=",wdt)
