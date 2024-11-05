@@ -137,7 +137,7 @@ module concat #(
 	generate
 		for (i=0; i<SIMD; i=i+1) begin : concat
 			always_comb begin
-				if (range_index_low + i < SLICE_0_ENDS) begin
+				if (range_index_low + i <= SLICE_0_ENDS) begin
 					stream_fifo_0_tdata[i*ELEM_BITS +: ELEM_BITS] = s_axis_slice_0_tdata[i*ELEM_BITS +: ELEM_BITS];
 					element_tvalid[i] = s_axis_slice_0_tvalid;
 				end else begin
@@ -618,8 +618,8 @@ module rope_axi #(
     	.SIMD(SIMD),
 	    .ELEM_BITS(ELEM_BITS),
 		.SLICE_0_STARTS(0),
-	    .SLICE_0_ENDS((HIDDEN_DIM + 1)/2),
-        .SLICE_1_STARTS((HIDDEN_DIM + 1)/2+1),
+	    .SLICE_0_ENDS((HIDDEN_DIM + 1)/2 - 1),
+        .SLICE_1_STARTS((HIDDEN_DIM + 1)/2),
 	    .SLICE_1_ENDS(HIDDEN_DIM),
 	    .SLICE_DIM_SIZE(HIDDEN_DIM)
 	) concat_0 (
