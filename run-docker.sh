@@ -251,6 +251,7 @@ if [ ! -z "$FINN_XILINX_PATH" ];then
   fi
   if [ -d "$HLS_PATH" ];then
     DOCKER_EXEC+="-e HLS_PATH=$HLS_PATH "
+    DOCKER_EXEC+="-e LD_LIBRARY_PATH=$HLS_PATH/lnx64/tools/fpo_v7_1 "
   fi
   if [ -d "$VITIS_PATH" ];then
     DOCKER_EXEC+="-e VITIS_PATH=$VITIS_PATH "
