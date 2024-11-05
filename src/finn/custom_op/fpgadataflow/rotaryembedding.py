@@ -137,6 +137,13 @@ class RotaryEmbedding(HWCustomOp):
         # Behavioral Model Code
         node = self.onnx_node
         # Rope Computation
-        context[node.output[0]] = context[node.input[0]] * context[node.input[1]] + context[node.input[0]] * context[node.input[2]]
+        x = context[node.input[0]]
+        cos = context[node.input[1]]
+        sin = context[node.input[2]]
+        midpoint = x.shape[-1] // 2
+        x1 = np.concatenate((-x[...,midpoint:], x[...,:midpoint]), axis=-1)
+
+
+        context[node.output[0]] = x * cos + x1 * sin
 
 

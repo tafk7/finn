@@ -166,7 +166,12 @@ def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
     #cos = gen_finn_dt_tensor(wdt, [1, 1, seq_len, hidden])
     print("x=",x)
     input_dict = {"input": x}
-    y_expected = x * cos + x * sin
+
+    midpoint = hidden // 2
+
+    x1 = np.concatenate((-x[...,midpoint:], x[...,:midpoint]), axis=-1)
+
+    y_expected = x * cos + x1 * sin
     #import pdb; pdb.set_trace()
 
     print("idt=",idt)
