@@ -167,8 +167,8 @@ template<typename TO, unsigned N, unsigned SIMD>
 void inv_sqrt_stage(
 	const TO epsilon,
 	hls::stream<hls::vector<TO, SIMD>> &in_s,
-	hls::stream<hls::vector<TO, SIMD>> &out_s
-	hls::stream<varmean_t<TO>> &varmean_s,
+	hls::stream<hls::vector<TO, SIMD>> &out_s,
+	hls::stream<varmean_t<TO>> &varmean_s
 ) {
 #pragma HLS pipeline II=1 style=flp
 
