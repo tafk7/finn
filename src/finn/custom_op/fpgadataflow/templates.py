@@ -33,6 +33,7 @@ docompute_template = """
 #define AP_INT_MAX_W $AP_INT_MAX_W$
 #include "cnpy.h"
 #include "npy2apintstream.hpp"
+#include "npy2vectorstream.hpp"
 #include <vector>
 #include "bnn-library.h"
 
@@ -95,8 +96,22 @@ puts "custom HLS dir: $config_customhlsdir"
 set config_toplevelfxn "$TOPFXN$"
 set config_clkperiod $CLKPERIOD$
 
+
+proc get_include_flags {base_dir} {
+    set include_flags ""
+    set items [glob -nocomplain -directory $base_dir *]
+    foreach item $items {
+        if {[file isdirectory $item]} {
+            append include_flags " -I$item"
+            append include_flags [get_include_flags $item]
+        }
+    }
+    return $include_flags
+}
+set custom_hls_include_flags [get_include_flags $config_customhlsdir]
+
 open_project $config_proj_name
-add_files $config_hwsrcdir/top_$TOPFXN$.cpp -cflags "-std=c++14 -I$config_bnnlibdir -I$config_customhlsdir"
+add_files $config_hwsrcdir/top_$TOPFXN$.cpp -cflags "-std=c++14 -I$config_bnnlibdir -I$config_customhlsdir $custom_hls_include_flags"
 
 set_top $config_toplevelfxn
 open_solution sol1

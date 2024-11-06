@@ -308,6 +308,7 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
 
 
 @pytest.mark.parametrize("impl_style", ["hls"])
+@pytest.mark.parametrize("exec_mode", ["rtlsim", "cppsim"])
 @pytest.mark.parametrize("simd", ["simd1", "simd2", "simd3", "simd4"])
 @pytest.mark.parametrize("idt", ["FLOAT16", "FLOAT32"])
 @pytest.mark.parametrize("wdt", ["FLOAT16", "FLOAT32"])
@@ -315,10 +316,15 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
 @pytest.mark.parametrize("odt", ["FLOAT16", "FLOAT32"])
 @pytest.mark.parametrize("ifm_dim", [(1, 128, 384), (1, 12, 12, 128)])
 @pytest.mark.fpgadataflow
-def test_fpga_dataflow_layernorm(impl_style, simd, idt, wdt, bdt, odt, ifm_dim):
+def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt, ifm_dim):
     '''
     This test checks that the ONNX LayerNormalization can lowered to FINN LayerNorm
     '''
+    idt = DataType[idt]
+    odt = DataType[odt]
+    wdt = DataType[wdt]
+    bdt = DataType[bdt]
+    
     simd = int(simd[-1])
     io_shape = ifm_dim
     tolerance = 2
@@ -345,14 +351,25 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt, wdt, bdt, odt, ifm_dim):
     # Create reference values using the qonnx model
     y_ref = oxe.execute_onnx(model, input_t)[out_name]
 
-    try:
-        model = model.transform(SpecializeLayers(test_fpga_part))
-        model = model.transform(GiveUniqueNodeNames())
-        model = model.transform(SetExecMode("cppsim"))
-        model = model.transform(PrepareCppSim())
-        model = model.transform(CompileCppSim())
-    except Exception as e:
-        pytest.fail(f"Failed to transform the model: {str(e)}")
+    if exec_mode == "cppsim":
+        try:
+            model = model.transform(SpecializeLayers(test_fpga_part))
+            model = model.transform(GiveUniqueNodeNames())
+            model = model.transform(SetExecMode("cppsim"))
+            model = model.transform(PrepareCppSim())
+            model = model.transform(CompileCppSim())
+        except Exception as e:
+            pytest.fail(f"Failed to transform the model: {str(e)}")
+    elif exec_mode == "rtlsim":
+        try:
+            model = model.transform(SpecializeLayers(test_fpga_part))
+            model = model.transform(GiveUniqueNodeNames())
+            model = model.transform(SetExecMode("rtlsim"))        
+            model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
+            model = model.transform(HLSSynthIP())
+            model = model.transform(PrepareRTLSim())
+        except Exception as e:
+            pytest.fail(f"Failed to transform the model: {str(e)}")
 
     # run the model
     y_hw = oxe.execute_onnx(model, input_t)[out_name]
