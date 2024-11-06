@@ -127,11 +127,13 @@ def build_layernorm_graph(
         inputs=[Quant_0_out.name, "layernorm0_scale_param", "layernorm0_b_param"],
         outputs=[LayerNorm_0_out.name],
         name='Layernorm_1',
+        epsilon=epsilon,
+        axis=-1
     )
     model.graph.node.append(LayerNorm_0)
     model.graph.value_info.append(LayerNorm_0_out)
-    epsilon0_attr = helper.make_attribute("epsilon", epsilon)
-    LayerNorm_0.attribute.append(epsilon0_attr)
+    # epsilon0_attr = helper.make_attribute("epsilon", epsilon)
+    # LayerNorm_0.attribute.append(epsilon0_attr)
 
     ElementWiseMul_hls_0_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, list(idm))
     ElementWiseMul_hls_0 = helper.make_node(
@@ -295,12 +297,7 @@ def test_convert_to_hw_layernorm_layer(exec_mode, simd):
             model = model.transform(SetExecMode("rtlsim"))
             model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
             model = model.transform(HLSSynthIP())
-            try:
-                model = model.transform(PrepareRTLSim())
-                pytest.fail("PrepareRTLSim should have failed")
-            except Exception as e:
-                print('expected to fail because this node do not support rtlsim')
-                pass
+            model = model.transform(PrepareRTLSim())
         elif exec_mode == "stitched_ip":
             model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
             model = model.transform(HLSSynthIP())
@@ -347,9 +344,6 @@ def test_fpga_dataflow_layernorm(impl_style, simd, idt, wdt, bdt, odt, ifm_dim):
 
     # Create reference values using the qonnx model
     y_ref = oxe.execute_onnx(model, input_t)[out_name]
-
-    y_out = oxe.execute_onnx(model, input_t)[out_name]
-    assert np.allclose(y_ref, y_out, atol=tolerance), "Model output does not match expected output"
 
     try:
         model = model.transform(SpecializeLayers(test_fpga_part))

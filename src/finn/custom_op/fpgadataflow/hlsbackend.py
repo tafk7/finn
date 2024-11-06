@@ -246,7 +246,7 @@ class HLSBackend(ABC):
         cmd = ["create_bd_cell -type ip -vlnv %s %s" % (vlnv, self.onnx_node.name)]
         return cmd
 
-    def compile_singlenode_code(self):
+    def compile_singlenode_code(self, hls_dir="layernorm"):
         """Builds the bash script for compilation using the CppBuilder from
         finn.util.basic and executes the script to produce the executable."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
@@ -256,13 +256,21 @@ class HLSBackend(ABC):
         builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
         builder.append_includes("-I$FINN_ROOT/deps/cnpy/")
         builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")
-        builder.append_includes("-I$FINN_ROOT/custom_hls")
+        builder.append_includes(f"-I$FINN_ROOT/custom_hls/{hls_dir}") # TAFK
         builder.append_includes("-I{}/include".format(os.environ["HLS_PATH"]))
         builder.append_includes("--std=c++14")
         builder.append_includes("-O3")
         builder.append_sources(code_gen_dir + "/*.cpp")
         builder.append_sources("$FINN_ROOT/deps/cnpy/cnpy.cpp")
         builder.append_includes("-lz")
+        # TAFK <
+        builder.append_includes(
+            '-fno-builtin -fno-inline -Wl,-rpath,"$HLS_PATH/lnx64/lib/csim" -L$HLS_PATH/lnx64/lib/csim -lhlsmc++-GCC46'
+        )
+        builder.append_includes(
+            "-L$HLS_PATH/lnx64/tools/fpo_v7_1 -lgmp -lmpfr -lIp_floating_point_v7_1_bitacc_cmodel"
+        )
+        # TAFK >
         builder.set_executable_path(code_gen_dir + "/node_model")
         builder.build(code_gen_dir)
         self.set_nodeattr("executable_path", builder.executable_path)
