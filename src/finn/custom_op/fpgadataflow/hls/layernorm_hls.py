@@ -165,7 +165,6 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
 
     def prepare_rtlsim(self):
         verilog_files = self.get_all_verilog_filenames(abspath=True)
-        print(f"[STF DEBUG] {verilog_files=}")
         single_src_dir = make_build_dir("rtlsim_" + self.onnx_node.name + "_")
 
         ret = pyxsi_rpcclient.compile_sim_obj(
