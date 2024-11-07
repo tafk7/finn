@@ -2129,7 +2129,7 @@ class InferLayerNorm(Transformation):
         graph_modified = False
         for node in graph.node:
             node_ind += 1
-            if node.op_type == "LayerNormalization":
+            if node.op_type == "FuncLayerNorm":
                 act_in = node.input[0]
                 act_out = node.output[0]
                 # Get any shape info that needs reuse
@@ -2137,13 +2137,6 @@ class InferLayerNorm(Transformation):
                 # Get datatypes
                 idt = model.get_tensor_datatype(act_in)
                 odt = model.get_tensor_datatype(act_out)
-                
-                # # Weight & bias should be stripped out
-                # if node.input[1] is not None or node.input[2] is not None:
-                #     continue
-
-                # check layout of inputs/outputs, and convert if needed
-                # check layout and convert if necessary
 
                 norm_axis = helper.get_node_attr_value(node, "axis")
                 if model.get_tensor_layout(act_in) == DataLayout.NCHW:
