@@ -2138,13 +2138,14 @@ class InferLayerNorm(Transformation):
                 idt = model.get_tensor_datatype(act_in)
                 odt = model.get_tensor_datatype(act_out)
                 
-                # Weight & bias should be stripped out
-                if node.input[1] is not None or node.input[2] is not None:
-                    continue
+                # # Weight & bias should be stripped out
+                # if node.input[1] is not None or node.input[2] is not None:
+                #     continue
 
                 # check layout of inputs/outputs, and convert if needed
                 # check layout and convert if necessary
-                norm_axis = node.get_nodeattr("axis")
+
+                norm_axis = helper.get_node_attr_value(node, "axis")
                 if model.get_tensor_layout(act_in) == DataLayout.NCHW:
                     act_in = nchw_to_nhwc(act_in, model, node_ind)
                     node_ind += 1
@@ -2176,7 +2177,7 @@ class InferLayerNorm(Transformation):
                     backend="fpgadataflow",
                     SIMD=simd,
                     ifm_dim=shape_in,
-                    epsilon=node.get_nodeattr("epsilon"),
+                    epsilon=helper.get_node_attr_value(node, "epsilon"),
                     inputDataType=idt.name,
                     outputDataType=odt.name,
                     name="LayerNorm_" + node.name,
