@@ -32,6 +32,8 @@ from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 
+def get_rope_onnx_filename(theta_base, batch_size, num_attention_heads, seq_len, head_size):
+    return f"rope_rt{theta_base}_b{batch_size}_nh{num_attention_heads}_s{seq_len}_hs{head_size}.onnx"
 
 class RotaryEmbedding(HWCustomOp):
     """Abstraction layer for HW impplementation of RotaryEmbedding.
@@ -46,6 +48,13 @@ class RotaryEmbedding(HWCustomOp):
             "SequenceLength": ("i", True, 0),
             # hidden dimension of the input
             "HiddenDimension": ("i", True, 0),
+            # head dimension of the input
+            "HeadDimension": ("i", True, 0),
+            # Number of attention heads
+            "NumHeads": ("i", True, 0),
+            # Rope Theta
+            "RopeTheta": ("f", True, 10000.0),
+
             # SIMD Input parallelism
             "SIMD": ("i", False, 1),
             # FINN input datatype
@@ -56,6 +65,7 @@ class RotaryEmbedding(HWCustomOp):
         }
         my_attrs.update(super().get_nodeattr_types())
         return my_attrs
+
 
     def get_exp_cycles(self):
         return 0

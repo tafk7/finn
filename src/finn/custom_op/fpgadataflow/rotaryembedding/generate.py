@@ -1,3 +1,4 @@
+import sys; sys.path.append("..")
 import argparse
 import pip_install_transformers
 import transformers
@@ -6,6 +7,7 @@ from transformers import MistralConfig, MistralModel
 from torch import nn
 from torch import onnx
 import torch
+from rotaryembedding import get_rope_onnx_filename
 
 class MistralRotaryEmbeddingForFinn(nn.Module):
         def __init__(self, mistral):
@@ -57,12 +59,13 @@ def export_rotary_embedding_onnx(rotary_embedding_model):
     num_attention_heads = rotary_embedding_model.mistral.config.num_heads
     seq_len             = rotary_embedding_model.mistral.config.max_position_embeddings
     head_size           = rotary_embedding_model.mistral.config.head_dim
-    base                = rotary_embedding_model.mistral.config.rope_theta
+    theta_base          = rotary_embedding_model.mistral.config.rope_theta
 
     q = torch.randn(batch_size, num_attention_heads, seq_len, head_size)
     k = torch.randn(batch_size, num_attention_heads, seq_len, head_size)
 
-    onnx_path = f"onnxgraphs/rope_th{int(base)}_b{batch_size}_nh{num_attention_heads}_s{seq_len}_hs{head_size}.onnx"
+    onnx_filename = get_rope_onnx_filename(theta_base, batch_size, num_attention_heads, seq_len, head_size)
+    onnx_path = f"onnxgraphs/" + onnx_filename
     onnx.export(
         rotary_embedding_model,
         (q, k),
