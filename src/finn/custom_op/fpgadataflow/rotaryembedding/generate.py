@@ -41,11 +41,7 @@ class MistralRotaryEmbeddingForFinn(nn.Module):
             (self.cos, self.sin) = self.rotary_emb(type_device_info_wrapper, position_ids)
 
             self.cos_param = torch.nn.Parameter(self.cos, requires_grad=False)
-            self.cos_param._name = "cos_param"
             self.sin_param = torch.nn.Parameter(self.sin, requires_grad=False)
-            self.sin_param._name = "sin_param"
-            #self.cos_param = torch.nn.Parameter(self.cos, requires_grad=False)
-            #self.sin_param = torch.nn.Parameter(self.sin, requires_grad=False)
 
 
 def create_mistral_from_args(args):
