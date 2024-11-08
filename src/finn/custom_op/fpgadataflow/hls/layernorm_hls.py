@@ -91,7 +91,21 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
 
 
     def execute_node(self, context, graph):
+        # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
+        # Lookup table mapping execution modes to implementing methods
+        exec_fns = {
+            "python": self._execute_node_python,
+            "cppsim": self._execute_node_cppsim,
+            "rtlsim": self._execute_node_rtlsim,
+        }
+        # Select and execute the function by mode string
+        exec_fns[mode](context, graph)
+
+
+
+        
+        
         node = self.onnx_node
         exp_ishape = self.get_normal_input_shape()
         exp_oshape = self.get_normal_output_shape()
@@ -103,12 +117,12 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         elif mode == "rtlsim":
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
-
         inp = context[node.input[0]]
         inp = inp.reshape(folded_ishape)
         np.save(os.path.join(code_gen_dir, "input_0.npy"), inp)
-
-        if mode == "cppsim":
+        if mode == "python":
+            self._execute_node_python(context, graph)
+        elif mode == "cppsim":
             # # execute the precompiled model
             super().exec_precompiled_singlenode_model()
             # # load output npy file

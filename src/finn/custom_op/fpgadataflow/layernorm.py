@@ -61,22 +61,21 @@ class LayerNorm(HWCustomOp):
             # FINN DataTypes for inputs, weight, bias, outputs
             "inputDataType": ("s", True, ""),
             "outputDataType": ("s", True, ""),
+            # Possible execution modes for simulating this node
+            #   Note: Override to support python mode
+            "exec_mode": (
+                "s", False, "python", {"", "rtlsim", "cppsim", "python"}
+            ),
         }
         my_attrs.update(super().get_nodeattr_types())
         return my_attrs
 
-    # Executes elementwise op in simulation (either python c++ or rtl sim)
     def execute_node(self, context, graph):
         # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
-        # Lookup table mapping execution modes to implementing methods
-        exec_fns = {
-            "python": self._execute_node_python,
-            "cppsim": self._execute_node_cppsim,
-            "rtlsim": self._execute_node_rtlsim,
-        }
-        # Select and execute the function by mode string
-        exec_fns[mode](context, graph)
+
+        if mode == "python":
+            self._execute_node_python(context, graph)
 
     # Executes elementwise operation in python
     def _execute_node_python(self, context, graph):

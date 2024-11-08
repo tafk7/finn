@@ -33,7 +33,10 @@ class ExpandNorms(Transformation):
                 axis = getattr(get_by_name(node.attribute, "axis"), "i", -1)
                 epsilon = getattr(get_by_name(node.attribute, "epsilon"), "f", 1e-5)
                 # Get tensor attributes
-                act_dtype = DataType[model.get_tensor_datatype(ln_act_in)]
+                # TODO: This is a terrible way of converting to the correct tensor_dtype code in ONNX 
+                in_dtype = model.get_tensor_datatype(ln_act_in)
+                out_dtype = model.get_tensor_datatype(act_out)
+                act_dtype = oh.np_dtype_to_tensor_dtype(np.dtype(in_dtype.to_numpy_dt()))
                 act_shape = model.get_tensor_shape(ln_act_in)
                 # Create functional layernorm node
                 func_ln_node = oh.make_node(
@@ -43,7 +46,9 @@ class ExpandNorms(Transformation):
                     domain="finn.custom_op.general",
                     backend="general",
                     axis=axis,
-                    epsilon=epsilon
+                    epsilon=epsilon,
+                    InputDataType=in_dtype.name,
+                    OutputDataType=out_dtype.name
                 )
 
                 # Get scale, eliminate if all ones
@@ -53,7 +58,7 @@ class ExpandNorms(Transformation):
                     scale_act_in = oh.make_tensor_value_info(model.make_new_valueinfo_name(), act_dtype, act_shape)
                     graph.value_info.append(scale_act_in)
                     # Update previous output tensor
-                    func_ln_node.output[:] = scale_act_in
+                    func_ln_node.output[0] = scale_act_in.name
                     # Create Mul node to replace scale
                     mul_node = oh.make_node("Mul", [scale_act_in.name, scale], [act_out])
 
@@ -65,9 +70,9 @@ class ExpandNorms(Transformation):
                     graph.value_info.append(bias_act_in)
                     # Update previous output tensor
                     if elementwise_affine:
-                        mul_node.output[:] = bias_act_in
+                        mul_node.output[0] = bias_act_in.name
                     else:
-                        func_ln_node.output[:] = scale_act_in
+                        func_ln_node.output[0] = scale_act_in.name
                     # Create Add node to replace bias
                     add_node = oh.make_node("Add", [bias_act_in.name, bias], [act_out])
 

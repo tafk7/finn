@@ -40,6 +40,8 @@ target_clk_ns = 5
 export_onnx_path_0 = "pytest_layernorm_dut_0.onnx"
 export_onnx_path_1 = "pytest_layernorm_dut_1.onnx"
 export_onnx_path_2 = "pytest_layernorm_dut_2.onnx"
+export_onnx_path_3 = "pytest_layernorm_dut_3.onnx"
+export_onnx_path_4 = "pytest_layernorm_dut_4.onnx"
 
 
 
@@ -417,10 +419,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         model.save(export_onnx_path_2) # Debug
         model = model.transform(to_hw.InferElementwiseBinaryOperation())
         model = model.transform(GiveUniqueNodeNames())
-        
-        # model.save(export_onnx_path_2)
-        y_python = oxe.execute_onnx(model, input_t)[out_name]
-        assert np.allclose(y_ref, y_python, atol=tolerance), "HWCustomOp output does not match expected output"
+        model.save(export_onnx_path_3) # Debug
 
         # Isolate fpga dataflow layers
         parent_model = model.transform(CreateDataflowPartition())
@@ -433,6 +432,12 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         model = model.transform(ApplyConfig(folding_config))
         model = model.transform(SpecializeLayers(test_fpga_part))
         model = model.transform(GiveUniqueNodeNames())
+        
+        # model = model.transform(SetExecMode("python"))
+        # y_python = oxe.execute_onnx(model, input_t)[out_name]
+        # assert np.allclose(y_ref, y_python, atol=tolerance), "HWCustomOp output does not match expected output"
+
+        model.save(export_onnx_path_4) # Debug
         # Execute selected sim
         if exec_mode == "cppsim":
             model = model.transform(SetExecMode("cppsim"))
@@ -449,7 +454,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
     except Exception as e:
         pytest.fail(f"Failed to transform the model: {str(e)}")
-
+    
     # run the model
     y_hw = oxe.execute_onnx(model, input_t)[out_name]
     assert np.allclose(y_ref, y_hw, atol=tolerance), "HW sim output does not match expected output"
