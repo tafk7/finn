@@ -46,6 +46,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
+from finn.custom_op.fpgadataflow.rotaryembedding import get_rope_onnx_filename
 from finn.analysis.fpgadataflow.exp_cycles_per_layer import exp_cycles_per_layer
 from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
@@ -62,12 +63,17 @@ test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
 
 
-def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, impl_style):
+def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, simd, impl_style):
+
+    io_shape = [1, num_heads, seq_len, head_size]
+
     # Define the input tensor
-    input_tensor = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, [1, 1, seq_len, hidden])
+    q = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, io_shape)
+    k = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, io_shape)
 
     # Define the output tensor
-    output_tensor = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, [1, 1, seq_len, hidden])
+    output_q = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, io_shape)
+    output_k = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, io_shape)
 
     #cos_tensor = numpy_helper.from_array(cos_values, name='cos')
     #sin_tensor = numpy_helper.from_array(sin_values, name='sin')
@@ -75,14 +81,16 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, imp
     # Define the custom RoPE node
     rope_node = helper.make_node(
         'RotaryEmbedding',  # Custom node name
-        #['input', 'cos', 'sin'],  # Inputs
-        ['input', 'cos', 'sin'],
-        ['output'],  # Outputs
+        ['q', 'k' ],
+        ['output_q, output_k'],  # Outputs
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
         backend="fpgadataflow",
         HiddenDimension=hidden,
         SequenceLength=seq_len,
+        HeadSize=head_size,
+        NumHeads=num_heads,
+        RopeTheta=10000.0,
         inputDataType=str(idt.name),
         weightDataType=str(wdt.name),
         numInputVectors=1,
@@ -94,14 +102,8 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, imp
     graph = helper.make_graph(
         [rope_node],  # Nodes
         'RopeGraph',  # Graph name
-        [input_tensor],  # Inputs
-        [output_tensor],  # Outputs
-
-        initializer=[
-            helper.make_tensor('cos', onnx.TensorProto.INT8, cos.shape, cos),
-            helper.make_tensor('sin', onnx.TensorProto.INT8, sin.shape, sin),
-        #    helper.make_tensor('sin', onnx.TensorProto.FLOAT, sin_values.shape, sin_values)
-        ]  # Initializers
+        [q, k],  # Inputs
+        [output_q, output_k],  # Outputs
     )
 
     # Create the model
@@ -109,10 +111,10 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, imp
     model = qonnx_make_model(graph, producer_name="rope-model")
     model = ModelWrapper(model)
 
-    model.set_tensor_datatype("input", idt)
-    model.set_tensor_datatype("cos", wdt)
-    model.set_tensor_datatype("sin", wdt)
-    model.set_tensor_datatype("output", idt)
+    model.set_tensor_datatype("q", idt)
+    model.set_tensor_datatype("k", idt)
+    model.set_tensor_datatype("output_q", idt)
+    model.set_tensor_datatype("output_k", idt)
 
     model.set_metadata_prop("rtlsim_trace", "trace.vcd")
     os.environ["RTLSIM_TRACE_DEPTH"] = "45"
@@ -127,7 +129,9 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, imp
 #@pytest.mark.parametrize("idim", [[8, 8], [10, 8]])
 # number of channels
 @pytest.mark.parametrize("seq_len", [2])
-@pytest.mark.parametrize("hidden", [128])
+@pytest.mark.parametrize("hidden", [512])
+@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize("num_heads", [8])
 # Input parallelism
 @pytest.mark.parametrize("simd", [1])
 # FINN input datatype
@@ -140,46 +144,29 @@ def make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, imp
 @pytest.mark.fpgadataflow
 @pytest.mark.slow
 @pytest.mark.vivado
-def test_fpgadataflow_rope(seq_len, hidden, idt, wdt, simd, impl_style):
-    #if num_ch % simd != 0:
-    #    pytest.skip(" num_ch % simd != 0, skipping")
+def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd, impl_style):
 
-    #idim_h, idim_w = idim
-    #pad_h = pad[0] + pad[2]
-    #pad_w = pad[1] + pad[3]
+    q = gen_finn_dt_tensor(idt, [1, num_heads, seq_len, head_size]) % 5
+    k = gen_finn_dt_tensor(idt, [1, num_heads, seq_len, head_size]) % 5
 
-    # generate input data
-    #odim_h = idim_h + pad_h
-    #odim_w = idim_w + pad_w
+    midpoint = head_size // 2
 
-    #y_expected = np.pad(x, ((0, 0), (pad[0], pad[2]), (pad[1], pad[3]), (0, 0)), "constant")
-    #expected_oshape = (1, odim_h, odim_w, num_ch)
+    q1 = np.concatenate((-q[...,midpoint:], q[...,:midpoint]), axis=-1)
+    k1 = np.concatenate((-k[...,midpoint:], k[...,:midpoint]), axis=-1)
 
-    # Define the cached tensors
-    #cos_values = gen_finn_dt_tensor(idt, [1, 1, 1, num_ch])
-    cos = np.random.randint(-5, 5, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
-    sin = np.random.randint(-5, 5, size=(1, 1, seq_len, hidden)).astype(np.int8)  # Random values
+    # open onnx file and retrieve weights
+    onnx_filename = get_rope_onnx_filename(10000.0, 1, num_heads, seq_len, head_size)
+    onnx_path     = "../../src/finn/custom_op/fpgadataflow/rotaryembedding/onnxgraphs/" + onnx_filename
+    onnx_model    = onnx.load(onnx_path)
 
-    #sin_values = np.random.rand(32768, 64).astype(np.float32)  # Random values
+    qonnx_model = ModelWrapper(onnx_model)
+    print(qonnx_model.get_initializer("cos_param"))
 
-    x = gen_finn_dt_tensor(idt, [1, 1, seq_len, hidden]) % 5
-    #cos = gen_finn_dt_tensor(wdt, [1, 1, seq_len, hidden])
-    print("x=",x)
-    input_dict = {"input": x}
-
-    midpoint = hidden // 2
-
-    x1 = np.concatenate((-x[...,midpoint:], x[...,:midpoint]), axis=-1)
-
-    y_expected = x * cos + x1 * sin
-    #import pdb; pdb.set_trace()
-
-    # remove instances of -0 from y_expected
-    y_expected[y_expected == -0] = 0
-
+    exit(0)
+    #print("cos=",cos)
     print("idt=",idt)
     print("wdt=",wdt)
-    model = make_single_rope_modelwrapper(seq_len, hidden, idt, wdt, cos, sin, simd, impl_style)
+    model = make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, simd, impl_style)
 
     #inp = np.random.rand(1, num_ch).astype(np.float32)
 

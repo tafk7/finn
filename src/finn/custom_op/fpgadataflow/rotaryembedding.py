@@ -28,6 +28,9 @@
 
 import numpy as np
 import warnings
+import onnx
+import onnxruntime as ort
+import os
 from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
@@ -41,6 +44,16 @@ class RotaryEmbedding(HWCustomOp):
 
     def __init__(self, onnx_node, **kwargs):
         super().__init__(onnx_node, **kwargs)
+
+        # Onnx Filename is always generated with batch size 1
+        # since RTL generation is not affected by batch size
+        batch_size = 1
+        self.onnx_filename = get_rope_onnx_filename(onnx_node.get_nodeattr("RopeTheta"), batch_size,
+                                                    onnx_node.get_nodeattr("NumHeads"),
+                                                    onnx_node.get_nodeattr("SequenceLength"),
+                                                    onnx_node.get_nodeattr("HeadDimension"))
+        self.onnx_path = os.path.abspath(__file__) + "/rotaryembedding/onnxgraphs/" + self.onnx_filename
+        #self.onnx_model = onnx.load('rotaryembedding' + '/' + self.onnx_filename)
 
     def get_nodeattr_types(self):
         my_attrs = {
@@ -71,31 +84,33 @@ class RotaryEmbedding(HWCustomOp):
         return 0
 
     def get_normal_input_shape(self, ind=0):
-        seq_len = self.get_nodeattr("SequenceLength")
-        hidden = self.get_nodeattr("HiddenDimension")
-        ishape = (1, 1, seq_len, hidden)
+        seq_len  = self.get_nodeattr("SequenceLength")
+        head_dim = self.get_nodeattr("HeadDimension")
+        num_heads = self.get_nodeattr("NumHeads")
+        ishape = (1, num_heads, seq_len, head_dim)
         return ishape
 
     def get_normal_output_shape(self, ind=0):
-        seq_len = self.get_nodeattr("SequenceLength")
-        hidden = self.get_nodeattr("HiddenDimension")
-        oshape = (1, 1, seq_len, hidden)
+        seq_len  = self.get_nodeattr("SequenceLength")
+        head_dim = self.get_nodeattr("HeadDimension")
+        num_heads = self.get_nodeattr("NumHeads")
+        oshape = (1, num_heads, seq_len, head_dim)
         return oshape
 
     def get_folded_input_shape(self, ind=0):
         normal_ishape = list(self.get_normal_input_shape())
-        hidden = self.get_nodeattr("HiddenDimension")
+        head_dim = self.get_nodeattr("HeadDimension")
         simd = self.get_nodeattr("SIMD")
-        assert hidden % simd == 0, "SIMD must divide input channels"
+        assert head_dim % simd == 0, "SIMD must divide input channels"
         fold = int(normal_ishape[-1] / simd)
         folded_ishape = normal_ishape[:-1] + [fold, simd]
         return tuple(folded_ishape)
 
     def get_folded_output_shape(self, ind=0):
         normal_oshape = list(self.get_normal_output_shape())
-        hidden = self.get_nodeattr("HiddenDimension")
+        head_dim = self.get_nodeattr("HeadDimension")
         simd = self.get_nodeattr("SIMD")
-        assert hidden % simd == 0, "SIMD must divide input channels"
+        assert head_dim % simd == 0, "SIMD must divide input channels"
         fold = int(normal_oshape[-1] / simd)
         folded_oshape = normal_oshape[:-1] + [fold, simd]
         return tuple(folded_oshape)
@@ -144,16 +159,17 @@ class RotaryEmbedding(HWCustomOp):
         return np.prod(folded_oshape[:-1])
 
     def execute_node(self, context, graph):
-        # Behavioral Model Code
-        node = self.onnx_node
-        # Rope Computation
-        x = context[node.input[0]]
-        cos = context[node.input[1]]
-        sin = context[node.input[2]]
-        midpoint = x.shape[-1] // 2
-        x1 = np.concatenate((-x[...,midpoint:], x[...,:midpoint]), axis=-1)
+        ort_session = ort.InferenceSession(self.onnx_path)
 
+        inputs = {
+            "q": context[self.onnx_node.input[0]],
+            "k": context[self.onnx_node.input[1]]
+        }
 
-        context[node.output[0]] = x * cos + x1 * sin
+        output_names = ["output_q", "output_k"]
 
+        outputs = ort_session.run(output_names, inputs)
+
+        context[self.onnx_node.output[0]] = outputs[0]
+        context[self.onnx_node.output[1]] = outputs[1]
 
