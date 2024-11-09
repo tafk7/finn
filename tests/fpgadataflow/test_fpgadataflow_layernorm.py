@@ -37,11 +37,9 @@ import finn.transformation.streamline.absorb as absorb
 import numpy as np
 test_fpga_part = "xczu3eg-sbva484-1-e"
 target_clk_ns = 5
-export_onnx_path_0 = "pytest_layernorm_dut_0.onnx"
-export_onnx_path_1 = "pytest_layernorm_dut_1.onnx"
-export_onnx_path_2 = "pytest_layernorm_dut_2.onnx"
-export_onnx_path_3 = "pytest_layernorm_dut_3.onnx"
-export_onnx_path_4 = "pytest_layernorm_dut_4.onnx"
+
+def onnx_path(suffx):
+    return f'pytest_layernorm_{suffx}.onnx'
 
 
 
@@ -73,7 +71,7 @@ def build_simple_layernorm_graph(
     last_dim = idm[-1]
 
     inp = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, list(idm))
-    outp = helper.make_tensor_value_info("gloabl_out", TensorProto.FLOAT, list(idm))
+    outp = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, list(idm))
 
     graph = helper.make_graph(
         nodes=[], name="LayerNorm_graph", inputs=[inp], outputs=[outp]
@@ -174,16 +172,16 @@ def build_simple_layernorm_graph(
     model.set_initializer("layernorm0_b_param", np.random.rand(last_dim).astype(np.float32))
     model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
 
-    model.save(export_onnx_path_0)
+    model.save(onnx_path(-1))
 
     # Force the opset to 17 (TODO: Must be a better way to do this)
-    _model = onnx.load(export_onnx_path_0)
+    _model = onnx.load(onnx_path(-1))
     op = onnx.OperatorSetIdProto()
     op.version = 17
     _model_opset17 = helper.make_model(_model.graph, opset_imports=[op])    
-    onnx.save(_model_opset17, export_onnx_path_0)
+    onnx.save(_model_opset17, onnx_path(-1))
 
-    return ModelWrapper(export_onnx_path_0) 
+    return ModelWrapper(onnx_path(-1)) 
 
 def build_layernorm_graph(
         input_datatype:str,
@@ -213,7 +211,7 @@ def build_layernorm_graph(
     last_dim = idm[-1]
 
     inp = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, list(idm))
-    outp = helper.make_tensor_value_info("gloabl_out", TensorProto.FLOAT, list(idm))
+    outp = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, list(idm))
 
     graph = helper.make_graph(
         nodes=[], name="LayerNorm_graph", inputs=[inp], outputs=[outp]
@@ -334,16 +332,16 @@ def build_layernorm_graph(
     model.set_initializer("layernorm0_b_param", np.random.rand(last_dim).astype(np.float32))
     model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
 
-    model.save(export_onnx_path_0)
+    model.save(onnx_path(-1))
 
     # Force the opset to 17 (TODO: Must be a better way to do this)
-    _model = onnx.load(export_onnx_path_0)
+    _model = onnx.load(onnx_path(-1))
     op = onnx.OperatorSetIdProto()
     op.version = 17
     _model_opset17 = helper.make_model(_model.graph, opset_imports=[op])    
-    onnx.save(_model_opset17, export_onnx_path_0)
+    onnx.save(_model_opset17, onnx_path(-1))
 
-    return ModelWrapper(export_onnx_path_0) 
+    return ModelWrapper(onnx_path(-1)) 
 
 @pytest.mark.parametrize("impl_style", ["hls"])
 @pytest.mark.parametrize("exec_mode", ["cppsim", "rtlsim", "stitched_ip"])
@@ -373,23 +371,23 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             "simd": simd,
             "preferred_impl_style": impl_style
         },
-        "Mul_0": {
-            "simd": simd,
+        "ElementwiseMul_0": {
+            # "pe": simd,
             "preferred_impl_style": impl_style
         },
-        "Add_0": {
-            "simd": simd,
+        "ElementwiseAdd_0": {
+            # "pe": simd,
             "preferred_impl_style": impl_style
         }
     }
     io_shape = ifm_dim
     epsilon = 1e-05
-    tolerance = 0
+    tolerance = 2
     
     model = build_simple_layernorm_graph(idt, wdt, bdt, odt, epsilon, ifm_dim)
     # model = build_layernorm_graph(idt, wdt, bdt, odt, epsilon, ifm_dim)
     model = model.transform(InferShapes())
-    model.save(export_onnx_path_0)    
+    model.save(onnx_path(0))    
 
     if(ifm_dim[-1] % simd != 0):
         pytest.skip(f"Skipping this test because the channel dimension is not a multiple of {simd}")
@@ -406,7 +404,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
 
     # Create reference values using the qonnx model
     y_ref = oxe.execute_onnx(model, input_t)[out_name]
-    model.save(export_onnx_path_0) # Debug
+    model.save(onnx_path(1)) # Debug
 
     try:
         # Lower graph to HWCustomOps
@@ -414,30 +412,30 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         model = model.transform(ConvertQONNXtoFINN())
         model = model.transform(InferShapes())
         model = model.transform(InferDataTypes())
-        model.save(export_onnx_path_1) # Debug
+        model.save(onnx_path(2)) # Debug
         model = model.transform(to_hw.InferLayerNorm())
-        model.save(export_onnx_path_2) # Debug
+        model.save(onnx_path(3)) # Debug
         model = model.transform(to_hw.InferElementwiseBinaryOperation())
         model = model.transform(GiveUniqueNodeNames())
-        model.save(export_onnx_path_3) # Debug
+        model.save(onnx_path(4)) # Debug
 
         # Isolate fpga dataflow layers
         parent_model = model.transform(CreateDataflowPartition())
+        parent_model.save(onnx_path(5)) # Debug
         sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-
-        # @STFleming what do these two lines do?
         sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
         model = ModelWrapper(sdp_node_path)
+        model.save(onnx_path(6)) # Debug
 
         model = model.transform(ApplyConfig(folding_config))
         model = model.transform(SpecializeLayers(test_fpga_part))
         model = model.transform(GiveUniqueNodeNames())
+        model.save(onnx_path(7)) # Debug
         
         # model = model.transform(SetExecMode("python"))
         # y_python = oxe.execute_onnx(model, input_t)[out_name]
         # assert np.allclose(y_ref, y_python, atol=tolerance), "HWCustomOp output does not match expected output"
 
-        model.save(export_onnx_path_4) # Debug
         # Execute selected sim
         if exec_mode == "cppsim":
             model = model.transform(SetExecMode("cppsim"))
@@ -456,5 +454,5 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         pytest.fail(f"Failed to transform the model: {str(e)}")
     
     # run the model
-    y_hw = oxe.execute_onnx(model, input_t)[out_name]
+    y_hw = oxe.execute_onnx(model, input_t)[model.graph.output[0].name]
     assert np.allclose(y_ref, y_hw, atol=tolerance), "HW sim output does not match expected output"

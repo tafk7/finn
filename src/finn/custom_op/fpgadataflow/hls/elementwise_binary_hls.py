@@ -46,8 +46,10 @@ class ElementwiseBinaryOperation_hls(  # noqa: Class name does not follow
 ):
     # Node attributes matching the HLS operator
     def get_nodeattr_types(self):
+        # attrs = {"custom_hls_dir": ("s", False, "elementwise")}
+        attrs = {}
         # Start from parent operator class attributes
-        attrs = ElementwiseBinaryOperation.get_nodeattr_types(self)
+        attrs.update(ElementwiseBinaryOperation.get_nodeattr_types(self))
         # Add the HLSBackend default attributes on top
         attrs.update(HLSBackend.get_nodeattr_types(self))
         # Add/Specialize implementation specific attributes here...

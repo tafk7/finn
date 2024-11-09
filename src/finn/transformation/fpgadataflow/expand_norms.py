@@ -4,9 +4,8 @@ from onnx import helper as oh
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import get_by_name
-
-
 from qonnx.core.datatype import DataType
+
 
 class ExpandNorms(Transformation):
     """Expand any standard LayerNorms/RMSNorms into the functional 

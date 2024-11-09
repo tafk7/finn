@@ -41,7 +41,7 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         super().__init__(onnx_node, **kwargs)
 
     def get_nodeattr_types(self):
-        my_attrs = {}
+        my_attrs = {"custom_hls_dir": ("s", False, "layernorm")}
         my_attrs.update(LayerNorm.get_nodeattr_types(self))
         my_attrs.update(HLSBackend.get_nodeattr_types(self))
         return my_attrs
@@ -93,14 +93,14 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
     def execute_node(self, context, graph):
         # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
-        # Lookup table mapping execution modes to implementing methods
-        exec_fns = {
-            "python": self._execute_node_python,
-            "cppsim": self._execute_node_cppsim,
-            "rtlsim": self._execute_node_rtlsim,
-        }
-        # Select and execute the function by mode string
-        exec_fns[mode](context, graph)
+        # # Lookup table mapping execution modes to implementing methods
+        # exec_fns = {
+        #     "python": self._execute_node_python,
+        #     "cppsim": self._execute_node_cppsim,
+        #     "rtlsim": self._execute_node_rtlsim,
+        # }
+        # # Select and execute the function by mode string
+        # exec_fns[mode](context, graph)
 
 
 

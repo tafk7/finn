@@ -53,6 +53,7 @@ class HLSBackend(ABC):
     def get_nodeattr_types(self):
         return {
             "code_gen_dir_cppsim": ("s", False, ""),
+            "custom_hls_dir": ("s", False, ""),            
             "executable_path": ("s", False, ""),
             "res_hls": ("s", False, ""),
         }
@@ -250,13 +251,16 @@ class HLSBackend(ABC):
         """Builds the bash script for compilation using the CppBuilder from
         finn.util.basic and executes the script to produce the executable."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+        custom_hls_dir = self.get_nodeattr("custom_hls_dir")
         builder = CppBuilder()
         # to enable additional debug features please uncommand the next line
         # builder.append_includes("-DDEBUG")
         builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
         builder.append_includes("-I$FINN_ROOT/deps/cnpy/")
         builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")
-        builder.append_includes(f"-I$FINN_ROOT/custom_hls/{hls_dir}") # TAFK
+        # builder.append_includes(f"-I$FINN_ROOT/custom_hls/{custom_hls_dir}") # TAFK
+        builder.append_includes(f"-I$FINN_ROOT/custom_hls/") # TAFK
+        builder.append_includes(f"-I$FINN_ROOT/custom_hls/layernorm") # TAFK
         builder.append_includes("-I{}/include".format(os.environ["HLS_PATH"]))
         builder.append_includes("--std=c++14")
         builder.append_includes("-O3")
