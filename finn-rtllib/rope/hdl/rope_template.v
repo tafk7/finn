@@ -37,14 +37,23 @@ input   ap_clk,
 input   ap_rst_n,
 
 //- AXI Stream - Input --------------
-output	in0_V_TREADY,
-input	in0_V_TVALID,
-input	[$STREAM_BITS$-1:0]  in0_V_TDATA,
+output	q_in_V_TREADY,
+input	q_in_V_TVALID,
+input	[$STREAM_BITS$-1:0]  q_in_V_TDATA,
+
+output	k_in_V_TREADY,
+input	k_in_V_TVALID,
+input	[$STREAM_BITS$-1:0]  k_in_V_TDATA,
+
 
 //- AXI Stream - Output -------------
-input	out_V_TREADY,
-output	out_V_TVALID,
-output	[$STREAM_BITS$-1:0]  out_V_TDATA
+input	q_out_V_TREADY,
+output	q_out_V_TVALID,
+output	[$STREAM_BITS$-1:0] q_out_V_TDATA,
+
+input	k_out_V_TREADY,
+output	k_out_V_TVALID,
+output	[$STREAM_BITS$-1:0] k_out_V_TDATA
 );
 
 
@@ -60,12 +69,20 @@ impl
 (
  .ap_clk(ap_clk),
  .ap_rst_n(ap_rst_n),
- .s_axis_tready(in0_V_TREADY),
- .s_axis_tvalid(in0_V_TVALID),
- .s_axis_tdata(in0_V_TDATA),
- .m_axis_tready(out_V_TREADY),
- .m_axis_tvalid(out_V_TVALID),
- .m_axis_tdata(out_V_TDATA)
+
+ .s_axis_q_tready(q_in_V_TREADY),
+ .s_axis_q_tvalid(q_in_V_TVALID),
+ .s_axis_q_tdata(q_in_V_TDATA),
+ .s_axis_k_tready(k_in_V_TREADY),
+ .s_axis_k_tvalid(k_in_V_TVALID),
+ .s_axis_k_tdata(k_in_V_TDATA),
+
+ .m_axis_q_tready(q_out_V_TREADY),
+ .m_axis_q_tvalid(q_out_V_TVALID),
+ .m_axis_q_tdata(q_out_V_TDATA),
+ .m_axis_k_tready(k_out_V_TREADY),
+ .m_axis_k_tvalid(k_out_V_TVALID),
+ .m_axis_k_tdata(k_out_V_TDATA)
 );
 
 endmodule
