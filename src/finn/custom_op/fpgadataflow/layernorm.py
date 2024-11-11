@@ -26,24 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import math
 import torch
 import numpy as np
 import torch.nn.functional as F
-from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
-from qonnx.util.basic import qonnx_make_model
-
-import textwrap
 import warnings
-from qonnx.util.basic import (
-    calculate_matvec_accumulator_range,
-    interleave_matrix_outer_dim_from_partitions,
-    roundup_to_integer_multiple,
-)
+import textwrap
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
-from finn.util.data_packing import numpy_to_hls_code, pack_innermost_dim_as_hex_string
 
 # TODO: Explain any shape assumptions -- TAFK
 

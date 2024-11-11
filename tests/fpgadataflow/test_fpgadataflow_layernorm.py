@@ -33,8 +33,20 @@ from qonnx.transformation.general import (
     ApplyConfig,
     GiveUniqueNodeNames,
 )
+
+from finn.transformation.streamline import Streamline
 import finn.transformation.streamline.absorb as absorb
 import numpy as np
+
+# from finn.builder.build_dataflow_config import DataflowBuildConfig``
+from finn.transformation.qonnx.quant_act_to_multithreshold import (
+    default_filter_function_generator as dff_gen,
+)
+from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
+
+
+
+
 test_fpga_part = "xczu3eg-sbva484-1-e"
 target_clk_ns = 5
 
@@ -371,14 +383,22 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             "simd": simd,
             "preferred_impl_style": impl_style
         },
-        "ElementwiseMul_0": {
+        "Thresholding_MultiThreshold_0": {
             # "pe": simd,
             "preferred_impl_style": impl_style
         },
-        "ElementwiseAdd_0": {
+        "Thresholding_MultiThreshold_1": {
             # "pe": simd,
             "preferred_impl_style": impl_style
-        }
+        },
+        # "ElementwiseMul_0": {
+        #     # "pe": simd,
+        #     "preferred_impl_style": impl_style
+        # },
+        # "ElementwiseAdd_0": {
+        #     # "pe": simd,
+        #     "preferred_impl_style": impl_style
+        # },
     }
     io_shape = ifm_dim
     epsilon = 1e-05
@@ -409,13 +429,20 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
     try:
         # Lower graph to HWCustomOps
         model = model.transform(ExpandNorms())
-        model = model.transform(ConvertQONNXtoFINN())
+        model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=32)))
+        model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
+        model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
+        model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
+
         model = model.transform(InferShapes())
         model = model.transform(InferDataTypes())
         model.save(onnx_path(2)) # Debug
         model = model.transform(to_hw.InferLayerNorm())
+        model = model.transform(GiveUniqueNodeNames())
         model.save(onnx_path(3)) # Debug
-        model = model.transform(to_hw.InferElementwiseBinaryOperation())
+        # model = model.transform(RoundAndClipThresholds())
+        model = model.transform(to_hw.InferThresholdingLayer())
+        # model = model.transform(to_hw.InferElementwiseBinaryOperation())
         model = model.transform(GiveUniqueNodeNames())
         model.save(onnx_path(4)) # Debug
 
@@ -455,4 +482,15 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
     
     # run the model
     y_hw = oxe.execute_onnx(model, input_t)[model.graph.output[0].name]
+    j = 0
+    y_ref = y_ref.flatten()
+    y_hw = y_hw.flatten()
+    for i in range(len(y_ref)):
+        if np.allclose(y_ref[i], y_hw[i], atol=tolerance):
+
+            print(f'Won at {i}: {y_ref[i]} != {y_hw[i]}')
+            j+=1
+        if j > 20:
+            assert False, "Too much!"
+
     assert np.allclose(y_ref, y_hw, atol=tolerance), "HW sim output does not match expected output"
