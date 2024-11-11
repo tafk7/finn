@@ -60,56 +60,91 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
     def get_verilog_top_module_intf_names(self):
         # Overload default HLSCustomOp implementation to add axilite control IF
         intf_names = super().get_verilog_top_module_intf_names()
+        # Override the AXIS I/O
+        intf_names["s_axis"] = [("q_in_"+self.hls_sname(), self.get_instream_width_padded()),
+                                ("k_in_"+self.hls_sname(), self.get_instream_width_padded())]
+        intf_names["m_axis"] = [("q_out_"+self.hls_sname(), self.get_outstream_width_padded()),
+                                ("k_out_"+self.hls_sname(), self.get_outstream_width_padded())]
         return intf_names
+
+    def assert_context_has_input(self, context, inp_name):
+        assert inp_name in context, "Missing expected input %s" % inp_name
+
+    def assert_datatype_is_float(self, dt):
+        assert str(dt) == "float32", "Only float32 datatype supported"
+
+    def assert_expected_shape(self, shape, exp_shape, help_explain_shape=""):
+        assert shape == exp_shape, f"Expected Shape {exp_shape} Actual Shape: {shape}" + f"\n{help_explain_shape}"
+
+    def validate_input(self, context, itensor):
+        self.assert_context_has_input(context, itensor)
+        self.assert_datatype_is_float(context[itensor].dtype)
+        self.assert_expected_shape(context[itensor],
+                                   self.get_normal_input_shape(),
+                                   "Input Shape (1, NumberOfHeads, SequenceLength, HiddenDimension)")
+
+    def validate_output(self, context, otensor):
+        self.assert_context_has_input(context, otensor)
+        self.assert_expected_shape(context[otensor],
+                                   self.get_normal_output_shape(),
+                                   "Output Shape (1, NumberOfHeads, SequenceLength, HiddenDimension)")
+
+    def apply_input_folding(self, itensor):
+        return itensor.reshape(self.get_folded_input_shape())
+
+    def apply_output_unfolding(self, otensor):
+        return np.asarray([otensor], dtype=np.float32).reshape(*self.get_normal_output_shape())
+
+    def export_to_npy(self, directory, filename, itensor):
+        np.save(os.path.join(directory, filename), itensor)
+
+    def build_simio_dict(self, context, graph):
+        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+        idt   = self.get_input_datatype()
+        nbits = self.get_instream_width()
+
+        simulation_io = {"inputs": {}, "outputs": {}}
+        for inp in self.onnx_node.input:
+            self.validate_input(context, inp)
+            self.export_to_npy(code_gen_dir, inp + ".npy", self.apply_input_folding(context[inp]))
+            simulation_io["inputs"][inp] = npy_to_rtlsim_input(f"{code_gen_dir}/{inp}.npy", idt, nbits)
+
+        for outp in self.onnx_node.output:
+            simulation_io["outputs"][outp] = []
+
+        return simulation_io
+
+    def process_sim_output(self, context, graph, io_dict):
+        for outp in self.onnx_node.output:
+            otensor = io_dict["outputs"][outp]
+            outp_npy_path = f"{self.get_nodeattr('code_gen_dir_ipgen')}/{outp}.npy"
+            rtlsim_output_to_npy(
+                otensor,
+                outp_npy_path,
+                self.get_output_datatype(),
+                self.get_folded_output_shape(),
+                self.get_outstream_width(),
+                self.get_outstream_width(),
+                self.get_output_datatype().bitwidth(),
+            )
+            output          = np.load(outp_npy_path)
+            unfolded_output = self.apply_output_unfolding(output)
+            self.validate_output(context, unfolded_output)
+            context[outp] = unfolded_output
+
 
     def execute_node(self, context, graph):
         mode = self.get_nodeattr("exec_mode")
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
-        # if mode == "cppsim":
-        #     RotaryEmbedding.execute_node(self, context, graph)
-        # elif mode == "rtlsim":
         if mode == "rtlsim":
-            node = self.onnx_node
-            exp_ishape = self.get_normal_input_shape()
-            exp_oshape = self.get_normal_output_shape()
-            folded_ishape = self.get_folded_input_shape()
-            inp = context[node.input[0]]
-            assert str(inp.dtype) == "float32", "Input datatype is not float32"
-            assert (
-                inp.shape == exp_ishape
-            ), """Input shape doesn't
-            match expected shape (1, ImgDim_h, ImgDim_w, HiddenDimension)."""
-            export_idt = self.get_input_datatype()
-
-            reshaped_input = inp.reshape(folded_ishape)
-            np.save(os.path.join(code_gen_dir, "input_0.npy"), reshaped_input)
+            io_dict = self.build_simio_dict(context, graph)
 
             sim = self.get_rtlsim()
-            nbits = self.get_instream_width()
-            rtlsim_inp = npy_to_rtlsim_input(
-                "{}/input_0.npy".format(code_gen_dir), export_idt, nbits
-            )
             super().reset_rtlsim(sim)
             super().toggle_clk(sim)
-            rtlsim_output = self.rtlsim(sim, rtlsim_inp)
-            odt = export_idt
-            target_bits = odt.bitwidth()
-            packed_bits = self.get_outstream_width()
-            out_npy_path = "{}/output.npy".format(code_gen_dir)
-            out_shape = self.get_folded_output_shape()
-            rtlsim_output_to_npy(
-                rtlsim_output, out_npy_path, odt, out_shape, packed_bits, target_bits
-            )
-            # load and reshape output
-            output = np.load(out_npy_path)
-            output = np.asarray([output], dtype=np.float32).reshape(*exp_oshape)
-            context[node.output[0]] = output
 
-            assert (
-                context[node.output[0]].shape == exp_oshape
-            ), """Output shape doesn't match expected shape
-                (1, OutputDim_H, OutputDim_W, NumChannels)."""
+            self.rtlsim_multi_io(sim, io_dict)
+            self.process_sim_output(context, graph, io_dict)
 
         else:
             raise Exception(
@@ -195,7 +230,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         ) as f:
             f.write(template)
 
-        sv_files = ["rope_axi.sv", "../../memstream/hdl/memstream.sv", "../../fifo/hdl/Q_srl.v"]
+        sv_files = ["rope_axi.sv", "rope.sv", "../../memstream/hdl/memstream.sv", "../../fifo/hdl/Q_srl.v"]
         for sv_file in sv_files:
             shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
         # set ipgen_path and ip_path so that HLS-Synth transformation
@@ -216,6 +251,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         verilog_paths = [code_gen_dir]
         verilog_files = [
             "rope_axi.sv",
+            "rope.sv",
             "memstream.sv",
             "Q_srl.v",
             self.get_nodeattr("gen_top_module") + ".v",
@@ -239,6 +275,7 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
 
         sourcefiles = [
              "rope_axi.sv",
+             "rope.sv",
              "memstream.sv",
              "Q_srl.v",
              self.get_nodeattr("gen_top_module") + ".v",

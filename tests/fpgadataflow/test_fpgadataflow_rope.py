@@ -186,23 +186,15 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     model = model.transform(HLSSynthIP())
     model = model.transform(PrepareRTLSim())
     model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
+
     model.save("rope_model-before-infer-shapes.onnx")
-    # if mode == "cppsim":
-    #     model = model.transform(PrepareCppSim())
-    #     model = model.transform(CompileCppSim())
-    # elif mode == "rtlsim":
-    #     model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
-    #     model = model.transform(HLSSynthIP())
-    #     model = model.transform(PrepareRTLSim())
-    #import pdb; pdb.set_trace()
+
     model.set_metadata_prop("exec_mode", "rtlsim")
-    y_produced = oxe.execute_onnx(model, input_dict)["output"]
+    sim_output = oxe.execute_onnx(model, input_dict)
 
 
-
-
-    # assert y_produced.shape == expected_oshape
-    assert (y_produced == y_expected).all()
+    assert (sim_output['output_k'] == k_expected).all()
+    assert (sim_output['output_q'] == q_expected).all()
 
     # if mode == "rtlsim":
     op_type = "RotaryEmbedding_" + "rtl"

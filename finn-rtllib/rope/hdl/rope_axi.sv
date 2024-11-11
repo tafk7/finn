@@ -52,7 +52,7 @@ module rope_axi #(
 	//- AXI Stream - Input --------------
 	output	logic  s_axis_q_tready,
 	input	logic  s_axis_q_tvalid,
-	input	logic [STREAM_BITS-1:0]  s_qaxis_q_tdata,
+	input	logic [STREAM_BITS-1:0]  s_axis_q_tdata,
 
 	output	logic  s_axis_k_tready,
 	input	logic  s_axis_k_tvalid,
