@@ -183,13 +183,9 @@ class RotaryEmbedding(HWCustomOp):
         output_names = ["output_q", "output_k"]
 
         outputs = ort_session.run(output_names, inputs)
-        # print(f"Outputs: {len(outputs)}")
 
         context[self.onnx_node.output[0]] = outputs[0]
         context[self.onnx_node.output[1]] = outputs[1]
-        # context[self.onnx_node.output[2]] = outputs[2]
-        # context[self.onnx_node.output[3]] = outputs[3]
-        # context[self.onnx_node.output[4]] = outputs[4]
 
 
 
