@@ -199,12 +199,9 @@ class InferThresholdingLayer(Transformation):
         graph = model.graph
         node_ind = 0
         graph_modified = False
-        print('Evaluating thresholding inf ------------------------------------------------------------------------------------')
         for node in graph.node:
             node_ind += 1
-            print(f'Node check {node_ind}: {node.op_type == "MultiThreshold"}')
             if node.op_type == "MultiThreshold":
-                z=0
                 thl_input = node.input[0]
                 thl_threshold = node.input[1]
                 thl_output = node.output[0]
@@ -212,7 +209,6 @@ class InferThresholdingLayer(Transformation):
                 thl_thres_shape = model.get_tensor_shape(thl_threshold)
                 idt = model.get_tensor_datatype(thl_input)
                 tdt = model.get_tensor_datatype(thl_threshold)
-                print(z); z+=1
                 # skip conversion for layers with float input
                 if not idt.is_integer():
                     continue
@@ -222,7 +218,6 @@ class InferThresholdingLayer(Transformation):
                     because thresholds are float type. Input data type is integer,
                     please run RoundAndClipThresholds to convert thresholds to integer."""
                 )
-                print(z); z+=1
 
                 # check layout of inputs/outputs, and convert if needed
                 # check layout and convert if necessary
@@ -232,7 +227,6 @@ class InferThresholdingLayer(Transformation):
                     node_ind += 1
                     thl_in_shape = model.get_tensor_shape(thl_input)
 
-                print(z); z+=1
                 # keep track of where we need to insert the HLS Op
                 # it has to be ahead of the output transform
                 insert_point = node_ind
@@ -241,25 +235,21 @@ class InferThresholdingLayer(Transformation):
                     thl_output = nchw_to_nhwc(thl_output, model, node_ind, reverse=True)
                     node_ind += 1
 
-                print(z); z+=1
                 # now safe to assume number of channels is in last dimension
                 ifc = int(thl_in_shape[-1])
                 # create node with no parallelization first
                 pe = 1
-                print(z); z+=1
 
                 odt = model.get_tensor_datatype(thl_output)
                 scale = getCustomOp(node).get_nodeattr("out_scale")
                 assert scale == 1.0, (
                     node.name + ": MultiThreshold out_scale must be 1 for HLS conversion."
                 )
-                print(z); z+=1
                 actval = getCustomOp(node).get_nodeattr("out_bias")
                 assert int(actval) == actval, (
                     node.name + ": MultiThreshold out_bias must be integer for HLS conversion."
                 )
                 actval = int(actval)
-                print(z); z+=1
 
                 # a signed activation should always have a negative bias,
                 # but BIPOLAR uses the -1 as 0 encoding so the assert does not apply
@@ -268,7 +258,6 @@ class InferThresholdingLayer(Transformation):
                         node.name + ": Signed output requires actval < 0"
                     )
 
-                print(z); z+=1
                 new_node = helper.make_node(
                     "Thresholding",
                     [thl_input, thl_threshold],
@@ -285,13 +274,11 @@ class InferThresholdingLayer(Transformation):
                     ActVal=actval,
                     name="Thresholding_" + node.name,
                 )
-                print(z); z+=1
 
                 graph.node.insert(insert_point, new_node)
                 # remove old node
                 graph.node.remove(node)
                 graph_modified = True
-                print(z); z+=1
 
         return (model, graph_modified)
 
