@@ -68,27 +68,24 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
     io_shape = [1, num_heads, seq_len, head_size]
 
     # Define the input tensor
-    q = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, io_shape)
-    k = helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, io_shape)
+    q = helper.make_tensor_value_info('q', onnx.TensorProto.FLOAT, io_shape)
+    k = helper.make_tensor_value_info('k', onnx.TensorProto.FLOAT, io_shape)
 
     # Define the output tensor
-    output_q = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, io_shape)
-    output_k = helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, io_shape)
-
-    #cos_tensor = numpy_helper.from_array(cos_values, name='cos')
-    #sin_tensor = numpy_helper.from_array(sin_values, name='sin')
+    output_q = helper.make_tensor_value_info('output_q', onnx.TensorProto.FLOAT, io_shape)
+    output_k = helper.make_tensor_value_info('output_k', onnx.TensorProto.FLOAT, io_shape)
 
     # Define the custom RoPE node
     rope_node = helper.make_node(
         'RotaryEmbedding',  # Custom node name
         ['q', 'k' ],
-        ['output_q, output_k'],  # Outputs
+        ['output_q', 'output_k'],  # Outputs
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
         backend="fpgadataflow",
         HiddenDimension=hidden,
         SequenceLength=seq_len,
-        HeadSize=head_size,
+        HeadDimension=head_size,
         NumHeads=num_heads,
         RopeTheta=10000.0,
         inputDataType=str(idt.name),
@@ -135,8 +132,8 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
 # Input parallelism
 @pytest.mark.parametrize("simd", [1])
 # FINN input datatype
-@pytest.mark.parametrize("idt", [DataType["INT8"]])
-@pytest.mark.parametrize("wdt", [DataType["INT8"]])
+@pytest.mark.parametrize("idt", [DataType["FLOAT32"]])
+@pytest.mark.parametrize("wdt", [DataType["FLOAT32"]])
 # execution mode
 #@pytest.mark.parametrize("mode", ["cppsim", "rtlsim"])
 # implementation style
@@ -160,21 +157,25 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     onnx_model    = onnx.load(onnx_path)
 
     qonnx_model = ModelWrapper(onnx_model)
-    print(qonnx_model.get_initializer("cos_param"))
+    cos = np.expand_dims(qonnx_model.get_initializer("cos_param"), 0)
+    sin = np.expand_dims(qonnx_model.get_initializer("sin_param"), 0)
 
-    exit(0)
-    #print("cos=",cos)
-    print("idt=",idt)
-    print("wdt=",wdt)
+    q_expected = q * cos + q1 * sin
+    k_expected = k * cos + k1 * sin
+
     model = make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, simd, impl_style)
 
-    #inp = np.random.rand(1, num_ch).astype(np.float32)
+    input_dict = {"q": q, "k": k}
+    onnx_output = oxe.execute_onnx(model, input_dict)
 
-    y_produced_cpu = oxe.execute_onnx(model, input_dict)["output"]
-    print("output_cpu=",y_produced_cpu)
+    assert (k_expected == onnx_output["output_k"]).all()
+    assert (q_expected == onnx_output["output_q"]).all()
+
+    exit(0)
+    #print("output_cpu=",y_produced_cpu)
     # assert y_produced.shape == expected_oshape
-    print("y_expected=", y_expected)
-    assert (y_produced_cpu == y_expected).all(), "HW layer execution failed"
+    #print("y_expected=", y_expected)
+    #assert (y_produced_cpu == y_expected).all(), "HW layer execution failed"
 
     model = model.transform(SpecializeLayers(test_fpga_part))
     model = model.transform(InferShapes())

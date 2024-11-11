@@ -48,12 +48,27 @@ class RotaryEmbedding(HWCustomOp):
         # Onnx Filename is always generated with batch size 1
         # since RTL generation is not affected by batch size
         batch_size = 1
-        self.onnx_filename = get_rope_onnx_filename(onnx_node.get_nodeattr("RopeTheta"), batch_size,
-                                                    onnx_node.get_nodeattr("NumHeads"),
-                                                    onnx_node.get_nodeattr("SequenceLength"),
-                                                    onnx_node.get_nodeattr("HeadDimension"))
-        self.onnx_path = os.path.abspath(__file__) + "/rotaryembedding/onnxgraphs/" + self.onnx_filename
-        #self.onnx_model = onnx.load('rotaryembedding' + '/' + self.onnx_filename)
+        self.onnx_filename = get_rope_onnx_filename(self.get_nodeattr("RopeTheta"), batch_size,
+                                                    self.get_nodeattr("NumHeads"),
+                                                    self.get_nodeattr("SequenceLength"),
+                                                    self.get_nodeattr("HeadDimension"))
+        self.onnx_dir = os.path.dirname(__file__) + "/rotaryembedding/onnxgraphs/"
+        self.onnx_path = self.onnx_dir + self.onnx_filename
+        self.onnx_model = onnx.load(self.onnx_path)
+        onnx.checker.check_model(self.onnx_model)
+
+        # debug_names = ["/Concat_1", "/Mul_2", "/Mul_3"]
+        # print(f"Adding intermediate tensors as outputs for debugging: {debug_names}")
+        # for node in self.onnx_model.graph.node:
+        #     if node.name in debug_names:
+        #         print(f"Node {node.name} has output {node.output}")
+        #         for output in node.output:
+        #             intermediate_tensor = onnx.helper.make_tensor_value_info(output, onnx.TensorProto.FLOAT, None)
+        #             self.onnx_model.graph.output.append(intermediate_tensor)
+
+        # onnx.shape_inference.infer_shapes(self.onnx_model)
+
+        # onnx.save(self.onnx_model, self.onnx_dir + "debug.onnx")
 
     def get_nodeattr_types(self):
         my_attrs = {
@@ -160,16 +175,21 @@ class RotaryEmbedding(HWCustomOp):
 
     def execute_node(self, context, graph):
         ort_session = ort.InferenceSession(self.onnx_path)
-
         inputs = {
-            "q": context[self.onnx_node.input[0]],
-            "k": context[self.onnx_node.input[1]]
+            "q": context['q'],
+            "k": context['k']
         }
 
         output_names = ["output_q", "output_k"]
 
         outputs = ort_session.run(output_names, inputs)
+        # print(f"Outputs: {len(outputs)}")
 
         context[self.onnx_node.output[0]] = outputs[0]
         context[self.onnx_node.output[1]] = outputs[1]
+        # context[self.onnx_node.output[2]] = outputs[2]
+        # context[self.onnx_node.output[3]] = outputs[3]
+        # context[self.onnx_node.output[4]] = outputs[4]
+
+
 
