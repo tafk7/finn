@@ -76,10 +76,10 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
     def assert_expected_shape(self, shape, exp_shape, help_explain_shape=""):
         assert shape == exp_shape, f"Expected Shape {exp_shape} Actual Shape: {shape}" + f"\n{help_explain_shape}"
 
-    def validate_input(self, context, itensor):
-        self.assert_context_has_input(context, itensor)
-        self.assert_datatype_is_float(context[itensor].dtype)
-        self.assert_expected_shape(context[itensor],
+    def validate_input(self, context, name):
+        self.assert_context_has_input(context, name)
+        self.assert_datatype_is_float(context[name].dtype)
+        self.assert_expected_shape(context[name].shape,
                                    self.get_normal_input_shape(),
                                    "Input Shape (1, NumberOfHeads, SequenceLength, HiddenDimension)")
 
@@ -89,62 +89,76 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
                                    self.get_normal_output_shape(),
                                    "Output Shape (1, NumberOfHeads, SequenceLength, HiddenDimension)")
 
-    def apply_input_folding(self, itensor):
-        return itensor.reshape(self.get_folded_input_shape())
-
-    def apply_output_unfolding(self, otensor):
-        return np.asarray([otensor], dtype=np.float32).reshape(*self.get_normal_output_shape())
-
     def export_to_npy(self, directory, filename, itensor):
         np.save(os.path.join(directory, filename), itensor)
 
-    def build_simio_dict(self, context, graph):
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        idt   = self.get_input_datatype()
-        nbits = self.get_instream_width()
-
-        simulation_io = {"inputs": {}, "outputs": {}}
+    def import_io_from_onnx_node(self):
+        io_dict = {}
         for inp in self.onnx_node.input:
-            self.validate_input(context, inp)
-            self.export_to_npy(code_gen_dir, inp + ".npy", self.apply_input_folding(context[inp]))
-            simulation_io["inputs"][inp] = npy_to_rtlsim_input(f"{code_gen_dir}/{inp}.npy", idt, nbits)
-
+            io_dict[inp] = []
         for outp in self.onnx_node.output:
-            simulation_io["outputs"][outp] = []
+            io_dict[outp] = []
+        return io_dict
 
-        return simulation_io
+    def import_test_vectors_from_context(self, context, name_to_data_dict):
+        for name in name_to_data_dict:
+            self.validate_input(context, name_to_data_dict[name])
+            name_to_data_dict[name].append(context[name])
 
-    def process_sim_output(self, context, graph, io_dict):
-        for outp in self.onnx_node.output:
-            otensor = io_dict["outputs"][outp]
-            outp_npy_path = f"{self.get_nodeattr('code_gen_dir_ipgen')}/{outp}.npy"
-            rtlsim_output_to_npy(
-                otensor,
-                outp_npy_path,
+    def export_outputs_to_context(self, context, name_to_data_dict):
+        for name in name_to_data_dict:
+            self.validate_output(context, name)
+            context[name] = name_to_data_dict[name]
+
+    def apply_folding(self, name_to_data_dict):
+        for name in name_to_data_dict:
+            name_to_data_dict[name] = name_to_data_dict[name].reshape(self.get_folded_input_shape())
+        return name_to_data_dict
+
+    def apply_output_unfolding(self, name_to_data_dict):
+        for name in name_to_data_dict:
+            name_to_data_dict[name] = name_to_data_dict[name].reshape(self.get_normal_output_shape())
+        return name_to_data_dict
+
+
+    def convert_npy_to_rtlsim(self, name_to_data_dict):
+        for name in name_to_data_dict:
+            name_to_data_dict[name] = npy_to_rtlsim_input(name_to_data_dict[name], self.get_input_datatype(), self.get_instream_width())
+        return name_to_data_dict
+
+    def convert_rtlsim_to_npy(self, name_to_data_dict):
+        for name in name_to_data_dict:
+            name_to_data_dict[name] = rtlsim_output_to_npy(
+                name_to_data_dict[name],
+                None,
                 self.get_output_datatype(),
                 self.get_folded_output_shape(),
                 self.get_outstream_width(),
                 self.get_outstream_width(),
                 self.get_output_datatype().bitwidth(),
             )
-            output          = np.load(outp_npy_path)
-            unfolded_output = self.apply_output_unfolding(output)
-            self.validate_output(context, unfolded_output)
-            context[outp] = unfolded_output
-
+        return name_to_data_dict
 
     def execute_node(self, context, graph):
         mode = self.get_nodeattr("exec_mode")
 
         if mode == "rtlsim":
-            io_dict = self.build_simio_dict(context, graph)
+            # Prepare Input For RTL Simulation
+            io_dict = self.import_io_from_onnx_node()
+            io_dict['inputs'] = self.import_test_vectors_from_context(context, io_dict['inputs'])
+            io_dict['inputs'] = self.apply_folding(io_dict['inputs'])
+            io_dict['inputs'] = self.convert_npy_to_rtlsim(io_dict['inputs'])
 
+            # Run RTL Simulation
             sim = self.get_rtlsim()
             super().reset_rtlsim(sim)
             super().toggle_clk(sim)
-
             self.rtlsim_multi_io(sim, io_dict)
-            self.process_sim_output(context, graph, io_dict)
+
+            # Process RTL Simulation Output
+            io_dict['outputs'] = self.convert_rtlsim_to_npy(io_dict['outputs'])
+            io_dict['outputs'] = self.apply_output_unfolding(io_dict['outputs'])
+            self.export_outputs_to_context(context, io_dict['outputs'])
 
         else:
             raise Exception(
