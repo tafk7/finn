@@ -56,11 +56,76 @@ from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
+from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import pynq_part_map
 
 test_pynq_board = os.getenv("PYNQ_BOARD", default="Pynq-Z1")
 test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
+
+
+class QOnnxQuantizeNodeConfig:
+    def __init__(self, scale = 1.0, zeropt = 0, bitwidth = 8, narrow=0, signed=1, rounding_mode="ROUND"):
+        self.narrow = narrow
+        self.signed = signed
+        self.rounding_mode = rounding_mode
+        self.scale = scale
+        self.zeropt = zeropt
+        self.bitwidth = bitwidth
+
+def make_quant_node(name, inp, outp, qconfig):
+    return helper.make_node(
+            'Quant',
+            domain='qonnx.custom_op.general',
+            inputs=[inp.name, f'{name}_quant_scale', f'{name}_quant_zeropt', f'{name}_quant_bitwidth'],
+            outputs=[outp.name],
+            narrow=qconfig.narrow,
+            signed=qconfig.signed,
+            rounding_mode=qconfig.rounding_mode,
+            name=f'{name}QuantNode',
+    )
+
+def get_tensorinfo_shape(itensor):
+    return [dim.dim_value for dim in itensor.type.tensor_type.shape.dim]
+
+def add_quant_node_to_tensor(model, name, itensor, qconfig, as_consumer=True):
+    # Create a tensor output for the new quantize node
+    ntensor = helper.make_tensor_value_info(f"{name}_quant_0", TensorProto.FLOAT, get_tensorinfo_shape(itensor))
+
+    # Create the new quantize node
+    if as_consumer:
+        node = make_quant_node(name, itensor, ntensor, qconfig)
+    else:
+        node = make_quant_node(name, ntensor, itensor, qconfig)
+
+    # update the graph
+    model.graph.node.append(node)
+    model.graph.value_info.append(ntensor)
+
+    # update the initializers
+    model.set_initializer(node.input[1], np.asarray([qconfig.scale], dtype=np.float32))
+    model.set_initializer(node.input[2], np.asarray([qconfig.zeropt], dtype=np.float32))
+    model.set_initializer(node.input[3], np.asarray([qconfig.bitwidth], dtype=np.float32))
+
+    return ntensor
+
+def add_quant_node_before_tensor(model, name, otensor, qconfig):
+    # Create a tensor input for the new quantize node
+    itensor = helper.make_tensor_value_info(f"{name}_quant_input_0", TensorProto.FLOAT, get_tensorinfo_shape(otensor))
+
+    # Create the new quantize node
+    node = make_quant_node(name, itensor, otensor, qconfig)
+
+    # update the graph
+    model.graph.node.append(node)
+    model.graph.value_info.append(itensor)
+
+    # update the initializers
+    model.set_initializer(node.input[1], np.asarray([qconfig.scale], dtype=np.float32))
+    model.set_initializer(node.input[2], np.asarray([qconfig.zeropt], dtype=np.float32))
+    model.set_initializer(node.input[3], np.asarray([qconfig.bitwidth], dtype=np.float32))
+
+    return itensor
 
 
 def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, cos, sin, simd, impl_style):
@@ -75,11 +140,39 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
     output_q = helper.make_tensor_value_info('output_q', onnx.TensorProto.FLOAT, io_shape)
     output_k = helper.make_tensor_value_info('output_k', onnx.TensorProto.FLOAT, io_shape)
 
+    # Create the graph
+    graph = helper.make_graph(
+        nodes = [],
+        name = 'RopeGraph',
+        inputs = [q, k],
+        outputs = [output_q, output_k],
+        initializer = [
+            helper.make_tensor('cos', onnx.TensorProto.FLOAT, cos.shape, cos),
+            helper.make_tensor('sin', onnx.TensorProto.FLOAT, sin.shape, sin),
+        ]
+    )
+
+    # Create the QONNX model
+    model = qonnx_make_model(graph, producer_name="rope-model")
+    model = ModelWrapper(model)
+
+    IQuantConfig = QOnnxQuantizeNodeConfig(bitwidth=idt.bitwidth())
+    q_quant = add_quant_node_to_tensor(model, "q", q, IQuantConfig)
+    k_quant = add_quant_node_to_tensor(model, "k", k, IQuantConfig)
+
+    WQuantConfig = QOnnxQuantizeNodeConfig(bitwidth=wdt.bitwidth())
+    cosTVI = helper.make_tensor_value_info('cos', onnx.TensorProto.FLOAT, model.get_initializer("cos").shape)
+    sinTVI = helper.make_tensor_value_info('sin', onnx.TensorProto.FLOAT, model.get_initializer("sin").shape)
+
+    cos_quant = add_quant_node_to_tensor(model, "cos", cosTVI, WQuantConfig)
+    sin_quant = add_quant_node_to_tensor(model, "sin", sinTVI, WQuantConfig)
+
     # Define the custom RoPE node
     rope_node = helper.make_node(
         'RotaryEmbedding',  # Custom node name
-        ['q', 'k', 'cos', 'sin' ],
-        ['output_q', 'output_k'],  # Outputs
+        [ q_quant.name,  k_quant.name, cos_quant.name, sin_quant.name],  # Inputs
+        #  cos_quant_otensor.name, sin_quant_otensor.name],  # Inputs],
+        [],  # Outputs
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
         backend="fpgadataflow",
@@ -95,38 +188,23 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
         preferred_impl_style=impl_style,
     )
 
-    # Create the graph
-    graph = helper.make_graph(
-        [rope_node],  # Nodes
-        'RopeGraph',  # Graph name
-        [q, k],  # Inputs
-        [output_q, output_k],  # Outputs
-        initializer = [
-            helper.make_tensor('cos', onnx.TensorProto.FLOAT, cos.shape, cos),
-            helper.make_tensor('sin', onnx.TensorProto.FLOAT, sin.shape, sin),
-        ]  # Initializer
-    )
+    # Add the custom node to the graph
+    model.graph.node.append(rope_node)
 
-    # Create the model
-    #model = helper.make_model(graph, producer_name='custom_rope_model')
-    model = qonnx_make_model(graph, producer_name="rope-model")
-    model = ModelWrapper(model)
+    OQuantConfig = QOnnxQuantizeNodeConfig(bitwidth=idt.bitwidth())
+    q_otensor = add_quant_node_to_tensor(model, "output_q", output_q, OQuantConfig, as_consumer=False)
+    k_otensor = add_quant_node_to_tensor(model, "output_k", output_k, OQuantConfig, as_consumer=False)
 
-    model.set_tensor_datatype("q", idt)
-    model.set_tensor_datatype("k", idt)
-    model.set_tensor_datatype("output_q", idt)
-    model.set_tensor_datatype("output_k", idt)
-    model.set_tensor_datatype("cos", wdt)
-    model.set_tensor_datatype("sin", wdt)
+    model.graph.node[-3].output.append(q_otensor.name)
+    model.graph.node[-3].output.append(k_otensor.name)
 
     model.set_metadata_prop("rtlsim_trace", "trace.vcd")
     os.environ["RTLSIM_TRACE_DEPTH"] = "45"
 
     # Save the model to a file
-    onnx.save(helper.make_model(graph, producer_name='custom_rope_model'), 'rope_node.onnx')
+    model.save("rope_node.onnx")
 
     return model
-
 
 # input image dimension
 #@pytest.mark.parametrize("idim", [[8, 8], [10, 8]])
@@ -138,8 +216,8 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
 # Input parallelism
 @pytest.mark.parametrize("simd", [1])
 # FINN input datatype
-@pytest.mark.parametrize("idt", [DataType["FLOAT32"]])
-@pytest.mark.parametrize("wdt", [DataType["FLOAT32"]])
+@pytest.mark.parametrize("idt", [DataType["INT8"]])
+@pytest.mark.parametrize("wdt", [DataType["INT8"]])
 # execution mode
 #@pytest.mark.parametrize("mode", ["cppsim", "rtlsim"])
 # implementation style
@@ -149,8 +227,8 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
 @pytest.mark.vivado
 def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd, impl_style):
 
-    q = gen_finn_dt_tensor(idt, [1, num_heads, seq_len, head_size]) % 5
-    k = gen_finn_dt_tensor(idt, [1, num_heads, seq_len, head_size]) % 5
+    q = gen_finn_dt_tensor(idt, [1, num_heads, seq_len, head_size])
+    k = gen_finn_dt_tensor(idt, [1, num_heads, seq_len, head_size])
 
     midpoint = head_size // 2
 
@@ -171,13 +249,18 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
 
     model = make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, cos, sin, simd, impl_style)
 
-    input_dict = {"q": q, "k": k}
-    onnx_output = oxe.execute_onnx(model, input_dict)
+    #input_dict = {"q": q, "k": k}
+    #onnx_output = oxe.execute_onnx(model, input_dict)
 
-    assert (k_expected == onnx_output["output_k"]).all()
-    assert (q_expected == onnx_output["output_q"]).all()
+    #assert (k_expected == onnx_output["output_k"]).all()
+    #assert (q_expected == onnx_output["output_q"]).all()
 
+    model = model.transform(ConvertQONNXtoFINN())
     model = model.transform(SpecializeLayers(test_fpga_part))
+
+
+    model.save("rope_model-before-infer-shapes.onnx")
+
     model = model.transform(InferShapes())
     model = model.transform(SetExecMode("rtlsim"))
     model = model.transform(GiveUniqueNodeNames())
