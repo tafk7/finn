@@ -295,6 +295,7 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     model.save("rope_model-after-create-stitched-ip.onnx")
 
     model.set_metadata_prop("exec_mode", "rtlsim")
+    input_dict = {"q_quant_0": q, "k_quant_0": k}
     sim_output = oxe.execute_onnx(model, input_dict)
 
 
