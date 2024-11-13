@@ -46,6 +46,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
+import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 from finn.custom_op.fpgadataflow.rotaryembedding import get_rope_onnx_filename
 from finn.analysis.fpgadataflow.exp_cycles_per_layer import exp_cycles_per_layer
 from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
@@ -57,7 +58,14 @@ from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
+from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
 from finn.util.basic import pynq_part_map
+
+import finn.transformation.streamline.absorb as absorb
+from finn.transformation.fpgadataflow.create_dataflow_partition import (
+    CreateDataflowPartition,
+)
+
 
 test_pynq_board = os.getenv("PYNQ_BOARD", default="Pynq-Z1")
 test_fpga_part = pynq_part_map[test_pynq_board]
@@ -172,7 +180,7 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
         'RotaryEmbedding',  # Custom node name
         [ q_quant.name,  k_quant.name, cos_quant.name, sin_quant.name],  # Inputs
         #  cos_quant_otensor.name, sin_quant_otensor.name],  # Inputs],
-        [],  # Outputs
+        ["output_q", "output_k"],  # Outputs
         name='CustomRoPE',
         domain="finn.custom_op.fpgadataflow",
         backend="fpgadataflow",
@@ -191,12 +199,12 @@ def make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wd
     # Add the custom node to the graph
     model.graph.node.append(rope_node)
 
-    OQuantConfig = QOnnxQuantizeNodeConfig(bitwidth=idt.bitwidth())
-    q_otensor = add_quant_node_to_tensor(model, "output_q", output_q, OQuantConfig, as_consumer=False)
-    k_otensor = add_quant_node_to_tensor(model, "output_k", output_k, OQuantConfig, as_consumer=False)
+    #OQuantConfig = QOnnxQuantizeNodeConfig(bitwidth=idt.bitwidth())
+    #q_otensor = add_quant_node_to_tensor(model, "output_q", output_q, OQuantConfig, as_consumer=False)
+    #k_otensor = add_quant_node_to_tensor(model, "output_k", output_k, OQuantConfig, as_consumer=False)
 
-    model.graph.node[-3].output.append(q_otensor.name)
-    model.graph.node[-3].output.append(k_otensor.name)
+    #model.graph.node[-3].output.append(q_otensor.name)
+    #model.graph.node[-3].output.append(k_otensor.name)
 
     model.set_metadata_prop("rtlsim_trace", "trace.vcd")
     os.environ["RTLSIM_TRACE_DEPTH"] = "45"
@@ -255,19 +263,38 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     model = make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, cos, sin, simd, impl_style)
 
     model = model.transform(ConvertQONNXtoFINN())
-    model = model.transform(SpecializeLayers(test_fpga_part))
+    model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
+    model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
+    model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
 
     model.save("rope_model-before-infer-shapes.onnx")
     model = model.transform(InferShapes())
-    model = model.transform(SetExecMode("rtlsim"))
-    model = model.transform(GiveUniqueNodeNames())
+    model = model.transform(RoundAndClipThresholds())
+    model.save("rope_model-before-infer-thresholding-layer.onnx")
+    model = model.transform(to_hw.InferThresholdingLayer())
+    model.save("rope_model-after-infer-thresholding-layer.onnx")
 
+    # Isolate fpga dataflow layers
+    parent_model = model.transform(CreateDataflowPartition())
+    parent_model.save('parent_model.onnx') # Debug
+    sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
+    sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
+    model = ModelWrapper(sdp_node_path)
+    model.save('partitioned_model.onnx') # Debug
+
+    model = model.transform(SpecializeLayers(test_fpga_part))
+    #model = model.transform(GiveUniqueNodeNames())
+    model.save("rope_model-after-specialize.onnx")
+
+    model = model.transform(SetExecMode("rtlsim"))
     model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
     model = model.transform(HLSSynthIP())
     model = model.transform(PrepareRTLSim())
-    model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
+    #
+    #
+    #model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
 
-    model.save("rope_model-before-infer-shapes.onnx")
+    model.save("rope_model-after-create-stitched-ip.onnx")
 
     model.set_metadata_prop("exec_mode", "rtlsim")
     sim_output = oxe.execute_onnx(model, input_dict)
