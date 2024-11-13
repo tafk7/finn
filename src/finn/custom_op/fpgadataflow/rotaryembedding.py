@@ -138,7 +138,19 @@ class RotaryEmbedding(HWCustomOp):
         return super().make_const_shape_op(oshape)
 
     def infer_node_datatype(self, model):
-        raise NotImplementedError("This Method is not implemented")
+        node = self.onnx_node
+        idt = model.get_tensor_datatype(node.input[0])
+        if idt != self.get_input_datatype():
+            warn_str = "inputDataType changing for %s: %s -> %s " % (
+                node.name,
+                str(self.get_input_datatype().name),
+                str(idt.name),
+            )
+            warnings.warn(warn_str)
+        self.set_nodeattr("inputDataType", idt.name)
+        # set output datatype from property
+        odt = self.get_output_datatype()
+        model.set_tensor_datatype(node.output[0], odt)
 
     def verify_node(self):
         pass

@@ -247,20 +247,17 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     q_expected = q * cos + q1 * sin
     k_expected = k * cos + k1 * sin
 
+    input_dict = {"q": q, "k": k}
+    # onnx_output = oxe.execute_onnx(model, input_dict)
+    # assert (k_expected == onnx_output["output_k"]).all()
+    # assert (q_expected == onnx_output["output_q"]).all()
+
     model = make_single_rope_modelwrapper(seq_len, hidden, head_size, num_heads, idt, wdt, cos, sin, simd, impl_style)
-
-    #input_dict = {"q": q, "k": k}
-    #onnx_output = oxe.execute_onnx(model, input_dict)
-
-    #assert (k_expected == onnx_output["output_k"]).all()
-    #assert (q_expected == onnx_output["output_q"]).all()
 
     model = model.transform(ConvertQONNXtoFINN())
     model = model.transform(SpecializeLayers(test_fpga_part))
 
-
     model.save("rope_model-before-infer-shapes.onnx")
-
     model = model.transform(InferShapes())
     model = model.transform(SetExecMode("rtlsim"))
     model = model.transform(GiveUniqueNodeNames())
