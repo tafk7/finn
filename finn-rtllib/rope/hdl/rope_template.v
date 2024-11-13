@@ -65,7 +65,7 @@ rope_axi #(
 .COS_INIT_FILE($COS_INIT_FILE$),
 .SIN_INIT_FILE($SIN_INIT_FILE$)
 )
-impl
+impl_0
 (
  .ap_clk(ap_clk),
  .ap_rst_n(ap_rst_n),

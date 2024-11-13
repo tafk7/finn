@@ -85,7 +85,7 @@ module rope_axi #(
 	//- AXI Stream - Input --------------
 	.s_axis_tready(s_axis_q_tready),
 	.s_axis_tvalid(s_axis_q_tvalid),
-	.s_qaxis_tdata(s_qaxis_q_tdata),
+	.s_axis_tdata(s_axis_q_tdata),
 
 	//- AXI Stream - Output -------------
 	.m_axis_tready(m_axis_q_tready),
@@ -110,7 +110,7 @@ module rope_axi #(
 	//- AXI Stream - Input --------------
 	.s_axis_tready(s_axis_k_tready),
 	.s_axis_tvalid(s_axis_k_tvalid),
-	.s_qaxis_tdata(s_qaxis_k_tdata),
+	.s_axis_tdata(s_axis_k_tdata),
 
 	//- AXI Stream - Output -------------
 	.m_axis_tready(m_axis_k_tready),
