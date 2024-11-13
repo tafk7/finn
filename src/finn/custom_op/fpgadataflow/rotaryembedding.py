@@ -151,6 +151,7 @@ class RotaryEmbedding(HWCustomOp):
         # set output datatype from property
         odt = self.get_output_datatype()
         model.set_tensor_datatype(node.output[0], odt)
+        model.set_tensor_datatype(node.output[1], odt)
 
     def verify_node(self):
         pass
