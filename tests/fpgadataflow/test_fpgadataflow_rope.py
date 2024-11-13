@@ -283,7 +283,7 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     model.save('partitioned_model.onnx') # Debug
 
     model = model.transform(SpecializeLayers(test_fpga_part))
-    #model = model.transform(GiveUniqueNodeNames())
+    model = model.transform(GiveUniqueNodeNames())
     model.save("rope_model-after-specialize.onnx")
 
     model = model.transform(SetExecMode("rtlsim"))
