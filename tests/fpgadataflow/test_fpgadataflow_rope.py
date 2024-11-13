@@ -290,9 +290,7 @@ def test_fpgadataflow_rope(seq_len, hidden, head_size, num_heads, idt, wdt, simd
     model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
     model = model.transform(HLSSynthIP())
     model = model.transform(PrepareRTLSim())
-    #
-    #
-    #model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
+    model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))
 
     model.save("rope_model-after-create-stitched-ip.onnx")
 
