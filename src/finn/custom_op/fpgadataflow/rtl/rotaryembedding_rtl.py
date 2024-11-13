@@ -219,12 +219,12 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
         self.make_weight_file(
             "cos_values.dat",
             wdt,
-            model.get_initializer("cos"),
+            model.get_initializer("cos_quant_0"),
         )
         self.make_weight_file(
             "sin_values.dat",
             wdt,
-            model.get_initializer("sin"),
+            model.get_initializer("sin_quant_0"),
         )
         # save top module name so we can refer to it after this node has been renamed
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
