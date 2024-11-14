@@ -33,6 +33,7 @@
  *****************************************************************************/
 
 module rope_axi #(
+	int unsigned  HEAD_DIM,
 	int unsigned  SEQ_LEN,
 	int unsigned  HIDDEN_DIM,
 	int unsigned  SIMD,
@@ -69,6 +70,7 @@ module rope_axi #(
 );
 
   rope #(
+	.HEAD_DIM(HEAD_DIM),
 	.SEQ_LEN(SEQ_LEN),
 	.HIDDEN_DIM(HIDDEN_DIM),
 	.SIMD(SIMD),
@@ -94,6 +96,7 @@ module rope_axi #(
   );
 
   rope #(
+	.HEAD_DIM(HEAD_DIM),
 	.SEQ_LEN(SEQ_LEN),
 	.HIDDEN_DIM(HIDDEN_DIM),
 	.SIMD(SIMD),

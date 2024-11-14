@@ -168,11 +168,12 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
                 )
             )
 
-    def get_template_values(self, seq_len, hidden, simd, idt):
+    def get_template_values(self, head_dim, seq_len, hidden, simd, idt):
         topname = self.get_verilog_top_module_name()
         stream_bits = idt.bitwidth() * simd
         stream_bits = int(roundup_to_integer_multiple(stream_bits, 8))
         code_gen_dict = {
+            "HEAD_DIM": int(head_dim),
             "SEQ_LEN": int(seq_len),
             "HIDDEN_DIM": int(hidden),
             "SIMD": int(simd),
@@ -210,12 +211,13 @@ class RotaryEmbedding_rtl(RotaryEmbedding, RTLBackend):
     def generate_hdl(self, model, fpgapart, clk):
         rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/rope/hdl"
         template_path = rtlsrc + "/rope_template.v"
+        head_dim = self.get_nodeattr("HeadDimension")
         hidden  = self.get_nodeattr("HiddenDimension")
         seq_len = self.get_nodeattr("SequenceLength")
         simd  = self.get_nodeattr("SIMD")
         idt = self.get_input_datatype()
         wdt = self.get_weight_datatype()
-        code_gen_dict = self.get_template_values(seq_len, hidden, simd, idt)
+        code_gen_dict = self.get_template_values(head_dim, seq_len, hidden, simd, idt)
         self.make_weight_file(
             "cos_values.dat",
             wdt,

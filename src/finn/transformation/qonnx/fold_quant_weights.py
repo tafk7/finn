@@ -104,6 +104,7 @@ class FoldQuantWeights(Transformation):
                             "MatMul",
                             "Gather",
                             "ConvTranspose",
+                            "RotaryEmbedding"
                         ]
                         add_like_nodes = ["Add", "Sub"]
                         all_supported_ops = mul_like_nodes.copy()

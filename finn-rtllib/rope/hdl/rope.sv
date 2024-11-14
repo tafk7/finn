@@ -433,6 +433,7 @@ module duplicate_stream #(
 endmodule
 
 module rope #(
+	int unsigned  HEAD_DIM,
 	int unsigned  SEQ_LEN,
 	int unsigned  HIDDEN_DIM,
 	int unsigned  SIMD,
@@ -443,7 +444,7 @@ module rope #(
 	parameter SIN_INIT_FILE = "",
 
 	localparam int unsigned  STREAM_BITS = 8*(1 + (SIMD*ELEM_BITS-1)/8),
-	localparam int unsigned  WEIGHT_DEPTH = SEQ_LEN * HIDDEN_DIM
+	localparam int unsigned  WEIGHT_DEPTH = SEQ_LEN * HEAD_DIM
 )(
 	//- Global Control ------------------
 	input	logic  ap_clk,

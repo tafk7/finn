@@ -58,6 +58,7 @@ output	[$STREAM_BITS$-1:0] k_out_V_TDATA
 
 
 rope_axi #(
+.HEAD_DIM($HEAD_DIM$),
 .SEQ_LEN($SEQ_LEN$),
 .HIDDEN_DIM($HIDDEN_DIM$),
 .SIMD($SIMD$),
