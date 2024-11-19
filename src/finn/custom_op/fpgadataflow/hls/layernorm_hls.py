@@ -34,6 +34,7 @@ from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.layernorm import LayerNorm
 from finn.util.basic import make_build_dir
+from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
 
 class LayerNorm_hls(LayerNorm, HLSBackend):
@@ -41,7 +42,10 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         super().__init__(onnx_node, **kwargs)
 
     def get_nodeattr_types(self):
-        my_attrs = {"custom_hls_dir": ("s", False, "layernorm")}
+        my_attrs = {
+            "rtlsim_backend": ("s", True, "pyxsi"),
+            "custom_hls_dir": ("s", False, "layernorm"),
+            }
         my_attrs.update(LayerNorm.get_nodeattr_types(self))
         my_attrs.update(HLSBackend.get_nodeattr_types(self))
         return my_attrs
@@ -93,50 +97,39 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
     def execute_node(self, context, graph):
         # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
-        # # Lookup table mapping execution modes to implementing methods
-        # exec_fns = {
-        #     "python": self._execute_node_python,
-        #     "cppsim": self._execute_node_cppsim,
-        #     "rtlsim": self._execute_node_rtlsim,
-        # }
-        # # Select and execute the function by mode string
-        # exec_fns[mode](context, graph)
-
-
-
-        
-        
         node = self.onnx_node
         exp_ishape = self.get_normal_input_shape()
         exp_oshape = self.get_normal_output_shape()
         folded_ishape = self.get_folded_input_shape()
         export_idt = self.get_input_datatype()
 
-        if mode == "cppsim":
-            code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        elif mode == "rtlsim":
-            code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-
+        # Generate input
         inp = context[node.input[0]]
         inp = inp.reshape(folded_ishape)
-        np.save(os.path.join(code_gen_dir, "input_0.npy"), inp)
+
         if mode == "python":
             self._execute_node_python(context, graph)
         elif mode == "cppsim":
-            # # execute the precompiled model
+            code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+            np.save(os.path.join(code_gen_dir, "input_0.npy"), inp)
+            # Execute the precompiled model
             super().exec_precompiled_singlenode_model()
-            # # load output npy file
+            # Load output npy file
             super().npy_to_dynamic_output(context)
         elif mode == "rtlsim":
-            sim = self.get_rtlsim()
+            # Generate & format input
+            code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+            np.save(os.path.join(code_gen_dir, "input_0.npy"), inp)
             nbits = self.get_instream_width()
             rtlsim_inp = npy_to_rtlsim_input(
                 "{}/input_0.npy".format(code_gen_dir), export_idt, nbits
             )
+            # Setup RTLsim
+            sim = self.get_rtlsim()
             super().reset_rtlsim(sim)
             super().toggle_clk(sim)
 
-            #rtlsim_output = self.rtlsim(sim, rtlsim_inp)
+            # rtlsim_output = self.rtlsim(sim, rtlsim_inp)
             io_dict = {
                 "inputs": {"in0": rtlsim_inp},
                 "outputs":{"out": []}
@@ -161,7 +154,7 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
             raise Exception(f"Unsupported execution mode: {mode}")
 
 
-    # Executes elementwise operation in C++ simulation
+   # Executes elementwise operation in C++ simulation
    # def _execute_node_cppsim(self, context, graph):
    #     # Get the node wrapped by this custom op
    #     node = self.onnx_node
@@ -205,8 +198,8 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         oshape_str = str(oshape).replace("(", "{").replace(")", "}")
         self.code_gen_dict["$DOCOMPUTE$"] = [
             f"""
-            static hls::stream<hls::vector<TI,SIMD>>  in0_V;
-            static hls::stream<hls::vector<TO,SIMD>>  out_V;
+            static hls::stream<hls::vector<TI,SIMD>> in0_V;
+            static hls::stream<hls::vector<TO,SIMD>> out_V;
 
             npy2vectorstream<TI, float, SIMD>("{path}/input_0.npy", in0_V);
             int stream_size = in0_V.size();

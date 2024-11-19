@@ -11,7 +11,7 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
-from qonnx.transformation.infer_shapes import InferShapes
+from qonnx.transformation.infer_shapes import InferShapes 
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 from qonnx.transformation.infer_datatypes import InferDataTypes
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
@@ -53,9 +53,7 @@ target_clk_ns = 5
 def onnx_path(suffx):
     return f'pytest_layernorm_{suffx}.onnx'
 
-
-
-def build_simple_layernorm_graph(
+def build_layernorm_graph(
         input_datatype:str,
         weight_datatype:str,
         bias_datatype:str,
@@ -80,10 +78,19 @@ def build_simple_layernorm_graph(
     bias_quant_params   = [1.0, 0.0, bw[2]]
     output_quant_params = [1.0, 0.0, bw[3]]
 
+    # idt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
+    # odt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
+    
+    idt = TensorProto.FLOAT
+    odt = TensorProto.FLOAT
+
+    max_scale = 2**(bw[1]/2)
+    max_bias = 2**(bw[2]/2)
+
     last_dim = idm[-1]
 
-    inp = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, list(idm))
-    outp = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, list(idm))
+    inp = helper.make_tensor_value_info("global_in", idt, list(idm))
+    outp = helper.make_tensor_value_info("global_out", odt, list(idm))
 
     graph = helper.make_graph(
         nodes=[], name="LayerNorm_graph", inputs=[inp], outputs=[outp]
@@ -92,20 +99,20 @@ def build_simple_layernorm_graph(
     model = qonnx_make_model(graph, producer_name="LayerNorm_graph")
     model = ModelWrapper(model)
 
-    Quant_0_out = helper.make_tensor_value_info("Quant_0_out", TensorProto.FLOAT, list(idm))
-    # Create node
-    Quant_0 = helper.make_node(
-            'Quant',
-            domain='qonnx.custom_op.general',
-            inputs=[inp.name, 'quant0_scale', 'quant0_zeropt', 'quant0_bitwidth'],
-            outputs=[Quant_0_out.name],
-            narrow=0,
-            signed=1,
-            rounding_mode="ROUND",
-            name="Quant_0"
-    )
-    model.graph.node.append(Quant_0)
-    model.graph.value_info.append(Quant_0_out)
+    # Quant_0_out = helper.make_tensor_value_info("Quant_0_out", TensorProto.FLOAT, list(idm))
+    # # Create node
+    # Quant_0 = helper.make_node(
+    #         'Quant',
+    #         domain='qonnx.custom_op.general',
+    #         inputs=[inp.name, 'quant0_scale', 'quant0_zeropt', 'quant0_bitwidth'],
+    #         outputs=[Quant_0_out.name],
+    #         narrow=0,
+    #         signed=1,
+    #         rounding_mode="ROUND",
+    #         name="Quant_0"
+    # )
+    # model.graph.node.append(Quant_0)
+    # model.graph.value_info.append(Quant_0_out)
 
     scale_bias_shape = [last_dim]
 
@@ -140,7 +147,7 @@ def build_simple_layernorm_graph(
     LayerNorm_0_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, list(idm))
     LayerNorm_0 = helper.make_node(
         'LayerNormalization',
-        inputs=[Quant_0_out.name, Quant_LayerNorm_scale_out.name, Quant_LayerNorm_bias_out.name],
+        inputs=[inp.name, Quant_LayerNorm_scale_out.name, Quant_LayerNorm_bias_out.name],
         outputs=[LayerNorm_0_out.name],
         name='Layernorm_1',
         epsilon=epsilon,
@@ -180,8 +187,8 @@ def build_simple_layernorm_graph(
     model.set_initializer("layernorm_scale_quant_zeropt", np.asarray(scale_quant_params[1], dtype=np.float32))
     model.set_initializer("layernorm_scale_quant_bitwidth", np.asarray(scale_quant_params[2], dtype=np.float32))
 
-    model.set_initializer("layernorm0_scale_param", np.random.rand(last_dim).astype(np.float32))
-    model.set_initializer("layernorm0_b_param", np.random.rand(last_dim).astype(np.float32))
+    model.set_initializer("layernorm0_scale_param", max_scale*np.random.rand(last_dim).astype(np.float32))
+    model.set_initializer("layernorm0_b_param", max_bias*np.random.rand(last_dim).astype(np.float32))
     model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
 
     model.save(onnx_path(-1))
@@ -195,10 +202,8 @@ def build_simple_layernorm_graph(
 
     return ModelWrapper(onnx_path(-1)) 
 
-def build_layernorm_graph(
+def build_func_layernorm_graph(
         input_datatype:str,
-        weight_datatype:str,
-        bias_datatype:str,
         output_datatype:str,
         epsilon:float,
         idm:tuple, # Input dimension
@@ -206,7 +211,7 @@ def build_layernorm_graph(
 
     # Datatypes restricted to "FLOAT16" or "FLOAT32" in current implementation
     bw = []
-    for dt in [input_datatype, weight_datatype, bias_datatype, output_datatype]:
+    for dt in [input_datatype, output_datatype]:
         if dt == "FLOAT16":
             bw += [16]
         elif dt == "FLOAT32":
@@ -216,11 +221,7 @@ def build_layernorm_graph(
     
     #(scale, zero_point, bitwidth)
     input_quant_params  = [1.0, 0.0, bw[0]]
-    scale_quant_params  = [1.0, 0.0, bw[1]]
-    bias_quant_params   = [1.0, 0.0, bw[2]]
-    output_quant_params = [1.0, 0.0, bw[3]]
-
-    last_dim = idm[-1]
+    output_quant_params = [1.0, 0.0, bw[1]]
 
     inp = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, list(idm))
     outp = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, list(idm))
@@ -233,7 +234,7 @@ def build_layernorm_graph(
     model = ModelWrapper(model)
 
     Quant_0_out = helper.make_tensor_value_info("Quant_0_out", TensorProto.FLOAT, list(idm))
-    # Create node
+    # Create input quant node
     Quant_0 = helper.make_node(
             'Quant',
             domain='qonnx.custom_op.general',
@@ -247,75 +248,28 @@ def build_layernorm_graph(
     model.graph.node.append(Quant_0)
     model.graph.value_info.append(Quant_0_out)
 
-    scale_bias_shape = [last_dim]
-
-    Quant_LayerNorm_scale_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, scale_bias_shape)
-    Quant_LayerNorm_scale = helper.make_node(
-            'Quant',
-            domain='qonnx.custom_op.general',
-            inputs=["layernorm0_scale_param", 'layernorm_scale_quant_scale', 'layernorm_scale_quant_zeropt', 'layernorm_scale_quant_bitwidth'],
-            outputs=[Quant_LayerNorm_scale_out.name],
-            narrow=0,
-            signed=1,
-            rounding_mode="ROUND",
-            name="LayerNorm_Scale_Quant"
-    )
-    model.graph.node.append(Quant_LayerNorm_scale)
-    model.graph.value_info.append(Quant_LayerNorm_scale_out)
-
-    Quant_LayerNorm_bias_out = helper.make_tensor_value_info(model.make_new_valueinfo_name(), TensorProto.FLOAT, scale_bias_shape)
-    Quant_LayerNorm_bias = helper.make_node(
-            'Quant',
-            domain='qonnx.custom_op.general',
-            inputs=["layernorm0_b_param", 'layernorm_bias_quant_scale', 'layernorm_bias_quant_zeropt', 'layernorm_bias_quant_bitwidth'],
-            outputs=[Quant_LayerNorm_bias_out.name],
-            narrow=0,
-            signed=1,
-            rounding_mode="ROUND",
-            name="LayerNorm_bias_Quant"
-    )
-    model.graph.node.append(Quant_LayerNorm_bias)
-    model.graph.value_info.append(Quant_LayerNorm_bias_out)
-
+    # Create functional layernorm node
     LayerNorm_0_out = helper.make_tensor_value_info("layernorm_0_out", TensorProto.FLOAT, list(idm))
     LayerNorm_0 = helper.make_node(
-        'LayerNormalization',
-        inputs=[Quant_0_out.name, "layernorm0_scale_param", "layernorm0_b_param"],
-        outputs=[LayerNorm_0_out.name],
-        name='Layernorm_1',
+        "FuncLayerNorm",
+        [Quant_0_out.name],
+        [LayerNorm_0_out.name],
+        domain="finn.custom_op.general",
+        backend="general",
+        axis=-1,
         epsilon=epsilon,
-        axis=-1
+        InputDataType=input_datatype,
+        OutputDataType=output_datatype,
+        name='LayerNorm_1',
     )
     model.graph.node.append(LayerNorm_0)
     model.graph.value_info.append(LayerNorm_0_out)
-    # axis0_attr = helper.make_attribute("axis", -1)
-    # LayerNorm_0.attribute.append(axis0_attr)
-    # epsilon0_attr = helper.make_attribute("epsilon", epsilon)
-    # LayerNorm_0.attribute.append(epsilon0_attr)
 
-    Mul_0_out = helper.make_tensor_value_info("mul_0_out", TensorProto.FLOAT, list(idm))
-    Mul_0 = helper.make_node(
-        "Mul",
-        inputs=[LayerNorm_0_out.name, Quant_LayerNorm_scale_out.name],
-        outputs=[Mul_0_out.name],
-        name="Mul_0")
-    model.graph.value_info.append(Mul_0_out)
-    model.graph.node.append(Mul_0)
-
-    Add_0_out = helper.make_tensor_value_info("add_0_out", TensorProto.FLOAT, list(idm))
-    Add_0 = helper.make_node(
-        "Add",
-        inputs=[Mul_0_out.name, Quant_LayerNorm_bias_out.name],
-        outputs=[Add_0_out.name],
-        name="Add_0")
-    model.graph.value_info.append(Add_0_out)
-    model.graph.node.append(Add_0)
-
-    # Create node
+    # Create output quant node
     Quant_1 = helper.make_node(
             'Quant',
             domain='qonnx.custom_op.general',
-            inputs=[Add_0_out.name, 'quant1_scale', 'quant1_zeropt', 'quant1_bitwidth'],
+            inputs=[LayerNorm_0_out.name, 'quant1_scale', 'quant1_zeropt', 'quant1_bitwidth'],
             outputs=[outp.name],
             narrow=0,
             signed=1,
@@ -331,18 +285,6 @@ def build_layernorm_graph(
     model.set_initializer("quant1_scale", np.asarray(output_quant_params[0], dtype=np.float32))
     model.set_initializer("quant1_zeropt", np.asarray(output_quant_params[1], dtype=np.float32))
     model.set_initializer("quant1_bitwidth", np.asarray(output_quant_params[2], dtype=np.float32))
-
-    model.set_initializer("layernorm_bias_quant_scale", np.asarray(bias_quant_params[0], dtype=np.float32))
-    model.set_initializer("layernorm_bias_quant_zeropt", np.asarray(bias_quant_params[1], dtype=np.float32))
-    model.set_initializer("layernorm_bias_quant_bitwidth", np.asarray(bias_quant_params[2], dtype=np.float32))
-
-    model.set_initializer("layernorm_scale_quant_scale", np.asarray(scale_quant_params[0], dtype=np.float32))
-    model.set_initializer("layernorm_scale_quant_zeropt", np.asarray(scale_quant_params[1], dtype=np.float32))
-    model.set_initializer("layernorm_scale_quant_bitwidth", np.asarray(scale_quant_params[2], dtype=np.float32))
-
-    model.set_initializer("layernorm0_scale_param", np.random.rand(last_dim).astype(np.float32))
-    model.set_initializer("layernorm0_b_param", np.random.rand(last_dim).astype(np.float32))
-    model.set_initializer("layernorm0_epsilon_param", np.asarray(epsilon, dtype=np.float32))
 
     model.save(onnx_path(-1))
 
@@ -383,19 +325,19 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             "simd": simd,
             "preferred_impl_style": impl_style
         },
-        "Thresholding_MultiThreshold_0": {
-            # "pe": simd,
-            "preferred_impl_style": impl_style
-        },
-        "Thresholding_MultiThreshold_1": {
-            # "pe": simd,
-            "preferred_impl_style": impl_style
-        },
-        # "ElementwiseMul_0": {
+        # "MultiThreshold_0": {
         #     # "pe": simd,
         #     "preferred_impl_style": impl_style
         # },
-        # "ElementwiseAdd_0": {
+        # "MultiThreshold_1": {
+        #     # "pe": simd,
+        #     "preferred_impl_style": impl_style
+        # },
+        # "Mul_0": {
+        #     # "pe": simd,
+        #     "preferred_impl_style": impl_style
+        # },
+        # "Add_0": {
         #     # "pe": simd,
         #     "preferred_impl_style": impl_style
         # },
@@ -404,10 +346,11 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
     epsilon = 1e-05
     tolerance = 2
     
-    model = build_simple_layernorm_graph(idt, wdt, bdt, odt, epsilon, ifm_dim)
-    # model = build_layernorm_graph(idt, wdt, bdt, odt, epsilon, ifm_dim)
+    model = build_layernorm_graph(idt, wdt, bdt, odt, epsilon, ifm_dim)
+    # model = build_func_layernorm_graph(idt, odt, epsilon, ifm_dim)
+
     model = model.transform(InferShapes())
-    model.save(onnx_path(0))    
+    model.save(onnx_path(0))
 
     if(ifm_dim[-1] % simd != 0):
         pytest.skip(f"Skipping this test because the channel dimension is not a multiple of {simd}")
@@ -424,35 +367,38 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
 
     # Create reference values using the qonnx model
     y_ref = oxe.execute_onnx(model, input_t)[out_name]
-    model.save(onnx_path(1)) # Debug
 
     try:
         # Lower graph to HWCustomOps
+        model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=16)))
+        model.save(onnx_path(1)) # Debug
         model = model.transform(ExpandNorms())
-        model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=32)))
-        model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
-        model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
-        model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
+        model.save(onnx_path(2)) # Debug
+        # model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
+        # model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
+        # model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
+        model.save(onnx_path(3)) # Debug
 
         model = model.transform(InferShapes())
         model = model.transform(InferDataTypes())
-        model.save(onnx_path(2)) # Debug
-        model = model.transform(to_hw.InferLayerNorm())
-        model = model.transform(GiveUniqueNodeNames())
-        model.save(onnx_path(3)) # Debug
-        # model = model.transform(RoundAndClipThresholds())
-        model = model.transform(to_hw.InferThresholdingLayer())
-        # model = model.transform(to_hw.InferElementwiseBinaryOperation())
-        model = model.transform(GiveUniqueNodeNames())
         model.save(onnx_path(4)) # Debug
 
-        # Isolate fpga dataflow layers
-        parent_model = model.transform(CreateDataflowPartition())
-        parent_model.save(onnx_path(5)) # Debug
-        sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-        sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
-        model = ModelWrapper(sdp_node_path)
+        model = model.transform(to_hw.InferLayerNorm())
+        model = model.transform(GiveUniqueNodeNames())
+        model.save(onnx_path(5)) # Debug
+        # model = model.transform(RoundAndClipThresholds())
+        model = model.transform(to_hw.InferThresholdingLayer())
+        model = model.transform(to_hw.InferElementwiseBinaryOperation())
+        model = model.transform(GiveUniqueNodeNames())
         model.save(onnx_path(6)) # Debug
+
+        # Isolate fpga dataflow layers
+        # parent_model = model.transform(CreateDataflowPartition())
+        # parent_model.save(onnx_path(5)) # Debug
+        # sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
+        # sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
+        # model = ModelWrapper(sdp_node_path)
+        # model.save(onnx_path(6)) # Debug
 
         model = model.transform(ApplyConfig(folding_config))
         model = model.transform(SpecializeLayers(test_fpga_part))
@@ -469,6 +415,13 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             model = model.transform(PrepareCppSim())
             model = model.transform(CompileCppSim())
         elif exec_mode == "rtlsim":
+
+            #  HOTFIX: Ensure everything is pyxsi
+            for node in model.graph.node:
+                attr = helper.make_attribute("rtlsim_backend", "pyxsi")
+                node.attribute.append(attr)
+            model.save(onnx_path(99)) # Debug
+
             model = model.transform(SetExecMode("rtlsim"))
             model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
             model = model.transform(HLSSynthIP())
@@ -487,8 +440,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
     y_hw = y_hw.flatten()
     for i in range(len(y_ref)):
         if np.allclose(y_ref[i], y_hw[i], atol=tolerance):
-
-            print(f'Won at {i}: {y_ref[i]} != {y_hw[i]}')
+            print(f'at {i}: {y_ref[i]} != {y_hw[i]}')
             j+=1
         if j > 20:
             assert False, "Too much!"
