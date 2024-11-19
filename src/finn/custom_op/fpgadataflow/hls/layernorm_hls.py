@@ -31,6 +31,7 @@ import os
 
 import finn.util.pyxsi_rpcclient as pyxsi_rpcclient
 from finn.custom_op.fpgadataflow import templates
+from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.layernorm import LayerNorm
 from finn.util.basic import make_build_dir
@@ -71,24 +72,26 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
     def docompute(self):
         self.code_gen_dict["$DOCOMPUTE$"] = [
             f"""
-                layernorm_pipeline<TI, TO, W, SIMD>(epsilon, src, dst);
+                layernorm_pipeline<TI, TO, W, SIMD>(epsilon, in0_{self.hls_sname()}, out_{self.hls_sname()});
             """
         ]
 
     def blackboxfunction(self):
         self.code_gen_dict["$BLACKBOXFUNCTION$"] = [
-            f"void {self.onnx_node.name}(",
-            f"    hls::stream<hls::vector<TI,SIMD>> &src,",
-            f"    hls::stream<hls::vector<TO,SIMD>> &dst",
-            ")"
+            f"""
+            void {self.onnx_node.name}(
+                hls::stream<hls::vector<TI,SIMD>> &in0_{self.hls_sname()},
+                hls::stream<hls::vector<TO,SIMD>> &out_{self.hls_sname()}
+                )
+            """
         ]
 
     def pragmas(self):
         self.code_gen_dict["$PRAGMAS$"] = [
-            f"#pragma HLS interface AXIS port=src",
-            f"#pragma HLS interface AXIS port=dst",
-            f"#pragma HLS aggregate variable=src compact=bit",
-            f"#pragma HLS aggregate variable=dst compact=bit",
+            f"#pragma HLS interface AXIS port=in0_{self.hls_sname()}",
+            f"#pragma HLS interface AXIS port=out_{self.hls_sname()}",
+            f"#pragma HLS aggregate variable=in0_{self.hls_sname()} compact=bit",
+            f"#pragma HLS aggregate variable=out_{self.hls_sname()} compact=bit",
             f"#pragma HLS interface ap_ctrl_none port=return",
             f"#pragma HLS dataflow disable_start_propagation",
         ]
@@ -97,6 +100,18 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
     def execute_node(self, context, graph):
         # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
+<<<<<<< HEAD
+=======
+        # # Lookup table mapping execution modes to implementing methods
+        # exec_fns = {
+        #     "python": self._execute_node_python,
+        #     "cppsim": self._execute_node_cppsim,
+        #     "rtlsim": self._execute_node_rtlsim,
+        # }
+        # # Select and execute the function by mode string
+        # exec_fns[mode](context, graph)
+
+>>>>>>> refs/remotes/origin/feature/rmsnorm
         node = self.onnx_node
         exp_ishape = self.get_normal_input_shape()
         exp_oshape = self.get_normal_output_shape()
