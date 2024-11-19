@@ -12,6 +12,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_shapes import InferShapes 
+from qonnx.transformation.extract_quant_scale_zeropt import ExtractQuantScaleZeroPt
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 from qonnx.transformation.infer_datatypes import InferDataTypes
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
@@ -73,10 +74,10 @@ def build_layernorm_graph(
             raise ValueError(f"LayerNorm only supports FP16/FP32 inputs. Invalid input: {dt}")
     
     #(scale, zero_point, bitwidth)
-    input_quant_params  = [1.0, 0.0, bw[0]]
-    scale_quant_params  = [1.0, 0.0, bw[1]]
-    bias_quant_params   = [1.0, 0.0, bw[2]]
-    output_quant_params = [1.0, 0.0, bw[3]]
+    input_quant_params  = [1.0/(1<<bw[0]), 0.0, bw[0]]
+    scale_quant_params  = [1.0/(1<<bw[1]), 0.0, bw[1]]
+    bias_quant_params   = [1.0/(1<<bw[2]), 0.0, bw[2]]
+    output_quant_params = [1.0/(1<<bw[3]), 0.0, bw[3]]
 
     idt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
     odt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
@@ -220,8 +221,8 @@ def build_func_layernorm_graph(
             raise ValueError(f"LayerNorm only supports FP16/FP32 inputs. Invalid input: {dt}")
     
     #(scale, zero_point, bitwidth)
-    input_quant_params  = [1.0, 0.0, bw[0]]
-    output_quant_params = [1.0, 0.0, bw[1]]
+    input_quant_params  = [1.0/(1 << bw[0]), 0.0, bw[0]]
+    output_quant_params = [1.0/(1 << bw[1]), 0.0, bw[1]]
 
     inp = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, list(idm))
     outp = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, list(idm))
@@ -370,7 +371,9 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
 
     try:
         # Lower graph to HWCustomOps
-        model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=32)))
+        #model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=32)))
+        model = model.transform(ExtractQuantScaleZeroPt())
+
         model.save(onnx_path(1)) # Debug
         model = model.transform(ExpandNorms())
         model.save(onnx_path(2)) # Debug
@@ -392,13 +395,13 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         model = model.transform(GiveUniqueNodeNames())
         model.save(onnx_path(6)) # Debug
 
-        # Isolate fpga dataflow layers
-        parent_model = model.transform(CreateDataflowPartition())
-        parent_model.save(onnx_path(5)) # Debug
-        sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-        sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
-        model = ModelWrapper(sdp_node_path)
-        model.save(onnx_path(6)) # Debug
+        ## Isolate fpga dataflow layers
+        #parent_model = model.transform(CreateDataflowPartition())
+        #parent_model.save(onnx_path(5)) # Debug
+        #sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
+        #sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
+        #model = ModelWrapper(sdp_node_path)
+        #model.save(onnx_path(6)) # Debug
 
         model = model.transform(ApplyConfig(folding_config))
         model = model.transform(SpecializeLayers(test_fpga_part))
@@ -428,7 +431,16 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         pytest.fail(f"Failed to transform the model: {str(e)}")
     
     # run the model
+    # TODO: gen_finn_dt_tensor doesn't have FP16 support
+    if idt == 'FLOAT16':
+        input = np.random.randn(*io_shape).astype(np.float16)
+        input = input.astype(np.float32)
+    else:
+        input = gen_finn_dt_tensor(idt, io_shape)
+    in_name = model.graph.input[0].name
+    input_t = {in_name: input}
     y_hw = oxe.execute_onnx(model, input_t)[model.graph.output[0].name]
+
     j = 0
     y_ref = y_ref.flatten()
     y_hw = y_hw.flatten()
@@ -440,3 +452,5 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             assert False, "Too much!"
 
     assert np.allclose(y_ref, y_hw, atol=tolerance), "HW sim output does not match expected output"
+
+    print(f"Test matches")
