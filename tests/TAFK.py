@@ -5,7 +5,7 @@ import fpgadataflow.test_fpgadataflow_eltwise as te
 
 # ["cppsim", "rtlsim", "stitched_ip"]
 # ["simd1", "simd2", "simd3", "simd4"]
-exec_mode = "cppsim"
+exec_mode = "rtlsim"
 impl_style = "hls"
 simd = "simd1"
 #idt = ["FLOAT16"]

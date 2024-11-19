@@ -370,7 +370,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
 
     try:
         # Lower graph to HWCustomOps
-        model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=16)))
+        model = model.transform(ConvertQONNXtoFINN(filter_function=dff_gen(max_multithreshold_bit_width=32)))
         model.save(onnx_path(1)) # Debug
         model = model.transform(ExpandNorms())
         model.save(onnx_path(2)) # Debug
@@ -439,7 +439,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
     y_ref = y_ref.flatten()
     y_hw = y_hw.flatten()
     for i in range(len(y_ref)):
-        if np.allclose(y_ref[i], y_hw[i], atol=tolerance):
+        if not np.allclose(y_ref[i], y_hw[i], atol=tolerance):
             print(f'at {i}: {y_ref[i]} != {y_hw[i]}')
             j+=1
         if j > 20:

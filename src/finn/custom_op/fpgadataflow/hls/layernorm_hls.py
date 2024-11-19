@@ -100,8 +100,6 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
     def execute_node(self, context, graph):
         # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
-<<<<<<< HEAD
-=======
         # # Lookup table mapping execution modes to implementing methods
         # exec_fns = {
         #     "python": self._execute_node_python,
@@ -111,7 +109,6 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
         # # Select and execute the function by mode string
         # exec_fns[mode](context, graph)
 
->>>>>>> refs/remotes/origin/feature/rmsnorm
         node = self.onnx_node
         exp_ishape = self.get_normal_input_shape()
         exp_oshape = self.get_normal_output_shape()
