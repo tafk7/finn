@@ -247,7 +247,7 @@ class HLSBackend(ABC):
         cmd = ["create_bd_cell -type ip -vlnv %s %s" % (vlnv, self.onnx_node.name)]
         return cmd
 
-    def compile_singlenode_code(self, hls_dir="layernorm"):
+    def compile_singlenode_code(self):
         """Builds the bash script for compilation using the CppBuilder from
         finn.util.basic and executes the script to produce the executable."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")

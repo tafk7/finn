@@ -78,8 +78,8 @@ def build_layernorm_graph(
     bias_quant_params   = [1.0, 0.0, bw[2]]
     output_quant_params = [1.0, 0.0, bw[3]]
 
-    # idt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
-    # odt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
+    idt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
+    odt = TensorProto.FLOAT16 if bw[0] == 16 else TensorProto.FLOAT
     
     idt = TensorProto.FLOAT
     odt = TensorProto.FLOAT
@@ -374,9 +374,9 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         model.save(onnx_path(1)) # Debug
         model = model.transform(ExpandNorms())
         model.save(onnx_path(2)) # Debug
-        # model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
-        # model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
-        # model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
+        model = model.transform(absorb.AbsorbSignBiasIntoMultiThreshold())
+        model = model.transform(absorb.AbsorbAddIntoMultiThreshold())
+        model = model.transform(absorb.AbsorbMulIntoMultiThreshold())
         model.save(onnx_path(3)) # Debug
 
         model = model.transform(InferShapes())
@@ -393,12 +393,12 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
         model.save(onnx_path(6)) # Debug
 
         # Isolate fpga dataflow layers
-        # parent_model = model.transform(CreateDataflowPartition())
-        # parent_model.save(onnx_path(5)) # Debug
-        # sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-        # sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
-        # model = ModelWrapper(sdp_node_path)
-        # model.save(onnx_path(6)) # Debug
+        parent_model = model.transform(CreateDataflowPartition())
+        parent_model.save(onnx_path(5)) # Debug
+        sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
+        sdp_node_path = getCustomOp(sdp_node).get_nodeattr("model")
+        model = ModelWrapper(sdp_node_path)
+        model.save(onnx_path(6)) # Debug
 
         model = model.transform(ApplyConfig(folding_config))
         model = model.transform(SpecializeLayers(test_fpga_part))
@@ -415,13 +415,7 @@ def test_fpga_dataflow_layernorm(impl_style, exec_mode, simd, idt, wdt, bdt, odt
             model = model.transform(PrepareCppSim())
             model = model.transform(CompileCppSim())
         elif exec_mode == "rtlsim":
-
             #  HOTFIX: Ensure everything is pyxsi
-            for node in model.graph.node:
-                attr = helper.make_attribute("rtlsim_backend", "pyxsi")
-                node.attribute.append(attr)
-            model.save(onnx_path(99)) # Debug
-
             model = model.transform(SetExecMode("rtlsim"))
             model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
             model = model.transform(HLSSynthIP())

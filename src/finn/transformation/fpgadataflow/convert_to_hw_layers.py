@@ -2173,7 +2173,7 @@ class InferLayerNorm(Transformation):
                     epsilon=helper.get_node_attr_value(node, "epsilon"),
                     inputDataType=idt.name,
                     outputDataType=odt.name,
-                    rtlsim_backend="pyxsi",
+                    # rtlsim_backend="pyxsi",
                     name="LayerNorm_" + node.name,
                 )
                 graph.node.insert(insert_point, new_node)
