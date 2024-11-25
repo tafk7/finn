@@ -312,14 +312,12 @@ class InferConvInpGen(Transformation):
         new_nodes = []
         new_tensors = []
         new_attributes = []
-
         # Get i/o tensors & their properties
         act_in = node.input[0]
         act_out = node.output[0]
         shape_in = model.get_tensor_shape(act_in)
         shape_out = model.get_tensor_shape(act_out)
         idt = model.get_tensor_datatype(act_in)
-        
         # TODO: Figure out why we need to getCustomOp here? Isn't it already one?
         node_inst = getCustomOp(node)
         # Get attributes
@@ -338,16 +336,11 @@ class InferConvInpGen(Transformation):
         ofm_dim_w = shape_out[2]
 
         # default params for ConvolutionInputGenerator
-        ConvInpGen_node_idx = node_ind
         ConvInpGen_input = act_in
         ConvInpGen_idim_h = ifm_dim_h
         ConvInpGen_idim_w = ifm_dim_w
 
         if pad_h > 0 or pad_w > 0:
-            assert pad_val == 0, (
-                "%s : FMPadding_Batch doesn't currently support pad_val!= 0" % n.name
-            )
-
             odim_padding_h = ifm_dim_h + pad_h
             odim_padding_w = ifm_dim_w + pad_w
 
