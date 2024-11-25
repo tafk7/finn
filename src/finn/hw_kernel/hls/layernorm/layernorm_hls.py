@@ -4,9 +4,9 @@
 import numpy as np
 import os
 
-from finn.custom_op.fpgadataflow import templates
-from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
-from finn.custom_op.fpgadataflow.norms import LayerNorm, RMSNorm
+from finn.hw.fpgadataflow import templates
+from finn.hw.fpgadataflow.hlsbackend import HLSBackend
+from finn.hw.fpgadataflow.norms import LayerNorm, RMSNorm
 from finn.util.basic import CppBuilder
 
 
