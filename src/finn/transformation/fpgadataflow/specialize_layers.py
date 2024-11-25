@@ -32,8 +32,8 @@ from onnx import helper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.custom_op.fpgadataflow.hls import custom_op as hls_variants
-from finn.custom_op.fpgadataflow.rtl import custom_op as rtl_variants
+from finn.custom_op.hw.hls import custom_op as hls_variants
+from finn.custom_op.hw.rtl import custom_op as rtl_variants
 from finn.util.basic import get_dsp_block, is_versal
 
 

@@ -1,0 +1,327 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+import numpy as np
+import os
+
+from finn.custom_op.fpgadataflow import templates
+from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
+from finn.custom_op.fpgadataflow.norms import LayerNorm, RMSNorm
+from finn.util.basic import CppBuilder
+
+
+class LayerNorm_hls(LayerNorm, HLSBackend):
+    def __init__(self, onnx_node, **kwargs):
+        super().__init__(onnx_node, **kwargs)
+
+    def get_nodeattr_types(self):
+        my_attrs = {
+            "supported_idt": ("l", True, ["FLOAT32", "FLOAT16"]),
+            "supported_odt": ("l", True, ["FLOAT32", "FLOAT16"]),
+        }
+        my_attrs.update(LayerNorm.get_nodeattr_types(self))
+        my_attrs.update(HLSBackend.get_nodeattr_types(self))
+        return my_attrs
+
+    def global_includes(self):
+        self.code_gen_dict["$GLOBALS$"] = [
+            "#include <hls_vector.h>",
+            '#include "layernorm.hpp"',
+            '#include "ln_utils.hpp"'
+        ]
+
+    def defines(self, var):
+        simd = self.get_nodeattr("simd")
+        w = self.get_nodeattr("ifm_dim")[-1]
+        epsilon = self.get_nodeattr("epsilon")
+        idtype = self.get_input_datatype()
+        odtype = self.get_output_datatype()
+        self.code_gen_dict["$DEFINES$"] = [
+            f"""
+            constexpr unsigned SIMD = {simd};
+            constexpr unsigned W = {w};
+            constexpr unsigned epsilon = {epsilon};
+            using TI = {idtype.get_hls_datatype_str()};
+            using TO = {odtype.get_hls_datatype_str()};
+           """
+        ]
+
+    def docompute(self):
+        self.code_gen_dict["$DOCOMPUTE$"] = [
+            f"""
+                layernorm_pipeline<TI, TO, W, SIMD>(epsilon, src, dst);
+            """
+        ]
+
+    def blackboxfunction(self):
+        self.code_gen_dict["$BLACKBOXFUNCTION$"] = [
+            f"""
+            void {self.onnx_node.name}(
+                hls::stream<hls::vector<TI,SIMD>> &src,
+                hls::stream<hls::vector<TO,SIMD>> &dst
+            )
+            """
+        ]
+
+    def pragmas(self):
+        self.code_gen_dict["$PRAGMAS$"] = [
+            f"""
+            #pragma HLS interface AXIS port=src
+            #pragma HLS interface AXIS port=dst
+            #pragma HLS aggregate variable=src compact=bit
+            #pragma HLS aggregate variable=dst compact=bit
+
+            #pragma HLS interface ap_ctrl_none port=return
+            #pragma HLS dataflow disable_start_propagation
+            """
+        ]
+
+    def execute_node(self, context, graph):
+        mode = self.get_nodeattr("exec_mode")
+        node = self.onnx_node
+        folded_ishape = self.get_folded_input_shape()
+
+        if mode == "cppsim":
+            code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+            inp = context[node.input[0]]
+            inp = inp.reshape(folded_ishape)
+            np.save(os.path.join(code_gen_dir, "input_0.npy"), inp)
+            # # execute the precompiled model
+            super().exec_precompiled_singlenode_model()
+            # # load output npy file
+            super().npy_to_dynamic_output(context)
+        else:
+            raise Exception(f"Unsupported execution mode: {mode}")
+
+        # Verifies the node attributes, inputs and outputs
+    def verify_node(self):
+        # TODO: Implement
+        idt = self.get_nodeattr("inputDataType")
+        odt = self.get_nodeattr("outputDataType")
+        assert idt in self.get_nodeattr("supported_idt"), f"Input data type {idt} not supported"
+        assert odt in self.get_nodeattr("supported_odt"), f"Output data type {idt} not supported"
+        pass
+
+    def compile_singlenode_code(self):
+        """Builds the bash script for compilation using the CppBuilder from
+        finn.util.basic and executes the script to produce the executable."""
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+        builder = CppBuilder()
+        # to enable additional debug features please uncommand the next line
+        builder.append_includes("-DDEBUG")
+        builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
+        builder.append_includes("-I$FINN_ROOT/deps/cnpy/")
+        builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")
+        builder.append_includes("-I$FINN_ROOT/custom_hls/layernorm")
+        builder.append_includes("-I{}/include".format(os.environ["HLS_PATH"]))
+        builder.append_includes("--std=c++14")
+        builder.append_includes("-O3")
+        builder.append_sources(code_gen_dir + "/*.cpp")
+        builder.append_sources("$FINN_ROOT/deps/cnpy/cnpy.cpp")
+        builder.append_includes("-lz")
+        builder.append_includes(
+            '-fno-builtin -fno-inline -Wl,-rpath,"$HLS_PATH/lnx64/lib/csim" -L$HLS_PATH/lnx64/lib/csim -lhlsmc++-GCC46'
+        )
+        builder.append_includes(
+            "-L$HLS_PATH/lnx64/tools/fpo_v7_1 -lgmp -lmpfr -lIp_floating_point_v7_1_bitacc_cmodel"
+        )
+        builder.set_executable_path(code_gen_dir + "/node_model")
+        builder.build(code_gen_dir)
+        self.set_nodeattr("executable_path", builder.executable_path)
+
+    def code_generation_cppsim(self, model):
+        """Generates c++ code for simulation (cppsim)."""
+        self.code_gen_dict["$READNPYDATA$"] = [""]
+        self.code_gen_dict["$DATAOUTSTREAM$"] = [""]
+        self.code_gen_dict["$STREAMDECLARATIONS$"] = [""]
+        node = self.onnx_node
+        path = self.get_nodeattr("code_gen_dir_cppsim")
+        self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
+        self.generate_params(model, path)
+        self.global_includes()
+        self.defines("cppsim")
+        self.pragmas()
+        oshape = self.get_folded_output_shape()
+        oshape_str = str(oshape).replace("(", "{").replace(")", "}")
+        self.code_gen_dict["$DOCOMPUTE$"] = [
+            f"""
+            static hls::stream<hls::vector<TI,SIMD>>  in0_V;
+            static hls::stream<hls::vector<TO,SIMD>>  out_V;
+
+            npy2vectorstream<TI, float, SIMD>("{path}/input_0.npy", in0_V);
+            int stream_size = in0_V.size();
+
+            while(out_V.size() != stream_size){{
+                layernorm_pipeline<TI, TO, W, SIMD>(epsilon, in0_V, out_V);
+            }}
+
+            vectorstream2npy<TO, float, SIMD>(out_V, {oshape_str}, "{path}/output.npy");
+            """
+        ]
+        self.save_as_npy()
+
+        template = templates.docompute_template
+
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim") + f"/execute_{node.op_type}.cpp"
+        with open(code_gen_dir, "w") as f:
+            for key in self.code_gen_dict:
+                # transform list into long string separated by '\n'
+                code_gen_line = "\n".join(self.code_gen_dict[key])
+                template = template.replace(key, code_gen_line)
+            f.write(template)
+
+    def prepare_rtlsim(self):
+        # this node currently does not support rtlsim
+        raise NotImplementedError("LayerNorm_hls does not support rtlsim")
+
+class RMSNorm_hls(RMSNorm, HLSBackend):
+    def __init__(self, onnx_node, **kwargs):
+        super().__init__(onnx_node, **kwargs)
+
+    def get_nodeattr_types(self):
+        my_attrs = {}
+        my_attrs.update(RMSNorm.get_nodeattr_types(self))
+        my_attrs.update(HLSBackend.get_nodeattr_types(self))
+        return my_attrs
+
+    def global_includes(self):
+        self.code_gen_dict["$GLOBALS$"] = [
+            "#include <hls_vector.h>",
+            '#include "rmsnorm.hpp"',
+            '#include "npy2vectorstream.hpp"'
+        ]
+
+    def defines(self, var):
+        simd = self.get_nodeattr("simd")
+        w = self.get_nodeattr("ifm_dim")[-1]
+        epsilon = self.get_nodeattr("epsilon")
+        idtype = self.get_input_datatype()
+        odtype = self.get_output_datatype()
+        self.code_gen_dict["$DEFINES$"] = [
+            f"""
+            constexpr unsigned SIMD = {simd};
+            constexpr unsigned W = {w};
+            constexpr unsigned epsilon = {epsilon};
+            using TI = {idtype.get_hls_datatype_str()};
+            using TO = {odtype.get_hls_datatype_str()};
+           """
+        ]
+
+    def docompute(self):
+        self.code_gen_dict["$DOCOMPUTE$"] = [
+            f"""
+                rmsnorm_pipeline<TI,TO,W,SIMD>(epsilon, src, dst);
+            """
+        ]
+
+    def blackboxfunction(self):
+        self.code_gen_dict["$BLACKBOXFUNCTION$"] = [
+            f"""
+            void {self.onnx_node.name}(
+                hls::stream<hls::vector<TI,SIMD>> &src,
+                hls::stream<hls::vector<TO,SIMD>> &dst
+            )
+            """
+        ]
+
+    def pragmas(self):
+        self.code_gen_dict["$PRAGMAS$"] = [
+            f"""
+            #pragma HLS interface AXIS port=src
+            #pragma HLS interface AXIS port=dst
+            #pragma HLS aggregate variable=src compact=bit
+            #pragma HLS aggregate variable=dst compact=bit
+
+            #pragma HLS interface ap_ctrl_none port=return
+            #pragma HLS dataflow disable_start_propagation
+            """
+        ]
+
+    def execute_node(self, context, graph):
+        mode = self.get_nodeattr("exec_mode")
+        node = self.onnx_node
+        folded_ishape = self.get_folded_input_shape()
+
+        if mode == "cppsim":
+            code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+            inp = context[node.input[0]]
+            inp = inp.reshape(folded_ishape)
+            np.save(os.path.join(code_gen_dir, "input_0.npy"), inp)
+            # # execute the precompiled model
+            super().exec_precompiled_singlenode_model()
+            # # load output npy file
+            super().npy_to_dynamic_output(context)
+        else:
+            raise Exception(f"Unsupported execution mode: {mode}")
+
+    def compile_singlenode_code(self):
+        """Builds the bash script for compilation using the CppBuilder from
+        finn.util.basic and executes the script to produce the executable."""
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+        builder = CppBuilder()
+        # to enable additional debug features please uncommand the next line
+        builder.append_includes("-DDEBUG")
+        builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
+        builder.append_includes("-I$FINN_ROOT/deps/cnpy/")
+        builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")
+        builder.append_includes("-I$FINN_ROOT/custom_hls/rmsnorm")
+        builder.append_includes("-I{}/include".format(os.environ["HLS_PATH"]))
+        builder.append_includes("--std=c++14")
+        builder.append_includes("-O3")
+        builder.append_sources(code_gen_dir + "/*.cpp")
+        builder.append_sources("$FINN_ROOT/deps/cnpy/cnpy.cpp")
+        builder.append_includes("-lz")
+        builder.append_includes(
+            '-fno-builtin -fno-inline -Wl,-rpath,"$HLS_PATH/lnx64/lib/csim" -L$HLS_PATH/lnx64/lib/csim -lhlsmc++-GCC46'
+        )
+        builder.append_includes(
+            "-L$HLS_PATH/lnx64/tools/fpo_v7_1 -lgmp -lmpfr -lIp_floating_point_v7_1_bitacc_cmodel"
+        )
+        builder.set_executable_path(code_gen_dir + "/node_model")
+        builder.build(code_gen_dir)
+        self.set_nodeattr("executable_path", builder.executable_path)
+
+    def code_generation_cppsim(self, model):
+        """Generates c++ code for simulation (cppsim)."""
+        self.code_gen_dict["$READNPYDATA$"] = [""]
+        self.code_gen_dict["$DATAOUTSTREAM$"] = [""]
+        self.code_gen_dict["$STREAMDECLARATIONS$"] = [""]
+        node = self.onnx_node
+        path = self.get_nodeattr("code_gen_dir_cppsim")
+        self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
+        self.generate_params(model, path)
+        self.global_includes()
+        self.defines("cppsim")
+        self.pragmas()
+        oshape = self.get_folded_output_shape()
+        oshape_str = str(oshape).replace("(", "{").replace(")", "}")
+        self.code_gen_dict["$DOCOMPUTE$"] = [
+            f"""
+            static hls::stream<hls::vector<TI,SIMD>>  in0_V;
+            static hls::stream<hls::vector<TO,SIMD>>  out_V;
+
+            npy2vectorstream<TI, float, SIMD>("{path}/input_0.npy", in0_V);
+            int stream_size = in0_V.size();
+
+            while(out_V.size() != stream_size){{
+                rmsnorm_pipeline<TI, TO, W, SIMD>(epsilon, in0_V, out_V);
+            }}
+
+            vectorstream2npy<TO, float, SIMD>(out_V, {oshape_str}, "{path}/output.npy");
+            """
+        ]
+        self.save_as_npy()
+
+        template = templates.docompute_template
+
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim") + f"/execute_{node.op_type}.cpp"
+        with open(code_gen_dir, "w") as f:
+            for key in self.code_gen_dict:
+                # transform list into long string separated by '\n'
+                code_gen_line = "\n".join(self.code_gen_dict[key])
+                template = template.replace(key, code_gen_line)
+            f.write(template)
+
+    def prepare_rtlsim(self):
+        # this node currently does not support rtlsim
+        raise NotImplementedError("RMSNorm_hls does not support rtlsim")
