@@ -31,6 +31,7 @@ import numpy as np
 import qonnx.core.data_layout as DataLayout
 import warnings
 from onnx import TensorProto, helper
+from onnx.compose import extract_subgraph, merge_graphs
 from qonnx.core.datatype import DataType
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -42,7 +43,7 @@ from qonnx.util.onnx import nchw_to_nhwc
 
 
 class InferHWCustomOp(Transformation):
-    """Convert MaxPoolNHWC layers to StreamingMaxPool HW layers."""
+    """Abstract class for transformations that replace nodes with HWCustomOps."""
 
     def __init__(self, channel_last=False):
         super().__init__()
@@ -56,7 +57,7 @@ class InferHWCustomOp(Transformation):
         pass
     
     @abstractmethod
-    def verify_input_node(self, model, node):
+    def verify_pattern_graph(self, model, node):
         """Validates that the input node meets all restrictions of the HWCustomOp.
         Disqualifications are considered errors."""
         pass
@@ -88,16 +89,69 @@ class InferHWCustomOp(Transformation):
         
         return acts_in, acts_out, weights
     
-    def set_channel_last(self, model, node_ind, acts):
-        for act in acts:
-            layout = model.get_tensor_layout(act)
-            if layout == DataLayout.NCHW:
-                new_act = nchw_to_nhwc(act, model, node_ind)
-                node_ind += 1
-            elif layout == DataLayout.NCW:
-                new_act = None # TODO: Add logic handling NCW case --> NWC
-                node_ind += 1        
-        return model, node_ind
+    def set_channel_last(self, model, subgraph, node_ind):
+        input_acts = subgraph.input
+        output_acts = subgraph.output
+        inputs_done = False
+        for acts in [input_acts, output_acts]:
+            for i, act in enumerate(acts):
+                layout = model.get_tensor_layout(act)
+                if layout == DataLayout.NCHW:
+                    new_act = nchw_to_nhwc(act, model, node_ind)
+                    node_ind += 1
+                elif layout == DataLayout.NCW:
+                    new_act = None # TODO: Add logic handling NCW case --> NWC
+                    node_ind += 1
+            if not inputs_done:
+                insert_point = node_ind
+                inputs_done = True
+
+        # Re-extract subgraph with updated layout
+        
+        subgraph = extract_subgraph(model, input_acts, output_acts)
+        return model, subgraph, node_ind, insert_point
+
+    def replace_subgraph(self, model, subgraph, new_graph):
+        # Remove pattern subgraph from main graph
+        print("Printing nodes...")
+        for node in list(subgraph.node):
+            # model.graph.node.remove(node)
+            print(node)
+        print("Printing initializers...")
+        # Remove all initializers
+        for init in list(subgraph.initializer):
+            # model.graph.initializer.remove(init)
+            print(init)
+        print("Printing inputs...")
+        # Remove all inputs/outputs
+        for input in list(subgraph.input):
+            # model.graph.input.remove(input)
+            print(input)
+        print("Printing outputs...")
+        for output in list(subgraph.output):
+            # model.graph.output.remove(output)
+            print(output)
+        print("Printing value_info...")
+        # Remove all value_info entries
+        for value_info in list(subgraph.value_info):
+            # model.graph.value_info.remove(value_info)
+            print(value_info)
+
+        # # Step 4: Insert new_graph into main_graph
+        # # Build sets of existing names to avoid duplicates
+        # existing_node_names = set(node.name for node in main_graph.node)
+        # existing_initializer_names = set(init.name for init in main_graph.initializer)
+        # existing_value_info_names = set(vi.name for vi in main_graph.value_info)
+        # existing_tensor_names = used_tensor_names.copy()
+        
+        # # Add initializers from new_graph into main_graph
+        # for initializer in new_graph.initializer:
+        #     if initializer.name not in existing_initializer_names:
+        #         main_graph.initializer.append(initializer)
+        #         existing_initializer_names.add(initializer.name)
+        #     else:
+        #         # If the initializer already exists, ensure it's the same
+        #         pass  # Assuming they are the same or handling conflicts as needed
 
     def apply(self, model):
         graph = model.graph
@@ -105,20 +159,17 @@ class InferHWCustomOp(Transformation):
         graph_modified = False
         for node in graph.node:
             node_ind += 1
-            if self.pattern_match(model, node):
-                self.verify_input_node(model, node)
-                insert_point = node_ind
+            subgraph = self.pattern_match(model, node)
+            if subgraph is not None:
+                # Ensure channel is last if enforced
                 if self.channel_last:
-                    # TODO: Add logic to parse inputs to be judged
-                    acts_in = node.inputs
-                    acts_out = node.outputs                    
-                    model, node_ind = self.set_channel_last(model, node_ind, acts_in)
-                    insert_point = node_ind
-                    model, node_ind = self.set_channel_last(model, node_ind, acts_out)
+                    model, subgraph, node_ind, insert_point = self.set_channel_last(model, subgraph, node_ind)
                 else:
                     insert_point = node_ind
+                # Validate node meets HW restrictions
+                config = self.verify_pattern_graph(model, subgraph)s
                 # Generate HWCustomOp & final validation
-                hw_op = self.gen_hw_custom_op(model, node)
+                hw_op = self.gen_hw_custom_op(model, node, config)
                 hw_op.verify_node()
                 # Replace matched node with HW op
                 graph.node.insert(insert_point, hw_op)
@@ -138,17 +189,25 @@ class InferLayerNorm(InferHWCustomOp):
         super().__init__(channel_last=True)
 
     def pattern_match(self, model, node):
-        return node.op_type == "FuncLayerNorm"
+        ### New implementation - subgraph pattern matching
+        if node.op_type == "FuncLayerNorm":
+            input_names = node.input
+            output_names = node.output
+            return extract_subgraph(model, input_names, output_names)
+        else:
+            return None
+        ### Old implementation - bool output, only supports single-node patterns
+        # return node.op_type == "FuncLayerNorm"
     
     # Verify input node parameters meet HW restrictions
-    def verify_input_node(self, model, node):
+    def verify_pattern_graph(self, model, node):
         # Check if attributes meet criteria
         shape_in = model.get_tensor_shape(node.input[0])
         norm_axis = helper.get_node_attr_value(node, "axis")
         assert (norm_axis == -1 or norm_axis == len(shape_in)-1), \
             f'{node}: attribute "axis" is restricted to -1 or len(shape_in).'
 
-    def gen_hw_custom_op(self, model, node):
+    def gen_hw_custom_op(self, model, node, config):
         # Get tensors
         act_in = node.input[0]
         act_out = node.output[0]
@@ -174,7 +233,7 @@ class InferLayerNorm(InferHWCustomOp):
         )
 
 
-class InferThresholdingLayer(Transformation):
+class InferThresholdingLayer(InferHWCustomOp):
     """Convert any MultiThreshold into a standalone thresholding HLS layer."""
 
     def __init__(self):
@@ -187,7 +246,7 @@ class InferThresholdingLayer(Transformation):
         match &= idt.is_integer()
         return match
 
-    def verify_input_node(self, model, node):
+    def verify_pattern_graph(self, model, node):
         tdt = model.get_tensor_datatype(node.input[1])
         assert tdt.is_integer(), (
             node.name
@@ -211,7 +270,7 @@ class InferThresholdingLayer(Transformation):
                 node.name + ": Signed output requires actval < 0"
             )
 
-    def gen_hw_custom_op(self, model, node):
+    def gen_hw_custom_op(self, model, node, config):
         # Get tensors
         act_in = node.input[0]
         threshold = node.input[1]
@@ -245,8 +304,7 @@ class InferThresholdingLayer(Transformation):
         )
 
 
-
-class InferConvInpGen(Transformation):
+class InferConvInpGen(InferHWCustomOp):
     """Convert Im2Col layers to ConvolutionInputGenerator layers."""
     
     def __init__(self):
@@ -259,56 +317,37 @@ class InferConvInpGen(Transformation):
         match &= idt.is_integer()
         return match
 
-    def verify_input_node(self, model, node):
+    def verify_pattern_graph(self, model, node):
         custom_node = getCustomOp(node)
         # Validate padding
         pad_attr = custom_node.get_nodeattr("pad_amount")
         pad_h = pad_attr[0] + pad_attr[2]
         pad_w = pad_attr[1] + pad_attr[3]
         pad_val = custom_node.get_nodeattr("pad_value")
-        if pad_h > 0 or pad_w > 0:
+        padding = pad_h > 0 or pad_w > 0
+        if padding:
             assert pad_val == 0, (
                 node.name + ": FMPadding_Batch doesn't currently support pad_val!= 0"
             )
         # Validate downsampling
         stride_h, stride_w = custom_node.get_nodeattr("stride")
         k_h, k_w = custom_node.get_nodeattr("kernel_size")
-        has_stride = (stride_h > 1 or stride_w > 1)
-        is_kernel_pointwise = (k_h == 1 and k_w == 1)
-        if has_stride and is_kernel_pointwise:
-            shape_in = model.get_tensor_shape(node.input[0])
-            downsample_1D = 1 in shape_in[1:3]
-            is_square_image = (shape_in[1] == shape_in[2])
-            is_equal_stride = (stride_h == stride_w)
-            downsample_2D = is_square_image and is_equal_stride        
-            assert downsample_1D or downsample_2D, (
-                node.name + ": Couldn't infer Downsample, check config."
-            )
-        
-
-
-        if (stride_h > 1 or stride_w > 1) and is_kernel_pointwise:
-            downsample_1D = is_1D
-            is1D_unitx = ifm_dim_w == 1
-            downsample_2D = (not downsample_1D) and is_square_image and is_equal_stride
-            if not (downsample_1D or downsample_2D):
-                warnings.warn(f"Couldn't infer Downsample from {node.name},  check config.")
-                continue
-
-
-
-
-
-
-
-        assert tdt.is_integer(), (
-            node.name
-            + """: MultiThreshold cannot be converted
-            because thresholds are float type. Input data type is integer,
-            please run RoundAndClipThresholds to convert thresholds to integer."""
+        downsample = stride_h > 1 or stride_w > 1 and k_h == 1 and k_w == 1
+        # Determine dimensionality of downsample
+        shape_in = model.get_tensor_shape(node.input[0])
+        if 1 in shape_in[1:3]:
+            num_dims = 1 # 1D downsampling, either dim 1 or 2 == 1
+        elif shape_in[1] == shape_in[2] and stride_h == stride_w:
+            num_dims = 2 # 2D downsampling, is square image & equal stride    
+        assert downsample == 1 or downsample == 2 (
+            node.name + ": Couldn't infer Downsample, check config."
         )
 
-    def gen_hw_custom_op(self, model, node):
+        return {"padding" : padding,
+                "downsample" : downsample,
+                "num_dims" : num_dims}
+
+    def gen_hw_custom_op(self, model, node, config):
         new_nodes = []
         new_tensors = []
         new_attributes = []
@@ -318,6 +357,7 @@ class InferConvInpGen(Transformation):
         shape_in = model.get_tensor_shape(act_in)
         shape_out = model.get_tensor_shape(act_out)
         idt = model.get_tensor_datatype(act_in)
+        odt = model.get_tensor_datatype(act_out)
         # TODO: Figure out why we need to getCustomOp here? Isn't it already one?
         node_inst = getCustomOp(node)
         # Get attributes
@@ -335,12 +375,7 @@ class InferConvInpGen(Transformation):
         ofm_dim_h = shape_out[1]
         ofm_dim_w = shape_out[2]
 
-        # default params for ConvolutionInputGenerator
-        ConvInpGen_input = act_in
-        ConvInpGen_idim_h = ifm_dim_h
-        ConvInpGen_idim_w = ifm_dim_w
-
-        if pad_h > 0 or pad_w > 0:
+        if config["padding"]:
             odim_padding_h = ifm_dim_h + pad_h
             odim_padding_w = ifm_dim_w + pad_w
 
@@ -350,64 +385,54 @@ class InferConvInpGen(Transformation):
                 (1, odim_padding_h, odim_padding_w, ifm_ch),
             )
             graph.value_info.append(padding_out)
-            padding_out = padding_out.name
             model.set_tensor_datatype(padding_out, dt)
-
-            ConvInpGen_node_idx += 1
-            ConvInpGen_input = padding_out
-            ConvInpGen_idim_h = odim_padding_h
-            ConvInpGen_idim_w = odim_padding_w
 
             padding_node = helper.make_node(
                 "FMPadding",
-                [i2c_input],
-                [padding_out],
+                [act_in],
+                [padding_out.name],
                 domain="finn.custom_op.hw",
                 backend="fpgadataflow",
                 ImgDim=[ifm_dim_h, ifm_dim_w],
                 Padding=pad_attr,
                 NumChannels=ifm_ch,
-                inputDataType=dt.name,
+                inputDataType=idt.name,
                 SIMD=ifm_ch,
-                name="FMPadding_Batch_" + n.name,
+                name="FMPadding_Batch_" + node.name,
             )
             graph.node.insert(node_ind, padding_node)
+            # Set appropriate values for ConvInpGen/Downsampler
+            act_ConvInpGen = padding_out.name
+            ConvInpGen_idim_h = odim_padding_h
+            ConvInpGen_idim_w = odim_padding_w
+        else:
+            act_ConvInpGen = act_in
+            ConvInpGen_idim_h = ifm_dim_h
+            ConvInpGen_idim_w = ifm_dim_w
 
-        is_kernel_pointwise = k_h == 1 and k_w == 1
-        is_square_image = ConvInpGen_idim_h == ConvInpGen_idim_w
-        is_equal_stride = stride_h == stride_w
 
-        is_1D = (ifm_dim_h == 1) or (ifm_dim_w == 1)
-        if (stride_h > 1 or stride_w > 1) and is_kernel_pointwise:
-            downsample_1D = is_1D
-            is1D_unitx = ifm_dim_w == 1
-            downsample_2D = (not downsample_1D) and is_square_image and is_equal_stride
-            if not (downsample_1D or downsample_2D):
-                warnings.warn(f"Couldn't infer Downsample from {n.name},check config.")
-                continue
-            ConvInpGen_idim = max(ConvInpGen_idim_h, ConvInpGen_idim_w)
-            stride = max(stride_h, stride_w)
-            # create DownSampler node
+
+        if config['downsample']:
             ConvInpGen_node = helper.make_node(
                 "DownSampler",
-                [ConvInpGen_input],
-                [i2c_output],
+                [act_ConvInpGen],
+                [act_out],
                 domain="finn.custom_op.hw",
                 backend="fpgadataflow",
-                ImgDim=ConvInpGen_idim,
+                ImgDim=max(ConvInpGen_idim_h, ConvInpGen_idim_w),
                 NumChannels=ifm_ch,
                 SIMD=ifm_ch,
-                Stride=stride,
-                inputDataType=dt.name,
-                name="DownSampler_" + n.name,
-                is1D=downsample_1D,
-                is1D_unitx=is1D_unitx,
+                Stride=max(stride_h, stride_w),
+                inputDataType=idt.name,
+                name="DownSampler_" + node.name,
+                is1D=(config['downsample']==1),
+                is1D_unitx=(ifm_dim_w == 1),
             )
         else:
             ConvInpGen_node = helper.make_node(
                 "ConvolutionInputGenerator",
-                [ConvInpGen_input],
-                [i2c_output],
+                [act_ConvInpGen],
+                [act_out],
                 domain="finn.custom_op.hw",
                 backend="fpgadataflow",
                 ConvKernelDim=[k_h, k_w],
@@ -417,11 +442,11 @@ class InferConvInpGen(Transformation):
                 SIMD=ifm_ch,
                 Stride=[stride_h, stride_w],
                 Dilation=[dilation_h, dilation_w],
-                inputDataType=dt.name,
-                outputDataType=dt.name,
+                inputDataType=idt.name,
+                outputDataType=odt.name,
                 depthwise=depthwise,
-                is1D=is_1D,
-                name="ConvolutionInputGenerator_" + n.name,
+                is1D=(config['downsample']==1),
+                name="ConvolutionInputGenerator_" + node.name,
             )
         graph.node.insert(ConvInpGen_node_idx, ConvInpGen_node)
 
@@ -575,12 +600,6 @@ class InferConvInpGen(Transformation):
             ActVal=actval,
             name="Thresholding_" + node.name,
         )
-
-
-
-
-
-        
 
     def apply(self, model):
         graph = model.graph
