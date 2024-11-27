@@ -32,6 +32,7 @@ import qonnx.core.data_layout as DataLayout
 import warnings
 from onnx import NodeProto, TensorProto, helper
 from qonnx.core.datatype import DataType
+from abc import abstractmethod
 
 # QONNX wrapper to ONNX model graphs
 from qonnx.core.modelwrapper import ModelWrapper
@@ -48,6 +49,287 @@ import finn.custom_op.fpgadataflow.elementwise_binary as elementwise_binary
 
 # Base class for all FINN custom ops, here just used for type-hinting
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
+
+
+
+
+
+
+
+
+
+class InferHWCustomOp(Transformation):
+    """Abstract class for transformations that replace nodes with HWCustomOps."""
+
+    def __init__(self, channel_last=False):
+        super().__init__()
+        self.channel_last = channel_last
+
+    @abstractmethod
+    def pattern_match(self, model, node):
+        """Returns True if the input node meets the criteria to be replaced by the 
+        selected HWCustomOp. For multi-node patterns, matches against the
+        input and connected nodes, anchored at the input."""
+        pass
+    
+    @abstractmethod
+    def verify_pattern_graph(self, model, node):
+        """Validates that the input node meets all restrictions of the HWCustomOp.
+        Disqualifications are considered errors."""
+        pass
+
+    @abstractmethod
+    def gen_hw_custom_op(self, model, node):
+        """Generates the HWCustomOp to replace the input node or graph anchored at 
+        the input node."""
+        pass
+
+    def extract_tensors(self, model, node):
+        acts_in = {}
+        acts_out = {}
+        weights = {}
+        # Extract & categorize inputs
+        for tensor in node.input:
+            if model.get_initializer(tensor) is None:
+                acts_in[tensor] = (model.get_tensor_shape(tensor),
+                                   model.get_tensor_datatype(tensor))
+            else:
+                tensor_data = model.get_initializer(tensor)
+                weights[tensor] = (tensor_data.shape,
+                                   model.get_tensor_datatype(tensor), # determine where best to get wdt?
+                                   tensor_data)
+        # Extract outputs
+        for tensor in node.output:
+            acts_out = (model.get_tensor_shape(tensor),
+                        model.get_tensor_datatype(tensor))
+        
+        return acts_in, acts_out, weights
+    
+    def set_channel_last(self, model, subgraph, node_ind):
+        input_acts = subgraph.input
+        output_acts = subgraph.output
+        inputs_done = False
+        for acts in [input_acts, output_acts]:
+            for i, act in enumerate(acts):
+                layout = model.get_tensor_layout(act)
+                if layout == DataLayout.NCHW:
+                    new_act = nchw_to_nhwc(act, model, node_ind)
+                    node_ind += 1
+                elif layout == DataLayout.NCW:
+                    new_act = None # TODO: Add logic handling NCW case --> NWC
+                    node_ind += 1
+            if not inputs_done:
+                insert_point = node_ind
+                inputs_done = True
+
+        # Re-extract subgraph with updated layout
+        
+        subgraph = extract_subgraph(model, input_acts, output_acts)
+        return model, subgraph, node_ind, insert_point
+
+    def replace_subgraph(self, model, subgraph, new_graph):
+        # Remove pattern subgraph from main graph
+        print("Printing nodes...")
+        for node in list(subgraph.node):
+            # model.graph.node.remove(node)
+            print(node.name + '    ' + str(node.op_type))
+        print("Printing initializers...")
+        # Remove all initializers
+        for init in list(subgraph.initializer):
+            # model.graph.initializer.remove(init)
+            print(init.name + '    ' + str(init.data_type))
+        print("Printing inputs...")
+        # Remove all inputs/outputs
+        for input in list(subgraph.input):
+            # model.graph.input.remove(input)
+            print(input.name)
+        print("Printing outputs...")
+        for output in list(subgraph.output):
+            # model.graph.output.remove(output)
+            print(output.name)
+        print("Printing value_info...")
+        # Remove all value_info entries
+        for value_info in list(subgraph.value_info):
+            # model.graph.value_info.remove(value_info)
+            print(value_info.name)
+
+        # # Step 4: Insert new_graph into main_graph
+        # # Build sets of existing names to avoid duplicates
+        # existing_node_names = set(node.name for node in main_graph.node)
+        # existing_initializer_names = set(init.name for init in main_graph.initializer)
+        # existing_value_info_names = set(vi.name for vi in main_graph.value_info)
+        # existing_tensor_names = used_tensor_names.copy()
+        
+        # # Add initializers from new_graph into main_graph
+        # for initializer in new_graph.initializer:
+        #     if initializer.name not in existing_initializer_names:
+        #         main_graph.initializer.append(initializer)
+        #         existing_initializer_names.add(initializer.name)
+        #     else:
+        #         # If the initializer already exists, ensure it's the same
+        #         pass  # Assuming they are the same or handling conflicts as needed
+
+    def apply(self, model):
+        graph = model.graph
+        node_ind = 0
+        graph_modified = False
+        for node in graph.node:
+            node_ind += 1
+            subgraph = self.pattern_match(model, node)
+            if subgraph is not None:
+                # Ensure channel is last if enforced
+                if self.channel_last:
+                    model, subgraph, node_ind, insert_point = self.set_channel_last(model, subgraph, node_ind)
+                else:
+                    insert_point = node_ind
+                # Validate node meets HW restrictions
+                config = self.verify_pattern_graph(model, subgraph)
+                # Generate HWCustomOp & final validation
+                hw_op = self.gen_hw_custom_op(model, node, config)
+                hw_op.verify_node()
+                # Replace matched node with HW op
+                graph.node.insert(insert_point, hw_op)
+                # TODO: Expand node removal to accomodate multi-node patterns
+                graph.node.remove(node)
+                graph_modified = True
+        if graph_modified:
+            model = model.transform(InferShapes())
+            model = model.transform(InferDataTypes())
+        return (model, graph_modified)
+
+
+
+class InferLayerNorm(InferHWCustomOp):
+    
+    def __init__(self):
+        super().__init__(channel_last=True)
+
+    def pattern_match(self, model, node):
+        ### New implementation - subgraph pattern matching
+        if node.op_type == "FuncLayerNorm":
+            input_names = node.input
+            output_names = node.output
+            return extract_subgraph(model, input_names, output_names)
+        else:
+            return None
+        ### Old implementation - bool output, only supports single-node patterns
+        # return node.op_type == "FuncLayerNorm"
+    
+    # Verify input node parameters meet HW restrictions
+    def verify_pattern_graph(self, model, node):
+        # Check if attributes meet criteria
+        shape_in = model.get_tensor_shape(node.input[0])
+        norm_axis = helper.get_node_attr_value(node, "axis")
+        assert (norm_axis == -1 or norm_axis == len(shape_in)-1), \
+            f'{node}: attribute "axis" is restricted to -1 or len(shape_in).'
+
+    def gen_hw_custom_op(self, model, node, config):
+        # Get tensors
+        act_in = node.input[0]
+        act_out = node.output[0]
+        # Get attributes
+        ifm_dim = model.get_tensor_shape(act_in)
+        epsilon = helper.get_node_attr_value(node, "epsilon")
+        idt = model.get_tensor_datatype(act_in).name
+        odt = model.get_tensor_datatype(act_out).name
+        # Generate node
+        return helper.make_node(
+            "LayerNorm",
+            [act_in],
+            [act_out],
+            domain="finn.custom_op.hw",
+            backend="fpgadataflow",
+            SIMD=1,
+            ifm_dim=ifm_dim,
+            epsilon=epsilon,
+            inputDataType=idt,
+            outputDataType=odt,
+            rtlsim_backend="pyxsi",
+            name="LayerNorm_" + node.name,
+        )
+
+
+class InferThresholdingLayer(InferHWCustomOp):
+    """Convert any MultiThreshold into a standalone thresholding HLS layer."""
+
+    def __init__(self):
+        super().__init__(channel_last=True)
+
+    def pattern_match(self, model, node):
+        match = node.op_type == "MultiThreshold"
+        # Skip if input is float
+        idt = model.get_tensor_datatype(node.input[0])
+        match &= idt.is_integer()
+        return match
+
+    def verify_pattern_graph(self, model, node):
+        tdt = model.get_tensor_datatype(node.input[1])
+        assert tdt.is_integer(), (
+            node.name
+            + """: MultiThreshold cannot be converted because thresholds are float 
+            type. Input data type is integer, please run RoundAndClipThresholds to
+            convert thresholds to integer."""
+        )
+        scale = getCustomOp(node).get_nodeattr("out_scale")
+        assert scale == 1.0, (
+            node.name + ": MultiThreshold out_scale must be 1 for HLS conversion."
+        )
+        actval = getCustomOp(node).get_nodeattr("out_bias")
+        assert int(actval) == actval, (
+            node.name + ": MultiThreshold out_bias must be integer for HLS conversion."
+        )
+        # A signed activation should always have a negative bias,
+        # but BIPOLAR uses the -1 as 0 encoding so the assert does not apply
+        odt = model.get_tensor_datatype(node.output[0]).name
+        if odt != DataType["BIPOLAR"]:
+            assert (not odt.signed()) or (actval < 0), (
+                node.name + ": Signed output requires actval < 0"
+            )
+
+    def gen_hw_custom_op(self, model, node, config):
+        # Get tensors
+        act_in = node.input[0]
+        threshold = node.input[1]
+        act_out = node.output[0]
+        # Get attributes
+        shape_in = model.get_tensor_shape(act_in)
+        ifc = shape_in[-1]
+        pe = 1
+        numSteps = model.get_tensor_shape(threshold)[1]
+        idt = model.get_tensor_datatype(act_in).name
+        wdt = model.get_tensor_datatype(threshold).name
+        odt = model.get_tensor_datatype(act_out).name
+        numInputVectors = list(shape_in[:-1])
+        actval = int(getCustomOp(node).get_nodeattr("out_bias"))
+        # Generate node
+        return helper.make_node(
+            "Thresholding",
+            [act_in, threshold],
+            [act_out],
+            domain="finn.custom_op.hw",
+            backend="fpgadataflow",
+            NumChannels=ifc,
+            PE=pe,
+            numSteps=numSteps,
+            inputDataType=idt,
+            weightDataType=wdt,
+            outputDataType=odt,
+            numInputVectors=numInputVectors,
+            ActVal=actval,
+            name="Thresholding_" + node.name,
+        )
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class InferConvInpGen(Transformation):
@@ -2119,145 +2401,4 @@ class InferQuantAsFloat2Int(Transformation):
         # Return the transformed model and indicate whether the graph actually
         # has been transformed
         return model, graph_modified
-
-
-class InferLayerNorm(Transformation):
-    """Convert LayerNorm into HW, only norming over channel dim"""
-    def apply(self, model):
-        graph = model.graph
-        node_ind = 0
-        graph_modified = False
-        for node in graph.node:
-            node_ind += 1
-            if node.op_type == "FuncLayerNorm":
-                act_in = node.input[0]
-                act_out = node.output[0]
-                # Get any shape info that needs reuse
-                shape_in = model.get_tensor_shape(act_in)
-                # Get datatypes
-                idt = model.get_tensor_datatype(act_in)
-                odt = model.get_tensor_datatype(act_out)
-
-                norm_axis = helper.get_node_attr_value(node, "axis")
-                if model.get_tensor_layout(act_in) == DataLayout.NCHW:
-                    act_in = nchw_to_nhwc(act_in, model, node_ind)
-                    node_ind += 1
-                    shape_in = model.get_tensor_shape(act_in)
-                    # shift axis for norm appropriately
-                    norm_axis = (norm_axis+2)%4
-                ch = shape_in[-1]
-
-                # keep track of where we need to insert the HLS Op
-                # it has to be ahead of the output transform
-                insert_point = node_ind
-                if model.get_tensor_layout(act_out) == DataLayout.NCHW:
-                    act_out = nchw_to_nhwc(act_out, model, node_ind, reverse=True)
-                    node_ind += 1
-
-                # Check if 1D, norming on channel axis
-                if not (norm_axis == -1 or norm_axis == len(shape_in)-1):
-                    continue
-
-                # create node with no parallelization first
-                simd = 1
-                assert ch % simd == 0, "Requirement IFC divisable by PE is violated."
-                # create and insert nodes
-                new_node = helper.make_node(
-                    "LayerNorm",
-                    [act_in],
-                    [act_out],
-                    domain="finn.custom_op.fpgadataflow",
-                    backend="fpgadataflow",
-                    SIMD=simd,
-                    ifm_dim=shape_in,
-                    epsilon=helper.get_node_attr_value(node, "epsilon"),
-                    inputDataType=idt.name,
-                    outputDataType=odt.name,
-                    # rtlsim_backend="pyxsi",
-                    name="LayerNorm_" + node.name,
-                )
-                graph.node.insert(insert_point, new_node)
-                # remove old node
-                graph.node.remove(node)
-                graph_modified = True
-
-        if graph_modified:
-            model = model.transform(InferShapes())
-            model = model.transform(InferDataTypes())
-
-        return (model, graph_modified)
-
-
-
-
-class InferRMSNorm(Transformation):
-    """Convert RMSNorm into HW, only norming over channel dim"""
-    def apply(self, model):
-        graph = model.graph
-        node_ind = 0
-        graph_modified = False
-        for node in graph.node:
-            node_ind += 1
-            if node.op_type == "SimplifiedLayerNormalization ":
-                act_in = node.input[0]
-                act_out = node.output[0]
-                # Get any shape info that needs reuse
-                shape_in = model.get_tensor_shape(act_in)
-                # Get datatypes
-                idt = model.get_tensor_datatype(act_in)
-                odt = model.get_tensor_datatype(act_out)
-                
-                # Weight & bias should be stripped out
-                if node.input[1] is not None or node.input[2] is not None:
-                    continue
-
-                # check layout of inputs/outputs, and convert if needed
-                # check layout and convert if necessary
-                norm_axis = node.get_nodeattr("axis")
-                if model.get_tensor_layout(act_in) == DataLayout.NCHW:
-                    act_in = nchw_to_nhwc(act_in, model, node_ind)
-                    node_ind += 1
-                    shape_in = model.get_tensor_shape(act_in)
-                    # shift axis for norm appropriately
-                    norm_axis = (norm_axis+2)%4
-                ch = shape_in[-1]
-
-                # keep track of where we need to insert the HLS Op
-                # it has to be ahead of the output transform
-                insert_point = node_ind
-                if model.get_tensor_layout(act_out) == DataLayout.NCHW:
-                    act_out = nchw_to_nhwc(act_out, model, node_ind, reverse=True)
-                    node_ind += 1
-
-                # Check if 1D, norming on channel axis
-                if not (norm_axis == -1 or norm_axis == len(shape_in)-1):
-                    continue
-
-                # create node with no parallelization first
-                simd = 1
-                assert ch % simd == 0, "Requirement IFC divisable by PE is violated."
-                # create and insert nodes
-                new_node = helper.make_node(
-                    "RMSNorm",
-                    [act_in],
-                    [act_out],
-                    domain="finn.custom_op.fpgadataflow",
-                    backend="fpgadataflow",
-                    SIMD=simd,
-                    ifm_dim=shape_in,
-                    epsilon=node.get_nodeattr("epsilon"),
-                    inputDataType=idt.name,
-                    outputDataType=odt.name,
-                    name="RMSNorm_" + node.name,
-                )
-                graph.node.insert(insert_point, new_node)
-                # remove old node
-                graph.node.remove(node)
-                graph_modified = True
-
-        if graph_modified:
-            model = model.transform(InferShapes())
-            model = model.transform(InferDataTypes())
-
-        return (model, graph_modified)
 

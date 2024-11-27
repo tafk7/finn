@@ -47,7 +47,8 @@ class ExpandNorms(Transformation):
                     axis=axis,
                     epsilon=epsilon,
                     InputDataType=in_dtype.name,
-                    OutputDataType=out_dtype.name
+                    OutputDataType=out_dtype.name,
+                    name="FuncLayerNorm_" + node.name,
                 )
 
                 # Get scale, eliminate if all ones
@@ -59,7 +60,12 @@ class ExpandNorms(Transformation):
                     # Update previous output tensor
                     func_ln_node.output[0] = scale_act_in.name
                     # Create Mul node to replace scale
-                    mul_node = oh.make_node("Mul", [scale_act_in.name, scale], [act_out])
+                    mul_node = oh.make_node(
+                        "Mul", 
+                        [scale_act_in.name, scale],
+                        [act_out],
+                        name="Mul_Scale_" + node.name
+                    )
 
                 # Check if optional bias exists
                 has_bias = bias is not None
@@ -73,7 +79,12 @@ class ExpandNorms(Transformation):
                     else:
                         func_ln_node.output[0] = scale_act_in.name
                     # Create Add node to replace bias
-                    add_node = oh.make_node("Add", [bias_act_in.name, bias], [act_out])
+                    add_node = oh.make_node(
+                        "Add",
+                        [bias_act_in.name, bias],
+                        [act_out],
+                        name="Add_Bias_" + node.name
+                    )
 
                 # Insert new nodes
                 insert_point = node_ind
