@@ -81,7 +81,7 @@ class ExpandNorms(Transformation):
                 if elementwise_affine:
                     insert_point += 1
                     graph.node.insert(insert_point, mul_node)
-                if bias:
+                if has_bias:
                     insert_point += 1
                     graph.node.insert(insert_point, add_node)
                 # Remove old node

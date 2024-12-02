@@ -526,3 +526,8 @@ class HWCustomOp(CustomOp):
         self.set_nodeattr("io_chrc_out", all_txns_out)
         self.set_nodeattr("io_chrc_pads_in", all_pad_in)
         self.set_nodeattr("io_chrc_pads_out", all_pad_out)
+
+    # def pattern_match(self, model, node):
+        
+    # def verify_pattern_graph(self, model, node):
+   
