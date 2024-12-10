@@ -45,7 +45,6 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
     def get_nodeattr_types(self):
         my_attrs = {
             "rtlsim_backend": ("s", True, "pyxsi"),
-            "custom_hls_dir": ("s", False, "layernorm"),
             }
         my_attrs.update(LayerNorm.get_nodeattr_types(self))
         my_attrs.update(HLSBackend.get_nodeattr_types(self))
@@ -96,22 +95,10 @@ class LayerNorm_hls(LayerNorm, HLSBackend):
             f"#pragma HLS dataflow disable_start_propagation",
         ]
 
-
     def execute_node(self, context, graph):
         # Get the configured execution mode
         mode = self.get_nodeattr("exec_mode")
-        # # Lookup table mapping execution modes to implementing methods
-        # exec_fns = {
-        #     "python": self._execute_node_python,
-        #     "cppsim": self._execute_node_cppsim,
-        #     "rtlsim": self._execute_node_rtlsim,
-        # }
-        # # Select and execute the function by mode string
-        # exec_fns[mode](context, graph)
-
         node = self.onnx_node
-        exp_ishape = self.get_normal_input_shape()
-        exp_oshape = self.get_normal_output_shape()
         folded_ishape = self.get_folded_input_shape()
         export_idt = self.get_input_datatype()
 

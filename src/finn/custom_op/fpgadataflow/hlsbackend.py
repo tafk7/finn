@@ -258,7 +258,6 @@ class HLSBackend(ABC):
         builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
         builder.append_includes("-I$FINN_ROOT/deps/cnpy/")
         builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")
-        # builder.append_includes(f"-I$FINN_ROOT/custom_hls/{custom_hls_dir}") # TAFK
         builder.append_includes(f"-I$FINN_ROOT/custom_hls/") # TAFK
         builder.append_includes(f"-I$FINN_ROOT/custom_hls/layernorm") # TAFK
         builder.append_includes("-I{}/include".format(os.environ["HLS_PATH"]))
@@ -344,9 +343,9 @@ class HLSBackend(ABC):
         executable_path = self.get_nodeattr("executable_path")
         if executable_path == "":
             raise Exception(
-                """
-Found no executable for this node, did you run the codegen and
-compilation transformations?
+            """
+            Found no executable for this node, did you run the codegen and
+            compilation transformations?
             """
             )
         process_execute = subprocess.Popen(executable_path, stdout=subprocess.PIPE)

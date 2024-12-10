@@ -101,7 +101,7 @@ class LayerNorm(HWCustomOp):
         assert normal_ishape[-1] % simd == 0, "SIMD must divide into input dimension"
         fold = int(normal_ishape[-1] / simd)
         folded_ishape = normal_ishape[:-1] + [fold, simd]
-        return tuple(folded_ishape)
+        return tuple(normal_ishape)
 
     def get_folded_output_shape(self, ind=0):
         return self.get_folded_input_shape()
