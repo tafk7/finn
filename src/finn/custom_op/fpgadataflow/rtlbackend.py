@@ -31,11 +31,6 @@ from abc import ABC, abstractmethod
 from finn.util.basic import get_rtlsim_trace_depth, make_build_dir
 
 try:
-    from pyverilator import PyVerilator
-except ModuleNotFoundError:
-    PyVerilator = None
-
-try:
     import pyxsi_utils
 except ModuleNotFoundError:
     pyxsi_utils = None
@@ -62,27 +57,8 @@ class RTLBackend(ABC):
         for this node, sets the rtlsim_so attribute to its path and returns
         a PyVerilator wrapper around it."""
 
-        if PyVerilator is None:
-            raise ImportError("Installation of PyVerilator is required.")
-
-        verilog_paths = self.get_verilog_paths()
         rtlsim_backend = self.get_nodeattr("rtlsim_backend")
-        if rtlsim_backend == "pyverilator":
-            if PyVerilator is None:
-                raise ImportError("Installation of PyVerilator is required.")
-            verilog_files = self.get_rtl_file_list(abspath=False)
-
-            # build the Verilator emu library
-            sim = PyVerilator.build(
-                verilog_files,
-                build_dir=make_build_dir("pyverilator_" + self.onnx_node.name + "_"),
-                verilog_path=verilog_paths,
-                trace_depth=get_rtlsim_trace_depth(),
-                top_module_name=self.get_nodeattr("gen_top_module"),
-            )
-            # save generated lib filename in attribute
-            self.set_nodeattr("rtlsim_so", sim.lib._name)
-        elif rtlsim_backend == "pyxsi":
+        if rtlsim_backend == "pyxsi":
             verilog_files = self.get_rtl_file_list(abspath=True)
             single_src_dir = make_build_dir("rtlsim_" + self.onnx_node.name + "_")
             ret = pyxsi_utils.compile_sim_obj(

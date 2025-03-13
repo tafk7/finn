@@ -28,7 +28,6 @@
 
 import numpy as np
 import os
-from pyverilator.util.axi_utils import reset_rtlsim, rtlsim_multi_io
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.util.basic import (
@@ -36,15 +35,9 @@ from finn.util.basic import (
     get_vivado_root,
     launch_process_helper,
     make_build_dir,
-    pyverilate_get_liveness_threshold_cycles,
+    rtlsim_get_liveness_threshold_cycles,
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
-from finn.util.pyverilator import pyverilate_stitched_ip
-
-try:
-    from pyverilator import PyVerilator
-except ModuleNotFoundError:
-    PyVerilator = None
 
 try:
     import pyxsi_utils
@@ -142,7 +135,7 @@ def rtlsim_exec_cppxsi(
     The postproc_cpp optional argument can be used to inject C++ code to retrieve
     extra data when the simulation is finished. See the @POSTPROC_CPP@ template argument
     in the xsi_simdriver.cpp file to see what context and functions are available.
-    If timeout_cycles is not None, the default value from pyverilate_get_liveness_threshold_cycles
+    If timeout_cycles is not None, the default value from rtlsim_get_liveness_threshold_cycles
     will be used.
     throttle_cycles will be used to pause the input stream every time an input frame is finished.
     """
@@ -150,7 +143,7 @@ def rtlsim_exec_cppxsi(
     # TODO: support running with multiple inputs/outputs
     # TODO: rename utility fxn to remove "pyverilate", used for other backends too
     if timeout_cycles is None:
-        timeout_cycles = pyverilate_get_liveness_threshold_cycles()
+        timeout_cycles = rtlsim_get_liveness_threshold_cycles()
 
     assert dummy_data_mode, "Only dummy_data_mode=True is supported for now"
 
@@ -384,72 +377,13 @@ def rtlsim_exec_pyxsi(model, execution_context, pre_hook=None, post_hook=None):
         io_dict,
         num_out_values,
         sname="_",
-        liveness_threshold=pyverilate_get_liveness_threshold_cycles(),
+        liveness_threshold=rtlsim_get_liveness_threshold_cycles(),
     )
     if post_hook is not None:
         post_hook(sim)
     # important to call close_rtlsim for pyxsi to flush traces and stop
     # the RPC server process
     pyxsi_utils.close_rtlsim(sim)
-
-    # unpack outputs and put back into execution context
-    for o, o_vi in enumerate(model.graph.output):
-        o_name = o_vi.name
-        if_name = if_dict["m_axis"][o][0]
-        o_stream_w, o_dt, o_folded_shape, o_shape = o_tensor_info[o]
-        packed_output = io_dict["outputs"][if_name]
-        o_folded_tensor = rtlsim_output_to_npy(
-            packed_output, None, o_dt, o_folded_shape, o_stream_w, o_dt.bitwidth()
-        )
-        execution_context[o_name] = o_folded_tensor.reshape(o_shape)
-
-    model.set_metadata_prop("cycles_rtlsim", str(n_cycles))
-
-
-def rtlsim_exec_pyverilator(model, execution_context, pre_hook=None, post_hook=None):
-    if PyVerilator is None:
-        raise ImportError("Installation of PyVerilator is required.")
-    # ensure stitched ip project already exists
-    assert os.path.isfile(
-        model.get_metadata_prop("wrapper_filename")
-    ), """The
-    file name from metadata property "wrapper_filename" doesn't exist."""
-    assert os.path.isdir(
-        model.get_metadata_prop("vivado_stitch_proj")
-    ), """The
-    directory from metadata property "vivado_stitch_proj" doesn't exist"""
-    trace_file = model.get_metadata_prop("rtlsim_trace")
-    if trace_file is None:
-        trace_file = ""
-    extra_verilator_args = model.get_metadata_prop("extra_verilator_args")
-    if extra_verilator_args is None:
-        extra_verilator_args = []
-    else:
-        extra_verilator_args = eval(extra_verilator_args)
-    io_dict, if_dict, num_out_values, o_tensor_info = prep_rtlsim_io_dict(model, execution_context)
-
-    # prepare pyverilator model
-    rtlsim_so = model.get_metadata_prop("rtlsim_so")
-    if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
-        sim = pyverilate_stitched_ip(model, extra_verilator_args=extra_verilator_args)
-        model.set_metadata_prop("rtlsim_so", sim.lib._name)
-    else:
-        sim = PyVerilator(rtlsim_so, auto_eval=False)
-
-    # reset and call rtlsim, including any pre/post hooks
-    reset_rtlsim(sim)
-    if pre_hook is not None:
-        pre_hook(sim)
-    n_cycles = rtlsim_multi_io(
-        sim,
-        io_dict,
-        num_out_values,
-        trace_file=trace_file,
-        sname="_",
-        liveness_threshold=pyverilate_get_liveness_threshold_cycles(),
-    )
-    if post_hook is not None:
-        post_hook(sim)
 
     # unpack outputs and put back into execution context
     for o, o_vi in enumerate(model.graph.output):
@@ -475,9 +409,7 @@ def rtlsim_exec(model, execution_context, pre_hook=None, post_hook=None):
     - post_hook : hook function to be called after sim end
     """
     backend = model.get_metadata_prop("rtlsim_backend")
-    if backend == "pyverilator":
-        rtlsim_exec_pyverilator(model, execution_context, pre_hook, post_hook)
-    elif backend == "pyxsi" or backend is None:
+    if backend == "pyxsi" or backend is None:
         rtlsim_exec_pyxsi(model, execution_context, pre_hook, post_hook)
     else:
         assert False, f"Unrecognized rtlsim_backend value: {backend}"

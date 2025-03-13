@@ -30,16 +30,10 @@ import numpy as np
 import os
 import warnings
 from abc import abstractmethod
-from pyverilator.util.axi_utils import rtlsim_multi_io
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import roundup_to_integer_multiple
 
-from finn.util.basic import pyverilate_get_liveness_threshold_cycles
-
-try:
-    from pyverilator import PyVerilator
-except ModuleNotFoundError:
-    PyVerilator = None
+from finn.util.basic import rtlsim_get_liveness_threshold_cycles
 
 try:
     import pyxsi_utils
@@ -72,7 +66,7 @@ class HWCustomOp(CustomOp):
             "res_estimate": ("s", False, ""),
             "res_synth": ("s", False, ""),
             "rtlsim_so": ("s", False, ""),
-            "rtlsim_backend": ("s", False, "pyxsi", {"pyverilator", "pyxsi"}),
+            "rtlsim_backend": ("s", False, "pyxsi", {"pyxsi"}),
             # partitioning info
             # ID of SLR to which the Op is attached in Vitis builds
             # Set to -1 as 'don't care'
@@ -133,17 +127,13 @@ class HWCustomOp(CustomOp):
         return intf_names
 
     def get_rtlsim(self):
-        """Return a PyVerilator wrapper for the Verilator emulation library
-        for this node."""
+        """Return a pyxsi wrapper for xsim simluation for this node."""
 
         rtlsim_so = self.get_nodeattr("rtlsim_so")
         assert os.path.isfile(rtlsim_so), "Cannot find rtlsim library."
         rtlsim_backend = self.get_nodeattr("rtlsim_backend")
 
-        if rtlsim_backend == "pyverilator":
-            # create PyVerilator wrapper
-            sim = PyVerilator(rtlsim_so)
-        elif rtlsim_backend == "pyxsi":
+        if rtlsim_backend == "pyxsi":
             sim_base, sim_rel = rtlsim_so.split("xsim.dir")
             sim_rel = "xsim.dir" + sim_rel
             # pass in correct tracefile from attribute
@@ -160,10 +150,7 @@ class HWCustomOp(CustomOp):
         "Close and free up resources for rtlsim."
         rtlsim_backend = self.get_nodeattr("rtlsim_backend")
 
-        if rtlsim_backend == "pyverilator":
-            # no action needed
-            pass
-        elif rtlsim_backend == "pyxsi":
+        if rtlsim_backend == "pyxsi":
             pyxsi_utils.close_rtlsim(sim)
         else:
             assert False, "Unknown rtlsim_backend"
@@ -224,26 +211,17 @@ class HWCustomOp(CustomOp):
         return {}
 
     def reset_rtlsim(self, sim):
-        """Sets reset input in pyverilator to zero, toggles the clock and set it
-        back to one"""
+        """Sets reset pyxsi instance: inputs and clock"""
         rtlsim_backend = self.get_nodeattr("rtlsim_backend")
-        if rtlsim_backend == "pyverilator":
-            sim.io.ap_rst_n = 0
-            sim.io.ap_clk = 1
-            sim.io.ap_clk = 0
-            sim.io.ap_rst_n = 1
-        elif rtlsim_backend == "pyxsi":
+        if rtlsim_backend == "pyxsi":
             pyxsi_utils.reset_rtlsim(sim)
         else:
             assert False, f"Unknown rtlsim_backend {rtlsim_backend}"
 
     def toggle_clk(self, sim):
-        """Toggles the clock input in pyverilator once."""
+        """Toggles the clock input in pyxsi once."""
         rtlsim_backend = self.get_nodeattr("rtlsim_backend")
-        if rtlsim_backend == "pyverilator":
-            sim.io.ap_clk = 1
-            sim.io.ap_clk = 0
-        elif rtlsim_backend == "pyxsi":
+        if rtlsim_backend == "pyxsi":
             pyxsi_utils.toggle_clk(sim)
         else:
             assert False, f"Unknown rtlsim_backend {rtlsim_backend}"
@@ -254,25 +232,13 @@ class HWCustomOp(CustomOp):
         sname = "_" + self.hls_sname() + "_"
         rtlsim_backend = self.get_nodeattr("rtlsim_backend")
         num_out_values = self.get_number_output_values()
-        if rtlsim_backend == "pyverilator":
-            trace_file = self.get_nodeattr("rtlsim_trace")
-            if trace_file == "default":
-                trace_file = self.onnx_node.name + ".vcd"
-            total_cycle_count = rtlsim_multi_io(
-                sim,
-                io_dict,
-                num_out_values,
-                trace_file=trace_file,
-                sname=sname,
-                liveness_threshold=pyverilate_get_liveness_threshold_cycles(),
-            )
-        elif rtlsim_backend == "pyxsi":
+        if rtlsim_backend == "pyxsi":
             total_cycle_count = pyxsi_utils.rtlsim_multi_io(
                 sim,
                 io_dict,
                 num_out_values,
                 sname=sname,
-                liveness_threshold=pyverilate_get_liveness_threshold_cycles(),
+                liveness_threshold=rtlsim_get_liveness_threshold_cycles(),
                 hook_postclk=hook_postclk,
             )
         else:

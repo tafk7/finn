@@ -139,7 +139,7 @@ def get_vivado_root():
         )
 
 
-def pyverilate_get_liveness_threshold_cycles():
+def rtlsim_get_liveness_threshold_cycles():
     """Return the number of no-output cycles rtlsim will wait before assuming
     the simulation is not finishing and throwing an exception."""
 

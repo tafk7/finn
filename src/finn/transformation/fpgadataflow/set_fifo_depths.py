@@ -49,7 +49,6 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
-from finn.util.pyverilator import verilator_fifosim
 
 
 def reset_implementation(node):
@@ -428,9 +427,7 @@ class InsertAndSetFIFODepths(Transformation):
         else:
             throttle_cycles = 0
 
-        if backend in ["verilator", "pyverilator"]:
-            sim = verilator_fifosim(model, n_inferences, max_iters=max_iters)
-        elif backend is None or backend in ["xsi", "pyxsi"]:
+        if backend is None or backend in ["xsi", "pyxsi"]:
             sim = xsi_fifosim(
                 model, n_inferences, max_iters=max_iters, throttle_cycles=throttle_cycles
             )
