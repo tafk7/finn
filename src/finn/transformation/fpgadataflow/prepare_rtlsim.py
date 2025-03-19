@@ -35,11 +35,6 @@ from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
 )
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 
-try:
-    from pyverilator import PyVerilator
-except ModuleNotFoundError:
-    PyVerilator = None
-
 
 class PrepareRTLSim(NodeLocalTransformation):
     """For a graph with generated RTL sources (after HLSSynthIP), create a
