@@ -1,0 +1,15 @@
+# Core dependencies for extensible parallelism system
+numpy>=1.19.0
+typing-extensions>=4.0.0
+
+# Development dependencies
+pytest>=6.0.0
+pytest-cov>=2.10.0
+black>=21.0.0
+flake8>=3.8.0
+mypy>=0.812
+
+# Optional dependencies for advanced features
+scipy>=1.7.0  # For optimization algorithms
+matplotlib>=3.3.0  # For visualization
+networkx>=2.5  # For graph-based analysis
