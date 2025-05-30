@@ -1,0 +1,256 @@
+#!/bin/bash
+# FINN Container Management Script
+# Provides utilities for managing persistent FINN containers
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+gecho () { echo -e "${GREEN}$1${NC}"; }
+recho () { echo -e "${RED}$1${NC}"; }
+yecho () { echo -e "${YELLOW}$1${NC}"; }
+becho () { echo -e "${BLUE}$1${NC}"; }
+
+SCRIPT=$(readlink -f "$0")
+SCRIPTPATH=$(dirname "$SCRIPT")
+DOCKER_UNAME=$(id -un)
+DOCKER_INST_NAME="finn_dev_${DOCKER_UNAME}"
+DOCKER_INST_NAME=$(echo "$DOCKER_INST_NAME" | tr '[:upper:]' '[:lower:]')
+
+# Default values (same as run-docker.sh)
+: ${FINN_HOST_BUILD_DIR="/tmp/$DOCKER_INST_NAME"}
+: ${FINN_DEPS_DIR="$SCRIPTPATH/deps"}
+: ${FINN_DOCKER_TAG="xilinx/finn:$(OLD_PWD=$(pwd); cd $SCRIPTPATH; git describe --always --tags --dirty; cd $OLD_PWD).xrt_202220.2.14.354_22.04-amd64-xrt"}
+
+show_help() {
+    cat << EOF
+FINN Container Management
+
+Usage: $0 [COMMAND] [OPTIONS]
+
+Commands:
+    start [MODE]    Start a persistent FINN container
+                   MODE: interactive (default), daemon
+    stop           Stop the running container
+    restart        Restart the container
+    status         Show container status
+    exec CMD       Execute command in running container (quick mode)
+    shell          Open an interactive shell in running container
+    logs           Show container logs
+    cleanup        Remove stopped container and cleanup
+    help           Show this help
+
+Examples:
+    $0 start              # Start interactive container
+    $0 start daemon       # Start container in background
+    $0 exec "python -c 'import finn; print(finn.__version__)'"
+    $0 shell              # Get interactive shell
+    $0 stop               # Stop container
+
+Environment Variables:
+    FINN_DOCKER_TAG       Docker image tag to use
+    FINN_HOST_BUILD_DIR   Host build directory
+    FINN_QUICK_EXEC       Set to 1 to skip environment setup for exec
+EOF
+}
+
+get_container_status() {
+    docker inspect "$DOCKER_INST_NAME" >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        STATUS=$(docker inspect --format='{{.State.Status}}' "$DOCKER_INST_NAME")
+        echo "$STATUS"
+    else
+        echo "not_found"
+    fi
+}
+
+is_container_running() {
+    STATUS=$(get_container_status)
+    [ "$STATUS" = "running" ]
+}
+
+start_container() {
+    MODE=${1:-interactive}
+    
+    STATUS=$(get_container_status)
+    
+    if [ "$STATUS" = "running" ]; then
+        gecho "Container $DOCKER_INST_NAME is already running"
+        return 0
+    elif [ "$STATUS" = "exited" ]; then
+        gecho "Starting existing container $DOCKER_INST_NAME"
+        docker start "$DOCKER_INST_NAME"
+        return $?
+    fi
+    
+    gecho "Creating new container $DOCKER_INST_NAME"
+    
+    # Source the original run-docker.sh configuration
+    source "$SCRIPTPATH/run-docker.sh" --get-config 2>/dev/null || {
+        # Fallback: basic configuration
+        DOCKER_UID=$(id -u)
+        DOCKER_GID=$(id -g)
+        FINN_DOCKER_EXTRA=""
+        mkdir -p "$FINN_HOST_BUILD_DIR"
+    }
+    
+    # Build docker run command with persistent container
+    DOCKER_CMD_BASE="docker run -d --name $DOCKER_INST_NAME --init --hostname $DOCKER_INST_NAME"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -e SHELL=/bin/bash"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -w $SCRIPTPATH"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -v $SCRIPTPATH:$SCRIPTPATH"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -v $FINN_HOST_BUILD_DIR:$FINN_HOST_BUILD_DIR"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -v $FINN_DEPS_DIR:$FINN_DEPS_DIR"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -e FINN_BUILD_DIR=$FINN_HOST_BUILD_DIR"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -e FINN_ROOT=$SCRIPTPATH"
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE -e FINN_DEPS_DIR=$FINN_DEPS_DIR"
+    
+    # Add user mapping for non-root execution
+    if [ "$FINN_DOCKER_RUN_AS_ROOT" != "1" ]; then
+        DOCKER_CMD_BASE="$DOCKER_CMD_BASE -v /etc/group:/etc/group:ro"
+        DOCKER_CMD_BASE="$DOCKER_CMD_BASE -v /etc/passwd:/etc/passwd:ro"
+        DOCKER_CMD_BASE="$DOCKER_CMD_BASE --user $DOCKER_UID:$DOCKER_GID"
+    fi
+    
+    # Add any extra docker options
+    DOCKER_CMD_BASE="$DOCKER_CMD_BASE $FINN_DOCKER_EXTRA"
+    
+    if [ "$MODE" = "interactive" ]; then
+        DOCKER_CMD_BASE="$DOCKER_CMD_BASE -it"
+        DOCKER_CMD="$DOCKER_CMD_BASE $FINN_DOCKER_TAG bash"
+        gecho "Starting interactive container..."
+        exec $DOCKER_CMD
+    else
+        # Daemon mode - keep container running with tail
+        DOCKER_CMD="$DOCKER_CMD_BASE $FINN_DOCKER_TAG tail -f /dev/null"
+        gecho "Starting daemon container..."
+        $DOCKER_CMD
+    fi
+}
+
+stop_container() {
+    if is_container_running; then
+        gecho "Stopping container $DOCKER_INST_NAME"
+        docker stop "$DOCKER_INST_NAME"
+    else
+        yecho "Container $DOCKER_INST_NAME is not running"
+    fi
+}
+
+restart_container() {
+    stop_container
+    sleep 2
+    start_container daemon
+}
+
+show_status() {
+    STATUS=$(get_container_status)
+    case "$STATUS" in
+        "running")
+            gecho "Container $DOCKER_INST_NAME is running"
+            docker ps --filter "name=$DOCKER_INST_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            ;;
+        "exited")
+            yecho "Container $DOCKER_INST_NAME exists but is stopped"
+            ;;
+        "not_found")
+            recho "Container $DOCKER_INST_NAME does not exist"
+            ;;
+        *)
+            yecho "Container $DOCKER_INST_NAME status: $STATUS"
+            ;;
+    esac
+}
+
+exec_in_container() {
+    if ! is_container_running; then
+        recho "Container $DOCKER_INST_NAME is not running. Start it first with: $0 start daemon"
+        return 1
+    fi
+    
+    if [ $# -eq 0 ]; then
+        recho "No command specified for exec"
+        return 1
+    fi
+    
+    # Build command with proper quoting
+    CMD=""
+    for arg in "$@"; do
+        if [ -z "$CMD" ]; then
+            CMD="$arg"
+        else
+            CMD="$CMD $arg"
+        fi
+    done
+    
+    # Quick exec mode - skip heavy environment setup
+    if [ "$FINN_QUICK_EXEC" = "1" ]; then
+        docker exec "$DOCKER_INST_NAME" bash -c "source /tmp/.finn_env_setup_complete 2>/dev/null; $CMD"
+    else
+        docker exec "$DOCKER_INST_NAME" bash -c "source /usr/local/bin/finn_setup_env.sh; $CMD"
+    fi
+}
+
+open_shell() {
+    if ! is_container_running; then
+        recho "Container $DOCKER_INST_NAME is not running. Start it first with: $0 start daemon"
+        return 1
+    fi
+    
+    gecho "Opening shell in container $DOCKER_INST_NAME"
+    docker exec -it "$DOCKER_INST_NAME" bash -c "source /usr/local/bin/finn_setup_env.sh; bash"
+}
+
+show_logs() {
+    docker logs "$DOCKER_INST_NAME" "$@"
+}
+
+cleanup_container() {
+    STATUS=$(get_container_status)
+    if [ "$STATUS" != "not_found" ]; then
+        gecho "Removing container $DOCKER_INST_NAME"
+        docker rm -f "$DOCKER_INST_NAME"
+    else
+        yecho "Container $DOCKER_INST_NAME does not exist"
+    fi
+}
+
+# Main command handling
+case "${1:-help}" in
+    "start")
+        start_container "$2"
+        ;;
+    "stop")
+        stop_container
+        ;;
+    "restart")
+        restart_container
+        ;;
+    "status")
+        show_status
+        ;;
+    "exec")
+        shift
+        exec_in_container "$@"
+        ;;
+    "shell")
+        open_shell
+        ;;
+    "logs")
+        shift
+        show_logs "$@"
+        ;;
+    "cleanup")
+        cleanup_container
+        ;;
+    "help"|"-h"|"--help")
+        show_help
+        ;;
+    *)
+        recho "Unknown command: $1"
+        show_help
+        exit 1
+        ;;
+esac

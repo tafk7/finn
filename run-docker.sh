@@ -95,6 +95,8 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 : ${FINN_SKIP_XRT_DOWNLOAD=""}
 : ${FINN_XRT_PATH=""}
 : ${FINN_DOCKER_NO_CACHE="0"}
+: ${FINN_DOCKER_PERSISTENT="0"}
+: ${FINN_LIGHTWEIGHT_ENTRYPOINT="0"}
 
 DOCKER_INTERACTIVE=""
 
@@ -189,7 +191,11 @@ fi
 # Launch container with current directory mounted
 # important to pass the --init flag here for correct Vivado operation, see:
 # https://stackoverflow.com/questions/55733058/vivado-synthesis-hangs-in-docker-container-spawned-by-jenkins
-DOCKER_BASE="docker run -t --rm $DOCKER_INTERACTIVE --tty --init --hostname $DOCKER_INST_NAME "
+if [ "$FINN_DOCKER_PERSISTENT" = "1" ]; then
+  DOCKER_BASE="docker run --name $DOCKER_INST_NAME --init --hostname $DOCKER_INST_NAME "
+else
+  DOCKER_BASE="docker run -t --rm $DOCKER_INTERACTIVE --tty --init --hostname $DOCKER_INST_NAME "
+fi
 DOCKER_EXEC="-e SHELL=/bin/bash "
 DOCKER_EXEC+="-w $SCRIPTPATH "
 DOCKER_EXEC+="-v $SCRIPTPATH:$SCRIPTPATH "
@@ -273,15 +279,22 @@ fi
 
 DOCKER_EXEC+="$FINN_DOCKER_EXTRA "
 
+# Choose entrypoint based on lightweight setting
+if [ "$FINN_LIGHTWEIGHT_ENTRYPOINT" = "1" ]; then
+  ENTRYPOINT_SCRIPT="/usr/local/bin/finn_entrypoint_light.sh"
+else
+  ENTRYPOINT_SCRIPT="/usr/local/bin/finn_entrypoint.sh"
+fi
+
 if [ -z "$FINN_SINGULARITY" ];then
-  CMD_TO_RUN="$DOCKER_BASE $DOCKER_EXEC $FINN_DOCKER_TAG $DOCKER_CMD"
+  CMD_TO_RUN="$DOCKER_BASE $DOCKER_EXEC $FINN_DOCKER_TAG $ENTRYPOINT_SCRIPT $DOCKER_CMD"
 else
   SINGULARITY_BASE="singularity exec"
   # Replace command options for Singularity
   SINGULARITY_EXEC="${DOCKER_EXEC//"-e "/"--env "}"
   SINGULARITY_EXEC="${SINGULARITY_EXEC//"-v "/"-B "}"
   SINGULARITY_EXEC="${SINGULARITY_EXEC//"-w "/"--pwd "}"
-  CMD_TO_RUN="$SINGULARITY_BASE $SINGULARITY_EXEC $FINN_SINGULARITY /usr/local/bin/finn_entrypoint.sh $DOCKER_CMD"
+  CMD_TO_RUN="$SINGULARITY_BASE $SINGULARITY_EXEC $FINN_SINGULARITY $ENTRYPOINT_SCRIPT $DOCKER_CMD"
   gecho "FINN_SINGULARITY is set, launching Singularity container instead of Docker"
 fi
 
