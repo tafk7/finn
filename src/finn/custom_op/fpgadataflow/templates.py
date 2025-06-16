@@ -27,8 +27,58 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# template for single node execution
-docompute_template = """
+# Enhanced templates using flexible template engine
+import os
+import logging
+from finn.util.flexible_hls import FINNTemplateEngine, FINNTemplateType
+
+logger = logging.getLogger(__name__)
+
+# Initialize template engine with FINN template paths
+def _get_template_engine():
+    """Get configured template engine for FINN templates."""
+    current_dir = os.path.dirname(__file__)
+    flexible_hls_dir = os.path.join(current_dir, "..", "..", "util", "flexible_hls")
+    template_paths = [
+        os.path.join(flexible_hls_dir, "templates", "finn"),
+        os.path.join(flexible_hls_dir, "templates", "base")
+    ]
+    return FINNTemplateEngine(template_paths)
+
+# Global template engine instance
+_template_engine = None
+
+def get_template_engine():
+    """Get the global template engine instance."""
+    global _template_engine
+    if _template_engine is None:
+        _template_engine = _get_template_engine()
+    return _template_engine
+
+# Template rendering functions for backward compatibility
+def render_docompute_template(variables):
+    """Render docompute template with variables."""
+    engine = get_template_engine()
+    return engine.render_template("docompute", variables, FINNTemplateType.DOCOMPUTE)
+
+def render_docompute_template_timeout(variables):
+    """Render docompute timeout template with variables."""
+    engine = get_template_engine()
+    return engine.render_template("docompute_timeout", variables, FINNTemplateType.DOCOMPUTE_TIMEOUT)
+
+def render_ipgen_template(variables):
+    """Render ipgen template with variables."""
+    engine = get_template_engine()
+    return engine.render_template("ipgen_cpp", variables, FINNTemplateType.IPGEN_CPP)
+
+def render_ipgentcl_template(variables):
+    """Render ipgen tcl template with variables."""
+    engine = get_template_engine()
+    return engine.render_template("ipgen_tcl", variables, FINNTemplateType.IPGEN_TCL)
+
+# Backward compatibility: Keep original template strings as fallbacks
+# These will be used if template engine fails
+_fallback_docompute_template = """
 #define HLS_CONSTEXPR_ENABLE
 #define AP_INT_MAX_W $AP_INT_MAX_W$
 #define HLS_NO_XIL_FPO_LIB
@@ -61,8 +111,7 @@ $SAVEASCNPY$
 
 """
 
-# template for single node execution with timeout (for single clock hls operations)
-docompute_template_timeout = """
+_fallback_docompute_template_timeout = """
 #define AP_INT_MAX_W $AP_INT_MAX_W$
 #include "cnpy.h"
 #include "npy2apintstream.hpp"
@@ -106,11 +155,7 @@ $SAVEASCNPY$
 
 """
 
-
-# templates for single node ip generation
-
-# cpp file
-ipgen_template = """
+_fallback_ipgen_template = """
 #define HLS_CONSTEXPR_ENABLE
 #define AP_INT_MAX_W $AP_INT_MAX_W$
 
@@ -129,8 +174,7 @@ $DOCOMPUTE$
 }
 """
 
-# tcl script for IP generation
-ipgentcl_template = """
+_fallback_ipgentcl_template = """
 set config_proj_name $PROJECTNAME$
 puts "HLS project: $config_proj_name"
 set config_hwsrcdir "$HWSRCDIR$"
@@ -158,6 +202,25 @@ csynth_design
 export_design -format ip_catalog
 exit 0
 """
+
+# Enhanced template properties with fallback mechanism
+class TemplateProperty:
+    """Property that tries template engine first, falls back to static template."""
+    
+    def __init__(self, render_func, fallback_template):
+        self.render_func = render_func
+        self.fallback_template = fallback_template
+    
+    def __get__(self, obj, objtype=None):
+        # For backward compatibility, return the template that can be used
+        # with simple string replacement
+        return self.fallback_template
+
+# Backward compatible template properties
+docompute_template = TemplateProperty(render_docompute_template, _fallback_docompute_template)
+docompute_template_timeout = TemplateProperty(render_docompute_template_timeout, _fallback_docompute_template_timeout)
+ipgen_template = TemplateProperty(render_ipgen_template, _fallback_ipgen_template)
+ipgentcl_template = TemplateProperty(render_ipgentcl_template, _fallback_ipgentcl_template)
 
 ip_package_tcl = """
 ## IP Info
