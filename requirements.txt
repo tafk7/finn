@@ -1,3 +1,4 @@
+# FINN Core Dependencies
 bitstring==4.2.3
 clize==5.0.1
 dataclasses-json==0.5.7
@@ -21,3 +22,21 @@ toposort==1.7.0
 transformers==4.46.3
 vcdvcd==1.0.5
 wget==3.2
+
+# FINN Unified Code Generation Framework Dependencies
+# Template Engine
+Jinja2>=3.0.0
+
+# Testing Framework (enhanced versions for codegen testing)
+pytest>=6.0.0
+pytest-cov>=2.10.0
+
+# Development Tools (optional - for codegen development)
+black>=21.0.0          # Code formatting
+isort>=5.0.0           # Import sorting
+flake8>=3.8.0          # Linting
+mypy>=0.910            # Type checking
+
+# Documentation (optional - for codegen documentation)
+sphinx>=4.0.0          # Documentation generation
+sphinx-rtd-theme>=0.5.0 # RTD theme
