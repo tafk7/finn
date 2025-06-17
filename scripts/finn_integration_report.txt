@@ -1,0 +1,51 @@
+FINN Integration Discovery Report
+==================================================
+
+TEST FILES DISCOVERED
+------------------------------
+Total test files: 96
+Transformation tests: 8
+HLS tests: 1
+Custom operation tests: 0
+FPGA dataflow tests: 42
+
+SAMPLE TEST FILES (first 10):
+  - tests/test_enforce_import_order.py
+  - tests/brevitas/test_brevitas_fc.py
+  - tests/brevitas/test_brevitas_scaled_qhardtanh_export.py
+  - tests/brevitas/test_brevitas_selu_act_export.py
+  - tests/brevitas/test_brevitas_qlinear.py
+  - tests/brevitas/test_brevitas_qconv2d.py
+  - tests/brevitas/test_brevitas_non_scaled_quanthardtanh_export.py
+  - tests/brevitas/test_brevitas_cnv.py
+  - tests/brevitas/test_brevitas_relu_act_export.py
+  - tests/brevitas/test_brevitas_validate_mobilenet.py
+
+FINN OPERATIONS
+------------------------------
+Found operation modules: 57
+Successfully imported: 3
+
+IMPORTABLE OPERATIONS:
+  ✅ finn.custom_op.fpgadataflow.thresholding.Thresholding
+  ✅ finn.custom_op.fpgadataflow.streamingdatawidthconverter.StreamingDataWidthConverter
+  ✅ finn.custom_op.fpgadataflow.addstreams.AddStreams
+
+FINN UTILITIES
+------------------------------
+Found utility modules: 63
+Successfully imported: 6
+
+IMPORTABLE UTILITIES:
+  ✅ finn.util.basic
+  ✅ finn.util.data_packing
+  ✅ finn.util.pytorch
+  ✅ finn.analysis.fpgadataflow
+  ✅ finn.transformation.fpgadataflow
+  ✅ finn.builder
+
+INTEGRATION RECOMMENDATIONS
+------------------------------
+✅ FINN operations are available for codegen integration testing
+✅ Test files are available for robustness validation
+✅ FINN utilities are available for extended testing

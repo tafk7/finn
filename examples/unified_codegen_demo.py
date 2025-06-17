@@ -72,17 +72,31 @@ class DemoHWCustomOp:
     def get_nodeattr_names(self):
         return list(self._node_attrs.keys())
     
-    def get_normal_input_shape(self, input_name):
-        if input_name == "input0":
+    def get_nodeattr_types(self):
+        """Return the types of all node attributes."""
+        return {name: type(value) for name, value in self._node_attrs.items()}
+    
+    def get_normal_input_shape(self, idx):
+        """Get input shape by index."""
+        if idx == 0:  # input0
             return [1, self._node_attrs["MW"]]
-        elif input_name == "weights":
+        elif idx == 1:  # weights
             return [self._node_attrs["MH"], self._node_attrs["MW"]]
         return None
     
-    def get_normal_output_shape(self, output_name):
-        if output_name == "output0":
+    def get_normal_output_shape(self, idx):
+        """Get output shape by index."""
+        if idx == 0:  # output0
             return [1, self._node_attrs["MH"]]
         return None
+    
+    def get_instream_width(self, idx=0):
+        """Get input stream width."""
+        return self._node_attrs.get("SIMD", 8) * self.get_input_datatype(idx).bitwidth()
+    
+    def get_outstream_width(self, idx=0):
+        """Get output stream width."""
+        return self._node_attrs.get("PE", 16) * self.get_output_datatype(idx).bitwidth()
     
     def get_input_datatype(self, idx):
         class MockDataType:

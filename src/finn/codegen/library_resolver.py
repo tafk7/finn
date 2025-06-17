@@ -317,7 +317,7 @@ class LibraryResolver:
                 if os.path.exists(full_path):
                     includes.append(full_path)
                 else:
-                    self.logger.warning(f"Include file not found: {full_path}")
+                    self.logger.debug(f"Include file not found: {full_path}")
             else:
                 # For system libraries, use the include file name as-is
                 includes.append(include_file)
