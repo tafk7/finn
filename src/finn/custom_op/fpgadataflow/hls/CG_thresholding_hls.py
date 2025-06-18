@@ -54,6 +54,55 @@ class CG_ThresholdingHLS(Thresholding, CG_HLSBackend):
         
         self.logger.debug(f"Initialized CG_ThresholdingHLS for node: {onnx_node.name}")
 
+    def get_nodeattr_types(self):
+        """Get node attribute types from both parent classes."""
+        my_attrs = {}
+        my_attrs.update(Thresholding.get_nodeattr_types(self))
+        my_attrs.update(CG_HLSBackend.get_nodeattr_types(self))
+        return my_attrs
+
+    def _generate_common_values(self, instance) -> Dict[str, Any]:
+        """Generate common template values shared across all templates.
+        
+        Args:
+            instance: Backend instance (for base class compatibility)
+        
+        Returns:
+            Dictionary of common template values used by all thresholding templates
+        """
+        values = {}
+        
+        # Common HLS information
+        values['NODE_NAME'] = self.onnx_node.name
+        values['OP_TYPE'] = self.onnx_node.op_type
+        values['INSTREAM_WIDTH'] = self.get_instream_width()
+        values['OUTSTREAM_WIDTH'] = self.get_outstream_width()
+        
+        # Data types
+        input_dtype = self.get_input_datatype()
+        output_dtype = self.get_output_datatype()
+        values['INPUT_HLS_TYPE'] = input_dtype.get_hls_datatype_str()
+        values['OUTPUT_HLS_TYPE'] = output_dtype.get_hls_datatype_str()
+        
+        # Shape information
+        values['INPUT_SHAPE'] = self.get_folded_input_shape()
+        values['OUTPUT_SHAPE'] = self.get_folded_output_shape()
+        
+        # HLS pragmas and includes
+        values['HLS_PRAGMAS'] = self._generate_hls_pragmas()
+        values['GLOBAL_INCLUDES'] = self._generate_hls_globals()
+        
+        # Node attributes commonly used
+        values['PE'] = self.get_nodeattr('PE')
+        values['NUM_CHANNELS'] = self.get_nodeattr('NumChannels')
+        values['NUM_STEPS'] = self.get_nodeattr('numSteps')
+        
+        # Code generation directories (use safe getter with defaults)
+        values['CODE_GEN_DIR_CPPSIM'] = self._safe_get_nodeattr('code_gen_dir_cppsim', '/tmp/test_cppsim')
+        values['CODE_GEN_DIR_IPGEN'] = self._safe_get_nodeattr('code_gen_dir_ipgen', '/tmp/test_ipgen')
+        
+        return values
+
     def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
         """Generate thresholding-specific template values.
         

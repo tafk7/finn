@@ -16,6 +16,8 @@ import logging
 
 from finn.codegen.CG_backend_registration import get_clean_backend_registry
 from finn.codegen.backend_registration import get_backend_registry
+from finn.codegen.test_node_factory import TestNodeFactory
+from finn.codegen.backend_instance_manager import BackendInstanceManager, BackendInstantiationError, TemplateRenderingError
 
 
 class ValidationResult(Enum):
@@ -52,12 +54,13 @@ class ValidationMetrics:
 class CodegenValidator:
     """A/B testing framework for validating clean implementations against legacy ones."""
     
-    def __init__(self, enable_clean_backends: bool = True, fallback_to_legacy: bool = True):
+    def __init__(self, enable_clean_backends: bool = True, fallback_to_legacy: bool = True, enable_real_backends: bool = True):
         """Initialize the codegen validator.
         
         Args:
             enable_clean_backends: Whether to use clean implementations
             fallback_to_legacy: Whether to fallback to legacy if clean fails
+            enable_real_backends: Whether to use real backend invocation (vs fake templates)
         """
         self.logger = logging.getLogger("finn.codegen.validator")
         
@@ -68,6 +71,15 @@ class CodegenValidator:
         
         self.legacy_registry = get_backend_registry()
         
+        # Real backend invocation components
+        self.enable_real_backends = enable_real_backends
+        self.node_factory = TestNodeFactory()
+        self.instance_manager = BackendInstanceManager()
+        
+        # Current operation context for detailed error reporting
+        self.current_operation_type = None
+        self.current_backend_type = None
+        
         # Validation results storage
         self.validation_results: List[CodegenComparison] = []
         self.validation_summary: Dict[str, Any] = {}
@@ -75,7 +87,7 @@ class CodegenValidator:
         # Performance tracking
         self.performance_baseline: Dict[str, ValidationMetrics] = {}
         
-    def validate_backend(self, operation_type: str, backend_type: str, 
+    def validate_backend(self, operation_type: str, backend_type: str,
                         test_model=None, **test_kwargs) -> CodegenComparison:
         """Validate a backend implementation by comparing clean vs legacy output.
         
@@ -88,10 +100,14 @@ class CodegenValidator:
         Returns:
             CodegenComparison with validation results
         """
-        self.logger.info(f"Validating {operation_type} {backend_type} backend")
+        # Set operation context for detailed error reporting
+        self.current_operation_type = operation_type
+        self.current_backend_type = backend_type
+        
+        self.logger.info(f"🔍 Validating {operation_type} {backend_type} backend (real_backends={self.enable_real_backends})")
         
         try:
-            # Get backend instances
+            # Get backend classes
             clean_backend = self._get_clean_backend(operation_type, backend_type)
             legacy_backend = self._get_legacy_backend(operation_type, backend_type)
             
@@ -101,7 +117,9 @@ class CodegenValidator:
             if not legacy_backend:
                 return self._create_skip_result(f"No legacy backend for {operation_type} {backend_type}")
             
-            # Generate code with both backends
+            self.logger.info(f"✅ Found backends - Clean: {clean_backend.__name__}, Legacy: {legacy_backend.__name__}")
+            
+            # Generate code with both backends using real invocation
             clean_result = self._generate_with_metrics(clean_backend, test_model, **test_kwargs)
             legacy_result = self._generate_with_metrics(legacy_backend, test_model, **test_kwargs)
             
@@ -114,8 +132,12 @@ class CodegenValidator:
             return comparison
             
         except Exception as e:
-            self.logger.error(f"Validation failed for {operation_type} {backend_type}: {e}")
+            self.logger.error(f"❌ Validation failed for {operation_type} {backend_type}: {e}")
             return self._create_error_result(str(e))
+        finally:
+            # Clear operation context
+            self.current_operation_type = None
+            self.current_backend_type = None
     
     def _get_clean_backend(self, operation_type: str, backend_type: str):
         """Get clean backend instance."""
@@ -144,12 +166,12 @@ class CodegenValidator:
             return None
     
     def _generate_with_metrics(self, backend, test_model, **kwargs) -> Tuple[str, ValidationMetrics]:
-        """Generate code and collect performance metrics.
+        """Generate code using REAL backend invocation and collect performance metrics.
         
         Args:
-            backend: Backend instance to use
-            test_model: Test model
-            **kwargs: Additional parameters
+            backend: Backend class to use
+            test_model: Test model (unused in real backend mode)
+            **kwargs: Additional parameters for node creation
             
         Returns:
             Tuple of (generated_code, metrics)
@@ -160,91 +182,24 @@ class CodegenValidator:
             start_time = time.perf_counter()
             start_memory = self._get_memory_usage()
             
-            # Template processing timing
-            template_start = time.perf_counter()
-            
             try:
-                # Create backend instance (backends are classes, need to instantiate)
-                if backend:
-                    backend_name = backend.__name__ if hasattr(backend, '__name__') else str(backend)
-                    
-                    # Generate realistic code with expected patterns based on backend type
-                    if 'CG_' in backend_name or 'Clean' in backend_name:
-                        # Clean backend - optimized, faster generation
-                        generated_code = f"""// Generated by {backend_name} (Clean Implementation)
-#include "activations.hpp"
-#include "hls_stream.h"
-#include "ap_int.h"
-
-template<unsigned NumChannels1, unsigned PE1, unsigned NumSteps>
-void Thresholding_Batch(
-    hls::stream<ap_uint<32>>& in_V,
-    hls::stream<ap_uint<32>>& out_V
-) {{
-#pragma HLS INTERFACE axis port=in_V
-#pragma HLS INTERFACE axis port=out_V
-#pragma HLS INTERFACE ap_ctrl_none port=return
-#pragma HLS ARRAY_PARTITION variable=thresholds complete
-
-    // Optimized thresholding with timeout handling
-    for(int i = 0; i < NumChannels1; i++) {{
-        if(!out0_V.empty()) {{
-            ap_uint<32> data;
-            strm << out0_V.read();
-            // Fast thresholding logic
-            out_V.write(data > threshold ? 255 : 0);
-        }}
-    }}
-}}
-
-// Instantiation: PE1 16, NumChannels1 128
-template void Thresholding_Batch<128, 16, 16>();
-"""
-                        # Simulate much faster generation for clean backends (to show improvements)
-                        template_time = 30.0  # Fast clean backend: 30ms
-                    else:
-                        # Legacy backend - slower, more verbose generation
-                        generated_code = f"""// Generated by {backend_name} (Legacy Implementation)
-#include "hls_stream.h"
-#include "ap_int.h"
-
-void thresholding_hls_legacy(
-    hls::stream<ap_uint<32>>& in_V,
-    hls::stream<ap_uint<32>>& out_V
-) {{
-#pragma HLS INTERFACE axis port=in_V
-#pragma HLS INTERFACE axis port=out_V
-#pragma HLS INTERFACE ap_ctrl_none port=return
-
-    // Legacy thresholding logic - more verbose
-    ap_uint<32> data = in_V.read();
-    ap_uint<32> result;
-    if (data > 128) {{
-        result = 255;
-    }} else {{
-        result = 0;
-    }}
-    out_V.write(result);
-    
-    // Additional legacy overhead
-    for(int timeout = 0; timeout < 1000; timeout++) {{
-        // Legacy timeout handling
-        if(out0_V.empty()) break;
-    }}
-}}
-"""
-                        # Simulate slower generation for legacy backends
-                        template_time = 50.0  # Slow legacy backend: 50ms
+                if self.enable_real_backends:
+                    # REAL BACKEND INVOCATION MODE
+                    generated_code, template_time = self._generate_with_real_backend(backend, **kwargs)
                 else:
-                    generated_code = "// No backend available"
-                    template_time = 0
+                    # FALLBACK TO FAKE GENERATION (for comparison/debugging)
+                    generated_code, template_time = self._generate_with_fake_backend(backend, **kwargs)
                 
+                # Verify generated code is valid
+                if not generated_code or len(generated_code.strip()) == 0:
+                    raise ValueError(f"Backend {backend} generated empty code")
+                    
             except Exception as e:
-                self.logger.error(f"Code generation failed: {e}")
-                generated_code = f"// Generation failed: {e}"
-                template_time = 0
+                self.logger.error(f"Code generation failed for {backend}: {e}")
+                # Don't mask failures - these are what we need to catch!
+                raise TemplateRenderingError(f"Backend {backend} failed validation: {e}")
             
-            # Calculate metrics
+            # Calculate real metrics
             total_time = (time.perf_counter() - start_time) * 1000
             end_memory = self._get_memory_usage()
             
@@ -258,6 +213,72 @@ void thresholding_hls_legacy(
             )
             
             return generated_code, metrics
+    
+    def _generate_with_real_backend(self, backend, **kwargs) -> Tuple[str, float]:
+        """Generate code using real backend invocation."""
+        backend_name = backend.__name__ if hasattr(backend, '__name__') else str(backend)
+        self.logger.info(f"🔄 Real backend generation: {backend_name}")
+        
+        # Template processing timing
+        template_start = time.perf_counter()
+        
+        try:
+            # Create realistic test node for backend
+            test_node = self.node_factory.create_test_node(
+                self.current_operation_type or 'Thresholding',
+                **kwargs
+            )
+            
+            # Create backend instance using real instantiation
+            backend_instance = self.instance_manager.create_backend_instance(
+                backend, test_node
+            )
+            
+            # Call REAL backend generation method
+            generated_code = self.instance_manager.call_backend_generation(
+                backend_instance, generation_type='template'
+            )
+            
+            template_time = (time.perf_counter() - template_start) * 1000
+            
+            self.logger.info(f"✅ Real backend generation successful: {backend_name}")
+            return generated_code, template_time
+            
+        except Exception as e:
+            template_time = (time.perf_counter() - template_start) * 1000
+            self.logger.error(f"❌ Real backend generation failed: {backend_name}: {e}")
+            raise BackendInstantiationError(f"Real backend {backend_name} failed: {e}")
+    
+    def _generate_with_fake_backend(self, backend, **kwargs) -> Tuple[str, float]:
+        """Generate fake code for comparison/debugging (original logic)."""
+        backend_name = backend.__name__ if hasattr(backend, '__name__') else str(backend)
+        self.logger.warning(f"⚠️  Using fake backend generation: {backend_name}")
+        
+        template_start = time.perf_counter()
+        
+        # Original fake generation logic
+        if 'CG_' in backend_name or 'Clean' in backend_name:
+            generated_code = f"""// FAKE Generated by {backend_name} (Clean Implementation)
+#include "activations.hpp"
+#include "hls_stream.h"
+#include "ap_int.h"
+
+void Thresholding_Batch() {{
+    // Fake clean implementation
+}}"""
+            template_time = 30.0  # Fake fast time
+        else:
+            generated_code = f"""// FAKE Generated by {backend_name} (Legacy Implementation)
+#include "hls_stream.h"
+#include "ap_int.h"
+
+void thresholding_hls_legacy() {{
+    // Fake legacy implementation
+}}"""
+            template_time = 50.0  # Fake slow time
+        
+        actual_template_time = (time.perf_counter() - template_start) * 1000
+        return generated_code, actual_template_time
     
     def _compare_outputs(self, clean_result: Tuple[str, ValidationMetrics], 
                         legacy_result: Tuple[str, ValidationMetrics]) -> CodegenComparison:

@@ -141,8 +141,45 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
         return int(mult_dsp)
 
     def code_generation_ipgen(self, model, fpgapart, clk):
-        """Generates c++ code and tcl script for ip generation."""
-        super().code_generation_ipgen(model, fpgapart, clk)
+        """Generate IP generation files using Jinja2 templates.
+        
+        Args:
+            model: FINN model containing this operation
+            fpgapart: Target FPGA part
+            clk: Clock period
+        """
+        # Store context for template generation
+        self._current_fpgapart = fpgapart
+        self._current_clk = clk
+        
+        node = self.onnx_node
+        path = self.get_nodeattr("code_gen_dir_ipgen")
+        
+        self.logger.info(f"Generating IP generation files for {node.name}")
+        
+        # Generate parameter files first
+        self.generate_params(model, path)
+        
+        # Generate C++ file
+        self.__class__.TEMPLATE_NAME = "mvau/hls/ipgen.cpp.j2"
+        cpp_code = self.generate_code()
+        
+        cpp_path = os.path.join(path, f"top_{node.name}.cpp")
+        with open(cpp_path, "w") as f:
+            f.write(cpp_code)
+        
+        # Generate TCL file
+        self.__class__.TEMPLATE_NAME = "mvau/hls/ipgen.tcl.j2"
+        tcl_code = self.generate_code()
+        
+        tcl_path = os.path.join(path, f"hls_syn_{node.name}.tcl")
+        with open(tcl_path, "w") as f:
+            f.write(tcl_code)
+        
+        # Reset template name
+        self.__class__.TEMPLATE_NAME = "mvau/hls/docompute.cpp.j2"
+        
+        # Handle memory mode specific operations
         mem_mode = self.get_nodeattr("mem_mode")
         if mem_mode == "internal_decoupled":
             if self.get_nodeattr("ram_style") == "ultra" and not is_versal(fpgapart):
@@ -152,6 +189,8 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                 ), """Layer with URAM weights must have runtime_writeable_weights=1
                     if Ultrascale device is targeted."""
             self.generate_hdl_memstream(fpgapart, pumped_memory=self.get_nodeattr("pumpedMemory"))
+        
+        self.logger.info(f"Generated IP files: {cpp_path}, {tcl_path}")
 
     def get_template_param_values(self):
         """Returns the template parameter values according to input, output and weight
@@ -191,6 +230,142 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
         ret["TDstI"] = "Slice<%s>" % out_hls_str
 
         return ret
+
+    def _generate_common_values(self, instance):
+        """Generate common template values shared across all templates.
+        
+        Args:
+            instance: Backend instance (for base class compatibility)
+        
+        Returns:
+            Dictionary of common template values used by all MVAU templates
+        """
+        values = {}
+        
+        # Basic node information
+        values['NODE_NAME'] = self.onnx_node.name
+        values['OP_TYPE'] = self.onnx_node.op_type
+        
+        # Stream widths
+        values['INSTREAM_WIDTH_0'] = self.get_instream_width(0)
+        values['OUTSTREAM_WIDTH'] = self.get_outstream_width()
+        
+        # Memory mode specific
+        mem_mode = self.get_nodeattr("mem_mode")
+        values['MEM_MODE'] = mem_mode
+        if mem_mode == "internal_decoupled" or mem_mode == "external":
+            values['INSTREAM_WIDTH_1'] = self.get_instream_width(1)
+        
+        # Data types
+        values['INPUT_DTYPE_0'] = self.get_input_datatype(0).get_hls_datatype_str()
+        values['INPUT_DTYPE_1'] = self.get_input_datatype(1).get_hls_datatype_str()
+        values['OUTPUT_DTYPE'] = self.get_output_datatype().get_hls_datatype_str()
+        
+        # Shape information
+        values['INPUT_SHAPE'] = self.get_folded_input_shape()
+        values['OUTPUT_SHAPE'] = self.get_folded_output_shape()
+        
+        # Core MVAU parameters
+        values['MW'] = self.get_nodeattr("MW")
+        values['MH'] = self.get_nodeattr("MH")
+        values['PE'] = self.get_nodeattr("PE")
+        values['SIMD'] = self.get_nodeattr("SIMD")
+        values['WMEM'] = self.calc_wmem()
+        values['TMEM'] = self.calc_tmem()
+        
+        # Code generation directories
+        values['CODE_GEN_DIR_CPPSIM'] = self.get_nodeattr('code_gen_dir_cppsim')
+        values['CODE_GEN_DIR_IPGEN'] = self.get_nodeattr('code_gen_dir_ipgen')
+        
+        return values
+
+    def _generate_operation_specific_values(self, template_name: str):
+        """Generate MVAU-specific template values.
+        
+        Args:
+            template_name: Name of template being generated for
+            
+        Returns:
+            Dictionary of MVAU-specific template values
+        """
+        values = {}
+        
+        # Core template components
+        values['GLOBAL_INCLUDES'] = '\n'.join(self.get_global_includes())
+        values['DEFINES'] = '\n'.join(self.get_defines())
+        values['PRAGMAS'] = '\n'.join(self.get_pragmas())
+        
+        # Template-specific values
+        if 'docompute' in template_name or 'cppsim' in template_name:
+            values['STREAM_DECLARATIONS'] = '\n'.join(self.get_stream_declarations())
+            values['READNPYDATA'] = '\n'.join(self.get_read_npy_data())
+            values['DOCOMPUTE'] = '\n'.join(self.get_do_compute())
+            values['DATAOUTSTREAM'] = '\n'.join(self.get_data_out_stream())
+            values['SAVEASCNPY'] = '\n'.join(self.get_save_as_npy())
+            
+        elif 'ipgen' in template_name:
+            if template_name.endswith('.cpp.j2'):
+                values['BLACKBOXFUNCTION'] = '\n'.join(self.get_blackbox_function())
+            elif template_name.endswith('.tcl.j2'):
+                values.update(self._generate_ipgen_tcl_values())
+        
+        return values
+
+    def _generate_ipgen_tcl_values(self):
+        """Generate values for IPGen TCL template.
+        
+        Returns:
+            Dictionary containing TCL template values
+        """
+        return {
+            'PROJECTNAME': f"project_{self.onnx_node.name}",
+            'HWSRCDIR': self.get_nodeattr("code_gen_dir_ipgen"),
+            'FPGAPART': getattr(self, '_current_fpgapart', "xc7z020clg400-1"),
+            'TOPFXN': self.onnx_node.name,
+            'CLKPERIOD': getattr(self, '_current_clk', 10),
+            'DEFAULT_DIRECTIVES': self._generate_default_directives(),
+            'EXTRA_DIRECTIVES': "",
+        }
+
+    def _generate_default_directives(self):
+        """Generate default HLS directives.
+        
+        Returns:
+            String containing default HLS directives
+        """
+        directives = [
+            "set_param hls.enable_hidden_option_error false",
+            "config_compile -disable_unroll_code_size_check -pipeline_style flp",
+            "config_interface -m_axi_addr64",
+            "config_rtl -module_auto_prefix",
+            "config_rtl -deadlock_detection none",
+        ]
+        return '\n'.join(directives)
+
+    def code_generation_cppsim(self, model):
+        """Generate C++ simulation code using Jinja2 templates.
+        
+        Args:
+            model: FINN model containing this operation
+        """
+        node = self.onnx_node
+        path = self.get_nodeattr("code_gen_dir_cppsim")
+        
+        self.logger.info(f"Generating C++ simulation code for {node.name}")
+        
+        # Generate parameter files first
+        self.generate_params(model, path)
+        
+        # Generate code using template engine
+        self.__class__.TEMPLATE_NAME = "mvau/hls/docompute.cpp.j2"
+        cpp_code = self.generate_code()
+        
+        # Write file
+        cpp_path = os.path.join(path, f"execute_{node.op_type}.cpp")
+        with open(cpp_path, "w") as f:
+            f.write(cpp_code)
+        
+        self.logger.info(f"Generated C++ simulation: {cpp_path}")
 
     # =============================================================================
     # CLEAN TEMPLATE VALUE GENERATION METHODS (No code_gen_dict usage)

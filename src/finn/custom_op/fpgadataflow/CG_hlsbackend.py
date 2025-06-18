@@ -262,24 +262,33 @@ class CG_HLSBackend(Codegen):
             "cpp_interface": ("s", False, "packed", {"packed", "hls_vector"}),
         }
         
-        # Try to get operation-specific attributes from parent classes
+        # Try to get operation-specific attributes from all parent classes
         operation_attrs = {}
-        for base in self.__class__.__bases__:
-            if hasattr(base, 'get_nodeattr_types') and base != CG_HLSBackend:
-                try:
-                    operation_attrs = base.get_nodeattr_types(self)
-                    break
-                except Exception:
-                    pass
         
-        # HLS attributes override operation attributes for clean separation
+        # Walk the MRO to get attributes from all parent classes
+        for cls in self.__class__.__mro__[1:]:  # Skip self
+            if hasattr(cls, 'get_nodeattr_types') and cls != CG_HLSBackend:
+                try:
+                    # Call the parent class method properly
+                    parent_attrs = cls.get_nodeattr_types(self)
+                    # Merge parent attributes, giving priority to first found
+                    for k, v in parent_attrs.items():
+                        if k not in operation_attrs:
+                            operation_attrs[k] = v
+                    self.logger.debug(f"Got {len(parent_attrs)} attributes from {cls.__name__}")
+                except Exception as e:
+                    self.logger.debug(f"Failed to get attributes from {cls.__name__}: {e}")
+                    continue
+        
+        # HLS attributes extend operation attributes (merge, don't override)
         merged_attrs = {**operation_attrs, **hls_attrs}
         
         # Log any conflicts for debugging
         conflicts = set(operation_attrs.keys()) & set(hls_attrs.keys())
         if conflicts:
-            self.logger.debug(f"HLS attributes override operation attributes: {conflicts}")
+            self.logger.debug(f"HLS attributes extend operation attributes, conflicts: {conflicts}")
         
+        self.logger.debug(f"Final merged attributes: {len(merged_attrs)} total")
         return merged_attrs
 
     # =====  HLS-Specific Utility Methods =====
