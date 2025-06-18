@@ -31,7 +31,7 @@ import numpy as np
 import os
 from qonnx.core.datatype import DataType
 
-from finn.custom_op.fpgadataflow.CG_hlsbackend import CG_HLSBackend
+from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
 from finn.util.basic import is_versal
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
@@ -44,14 +44,8 @@ from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 # the ... here can be any shape (representing groups of vectors)
 
 
-class CG_MVAU_hls(MVAU, CG_HLSBackend):
-    """Clean implementation of FINN MVAU HLS backend.
-    
-    This is a clean implementation that eliminates legacy compatibility bloat
-    and uses only direct template value generation methods. No code_gen_dict usage.
-    
-    Corresponds to finn-hlslib MatrixVectorActivation_Batch function.
-    """
+class MVAU_hls(MVAU, HLSBackend):
+    """Corresponds to finn-hlslib MatrixVectorActivation_Batch function."""
 
     def __init__(self, onnx_node, **kwargs):
         super().__init__(onnx_node, **kwargs)
@@ -59,7 +53,7 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
     def get_nodeattr_types(self):
         my_attrs = {}
         my_attrs.update(MVAU.get_nodeattr_types(self))
-        my_attrs.update(CG_HLSBackend.get_nodeattr_types(self))
+        my_attrs.update(HLSBackend.get_nodeattr_types(self))
         return my_attrs
 
     def lut_estimation(self):
@@ -192,30 +186,22 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
 
         return ret
 
-    # =============================================================================
-    # CLEAN TEMPLATE VALUE GENERATION METHODS (No code_gen_dict usage)
-    # =============================================================================
+    def global_includes(self):
+        self.code_gen_dict["$GLOBALS$"] = ['#include "weights.hpp"']
+        self.code_gen_dict["$GLOBALS$"] += ['#include "activations.hpp"']
 
-    def get_global_includes(self):
-        """Generate list of global include statements for HLS code."""
-        includes = ['#include "weights.hpp"', '#include "activations.hpp"']
-        
         mem_mode = self.get_nodeattr("mem_mode")
         if mem_mode not in ["internal_embedded", "internal_decoupled", "external"]:
             raise Exception(
                 """Please set mem_mode to "internal_embedded", "internal_decoupled", or "external",
                 currently no other parameter value is supported!"""
             )
-        includes.append('#include "mvau.hpp"')
-        
+        self.code_gen_dict["$GLOBALS$"] += ['#include "mvau.hpp"']
         if self.calc_tmem() != 0:
             # TODO find a better way of checking for no pregenerated thresholds
-            includes.append('#include "thresh.h"')
-        
-        return includes
+            self.code_gen_dict["$GLOBALS$"] += ['#include "thresh.h"']
 
-    def get_defines(self, var=None):
-        """Generate preprocessor definitions for HLS code."""
+    def defines(self, var):
         # Only ipgen mode: Make sure that SIMD parameter satisfies minimum requirements.
         if var == "ipgen":
             SIMD = self.get_nodeattr("SIMD")
@@ -227,13 +213,13 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                 f"and MW={MW} for node: {self.onnx_node.name}."
             )
             assert condition, msg
-        
         mem_mode = self.get_nodeattr("mem_mode")
         numInputVectors = list(self.get_nodeattr("numInputVectors"))
         numReps = np.prod(numInputVectors)
-        
-        defines = [
-            """#define MW1 {}\n#define MH1 {}\n#define SIMD1 {}\n#define PE1 {}\n#define WMEM1 {}\n#define TMEM1 {}\n#define numReps {}""".format(
+        self.code_gen_dict["$DEFINES$"] = [
+            """#define MW1 {}\n #define MH1 {}\n
+            #define SIMD1 {}\n #define PE1 {}\n #define WMEM1 {}\n
+            #define TMEM1 {}\n #define numReps {}""".format(
                 self.get_nodeattr("MW"),
                 self.get_nodeattr("MH"),
                 self.get_nodeattr("SIMD"),
@@ -243,15 +229,11 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                 numReps,
             )
         ]
-        
         if mem_mode == "internal_decoupled" or mem_mode == "external":
             wdt = self.get_input_datatype(1)
-            defines.append("#define WP1 {}\n".format(wdt.bitwidth()))
-        
-        return defines
+            self.code_gen_dict["$DEFINES$"].append("#define WP1 {}\n".format(wdt.bitwidth()))
 
-    def get_read_npy_data(self):
-        """Generate NPY data reading code for simulation."""
+    def read_npy_data(self):
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
         dtype = self.get_input_datatype(0)
         if dtype == DataType["BIPOLAR"]:
@@ -263,10 +245,9 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
         elem_hls_type = dtype.get_hls_datatype_str()
         npy_type = "float"
         npy_in = "%s/input_0.npy" % code_gen_dir
-        
-        read_statements = []
+        self.code_gen_dict["$READNPYDATA$"] = []
         # note: the innermost dim is reversed for the input
-        read_statements.append(
+        self.code_gen_dict["$READNPYDATA$"].append(
             'npy2apintstream<%s, %s, %d, %s>("%s", in0_V, false);'
             % (
                 packed_hls_type,
@@ -287,7 +268,7 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
             npy_type = "float"
             npy_in = "%s/weights.npy" % code_gen_dir
 
-            read_statements.append(
+            self.code_gen_dict["$READNPYDATA$"].append(
                 'npy2apintstream<%s, %s, %d, %s>("%s", in1_V, false, numReps);'
                 % (
                     packed_hls_type,
@@ -297,30 +278,23 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                     npy_in,
                 )
             )
-        
-        return read_statements
 
-    def get_stream_declarations(self):
-        """Generate HLS stream declarations."""
+    def strm_decl(self):
         mem_mode = self.get_nodeattr("mem_mode")
-        
-        declarations = []
-        declarations.append(
+        self.code_gen_dict["$STREAMDECLARATIONS$"] = []
+        self.code_gen_dict["$STREAMDECLARATIONS$"].append(
             'hls::stream<ap_uint<{}>> in0_V ("in0_V");'.format(self.get_instream_width(0))
         )
-        declarations.append(
+        self.code_gen_dict["$STREAMDECLARATIONS$"].append(
             'hls::stream<ap_uint<{}>> out0_V ("out0_V");'.format(self.get_outstream_width())
         )
 
         if mem_mode == "internal_decoupled" or mem_mode == "external":
-            declarations.append(
+            self.code_gen_dict["$STREAMDECLARATIONS$"].append(
                 'hls::stream<ap_uint<{}>> in1_V ("in1_V");'.format(self.get_instream_width(1))
             )
-        
-        return declarations
 
-    def get_do_compute(self):
-        """Generate main computation function call."""
+    def docompute(self):
         mem_mode = self.get_nodeattr("mem_mode")
         map_to_hls_mult_style = {
             "auto": "ap_resource_dflt()",
@@ -328,15 +302,13 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
             "dsp": "ap_resource_dsp()",
         }
         tmpl_args = self.get_template_param_values()
-        
         if self.calc_tmem() == 0:
             odtype_hls_str = self.get_output_datatype().get_hls_datatype_str()
             threshs = "PassThroughActivation<%s>()" % odtype_hls_str
         else:
             threshs = "threshs"
-        
         if mem_mode == "internal_embedded":
-            compute_call = [
+            self.code_gen_dict["$DOCOMPUTE$"] = [
                 """Matrix_Vector_Activate_Batch<MW1, MH1, SIMD1, PE1, 1, {}, {}, {}>
                 (in0_V, out0_V, weights, {}, numReps, {});""".format(
                     tmpl_args["TSrcI"],
@@ -353,7 +325,7 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
             else:
                 export_wdt = wdt
             wdtype_hls_str = export_wdt.get_hls_datatype_str()
-            compute_call = [
+            self.code_gen_dict["$DOCOMPUTE$"] = [
                 """Matrix_Vector_Activate_Stream_Batch<MW1, MH1, SIMD1, PE1, {}, {}, {}, {} >
                 (in0_V, out0_V, in1_V, {}, numReps, {});""".format(
                     tmpl_args["TSrcI"],
@@ -364,16 +336,14 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                     map_to_hls_mult_style[self.get_nodeattr("resType")],
                 )
             ]
+
         else:
             raise Exception(
                 """Please set mem_mode to "internal_embedded", "internal_decoupled", or "external",
                 currently no other parameter value is supported!"""
             )
-        
-        return compute_call
 
-    def get_data_out_stream(self):
-        """Generate output data streaming code."""
+    def dataoutstrm(self):
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
         dtype = self.get_output_datatype()
         if dtype == DataType["BIPOLAR"]:
@@ -389,7 +359,7 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
         shape_cpp_str = str(shape).replace("(", "{").replace(")", "}")
 
         # note: the innermost dim is not reversed for the output
-        return [
+        self.code_gen_dict["$DATAOUTSTREAM$"] = [
             'apintstream2npy<%s, %s, %d, %s>(out0_V, %s, "%s", false);'
             % (
                 packed_hls_type,
@@ -401,16 +371,13 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
             )
         ]
 
-    def get_save_as_npy(self):
-        """Generate NPY saving code (empty for MVAU)."""
-        return []
+    def save_as_npy(self):
+        self.code_gen_dict["$SAVEASCNPY$"] = []
 
-    def get_blackbox_function(self):
-        """Generate blackbox function signature."""
+    def blackboxfunction(self):
         mem_mode = self.get_nodeattr("mem_mode")
-        
         if mem_mode == "internal_embedded":
-            return [
+            self.code_gen_dict["$BLACKBOXFUNCTION$"] = [
                 """void {}(hls::stream<ap_uint<{}>> &in0_V,
                     hls::stream<ap_uint<{}>> &out0_V
                     )""".format(
@@ -420,7 +387,7 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                 )
             ]
         elif mem_mode == "internal_decoupled" or mem_mode == "external":
-            return [
+            self.code_gen_dict["$BLACKBOXFUNCTION$"] = [
                 """void {}(
                     hls::stream<ap_uint<{}>> &in0_V,
                     hls::stream<ap_uint<{}>> &in1_V,
@@ -432,30 +399,30 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                     self.get_outstream_width(),
                 )
             ]
+
         else:
             raise Exception(
                 """Please set mem_mode to "internal_embedded" or "internal_decoupled",
                     currently no other parameter value is supported!"""
             )
 
-    def get_pragmas(self):
-        """Generate HLS pragma directives."""
+    def pragmas(self):
         mem_mode = self.get_nodeattr("mem_mode")
         ram_style_thresholds = self.get_nodeattr("ram_style_thresholds")
-        
-        pragmas = ["#pragma HLS INTERFACE axis port=in0_V"]
-        pragmas.append("#pragma HLS INTERFACE axis port=out0_V")
-        pragmas.append("#pragma HLS INTERFACE ap_ctrl_none port=return")
+        self.code_gen_dict["$PRAGMAS$"] = ["#pragma HLS INTERFACE axis port=in0_V"]
+        self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE axis port=out0_V")
+        self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE ap_ctrl_none port=return")
 
         if mem_mode == "internal_embedded":
-            pragmas.append('#include "params.h"')
+            self.code_gen_dict["$PRAGMAS$"].append('#include "params.h"')
             # the weight tensor is ap_uint<simd*prec> [PE][WMEM]
             # partition for parallel access along the PE dimension (dim 1)
-            pragmas.append(
+            self.code_gen_dict["$PRAGMAS$"].append(
                 ("#pragma HLS ARRAY_PARTITION variable=weights.m_weights " "complete dim=1")
             )
         elif mem_mode == "internal_decoupled" or mem_mode == "external":
-            pragmas.append("#pragma HLS INTERFACE axis port=in1_V")
+            self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE axis port=in1_V")
+
         else:
             raise Exception(
                 """Please set mem_mode to "internal_embedded", "internal_decoupled", or external,
@@ -467,19 +434,19 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
         # dimensions (dims 1 and 3)
         if self.calc_tmem() != 0:
             # TODO find a better way of checking for no pregenerated thresholds
-            pragmas.append(
+            self.code_gen_dict["$PRAGMAS$"].append(
                 ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=1")
             )
-            pragmas.append(
+            self.code_gen_dict["$PRAGMAS$"].append(
                 ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=3")
             )
             # add resource pragma for thresholds if set
             if ram_style_thresholds == "distributed":
-                pragmas.append(
+                self.code_gen_dict["$PRAGMAS$"].append(
                     ("#pragma HLS RESOURCE variable=threshs.m_thresholds " "core=ROM_2P_LUTRAM")
                 )
             elif ram_style_thresholds == "block":
-                pragmas.append(
+                self.code_gen_dict["$PRAGMAS$"].append(
                     ("#pragma HLS RESOURCE variable=threshs.m_thresholds " "core=ROM_2P_BRAM")
                 )
             elif ram_style_thresholds == "auto":
@@ -487,12 +454,6 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
                 pass
             else:
                 raise Exception("Unrecognized ram_style_thresholds value:" + ram_style_thresholds)
-        
-        return pragmas
-
-    # =============================================================================
-    # INHERITED METHODS (unchanged from original)
-    # =============================================================================
 
     def get_ap_int_max_w(self):
         # base class impl (max of inp/out stream widths)

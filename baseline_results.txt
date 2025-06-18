@@ -1,0 +1,16 @@
+# FINN Codegen Baseline Results
+Total tests: 10
+Code generation success: 0/10
+Template processing success: 10/10
+
+# Per-test results:
+thresholding_hls_basic: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.12445449829101562, 'code_size': 0, 'operation': 'Thresholding', 'backend': 'hls'}
+thresholding_hls_high_pe: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.10609626770019531, 'code_size': 0, 'operation': 'Thresholding', 'backend': 'hls'}
+thresholding_hls_timeout: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.07414817810058594, 'code_size': 0, 'operation': 'Thresholding', 'backend': 'hls'}
+mvau_hls_embedded: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.10538101196289062, 'code_size': 0, 'operation': 'MVAU', 'backend': 'hls'}
+mvau_hls_streaming: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.10848045349121094, 'code_size': 0, 'operation': 'MVAU', 'backend': 'hls'}
+mvau_hls_external_weights: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.09775161743164062, 'code_size': 0, 'operation': 'MVAU', 'backend': 'hls'}
+thresholding_rtl_basic: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.09632110595703125, 'code_size': 0, 'operation': 'Thresholding', 'backend': 'rtl'}
+thresholding_rtl_high_throughput: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.09608268737792969, 'code_size': 0, 'operation': 'Thresholding', 'backend': 'rtl'}
+mvau_rtl_basic: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.10251998901367188, 'code_size': 0, 'operation': 'MVAU', 'backend': 'rtl'}
+mvau_rtl_dsp_optimized: {'code_generated': False, 'template_ok': True, 'generation_time_ms': 0.09989738464355469, 'code_size': 0, 'operation': 'MVAU', 'backend': 'rtl'}

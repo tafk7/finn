@@ -33,7 +33,7 @@ import shutil
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
 
-from finn.custom_op.fpgadataflow.CG_rtlbackend import CG_RTLBackend
+from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
 from finn.util.basic import get_memutil_alternatives, mem_primitives_versal
 from finn.util.data_packing import (
@@ -43,14 +43,8 @@ from finn.util.data_packing import (
 )
 
 
-class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
-    """Clean implementation of FINN Thresholding RTL backend.
-    
-    This is a clean implementation that eliminates legacy compatibility bloat
-    and uses only direct template value generation methods. No code_gen_dict usage.
-    
-    RTL backend for Thresholding using clean Jinja2 template architecture.
-    """
+class Thresholding_rtl(Thresholding, RTLBackend):
+    """Class that corresponds to finn-rtllib 'thresholding' function."""
 
     def __init__(self, onnx_node, **kwargs):
         super().__init__(onnx_node, **kwargs)
@@ -69,246 +63,8 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
             "deep_pipeline": ("i", False, 1, {0, 1}),
         }
         my_attrs.update(Thresholding.get_nodeattr_types(self))
-        my_attrs.update(CG_RTLBackend.get_nodeattr_types(self))
+        my_attrs.update(RTLBackend.get_nodeattr_types(self))
         return my_attrs
-
-    # =============================================================================
-    # CLEAN TEMPLATE VALUE GENERATION METHODS (No code_gen_dict usage)
-    # =============================================================================
-
-    def get_rtl_wrapper_values(self):
-        """Generate RTL wrapper template values for thresholding operation."""
-        bias = self.get_nodeattr("ActVal")
-        output_data_type = self.get_nodeattr("outputDataType")
-        input_data_type = self.get_nodeattr("inputDataType")
-        o_bitwidth = DataType[output_data_type].bitwidth()
-        i_bitwidth = DataType[input_data_type].bitwidth()
-        wdt = self.get_input_datatype(1)
-        
-        # Calculate O_BITS (existing logic)
-        if bias >= 0:
-            o_bits = math.ceil(math.log2(2**o_bitwidth + bias))
-        else:
-            o_bits = 1 + math.ceil(
-                math.log2(-bias if -bias >= 2 ** (o_bitwidth - 1) else 2**o_bitwidth + bias)
-            )
-        
-        return {
-            'MODULE_NAME_AXI_WRAPPER': self.get_verilog_top_module_name(),
-            'N': o_bitwidth,
-            'WI': i_bitwidth,
-            'WT': wdt.bitwidth(),
-            'C': self.get_nodeattr("NumChannels"),
-            'PE': self.get_nodeattr("PE"),
-            'SIGNED': 1 if self.get_input_datatype(0).signed() else 0,
-            'FPARG': 0 if self.get_input_datatype().is_integer() else 1,
-            'BIAS': bias,
-            'THRESHOLDS_PATH': f'"./{self.onnx_node.name}_"',
-            'USE_AXILITE': self.get_nodeattr("runtime_writeable_weights"),
-            'DEPTH_TRIGGER_URAM': self.get_nodeattr("depth_trigger_uram"),
-            'DEPTH_TRIGGER_BRAM': self.get_nodeattr("depth_trigger_bram"),
-            'DEEP_PIPELINE': self.get_nodeattr("deep_pipeline"),
-            'O_BITS': int(o_bits),
-        }
-
-    def get_rtl_module_name(self):
-        """Generate the RTL module name."""
-        return self.get_verilog_top_module_name()
-
-    def get_rtl_parameters(self):
-        """Generate RTL parameters for thresholding module."""
-        bias = self.get_nodeattr("ActVal")
-        output_data_type = self.get_nodeattr("outputDataType")
-        input_data_type = self.get_nodeattr("inputDataType")
-        o_bitwidth = DataType[output_data_type].bitwidth()
-        i_bitwidth = DataType[input_data_type].bitwidth()
-        wdt = self.get_input_datatype(1)
-        
-        # Calculate O_BITS
-        if bias >= 0:
-            o_bits = math.ceil(math.log2(2**o_bitwidth + bias))
-        else:
-            o_bits = 1 + math.ceil(
-                math.log2(-bias if -bias >= 2 ** (o_bitwidth - 1) else 2**o_bitwidth + bias)
-            )
-        
-        return {
-            'N': o_bitwidth,
-            'WI': i_bitwidth,
-            'WT': wdt.bitwidth(),
-            'C': self.get_nodeattr("NumChannels"),
-            'PE': self.get_nodeattr("PE"),
-            'O_BITS': int(o_bits),
-        }
-
-    def get_port_declarations(self):
-        """Generate port declarations for RTL module."""
-        runtime_writeable = self.get_nodeattr("runtime_writeable_weights")
-        
-        ports = {
-            'data_input': {
-                'name': 'in0_V',
-                'direction': 'input',
-                'width': self.get_instream_width(),
-                'type': 'axis'
-            },
-            'data_output': {
-                'name': 'out0_V', 
-                'direction': 'output',
-                'width': self.get_outstream_width(),
-                'type': 'axis'
-            }
-        }
-        
-        if runtime_writeable:
-            ports['axilite'] = {
-                'name': 's_axilite',
-                'direction': 'slave',
-                'type': 'axilite'
-            }
-        
-        return ports
-
-    def get_memory_files(self):
-        """Generate list of memory initialization files."""
-        dat_files = []
-        pe = self.get_nodeattr("PE")
-        output_data_type = self.get_nodeattr("outputDataType")
-        o_bitwidth = DataType[output_data_type].bitwidth()
-        
-        for stage in range(o_bitwidth):
-            for pe_value in range(pe):
-                thresh_file = f"{self.onnx_node.name}_threshs_{pe_value}_{stage}.dat"
-                dat_files.append(thresh_file)
-        
-        return dat_files
-
-    def get_source_files(self):
-        """Generate list of RTL source files needed."""
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/thresholding/hdl/")
-        
-        return [
-            os.path.join(rtllib_dir, "axilite_if.v"),
-            os.path.join(rtllib_dir, "thresholding.sv"),
-            os.path.join(rtllib_dir, "thresholding_axi.sv"),
-        ]
-
-    # =============================================================================
-    # OPERATION-SPECIFIC METHODS (threshold file generation)
-    # =============================================================================
-
-    def generate_threshold_files(self, model):
-        """Generate threshold data files for RTL simulation."""
-        thresholds = model.get_initializer(self.onnx_node.input[1])
-        bias = self.get_nodeattr("ActVal")
-        output_data_type = self.get_nodeattr("outputDataType")
-        input_data_type = self.get_nodeattr("inputDataType")
-        o_bitwidth = DataType[output_data_type].bitwidth()
-
-        t_path = self.get_nodeattr("code_gen_dir_ipgen")
-        if self.get_nodeattr("runtime_writeable_weights") == 1:
-            thresh_file_name = f"{t_path}/memblock.dat"
-            self.make_weight_file(thresholds, "decoupled", thresh_file_name)
-
-        # The RTL expects 2^N-1 thresholds, but narrow range quantization will result in
-        # one less threshold, prepending a dummy threshold (minimal possible value determined by
-        # input data type) and decrease the bias by 1.
-        # Additionally, increase number of threshold steps to reflect new shape
-        expected_thresholds = 2**o_bitwidth - 1
-        n_thres_steps = self.get_nodeattr("numSteps")
-        wdt = self.get_input_datatype(1)
-        if expected_thresholds != n_thres_steps:
-            if DataType[output_data_type].signed():
-                min_val = wdt.min()
-                thresholds = np.insert(thresholds, 0, min_val, axis=1)
-                bias = bias - 1
-            # TODO: temporary fix for unsigned narrow quantization
-            else:
-                max_val = wdt.max()
-                if max_val > DataType[input_data_type].max():
-                    thresholds = np.insert(thresholds, len(thresholds[0]), max_val, axis=1)
-                else:
-                    max_val = max_val + 1
-                    # increase wdt
-                    if not wdt.signed():
-                        wdt = DataType.get_smallest_possible(max_val)
-                    else:
-                        wdt = DataType.get_smallest_possible(-max_val - 1)
-                    thresholds = np.insert(thresholds, len(thresholds[0]), max_val, axis=1)
-            n_thres_steps += 1
-
-        # add dummy dimension as final dimension (that's what gets packed with next call)
-        t_expand = np.expand_dims(thresholds, axis=-1)
-        bw_hexdigit = roundup_to_integer_multiple(wdt.bitwidth(), 4)
-        t_packed = pack_innermost_dim_as_hex_string(
-            t_expand,
-            wdt,
-            bw_hexdigit,
-            prefix="",
-        )
-
-        pe = self.get_nodeattr("PE")
-        num_channels = self.get_nodeattr("NumChannels")
-
-        # If a single threshold value is found, broadcast the value
-        if t_packed.shape[0] == 1:
-            t_packed = np.broadcast_to(t_packed, (pe, expected_thresholds))
-            num_channels = pe
-
-        channel_fold = int(num_channels / pe)
-
-        for stage in range(o_bitwidth):
-            sn = o_bitwidth - stage - 1
-            for pe_value in range(pe):
-                thresh_file = t_path + "/%s_threshs_%s_%s.dat" % (
-                    self.onnx_node.name,
-                    pe_value,
-                    stage,
-                )
-                threshs = np.zeros([channel_fold * (2**stage)], dtype="object")
-                for ch in range(channel_fold):
-                    for i in range(2**stage):
-                        threshs[(ch << stage) + i] = t_packed[ch * pe + pe_value][
-                            (i << (o_bitwidth - stage)) + 2**sn - 1
-                        ]
-                with open(thresh_file, "w") as f:
-                    for val in threshs:
-                        f.write(val + "\n")
-
-    def copy_rtl_library_files(self, code_gen_dir):
-        """Copy RTL library files to generation directory."""
-        sv_files = ["axilite_if.v", "thresholding.sv", "thresholding_axi.sv"]
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/thresholding/hdl"
-        for sv_file in sv_files:
-            shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
-
-    def generate_hdl(self, model, fpgapart, clk):
-        """Generate HDL using clean template architecture."""
-        # Generate threshold data files
-        self.generate_threshold_files(model)
-        
-        # Generate RTL wrapper using clean backend
-        template_values = self.get_rtl_wrapper_values()
-        rtl_code = self.render_template("thresholding/rtl/wrapper.v.j2", template_values)
-        
-        # Write RTL file
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        module_name = template_values['MODULE_NAME_AXI_WRAPPER']
-        rtl_path = os.path.join(code_gen_dir, f"{module_name}.v")
-        with open(rtl_path, "w") as f:
-            f.write(rtl_code)
-        
-        # Copy library files
-        self.copy_rtl_library_files(code_gen_dir)
-        
-        # Set node attributes
-        self.set_nodeattr("gen_top_module", module_name)
-        self.set_nodeattr("ipgen_path", code_gen_dir)
-        self.set_nodeattr("ip_path", code_gen_dir)
-
-    # =============================================================================
-    # RESOURCE ESTIMATION METHODS (unchanged from original)
-    # =============================================================================
 
     def get_pe_mem_geometries(self):
         """return a list of (bitwidth, depth) for PE memory configurations to be used
@@ -377,10 +133,6 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
         res_dict = self.get_memory_estimate()
         return res_dict.get("LUTRAM", 0)
 
-    # =============================================================================
-    # INHERITED METHODS (unchanged from original)
-    # =============================================================================
-
     def get_all_meminit_filenames(self, abspath=False):
         "Return a list of all .dat memory initializer files used for this node"
         dat_files = []
@@ -398,6 +150,137 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
                 dat_files.append(thresh_file)
         return dat_files
 
+    def prepare_codegen_rtl_values(self, model):
+        """All dictionary values produced in this function are to replace
+        their key value(s) in the RTL template files"""
+        code_gen_dict = {}
+
+        thresholds = model.get_initializer(self.onnx_node.input[1])
+        bias = self.get_nodeattr("ActVal")  # activation bias value
+        output_data_type = self.get_nodeattr("outputDataType")  # output precision
+        input_data_type = self.get_nodeattr("inputDataType")  # input/threshold precision
+        o_bitwidth = DataType[output_data_type].bitwidth()
+
+        t_path = self.get_nodeattr("code_gen_dir_ipgen")
+        if self.get_nodeattr("runtime_writeable_weights") == 1:
+            thresh_file_name = f"{t_path}/memblock.dat"
+            self.make_weight_file(thresholds, "decoupled", thresh_file_name)
+
+        # The RTL expects 2^N-1 thresholds, but narrow range quantization will result in
+        # one less threshold, prepending a dummy threshold (minimal possible value determined by
+        # input data type) and decrease the bias by 1.
+        # Additionally, increase number of threshold steps to reflect new shape
+        expected_thresholds = 2**o_bitwidth - 1
+        n_thres_steps = self.get_nodeattr("numSteps")
+        wdt = self.get_input_datatype(1)
+        if expected_thresholds != n_thres_steps:
+            if DataType[output_data_type].signed():
+                min_val = wdt.min()
+                thresholds = np.insert(thresholds, 0, min_val, axis=1)
+                bias = bias - 1
+            # TODO: temporary fix for unsigned narrow quantization
+            else:
+                max_val = wdt.max()
+                if max_val > DataType[input_data_type].max():
+                    thresholds = np.insert(thresholds, len(thresholds[0]), max_val, axis=1)
+                else:
+                    max_val = max_val + 1
+                    # increase wdt
+                    if not wdt.signed():
+                        wdt = DataType.get_smallest_possible(max_val)
+                    else:
+                        wdt = DataType.get_smallest_possible(-max_val - 1)
+                    thresholds = np.insert(thresholds, len(thresholds[0]), max_val, axis=1)
+            n_thres_steps += 1
+
+        # add dummy dimension as final dimension (that's what gets packed with next call)
+        t_expand = np.expand_dims(thresholds, axis=-1)
+        bw_hexdigit = roundup_to_integer_multiple(wdt.bitwidth(), 4)
+        t_packed = pack_innermost_dim_as_hex_string(
+            t_expand,
+            wdt,
+            bw_hexdigit,
+            prefix="",
+        )
+
+        pe = self.get_nodeattr("PE")
+        num_channels = self.get_nodeattr("NumChannels")  # number of channels
+
+        # If a single threshold value is found, broadcast the value
+        if t_packed.shape[0] == 1:
+            t_packed = np.broadcast_to(t_packed, (pe, expected_thresholds))
+            num_channels = pe
+
+        channel_fold = int(num_channels / pe)
+
+        for stage in range(o_bitwidth):
+            sn = o_bitwidth - stage - 1
+            for pe_value in range(pe):
+                thresh_file = t_path + "/%s_threshs_%s_%s.dat" % (
+                    self.onnx_node.name,
+                    pe_value,
+                    stage,
+                )
+                threshs = np.zeros([channel_fold * (2**stage)], dtype="object")
+                for ch in range(channel_fold):
+                    for i in range(2**stage):
+                        threshs[(ch << stage) + i] = t_packed[ch * pe + pe_value][
+                            (i << (o_bitwidth - stage)) + 2**sn - 1
+                        ]
+                with open(thresh_file, "w") as f:
+                    for val in threshs:
+                        f.write(val + "\n")
+        code_gen_dict["$THRESHOLDS_PATH$"] = ['"./%s_"' % self.onnx_node.name]
+
+        # Identify the module name
+        code_gen_dict["$MODULE_NAME_AXI_WRAPPER$"] = [self.get_verilog_top_module_name()]
+        # Set the top module name - AXI wrapper
+        code_gen_dict["$TOP_MODULE$"] = code_gen_dict["$MODULE_NAME_AXI_WRAPPER$"]
+
+        # Identify the module variables
+        i_bitwidth = DataType[input_data_type].bitwidth()
+
+        code_gen_dict["$N$"] = [str(o_bitwidth)]  # output precision - convert bitwidth to string
+        code_gen_dict["$WT$"] = [
+            str(wdt.bitwidth())
+        ]  # threshold precision - convert bitwidth to string
+        code_gen_dict["$WI$"] = [str(i_bitwidth)]  # input precision - convert bitwidth to string
+        code_gen_dict["$C$"] = [str(num_channels)]  # number of channels
+        code_gen_dict["$BIAS$"] = [str(bias)]  # activation bias value
+        code_gen_dict["$PE$"] = [str(pe)]  # requires C = M*PE
+
+        # Is the input datatype signed or unsigned?
+        # The thresholding core needs to know this when comparing weights to inputs
+        if self.get_input_datatype(0).signed():
+            code_gen_dict["$SIGNED$"] = [str(1)]
+        else:
+            code_gen_dict["$SIGNED$"] = [str(0)]
+        # Is the input datatype non-integer?
+        # (assume this means floating-point)
+        if self.get_input_datatype().is_integer():
+            code_gen_dict["$FPARG$"] = [str(0)]
+        else:
+            code_gen_dict["$FPARG$"] = [str(1)]
+
+        if bias >= 0:
+            o_bits = math.ceil(math.log2(2**o_bitwidth + bias))
+        else:
+            o_bits = 1 + math.ceil(
+                math.log2(-bias if -bias >= 2 ** (o_bitwidth - 1) else 2**o_bitwidth + bias)
+            )
+        code_gen_dict["$O_BITS$"] = [str(int(o_bits))]
+
+        rt_weights = self.get_nodeattr("runtime_writeable_weights")
+        code_gen_dict["$USE_AXILITE$"] = [str(rt_weights)]
+
+        depth_trigger_uram = self.get_nodeattr("depth_trigger_uram")
+        depth_trigger_bram = self.get_nodeattr("depth_trigger_bram")
+        deep_pipeline = self.get_nodeattr("deep_pipeline")
+        code_gen_dict["$DEPTH_TRIGGER_URAM$"] = [str(depth_trigger_uram)]
+        code_gen_dict["$DEPTH_TRIGGER_BRAM$"] = [str(depth_trigger_bram)]
+        code_gen_dict["$DEEP_PIPELINE$"] = [str(deep_pipeline)]
+        return code_gen_dict
+
     def get_rtl_file_list(self, abspath=False):
         """Thresholding binary search RTL file list"""
         if abspath:
@@ -414,6 +297,43 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
             code_gen_dir + self.get_nodeattr("gen_top_module") + ".v",
         ]
         return verilog_files
+
+    def generate_hdl(self, model, fpgapart, clk):
+        """Prepare HDL files from templates for synthesis"""
+        # Generate a dictionary of values to put in RTL template
+        code_gen_dict = self.prepare_codegen_rtl_values(model)
+
+        # Retrieve the destination directory for the final RTL files
+        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+
+        # Set the 'gen_top_module' attribute for use later
+        # by xsi and IPI generation
+        self.set_nodeattr("gen_top_module", code_gen_dict["$TOP_MODULE$"][0])
+
+        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/thresholding/hdl"
+        template_path = rtlsrc + "/thresholding_template_wrapper.v"
+        with open(template_path, "r") as f:
+            template_wrapper = f.read()
+        for key in code_gen_dict:
+            # transform list into long string separated by '\n'
+            code_gen_line = "\n".join(code_gen_dict[key])
+            template_wrapper = template_wrapper.replace(key, code_gen_line)
+        with open(
+            os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + ".v"),
+            "w",
+        ) as f:
+            f.write(template_wrapper)
+
+        sv_files = ["axilite_if.v", "thresholding.sv", "thresholding_axi.sv"]
+        for sv_file in sv_files:
+            shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
+
+        # set ipgen_path and ip_path so that HLS-Synth transformation
+        # and stich_ip transformation do not complain
+        # i.e. during the HLSSynthIP() transformation
+        self.set_nodeattr("ipgen_path", code_gen_dir)
+        self.set_nodeattr("ip_path", code_gen_dir)
+        return
 
     def execute_node(self, context, graph):
         mode = self.get_nodeattr("exec_mode")

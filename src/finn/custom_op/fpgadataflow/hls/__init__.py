@@ -73,13 +73,15 @@ from finn.custom_op.fpgadataflow.hls.iodma_hls import IODMA_hls
 from finn.custom_op.fpgadataflow.hls.labelselect_hls import LabelSelect_hls
 from finn.custom_op.fpgadataflow.hls.lookup_hls import Lookup_hls
 from finn.custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MVAU_hls
+from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
 from finn.custom_op.fpgadataflow.hls.pool_hls import Pool_hls
 from finn.custom_op.fpgadataflow.hls.streamingdatawidthconverter_hls import (
     StreamingDataWidthConverter_hls,
 )
 from finn.custom_op.fpgadataflow.hls.streamingeltwise_hls import StreamingEltwise_hls
 from finn.custom_op.fpgadataflow.hls.streamingmaxpool_hls import StreamingMaxPool_hls
-from finn.custom_op.fpgadataflow.hls.thresholding_hls import ThresholdingHLS
+from finn.custom_op.fpgadataflow.hls.thresholding_hls import Thresholding_hls
+from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
 from finn.custom_op.fpgadataflow.hls.tlastmarker_hls import TLastMarker_hls
 from finn.custom_op.fpgadataflow.hls.upsampler_hls import UpsampleNearestNeighbour_hls
 from finn.custom_op.fpgadataflow.hls.vectorvectoractivation_hls import VVAU_hls
@@ -103,8 +105,10 @@ custom_op["StreamingConcat_hls"] = StreamingConcat_hls
 custom_op["StreamingEltwise_hls"] = StreamingEltwise_hls
 custom_op["StreamingDataWidthConverter_hls"] = StreamingDataWidthConverter_hls
 custom_op["StreamingMaxPool_hls"] = StreamingMaxPool_hls
-custom_op["Thresholding_hls"] = ThresholdingHLS
+custom_op["Thresholding_hls"] = Thresholding_hls
+custom_op["CG_ThresholdingHLS"] = CG_ThresholdingHLS
 custom_op["TLastMarker_hls"] = TLastMarker_hls
 custom_op["UpsampleNearestNeighbour_hls"] = UpsampleNearestNeighbour_hls
 custom_op["MVAU_hls"] = MVAU_hls
+custom_op["CG_MVAU_hls"] = CG_MVAU_hls
 custom_op["VVAU_hls"] = VVAU_hls

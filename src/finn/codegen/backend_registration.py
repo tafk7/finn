@@ -23,23 +23,17 @@ def register_all_backends() -> BackendRegistry:
     logger.debug("Registering HLS backends...")
     
     try:
-        from ..custom_op.fpgadataflow.hls.thresholding_hls import ThresholdingHLS
-        registry.register_hls_backend('Thresholding', ThresholdingHLS)
+        from ..custom_op.fpgadataflow.hls.thresholding_hls import Thresholding_hls
+        registry.register_hls_backend('Thresholding', Thresholding_hls)
     except ImportError as e:
-        logger.debug(f"Could not import ThresholdingHLS: {e}")
+        logger.debug(f"Could not import Thresholding_hls: {e}")
     
     try:
-        from ..custom_op.fpgadataflow.hls.mvau_hls import MVAU_HLS
-        registry.register_hls_backend('MatrixVectorActivation', MVAU_HLS)
-        registry.register_hls_backend('MVAU', MVAU_HLS)  # Alternative name
+        from ..custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MVAU_hls
+        registry.register_hls_backend('MatrixVectorActivation', MVAU_hls)
+        registry.register_hls_backend('MVAU', MVAU_hls)  # Alternative name
     except ImportError as e:
-        logger.debug(f"Could not import MVAU_HLS: {e}")
-    
-    try:
-        from ..custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MatrixVectorActivationHLS
-        registry.register_hls_backend('MatrixVectorActivation', MatrixVectorActivationHLS)
-    except ImportError as e:
-        logger.debug(f"Could not import MatrixVectorActivationHLS: {e}")
+        logger.debug(f"Could not import MVAU_hls: {e}")
     
     try:
         from ..custom_op.fpgadataflow.hls.addstreams_hls import AddStreamsHLS
@@ -129,22 +123,23 @@ def register_all_backends() -> BackendRegistry:
     logger.debug("Registering RTL backends...")
     
     try:
-        from ..custom_op.fpgadataflow.rtl.thresholding_rtl import ThresholdingRTL
-        registry.register_rtl_backend('Thresholding', ThresholdingRTL)
+        from ..custom_op.fpgadataflow.rtl.thresholding_rtl import Thresholding_rtl
+        registry.register_rtl_backend('Thresholding', Thresholding_rtl)
     except ImportError as e:
-        logger.debug(f"Could not import ThresholdingRTL: {e}")
+        logger.debug(f"Could not import Thresholding_rtl: {e}")
     
     try:
-        from ..custom_op.fpgadataflow.rtl.matrixvectoractivation_rtl import MatrixVectorActivationRTL
-        registry.register_rtl_backend('MatrixVectorActivation', MatrixVectorActivationRTL)
+        from ..custom_op.fpgadataflow.rtl.matrixvectoractivation_rtl import MVAU_rtl
+        registry.register_rtl_backend('MatrixVectorActivation', MVAU_rtl)
+        registry.register_rtl_backend('MVAU', MVAU_rtl)  # Alternative name
     except ImportError as e:
-        logger.debug(f"Could not import MatrixVectorActivationRTL: {e}")
+        logger.debug(f"Could not import MVAU_rtl: {e}")
     
     try:
-        from ..custom_op.fpgadataflow.rtl.dynmvau_rtl import DynMVAURTL
-        registry.register_rtl_backend('DynMVAU', DynMVAURTL)
+        from ..custom_op.fpgadataflow.rtl.dynmvau_rtl import DynMVU_rtl
+        registry.register_rtl_backend('DynMVAU', DynMVU_rtl)
     except ImportError as e:
-        logger.debug(f"Could not import DynMVAURTL: {e}")
+        logger.debug(f"Could not import DynMVU_rtl: {e}")
     
     try:
         from ..custom_op.fpgadataflow.rtl.convolutioninputgenerator_rtl import ConvolutionInputGeneratorRTL

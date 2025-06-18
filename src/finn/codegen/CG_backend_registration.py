@@ -208,27 +208,27 @@ def register_all_clean_backends() -> CG_BackendRegistry:
         logger.debug(f"Could not import CG_ThresholdingHLS: {e}")
     
     try:
-        from ..custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_HLS
-        registry.register_clean_hls_backend('MatrixVectorActivation', CG_MVAU_HLS)
-        registry.register_clean_hls_backend('MVAU', CG_MVAU_HLS)  # Alternative name
+        from ..custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
+        registry.register_clean_hls_backend('MatrixVectorActivation', CG_MVAU_hls)
+        registry.register_clean_hls_backend('MVAU', CG_MVAU_hls)  # Alternative name
     except ImportError as e:
-        logger.debug(f"Could not import CG_MVAU_HLS: {e}")
+        logger.debug(f"Could not import CG_MVAU_hls: {e}")
     
     # Register clean RTL backends
     logger.debug("Registering clean RTL backends...")
     
     try:
-        from ..custom_op.fpgadataflow.rtl.CG_thresholding_rtl import CG_ThresholdingRTL
-        registry.register_clean_rtl_backend('Thresholding', CG_ThresholdingRTL)
+        from ..custom_op.fpgadataflow.rtl.CG_thresholding_rtl import CG_Thresholding_rtl
+        registry.register_clean_rtl_backend('Thresholding', CG_Thresholding_rtl)
     except ImportError as e:
-        logger.debug(f"Could not import CG_ThresholdingRTL: {e}")
+        logger.debug(f"Could not import CG_Thresholding_rtl: {e}")
     
     try:
-        from ..custom_op.fpgadataflow.rtl.CG_mvau_rtl import CG_MVAU_RTL
-        registry.register_clean_rtl_backend('MatrixVectorActivation', CG_MVAU_RTL)
-        registry.register_clean_rtl_backend('MVAU', CG_MVAU_RTL)  # Alternative name
+        from ..custom_op.fpgadataflow.rtl.CG_mvau_rtl import CG_MVAU_rtl
+        registry.register_clean_rtl_backend('MatrixVectorActivation', CG_MVAU_rtl)
+        registry.register_clean_rtl_backend('MVAU', CG_MVAU_rtl)  # Alternative name
     except ImportError as e:
-        logger.debug(f"Could not import CG_MVAU_RTL: {e}")
+        logger.debug(f"Could not import CG_MVAU_rtl: {e}")
     
     # Register all legacy backends as well
     from .backend_registration import register_all_backends

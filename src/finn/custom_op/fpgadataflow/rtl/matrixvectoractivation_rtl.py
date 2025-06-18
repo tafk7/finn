@@ -30,7 +30,7 @@ import numpy as np
 import os
 
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
-from finn.custom_op.fpgadataflow.CG_rtlbackend import CG_RTLBackend
+from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import get_dsp_block, is_versal
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
@@ -41,14 +41,8 @@ from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 # the ... here can be any shape (representing groups of vectors)
 
 
-class CG_MVAU_rtl(MVAU, CG_RTLBackend):
-    """Clean implementation of FINN MVAU RTL backend.
-    
-    This is a clean implementation that eliminates legacy compatibility bloat
-    and uses only direct template value generation methods. No code_gen_dict usage.
-    
-    Class that corresponds to finn-rtl Matrix Vector Unit using clean template architecture.
-    """
+class MVAU_rtl(MVAU, RTLBackend):
+    """Class that corresponds to finn-rtl Matrix Vector Unit."""
 
     def __init__(self, onnx_node, **kwargs):
         super().__init__(onnx_node, **kwargs)
@@ -59,251 +53,8 @@ class CG_MVAU_rtl(MVAU, CG_RTLBackend):
             "pumpedCompute": ("i", False, 0, {0, 1}),
         }
         my_attrs.update(MVAU.get_nodeattr_types(self))
-        my_attrs.update(CG_RTLBackend.get_nodeattr_types(self))
+        my_attrs.update(RTLBackend.get_nodeattr_types(self))
         return my_attrs
-
-    # =============================================================================
-    # CLEAN TEMPLATE VALUE GENERATION METHODS (No code_gen_dict usage)
-    # =============================================================================
-
-    def get_rtl_wrapper_values(self, fpgapart, clk):
-        """Generate RTL wrapper template values for MVAU operation."""
-        # check if settings are valid
-        pumped_compute = self.get_nodeattr("pumpedCompute")
-        simd = self.get_nodeattr("SIMD")
-        if pumped_compute and simd == 1:
-            raise Exception(
-                "Clock pumping an input of SIMD=1 is not meaningful. Please increase SIMD."
-            )
-        
-        dsp_block = get_dsp_block(fpgapart)
-        
-        return {
-            'MODULE_NAME_AXI_WRAPPER': self.get_verilog_top_module_name(),
-            'IS_MVU': 1,
-            'COMPUTE_CORE': self._resolve_impl_style(dsp_block),
-            'PUMPED_COMPUTE': pumped_compute,
-            'MW': self.get_nodeattr("MW"),
-            'MH': self.get_nodeattr("MH"),
-            'PE': self.get_nodeattr("PE"),
-            'SIMD': simd,
-            'ACTIVATION_WIDTH': self.get_input_datatype(0).bitwidth(),
-            'WEIGHT_WIDTH': self.get_input_datatype(1).bitwidth(),
-            'ACCU_WIDTH': self.get_output_datatype().bitwidth(),
-            'SIGNED_ACTIVATIONS': 1 if (self.get_input_datatype(0).min() < 0) else 0,
-            'SEGMENTLEN': self._resolve_segment_len(clk),
-            'NARROW_WEIGHTS': 0,  # Will be updated in generate_hdl
-            'FORCE_BEHAVIORAL': 0,  # For synthesis
-        }
-
-    def get_rtl_module_name(self):
-        """Generate the RTL module name."""
-        return self.get_verilog_top_module_name()
-
-    def get_rtl_parameters(self, fpgapart, clk):
-        """Generate RTL parameters for MVAU module."""
-        pumped_compute = self.get_nodeattr("pumpedCompute")
-        simd = self.get_nodeattr("SIMD")
-        dsp_block = get_dsp_block(fpgapart)
-        
-        return {
-            'IS_MVU': 1,
-            'COMPUTE_CORE': self._resolve_impl_style(dsp_block),
-            'PUMPED_COMPUTE': pumped_compute,
-            'MW': self.get_nodeattr("MW"),
-            'MH': self.get_nodeattr("MH"),
-            'PE': self.get_nodeattr("PE"),
-            'SIMD': simd,
-            'ACTIVATION_WIDTH': self.get_input_datatype(0).bitwidth(),
-            'WEIGHT_WIDTH': self.get_input_datatype(1).bitwidth(),
-            'ACCU_WIDTH': self.get_output_datatype().bitwidth(),
-            'SIGNED_ACTIVATIONS': 1 if (self.get_input_datatype(0).min() < 0) else 0,
-            'SEGMENTLEN': self._resolve_segment_len(clk),
-        }
-
-    def get_port_declarations(self):
-        """Generate port declarations for RTL module."""
-        mem_mode = self.get_nodeattr("mem_mode")
-        
-        ports = {
-            'data_input': {
-                'name': 'in0_V',
-                'direction': 'input',
-                'width': self.get_instream_width(0),
-                'type': 'axis'
-            },
-            'data_output': {
-                'name': 'out0_V', 
-                'direction': 'output',
-                'width': self.get_outstream_width(),
-                'type': 'axis'
-            }
-        }
-        
-        if mem_mode in ["internal_decoupled", "external"]:
-            ports['weight_input'] = {
-                'name': 'in1_V',
-                'direction': 'input', 
-                'width': self.get_instream_width(1),
-                'type': 'axis'
-            }
-        
-        if mem_mode == "internal_decoupled" and self.get_nodeattr("runtime_writeable_weights"):
-            ports['axilite'] = {
-                'name': 's_axilite',
-                'direction': 'slave',
-                'type': 'axilite'
-            }
-        
-        return ports
-
-    def get_source_files(self):
-        """Generate list of RTL source files needed."""
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
-        
-        return [
-            os.path.join(rtllib_dir, "mvu_vvu_axi.sv"),
-            os.path.join(rtllib_dir, "replay_buffer.sv"),
-            os.path.join(rtllib_dir, "mvu_4sx4u.sv"),
-            os.path.join(rtllib_dir, "mvu_vvu_8sx9_dsp58.sv"),
-            os.path.join(rtllib_dir, "mvu_8sx8u_dsp48.sv"),
-        ]
-
-    def get_simulation_files(self):
-        """Generate list of files for RTL simulation."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        wrapper_name = self.get_nodeattr("gen_top_module")
-        
-        return [
-            os.path.join(code_gen_dir, f"{wrapper_name}_wrapper_sim.v"),
-        ]
-
-    # =============================================================================
-    # MVAU-SPECIFIC HELPER METHODS (for compute core selection and optimization)
-    # =============================================================================
-
-    def _resolve_segment_len(self, clk):
-        """Insert pipeline registers in the DSP58 chain to meet target clock frequency."""
-        # ~0.741 ns seems the worst-case delay through first DSP
-        # ~0.605 ns seems to be (on average) delay for all subsequent DSPs
-        # clk >= (critical_path_dsps - 1) * 0.605 + 0.741
-        if self.get_nodeattr("pumpedCompute"):
-            ref_clk = clk / 2
-            simd_factor = 6
-        else:
-            ref_clk = clk
-            simd_factor = 3
-
-        assert (
-            ref_clk > 0.741
-        ), """Infeasible clk target of {} ns has been set,
-        consider lowering the targeted clock frequency!""".format(
-            ref_clk
-        )
-        critical_path_dsps = np.floor((ref_clk - 0.741) / 0.605 + 1)
-        max_chain_len = np.ceil(self.get_nodeattr("SIMD") / simd_factor)
-        dsp_chain_len = critical_path_dsps if critical_path_dsps < max_chain_len else max_chain_len
-        return int(dsp_chain_len)
-
-    def _resolve_impl_style(self, dsp_block):
-        """Based on target device and activation/weight-width, choose the supported RTL compute core."""
-        assert (
-            self.get_nodeattr("resType") != "lut"
-        ), """LUT-based RTL-MVU implementation currently not supported!
-        Please change resType for {} to 'dsp' or consider switching to HLS-based MVAU!""".format(
-            self.onnx_node.name
-        )
-
-        act_width = self.get_input_datatype(0).bitwidth()
-        weight_width = self.get_input_datatype(1).bitwidth()
-
-        if dsp_block == "DSP58":
-            if act_width <= 4 and weight_width <= 4:
-                return "mvu_4sx4u_dsp48e2"
-            else:
-                return "mvu_vvu_8sx9_dsp58"
-        else:
-            if act_width <= 4 and weight_width <= 4:
-                if dsp_block == "DSP48E1":
-                    return "mvu_4sx4u_dsp48e1"
-                elif dsp_block == "DSP48E2":
-                    return "mvu_4sx4u_dsp48e2"
-            else:
-                return "mvu_8sx8u_dsp48"
-
-    def _determine_narrow_weights(self, model):
-        """Determine if weights are narrow range and return parameter value."""
-        weights = model.get_initializer(self.onnx_node.input[1])
-        wdt = self.get_input_datatype(1)
-        return 0 if np.min(weights) == wdt.min() else 1
-
-    def generate_hdl(self, model, fpgapart, clk):
-        """Generate HDL using clean template architecture."""
-        # Generate params as part of IP preparation
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        self.generate_params(model, code_gen_dir)
-
-        # Get template values using clean architecture
-        template_values = self.get_rtl_wrapper_values(fpgapart, clk)
-        
-        # Add narrow weights determination
-        template_values['NARROW_WEIGHTS'] = self._determine_narrow_weights(model)
-        
-        # Save top module name so we can refer to it after this node has been renamed
-        self.set_nodeattr("gen_top_module", template_values['MODULE_NAME_AXI_WRAPPER'])
-
-        # Generate synthesis wrapper
-        template_values['FORCE_BEHAVIORAL'] = 0
-        synthesis_code = self.render_template("mvau/rtl/wrapper.v.j2", template_values)
-        
-        wrapper_path = os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
-        with open(wrapper_path, "w") as f:
-            f.write(synthesis_code)
-
-        # Generate simulation wrapper  
-        template_values['FORCE_BEHAVIORAL'] = 1
-        simulation_code = self.render_template("mvau/rtl/wrapper.v.j2", template_values)
-        
-        sim_wrapper_path = os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper_sim.v")
-        with open(sim_wrapper_path, "w") as f:
-            f.write(simulation_code)
-
-        # Handle memory streaming if needed
-        if self.get_nodeattr("mem_mode") == "internal_decoupled":
-            if self.get_nodeattr("ram_style") == "ultra" and not is_versal(fpgapart):
-                runtime_writeable = self.get_nodeattr("runtime_writeable_weights")
-                assert (
-                    runtime_writeable == 1
-                ), """Layer with URAM weights must have runtime_writeable_weights=1
-                    if Ultrascale device is targeted."""
-            self.generate_hdl_memstream(fpgapart, pumped_memory=self.get_nodeattr("pumpedMemory"))
-        
-        # Set ipgen_path and ip_path so that HLS-Synth transformation
-        # and stich_ip transformation do not complain
-        self.set_nodeattr("ipgen_path", code_gen_dir)
-        self.set_nodeattr("ip_path", code_gen_dir)
-
-    # =============================================================================
-    # RESOURCE ESTIMATION METHODS (unchanged from original)
-    # =============================================================================
-
-    def lut_estimation(self):
-        return 0
-
-    def dsp_estimation(self, fpgapart):
-        # multiplication
-        P = self.get_nodeattr("PE")
-        Q = self.get_nodeattr("SIMD")
-        dsp_block = get_dsp_block(fpgapart)
-        if dsp_block == "DSP58":
-            mult_dsp = P * np.ceil(Q / 3)
-        else:
-            mult_dsp = np.ceil(P / 4) * Q
-        return int(mult_dsp)
-
-    # =============================================================================
-    # INHERITED METHODS (unchanged from original)
-    # =============================================================================
 
     def execute_node(self, context, graph):
         mode = self.get_nodeattr("exec_mode")
@@ -378,6 +129,20 @@ class CG_MVAU_rtl(MVAU, CG_RTLBackend):
                 )
             )
 
+    def lut_estimation(self):
+        return 0
+
+    def dsp_estimation(self, fpgapart):
+        # multiplication
+        P = self.get_nodeattr("PE")
+        Q = self.get_nodeattr("SIMD")
+        dsp_block = get_dsp_block(fpgapart)
+        if dsp_block == "DSP58":
+            mult_dsp = P * np.ceil(Q / 3)
+        else:
+            mult_dsp = np.ceil(P / 4) * Q
+        return int(mult_dsp)
+
     def instantiate_ip(self, cmd):
         # instantiate the RTL IP
         node_name = self.onnx_node.name
@@ -440,6 +205,133 @@ class CG_MVAU_rtl(MVAU, CG_RTLBackend):
                     "connect_bd_net [get_bd_pins %s/%s] [get_bd_pins %s/ap_clk2x]"
                     % (node_name, clk_name, node_name)
                 )
+
+    def _resolve_segment_len(self, clk):
+        # Insert pipeline registers in the DSP58 chain to meet target clock frequency
+        # ~0.741 ns seems the worst-case delay through first DSP
+        # ~0.605 ns seems to be (on average) delay for all subsequent DSPs
+        # clk >= (critical_path_dsps - 1) * 0.605 + 0.741
+        if self.get_nodeattr("pumpedCompute"):
+            ref_clk = clk / 2
+            simd_factor = 6
+        else:
+            ref_clk = clk
+            simd_factor = 3
+
+        assert (
+            ref_clk > 0.741
+        ), """Infeasible clk target of {} ns has been set,
+        consider lowering the targeted clock frequency!""".format(
+            ref_clk
+        )
+        critical_path_dsps = np.floor((ref_clk - 0.741) / 0.605 + 1)
+        max_chain_len = np.ceil(self.get_nodeattr("SIMD") / simd_factor)
+        dsp_chain_len = critical_path_dsps if critical_path_dsps < max_chain_len else max_chain_len
+        return dsp_chain_len
+
+    def _resolve_impl_style(self, dsp_block):
+        # Based on target device and activation/weight-width, choose the
+        # supported RTL compute core
+        assert (
+            self.get_nodeattr("resType") != "lut"
+        ), """LUT-based RTL-MVU implementation currently not supported!
+        Please change resType for {} to 'dsp' or consider switching to HLS-based MVAU!""".format(
+            self.onnx_node.name
+        )
+
+        act_width = self.get_input_datatype(0).bitwidth()
+        weight_width = self.get_input_datatype(1).bitwidth()
+
+        if dsp_block == "DSP58":
+            if act_width <= 4 and weight_width <= 4:
+                return "mvu_4sx4u_dsp48e2"
+            else:
+                return "mvu_vvu_8sx9_dsp58"
+        else:
+            if act_width <= 4 and weight_width <= 4:
+                if dsp_block == "DSP48E1":
+                    return "mvu_4sx4u_dsp48e1"
+                elif dsp_block == "DSP48E2":
+                    return "mvu_4sx4u_dsp48e2"
+            else:
+                return "mvu_8sx8u_dsp48"
+
+    def generate_hdl(self, model, fpgapart, clk):
+        # Generate params as part of IP preparation
+        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+        self.generate_params(model, code_gen_dir)
+
+        template_path, code_gen_dict = self.prepare_codegen_default(fpgapart, clk)
+        # determine if weights are narrow range and add parameter to code gen dict
+        weights = model.get_initializer(self.onnx_node.input[1])
+        wdt = self.get_input_datatype(1)
+        narrow_weights = 0 if np.min(weights) == wdt.min() else 1
+        code_gen_dict["$NARROW_WEIGHTS$"] = str(narrow_weights)
+        # add general parameters to dictionary
+        code_gen_dict["$MODULE_NAME_AXI_WRAPPER$"] = [self.get_verilog_top_module_name()]
+        # save top module name so we can refer to it after this node has been renamed
+        # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
+        self.set_nodeattr("gen_top_module", self.get_verilog_top_module_name())
+
+        # apply code generation to template
+        with open(template_path, "r") as f:
+            template_wrapper = f.read()
+        for key in code_gen_dict:
+            # transform list into long string separated by '\n'
+            code_gen_line = "\n".join(code_gen_dict[key])
+            template_wrapper = template_wrapper.replace(key, code_gen_line)
+        with open(
+            os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v"),
+            "w",
+        ) as f:
+            f.write(template_wrapper.replace("$FORCE_BEHAVIORAL$", str(0)))
+        with open(
+            os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper_sim.v"),
+            "w",
+        ) as f:
+            f.write(template_wrapper.replace("$FORCE_BEHAVIORAL$", str(1)))
+
+        if self.get_nodeattr("mem_mode") == "internal_decoupled":
+            if self.get_nodeattr("ram_style") == "ultra" and not is_versal(fpgapart):
+                runtime_writeable = self.get_nodeattr("runtime_writeable_weights")
+                assert (
+                    runtime_writeable == 1
+                ), """Layer with URAM weights must have runtime_writeable_weights=1
+                    if Ultrascale device is targeted."""
+            self.generate_hdl_memstream(fpgapart, pumped_memory=self.get_nodeattr("pumpedMemory"))
+        # set ipgen_path and ip_path so that HLS-Synth transformation
+        # and stich_ip transformation do not complain
+        self.set_nodeattr("ipgen_path", code_gen_dir)
+        self.set_nodeattr("ip_path", code_gen_dir)
+
+    def prepare_codegen_default(self, fpgapart, clk):
+        template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mvu/mvu_vvu_axi_wrapper.v"
+
+        # check if settings are valid
+        pumped_compute = self.get_nodeattr("pumpedCompute")
+        simd = self.get_nodeattr("SIMD")
+        if pumped_compute and simd == 1:
+            raise Exception(
+                "Clock pumping an input of SIMD=1 is not meaningful. Please increase SIMD."
+            )
+        dsp_block = get_dsp_block(fpgapart)
+        code_gen_dict = {}
+        code_gen_dict["$IS_MVU$"] = [str(1)]
+        code_gen_dict["$COMPUTE_CORE$"] = [self._resolve_impl_style(dsp_block)]
+        code_gen_dict["$PUMPED_COMPUTE$"] = [str(pumped_compute)]
+        code_gen_dict["$MW$"] = [str(self.get_nodeattr("MW"))]
+        code_gen_dict["$MH$"] = [str(self.get_nodeattr("MH"))]
+        code_gen_dict["$PE$"] = [str(self.get_nodeattr("PE"))]
+        code_gen_dict["$SIMD$"] = [str(simd)]
+        code_gen_dict["$ACTIVATION_WIDTH$"] = [str(self.get_input_datatype(0).bitwidth())]
+        code_gen_dict["$WEIGHT_WIDTH$"] = [str(self.get_input_datatype(1).bitwidth())]
+        code_gen_dict["$ACCU_WIDTH$"] = [str(self.get_output_datatype().bitwidth())]
+        code_gen_dict["$SIGNED_ACTIVATIONS$"] = (
+            [str(1)] if (self.get_input_datatype(0).min() < 0) else [str(0)]
+        )
+        code_gen_dict["$SEGMENTLEN$"] = [str(self._resolve_segment_len(clk))]
+
+        return template_path, code_gen_dict
 
     def get_rtl_file_list(self, abspath=False):
         if abspath:
