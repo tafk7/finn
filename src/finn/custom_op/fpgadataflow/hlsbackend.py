@@ -31,12 +31,15 @@ import os
 import subprocess
 import warnings
 from abc import ABC, abstractmethod
+from typing import Dict, Any, List, Set, Optional
 from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow import templates
 from finn.util.basic import CppBuilder, make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.hls import CallHLS
+from finn.codegen.codegen import Codegen
+from finn.codegen import TemplateEngine
 
 try:
     import pyxsi_utils
@@ -44,20 +47,327 @@ except ModuleNotFoundError:
     pyxsi_utils = None
 
 
-class HLSBackend(ABC):
-    """HLSBackend class all custom ops that correspond to a finn-hlslib
-    function are using functionality of. Contains different functions every HLS
-    custom node should have. Some as abstract methods, these have to be filled
-    when writing a new HLS custom op node."""
+class HLSBackend(Codegen):
+    """HLS Backend class inheriting from Codegen base class.
+    
+    Provides HLS-specific code generation functionality for FINN custom ops
+    that correspond to finn-hlslib functions. Uses explicit template declaration
+    instead of auto-discovery for predictable, maintainable code generation.
+    """
 
-    def get_nodeattr_types(self):
-        return {
+    # ===== Explicit Template Declaration =====
+    # These should be overridden by concrete operation classes
+    TEMPLATE_NAME: Optional[str] = None
+    TEMPLATE_OPTIONS: Optional[Dict[str, str]] = None
+
+    def __init__(self, **kwargs):
+        """Initialize HLS backend with Codegen infrastructure."""
+        # Extract HLS-specific kwargs to avoid conflicts
+        hls_kwargs = {k: v for k, v in kwargs.items() if k.startswith('hls_')}
+        
+        # Initialize parent Codegen class
+        super().__init__()
+        
+        # NEW: Initialize template engine
+        self.template_engine = TemplateEngine()
+        
+        # HLS-specific initialization
+        self.hls_template_path = "hls/"  # Updated path
+        # Initialize code generation dictionary for legacy functionality
+        self.code_gen_dict = {}
+        
+        # Context for template values
+        self._current_fpgapart = None
+        self._current_clk = None
+        
+        # Apply HLS-specific configurations
+        for key, value in hls_kwargs.items():
+            setattr(self, key, value)
+
+    # ===== Explicit Template Interface Implementation =====
+
+    def get_template_name(self) -> str:
+        """Get template name - explicit declaration required.
+        
+        Returns:
+            Name of template to use for code generation
+            
+        Raises:
+            NotImplementedError: If no template declared
+        """
+        # Check for instance override first
+        if hasattr(self, '_template_override'):
+            return self._template_override
+            
+        # Use class-level declaration
+        if self.TEMPLATE_NAME:
+            return self.TEMPLATE_NAME
+            
+        if self.TEMPLATE_OPTIONS:
+            return self._select_template_from_options()
+            
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must declare TEMPLATE_NAME or TEMPLATE_OPTIONS"
+        )
+    
+    def _select_template_from_options(self) -> str:
+        """Select template from available options. Override in subclass for logic.
+        
+        Returns:
+            Template name from TEMPLATE_OPTIONS
+        """
+        if not self.TEMPLATE_OPTIONS:
+            raise NotImplementedError("No template options available")
+        
+        # Default: return first option
+        return next(iter(self.TEMPLATE_OPTIONS.values()))
+    
+    def set_template_override(self, template_name: str):
+        """Allow runtime template override.
+        
+        Args:
+            template_name: Template name to use instead of class declaration
+        """
+        self._template_override = template_name
+    
+    def get_nodeattr_types(self) -> Dict[str, Any]:
+        """Get HLS backend node attribute types.
+        
+        Merges any operation-specific attributes with HLS backend attributes.
+        HLS attributes take precedence in case of conflicts.
+        
+        Returns:
+            Dictionary of node attribute specifications
+        """
+        # Base HLS backend attributes
+        hls_attrs = {
             "code_gen_dir_cppsim": ("s", False, ""),
             "executable_path": ("s", False, ""),
             "res_hls": ("s", False, ""),
-            # temporary node attribute to keep track of interface style of hls ops
+            # Temporary node attribute to keep track of interface style of HLS ops
             "cpp_interface": ("s", False, "packed", {"packed", "hls_vector"}),
+            # Template override support
+            "hls_template_override": ("s", False, ""),
         }
+        
+        # Try to get operation-specific attributes if this is a multiple inheritance case
+        operation_attrs = {}
+        for base in self.__class__.__bases__:
+            if hasattr(base, 'get_nodeattr_types') and base != HLSBackend:
+                try:
+                    operation_attrs = base.get_nodeattr_types(self)
+                    break
+                except Exception:
+                    pass
+        
+        # HLS attributes override operation attributes (explicit policy)
+        merged_attrs = {**operation_attrs, **hls_attrs}
+        
+        # Log any conflicts for debugging
+        conflicts = set(operation_attrs.keys()) & set(hls_attrs.keys())
+        if conflicts:
+            self.logger.debug(f"HLS attributes override operation attributes: {conflicts}")
+        
+        return merged_attrs
+
+    def get_template_values(self, template_name: str) -> Dict[str, Any]:
+        """Extract values for HLS template.
+        
+        Args:
+            template_name: Name of template to extract values for
+            
+        Returns:
+            Dictionary mapping template placeholders to values
+        """
+        # Convert existing code_gen_dict to template values
+        template_values = {}
+        
+        # Common HLS values from existing logic
+        template_values.update({
+            'AP_INT_MAX_W': self.get_ap_int_max_w(),
+            'GLOBALS': self._get_globals_from_code_gen_dict(),
+            'DEFINES': self._get_defines_from_code_gen_dict(),
+            'PRAGMAS': self._get_pragmas_from_code_gen_dict(),
+            'STREAMDECLARATIONS': self._get_streams_from_code_gen_dict(),
+            'DOCOMPUTE': self._get_docompute_from_code_gen_dict(),
+        })
+        
+        # Template-specific values
+        if 'docompute' in template_name:
+            template_values.update({
+                'READNPYDATA': self._get_readnpy_from_code_gen_dict(),
+                'DATAOUTSTREAM': self._get_dataout_from_code_gen_dict(),
+                'SAVEASCNPY': self._get_save_from_code_gen_dict(),
+            })
+            
+            if 'timeout' in template_name:
+                template_values.update({
+                    'TIMEOUT_VALUE': self._get_timeout_value(),
+                    'TIMEOUT_CONDITION': self._get_timeout_condition(),
+                    'TIMEOUT_READ_STREAM': self._get_timeout_read_stream(),
+                })
+        
+        elif 'ipgen' in template_name:
+            if template_name.endswith('.cpp.j2'):
+                template_values.update({
+                    'BLACKBOXFUNCTION': self._get_blackbox_from_code_gen_dict(),
+                })
+            elif template_name.endswith('.tcl.j2'):
+                template_values.update({
+                    'PROJECTNAME': f"project_{self.onnx_node.name}",
+                    'HWSRCDIR': self.get_nodeattr("code_gen_dir_ipgen"),
+                    'FPGAPART': self._current_fpgapart or "xc7z020clg400-1",
+                    'TOPFXN': self.onnx_node.name,
+                    'CLKPERIOD': self._current_clk or 10,
+                    'DEFAULT_DIRECTIVES': '\n'.join(self.ipgen_default_directives()),
+                    'EXTRA_DIRECTIVES': '\n'.join(self.ipgen_extra_directives()),
+                })
+        
+        elif 'ip_package' in template_name:
+            template_values.update({
+                'TOPNAME': self.onnx_node.name,
+                'VERILOG_DIR': self.get_nodeattr("code_gen_dir_ipgen"),
+                'HLS_SNAME': 'V',  # Default stream name
+            })
+        
+        return template_values
+
+    def _get_globals_from_code_gen_dict(self) -> str:
+        """Extract globals from code_gen_dict."""
+        if '$GLOBALS$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$GLOBALS$'])
+        return '// No globals'
+
+    def _get_defines_from_code_gen_dict(self) -> str:
+        """Extract defines from code_gen_dict."""
+        if '$DEFINES$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$DEFINES$'])
+        return '// No defines'
+
+    def _get_pragmas_from_code_gen_dict(self) -> str:
+        """Extract pragmas from code_gen_dict."""
+        if '$PRAGMAS$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$PRAGMAS$'])
+        return '// No pragmas'
+
+    def _get_streams_from_code_gen_dict(self) -> str:
+        """Extract stream declarations from code_gen_dict."""
+        if '$STREAMDECLARATIONS$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$STREAMDECLARATIONS$'])
+        return '// No stream declarations'
+
+    def _get_docompute_from_code_gen_dict(self) -> str:
+        """Extract docompute from code_gen_dict."""
+        if '$DOCOMPUTE$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$DOCOMPUTE$'])
+        return '// No compute logic'
+
+    def _get_readnpy_from_code_gen_dict(self) -> str:
+        """Extract read npy data from code_gen_dict."""
+        if '$READNPYDATA$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$READNPYDATA$'])
+        return '// No read npy data'
+
+    def _get_dataout_from_code_gen_dict(self) -> str:
+        """Extract data output stream from code_gen_dict."""
+        if '$DATAOUTSTREAM$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$DATAOUTSTREAM$'])
+        return '// No data output stream'
+
+    def _get_save_from_code_gen_dict(self) -> str:
+        """Extract save as cnpy from code_gen_dict."""
+        if '$SAVEASCNPY$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$SAVEASCNPY$'])
+        return '// No save as cnpy'
+
+    def _get_blackbox_from_code_gen_dict(self) -> str:
+        """Extract blackbox function from code_gen_dict."""
+        if '$BLACKBOXFUNCTION$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$BLACKBOXFUNCTION$'])
+        return '// No blackbox function'
+
+    def _get_timeout_value(self) -> str:
+        """Get timeout value."""
+        if '$TIMEOUT_VALUE$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$TIMEOUT_VALUE$'])
+        return '1000'
+
+    def _get_timeout_condition(self) -> str:
+        """Get timeout condition."""
+        if '$TIMEOUT_CONDITION$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$TIMEOUT_CONDITION$'])
+        return 'out0_V.empty()'
+
+    def _get_timeout_read_stream(self) -> str:
+        """Get timeout read stream."""
+        if '$TIMEOUT_READ_STREAM$' in self.code_gen_dict:
+            return '\n'.join(self.code_gen_dict['$TIMEOUT_READ_STREAM$'])
+        return 'strm << out0_V.read();'
+
+    # ===== HLS-Specific Methods =====
+
+    def generate_hls_code(self) -> str:
+        """Generate HLS code - uses inherited generate_code().
+        
+        Returns:
+            Generated HLS code as string
+        """
+        return self.generate_code()
+
+    def _extract_hls_parallelization_values(self, operation) -> Dict[str, Any]:
+        """Extract HLS-specific parallelization values.
+        
+        Args:
+            operation: Operation instance to extract from
+            
+        Returns:
+            Dictionary of HLS parallelization values
+        """
+        values = {
+            'pe_factor': self._safe_extract_value(operation, 'PE', 1),
+            'simd_factor': self._safe_extract_value(operation, 'SIMD', 1),
+        }
+        values['parallelization_strategy'] = self._infer_hls_parallelization_strategy(operation)
+        return values
+
+    def _infer_hls_parallelization_strategy(self, operation) -> str:
+        """Infer HLS parallelization strategy.
+        
+        Args:
+            operation: Operation instance to analyze
+            
+        Returns:
+            Parallelization strategy string
+        """
+        has_pe = self._has_attr(operation, 'PE')
+        has_simd = self._has_attr(operation, 'SIMD')
+        
+        if has_pe and has_simd:
+            return 'pe_simd'
+        elif has_pe:
+            return 'pe_only'
+        elif has_simd:
+            return 'simd_only'
+        else:
+            return 'sequential'
+
+    def _extract_hls_memory_config(self, operation) -> Dict[str, Any]:
+        """Extract HLS-specific memory configuration.
+        
+        Args:
+            operation: Operation instance to extract from
+            
+        Returns:
+            Dictionary of HLS memory configuration
+        """
+        return {
+            'mem_mode': self._safe_extract_value(operation, 'mem_mode', 'const_embedded'),
+            'ram_style': self._safe_extract_value(operation, 'ram_style', 'auto'),
+        }
+
+    # ===== Legacy HLS Backend Functionality =====
+    # All existing methods preserved for backward compatibility
+
 
     def get_all_verilog_paths(self):
         "Return list of all folders containing Verilog code for this node."
@@ -107,11 +417,15 @@ class HLSBackend(ABC):
         self.set_nodeattr("rtlsim_so", ret[0] + "/" + ret[1])
 
     def code_generation_ipgen(self, model, fpgapart, clk):
-        """Generates c++ code and tcl script for ip generation."""
+        """Generate HLS code using new template system."""
+        # Store context for template values
+        self._current_fpgapart = fpgapart
+        self._current_clk = clk
+        
         node = self.onnx_node
-
-        # generate top cpp file for ip generation
         path = self.get_nodeattr("code_gen_dir_ipgen")
+        
+        # LEGACY: Still populate code_gen_dict for backward compatibility
         self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
         self.generate_params(model, path)
         self.global_includes()
@@ -119,38 +433,28 @@ class HLSBackend(ABC):
         self.blackboxfunction()
         self.pragmas()
         self.docompute()
-
-        template = templates.ipgen_template
-
-        for key in self.code_gen_dict:
-            # transform list into long string separated by '\n'
-            code_gen_line = "\n".join(self.code_gen_dict[key])
-            template = template.replace(key, code_gen_line)
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        f = open(os.path.join(code_gen_dir, "top_{}.cpp".format(node.name)), "w")
-        f.write(template)
-        f.close()
+        
+        # NEW: Use template engine for CPP generation
+        self.set_template_override("hls/ipgen.cpp.j2")
+        cpp_code = self.generate_code()
+        
+        # Write CPP file
+        cpp_path = os.path.join(path, f"top_{node.name}.cpp")
+        with open(cpp_path, "w") as f:
+            f.write(cpp_code)
+        
+        # Clear and prepare for TCL template
         self.code_gen_dict.clear()
-
-        # generate tcl script for ip generation
-        self.code_gen_dict["$PROJECTNAME$"] = ["project_{}".format(node.name)]
-        self.code_gen_dict["$HWSRCDIR$"] = [code_gen_dir]
-        self.code_gen_dict["$FPGAPART$"] = [fpgapart]
-        self.code_gen_dict["$TOPFXN$"] = [node.name]
-        self.code_gen_dict["$CLKPERIOD$"] = [str(clk)]
-        self.code_gen_dict["$DEFAULT_DIRECTIVES$"] = self.ipgen_default_directives()
-        self.code_gen_dict["$EXTRA_DIRECTIVES$"] = self.ipgen_extra_directives()
-
-        template = templates.ipgentcl_template
-
-        for key in self.code_gen_dict:
-            # transform list into long string separated by '\n'
-            code_gen_line = "\n".join(self.code_gen_dict[key])
-            template = template.replace(key, code_gen_line)
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        f = open(os.path.join(code_gen_dir, "hls_syn_{}.tcl".format(node.name)), "w")
-        f.write(template)
-        f.close()
+        
+        # Generate TCL script using template
+        self.set_template_override("hls/ipgen.tcl.j2")
+        tcl_code = self.generate_code()
+        
+        # Write TCL file
+        tcl_path = os.path.join(path, f"hls_syn_{node.name}.tcl")
+        with open(tcl_path, "w") as f:
+            f.write(tcl_code)
+        
         self.code_gen_dict.clear()
 
     def ipgen_default_directives(self):
@@ -190,9 +494,11 @@ class HLSBackend(ABC):
         self.set_nodeattr("ip_vlnv", vlnv)
 
     def code_generation_cppsim(self, model):
-        """Generates c++ code for simulation (cppsim)."""
+        """Generate C++ simulation code using new template system."""
         node = self.onnx_node
         path = self.get_nodeattr("code_gen_dir_cppsim")
+        
+        # LEGACY: Populate code_gen_dict for backward compatibility
         self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
         self.generate_params(model, path)
         self.global_includes()
@@ -203,23 +509,25 @@ class HLSBackend(ABC):
         self.docompute()
         self.dataoutstrm()
         self.save_as_npy()
-
+        
+        # NEW: Determine template based on interface
         if self.get_nodeattr("cpp_interface") == "hls_vector":
             self.timeout_value()
             self.timeout_condition()
             self.timeout_read_stream()
-            template = templates.docompute_template_timeout
+            template_name = "hls/docompute_timeout.cpp.j2"
         else:
-            template = templates.docompute_template
-
-        for key in self.code_gen_dict:
-            # transform list into long string separated by '\n'
-            code_gen_line = "\n".join(self.code_gen_dict[key])
-            template = template.replace(key, code_gen_line)
-        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        f = open(os.path.join(code_gen_dir, "execute_{}.cpp".format(node.op_type)), "w")
-        f.write(template)
-        f.close()
+            template_name = "hls/docompute.cpp.j2"
+        
+        # Generate using template
+        self.set_template_override(template_name)
+        cpp_code = self.generate_code()
+        
+        # Write file
+        cpp_path = os.path.join(path, f"execute_{node.op_type}.cpp")
+        with open(cpp_path, "w") as f:
+            f.write(cpp_code)
+        
         self.code_gen_dict.clear()
 
     def code_generation_ipi(self):

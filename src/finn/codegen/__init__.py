@@ -1,22 +1,47 @@
 """
-FINN Unified Code Generation Framework
+FINN Unified Code Generation - Consolidated Architecture
 
-This module provides a unified architecture for code generation across HLS and RTL backends,
-adopting RTL's successful operation-driven pattern while providing modern infrastructure.
+Simple, explicit, fast.
 """
 
-from .base import BaseCodeGenerator
 from .template_engine import TemplateEngine
-from .file_manager import FileManager
-from .library_resolver import LibraryResolver
-from .hls_generator import ModernHLSGenerator
-from .rtl_generator import ModernRTLGenerator
+from .backend_registry import BackendRegistry
+from .backend_registration import get_backend_registry, register_all_backends
+from .config import CodegenConfig, get_global_config
+from .codegen import (
+    Codegen,
+    UnsupportedTemplateError,
+    TemplateValidationError,
+    CodeGenerationError
+)
+
+# Replace complex components with simplified versions
+from .simple_library_resolver import SimpleLibraryResolver as LibraryResolver
+from .simple_file_manager import SimpleFileManager as FileManager
+
+# Backend classes are imported separately to avoid circular imports
+# Import them directly from their modules when needed
 
 __all__ = [
-    'BaseCodeGenerator',
-    'TemplateEngine', 
+    # Core components
+    'TemplateEngine',
+    'BackendRegistry',
+    'CodegenConfig',
+    
+    # Utilities (simplified versions)
     'FileManager',
     'LibraryResolver',
-    'ModernHLSGenerator',
-    'ModernRTLGenerator'
+    
+    # Registration
+    'get_backend_registry',
+    'register_all_backends',
+    'get_global_config',
+    
+    # Base interface
+    'Codegen',
+    
+    # Exceptions
+    'UnsupportedTemplateError',
+    'TemplateValidationError',
+    'CodeGenerationError'
 ]
