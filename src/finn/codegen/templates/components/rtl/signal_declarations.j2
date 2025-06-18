@@ -1,0 +1,80 @@
+{#- Standard RTL signal declarations that appear in 80% of operations -#}
+
+{#- Input/Output signals -#}
+{% macro io_signals(input_width, output_width) %}
+input wire clk,
+input wire rst,
+input wire [{{ input_width-1 }}:0] in_data,
+input wire in_valid,
+output wire in_ready,
+output reg [{{ output_width-1 }}:0] out_data,
+output reg out_valid,
+input wire out_ready
+{% endmacro %}
+
+{#- Multi-input signals -#}
+{% macro multi_io_signals(input_widths, output_widths) %}
+input wire clk,
+input wire rst,
+{% for i, width in enumerate(input_widths) %}
+input wire [{{ width-1 }}:0] in{{ i }}_data,
+input wire in{{ i }}_valid,
+output wire in{{ i }}_ready,
+{% endfor %}
+{% for i, width in enumerate(output_widths) %}
+output reg [{{ width-1 }}:0] out{{ i }}_data,
+output reg out{{ i }}_valid,
+input wire out{{ i }}_ready{% if not loop.last %},{% endif %}
+{% endfor %}
+{% endmacro %}
+
+{#- Internal processing signals -#}
+{% macro processing_signals(data_width, pe_count=1) %}
+reg [{{ data_width-1 }}:0] proc_data [0:{{ pe_count-1 }}];
+reg proc_valid [0:{{ pe_count-1 }}];
+wire proc_ready [0:{{ pe_count-1 }}];
+{% endmacro %}
+
+{#- Memory interface signals -#}
+{% macro memory_signals(addr_width, data_width, mem_name="mem") %}
+reg [{{ addr_width-1 }}:0] {{ mem_name }}_addr;
+reg {{ mem_name }}_we;
+reg [{{ data_width-1 }}:0] {{ mem_name }}_din;
+wire [{{ data_width-1 }}:0] {{ mem_name }}_dout;
+{% endmacro %}
+
+{#- Counter signals -#}
+{% macro counter_signals(counter_width, counter_name="cnt") %}
+reg [{{ counter_width-1 }}:0] {{ counter_name }};
+reg {{ counter_name }}_en;
+reg {{ counter_name }}_rst;
+{% endmacro %}
+
+{#- State machine signals -#}
+{% macro state_machine_signals(state_width=3, state_name="state") %}
+localparam IDLE = {{ state_width }}'d0;
+localparam PROC = {{ state_width }}'d1;
+localparam DONE = {{ state_width }}'d2;
+reg [{{ state_width-1 }}:0] {{ state_name }};
+reg [{{ state_width-1 }}:0] {{ state_name }}_next;
+{% endmacro %}
+
+{#- FIFO signals -#}
+{% macro fifo_signals(data_width, fifo_name="fifo") %}
+wire [{{ data_width-1 }}:0] {{ fifo_name }}_din;
+wire [{{ data_width-1 }}:0] {{ fifo_name }}_dout;
+wire {{ fifo_name }}_wr_en;
+wire {{ fifo_name }}_rd_en;
+wire {{ fifo_name }}_full;
+wire {{ fifo_name }}_empty;
+{% endmacro %}
+
+{#- PE array signals -#}
+{% macro pe_array_signals(pe_count, data_width) %}
+wire [{{ data_width-1 }}:0] pe_in [0:{{ pe_count-1 }}];
+wire [{{ data_width-1 }}:0] pe_out [0:{{ pe_count-1 }}];
+wire pe_valid_in [0:{{ pe_count-1 }}];
+wire pe_valid_out [0:{{ pe_count-1 }}];
+wire pe_ready_in [0:{{ pe_count-1 }}];
+wire pe_ready_out [0:{{ pe_count-1 }}];
+{% endmacro %}

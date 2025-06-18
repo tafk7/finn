@@ -1,0 +1,29 @@
+{#- Operation-specific includes based on operation type -#}
+{% if operation_type == 'mvau' %}
+#include "weights.hpp"
+#include "activations.hpp"
+#include "mvau.hpp"
+{% if has_thresholds %}
+#include "thresh.h"
+{% endif %}
+{% elif operation_type == 'thresholding' %}
+#include "activations.hpp"
+{% elif operation_type == 'streaming' %}
+#include "streamtools.h"
+{% elif operation_type == 'pool' %}
+#include "maxpool.h"
+#include "pool.hpp"
+{% elif operation_type == 'elementwise' %}
+#include "eltwise.hpp"
+{% elif operation_type == 'swg' %}
+#include "slidingwindow.h"
+{% elif operation_type == 'lookup' %}
+#include "embeddings.hpp"
+{% endif %}
+
+{#- Custom additional includes -#}
+{% if additional_includes %}
+{% for include in additional_includes %}
+#include "{{ include }}"
+{% endfor %}
+{% endif %}

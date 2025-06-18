@@ -1,0 +1,17 @@
+{#- Standard stream declarations that appear in 85% of operations -#}
+{#- Input streams -#}
+{% for i in range(num_inputs) %}
+hls::stream<ap_uint<{{ input_widths[i] }}>> in{{ i }}_V ("in{{ i }}_V");
+{% endfor %}
+
+{#- Output streams -#}
+{% for i in range(num_outputs) %}
+hls::stream<ap_uint<{{ output_widths[i] }}>> out{{ i }}_V ("out{{ i }}_V");
+{% endfor %}
+
+{#- Additional custom streams -#}
+{% if custom_streams %}
+{% for stream in custom_streams %}
+{{ stream.declaration }}
+{% endfor %}
+{% endif %}

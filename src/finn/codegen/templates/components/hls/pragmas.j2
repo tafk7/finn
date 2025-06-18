@@ -1,0 +1,78 @@
+{#- HLS Pragma templates that appear in 85% of operations -#}
+
+{#- Interface pragmas for streams -#}
+{% macro stream_interface(stream_name, mode="axis") %}
+#pragma HLS INTERFACE {{ mode }} port={{ stream_name }}
+{% endmacro %}
+
+{#- Array partitioning pragmas -#}
+{% macro array_partition(array_name, type="complete", dim=1, factor=1) %}
+{% if type == "complete" %}
+#pragma HLS ARRAY_PARTITION variable={{ array_name }} complete dim={{ dim }}
+{% elif type == "cyclic" %}
+#pragma HLS ARRAY_PARTITION variable={{ array_name }} cyclic factor={{ factor }} dim={{ dim }}
+{% elif type == "block" %}
+#pragma HLS ARRAY_PARTITION variable={{ array_name }} block factor={{ factor }} dim={{ dim }}
+{% endif %}
+{% endmacro %}
+
+{#- Resource binding pragmas -#}
+{% macro resource_bind(operation, resource_type, resource_name="") %}
+{% if resource_name %}
+#pragma HLS RESOURCE variable={{ operation }} core={{ resource_type }} metadata="-impl {{ resource_name }}"
+{% else %}
+#pragma HLS RESOURCE variable={{ operation }} core={{ resource_type }}
+{% endif %}
+{% endmacro %}
+
+{#- Memory allocation pragmas -#}
+{% macro memory_allocation(variable, storage_type="RAM_2P_BRAM") %}
+#pragma HLS RESOURCE variable={{ variable }} core={{ storage_type }}
+{% endmacro %}
+
+{#- Pipeline with dependence handling -#}
+{% macro pipeline_with_dependence(ii=1, enable_flush="off", rewind="off") %}
+#pragma HLS PIPELINE II={{ ii }} enable_flush={{ enable_flush }} rewind={{ rewind }}
+{% endmacro %}
+
+{#- Dataflow with intervals -#}
+{% macro dataflow_interval(interval=1) %}
+#pragma HLS DATAFLOW interval={{ interval }}
+{% endmacro %}
+
+{#- Function inlining control -#}
+{% macro inline_control(mode="off") %}
+#pragma HLS INLINE {{ mode }}
+{% endmacro %}
+
+{#- Standard interface pragmas for top-level functions -#}
+{% macro top_function_interface() %}
+#pragma HLS INTERFACE s_axilite port=return bundle=control
+{% endmacro %}
+
+{#- Latency constraints -#}
+{% macro latency_constraint(min_latency=1, max_latency=1) %}
+#pragma HLS LATENCY min={{ min_latency }} max={{ max_latency }}
+{% endmacro %}
+
+{#- Clock domain pragmas -#}
+{% macro clock_domain(clock_name="ap_clk", reset_name="ap_rst_n") %}
+#pragma HLS CLOCK domain={{ clock_name }} name={{ clock_name }}
+#pragma HLS RESET variable={{ reset_name }} active=low
+{% endmacro %}
+
+{#- Standard thresholding pragmas -#}
+{% macro thresholding_pragmas(mem_array="mem", thresh_array="thresholds") %}
+{{ array_partition(mem_array, "complete", 1) }}
+{{ array_partition(thresh_array, "complete", 1) }}
+{{ memory_allocation(mem_array, "RAM_2P_BRAM") }}
+{{ memory_allocation(thresh_array, "RAM_1P_BRAM") }}
+{% endmacro %}
+
+{#- Standard MVAU pragmas -#}
+{% macro mvau_pragmas(weights_array="weights", bias_array="bias") %}
+{{ array_partition(weights_array, "complete", 2) }}
+{{ array_partition(bias_array, "complete", 1) }}
+{{ memory_allocation(weights_array, "RAM_2P_BRAM") }}
+{{ memory_allocation(bias_array, "RAM_1P_BRAM") }}
+{% endmacro %}

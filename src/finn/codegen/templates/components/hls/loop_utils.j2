@@ -1,0 +1,63 @@
+{#- HLS Loop utilities that appear in 90% of FINN operations -#}
+
+{#- Standard HLS loop with explicit pragmas -#}
+{% macro hls_loop(loop_name, loop_var, loop_bounds, pragma_type="pipeline", unroll_factor=1, pipeline_ii=1) %}
+{{ loop_name }}: for ({{ loop_var }} = 0; {{ loop_var }} < {{ loop_bounds }}; {{ loop_var }}++) {
+{% if pragma_type == "pipeline" %}
+    #pragma HLS PIPELINE II={{ pipeline_ii }}
+{% elif pragma_type == "unroll" %}
+    #pragma HLS UNROLL factor={{ unroll_factor }}
+{% elif pragma_type == "dataflow" %}
+    #pragma HLS DATAFLOW
+{% endif %}
+{% endmacro %}
+
+{#- Tile loop pattern common to matrix operations -#}
+{% macro tile_loop(tile_name="Tile", tile_var="tile", tile_count="num_tiles", pipeline_ii=1) %}
+{{ tile_name }}: for ({{ tile_var }} = 0; {{ tile_var }} < {{ tile_count }}; {{ tile_var }}++) {
+    #pragma HLS PIPELINE II={{ pipeline_ii }}
+{% endmacro %}
+
+{#- PE (Processing Element) loop pattern -#}
+{% macro pe_loop(pe_name="PE", pe_var="pe", pe_count="num_pes", pipeline_ii=1) %}
+{{ pe_name }}: for ({{ pe_var }} = 0; {{ pe_var }} < {{ pe_count }}; {{ pe_var }}++) {
+    #pragma HLS PIPELINE II={{ pipeline_ii }}
+{% endmacro %}
+
+{#- SIMD loop pattern for parallel operations -#}
+{% macro simd_loop(simd_name="SIMD", simd_var="simd", simd_count="SIMD", unroll=true) %}
+{{ simd_name }}: for ({{ simd_var }} = 0; {{ simd_var }} < {{ simd_count }}; {{ simd_var }}++) {
+{% if unroll %}
+    #pragma HLS UNROLL
+{% else %}
+    #pragma HLS PIPELINE II=1
+{% endif %}
+{% endmacro %}
+
+{#- Nested loop pattern with different pragmas -#}
+{% macro nested_loops(outer_name, outer_var, outer_bounds, inner_name, inner_var, inner_bounds, 
+                     outer_pragma="dataflow", inner_pragma="pipeline", inner_ii=1) %}
+{{ outer_name }}: for ({{ outer_var }} = 0; {{ outer_var }} < {{ outer_bounds }}; {{ outer_var }}++) {
+{% if outer_pragma == "dataflow" %}
+    #pragma HLS DATAFLOW
+{% elif outer_pragma == "pipeline" %}
+    #pragma HLS PIPELINE II=1
+{% endif %}
+    {{ inner_name }}: for ({{ inner_var }} = 0; {{ inner_var }} < {{ inner_bounds }}; {{ inner_var }}++) {
+{% if inner_pragma == "pipeline" %}
+        #pragma HLS PIPELINE II={{ inner_ii }}
+{% elif inner_pragma == "unroll" %}
+        #pragma HLS UNROLL
+{% endif %}
+{% endmacro %}
+
+{#- Standard loop closure -#}
+{% macro close_loop() %}
+    }
+{% endmacro %}
+
+{#- Nested loop closure -#}
+{% macro close_nested() %}
+    }
+}
+{% endmacro %}

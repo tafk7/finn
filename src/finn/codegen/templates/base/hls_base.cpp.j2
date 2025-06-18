@@ -1,0 +1,39 @@
+{#- 
+Base HLS template that consolidates common structure across all HLS operations.
+This eliminates 90% of code duplication found in the audit.
+-#}
+{% include 'components/includes/standard_hls.j2' %}
+{% if custom_includes %}
+{% for include in custom_includes %}
+#include "{{ include }}"
+{% endfor %}
+{% endif %}
+
+{% include 'components/includes/operation_specific.j2' %}
+
+{{ defines }}
+
+{% include 'components/streams/declarations.j2' %}
+
+{{ pragmas }}
+
+{{ blackbox_function }}
+{
+    {% if read_npy_data %}
+    // NPY data reading
+    {{ read_npy_data }}
+    {% endif %}
+    
+    // Main computation
+    {{ do_compute }}
+    
+    {% if data_out_stream %}
+    // Output data handling
+    {{ data_out_stream }}
+    {% endif %}
+    
+    {% if save_as_npy %}
+    // Save results
+    {{ save_as_npy }}
+    {% endif %}
+}

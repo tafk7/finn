@@ -48,11 +48,11 @@ except ModuleNotFoundError:
 
 
 class HLSBackend(Codegen):
-    """HLS Backend class inheriting from Codegen base class.
+    """Clean HLS Backend class using direct template value generation.
     
     Provides HLS-specific code generation functionality for FINN custom ops
     that correspond to finn-hlslib functions. Uses explicit template declaration
-    instead of auto-discovery for predictable, maintainable code generation.
+    and direct value generation without legacy compatibility layers.
     """
 
     # ===== Explicit Template Declaration =====
@@ -61,20 +61,18 @@ class HLSBackend(Codegen):
     TEMPLATE_OPTIONS: Optional[Dict[str, str]] = None
 
     def __init__(self, **kwargs):
-        """Initialize HLS backend with Codegen infrastructure."""
+        """Initialize HLS backend with clean Codegen infrastructure."""
         # Extract HLS-specific kwargs to avoid conflicts
         hls_kwargs = {k: v for k, v in kwargs.items() if k.startswith('hls_')}
         
         # Initialize parent Codegen class
         super().__init__()
         
-        # NEW: Initialize template engine
+        # Initialize template engine
         self.template_engine = TemplateEngine()
         
         # HLS-specific initialization
-        self.hls_template_path = "hls/"  # Updated path
-        # Initialize code generation dictionary for legacy functionality
-        self.code_gen_dict = {}
+        self.hls_template_path = "hls/"
         
         # Context for template values
         self._current_fpgapart = None
@@ -171,7 +169,7 @@ class HLSBackend(Codegen):
         return merged_attrs
 
     def get_template_values(self, template_name: str) -> Dict[str, Any]:
-        """Extract values for HLS template.
+        """Generate values for HLS template using direct value generation.
         
         Args:
             template_name: Name of template to extract values for
@@ -179,40 +177,14 @@ class HLSBackend(Codegen):
         Returns:
             Dictionary mapping template placeholders to values
         """
-        # Convert existing code_gen_dict to template values
-        template_values = {}
-        
-        # Common HLS values from existing logic
-        template_values.update({
+        # Generate template values directly without legacy conversion
+        template_values = {
             'AP_INT_MAX_W': self.get_ap_int_max_w(),
-            'GLOBALS': self._get_globals_from_code_gen_dict(),
-            'DEFINES': self._get_defines_from_code_gen_dict(),
-            'PRAGMAS': self._get_pragmas_from_code_gen_dict(),
-            'STREAMDECLARATIONS': self._get_streams_from_code_gen_dict(),
-            'DOCOMPUTE': self._get_docompute_from_code_gen_dict(),
-        })
+        }
         
-        # Template-specific values
-        if 'docompute' in template_name:
-            template_values.update({
-                'READNPYDATA': self._get_readnpy_from_code_gen_dict(),
-                'DATAOUTSTREAM': self._get_dataout_from_code_gen_dict(),
-                'SAVEASCNPY': self._get_save_from_code_gen_dict(),
-            })
-            
-            if 'timeout' in template_name:
-                template_values.update({
-                    'TIMEOUT_VALUE': self._get_timeout_value(),
-                    'TIMEOUT_CONDITION': self._get_timeout_condition(),
-                    'TIMEOUT_READ_STREAM': self._get_timeout_read_stream(),
-                })
-        
-        elif 'ipgen' in template_name:
-            if template_name.endswith('.cpp.j2'):
-                template_values.update({
-                    'BLACKBOXFUNCTION': self._get_blackbox_from_code_gen_dict(),
-                })
-            elif template_name.endswith('.tcl.j2'):
+        # Template-specific values based on template type
+        if 'ipgen' in template_name:
+            if template_name.endswith('.tcl.j2'):
                 template_values.update({
                     'PROJECTNAME': f"project_{self.onnx_node.name}",
                     'HWSRCDIR': self.get_nodeattr("code_gen_dir_ipgen"),
@@ -232,77 +204,6 @@ class HLSBackend(Codegen):
         
         return template_values
 
-    def _get_globals_from_code_gen_dict(self) -> str:
-        """Extract globals from code_gen_dict."""
-        if '$GLOBALS$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$GLOBALS$'])
-        return '// No globals'
-
-    def _get_defines_from_code_gen_dict(self) -> str:
-        """Extract defines from code_gen_dict."""
-        if '$DEFINES$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$DEFINES$'])
-        return '// No defines'
-
-    def _get_pragmas_from_code_gen_dict(self) -> str:
-        """Extract pragmas from code_gen_dict."""
-        if '$PRAGMAS$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$PRAGMAS$'])
-        return '// No pragmas'
-
-    def _get_streams_from_code_gen_dict(self) -> str:
-        """Extract stream declarations from code_gen_dict."""
-        if '$STREAMDECLARATIONS$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$STREAMDECLARATIONS$'])
-        return '// No stream declarations'
-
-    def _get_docompute_from_code_gen_dict(self) -> str:
-        """Extract docompute from code_gen_dict."""
-        if '$DOCOMPUTE$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$DOCOMPUTE$'])
-        return '// No compute logic'
-
-    def _get_readnpy_from_code_gen_dict(self) -> str:
-        """Extract read npy data from code_gen_dict."""
-        if '$READNPYDATA$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$READNPYDATA$'])
-        return '// No read npy data'
-
-    def _get_dataout_from_code_gen_dict(self) -> str:
-        """Extract data output stream from code_gen_dict."""
-        if '$DATAOUTSTREAM$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$DATAOUTSTREAM$'])
-        return '// No data output stream'
-
-    def _get_save_from_code_gen_dict(self) -> str:
-        """Extract save as cnpy from code_gen_dict."""
-        if '$SAVEASCNPY$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$SAVEASCNPY$'])
-        return '// No save as cnpy'
-
-    def _get_blackbox_from_code_gen_dict(self) -> str:
-        """Extract blackbox function from code_gen_dict."""
-        if '$BLACKBOXFUNCTION$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$BLACKBOXFUNCTION$'])
-        return '// No blackbox function'
-
-    def _get_timeout_value(self) -> str:
-        """Get timeout value."""
-        if '$TIMEOUT_VALUE$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$TIMEOUT_VALUE$'])
-        return '1000'
-
-    def _get_timeout_condition(self) -> str:
-        """Get timeout condition."""
-        if '$TIMEOUT_CONDITION$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$TIMEOUT_CONDITION$'])
-        return 'out0_V.empty()'
-
-    def _get_timeout_read_stream(self) -> str:
-        """Get timeout read stream."""
-        if '$TIMEOUT_READ_STREAM$' in self.code_gen_dict:
-            return '\n'.join(self.code_gen_dict['$TIMEOUT_READ_STREAM$'])
-        return 'strm << out0_V.read();'
 
     # ===== HLS-Specific Methods =====
 
@@ -417,7 +318,7 @@ class HLSBackend(Codegen):
         self.set_nodeattr("rtlsim_so", ret[0] + "/" + ret[1])
 
     def code_generation_ipgen(self, model, fpgapart, clk):
-        """Generate HLS code using new template system."""
+        """Generate HLS code using clean template system."""
         # Store context for template values
         self._current_fpgapart = fpgapart
         self._current_clk = clk
@@ -425,16 +326,10 @@ class HLSBackend(Codegen):
         node = self.onnx_node
         path = self.get_nodeattr("code_gen_dir_ipgen")
         
-        # LEGACY: Still populate code_gen_dict for backward compatibility
-        self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
+        # Generate parameters first
         self.generate_params(model, path)
-        self.global_includes()
-        self.defines("ipgen")
-        self.blackboxfunction()
-        self.pragmas()
-        self.docompute()
         
-        # NEW: Use template engine for CPP generation
+        # Generate CPP file using template
         self.set_template_override("hls/ipgen.cpp.j2")
         cpp_code = self.generate_code()
         
@@ -442,9 +337,6 @@ class HLSBackend(Codegen):
         cpp_path = os.path.join(path, f"top_{node.name}.cpp")
         with open(cpp_path, "w") as f:
             f.write(cpp_code)
-        
-        # Clear and prepare for TCL template
-        self.code_gen_dict.clear()
         
         # Generate TCL script using template
         self.set_template_override("hls/ipgen.tcl.j2")
@@ -454,8 +346,6 @@ class HLSBackend(Codegen):
         tcl_path = os.path.join(path, f"hls_syn_{node.name}.tcl")
         with open(tcl_path, "w") as f:
             f.write(tcl_code)
-        
-        self.code_gen_dict.clear()
 
     def ipgen_default_directives(self):
         """Return list of default HLS synthesis directives"""
@@ -494,27 +384,15 @@ class HLSBackend(Codegen):
         self.set_nodeattr("ip_vlnv", vlnv)
 
     def code_generation_cppsim(self, model):
-        """Generate C++ simulation code using new template system."""
+        """Generate C++ simulation code using clean template system."""
         node = self.onnx_node
         path = self.get_nodeattr("code_gen_dir_cppsim")
         
-        # LEGACY: Populate code_gen_dict for backward compatibility
-        self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
+        # Generate parameters first
         self.generate_params(model, path)
-        self.global_includes()
-        self.defines("cppsim")
-        self.read_npy_data()
-        self.strm_decl()
-        self.pragmas()
-        self.docompute()
-        self.dataoutstrm()
-        self.save_as_npy()
         
-        # NEW: Determine template based on interface
+        # Determine template based on interface
         if self.get_nodeattr("cpp_interface") == "hls_vector":
-            self.timeout_value()
-            self.timeout_condition()
-            self.timeout_read_stream()
             template_name = "hls/docompute_timeout.cpp.j2"
         else:
             template_name = "hls/docompute.cpp.j2"
@@ -527,8 +405,6 @@ class HLSBackend(Codegen):
         cpp_path = os.path.join(path, f"execute_{node.op_type}.cpp")
         with open(cpp_path, "w") as f:
             f.write(cpp_code)
-        
-        self.code_gen_dict.clear()
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
@@ -685,158 +561,6 @@ compilation transformations?
                 )
             )
 
-    @abstractmethod
-    def global_includes(self):
-        """Function to set the global includes for c++ code that has to be generated
-        for cppsim or rtlsim, is member function of HLSBackend class but has to
-        be filled by every node."""
-        pass
-
-    @abstractmethod
-    def defines(self, var):
-        """Function to set the define commands for c++ code that has to be generated
-        for cppsim or rtlsim, is member function of HLSBackend class but has to
-        be filled by every node.
-
-        var: makes it possible to reuse the function for different c++ code generation.
-        I.e. if set to "ipgen" in MatrixVectorActivation additional PRAGMA defines are
-        added."""
-        pass
-
-    def read_npy_data(self):
-        """Function to generate the commands for reading data from .npy file in c++,
-        might need to be overwritten depending on custom op."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        self.code_gen_dict["$READNPYDATA$"] = []
-        cpp_interface = self.get_nodeattr("cpp_interface")
-
-        for i, inp in enumerate(self.onnx_node.input):
-            dtype = self.get_input_datatype(i)
-            if dtype == DataType["BIPOLAR"]:
-                # use binary for bipolar storage
-                dtype = DataType["BINARY"]
-            elem_hls_type = dtype.get_hls_datatype_str()
-            npy_type = "float"
-            npy_in = "%s/input_%s.npy" % (code_gen_dir, i)
-
-            iwidth = self.get_instream_width(i)
-            # if the stream is not exposed, it has 0 width and no npy file will be created
-            if iwidth == 0:
-                continue
-            if cpp_interface == "packed":
-                elem_bits = dtype.bitwidth()
-                packed_bits = iwidth
-                packed_hls_type = "ap_uint<%d>" % packed_bits
-                self.code_gen_dict["$READNPYDATA$"].append(
-                    'npy2apintstream<%s, %s, %d, %s>("%s", in%s_V);'
-                    % (
-                        packed_hls_type,
-                        elem_hls_type,
-                        elem_bits,
-                        npy_type,
-                        npy_in,
-                        i,
-                    )
-                )
-            else:
-                folded_shape = self.get_folded_input_shape()
-                self.code_gen_dict["$READNPYDATA$"].append(
-                    'npy2vectorstream<%s, %s, %d>("%s", in%s_V, false);'
-                    % (
-                        elem_hls_type,
-                        npy_type,
-                        folded_shape[-1],
-                        npy_in,
-                        i,
-                    )
-                )
-
-    def strm_decl(self):
-        """Function to generate the commands for the stream declaration in c++,
-        is member function of HLSBackend class but might need to be filled
-        by node."""
-        self.code_gen_dict["$STREAMDECLARATIONS$"] = []
-        self.code_gen_dict["$STREAMDECLARATIONS$"].append(
-            'hls::stream<ap_uint<{}>> in0_V ("in0_V");'.format(self.get_instream_width())
-        )
-        self.code_gen_dict["$STREAMDECLARATIONS$"].append(
-            'hls::stream<ap_uint<{}>> out0_V ("out0_V");'.format(self.get_outstream_width())
-        )
-
-    @abstractmethod
-    def docompute(self):
-        """Function to generate the commands for the computational part of the
-        c++ code, is member function of HLSBackend class but has to be filled
-        by every node."""
-        pass
-
-    def dataoutstrm(self):
-        """Function to generate the commands for reading out data from c++ and convert
-        into npy format, is member function of HLSBackend class might need to be filled
-        by node."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        self.code_gen_dict["$DATAOUTSTREAM$"] = []
-
-        for o, outp in enumerate(self.onnx_node.output):
-            dtype = self.get_output_datatype(o)
-            if dtype == DataType["BIPOLAR"]:
-                # use binary for bipolar storage
-                dtype = DataType["BINARY"]
-            elem_hls_type = dtype.get_hls_datatype_str()
-            npy_type = "float"
-            npy_out = "%s/output_%s.npy" % (code_gen_dir, o)
-            oshape = self.get_folded_output_shape(o)
-            oshape_cpp_str = str(oshape).replace("(", "{").replace(")", "}")
-
-            cpp_interface = self.get_nodeattr("cpp_interface")
-
-            if cpp_interface == "packed":
-                elem_bits = dtype.bitwidth()
-                packed_bits = self.get_outstream_width(o)
-                packed_hls_type = "ap_uint<%d>" % packed_bits
-
-                self.code_gen_dict["$DATAOUTSTREAM$"].append(
-                    'apintstream2npy<%s, %s, %d, %s>(out%s_V, %s, "%s");'
-                    % (
-                        packed_hls_type,
-                        elem_hls_type,
-                        elem_bits,
-                        npy_type,
-                        o,
-                        oshape_cpp_str,
-                        npy_out,
-                    )
-                )
-            else:
-                folded_shape = self.get_folded_output_shape(o)
-                self.code_gen_dict["$DATAOUTSTREAM$"].append(
-                    'vectorstream2npy<%s, %s, %d>(strm, %s, "%s");'
-                    % (
-                        elem_hls_type,
-                        npy_type,
-                        folded_shape[-1],
-                        oshape_cpp_str,
-                        npy_out,
-                    )
-                )
-
-    def save_as_npy(self):
-        """Function to generate the commands for saving data in .npy file in c++"""
-        self.code_gen_dict["$SAVEASCNPY$"] = []
-
-    @abstractmethod
-    def blackboxfunction(self):
-        """Function to generate a blackbock function in c++ from which an IP block
-        will be generated, is member function of HLSBackend class but has to be filled
-        by every node."""
-        pass
-
-    def pragmas(self):
-        """Function to generate the pragma commands in c++,
-        might need to be overwritten depending on custom op."""
-        self.code_gen_dict["$PRAGMAS$"] = ["#pragma HLS INTERFACE axis port=in0_V"]
-        self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE axis port=out0_V")
-        self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE ap_ctrl_none port=return")
 
     def get_ap_int_max_w(self):
         """Return the maximum width of any ap_int used in this module. Used to set the
@@ -846,15 +570,3 @@ compilation transformations?
         ret = max([instream, outstream])
         assert ret <= 8191, "AP_INT_MAX_W=%d is larger than allowed maximum of 8191" % ret
         return ret
-
-    def timeout_value(self):
-        """Set timeout value for HLS functions defined for one clock cycle"""
-        self.code_gen_dict["$TIMEOUT_VALUE$"] = ["1000"]
-
-    def timeout_condition(self):
-        """Set timeout condition for HLS functions defined for one clock cycle"""
-        self.code_gen_dict["$TIMEOUT_CONDITION$"] = ["out0_V.empty()"]
-
-    def timeout_read_stream(self):
-        """Set reading output stream procedure for HLS functions defined for one clock cycle"""
-        self.code_gen_dict["$TIMEOUT_READ_STREAM$"] = ["strm << out0_V.read();"]

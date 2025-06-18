@@ -34,7 +34,7 @@ from finn.codegen import TemplateEngine
 
 
 class ThresholdingHLS(Thresholding, HLSBackend):
-    """HLS backend for Thresholding operations - NO code_gen_dict dependency."""
+    """Clean HLS backend for Thresholding operations using direct template value generation."""
     
     def __init__(self, onnx_node, **kwargs):
         """Initialize Thresholding HLS backend with template engine."""

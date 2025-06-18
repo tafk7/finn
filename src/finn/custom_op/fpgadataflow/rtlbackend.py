@@ -43,11 +43,11 @@ except ModuleNotFoundError:
 
 
 class RTLBackend(Codegen):
-    """RTL Backend class inheriting from Codegen base class.
+    """Clean RTL Backend class using direct template value generation.
     
     Provides RTL-specific code generation functionality for FINN custom ops
     that correspond to modules in finn-rtllib. Uses explicit template declaration
-    for predictable code generation.
+    and direct value generation without legacy compatibility layers.
     """
 
     # ===== Explicit Template Declaration =====
@@ -56,18 +56,18 @@ class RTLBackend(Codegen):
     TEMPLATE_OPTIONS: Optional[Dict[str, str]] = None
 
     def __init__(self, **kwargs):
-        """Initialize RTL backend with Codegen infrastructure."""
+        """Initialize RTL backend with clean Codegen infrastructure."""
         # Extract RTL-specific kwargs to avoid conflicts
         rtl_kwargs = {k: v for k, v in kwargs.items() if k.startswith('rtl_')}
         
         # Initialize parent Codegen class
         super().__init__()
         
-        # NEW: Initialize template engine
+        # Initialize template engine
         self.template_engine = TemplateEngine()
         
         # RTL-specific initialization
-        self.rtl_template_path = "rtl/"  # Updated path
+        self.rtl_template_path = "rtl/"
         
         # Context for template values
         self._current_model = None
