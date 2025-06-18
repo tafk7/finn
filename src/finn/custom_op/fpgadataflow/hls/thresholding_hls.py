@@ -28,157 +28,100 @@
 
 import os
 from typing import Dict, Any
+from qonnx.core.datatype import DataType
+
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
-from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
-from finn.codegen import TemplateEngine
+from finn.custom_op.fpgadataflow.CG_hlsbackend import CG_HLSBackend
 
 
-class ThresholdingHLS(Thresholding, HLSBackend):
-    """Clean HLS backend for Thresholding operations using direct template value generation."""
+class CG_ThresholdingHLS(Thresholding, CG_HLSBackend):
+    """
+    Clean thresholding HLS implementation with current inheritance.
+    
+    Inherits from both Thresholding and CG_HLSBackend to maintain compatibility
+    while using clean Jinja2-based template generation without legacy bloat.
+    """
+    
+    # Explicit template declaration
+    TEMPLATE_NAME = "thresholding/hls/docompute.cpp.j2"
+    TEMPLATE_FALLBACKS = ["hls/docompute.cpp.j2"]
     
     def __init__(self, onnx_node, **kwargs):
-        """Initialize Thresholding HLS backend with template engine."""
-        super().__init__(onnx_node, **kwargs)
+        """Initialize clean thresholding HLS backend with current inheritance."""
+        # Maintain current inheritance structure
+        Thresholding.__init__(self, onnx_node, **kwargs)
+        CG_HLSBackend.__init__(self, **kwargs)
         
-        # Initialize template engine
-        self.template_engine = TemplateEngine()
+        self.logger.debug(f"Initialized CG_ThresholdingHLS for node: {onnx_node.name}")
+
+    def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
+        """Generate thresholding-specific template values.
         
-        # Context for code generation
-        self._current_fpgapart = None
-        self._current_clk = None
-    
-    def get_template_values(self, template_name: str) -> Dict[str, Any]:
-        """Extract values for Jinja2 templates - NO code_gen_dict."""
+        Args:
+            template_name: Name of template being generated for
+            
+        Returns:
+            Dictionary of thresholding-specific template values
+        """
+        values = {}
+        
+        # Generate core thresholding values
+        values['DEFINES'] = self._generate_thresholding_defines()
+        values['DOCOMPUTE'] = self._generate_thresholding_compute()
+        
+        # Add template-specific values
         if 'docompute' in template_name:
-            return self._get_docompute_values(template_name)
-        elif 'ipgen.cpp' in template_name:
-            return self._get_ipgen_cpp_values()
-        elif 'ipgen.tcl' in template_name:
-            return self._get_ipgen_tcl_values()
-        else:
-            raise ValueError(f"Unsupported template: {template_name}")
-    
-    def _get_docompute_values(self, template_name: str) -> Dict[str, Any]:
-        """Get values for docompute templates."""
-        values = {
-            'AP_INT_MAX_W': self.get_ap_int_max_w(),
-            'GLOBALS': self._generate_globals(),
-            'DEFINES': self._generate_defines("cppsim"),
-            'PRAGMAS': self._generate_pragmas(),
-            'STREAMDECLARATIONS': self._generate_stream_declarations(),
-            'READNPYDATA': self._generate_read_npy_data(),
-            'DOCOMPUTE': self._generate_docompute(),
-            'DATAOUTSTREAM': self._generate_data_out_stream(),
-            'SAVEASCNPY': self._generate_save_as_npy(),
-        }
-        
-        if 'timeout' in template_name:
             values.update({
-                'TIMEOUT_VALUE': self._generate_timeout_value(),
-                'TIMEOUT_CONDITION': self._generate_timeout_condition(),
-                'TIMEOUT_READ_STREAM': self._generate_timeout_read_stream(),
+                'READNPYDATA': self._generate_read_npy_data(),
+                'DATAOUTSTREAM': self._generate_data_out_stream(),
+                'SAVEASCNPY': self._generate_save_as_npy(),
             })
+            
+            # Add timeout values for timeout template variant
+            if 'timeout' in template_name:
+                values.update({
+                    'TIMEOUT_VALUE': self._generate_timeout_value(),
+                    'TIMEOUT_CONDITION': self._generate_timeout_condition(),
+                    'TIMEOUT_READ_STREAM': self._generate_timeout_read_stream(),
+                })
+        
+        elif 'ipgen' in template_name:
+            if template_name.endswith('.cpp.j2'):
+                values['BLACKBOXFUNCTION'] = self._generate_blackbox_function()
+            elif template_name.endswith('.tcl.j2'):
+                values.update(self._generate_ipgen_tcl_values())
         
         return values
-    
-    def _get_ipgen_cpp_values(self) -> Dict[str, Any]:
-        """Get values for ipgen C++ template."""
-        return {
-            'AP_INT_MAX_W': self.get_ap_int_max_w(),
-            'GLOBALS': self._generate_globals(),
-            'DEFINES': self._generate_defines("ipgen"),
-            'BLACKBOXFUNCTION': self._generate_blackbox_function(),
-            'PRAGMAS': self._generate_pragmas(),
-            'DOCOMPUTE': self._generate_docompute(),
-        }
-    
-    def _get_ipgen_tcl_values(self) -> Dict[str, Any]:
-        """Get values for ipgen TCL template."""
-        return {
-            'PROJECTNAME': f"project_{self.onnx_node.name}",
-            'HWSRCDIR': self.get_nodeattr("code_gen_dir_ipgen"),
-            'FPGAPART': self._current_fpgapart,
-            'TOPFXN': self.onnx_node.name,
-            'CLKPERIOD': self._current_clk,
-            'DEFAULT_DIRECTIVES': '\n'.join(self.ipgen_default_directives()),
-            'EXTRA_DIRECTIVES': '\n'.join(self.ipgen_extra_directives()),
-        }
-    
-    # Direct template value generation methods (replace code_gen_dict usage)
-    def _generate_globals(self) -> str:
-        """Generate global includes directly."""
-        includes = [
-            '#include "activations.hpp"',
-            '#include "params.h"'
-        ]
-        return '\n'.join(includes)
-    
-    def _generate_defines(self, mode: str) -> str:
-        """Generate defines directly."""
-        numInputVectors = list(self.get_nodeattr("numInputVectors"))
-        numReps = numInputVectors[0]
+
+    def _generate_thresholding_defines(self) -> str:
+        """Generate thresholding defines directly.
+        
+        Returns:
+            String containing thresholding-specific #define statements
+        """
+        num_input_vectors = self.get_nodeattr('numInputVectors')
+        num_reps = num_input_vectors[0] if num_input_vectors else 1
         
         defines = [
             f"#define NumChannels1 {self.get_nodeattr('NumChannels')}",
             f"#define PE1 {self.get_nodeattr('PE')}",
-            f"#define numReps {numReps}"
+            f"#define numReps {num_reps}",
+            f"#define numSteps {self.get_nodeattr('numSteps')}",
         ]
+        
+        # Add threshold memory size if needed
+        tmem = self.calc_tmem()
+        if tmem > 0:
+            defines.append(f"#define TMEM {tmem}")
+        
         return '\n'.join(defines)
-    
-    def _generate_pragmas(self) -> str:
-        """Generate pragmas directly."""
-        pragmas = [
-            "#pragma HLS INTERFACE axis port=in0_V",
-            "#pragma HLS INTERFACE axis port=out0_V", 
-            "#pragma HLS INTERFACE ap_ctrl_none port=return"
-        ]
+
+    def _generate_thresholding_compute(self) -> str:
+        """Generate thresholding compute logic directly.
         
-        # Add array partition pragmas for thresholds
-        ram_style = self.get_nodeattr("ram_style")
-        if self.calc_tmem() != 0:
-            pragmas.extend([
-                "#pragma HLS ARRAY_PARTITION variable=threshs.parameters complete dim=1",
-                "#pragma HLS ARRAY_PARTITION variable=threshs.parameters complete dim=3"
-            ])
-            
-            if ram_style == "distributed":
-                pragmas.append("#pragma HLS RESOURCE variable=threshs.parameters core=ROM_2P_LUTRAM")
-            elif ram_style == "block":
-                pragmas.append("#pragma HLS RESOURCE variable=threshs.parameters core=ROM_2P_BRAM")
-        
-        return '\n'.join(pragmas)
-    
-    def _generate_stream_declarations(self) -> str:
-        """Generate stream declarations directly."""
-        declarations = [
-            f'hls::stream<ap_uint<{self.get_instream_width()}>> in0_V ("in0_V");',
-            f'hls::stream<ap_uint<{self.get_outstream_width()}>> out0_V ("out0_V");'
-        ]
-        return '\n'.join(declarations)
-    
-    def _generate_read_npy_data(self) -> str:
-        """Generate read npy data directly."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        
-        # Get input data type and stream info
-        dtype = self.get_input_datatype()
-        if dtype.name == "BIPOLAR":
-            dtype = self.get_input_datatype().get_binary_equivalent()
-        
-        elem_hls_type = dtype.get_hls_datatype_str()
-        npy_type = "float"
-        npy_in = f"{code_gen_dir}/input_0.npy"
-        
-        # Stream configuration
-        elem_bits = dtype.bitwidth()
-        packed_bits = self.get_instream_width()
-        packed_hls_type = f"ap_uint<{packed_bits}>"
-        
-        return f'npy2apintstream<{packed_hls_type}, {elem_hls_type}, {elem_bits}, {npy_type}>("{npy_in}", in0_V);'
-    
-    def _generate_docompute(self) -> str:
-        """Generate docompute directly."""
-        node = self.onnx_node
+        Returns:
+            String containing the thresholding computation call
+        """
         inp_hls_str = self.get_input_datatype().get_hls_datatype_str()
         out_hls_str = self.get_output_datatype().get_hls_datatype_str()
         
@@ -191,11 +134,49 @@ class ThresholdingHLS(Thresholding, HLSBackend):
         tdt = self.get_input_datatype(1)
         thold_hls_str = tdt.get_hls_datatype_str()
         
-        return f"""Thresholding_Batch<{inp_hls_str}, {out_hls_str}, {thold_hls_str}, NumChannels1, PE1, {tmem}>
+        compute_call = f"""Thresholding_Batch<{inp_hls_str}, {out_hls_str}, {thold_hls_str}, NumChannels1, PE1, {tmem}>
         (in0_V, out0_V, threshs.parameters, numReps);"""
-    
+        
+        return compute_call
+
+    def _generate_read_npy_data(self) -> str:
+        """Generate read npy data logic directly.
+        
+        Returns:
+            String containing npy data reading code
+        """
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+        
+        # Get input data type and stream info
+        dtype = self.get_input_datatype()
+        if dtype.name == "BIPOLAR":
+            dtype = dtype.get_binary_equivalent()
+        
+        elem_hls_type = dtype.get_hls_datatype_str()
+        npy_type = "float"
+        npy_in = f"{code_gen_dir}/input_0.npy"
+        
+        # Stream configuration
+        elem_bits = dtype.bitwidth()
+        packed_bits = self.get_instream_width()
+        packed_hls_type = f"ap_uint<{packed_bits}>"
+        
+        cpp_interface = self._safe_get_nodeattr("cpp_interface", "packed")
+        
+        if cpp_interface == "packed":
+            read_code = f'npy2apintstream<{packed_hls_type}, {elem_hls_type}, {elem_bits}, {npy_type}>("{npy_in}", in0_V);'
+        else:
+            folded_shape = self.get_folded_input_shape()
+            read_code = f'npy2vectorstream<{elem_hls_type}, {npy_type}, {folded_shape[-1]}>("{npy_in}", in0_V, false);'
+        
+        return read_code
+
     def _generate_data_out_stream(self) -> str:
-        """Generate data output stream directly."""
+        """Generate data output stream logic directly.
+        
+        Returns:
+            String containing data output streaming code
+        """
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
         
         # Get output data type and stream info
@@ -209,80 +190,209 @@ class ThresholdingHLS(Thresholding, HLSBackend):
         oshape = self.get_folded_output_shape()
         oshape_cpp_str = str(oshape).replace("(", "{").replace(")", "}")
         
-        elem_bits = dtype.bitwidth()
-        packed_bits = self.get_outstream_width()
-        packed_hls_type = f"ap_uint<{packed_bits}>"
+        cpp_interface = self._safe_get_nodeattr("cpp_interface", "packed")
         
-        return f'apintstream2npy<{packed_hls_type}, {elem_hls_type}, {elem_bits}, {npy_type}>(out0_V, {oshape_cpp_str}, "{npy_out}");'
-    
+        if cpp_interface == "packed":
+            elem_bits = dtype.bitwidth()
+            packed_bits = self.get_outstream_width()
+            packed_hls_type = f"ap_uint<{packed_bits}>"
+            
+            out_code = f'apintstream2npy<{packed_hls_type}, {elem_hls_type}, {elem_bits}, {npy_type}>(out0_V, {oshape_cpp_str}, "{npy_out}");'
+        else:
+            folded_shape = self.get_folded_output_shape()
+            out_code = f'vectorstream2npy<{elem_hls_type}, {npy_type}, {folded_shape[-1]}>(strm, {oshape_cpp_str}, "{npy_out}");'
+        
+        return out_code
+
     def _generate_save_as_npy(self) -> str:
-        """Generate save as npy directly."""
-        return ""  # Usually empty for thresholding
-    
+        """Generate save as npy logic directly.
+        
+        Returns:
+            String containing save functionality (usually empty for thresholding)
+        """
+        return "// Save functionality handled by dataoutstream"
+
     def _generate_blackbox_function(self) -> str:
-        """Generate blackbox function directly."""
+        """Generate blackbox function signature directly.
+        
+        Returns:
+            String containing blackbox function signature
+        """
         return f"""void {self.onnx_node.name}(hls::stream<ap_uint<{self.get_instream_width()}>> &in0_V,
     hls::stream<ap_uint<{self.get_outstream_width()}>> &out0_V)"""
-    
+
     def _generate_timeout_value(self) -> str:
-        """Generate timeout value directly."""
+        """Generate timeout value for timeout templates.
+        
+        Returns:
+            String containing timeout value
+        """
         return "1000"
-    
+
     def _generate_timeout_condition(self) -> str:
-        """Generate timeout condition directly.""" 
+        """Generate timeout condition for timeout templates.
+        
+        Returns:
+            String containing timeout condition
+        """
         return "out0_V.empty()"
-    
+
     def _generate_timeout_read_stream(self) -> str:
-        """Generate timeout read stream directly."""
+        """Generate timeout read stream for timeout templates.
+        
+        Returns:
+            String containing timeout read stream code
+        """
         return "strm << out0_V.read();"
-    
+
+    def _generate_ipgen_tcl_values(self) -> Dict[str, Any]:
+        """Generate values for IPGen TCL template.
+        
+        Returns:
+            Dictionary containing TCL template values
+        """
+        return {
+            'PROJECTNAME': f"project_{self.onnx_node.name}",
+            'HWSRCDIR': self.get_nodeattr("code_gen_dir_ipgen"),
+            'FPGAPART': getattr(self, '_current_fpgapart', "xc7z020clg400-1"),
+            'TOPFXN': self.onnx_node.name,
+            'CLKPERIOD': getattr(self, '_current_clk', 10),
+            'DEFAULT_DIRECTIVES': self._generate_default_directives(),
+            'EXTRA_DIRECTIVES': self._generate_extra_directives(),
+        }
+
+    def _generate_default_directives(self) -> str:
+        """Generate default HLS directives.
+        
+        Returns:
+            String containing default HLS directives
+        """
+        directives = [
+            "set_param hls.enable_hidden_option_error false",
+            "config_compile -disable_unroll_code_size_check -pipeline_style flp",
+            "config_interface -m_axi_addr64",
+            "config_rtl -module_auto_prefix",
+            "config_rtl -deadlock_detection none",
+        ]
+        return '\n'.join(directives)
+
+    def _generate_extra_directives(self) -> str:
+        """Generate extra HLS directives.
+        
+        Returns:
+            String containing extra HLS directives (empty by default)
+        """
+        return ""
+
+    def _generate_hls_pragmas(self) -> str:
+        """Override to add thresholding-specific pragmas.
+        
+        Returns:
+            String containing HLS pragmas with thresholding-specific additions
+        """
+        pragmas = [
+            "#pragma HLS INTERFACE axis port=in0_V",
+            "#pragma HLS INTERFACE axis port=out0_V", 
+            "#pragma HLS INTERFACE ap_ctrl_none port=return"
+        ]
+        
+        # Add array partition pragmas for thresholds
+        ram_style = self._safe_get_nodeattr("ram_style", "auto")
+        if self.calc_tmem() != 0:
+            pragmas.extend([
+                "#pragma HLS ARRAY_PARTITION variable=threshs.parameters complete dim=1",
+                "#pragma HLS ARRAY_PARTITION variable=threshs.parameters complete dim=3"
+            ])
+            
+            if ram_style == "distributed":
+                pragmas.append("#pragma HLS RESOURCE variable=threshs.parameters core=ROM_2P_LUTRAM")
+            elif ram_style == "block":
+                pragmas.append("#pragma HLS RESOURCE variable=threshs.parameters core=ROM_2P_BRAM")
+        
+        return '\n'.join(pragmas)
+
+    def _generate_hls_globals(self) -> str:
+        """Override to add thresholding-specific globals.
+        
+        Returns:
+            String containing thresholding-specific global declarations
+        """
+        globals_list = [
+            '#include "activations.hpp"',
+            '#include "params.h"'
+        ]
+        return '\n'.join(globals_list)
+
+    # ===== Code Generation Entry Points =====
+
     def code_generation_cppsim(self, model):
-        """Generate C++ simulation code using Jinja2 templates."""
+        """Generate C++ simulation code using Jinja2 templates.
+        
+        Args:
+            model: FINN model containing this operation
+        """
         node = self.onnx_node
         path = self.get_nodeattr("code_gen_dir_cppsim")
+        
+        self.logger.info(f"Generating C++ simulation code for {node.name}")
         
         # Generate parameter files first
         self.generate_params(model, path)
         
-        # Determine template
-        if self.get_nodeattr("cpp_interface") == "hls_vector":
+        # Determine template based on interface
+        cpp_interface = self._safe_get_nodeattr("cpp_interface", "packed")
+        if cpp_interface == "hls_vector":
             template_name = "thresholding/hls/docompute_timeout.cpp.j2"
         else:
             template_name = "thresholding/hls/docompute.cpp.j2"
         
         # Generate code using template engine
-        template_values = self.get_template_values(template_name)
-        cpp_code = self.template_engine.render_template(template_name, template_values)
+        cpp_code = self.generate_code()
         
         # Write file
         cpp_path = os.path.join(path, f"execute_{node.op_type}.cpp")
         with open(cpp_path, "w") as f:
             f.write(cpp_code)
-    
+        
+        self.logger.info(f"Generated C++ simulation: {cpp_path}")
+
     def code_generation_ipgen(self, model, fpgapart, clk):
-        """Generate IP generation files using Jinja2 templates."""
-        # Store context
+        """Generate IP generation files using Jinja2 templates.
+        
+        Args:
+            model: FINN model containing this operation
+            fpgapart: Target FPGA part
+            clk: Clock period
+        """
+        # Store context for template generation
         self._current_fpgapart = fpgapart
         self._current_clk = clk
         
         node = self.onnx_node
         path = self.get_nodeattr("code_gen_dir_ipgen")
         
+        self.logger.info(f"Generating IP generation files for {node.name}")
+        
         # Generate parameter files first
         self.generate_params(model, path)
         
         # Generate C++ file
-        cpp_values = self.get_template_values("thresholding/hls/ipgen.cpp.j2")
-        cpp_code = self.template_engine.render_template("thresholding/hls/ipgen.cpp.j2", cpp_values)
+        self.__class__.TEMPLATE_NAME = "thresholding/hls/ipgen.cpp.j2"
+        cpp_code = self.generate_code()
         
         cpp_path = os.path.join(path, f"top_{node.name}.cpp")
         with open(cpp_path, "w") as f:
             f.write(cpp_code)
         
         # Generate TCL file
-        tcl_values = self.get_template_values("thresholding/hls/ipgen.tcl.j2")
-        tcl_code = self.template_engine.render_template("thresholding/hls/ipgen.tcl.j2", tcl_values)
+        self.__class__.TEMPLATE_NAME = "thresholding/hls/ipgen.tcl.j2"
+        tcl_code = self.generate_code()
         
         tcl_path = os.path.join(path, f"hls_syn_{node.name}.tcl")
         with open(tcl_path, "w") as f:
             f.write(tcl_code)
+        
+        # Reset template name
+        self.__class__.TEMPLATE_NAME = "thresholding/hls/docompute.cpp.j2"
+        
+        self.logger.info(f"Generated IP files: {cpp_path}, {tcl_path}")

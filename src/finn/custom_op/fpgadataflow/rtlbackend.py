@@ -26,15 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import numpy as np
+import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Set, Optional
+from typing import Dict, Any, List
 
+from finn.codegen.codegen import Codegen
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
-from finn.codegen.codegen import Codegen
-from finn.codegen import TemplateEngine
 
 try:
     import pyxsi_utils
@@ -42,43 +41,28 @@ except ModuleNotFoundError:
     pyxsi_utils = None
 
 
-class RTLBackend(Codegen):
-    """Clean RTL Backend class using direct template value generation.
+class CG_RTLBackend(Codegen):
+    """
+    Clean RTL Backend class without legacy compatibility bloat.
     
     Provides RTL-specific code generation functionality for FINN custom ops
-    that correspond to modules in finn-rtllib. Uses explicit template declaration
-    and direct value generation without legacy compatibility layers.
+    using only Jinja2-based template system with direct value generation.
+    No legacy compatibility methods or complex string replacement.
     """
 
-    # ===== Explicit Template Declaration =====
-    # These should be overridden by concrete operation classes
-    TEMPLATE_NAME: Optional[str] = None
-    TEMPLATE_OPTIONS: Optional[Dict[str, str]] = None
-
     def __init__(self, **kwargs):
-        """Initialize RTL backend with clean Codegen infrastructure."""
-        # Extract RTL-specific kwargs to avoid conflicts
-        rtl_kwargs = {k: v for k, v in kwargs.items() if k.startswith('rtl_')}
-        
-        # Initialize parent Codegen class
+        """Initialize clean RTL backend."""
         super().__init__()
         
-        # Initialize template engine
-        self.template_engine = TemplateEngine()
-        
-        # RTL-specific initialization
-        self.rtl_template_path = "rtl/"
-        
-        # Context for template values
-        self._current_model = None
-        self._current_fpgapart = None
-        self._current_clk = None
+        # RTL-specific initialization without legacy bloat
+        self.logger = logging.getLogger(f"finn.codegen.{self.__class__.__name__}")
         
         # Apply RTL-specific configurations
-        for key, value in rtl_kwargs.items():
-            setattr(self, key, value)
-
-    # ===== Explicit Template Interface Implementation =====
+        for key, value in kwargs.items():
+            if key.startswith('rtl_'):
+                setattr(self, key, value)
+        
+        self.logger.debug(f"Initialized clean RTL backend: {self.__class__.__name__}")
 
     def get_template_name(self) -> str:
         """Get template name - explicit declaration required.
@@ -87,17 +71,14 @@ class RTLBackend(Codegen):
             Name of template to use for code generation
             
         Raises:
-            NotImplementedError: If no template declared
+            NotImplementedError: If no template declared by subclass
         """
-        # Check for instance override first
-        if hasattr(self, '_template_override'):
-            return self._template_override
+        # Check for explicit class-level template declaration
+        if hasattr(self.__class__, 'TEMPLATE_NAME') and self.__class__.TEMPLATE_NAME:
+            return self.__class__.TEMPLATE_NAME
             
-        # Use class-level declaration
-        if self.TEMPLATE_NAME:
-            return self.TEMPLATE_NAME
-            
-        if self.TEMPLATE_OPTIONS:
+        # Check for template selection from options
+        if hasattr(self.__class__, 'TEMPLATE_OPTIONS') and self.__class__.TEMPLATE_OPTIONS:
             return self._select_template_from_options()
             
         raise NotImplementedError(
@@ -110,22 +91,14 @@ class RTLBackend(Codegen):
         Returns:
             Template name from TEMPLATE_OPTIONS
         """
-        if not self.TEMPLATE_OPTIONS:
+        if not hasattr(self.__class__, 'TEMPLATE_OPTIONS') or not self.__class__.TEMPLATE_OPTIONS:
             raise NotImplementedError("No template options available")
         
         # Default: return first option
-        return next(iter(self.TEMPLATE_OPTIONS.values()))
-    
-    def set_template_override(self, template_name: str):
-        """Allow runtime template override.
-        
-        Args:
-            template_name: Template name to use instead of class declaration
-        """
-        self._template_override = template_name
+        return next(iter(self.__class__.TEMPLATE_OPTIONS.values()))
 
     def get_template_values(self, template_name: str) -> Dict[str, Any]:
-        """Extract values for RTL template.
+        """Generate template values directly - no legacy conversion.
         
         Args:
             template_name: Name of template to extract values for
@@ -133,150 +106,182 @@ class RTLBackend(Codegen):
         Returns:
             Dictionary mapping template placeholders to values
         """
-        # Base RTL values
-        template_values = self._extract_common_values(self)
+        self.logger.debug(f"Generating RTL template values for: {template_name}")
         
-        # Template-specific values
-        if 'thresholding' in template_name:
-            template_values.update(self._get_thresholding_template_values())
-        elif 'swg' in template_name:
-            template_values.update(self._get_swg_template_values())
-        else:
-            # Generic RTL wrapper values
-            template_values.update(self._get_generic_wrapper_values())
+        # Build template values through direct generation
+        values = self._generate_common_values(self)
+        values.update(self._generate_rtl_common_values())
+        values.update(self._generate_operation_specific_values(template_name))
         
-        return template_values
+        # Validate and clean values
+        validated_values = self._validate_template_values(values)
+        
+        self.logger.debug(f"Generated {len(validated_values)} RTL template values")
+        return validated_values
 
-    def _get_thresholding_template_values(self) -> Dict[str, Any]:
-        """Get values for thresholding wrapper template."""
-        return {
-            'MODULE_NAME_AXI_WRAPPER': f"{self.onnx_node.name}_wrapper",
-            'N': self._safe_extract_value(self, 'NumSteps', 8),
-            'WI': self._safe_extract_value(self, 'inputDataType', 8),
-            'WT': self._safe_extract_value(self, 'weightDataType', 8),
-            'C': self._safe_extract_value(self, 'NumChannels', 32),
-            'PE': self._safe_extract_value(self, 'PE', 4),
-            'SIGNED': 0,
-            'FPARG': 0,
-            'BIAS': 0,
-            'THRESHOLDS_PATH': '""',
-            'USE_AXILITE': 1,
-            'DEPTH_TRIGGER_URAM': 0,
-            'DEPTH_TRIGGER_BRAM': 0,
-            'DEEP_PIPELINE': 0,
-            'O_BITS': self._safe_extract_value(self, 'NumSteps', 8),
-        }
-
-    def _get_swg_template_values(self) -> Dict[str, Any]:
-        """Get values for SWG wrapper template."""
-        return {
-            'TOP_MODULE_NAME': f"{self.onnx_node.name}_wrapper",
-            'BIT_WIDTH': 8,
-            'SIMD': self._safe_extract_value(self, 'SIMD', 4),
-            'MMV_IN': 32,
-            'MMV_OUT': 32,
-            'IN_WIDTH_PADDED': 256,
-            'OUT_WIDTH_PADDED': 256,
-        }
-
-    def _get_generic_wrapper_values(self) -> Dict[str, Any]:
-        """Get values for generic RTL wrapper."""
-        return {
-            'MODULE_NAME': f"{self.onnx_node.name}_wrapper",
-            'DATA_WIDTH': self._extract_data_width(self),
-            'PE_COUNT': self._safe_extract_value(self, 'PE', 1),
-        }
-
-    # ===== RTL-Specific Methods =====
-
-    def generate_rtl_code(self) -> str:
-        """Generate RTL code - uses inherited generate_code().
+    def _generate_rtl_common_values(self) -> Dict[str, Any]:
+        """Generate values common to all RTL operations.
         
         Returns:
-            Generated RTL code as string
-        """
-        return self.generate_code()
-
-    def _extract_rtl_interface_values(self, operation) -> Dict[str, Any]:
-        """Extract RTL-specific interface values.
-        
-        Args:
-            operation: Operation instance to extract from
-            
-        Returns:
-            Dictionary of RTL interface values
+            Dictionary of common RTL template values
         """
         return {
-            'module_name': self._generate_module_name(operation),
-            'data_width': self._extract_data_width(operation),
-            'clock_enable': True,
-            'reset_style': 'sync',
-            'interface_type': 'axi_stream',
+            'MODULE_NAME': self._generate_module_name(),
+            'CLK_SIGNAL': 'clk',
+            'RST_SIGNAL': 'rst_n',
+            'DATA_WIDTH': self._extract_data_width(),
+            'INTERFACE_TYPE': 'axi_stream',
+            'RTL_PARAMETERS': self._generate_rtl_parameters(),
+            'PORT_DECLARATIONS': self._generate_port_declarations(),
         }
 
-    def _generate_module_name(self, operation) -> str:
-        """Generate RTL module name.
+    def _generate_module_name(self) -> str:
+        """Generate clean module name.
         
-        Args:
-            operation: Operation instance
-            
         Returns:
-            Generated module name
+            Generated RTL module name
         """
-        op_type = operation.onnx_node.op_type.lower()
-        pe_factor = self._safe_extract_value(operation, 'PE', 1)
-        return f"{op_type}_{pe_factor}pe"
+        try:
+            base_name = self.onnx_node.name.replace('-', '_').replace('.', '_')
+            op_type = self.onnx_node.op_type.lower()
+            return f"{base_name}_{op_type}"
+        except:
+            return "rtl_module"
 
-    def _extract_data_width(self, operation) -> int:
+    def _extract_data_width(self) -> int:
         """Extract data width for RTL.
         
-        Args:
-            operation: Operation instance
-            
         Returns:
             Data width in bits
         """
         try:
-            return operation.get_input_datatype().bitwidth()
+            if hasattr(self, 'get_input_datatype'):
+                return self.get_input_datatype().bitwidth()
+            else:
+                return self._safe_get_nodeattr('DataWidth', 8)
         except:
             self.logger.warning("Could not extract data width, using default 8")
-            return 8  # Default data width
+            return 8
 
-    # ===== Legacy RTL Backend Functionality =====
-    # All existing methods preserved for backward compatibility
+    def _generate_rtl_parameters(self) -> str:
+        """Generate RTL parameter declarations.
+        
+        Returns:
+            String containing RTL parameter declarations
+        """
+        params = []
+        
+        # Common RTL parameters
+        params.append(f"parameter DATA_WIDTH = {self._extract_data_width()}")
+        
+        # Add operation-specific parameters
+        try:
+            if hasattr(self, 'get_nodeattr'):
+                pe_count = self._safe_get_nodeattr('PE', 1)
+                params.append(f"parameter PE_COUNT = {pe_count}")
+        except:
+            pass
+        
+        return ',\n    '.join(params)
+
+    def _generate_port_declarations(self) -> str:
+        """Generate RTL port declarations.
+        
+        Returns:
+            String containing RTL port declarations
+        """
+        data_width = self._extract_data_width()
+        
+        ports = [
+            "// Clock and Reset",
+            "input wire clk",
+            "input wire rst_n",
+            "",
+            "// AXI Stream Input",
+            f"input wire [{data_width-1}:0] s_axis_tdata",
+            "input wire s_axis_tvalid",
+            "output wire s_axis_tready",
+            "",
+            "// AXI Stream Output", 
+            f"output wire [{data_width-1}:0] m_axis_tdata",
+            "output wire m_axis_tvalid",
+            "input wire m_axis_tready"
+        ]
+        
+        return '\n    '.join(ports)
+
+    def _validate_template_values(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and sanitize template values.
+        
+        Args:
+            values: Raw template values
+            
+        Returns:
+            Validated and cleaned template values
+        """
+        validated = {}
+        
+        for key, value in values.items():
+            # Skip None values
+            if value is None:
+                continue
+                
+            # Convert values to appropriate types for template rendering
+            if isinstance(value, (int, float, bool)):
+                validated[key] = str(value)
+            elif isinstance(value, str):
+                validated[key] = value
+            else:
+                # Convert other types to string representation
+                validated[key] = str(value)
+        
+        return validated
+
+    @abstractmethod
+    def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
+        """Generate operation-specific template values.
+        
+        Must be implemented by operation-specific subclasses.
+        
+        Args:
+            template_name: Name of template being generated for
+            
+        Returns:
+            Dictionary of operation-specific template values
+        """
+        pass
 
     def get_nodeattr_types(self) -> Dict[str, Any]:
         """Get RTL backend node attribute types.
-        
-        Merges any operation-specific attributes with RTL backend attributes.
-        RTL attributes take precedence in case of conflicts.
         
         Returns:
             Dictionary of node attribute specifications
         """
         # Base RTL backend attributes
         rtl_attrs = {
-            # attribute to save top module name - not user configurable
+            # RTL generation attributes
             "gen_top_module": ("s", False, ""),
             "code_gen_dir_ipgen": ("s", False, ""),
             "ipgen_path": ("s", False, ""),
             "ip_path": ("s", False, ""),
             "ip_vlnv": ("s", False, ""),
-            # Template override support
-            "rtl_template_override": ("s", False, ""),
+            
+            # RTL simulation attributes
+            "rtlsim_so": ("s", False, ""),
+            "rtlsim_trace": ("s", False, ""),
         }
         
-        # Try to get operation-specific attributes if this is a multiple inheritance case
+        # Try to get operation-specific attributes from parent classes
         operation_attrs = {}
         for base in self.__class__.__bases__:
-            if hasattr(base, 'get_nodeattr_types') and base != RTLBackend:
+            if hasattr(base, 'get_nodeattr_types') and base != CG_RTLBackend:
                 try:
                     operation_attrs = base.get_nodeattr_types(self)
                     break
                 except Exception:
                     pass
         
-        # RTL attributes override operation attributes (explicit policy)
+        # RTL attributes override operation attributes for clean separation
         merged_attrs = {**operation_attrs, **rtl_attrs}
         
         # Log any conflicts for debugging
@@ -286,56 +291,95 @@ class RTLBackend(Codegen):
         
         return merged_attrs
 
-    def generate_hdl(self, model, fpgapart, clk):
-        """Generate HDL code using template system.
+    # ===== RTL-Specific Utility Methods =====
+
+    def _safe_get_nodeattr(self, attr_name: str, default_value=None):
+        """Safely get node attribute with logging.
         
         Args:
-            model: FINN model
-            fpgapart: Target FPGA part
-            clk: Clock period
+            attr_name: Name of attribute to get
+            default_value: Default value if attribute missing
+            
+        Returns:
+            Attribute value or default
         """
-        # Store context
-        self._current_model = model
-        self._current_fpgapart = fpgapart
-        self._current_clk = clk
+        try:
+            value = self.get_nodeattr(attr_name)
+            self.logger.debug(f"Retrieved {attr_name}: {value}")
+            return value
+        except (AttributeError, KeyError) as e:
+            if default_value is not None:
+                self.logger.debug(f"Using default for {attr_name}: {default_value}")
+                return default_value
+            else:
+                self.logger.error(f"Required attribute {attr_name} missing: {e}")
+                raise
+
+    def _extract_rtl_interface_values(self) -> Dict[str, Any]:
+        """Extract RTL-specific interface values.
         
-        # Generate using template system
-        rtl_code = self.generate_code()  # Uses get_template_name() and get_template_values()
+        Returns:
+            Dictionary of RTL interface configuration
+        """
+        return {
+            'module_name': self._generate_module_name(),
+            'data_width': self._extract_data_width(),
+            'clock_enable': True,
+            'reset_style': 'async_neg',  # Active low async reset
+            'interface_type': 'axi_stream',
+            'pipeline_depth': self._safe_get_nodeattr('pipeline_depth', 1),
+        }
+
+    def _extract_rtl_timing_values(self) -> Dict[str, Any]:
+        """Extract RTL-specific timing values.
         
-        # Write to file
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        module_name = self._generate_module_name(self)
-        rtl_path = os.path.join(code_gen_dir, f"{module_name}.sv")
-        
-        with open(rtl_path, "w") as f:
-            f.write(rtl_code)
-        
-        # Set node attributes
-        self.set_nodeattr("gen_top_module", module_name)
+        Returns:
+            Dictionary of RTL timing configuration
+        """
+        return {
+            'clock_period': self._safe_get_nodeattr('clock_period', 10.0),  # ns
+            'setup_time': 0.5,  # ns
+            'hold_time': 0.1,   # ns
+            'max_delay': self._safe_get_nodeattr('max_delay', 8.0),  # ns
+        }
+
+    # ===== RTL Simulation Support =====
 
     def prepare_rtlsim(self):
-        """Creates a xsi emulation library for the RTL code generated
-        for this node, sets the rtlsim_so attribute to its path."""
-
+        """Creates a xsi emulation library for RTL simulation.
+        
+        Sets the rtlsim_so attribute to the path of the compiled simulation library.
+        """
+        if pyxsi_utils is None:
+            raise RuntimeError("pyxsi_utils not available for RTL simulation")
+        
         verilog_files = self.get_rtl_file_list(abspath=True)
         single_src_dir = make_build_dir("rtlsim_" + self.onnx_node.name + "_")
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")
+        
         ret = pyxsi_utils.compile_sim_obj(
             self.get_verilog_top_module_name(), verilog_files, single_src_dir, debug
         )
-        # save generated lib filename in attribute
+        
+        # Save generated lib filename in attribute
         self.set_nodeattr("rtlsim_so", ret[0] + "/" + ret[1])
+        self.logger.debug(f"RTL simulation library created: {ret[0]}/{ret[1]}")
 
-    def get_verilog_paths(self):
-        """Returns path to code gen directory. Can be overwritten to
-        return additional paths to relevant verilog files"""
+    def get_verilog_paths(self) -> List[str]:
+        """Returns paths containing Verilog files for this operation.
+        
+        Returns:
+            List of directory paths containing Verilog files
+        """
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        return [code_gen_dir]
+        return [code_gen_dir] if code_gen_dir else []
 
     @abstractmethod
-    def get_rtl_file_list(self, abspath=False):
-        """Returns list of rtl files. Needs to be filled by each node.
+    def get_rtl_file_list(self, abspath: bool = False) -> List[str]:
+        """Returns list of RTL files for this operation.
+        
+        Must be implemented by operation-specific subclasses.
         
         Args:
             abspath: Whether to return absolute paths
@@ -346,82 +390,74 @@ class RTLBackend(Codegen):
         pass
 
     @abstractmethod
-    def code_generation_ipi(self):
-        """Generate IPI (IP Integrator) code for this operation."""
+    def get_verilog_top_module_name(self) -> str:
+        """Get the name of the top-level Verilog module.
+        
+        Must be implemented by operation-specific subclasses.
+        
+        Returns:
+            Name of top-level module
+        """
         pass
 
-    def code_generation_ipgen(self, model, fpgapart, clk):
+    # ===== Code Generation Methods =====
+
+    def generate_hdl(self, model, fpgapart: str, clk: float):
+        """Generate HDL code using template system.
+        
+        Args:
+            model: FINN model
+            fpgapart: Target FPGA part
+            clk: Clock period in ns
+        """
+        self.logger.info(f"Generating HDL for {self.onnx_node.name}")
+        
+        # Store context for template generation
+        self._current_model = model
+        self._current_fpgapart = fpgapart
+        self._current_clk = clk
+        
+        # Generate using template system
+        rtl_code = self.generate_code()
+        
+        # Write to file
+        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+        module_name = self._generate_module_name()
+        rtl_path = os.path.join(code_gen_dir, f"{module_name}.sv")
+        
+        with open(rtl_path, "w") as f:
+            f.write(rtl_code)
+        
+        # Set node attributes
+        self.set_nodeattr("gen_top_module", module_name)
+        self.logger.info(f"Generated HDL: {rtl_path}")
+
+    def code_generation_ipgen(self, model, fpgapart: str, clk: float):
         """Generate IP for this operation.
         
         Args:
             model: FINN model
             fpgapart: Target FPGA part
-            clk: Clock period
+            clk: Clock period in ns
         """
         self.generate_hdl(model, fpgapart, clk)
 
-    def execute_node(self, context, graph):
-        """Execute this node in the given context.
+    @abstractmethod
+    def code_generation_ipi(self) -> List[str]:
+        """Generate IPI (IP Integrator) TCL commands.
         
-        Args:
-            context: Execution context
-            graph: Model graph
+        Must be implemented by operation-specific subclasses.
+        
+        Returns:
+            List of TCL commands for IP Integrator
         """
-        mode = self.get_nodeattr("exec_mode")
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+        pass
 
-        if mode == "rtlsim":
-            node = self.onnx_node
-            inputs = {}
-            for i, inp in enumerate(node.input):
-                exp_ishape = tuple(self.get_normal_input_shape(i))
-                folded_ishape = self.get_folded_input_shape(i)
-                inp_val = context[inp]
-                assert str(inp_val.dtype) == "float32", "Input datatype is not float32"
-                assert inp_val.shape == exp_ishape, "Input shape doesn't match expected shape."
-                export_idt = self.get_input_datatype(i)
-
-                reshaped_input = inp_val.reshape(folded_ishape)
-                np.save(os.path.join(code_gen_dir, "input_%s.npy" % i), reshaped_input)
-                nbits = self.get_instream_width(i)
-                rtlsim_inp = npy_to_rtlsim_input(
-                    "{}/input_{}.npy".format(code_gen_dir, i), export_idt, nbits
-                )
-                inputs["in%s" % i] = rtlsim_inp
-            outputs = {}
-            for o, outp in enumerate(node.output):
-                outputs["out%s" % o] = []
-            # assembled execution context
-            io_dict = {"inputs": inputs, "outputs": outputs}
-
-            sim = self.get_rtlsim()
-            self.reset_rtlsim(sim)
-            self.rtlsim_multi_io(sim, io_dict)
-            self.close_rtlsim(sim)
-            for o, outp in enumerate(node.output):
-                rtlsim_output = io_dict["outputs"]["out%s" % o]
-                odt = self.get_output_datatype(o)
-                target_bits = odt.bitwidth()
-                packed_bits = self.get_outstream_width(o)
-                out_npy_path = "{}/output.npy".format(code_gen_dir)
-                out_shape = self.get_folded_output_shape(o)
-                rtlsim_output_to_npy(
-                    rtlsim_output, out_npy_path, odt, out_shape, packed_bits, target_bits
-                )
-                # load and reshape output
-                exp_oshape = tuple(self.get_normal_output_shape(o))
-                output = np.load(out_npy_path)
-                output = np.asarray([output], dtype=np.float32).reshape(*exp_oshape)
-                context[outp] = output
-
-                assert (
-                    context[outp].shape == exp_oshape
-                ), "Output shape doesn't match expected shape."
-
-        else:
-            raise Exception(
-                """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
-            )
+    # ===== REMOVED: All Legacy Methods =====
+    # The following methods are intentionally NOT implemented to eliminate legacy bloat:
+    # - Any string replacement template logic
+    # - Complex template selection mechanisms  
+    # - Legacy compatibility methods
+    # - Manual Verilog generation methods
+    #
+    # These are replaced by the direct template value generation methods above.

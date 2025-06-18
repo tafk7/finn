@@ -30,11 +30,10 @@ import math
 import numpy as np
 import os
 import shutil
-from typing import Dict, Any
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
 
-from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.custom_op.fpgadataflow.CG_rtlbackend import CG_RTLBackend
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
 from finn.util.basic import get_memutil_alternatives, mem_primitives_versal
 from finn.util.data_packing import (
@@ -42,17 +41,19 @@ from finn.util.data_packing import (
     pack_innermost_dim_as_hex_string,
     rtlsim_output_to_npy,
 )
-from finn.codegen import TemplateEngine
 
 
-class Thresholding_rtl(Thresholding, RTLBackend):
-    """RTL backend for Thresholding - using Jinja2 templates."""
+class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
+    """Clean implementation of FINN Thresholding RTL backend.
+    
+    This is a clean implementation that eliminates legacy compatibility bloat
+    and uses only direct template value generation methods. No code_gen_dict usage.
+    
+    RTL backend for Thresholding using clean Jinja2 template architecture.
+    """
 
     def __init__(self, onnx_node, **kwargs):
         super().__init__(onnx_node, **kwargs)
-        
-        # Initialize template engine
-        self.template_engine = TemplateEngine()
 
     def get_nodeattr_types(self):
         my_attrs = {
@@ -68,21 +69,15 @@ class Thresholding_rtl(Thresholding, RTLBackend):
             "deep_pipeline": ("i", False, 1, {0, 1}),
         }
         my_attrs.update(Thresholding.get_nodeattr_types(self))
-        my_attrs.update(RTLBackend.get_nodeattr_types(self))
+        my_attrs.update(CG_RTLBackend.get_nodeattr_types(self))
         return my_attrs
 
-    def get_template_values(self, template_name: str) -> Dict[str, Any]:
-        """Extract values for RTL template."""
-        if template_name == "thresholding/rtl/wrapper.v.j2":
-            return self._get_wrapper_values()
-        else:
-            raise ValueError(f"Unsupported template: {template_name}")
+    # =============================================================================
+    # CLEAN TEMPLATE VALUE GENERATION METHODS (No code_gen_dict usage)
+    # =============================================================================
 
-    def _get_wrapper_values(self) -> Dict[str, Any]:
-        """Get values for RTL wrapper template."""
-        # Extract values that were previously built in prepare_codegen_rtl_values()
-        # but return them as a dictionary instead of populating code_gen_dict
-        
+    def get_rtl_wrapper_values(self):
+        """Generate RTL wrapper template values for thresholding operation."""
         bias = self.get_nodeattr("ActVal")
         output_data_type = self.get_nodeattr("outputDataType")
         input_data_type = self.get_nodeattr("inputDataType")
@@ -116,8 +111,94 @@ class Thresholding_rtl(Thresholding, RTLBackend):
             'O_BITS': int(o_bits),
         }
 
-    def _generate_threshold_files(self, model):
-        """Generate threshold data files (extract from prepare_codegen_rtl_values)."""
+    def get_rtl_module_name(self):
+        """Generate the RTL module name."""
+        return self.get_verilog_top_module_name()
+
+    def get_rtl_parameters(self):
+        """Generate RTL parameters for thresholding module."""
+        bias = self.get_nodeattr("ActVal")
+        output_data_type = self.get_nodeattr("outputDataType")
+        input_data_type = self.get_nodeattr("inputDataType")
+        o_bitwidth = DataType[output_data_type].bitwidth()
+        i_bitwidth = DataType[input_data_type].bitwidth()
+        wdt = self.get_input_datatype(1)
+        
+        # Calculate O_BITS
+        if bias >= 0:
+            o_bits = math.ceil(math.log2(2**o_bitwidth + bias))
+        else:
+            o_bits = 1 + math.ceil(
+                math.log2(-bias if -bias >= 2 ** (o_bitwidth - 1) else 2**o_bitwidth + bias)
+            )
+        
+        return {
+            'N': o_bitwidth,
+            'WI': i_bitwidth,
+            'WT': wdt.bitwidth(),
+            'C': self.get_nodeattr("NumChannels"),
+            'PE': self.get_nodeattr("PE"),
+            'O_BITS': int(o_bits),
+        }
+
+    def get_port_declarations(self):
+        """Generate port declarations for RTL module."""
+        runtime_writeable = self.get_nodeattr("runtime_writeable_weights")
+        
+        ports = {
+            'data_input': {
+                'name': 'in0_V',
+                'direction': 'input',
+                'width': self.get_instream_width(),
+                'type': 'axis'
+            },
+            'data_output': {
+                'name': 'out0_V', 
+                'direction': 'output',
+                'width': self.get_outstream_width(),
+                'type': 'axis'
+            }
+        }
+        
+        if runtime_writeable:
+            ports['axilite'] = {
+                'name': 's_axilite',
+                'direction': 'slave',
+                'type': 'axilite'
+            }
+        
+        return ports
+
+    def get_memory_files(self):
+        """Generate list of memory initialization files."""
+        dat_files = []
+        pe = self.get_nodeattr("PE")
+        output_data_type = self.get_nodeattr("outputDataType")
+        o_bitwidth = DataType[output_data_type].bitwidth()
+        
+        for stage in range(o_bitwidth):
+            for pe_value in range(pe):
+                thresh_file = f"{self.onnx_node.name}_threshs_{pe_value}_{stage}.dat"
+                dat_files.append(thresh_file)
+        
+        return dat_files
+
+    def get_source_files(self):
+        """Generate list of RTL source files needed."""
+        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/thresholding/hdl/")
+        
+        return [
+            os.path.join(rtllib_dir, "axilite_if.v"),
+            os.path.join(rtllib_dir, "thresholding.sv"),
+            os.path.join(rtllib_dir, "thresholding_axi.sv"),
+        ]
+
+    # =============================================================================
+    # OPERATION-SPECIFIC METHODS (threshold file generation)
+    # =============================================================================
+
+    def generate_threshold_files(self, model):
+        """Generate threshold data files for RTL simulation."""
         thresholds = model.get_initializer(self.onnx_node.input[1])
         bias = self.get_nodeattr("ActVal")
         output_data_type = self.get_nodeattr("outputDataType")
@@ -194,21 +275,21 @@ class Thresholding_rtl(Thresholding, RTLBackend):
                     for val in threshs:
                         f.write(val + "\n")
 
-    def _copy_rtl_library_files(self, code_gen_dir):
-        """Copy RTL library files (extract from existing generate_hdl)."""
+    def copy_rtl_library_files(self, code_gen_dir):
+        """Copy RTL library files to generation directory."""
         sv_files = ["axilite_if.v", "thresholding.sv", "thresholding_axi.sv"]
         rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/thresholding/hdl"
         for sv_file in sv_files:
             shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
 
     def generate_hdl(self, model, fpgapart, clk):
-        """Generate HDL using Jinja2 template instead of string replacement."""
-        # Generate threshold data files (keep existing logic)
-        self._generate_threshold_files(model)
+        """Generate HDL using clean template architecture."""
+        # Generate threshold data files
+        self.generate_threshold_files(model)
         
-        # Generate RTL wrapper using template
-        template_values = self.get_template_values("thresholding/rtl/wrapper.v.j2")
-        rtl_code = self.template_engine.render_template("thresholding/rtl/wrapper.v.j2", template_values)
+        # Generate RTL wrapper using clean backend
+        template_values = self.get_rtl_wrapper_values()
+        rtl_code = self.render_template("thresholding/rtl/wrapper.v.j2", template_values)
         
         # Write RTL file
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
@@ -217,15 +298,18 @@ class Thresholding_rtl(Thresholding, RTLBackend):
         with open(rtl_path, "w") as f:
             f.write(rtl_code)
         
-        # Copy library files (keep existing logic)
-        self._copy_rtl_library_files(code_gen_dir)
+        # Copy library files
+        self.copy_rtl_library_files(code_gen_dir)
         
-        # Set node attributes (keep existing logic)
+        # Set node attributes
         self.set_nodeattr("gen_top_module", module_name)
         self.set_nodeattr("ipgen_path", code_gen_dir)
         self.set_nodeattr("ip_path", code_gen_dir)
 
-    # All other methods remain unchanged - copy from original implementation
+    # =============================================================================
+    # RESOURCE ESTIMATION METHODS (unchanged from original)
+    # =============================================================================
+
     def get_pe_mem_geometries(self):
         """return a list of (bitwidth, depth) for PE memory configurations to be used
         in resource estimation
@@ -292,6 +376,10 @@ class Thresholding_rtl(Thresholding, RTLBackend):
         """return the number of LUTs required for this node"""
         res_dict = self.get_memory_estimate()
         return res_dict.get("LUTRAM", 0)
+
+    # =============================================================================
+    # INHERITED METHODS (unchanged from original)
+    # =============================================================================
 
     def get_all_meminit_filenames(self, abspath=False):
         "Return a list of all .dat memory initializer files used for this node"
