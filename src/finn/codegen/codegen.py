@@ -160,9 +160,9 @@ class Codegen(ABC):
             engine = TemplateEngine(template_dirs)
             self.logger.debug("Template engine initialized")
             return engine
-        except ImportError:
-            self.logger.warning("Template engine not available, using mock")
-            return MockTemplateEngine()
+        except ImportError as e:
+            self.logger.error("Template engine not available")
+            raise CodeGenerationError(f"Failed to import TemplateEngine: {e}")
     
     def _render_template(self, template_name: str, values: Dict[str, Any]) -> str:
         """Render template - simplified rendering logic.
@@ -313,18 +313,3 @@ class Codegen(ABC):
         except Exception as e:
             self.logger.warning(f"Failed to save debug values: {e}")
 
-
-class MockTemplateEngine:
-    """Mock template engine for testing when real engine unavailable."""
-    
-    def render(self, template_name: str, values: Dict[str, Any]) -> str:
-        """Return mock rendered template."""
-        return f"// Mock template: {template_name}\n// Values: {list(values.keys())}\n"
-    
-    def template_exists(self, template_name: str) -> bool:
-        """Mock template exists check."""
-        return True
-    
-    def clear_cache(self):
-        """Mock cache clear."""
-        pass

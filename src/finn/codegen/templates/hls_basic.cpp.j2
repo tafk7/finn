@@ -1,0 +1,53 @@
+// Basic HLS Template for FINN Operations
+// This is a simplified, self-contained template for HLS code generation
+// Variables are directly substituted - no complex macros or includes needed
+
+#define AP_INT_MAX_W {{ ap_int_max_w | default(8192) }}
+#include <ap_int.h>
+#include <hls_stream.h>
+#include "bnn-library.h"
+
+// Global includes for parameters, weights, etc.
+{% for include in global_includes %}
+{{ include }}
+{% endfor %}
+
+// Parameter defines
+{% for define in defines %}
+{{ define }}
+{% endfor %}
+
+// Main compute function
+void {{ function_name }}(
+    {% for port in input_ports %}
+    hls::stream<{{ port.type }}> &{{ port.name }}{{ "," if not loop.last else "" }}
+    {% endfor %}
+    {% if output_ports %}
+    {{ "," if input_ports else "" }}
+    {% for port in output_ports %}
+    hls::stream<{{ port.type }}> &{{ port.name }}{{ "," if not loop.last else "" }}
+    {% endfor %}
+    {% endif %}
+) {
+    // HLS pragmas for interface and optimization
+    {% for pragma in pragmas %}
+    {{ pragma }}
+    {% endfor %}
+    
+    // Main computation
+    {{ compute_body | indent(4) }}
+}
+
+{% if include_wrapper %}
+// Top-level wrapper for IP packaging
+void {{ top_function_name }}(
+    hls::stream<ap_uint<{{ input_width }}>> &in0_V,
+    hls::stream<ap_uint<{{ output_width }}>> &out_V
+) {
+    #pragma HLS INTERFACE axis port=in0_V
+    #pragma HLS INTERFACE axis port=out_V
+    #pragma HLS INTERFACE ap_ctrl_none port=return
+    
+    {{ function_name }}(in0_V, out_V);
+}
+{% endif %}

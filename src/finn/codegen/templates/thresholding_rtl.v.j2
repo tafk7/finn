@@ -1,0 +1,116 @@
+// Thresholding RTL Template for FINN
+// Simple Verilog wrapper for thresholding operations
+// Direct parameter substitution - no complex macros
+
+module {{ module_name }} #(
+    // Core parameters
+    parameter  N   = {{ n }},          // output precision  
+    parameter  WI  = {{ wi }},         // input precision
+    parameter  WT  = {{ wt }},         // threshold precision
+    parameter  C   = {{ c }},          // channels
+    parameter  PE  = {{ pe }},         // processing parallelism
+    
+    // Operation parameters
+    parameter  SIGNED = {{ signed }},  // signed inputs
+    parameter  FPARG  = {{ fparg }},   // floating-point inputs
+    parameter  BIAS   = {{ bias }},    // output offset
+    
+    // Memory configuration
+    parameter  THRESHOLDS_PATH = "{{ thresholds_path }}",
+    parameter  USE_AXILITE = {{ use_axilite }},
+    parameter  DEPTH_TRIGGER_URAM = {{ depth_trigger_uram }},
+    parameter  DEPTH_TRIGGER_BRAM = {{ depth_trigger_bram }},
+    parameter  DEEP_PIPELINE = {{ deep_pipeline }},
+    
+    // Derived parameters
+    parameter  O_BITS = {{ o_bits }}
+)(
+    // Global Control
+    (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF in0_V:out0_V, ASSOCIATED_RESET ap_rst_n" *)
+    (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 ap_clk CLK" *)
+    input  ap_clk,
+    (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
+    input  ap_rst_n,
+    
+    {% if use_axilite %}
+    // AXI-Lite interface for threshold read/write
+    input   s_axilite_AWVALID,
+    output  s_axilite_AWREADY,
+    input   [{{ axilite_addr_width }}:0] s_axilite_AWADDR,
+    
+    input   s_axilite_WVALID,
+    output  s_axilite_WREADY,
+    input   [31:0] s_axilite_WDATA,
+    input   [3:0]  s_axilite_WSTRB,
+    
+    output  s_axilite_BVALID,
+    input   s_axilite_BREADY,
+    output  [1:0] s_axilite_BRESP,
+    
+    input   s_axilite_ARVALID,
+    output  s_axilite_ARREADY,
+    input   [{{ axilite_addr_width }}:0] s_axilite_ARADDR,
+    
+    output  s_axilite_RVALID,
+    input   s_axilite_RREADY,
+    output  [31:0] s_axilite_RDATA,
+    output  [1:0]  s_axilite_RRESP,
+    {% endif %}
+    
+    // AXI Stream - Input
+    output  in0_V_TREADY,
+    input   in0_V_TVALID,
+    input   [{{ input_stream_width - 1 }}:0] in0_V_TDATA,
+    
+    // AXI Stream - Output  
+    input   out0_V_TREADY,
+    output  out0_V_TVALID,
+    output  [{{ output_stream_width - 1 }}:0] out0_V_TDATA
+);
+
+    // Instantiate the thresholding core
+    thresholding_axi #(
+        .N(N), .WI(WI), .WT(WT), .C(C), .PE(PE),
+        .SIGNED(SIGNED),
+        .FPARG(FPARG),
+        .BIAS(BIAS),
+        .THRESHOLDS_PATH(THRESHOLDS_PATH),
+        .USE_AXILITE(USE_AXILITE),
+        .DEPTH_TRIGGER_URAM(DEPTH_TRIGGER_URAM),
+        .DEPTH_TRIGGER_BRAM(DEPTH_TRIGGER_BRAM),
+        .DEEP_PIPELINE(DEEP_PIPELINE)
+    ) core (
+        .ap_clk(ap_clk), 
+        .ap_rst_n(ap_rst_n),
+        
+        {% if use_axilite %}
+        // AXI-Lite connections
+        .s_axilite_AWVALID(s_axilite_AWVALID), 
+        .s_axilite_AWREADY(s_axilite_AWREADY), 
+        .s_axilite_AWADDR(s_axilite_AWADDR),
+        .s_axilite_WVALID(s_axilite_WVALID), 
+        .s_axilite_WREADY(s_axilite_WREADY), 
+        .s_axilite_WDATA(s_axilite_WDATA), 
+        .s_axilite_WSTRB(s_axilite_WSTRB),
+        .s_axilite_BVALID(s_axilite_BVALID), 
+        .s_axilite_BREADY(s_axilite_BREADY), 
+        .s_axilite_BRESP(s_axilite_BRESP),
+        .s_axilite_ARVALID(s_axilite_ARVALID), 
+        .s_axilite_ARREADY(s_axilite_ARREADY), 
+        .s_axilite_ARADDR(s_axilite_ARADDR),
+        .s_axilite_RVALID(s_axilite_RVALID), 
+        .s_axilite_RREADY(s_axilite_RREADY), 
+        .s_axilite_RDATA(s_axilite_RDATA), 
+        .s_axilite_RRESP(s_axilite_RRESP),
+        {% endif %}
+        
+        // AXI Stream connections
+        .s_axis_tready(in0_V_TREADY), 
+        .s_axis_tvalid(in0_V_TVALID), 
+        .s_axis_tdata(in0_V_TDATA),
+        .m_axis_tready(out0_V_TREADY), 
+        .m_axis_tvalid(out0_V_TVALID), 
+        .m_axis_tdata(out0_V_TDATA)
+    );
+
+endmodule

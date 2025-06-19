@@ -29,7 +29,7 @@ def test_real_finn_backends():
         from qonnx.core.datatype import DataType
         
         # Import backend classes
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
         from finn.custom_op.fpgadataflow.hls.thresholding_hls import Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MVAU_hls
@@ -71,7 +71,7 @@ def test_real_finn_backends():
         
         # Test Clean Thresholding Backend
         try:
-            clean_backend = CG_ThresholdingHLS(thres_node)
+            clean_backend = CG_Thresholding_hls(thres_node)
             logger.info("✅ Clean Thresholding backend instantiated successfully")
             
             # Test template value generation

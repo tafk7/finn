@@ -54,7 +54,11 @@ class CG_MVAU_hls(MVAU, CG_HLSBackend):
     """
 
     def __init__(self, onnx_node, **kwargs):
-        super().__init__(onnx_node, **kwargs)
+        # Initialize parent classes explicitly to maintain compatibility
+        MVAU.__init__(self, onnx_node, **kwargs)
+        CG_HLSBackend.__init__(self, **kwargs)
+        
+        self.logger.debug(f"Initialized CG_MVAU_hls for node: {onnx_node.name}")
 
     def get_nodeattr_types(self):
         my_attrs = {}

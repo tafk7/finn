@@ -24,7 +24,7 @@ def test_fixed_backends():
     
     try:
         # Import required modules
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
         from finn.custom_op.fpgadataflow.hls.thresholding_hls import Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MVAU_hls
@@ -39,7 +39,7 @@ def test_fixed_backends():
         
         # Test configurations
         backends_to_test = [
-            ("Clean Thresholding", CG_ThresholdingHLS, "thresholding"),
+            ("Clean Thresholding", CG_Thresholding_hls, "thresholding"),
             ("Clean MVAU", CG_MVAU_hls, "mvau"),
             ("Legacy Thresholding", Thresholding_hls, "thresholding"),
             ("Legacy MVAU", MVAU_hls, "mvau")
@@ -156,16 +156,16 @@ def test_specific_methods():
     logger.info("=" * 50)
     
     try:
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
         from finn.codegen.test_node_factory import TestNodeFactory
         
         factory = TestNodeFactory()
         
-        # Test CG_ThresholdingHLS methods
-        logger.info("🔍 Testing CG_ThresholdingHLS methods")
+        # Test CG_Thresholding_hls methods
+        logger.info("🔍 Testing CG_Thresholding_hls methods")
         thresh_node = factory.create_thresholding_node()
-        thresh_backend = CG_ThresholdingHLS(thresh_node)
+        thresh_backend = CG_Thresholding_hls(thresh_node)
         
         # Test _generate_common_values
         common_values = thresh_backend._generate_common_values()

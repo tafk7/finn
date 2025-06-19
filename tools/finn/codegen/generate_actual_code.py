@@ -24,7 +24,7 @@ def generate_actual_code_files():
         # Import FINN infrastructure
         import onnx.helper as helper
         import onnx
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
         from finn.custom_op.fpgadataflow.hls.thresholding_hls import Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MVAU_hls
@@ -160,7 +160,7 @@ def generate_actual_code_files():
         
         # Generate files for all backends using real FINN infrastructure
         backends_to_test = [
-            ("Clean_Thresholding", CG_ThresholdingHLS(thres_node)),
+            ("Clean_Thresholding", CG_Thresholding_hls(thres_node)),
             ("Legacy_Thresholding", Thresholding_hls(thres_node)),
             ("Clean_MVAU", CG_MVAU_hls(mvau_node)),
             ("Legacy_MVAU", MVAU_hls(mvau_node))

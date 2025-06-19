@@ -52,6 +52,12 @@ pip install -e ".[testing]"             # With test dependencies
 - `analysis`: Analysis tool tests
 - `transform`: Transformation tests
 
+## Development Guidance
+
+### Testing Guidelines
+
+- ALWAYS run tests with `./run-docker.sh <command>`
+
 ## Architecture Overview
 
 ### Core Structure

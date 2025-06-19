@@ -164,16 +164,16 @@ def save_clean_rtl_output(model):
         try:
             engine = TemplateEngine()
             
-            # Check what template to use
-            template_name = "thresholding/rtl/wrapper.v.j2"
+            # Check what template to use - now simplified
+            template_name = "thresholding_rtl.v.j2"
             
-            # Get template values - RTL backends might use different method
-            if hasattr(inst, 'get_rtl_wrapper_values'):
-                print("  Getting RTL wrapper values...")
-                template_values = inst.get_rtl_wrapper_values()
-            elif hasattr(inst, 'get_template_values'):
+            # Get template values - prioritize get_template_values for clean backend
+            if hasattr(inst, 'get_template_values'):
                 print("  Getting template values...")
                 template_values = inst.get_template_values(template_name)
+            elif hasattr(inst, 'get_rtl_wrapper_values'):
+                print("  Getting RTL wrapper values...")
+                template_values = inst.get_rtl_wrapper_values()
             else:
                 raise Exception("No template value generation method found")
                 

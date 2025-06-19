@@ -60,10 +60,8 @@ class TemplateEngine:
         finn_root = os.environ.get('FINN_ROOT', '.')
         
         template_dirs = [
-            os.path.join(finn_root, 'src', 'finn', 'codegen', 'templates'),  # Base directory for operation-specific templates
-            os.path.join(finn_root, 'src', 'finn', 'codegen', 'templates', 'hls'),
-            os.path.join(finn_root, 'src', 'finn', 'codegen', 'templates', 'rtl'),
-            os.path.join(finn_root, 'src', 'finn', 'codegen', 'templates', 'common'),
+            # Simplified template structure - just the main templates directory
+            os.path.join(finn_root, 'src', 'finn', 'codegen', 'templates'),
             # Backward compatibility with existing template locations
             os.path.join(finn_root, 'custom_hls'),
             os.path.join(finn_root, 'finn-rtllib'),

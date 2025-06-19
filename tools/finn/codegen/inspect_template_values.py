@@ -22,7 +22,7 @@ def inspect_template_values():
     try:
         # Import FINN infrastructure
         import onnx.helper as helper
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
         from finn.custom_op.fpgadataflow.hls.thresholding_hls import Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.matrixvectoractivation_hls import MVAU_hls
@@ -80,7 +80,7 @@ def inspect_template_values():
         
         # Test Clean Thresholding
         logger.info("\n🟢 CLEAN THRESHOLDING BACKEND VALUES:")
-        clean_thres = CG_ThresholdingHLS(thres_node)
+        clean_thres = CG_Thresholding_hls(thres_node)
         clean_thres_values = clean_thres.get_template_values("base/hls_base.cpp.j2")
         format_template_values(clean_thres_values, "Clean Thresholding Template Values")
         

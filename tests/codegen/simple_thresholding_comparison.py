@@ -147,7 +147,7 @@ def save_clean_output(model):
     print("=== CLEAN BACKEND ===")
     
     try:
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.codegen.template_engine import TemplateEngine
         
         # Specialize to HLS with clean backend
@@ -157,7 +157,7 @@ def save_clean_output(model):
         
         # Create clean backend instance directly
         # Don't use getCustomOp since it returns the legacy backend
-        inst = CG_ThresholdingHLS(node)
+        inst = CG_Thresholding_hls(node)
         print(f"Backend: {inst.__class__.__name__} (clean implementation)")
         
         output = f"// Clean HLS backend: {inst.__class__.__name__}\n"
@@ -182,9 +182,9 @@ def save_clean_output(model):
                         output += f"// {key}: {repr(value)}\n"
                 output += "\n"
                 
-                # Render the template
+                # Render the template - now using simplified template
                 print("  Rendering template...")
-                rendered = engine.render("thresholding/hls/docompute.cpp.j2", template_values)
+                rendered = engine.render("hls_basic.cpp.j2", template_values)
                 output += "// === Rendered docompute.cpp ===\n"
                 output += rendered
             else:

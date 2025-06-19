@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Real FINN Backend Testing - For Docker Environment
-Tests actual CG_ThresholdingHLS vs Thresholding_hls and CG_MVAU_hls vs MVAU_hls
+Tests actual CG_Thresholding_hls vs Thresholding_hls and CG_MVAU_hls vs MVAU_hls
 NO MOCKS - Just real backend implementation testing
 """
 
@@ -42,15 +42,15 @@ def test_real_thresholding_backends():
         
         results = {}
         
-        # Test 1: Clean Backend (CG_ThresholdingHLS)
+        # Test 1: Clean Backend (CG_Thresholding_hls)
         print("🟢 Testing Clean Thresholding Backend...")
         try:
-            from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+            from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
             
-            print("✅ Successfully imported CG_ThresholdingHLS")
+            print("✅ Successfully imported CG_Thresholding_hls")
             
-            clean_instance = manager.create_backend_instance(CG_ThresholdingHLS, test_node)
-            print("✅ Successfully instantiated CG_ThresholdingHLS")
+            clean_instance = manager.create_backend_instance(CG_Thresholding_hls, test_node)
+            print("✅ Successfully instantiated CG_Thresholding_hls")
             
             clean_code = manager.call_backend_generation(clean_instance, 'template')
             print(f"✅ Generated {len(clean_code)} characters of clean code")
@@ -267,7 +267,7 @@ def show_results_summary(thres_results, mvau_results, validation_results):
     if 'clean' in thres_results:
         clean = thres_results['clean']
         status = "✅ SUCCESS" if clean.get('success') else "❌ FAILED"
-        print(f"   Clean (CG_ThresholdingHLS): {status}")
+        print(f"   Clean (CG_Thresholding_hls): {status}")
         if clean.get('success'):
             print(f"      Generated: {clean['code_length']} characters")
             print(f"      File: {clean['file']}")

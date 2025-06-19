@@ -40,16 +40,16 @@ def test_real_finn_backends():
         print()
         
         # Test 1: Try to import and test your clean Thresholding backend
-        print("🟢 Testing Clean Thresholding Backend (CG_ThresholdingHLS)...")
+        print("🟢 Testing Clean Thresholding Backend (CG_Thresholding_hls)...")
         try:
             # Import your actual clean implementation (correct class name)
-            from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+            from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
             
-            print("✅ Successfully imported CG_ThresholdingHLS")
+            print("✅ Successfully imported CG_Thresholding_hls")
             
             # Create instance with real backend
-            clean_instance = manager.create_backend_instance(CG_ThresholdingHLS, test_node)
-            print("✅ Successfully instantiated CG_ThresholdingHLS")
+            clean_instance = manager.create_backend_instance(CG_Thresholding_hls, test_node)
+            print("✅ Successfully instantiated CG_Thresholding_hls")
             
             # Call real backend generation
             clean_code = manager.call_backend_generation(clean_instance, 'template')

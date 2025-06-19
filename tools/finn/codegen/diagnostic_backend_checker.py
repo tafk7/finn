@@ -163,7 +163,7 @@ def main():
         print("\n📦 Testing Backend Imports...")
         
         # Import clean backends
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         from finn.custom_op.fpgadataflow.hls.CG_mvau_hls import CG_MVAU_hls
         
         # Import legacy backends  
@@ -173,7 +173,7 @@ def main():
         print("✅ All backends imported successfully")
         
         backends_to_analyze = [
-            ("Clean Thresholding", CG_ThresholdingHLS),
+            ("Clean Thresholding", CG_Thresholding_hls),
             ("Clean MVAU", CG_MVAU_hls), 
             ("Legacy Thresholding", Thresholding_hls),
             ("Legacy MVAU", MVAU_hls)

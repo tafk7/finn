@@ -201,14 +201,14 @@ def save_clean_code_outputs(model, output_dir):
     
     try:
         # Check if clean backend is available
-        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_ThresholdingHLS
+        from finn.custom_op.fpgadataflow.hls.CG_thresholding_hls import CG_Thresholding_hls
         
-        print(f"✓ Clean backend found: {CG_ThresholdingHLS.__name__}")
-        print(f"Base classes: {[b.__name__ for b in CG_ThresholdingHLS.__bases__]}")
+        print(f"✓ Clean backend found: {CG_Thresholding_hls.__name__}")
+        print(f"Base classes: {[b.__name__ for b in CG_Thresholding_hls.__bases__]}")
         
         # Save template information
-        if hasattr(CG_ThresholdingHLS, 'TEMPLATE_NAME'):
-            template_name = CG_ThresholdingHLS.TEMPLATE_NAME
+        if hasattr(CG_Thresholding_hls, 'TEMPLATE_NAME'):
+            template_name = CG_Thresholding_hls.TEMPLATE_NAME
             print(f"Template: {template_name}")
             
             # Save template files
@@ -228,7 +228,7 @@ def save_clean_code_outputs(model, output_dir):
                     with open(full_path, "r") as src, open(output_path, "w") as dst:
                         dst.write(f"// Clean backend template: {template_file}\n")
                         dst.write(f"// Source: {template_path}\n")
-                        dst.write(f"// Backend: {CG_ThresholdingHLS.__name__}\n\n")
+                        dst.write(f"// Backend: {CG_Thresholding_hls.__name__}\n\n")
                         dst.write(src.read())
                     
                     saved_templates += 1
@@ -241,11 +241,11 @@ def save_clean_code_outputs(model, output_dir):
         with open(info_file, "w") as f:
             f.write("Clean Backend Information\n")
             f.write("="*50 + "\n")
-            f.write(f"Class: {CG_ThresholdingHLS.__name__}\n")
-            f.write(f"Module: {CG_ThresholdingHLS.__module__}\n")
-            f.write(f"Base classes: {[c.__name__ for c in CG_ThresholdingHLS.__bases__]}\n")
-            f.write(f"Template: {getattr(CG_ThresholdingHLS, 'TEMPLATE_NAME', 'Not specified')}\n")
-            f.write(f"Uses get_template_values: {hasattr(CG_ThresholdingHLS, 'get_template_values')}\n")
+            f.write(f"Class: {CG_Thresholding_hls.__name__}\n")
+            f.write(f"Module: {CG_Thresholding_hls.__module__}\n")
+            f.write(f"Base classes: {[c.__name__ for c in CG_Thresholding_hls.__bases__]}\n")
+            f.write(f"Template: {getattr(CG_Thresholding_hls, 'TEMPLATE_NAME', 'Not specified')}\n")
+            f.write(f"Uses get_template_values: {hasattr(CG_Thresholding_hls, 'get_template_values')}\n")
             f.write(f"Performance: 5.7x faster, 60% less memory vs legacy\n")
             f.write(f"Architecture: Jinja2 templates with explicit value provision\n")
         

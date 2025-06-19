@@ -1,0 +1,199 @@
+// Improved HLS Template for FINN Operations
+// This template provides better structure while remaining self-contained
+// Suitable for operations like MVAU, Conv, Pool, etc.
+
+//================================================================
+// Headers and Defines
+//================================================================
+#define AP_INT_MAX_W {{ ap_int_max_w | default(8192) }}
+#include <ap_int.h>
+#include <hls_stream.h>
+#include <ap_axi_sdata.h>
+#include "bnn-library.h"
+
+{% if extra_includes %}
+// Operation-specific includes
+{% for inc in extra_includes %}
+#include "{{ inc }}"
+{% endfor %}
+{% endif %}
+
+//================================================================
+// Type Definitions
+//================================================================
+// Input/Output stream types
+typedef ap_uint<{{ input_precision }}> InputType;
+typedef ap_uint<{{ output_precision }}> OutputType;
+
+{% if weight_precision %}
+// Weight type
+typedef ap_{{ "int" if weight_signed else "uint" }}<{{ weight_precision }}> WeightType;
+{% endif %}
+
+{% if accumulator_precision %}
+// Accumulator type
+typedef ap_{{ "int" if acc_signed else "uint" }}<{{ accumulator_precision }}> AccType;
+{% endif %}
+
+//================================================================
+// Constants and Parameters
+//================================================================
+const unsigned int NumChannels = {{ num_channels }};
+const unsigned int PE = {{ pe }};
+const unsigned int SIMD = {{ simd }};
+{% for const in extra_constants %}
+const unsigned int {{ const.name }} = {{ const.value }};
+{% endfor %}
+
+{% if weights_const %}
+//================================================================
+// Weights (embedded in code)
+//================================================================
+const WeightType weights[{{ weight_size }}] = {
+    #include "{{ weights_file }}"
+};
+{% endif %}
+
+//================================================================
+// Main Compute Function
+//================================================================
+void {{ function_name }}(
+    hls::stream<InputType> &in,
+    hls::stream<OutputType> &out
+    {% if external_weights %}
+    , const WeightType *weights
+    {% endif %}
+    {% for param in extra_params %}
+    , {{ param.type }} {{ param.name }}
+    {% endfor %}
+) {
+    //------------------------------------------------------------
+    // Interface Pragmas
+    //------------------------------------------------------------
+    #pragma HLS INTERFACE axis port=in
+    #pragma HLS INTERFACE axis port=out
+    {% if external_weights %}
+    #pragma HLS INTERFACE m_axi port=weights offset=slave
+    {% endif %}
+    #pragma HLS INTERFACE ap_ctrl_none port=return
+    
+    //------------------------------------------------------------
+    // Dataflow Pragma (if needed)
+    //------------------------------------------------------------
+    {% if use_dataflow %}
+    #pragma HLS DATAFLOW
+    {% endif %}
+    
+    //------------------------------------------------------------
+    // Array Partitioning
+    //------------------------------------------------------------
+    {% for partition in array_partitions %}
+    #pragma HLS ARRAY_PARTITION variable={{ partition.var }} {{ partition.type }} factor={{ partition.factor }}
+    {% endfor %}
+    
+    //------------------------------------------------------------
+    // Main Processing Loop
+    //------------------------------------------------------------
+    {% if outer_loop_name %}
+    {{ outer_loop_name }}: 
+    {% endif %}
+    for (unsigned int i = 0; i < {{ num_iterations }}; i++) {
+        {% if outer_loop_pipeline %}
+        #pragma HLS PIPELINE II={{ outer_loop_ii | default(1) }}
+        {% endif %}
+        
+        {% if inner_loops %}
+        //------------------------------------------------------------
+        // Inner Processing Loops
+        //------------------------------------------------------------
+        {% for inner_loop in inner_loops %}
+        {{ inner_loop.label }}: for (unsigned int {{ inner_loop.var }} = 0; {{ inner_loop.var }} < {{ inner_loop.bound }}; {{ inner_loop.var }}++) {
+            {% for pragma in inner_loop.pragmas %}
+            {{ pragma }}
+            {% endfor %}
+            
+            {{ inner_loop.body | indent(12) }}
+        }
+        {% endfor %}
+        {% else %}
+        //------------------------------------------------------------
+        // Direct Processing
+        //------------------------------------------------------------
+        {{ main_compute_body | indent(8) }}
+        {% endif %}
+    }
+    
+    {% if post_processing %}
+    //------------------------------------------------------------
+    // Post-processing
+    //------------------------------------------------------------
+    {{ post_processing | indent(4) }}
+    {% endif %}
+}
+
+{% if generate_wrapper %}
+//================================================================
+// Top-level Wrapper for IP Export
+//================================================================
+void {{ top_function_name }}(
+    hls::stream<ap_axiu<{{ input_width }}, 0, 0, 0>> &in0_V,
+    hls::stream<ap_axiu<{{ output_width }}, 0, 0, 0>> &out_V
+) {
+    #pragma HLS INTERFACE axis port=in0_V
+    #pragma HLS INTERFACE axis port=out_V
+    #pragma HLS INTERFACE ap_ctrl_none port=return
+    
+    // Convert AXI streams to simple streams
+    hls::stream<InputType> in_stream;
+    hls::stream<OutputType> out_stream;
+    
+    // Input conversion loop
+    ConvertInput: for (unsigned int i = 0; i < {{ total_inputs }}; i++) {
+        #pragma HLS PIPELINE II=1
+        ap_axiu<{{ input_width }}, 0, 0, 0> e = in0_V.read();
+        in_stream.write(e.data);
+    }
+    
+    // Call main compute function
+    {{ function_name }}(in_stream, out_stream);
+    
+    // Output conversion loop
+    ConvertOutput: for (unsigned int i = 0; i < {{ total_outputs }}; i++) {
+        #pragma HLS PIPELINE II=1
+        ap_axiu<{{ output_width }}, 0, 0, 0> e;
+        e.data = out_stream.read();
+        e.last = (i == {{ total_outputs - 1 }});
+        e.keep = -1;
+        out_V.write(e);
+    }
+}
+{% endif %}
+
+{% if generate_testbench %}
+//================================================================
+// Testbench Code
+//================================================================
+#ifdef __TESTBENCH__
+#include <iostream>
+#include <fstream>
+
+int main() {
+    // Create test streams
+    hls::stream<InputType> test_in;
+    hls::stream<OutputType> test_out;
+    
+    // Load test data
+    std::ifstream input_file("{{ test_input_file }}");
+    std::ifstream expected_file("{{ test_expected_file }}");
+    
+    // Run test
+    {{ function_name }}(test_in, test_out);
+    
+    // Verify results
+    int errors = 0;
+    // ... verification code ...
+    
+    return errors;
+}
+#endif
+{% endif %}

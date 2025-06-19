@@ -54,7 +54,11 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
     """
 
     def __init__(self, onnx_node, **kwargs):
-        super().__init__(onnx_node, **kwargs)
+        # Initialize parent classes explicitly to maintain compatibility
+        Thresholding.__init__(self, onnx_node, **kwargs)
+        CG_RTLBackend.__init__(self, **kwargs)
+        
+        self.logger.debug(f"Initialized CG_Thresholding_rtl for node: {onnx_node.name}")
 
     def get_nodeattr_types(self):
         my_attrs = {
@@ -198,35 +202,64 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
     # TEMPLATE VALUE GENERATION METHODS
     # =============================================================================
     
-    def _generate_common_values(self, instance) -> Dict[str, Any]:
-        """Generate common template values for RTL backend.
-        
-        Args:
-            instance: Backend instance (for compatibility)
-            
-        Returns:
-            Dictionary of common template values
-        """
-        return {
-            'MODULE_NAME': self.get_verilog_top_module_name(),
-            'NODE_NAME': self.onnx_node.name,
-            'OP_TYPE': self.onnx_node.op_type,
-        }
+    def get_template_name(self) -> str:
+        """Return the template name for this backend."""
+        return "thresholding_rtl.v.j2"
     
-    def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
-        """Generate RTL thresholding-specific template values.
+    def get_template_values(self, template_name: str) -> Dict[str, Any]:
+        """Generate template values for simplified RTL template.
         
         Args:
             template_name: Name of template being generated for
             
         Returns:
-            Dictionary of thresholding-specific template values
+            Dictionary of template values for thresholding_rtl.v.j2
         """
-        if 'wrapper' in template_name:
-            return self.get_rtl_wrapper_values()
+        # Get base values
+        template_values = self.get_rtl_wrapper_values()
+        
+        # Convert to simplified template format
+        simplified_values = {
+            'module_name': template_values['MODULE_NAME_AXI_WRAPPER'],
+            'n': template_values['N'],
+            'wi': template_values['WI'],
+            'wt': template_values['WT'],
+            'c': template_values['C'],
+            'pe': template_values['PE'],
+            'signed': template_values['SIGNED'],
+            'fparg': template_values['FPARG'],
+            'bias': template_values['BIAS'],
+            'thresholds_path': template_values['THRESHOLDS_PATH'],
+            'use_axilite': template_values['USE_AXILITE'],
+            'depth_trigger_uram': template_values['DEPTH_TRIGGER_URAM'],
+            'depth_trigger_bram': template_values['DEPTH_TRIGGER_BRAM'],
+            'deep_pipeline': template_values['DEEP_PIPELINE'],
+            'o_bits': template_values['O_BITS'],
+        }
+        
+        # Calculate stream widths
+        pe = template_values['PE']
+        wi = template_values['WI']
+        o_bits = template_values['O_BITS']
+        
+        input_width = pe * wi
+        output_width = pe * o_bits
+        
+        # Pad to byte boundaries
+        simplified_values['input_stream_width'] = ((input_width + 7) // 8) * 8
+        simplified_values['output_stream_width'] = ((output_width + 7) // 8) * 8
+        
+        # Calculate AXI-Lite address width if needed
+        if template_values['USE_AXILITE']:
+            import math
+            c = template_values['C']
+            n = template_values['N']
+            addr_width = math.ceil(math.log2(c/pe)) + math.ceil(math.log2(pe)) + n + 1
+            simplified_values['axilite_addr_width'] = int(addr_width)
         else:
-            # Return empty dict for other templates
-            return {}
+            simplified_values['axilite_addr_width'] = 0
+            
+        return simplified_values
 
     # =============================================================================
     # OPERATION-SPECIFIC METHODS (threshold file generation)
@@ -318,17 +351,62 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
             shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
 
     def generate_hdl(self, model, fpgapart, clk):
-        """Generate HDL using clean template architecture."""
+        """Generate HDL using simplified RTL template."""
         # Generate threshold data files
         self.generate_threshold_files(model)
         
-        # Generate RTL wrapper using clean backend
+        # Get template values and convert to match simplified template
         template_values = self.get_rtl_wrapper_values()
-        rtl_code = self.render_template("thresholding/rtl/wrapper.v.j2", template_values)
+        
+        # Convert keys to match simplified template expectations
+        simplified_values = {
+            'module_name': template_values['MODULE_NAME_AXI_WRAPPER'],
+            'n': template_values['N'],
+            'wi': template_values['WI'],
+            'wt': template_values['WT'],
+            'c': template_values['C'],
+            'pe': template_values['PE'],
+            'signed': template_values['SIGNED'],
+            'fparg': template_values['FPARG'],
+            'bias': template_values['BIAS'],
+            'thresholds_path': template_values['THRESHOLDS_PATH'],
+            'use_axilite': template_values['USE_AXILITE'],
+            'depth_trigger_uram': template_values['DEPTH_TRIGGER_URAM'],
+            'depth_trigger_bram': template_values['DEPTH_TRIGGER_BRAM'],
+            'deep_pipeline': template_values['DEEP_PIPELINE'],
+            'o_bits': template_values['O_BITS'],
+        }
+        
+        # Calculate stream widths
+        pe = template_values['PE']
+        wi = template_values['WI']
+        o_bits = template_values['O_BITS']
+        
+        input_width = pe * wi
+        output_width = pe * o_bits
+        
+        # Pad to byte boundaries
+        simplified_values['input_stream_width'] = ((input_width + 7) // 8) * 8
+        simplified_values['output_stream_width'] = ((output_width + 7) // 8) * 8
+        
+        # Calculate AXI-Lite address width if needed
+        if template_values['USE_AXILITE']:
+            import math
+            c = template_values['C']
+            n = template_values['N']
+            addr_width = math.ceil(math.log2(c/pe)) + math.ceil(math.log2(pe)) + n + 1
+            simplified_values['axilite_addr_width'] = int(addr_width)
+        else:
+            simplified_values['axilite_addr_width'] = 0
+        
+        # Use simplified template
+        from finn.codegen.template_engine import TemplateEngine
+        engine = TemplateEngine()
+        rtl_code = engine.render("thresholding_rtl.v.j2", simplified_values)
         
         # Write RTL file
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        module_name = template_values['MODULE_NAME_AXI_WRAPPER']
+        module_name = simplified_values['module_name']
         rtl_path = os.path.join(code_gen_dir, f"{module_name}.v")
         with open(rtl_path, "w") as f:
             f.write(rtl_code)
@@ -590,6 +668,17 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
             intf_names["axilite"] = ["s_axilite"]
 
         return intf_names
+    
+    def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
+        """Generate operation-specific values (required by parent class).
+        
+        Args:
+            template_name: Name of template being generated for
+            
+        Returns:
+            Empty dict - we handle everything in parent class methods
+        """
+        return {}
 
     def make_weight_file(self, weights, weight_file_mode, weight_file_name):
         """Produce a file containing given weights (thresholds) in appropriate
