@@ -96,3 +96,13 @@ MANIFEST
 
 # downloaded dep repos
 /deps/
+
+# Docker container cache
+.finn_cache/
+/tmp/.finn_cache/
+
+# Legacy backup files
+*.legacy
+
+# Container build directories
+/tmp/finn_dev_*/

@@ -1,0 +1,70 @@
+# FINN Repository Configuration
+# Defines all external dependencies and their versions
+
+repositories:
+  # Python dependencies (installed as editable packages)
+  qonnx:
+    url: https://github.com/fastmachinelearning/qonnx.git
+    commit: fd61cfeebbdace3ee2da7f70a018e4cdc2055220
+    type: python
+    install: editable
+    
+  finn-experimental:
+    url: https://github.com/Xilinx/finn-experimental.git
+    commit: 0724be21111a21c4fc75bd5a6e229c3bc47ed7a5
+    type: python
+    install: editable
+    
+  brevitas:
+    url: https://github.com/Xilinx/brevitas.git
+    commit: d4834bd2a0fad3c1fbc0ff7e1346e5b5de209933
+    type: python
+    install: editable
+    
+  pyverilator:
+    url: https://github.com/maltanar/pyverilator.git
+    commit: 135b057e4bcb9b2743f1d9b5a1ae3cfeb577d7a2
+    type: python
+    install: editable
+    
+  # C++ dependencies
+  finn-hlslib:
+    url: https://github.com/Xilinx/finn-hlslib.git
+    commit: 9fcb7a03648954b8a2cd83311757e1e007df8a4f
+    type: cpp
+    
+  cnpy:
+    url: https://github.com/rogersce/cnpy.git
+    commit: 4e8810b1a8637695171ed346ce68f6984e585ef4
+    type: cpp
+    
+  # Other dependencies
+  oh-my-xilinx:
+    url: https://github.com/Xilinx/oh-my-xilinx.git
+    commit: 9fcb7a03648954b8a2cd83311757e1e007df8a4f
+    type: other
+    
+  pyxsi:
+    url: https://github.com/Xilinx/pyxsi.git
+    commit: eda3e7eff37090a59b0bbbb957c5d292f4aa5f48
+    type: other
+
+# Board file repositories
+board_files:
+  - name: KV260_SOM
+    url: https://github.com/Xilinx/XilinxBoardStore.git
+    path: boards/Xilinx/kv260_som
+    commit: 2635a6e3bb43f2ba3c3678b808ceeab6d3cf8f2f
+    sparse: true
+    
+  - name: Pynq-Z1
+    url: https://github.com/cathalmccabe/pynq-z1_board_files.git
+    path: .
+    commit: f6b743c0cf16a2e81738fcc13706dfba031b3aac
+    sparse: false
+    
+  - name: ZCU104
+    url: https://github.com/Xilinx/XilinxBoardStore.git
+    path: boards/Xilinx/zcu104
+    commit: 2635a6e3bb43f2ba3c3678b808ceeab6d3cf8f2f
+    sparse: true
