@@ -148,7 +148,7 @@ fetch_from_yaml() {
     gecho "Fetching FINN dependencies..."
     
     # Parse repositories
-    python3 << EOF
+    python3 << EOF | while IFS='|' read -r type name url commit path sparse; do
 import yaml
 import sys
 
@@ -170,7 +170,6 @@ for board in config.get('board_files', []):
     sparse = board.get('sparse', False)
     print(f"BOARD|{name}|{url}|{commit}|{path}|{sparse}")
 EOF
-    | while IFS='|' read -r type name url commit path sparse; do
         case $type in
             "REPO")
                 target_dir="$DEPS_DIR/$name"

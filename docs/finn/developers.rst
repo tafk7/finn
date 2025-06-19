@@ -80,7 +80,7 @@ The finn.dev image is built and launched as follows:
   * The build folder is mounted under /tmp/finn_dev_username (can be overridden by defining FINN_HOST_BUILD_DIR). This will be used for generated files. Mounting on the host allows easy examination of the generated files, and keeping the generated files after the container exits.
   * Various environment variables are set up for use inside the container. See the run-docker.sh script for a complete list.
 
-4. Entrypoint script (docker/finn_entrypoint.sh) upon launching container performs the following:
+4. Entrypoint script (docker/entrypoint.sh) upon launching container performs the following:
 
   * Source Vivado settings64.sh from specified path to make vivado and vitis_hls available.
   * Download board files into the finn root directory, unless they already exist or ``FINN_SKIP_BOARD_FILES=1``.
