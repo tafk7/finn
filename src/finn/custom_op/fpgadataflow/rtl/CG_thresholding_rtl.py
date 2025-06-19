@@ -30,6 +30,7 @@ import math
 import numpy as np
 import os
 import shutil
+from typing import Dict, Any, List
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
 
@@ -192,6 +193,40 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
             os.path.join(rtllib_dir, "thresholding.sv"),
             os.path.join(rtllib_dir, "thresholding_axi.sv"),
         ]
+
+    # =============================================================================
+    # TEMPLATE VALUE GENERATION METHODS
+    # =============================================================================
+    
+    def _generate_common_values(self, instance) -> Dict[str, Any]:
+        """Generate common template values for RTL backend.
+        
+        Args:
+            instance: Backend instance (for compatibility)
+            
+        Returns:
+            Dictionary of common template values
+        """
+        return {
+            'MODULE_NAME': self.get_verilog_top_module_name(),
+            'NODE_NAME': self.onnx_node.name,
+            'OP_TYPE': self.onnx_node.op_type,
+        }
+    
+    def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
+        """Generate RTL thresholding-specific template values.
+        
+        Args:
+            template_name: Name of template being generated for
+            
+        Returns:
+            Dictionary of thresholding-specific template values
+        """
+        if 'wrapper' in template_name:
+            return self.get_rtl_wrapper_values()
+        else:
+            # Return empty dict for other templates
+            return {}
 
     # =============================================================================
     # OPERATION-SPECIFIC METHODS (threshold file generation)
@@ -490,6 +525,42 @@ class CG_Thresholding_rtl(Thresholding, CG_RTLBackend):
                     mode
                 )
             )
+
+    def get_rtl_file_list(self, abspath: bool = False) -> List[str]:
+        """Returns list of RTL files for thresholding.
+        
+        Args:
+            abspath: Whether to return absolute paths
+            
+        Returns:
+            List of RTL file paths
+        """
+        rtl_files = []
+        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+        
+        # Add wrapper file if it exists
+        wrapper_filename = self.get_verilog_top_module_name() + "_wrapper.v"
+        wrapper_path = os.path.join(code_gen_dir, wrapper_filename)
+        if os.path.exists(wrapper_path):
+            rtl_files.append(wrapper_path if abspath else wrapper_filename)
+        
+        # Add source files from rtllib
+        rtl_files.extend(self.get_source_files() if abspath else 
+                        [os.path.basename(f) for f in self.get_source_files()])
+        
+        return rtl_files
+    
+    def get_verilog_top_module_name(self) -> str:
+        """Get the Verilog module name for this operation.
+        
+        Returns:
+            Verilog module name
+        """
+        # Base it on the node name to ensure uniqueness
+        node_name = self.onnx_node.name
+        # Ensure valid Verilog identifier
+        verilog_name = node_name.replace(".", "_").replace("/", "_")
+        return f"{verilog_name}_wrapper"
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL commands for node instantiation as an RTL

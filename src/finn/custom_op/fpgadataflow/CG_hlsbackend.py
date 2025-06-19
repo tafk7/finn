@@ -227,6 +227,20 @@ class CG_HLSBackend(Codegen):
         
         return validated
 
+    @abstractmethod
+    def _generate_common_values(self, instance) -> Dict[str, Any]:
+        """Generate common template values shared across templates.
+        
+        Must be implemented by operation-specific subclasses.
+        
+        Args:
+            instance: Backend instance (for compatibility)
+            
+        Returns:
+            Dictionary of common template values
+        """
+        pass
+
     @abstractmethod  
     def _generate_operation_specific_values(self, template_name: str) -> Dict[str, Any]:
         """Generate operation-specific template values.
