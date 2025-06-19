@@ -5,19 +5,19 @@ repositories:
   # Python dependencies (installed as editable packages)
   qonnx:
     url: https://github.com/fastmachinelearning/qonnx.git
-    commit: fd61cfeebbdace3ee2da7f70a018e4cdc2055220
+    commit: ed339373246d84626cf8e1d9038a8acad7111031
     type: python
     install: editable
     
   finn-experimental:
     url: https://github.com/Xilinx/finn-experimental.git
-    commit: 0724be21111a21c4fc75bd5a6e229c3bc47ed7a5
+    commit: 0724be21111a21f0d81a072fccc1c446e053f851
     type: python
     install: editable
     
   brevitas:
     url: https://github.com/Xilinx/brevitas.git
-    commit: d4834bd2a0fad3c1fbc0ff7e1346e5b5de209933
+    commit: 4617f7bd136e96fa21c7f76e3c7e2e37fe563837
     type: python
     install: editable
     
@@ -30,41 +30,47 @@ repositories:
   # C++ dependencies
   finn-hlslib:
     url: https://github.com/Xilinx/finn-hlslib.git
-    commit: 9fcb7a03648954b8a2cd83311757e1e007df8a4f
+    commit: 5c5ad631e3602a8dd5bd3399a016477a407d6ee7
     type: cpp
     
   cnpy:
-    url: https://github.com/rogersce/cnpy.git
-    commit: 4e8810b1a8637695171ed346ce68f6984e585ef4
+    url: https://github.com/maltanar/cnpy.git
+    commit: 8c82362372ce600bbd1cf11d64661ab69d38d7de
     type: cpp
     
   # Other dependencies
   oh-my-xilinx:
-    url: https://github.com/Xilinx/oh-my-xilinx.git
-    commit: 9fcb7a03648954b8a2cd83311757e1e007df8a4f
+    url: https://github.com/maltanar/oh-my-xilinx.git
+    commit: 0b59762f9e4c4f7e5aa535ee9bc29f292434ca7a
     type: other
     
   pyxsi:
-    url: https://github.com/Xilinx/pyxsi.git
-    commit: eda3e7eff37090a59b0bbbb957c5d292f4aa5f48
+    url: https://github.com/maltanar/pyxsi.git
+    commit: 941bb62a4a3cc2c8cf2a9b89187c60bb0b776658
     type: other
 
 # Board file repositories
 board_files:
-  - name: KV260_SOM
-    url: https://github.com/Xilinx/XilinxBoardStore.git
-    path: boards/Xilinx/kv260_som
-    commit: 2635a6e3bb43f2ba3c3678b808ceeab6d3cf8f2f
-    sparse: true
-    
-  - name: Pynq-Z1
-    url: https://github.com/cathalmccabe/pynq-z1_board_files.git
+  - name: avnet-bdf
+    url: https://github.com/Avnet/bdf.git
     path: .
-    commit: f6b743c0cf16a2e81738fcc13706dfba031b3aac
+    commit: 2d49cfc25766f07792c0b314489f21fe916b639b
     sparse: false
     
-  - name: ZCU104
+  - name: xil-bdf
     url: https://github.com/Xilinx/XilinxBoardStore.git
-    path: boards/Xilinx/zcu104
-    commit: 2635a6e3bb43f2ba3c3678b808ceeab6d3cf8f2f
+    path: .
+    commit: 8cf4bb674a919ac34e3d99d8d71a9e60af93d14e
+    sparse: false
+    
+  - name: rfsoc4x2-bdf
+    url: https://github.com/RealDigitalOrg/RFSoC4x2-BSP.git
+    path: .
+    commit: 13fb6f6c02c7dfd7e4b336b18b959ad5115db696
+    sparse: false
+    
+  - name: kv260-som-bdf
+    url: https://github.com/Xilinx/XilinxBoardStore.git
+    path: boards/Xilinx/kv260_som
+    commit: 98e0d3efc901f0b974006bc4370c2a7ad8856c79
     sparse: true
