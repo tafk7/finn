@@ -9,7 +9,6 @@ This directory contains all Docker-related files for the FINN framework.
 - `entrypoint.sh` - Primary container entrypoint with initialization
 - `entrypoint_exec.sh` - Fast execution entrypoint for running containers
 - `entrypoint_common.sh` - Shared environment setup
-- `finn_entrypoint.sh` - Legacy entrypoint (for backward compatibility)
 
 ### Dependency Management
 - `finn_repos.yaml` - YAML configuration of all dependencies
