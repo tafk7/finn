@@ -134,9 +134,32 @@ RUN pip install setuptools==68.2.2
 # extra environment variables for FINN compiler
 ENV VIVADO_IP_CACHE "/tmp/vivado_ip_cache"
 
-COPY docker/finn_entrypoint.sh /usr/local/bin/
+# Copy new entrypoint scripts
+COPY docker/entrypoint.sh /usr/local/bin/
+COPY docker/entrypoint_exec.sh /usr/local/bin/
+COPY docker/entrypoint_common.sh /usr/local/bin/
 COPY docker/quicktest.sh /usr/local/bin/
+
+# Copy dependency management scripts
+COPY docker/fetch_deps.py /usr/local/bin/
+COPY docker/install_deps.py /usr/local/bin/
+COPY docker/verify_installation.py /usr/local/bin/
+COPY docker/health_check.py /usr/local/bin/
+COPY docker/startup_profiler.py /usr/local/bin/
+
+# Copy old entrypoint for backward compatibility
+COPY docker/finn_entrypoint.sh /usr/local/bin/
+
+# Make scripts executable
+RUN chmod 755 /usr/local/bin/entrypoint*.sh
 RUN chmod 755 /usr/local/bin/finn_entrypoint.sh
 RUN chmod 755 /usr/local/bin/quicktest.sh
-ENTRYPOINT ["finn_entrypoint.sh"]
+RUN chmod 755 /usr/local/bin/fetch_deps.py
+RUN chmod 755 /usr/local/bin/install_deps.py
+RUN chmod 755 /usr/local/bin/verify_installation.py
+RUN chmod 755 /usr/local/bin/health_check.py
+RUN chmod 755 /usr/local/bin/startup_profiler.py
+
+# Use new entrypoint
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

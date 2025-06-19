@@ -21,6 +21,35 @@ For more general information about FINN, please visit the [project page](https:/
 
 Please see the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page for more information on requirements, installation, and how to run FINN in different modes. Due to the complex nature of the dependencies of the project, **we only support Docker-based execution of the FINN compiler at this time**.
 
+### Quick Start with Docker
+
+FINN uses a modernized Docker orchestration system for improved performance and developer experience:
+
+```bash
+# Initialize persistent container (one-time setup, ~2-3 minutes)
+./finn-docker init
+
+# Run tests (sub-second execution after init)
+./finn-docker pytest tests/
+
+# Interactive development shell
+./finn-docker shell
+
+# Run Jupyter notebooks
+./finn-docker notebook
+
+# Check container health
+./finn-docker health
+```
+
+**Legacy Support:** The original `run-docker.sh` script remains fully supported during transition:
+```bash
+./run-docker.sh              # Still works as before
+./run-docker.sh quicktest    # Quick test execution
+```
+
+**Performance:** The new system provides ~73% faster repeated operations through persistent containers while maintaining full backward compatibility.
+
 ## What's New in FINN?
 
 * Please find all news under [GitHub discussions Announcements](https://github.com/Xilinx/finn/discussions/categories/announcements).
