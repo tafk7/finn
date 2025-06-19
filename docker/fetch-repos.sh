@@ -231,11 +231,6 @@ fetch_legacy_repos() {
         "d4834bd2a0fad3c1fbc0ff7e1346e5b5de209933" \
         "$DEPS_DIR/brevitas"
         
-    fetch_with_retry "pyverilator" \
-        "https://github.com/maltanar/pyverilator.git" \
-        "135b057e4bcb9b2743f1d9b5a1ae3cfeb577d7a2" \
-        "$DEPS_DIR/pyverilator"
-        
     # Other essential repos
     fetch_with_retry "finn-hlslib" \
         "https://github.com/Xilinx/finn-hlslib.git" \
