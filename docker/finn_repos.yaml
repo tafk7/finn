@@ -21,12 +21,6 @@ repositories:
     type: python
     install: editable
     
-  pyverilator:
-    url: https://github.com/maltanar/pyverilator.git
-    commit: 135b057e4bcb9b2743f1d9b5a1ae3cfeb577d7a2
-    type: python
-    install: editable
-    
   # C++ dependencies
   finn-hlslib:
     url: https://github.com/Xilinx/finn-hlslib.git

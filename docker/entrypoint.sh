@@ -55,7 +55,6 @@ initialize_container() {
                 install_with_cache "qonnx" "$FINN_DEPS_DIR/qonnx"
                 install_with_cache "finn_experimental" "$FINN_DEPS_DIR/finn-experimental" 
                 install_with_cache "brevitas" "$FINN_DEPS_DIR/brevitas"
-                install_with_cache "pyverilator" "$FINN_DEPS_DIR/pyverilator"
             fi
         fi
     fi

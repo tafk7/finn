@@ -199,7 +199,6 @@ class InstallationVerifier:
             ("qonnx", "qonnx"),
             ("finn_experimental", "finn_experimental"),
             ("brevitas", "brevitas"),
-            ("pyverilator", "pyverilator"),
         ]
         
         for name, module in finn_packages:
@@ -213,7 +212,6 @@ class InstallationVerifier:
             "qonnx",
             "finn-experimental", 
             "brevitas",
-            "pyverilator",
             "finn-hlslib",
             "cnpy",
             "oh-my-xilinx",

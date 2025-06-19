@@ -292,7 +292,6 @@ def main():
         ("qonnx", deps_dir / "qonnx"),
         ("finn_experimental", deps_dir / "finn-experimental"),
         ("brevitas", deps_dir / "brevitas"),
-        ("pyverilator", deps_dir / "pyverilator"),
     ]
     
     # Filter out non-existent packages
