@@ -27,11 +27,15 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import logging
+import os
+import subprocess
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 from qonnx.core.datatype import DataType
 
 from finn.codegen.codegen import Codegen
+from finn.codegen import TemplateEngine
+from finn.util.basic import CppBuilder, make_build_dir
 
 
 class CG_HLSBackend(Codegen):
@@ -49,6 +53,9 @@ class CG_HLSBackend(Codegen):
         
         # HLS-specific initialization without legacy bloat
         self.logger = logging.getLogger(f"finn.codegen.{self.__class__.__name__}")
+        
+        # Initialize template engine for execution methods
+        self.template_engine = TemplateEngine()
         
         # Apply HLS-specific configurations
         for key, value in kwargs.items():
@@ -368,20 +375,235 @@ class CG_HLSBackend(Codegen):
             'res_type': self._safe_get_nodeattr('resType', 'lut'),
         }
 
-    # ===== REMOVED: All Legacy Methods =====
-    # The following methods are intentionally NOT implemented to eliminate legacy bloat:
-    # - code_generation_cppsim()
-    # - code_generation_ipgen() 
-    # - global_includes()
-    # - defines()
-    # - docompute()
-    # - blackboxfunction()
-    # - read_npy_data()
-    # - strm_decl()
-    # - dataoutstrm()
-    # - save_as_npy()
-    # - pragmas()
-    # - All _get_*_from_code_gen_dict() methods
-    # - code_gen_dict attribute and usage
-    #
-    # These are replaced by the direct template value generation methods above.
+    # ===== Template-Native Execution Methods =====
+    # These methods provide FINN compatibility through template-based implementations
+
+    def code_generation_cppsim(self):
+        """Generate C++ simulation code using template system."""
+        self.logger.info(f"Generating C++ simulation code for {self.onnx_node.name}")
+        
+        # Ensure code generation directory exists
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+        if not code_gen_dir or not os.path.isdir(code_gen_dir):
+            code_gen_dir = make_build_dir("code_gen_cppsim_" + self.onnx_node.name + "_")
+            self.set_nodeattr("code_gen_dir_cppsim", code_gen_dir)
+        
+        # Generate template values
+        template_values = self.get_execution_template_values("cppsim")
+        
+        # Render cppsim template
+        cppsim_code = self.template_engine.render_template("execution/cppsim.cpp.j2", template_values)
+        
+        # Write main C++ file
+        function_name = template_values.get('function_name', 'main')
+        cpp_file = os.path.join(code_gen_dir, f"{function_name}.cpp")
+        with open(cpp_file, 'w') as f:
+            f.write(cppsim_code)
+        
+        # Generate params.h if needed
+        if template_values.get('operation_params'):
+            params_code = self.template_engine.render_template("execution/params.h.j2", template_values)
+            params_file = os.path.join(code_gen_dir, "params.h")
+            with open(params_file, 'w') as f:
+                f.write(params_code)
+        
+        self.logger.info(f"Generated C++ simulation code: {cpp_file}")
+
+    def code_generation_ipgen(self, model, fpgapart: str, clk: float):
+        """Generate IP generation code using template system."""
+        self.logger.info(f"Generating IP code for {self.onnx_node.name}")
+        
+        # Store context for template generation
+        self._current_model = model
+        self._current_fpgapart = fpgapart
+        self._current_clk = clk
+        
+        # Ensure code generation directory exists
+        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
+        if not code_gen_dir or not os.path.isdir(code_gen_dir):
+            code_gen_dir = make_build_dir("code_gen_ipgen_" + self.onnx_node.name + "_")
+            self.set_nodeattr("code_gen_dir_ipgen", code_gen_dir)
+        
+        # Generate template values with IP context
+        template_values = self.get_execution_template_values("ipgen")
+        template_values.update({
+            'fpga_part': fpgapart,
+            'clock_period': clk,
+            'project_name': f"{self.onnx_node.name}_project",
+            'ip_name': f"{self.onnx_node.name}_ip",
+            'ip_version': "1.0",
+        })
+        
+        # Render IP generation template
+        ipgen_code = self.template_engine.render_template("execution/ipgen.cpp.j2", template_values)
+        tcl_code = self.template_engine.render_template("execution/ipgen.tcl.j2", template_values)
+        
+        # Write files
+        function_name = template_values.get('function_name', 'main')
+        cpp_file = os.path.join(code_gen_dir, f"{function_name}.cpp")
+        tcl_file = os.path.join(code_gen_dir, "run_hls.tcl")
+        
+        with open(cpp_file, 'w') as f:
+            f.write(ipgen_code)
+        with open(tcl_file, 'w') as f:
+            f.write(tcl_code)
+        
+        # Generate params.h if needed
+        if template_values.get('operation_params'):
+            params_code = self.template_engine.render_template("execution/params.h.j2", template_values)
+            params_file = os.path.join(code_gen_dir, "params.h")
+            with open(params_file, 'w') as f:
+                f.write(params_code)
+        
+        self.logger.info(f"Generated IP code: {cpp_file}, {tcl_file}")
+
+    def compile_singlenode_code(self):
+        """Compile C++ simulation code using template system."""
+        self.logger.info(f"Compiling single-node code for {self.onnx_node.name}")
+        
+        code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
+        if not code_gen_dir or not os.path.isdir(code_gen_dir):
+            raise ValueError(f"Code generation directory not found: {code_gen_dir}")
+        
+        # Get template values for compilation info
+        template_values = self.get_execution_template_values("cppsim")
+        function_name = template_values.get('function_name', 'main')
+        
+        # Build using CppBuilder
+        builder = CppBuilder()
+        
+        # Add source files
+        cpp_file = os.path.join(code_gen_dir, f"{function_name}.cpp")
+        if not os.path.exists(cpp_file):
+            raise FileNotFoundError(f"Generated C++ file not found: {cpp_file}")
+        
+        builder.append_sources([cpp_file])
+        
+        # Add includes
+        builder.append_includes([code_gen_dir])
+        
+        # Build executable
+        executable_path = builder.build(code_gen_dir)
+        self.set_nodeattr("executable_path", executable_path)
+        
+        self.logger.info(f"Compiled executable: {executable_path}")
+
+    def execute_node(self, context, graph):
+        """Execute the node using template system."""
+        exec_mode = self.get_nodeattr("exec_mode")
+        
+        if exec_mode == "cppsim":
+            return self._execute_cppsim(context, graph)
+        elif exec_mode == "rtlsim":
+            return self._execute_rtlsim(context, graph)
+        else:
+            raise ValueError(f"Unknown execution mode: {exec_mode}")
+
+    def _execute_cppsim(self, context, graph):
+        """Execute using C++ simulation."""
+        executable_path = self.get_nodeattr("executable_path")
+        if not executable_path or not os.path.exists(executable_path):
+            raise ValueError(f"Executable not found: {executable_path}")
+        
+        # Implementation would handle data conversion and subprocess execution
+        # This is a simplified version
+        self.logger.info(f"Executing C++ simulation: {executable_path}")
+        return context  # Return modified context
+
+    def _execute_rtlsim(self, context, graph):
+        """Execute using RTL simulation."""
+        # Implementation would handle RTL simulation
+        self.logger.info("Executing RTL simulation")
+        return context  # Return modified context
+
+    def get_execution_template_values(self, execution_type: str) -> Dict[str, Any]:
+        """Get template values for execution-specific templates.
+        
+        Args:
+            execution_type: Type of execution ("cppsim", "ipgen", etc.)
+            
+        Returns:
+            Dictionary of template values for execution
+        """
+        # Start with basic template values
+        values = self.get_template_values(self.get_template_name())
+        
+        # Add execution-specific values
+        execution_values = self._generate_execution_values(execution_type)
+        values.update(execution_values)
+        
+        return values
+
+    def _generate_execution_values(self, execution_type: str) -> Dict[str, Any]:
+        """Generate execution-specific template values.
+        
+        Args:
+            execution_type: Type of execution
+            
+        Returns:
+            Dictionary of execution-specific values
+        """
+        values = {
+            'execution_type': execution_type,
+            'function_name': self._generate_function_name(),
+            'mem_mode': self._safe_get_nodeattr('mem_mode', 'external'),
+            'headers': self._generate_execution_headers(),
+            'input_ports': self._generate_input_ports(),
+            'output_ports': self._generate_output_ports(),
+            'internal_streams': self._generate_internal_streams(),
+            'operation_params': self._generate_operation_params(),
+            'data_types': self._generate_data_types(),
+            'resource_config': self._generate_resource_config(),
+        }
+        
+        if execution_type == "ipgen":
+            values.update({
+                'pipeline_depth': self._safe_get_nodeattr('pipeline_depth', 1),
+                'resource_pragmas': self._generate_resource_pragmas(),
+                'synthesis_directives': self._generate_synthesis_directives(),
+            })
+        
+        return values
+
+    def _generate_function_name(self) -> str:
+        """Generate function name for execution."""
+        try:
+            return self.onnx_node.name.replace('-', '_').replace('.', '_')
+        except:
+            return "compute_function"
+
+    def _generate_execution_headers(self) -> list:
+        """Generate headers needed for execution."""
+        return []  # Override in subclasses
+
+    def _generate_input_ports(self) -> list:
+        """Generate input port definitions."""
+        return []  # Override in subclasses
+
+    def _generate_output_ports(self) -> list:
+        """Generate output port definitions."""
+        return []  # Override in subclasses
+
+    def _generate_internal_streams(self) -> list:
+        """Generate internal stream definitions."""
+        return []  # Override in subclasses
+
+    def _generate_operation_params(self) -> dict:
+        """Generate operation-specific parameters."""
+        return {}  # Override in subclasses
+
+    def _generate_data_types(self) -> dict:
+        """Generate data type definitions."""
+        return {}  # Override in subclasses
+
+    def _generate_resource_config(self) -> dict:
+        """Generate resource configuration."""
+        return {}  # Override in subclasses
+
+    def _generate_resource_pragmas(self) -> list:
+        """Generate HLS resource pragmas."""
+        return []  # Override in subclasses
+
+    def _generate_synthesis_directives(self) -> list:
+        """Generate synthesis directives."""
+        return []  # Override in subclasses

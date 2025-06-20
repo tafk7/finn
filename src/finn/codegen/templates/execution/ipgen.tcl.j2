@@ -1,0 +1,37 @@
+# Copyright (C) 2023, Advanced Micro Devices, Inc.
+# All rights reserved.
+
+# TCL script for IP generation
+# Generated from: {{ function_name }}
+
+# Project configuration
+open_project {{ project_name }}
+set_top {{ function_name }}
+add_files {{ function_name }}.cpp
+{% if mem_mode == "internal_decoupled" %}
+add_files weights.h
+{% endif %}
+
+# Solution configuration
+open_solution "solution1"
+set_part {{ fpga_part }}
+create_clock -period {{ clock_period }}
+
+# Synthesis configuration
+{% if synthesis_directives %}
+{% for directive in synthesis_directives %}
+{{ directive }}
+{% endfor %}
+{% endif %}
+
+# Run synthesis
+csynth_design
+
+# Export IP if synthesis successful
+if {[file exists solution1/syn/report/{{ function_name }}_csynth.rpt]} {
+    export_design -format ip_catalog -ipname {{ ip_name }} -version {{ ip_version }}
+    puts "IP export completed successfully"
+} else {
+    puts "ERROR: Synthesis failed, cannot export IP"
+    exit 1
+}

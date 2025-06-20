@@ -930,3 +930,108 @@ exit 0
             num_w_reps = np.prod(self.get_nodeattr("numInputVectors"))
             io_dict["inputs"]["in1"] = [0 for i in range(num_w_reps * n_weight_inps)]
         super().derive_characteristic_fxns(period, override_rtlsim_dict=io_dict)
+
+    # ===== Execution-Specific Template Methods =====
+
+    def _generate_execution_headers(self) -> list:
+        """Generate headers needed for thresholding execution."""
+        headers = ["npy2apintstream.hpp", "streamtools.h", "thresholding.h"]
+        
+        # Add memory mode specific headers
+        mem_mode = self._safe_get_nodeattr('mem_mode', 'external')
+        if mem_mode == "internal_embedded":
+            headers.append("thresh_param.h")
+        elif mem_mode == "internal_decoupled":
+            headers.append("weights.h")
+            
+        return headers
+
+    def _generate_input_ports(self) -> list:
+        """Generate input port definitions for thresholding."""
+        instream_w = self.get_instream_width()
+        return [{
+            'name': 'in0_V',
+            'type': f'ap_uint<{instream_w}>*',
+            'stream_type': f'ap_uint<{instream_w}>',
+            'size': self._calculate_input_size(),
+        }]
+
+    def _generate_output_ports(self) -> list:
+        """Generate output port definitions for thresholding."""
+        outstream_w = self.get_outstream_width()
+        return [{
+            'name': 'out0_V',
+            'type': f'ap_uint<{outstream_w}>*',
+            'stream_name': 'out0_V_stream',
+            'size': self._calculate_output_size(),
+        }]
+
+    def _generate_internal_streams(self) -> list:
+        """Generate internal stream definitions for thresholding."""
+        outstream_w = self.get_outstream_width()
+        return [{
+            'name': 'out0_V_stream',
+            'type': f'ap_uint<{outstream_w}>',
+        }]
+
+    def _generate_operation_params(self) -> dict:
+        """Generate thresholding-specific parameters."""
+        return {
+            'NumChannels': self.get_nodeattr("NumChannels"),
+            'PE': self.get_nodeattr("PE"),
+            'numSteps': self.get_nodeattr("numSteps"),
+            'inputDataType': str(self.get_input_datatype()),
+            'outputDataType': str(self.get_output_datatype()),
+            'numThresh': self._get_num_thresh(),
+        }
+
+    def _generate_data_types(self) -> dict:
+        """Generate thresholding data type definitions."""
+        input_dt = self.get_input_datatype()
+        output_dt = self.get_output_datatype()
+        thresh_dt = self.get_thresholds_datatype()
+        
+        return {
+            'input_t': input_dt.get_hls_datatype_str(),
+            'output_t': output_dt.get_hls_datatype_str(),
+            'thresh_t': thresh_dt.get_hls_datatype_str(),
+            'ActVal': str(output_dt.get_hls_datatype_str()),
+        }
+
+    def _generate_resource_config(self) -> dict:
+        """Generate thresholding resource configuration."""
+        return {
+            'PE_COUNT': self.get_nodeattr("PE"),
+            'THRESH_COUNT': self._get_num_thresh(),
+            'MEM_MODE': self._safe_get_nodeattr('mem_mode', 'external'),
+        }
+
+    def _generate_resource_pragmas(self) -> list:
+        """Generate HLS resource pragmas for thresholding."""
+        pe = self.get_nodeattr("PE")
+        pragmas = [
+            f'#pragma HLS RESOURCE variable=thresholds core=RAM_2P_BRAM',
+            f'#pragma HLS ARRAY_PARTITION variable=thresholds cyclic factor={pe} dim=1',
+        ]
+        return pragmas
+
+    def _generate_synthesis_directives(self) -> list:
+        """Generate synthesis directives for thresholding."""
+        return [
+            'set_directive_pipeline "Thresholding_hls/Thresholding_hls_label0"',
+            'set_directive_unroll "Thresholding_hls/Thresholding_hls_label1"',
+        ]
+
+    def _calculate_input_size(self) -> int:
+        """Calculate input tensor size."""
+        ishape = self.get_normal_input_shape()
+        return int(np.prod(ishape))
+
+    def _calculate_output_size(self) -> int:
+        """Calculate output tensor size."""
+        oshape = self.get_normal_output_shape()
+        return int(np.prod(oshape))
+
+    def _get_num_thresh(self) -> int:
+        """Get number of thresholds."""
+        return self.get_nodeattr("numSteps") - 1

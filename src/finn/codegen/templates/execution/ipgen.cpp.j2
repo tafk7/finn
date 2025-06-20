@@ -1,0 +1,53 @@
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All rights reserved.
+
+// IP Generation Template for FINN HLS Operations
+// Generated from: {{ function_name }}
+
+#define AP_INT_MAX_W {{ ap_int_max_w | default(8192) }}
+#include <ap_int.h>
+#include <hls_stream.h>
+#include "bnn-library.h"
+
+// Include operation-specific headers
+{% for header in headers %}
+#include "{{ header }}"
+{% endfor %}
+
+// Memory mode specific includes
+{% if mem_mode == "internal_embedded" %}
+// Weights embedded in code
+{% elif mem_mode == "internal_decoupled" %}
+#include "weights.h"
+{% elif mem_mode == "external" %}
+// External weight loading required
+{% endif %}
+
+// Top-level function for HLS synthesis
+void {{ function_name }}(
+    {% for port in input_ports %}
+    hls::stream<{{ port.type }}> &{{ port.name }}{{ "," if not loop.last or output_ports else "" }}
+    {% endfor %}
+    {% for port in output_ports %}
+    hls::stream<{{ port.type }}> &{{ port.name }}{{ "," if not loop.last else "" }}
+    {% endfor %}
+) {
+    // HLS pragmas for synthesis
+    #pragma HLS INTERFACE axis port={{ input_ports[0].name if input_ports }}
+    #pragma HLS INTERFACE axis port={{ output_ports[0].name if output_ports }}
+    #pragma HLS INTERFACE ap_ctrl_none port=return
+    
+    // Pipeline configuration
+    {% if pipeline_depth > 1 %}
+    #pragma HLS PIPELINE II=1
+    {% endif %}
+    
+    // Resource configuration
+    {% if resource_pragmas %}
+    {% for pragma in resource_pragmas %}
+    {{ pragma }}
+    {% endfor %}
+    {% endif %}
+
+    {{ compute_body | indent(4) }}
+}

@@ -1,0 +1,76 @@
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All rights reserved.
+
+// C++ Simulation Template for FINN HLS Operations
+// Generated from: {{ function_name }}
+
+#define AP_INT_MAX_W {{ ap_int_max_w | default(8192) }}
+#include <ap_int.h>
+#include <hls_stream.h>
+#include "bnn-library.h"
+
+// Include operation-specific headers
+{% for header in headers %}
+#include "{{ header }}"
+{% endfor %}
+
+// Memory mode specific includes
+{% if mem_mode == "internal_embedded" %}
+// Weights embedded in code
+{% elif mem_mode == "internal_decoupled" %}
+#include "weights.h"
+{% elif mem_mode == "external" %}
+// External weight loading required
+{% endif %}
+
+// Function signature for C++ simulation
+extern "C" void {{ function_name }}_cppsim(
+    {% for port in input_ports %}
+    {{ port.type }}* {{ port.name }}{{ "," if not loop.last or output_ports else "" }}
+    {% endfor %}
+    {% for port in output_ports %}
+    {{ port.type }}* {{ port.name }}{{ "," if not loop.last else "" }}
+    {% endfor %}
+) {
+    // Stream declarations
+    {% for stream in internal_streams %}
+    hls::stream<{{ stream.type }}> {{ stream.name }};
+    {% endfor %}
+
+    // Convert input arrays to streams
+    {% for port in input_ports %}
+    hls::stream<{{ port.stream_type }}> {{ port.name }}_stream;
+    for (int i = 0; i < {{ port.size }}; i++) {
+        {{ port.name }}_stream.write({{ port.name }}[i]);
+    }
+    {% endfor %}
+
+    // Call the main computation function
+    {{ function_name }}_compute(
+        {% for port in input_ports %}
+        {{ port.name }}_stream{{ "," if not loop.last or output_streams else "" }}
+        {% endfor %}
+        {% for stream in output_streams %}
+        {{ stream.name }}{{ "," if not loop.last else "" }}
+        {% endfor %}
+    );
+
+    // Convert output streams to arrays
+    {% for port in output_ports %}
+    for (int i = 0; i < {{ port.size }}; i++) {
+        {{ port.name }}[i] = {{ port.stream_name }}.read();
+    }
+    {% endfor %}
+}
+
+// Main computation function (from basic template)
+void {{ function_name }}_compute(
+    {% for port in input_ports %}
+    hls::stream<{{ port.stream_type }}> &{{ port.name }}{{ "," if not loop.last or output_streams else "" }}
+    {% endfor %}
+    {% for stream in output_streams %}
+    hls::stream<{{ stream.type }}> &{{ stream.name }}{{ "," if not loop.last else "" }}
+    {% endfor %}
+) {
+    {{ compute_body | indent(4) }}
+}

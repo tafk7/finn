@@ -1,0 +1,36 @@
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All rights reserved.
+
+// Parameter definitions for {{ function_name }}
+// Generated automatically - do not modify
+
+#ifndef {{ function_name | upper }}_PARAMS_H
+#define {{ function_name | upper }}_PARAMS_H
+
+// Operation parameters
+{% for param_name, param_value in operation_params.items() %}
+#define {{ param_name | upper }} {{ param_value }}
+{% endfor %}
+
+// Data type definitions
+{% for type_name, type_def in data_types.items() %}
+typedef {{ type_def }} {{ type_name }};
+{% endfor %}
+
+// Memory configuration
+{% if mem_mode == "internal_embedded" %}
+#define MEM_MODE_EMBEDDED
+{% elif mem_mode == "internal_decoupled" %}
+#define MEM_MODE_DECOUPLED
+{% elif mem_mode == "external" %}
+#define MEM_MODE_EXTERNAL
+{% endif %}
+
+// Resource configuration
+{% if resource_config %}
+{% for resource, value in resource_config.items() %}
+#define {{ resource | upper }} {{ value }}
+{% endfor %}
+{% endif %}
+
+#endif // {{ function_name | upper }}_PARAMS_H
