@@ -21,6 +21,7 @@ Options:
 """
 
 import argparse
+import pybind11
 import os
 import shutil
 import subprocess
@@ -43,21 +44,13 @@ def get_build_paths() -> Tuple[List[str], str, List[str]]:
     if python_include:
         include_dirs.append(python_include)
 
-    # Try to get pybind11 include directory
-    # flake8: noqa
-    try:
-        import pybind11
+    pybind11_include = pybind11.get_include()
+    include_dirs.append(pybind11_include)
 
-        pybind11_include = pybind11.get_include()
-        include_dirs.append(pybind11_include)
-
-        # Also get the user-specific include
-        pybind11_user_include = pybind11.get_include(user=True)
-        if pybind11_user_include != pybind11_include:
-            include_dirs.append(pybind11_user_include)
-    except ImportError:
-        # Will be caught later in prerequisites check
-        pass
+    # Also get the user-specific include
+    pybind11_user_include = pybind11.get_include(user=True)
+    if pybind11_user_include != pybind11_include:
+        include_dirs.append(pybind11_user_include)
 
     # Get Xilinx Vivado include directory
     xilinx_vivado = os.environ.get("XILINX_VIVADO")
@@ -95,12 +88,6 @@ def check_prerequisites() -> List[str]:
         errors.append("XILINX_VIVADO environment variable not set. Please source Vivado settings.")
     elif not os.path.exists(os.path.join(xilinx_vivado, "data", "xsim", "include")):
         errors.append(f"Xilinx XSim headers not found at {xilinx_vivado}/data/xsim/include")
-
-    # Check for pybind11
-    try:
-        import pybind11
-    except ImportError:
-        errors.append("pybind11 not found. Please install it with: pip install pybind11")
 
     return errors
 
@@ -182,7 +169,6 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
         print(" ".join(cmd))
         print("\nCommon issues:")
         print("  - Ensure Xilinx Vivado is properly sourced")
-        print("  - Check that pybind11 is installed in your Python environment")
         print("  - Verify C++ compiler is installed")
         return False
 
