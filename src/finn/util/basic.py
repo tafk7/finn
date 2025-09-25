@@ -98,74 +98,52 @@ def get_rtlsim_trace_depth():
     - level 2 shows per-layer input/output streams
     - level 3 shows per full-layer I/O including FIFO count signals
     """
-
-    try:
-        return int(os.environ["RTLSIM_TRACE_DEPTH"])
-    except KeyError:
-        return 1
+    from finn.config import get_config
+    return get_config().runtime.rtlsim_trace_depth
 
 
 def get_finn_root():
     "Return the root directory that FINN is cloned into."
-
-    try:
-        return os.environ["FINN_ROOT"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_ROOT must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+    from finn.config import get_config
+    return str(get_config().finn_root)
 
 
 def get_vivado_root():
     "Return the root directory that Vivado is installed into."
-
-    try:
-        return os.environ["XILINX_VIVADO"]
-    except KeyError:
+    from finn.config import get_config
+    vivado_path = get_config().xilinx_tools.vivado_path
+    if vivado_path is None:
         raise Exception(
-            """Environment variable XILINX_VIVADO must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
+            """Vivado path not configured. Please set XILINX_VIVADO environment variable
+        or ensure you have launched the Docker container correctly.
         """
         )
+    return str(vivado_path)
 
 
 def get_deps_dir():
     "Return the directory that contains FINN dependencies."
-
-    try:
-        return os.environ["FINN_DEPS_DIR"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_DEPS_DIR must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+    from finn.config import get_config
+    return str(get_config().finn_deps_dir)
 
 
 def get_liveness_threshold_cycles():
     """Return the number of no-output cycles rtlsim will wait before assuming
     the simulation is not finishing and throwing an exception."""
-
-    return int(os.getenv("LIVENESS_THRESHOLD", 1000000))
+    from finn.config import get_config
+    return get_config().runtime.liveness_threshold
 
 
 def make_build_dir(prefix=""):
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files
     will survive on the host after the FINN Docker container exits."""
-    try:
-        tmpdir = tempfile.mkdtemp(prefix=prefix)
-        newdir = tmpdir.replace("/tmp", os.environ["FINN_BUILD_DIR"])
-        os.makedirs(newdir)
-        return newdir
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_BUILD_DIR must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+    from finn.config import get_config
+    build_dir = get_config().finn_build_dir
+    tmpdir = tempfile.mkdtemp(prefix=prefix)
+    newdir = tmpdir.replace("/tmp", str(build_dir))
+    os.makedirs(newdir)
+    return newdir
 
 
 class CppBuilder:
