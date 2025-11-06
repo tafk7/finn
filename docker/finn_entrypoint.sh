@@ -56,13 +56,14 @@ recho () {
 
 # qonnx (using workaround for https://github.com/pypa/pip/issues/7953)
 # to be fixed in future Ubuntu versions (https://bugs.launchpad.net/ubuntu/+source/setuptools/+bug/1994016)
-mv ${FINN_ROOT}/deps/qonnx/pyproject.toml ${FINN_ROOT}/deps/qonnx/pyproject.tmp
-pip install --user -e ${FINN_ROOT}/deps/qonnx
-mv ${FINN_ROOT}/deps/qonnx/pyproject.tmp ${FINN_ROOT}/deps/qonnx/pyproject.toml
+mv ${FINN_DEPS_DIR}/qonnx/pyproject.toml ${FINN_DEPS_DIR}/qonnx/pyproject.tmp
+pip install --user -e ${FINN_DEPS_DIR}/qonnx
+mv ${FINN_DEPS_DIR}/qonnx/pyproject.tmp ${FINN_DEPS_DIR}/qonnx/pyproject.toml
+
 # finn-experimental
-pip install --user -e ${FINN_ROOT}/deps/finn-experimental
+pip install --user -e ${FINN_DEPS_DIR}/finn-experimental
 # brevitas
-pip install --user -e ${FINN_ROOT}/deps/brevitas
+pip install --user -e ${FINN_DEPS_DIR}/brevitas
 
 if [ -f "${FINN_ROOT}/setup.py" ];then
   # run pip install for finn
@@ -84,8 +85,8 @@ if [ -f "$VITIS_PATH/settings64.sh" ];then
     source $XILINX_XRT/setup.sh
     gecho "Found XRT at $XILINX_XRT"
   else
-    yecho "XRT not found on $XILINX_XRT - continuing without XRT (Alveo functionality will not be available)"
-    # exit -1  # Commented out for testing without XRT
+    recho "XRT not found on $XILINX_XRT, did you skip the download or did the installation fail?"
+    #exit -1
   fi
 else
   yecho "Unable to find $VITIS_PATH/settings64.sh"
@@ -104,17 +105,20 @@ else
 fi
 
 if [ -z "${XILINX_VIVADO}" ]; then
-  yecho "pyxsi will be unavailable since Vivado was not found"
+  yecho "finnxsi will be unavailable since Vivado was not found"
 else
-  if [ -f "${FINN_ROOT}/deps/pyxsi/pyxsi.so" ]; then
-    gecho "Found pyxsi at ${FINN_ROOT}/deps/pyxsi/pyxsi.so"
+  # Build finn_xsi using the new Python-based setup
+  if [ -f "${FINN_ROOT}/finn_xsi/xsi.so" ]; then
+    gecho "Found existing finn_xsi at ${FINN_ROOT}/finn_xsi/xsi.so"
   else
-    OLDPWD=$(pwd)
-    cd ${FINN_ROOT}/deps/pyxsi
-    make
-    cd $OLDPWD
+    gecho "Building finn_xsi using finn.xsi.setup..."
+    python -m finn.xsi.setup --quiet
+    if [ $? -eq 0 ]; then
+      gecho "finn_xsi built successfully"
+    else
+      recho "Failed to build finn_xsi"
+    fi
   fi
-  export PYTHONPATH=$PYTHONPATH:${FINN_ROOT}/deps/pyxsi:${FINN_ROOT}/deps/pyxsi/py
   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/lib/x86_64-linux-gnu/:${XILINX_VIVADO}/lib/lnx64.o
 fi
 
@@ -151,6 +155,9 @@ else
   echo "See https://docs.xilinx.com/r/en-US/ug835-vivado-tcl-commands/Tcl-Initialization-Scripts"
 fi
 
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$VITIS_PATH/lnx64/tools/fpo_v7_1"
+
 export PATH=$PATH:$HOME/.local/bin
+
 # execute the provided command(s) as root
 exec "$@"
