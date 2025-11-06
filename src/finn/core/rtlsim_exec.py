@@ -293,7 +293,7 @@ def rtlsim_exec_cppxsi(
     # write compilation command to a file for easy re-running/debugging
     with open(sim_base + "/compile_rtlsim.sh", "w") as f:
         f.write(" ".join(build_cmd))
-    logger = logging.getLogger("finn.rtlsim")
+    logger = logging.getLogger("finn.gcc")
     launch_process_helper(
         build_cmd,
         cwd=sim_base,
@@ -314,11 +314,12 @@ def rtlsim_exec_cppxsi(
         f.write(
             f"LD_LIBRARY_PATH={runsim_env['LD_LIBRARY_PATH']} ./rtlsim_xsi > rtlsim_xsi_log.txt"
         )
+    xsim_logger = logging.getLogger("finn.xsim")
     launch_process_helper(
         runsim_cmd,
         cwd=sim_base,
         use_logging=True,
-        logger=logger,
+        logger=xsim_logger,
         stdout_level=logging.INFO,
         stderr_level=logging.WARNING,
         detect_levels=True,

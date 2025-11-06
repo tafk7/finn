@@ -139,6 +139,21 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
         filemode="a",
     )
     log = logging.getLogger("build_dataflow")
+
+    # Configure FINN tool loggers to respect verbose flag
+    finn_logger = logging.getLogger('finn')
+    if cfg.verbose:
+        # Verbose mode: output to both console and file
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_formatter = logging.Formatter('[%(name)s] %(levelname)s: %(message)s')
+        console_handler.setFormatter(console_formatter)
+        finn_logger.addHandler(console_handler)
+        finn_logger.setLevel(logging.INFO)
+    else:
+        # Quiet mode: only warnings/errors, file only (via root logger propagation)
+        finn_logger.setLevel(logging.WARNING)
+    # finn_logger.propagate = True (default) ensures all logs go to build_dataflow.log
+
     stdout_logger = StreamToLogger(log, logging.INFO)
     stderr_logger = StreamToLogger(log, logging.ERROR)
     stdout_orig = sys.stdout
