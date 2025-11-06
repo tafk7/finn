@@ -691,6 +691,7 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
         assert (
             DataflowOutputType.STITCHED_IP in cfg.generate_outputs
         ), "rtlsim_perf needs stitched IP"
+        
         report_dir = cfg.output_dir + "/report"
         os.makedirs(report_dir, exist_ok=True)
         rtlsim_bs = int(cfg.rtlsim_batch_size)
@@ -784,6 +785,7 @@ def step_out_of_context_synthesis(model: ModelWrapper, cfg: DataflowBuildConfig)
         model = model.transform(
             SynthOutOfContext(part=cfg._resolve_fpga_part(), clk_period_ns=cfg.synth_clk_period_ns)
         )
+        
         report_dir = cfg.output_dir + "/report"
         os.makedirs(report_dir, exist_ok=True)
         ooc_res_dict = model.get_metadata_prop("res_total_ooc_synth")
@@ -800,85 +802,130 @@ def step_out_of_context_synthesis(model: ModelWrapper, cfg: DataflowBuildConfig)
 
 
 def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Synthesize a bitfile for the using the specified shell flow, using either
-    Vivado or Vitis, to target the specified board."""
+    """Synthesize a bitfile using the configured integration flow.
+
+    Uses the platform abstraction layer to dispatch to the appropriate
+    integration flow handler (e.g., zynq_ps, alveo_xrt), or falls back
+    to legacy shell_flow_type branching for backward compatibility.
+    """
 
     if DataflowOutputType.BITFILE in cfg.generate_outputs:
+        # Create output directories
         bitfile_dir = cfg.output_dir + "/bitfile"
         os.makedirs(bitfile_dir, exist_ok=True)
         report_dir = cfg.output_dir + "/report"
         os.makedirs(report_dir, exist_ok=True)
         partition_model_dir = cfg.output_dir + "/intermediate_models/kernel_partitions"
-        if cfg.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:
-            model = model.transform(
-                ZynqBuild(
-                    cfg.board,
-                    cfg.synth_clk_period_ns,
-                    cfg.enable_hw_debug,
-                    partition_model_dir=partition_model_dir,
+
+        # Try platform abstraction first (new API)
+        target_spec = cfg.get_fpga_target_spec()
+        if target_spec is not None:
+            import warnings
+
+            # Check platform compatibility tier
+            is_supported, is_tested = target_spec.integration_flow.supports(target_spec.platform)
+
+            if not is_supported:
+                raise ValueError(
+                    f"Platform '{target_spec.platform.part_number}' is not compatible with "
+                    f"integration flow '{target_spec.integration_flow.name}'. "
+                    f"Baseline compatibility check failed."
                 )
-            )
-            copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")
-            copy(model.get_metadata_prop("hw_handoff"), bitfile_dir + "/finn-accel.hwh")
-            copy(
-                model.get_metadata_prop("vivado_synth_rpt"),
-                report_dir + "/post_synth_resources.xml",
-            )
 
-            post_synth_resources = model.analysis(post_synth_res)
-            with open(report_dir + "/post_synth_resources.json", "w") as f:
-                json.dump(post_synth_resources, f, indent=2)
-
-            vivado_pynq_proj_dir = model.get_metadata_prop("vivado_pynq_proj")
-            timing_rpt = (
-                "%s/finn_zynq_link.runs/impl_1/top_wrapper_timing_summary_routed.rpt"
-                % vivado_pynq_proj_dir
-            )
-            copy(timing_rpt, report_dir + "/post_route_timing.rpt")
-
-        elif cfg.shell_flow_type == ShellFlowType.VITIS_ALVEO:
-            model = model.transform(
-                VitisBuild(
-                    cfg._resolve_fpga_part(),
-                    cfg.synth_clk_period_ns,
-                    cfg._resolve_vitis_platform(),
-                    strategy=cfg._resolve_vitis_opt_strategy(),
-                    enable_debug=cfg.enable_hw_debug,
-                    floorplan_file=cfg.vitis_floorplan_file,
-                    partition_model_dir=partition_model_dir,
+            # Warn if using untested platform (Tier 2)
+            if not is_tested:
+                warnings.warn(
+                    f"Platform '{target_spec.platform.part_number}' has not been tested with "
+                    f"integration flow '{target_spec.integration_flow.name}'. "
+                    f"Build may work based on baseline compatibility "
+                    f"(vendor={target_spec.platform.vendor}, "
+                    f"has_ps={getattr(target_spec.platform, 'has_ps', False)}), "
+                    f"but functionality is not guaranteed. "
+                    f"Tested platforms: {target_spec.integration_flow.tested_platforms}",
+                    UserWarning,
+                    stacklevel=2
                 )
-            )
-            copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.xclbin")
-            copy(
-                model.get_metadata_prop("vivado_synth_rpt"),
-                report_dir + "/post_synth_resources.xml",
-            )
 
-            post_synth_resources = model.analysis(post_synth_res)
-            with open(report_dir + "/post_synth_resources.json", "w") as f:
-                json.dump(post_synth_resources, f, indent=2)
+            # Build handler kwargs from flow's parameter requirements (flow-driven)
+            handler_kwargs = {}
+
+            # Add required parameters
+            for param in target_spec.integration_flow.required_params:
+                value = cfg._resolve_config_param(param)
+                if value is None:
+                    raise ValueError(
+                        f"Integration flow '{target_spec.integration_flow.name}' requires "
+                        f"parameter '{param}' but it could not be resolved from config"
+                    )
+                handler_kwargs[param] = value
+
+            # Add optional parameters
+            for param, default_value in target_spec.integration_flow.optional_params.items():
+                value = cfg._resolve_config_param(param)
+                if value is not None:
+                    handler_kwargs[param] = value
+                else:
+                    handler_kwargs[param] = default_value
+
+            # Execute the integration flow handler
+            # The handler will perform the build transformation and manage all artifacts
+            model = target_spec.integration_flow.execute(model, **handler_kwargs)
+
+        # Fall back to legacy shell_flow_type branching (backward compatibility)
         else:
-            raise Exception("Unrecognized shell_flow_type: " + str(cfg.shell_flow_type))
-        print("Bitfile written into " + bitfile_dir)
+            if cfg.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:
+                model = model.transform(
+                    ZynqBuild(
+                        cfg.board,
+                        cfg.synth_clk_period_ns,
+                        cfg.enable_hw_debug,
+                        partition_model_dir=partition_model_dir,
+                    )
+                )
+                copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")
+                copy(model.get_metadata_prop("hw_handoff"), bitfile_dir + "/finn-accel.hwh")
+                copy(
+                    model.get_metadata_prop("vivado_synth_rpt"),
+                    report_dir + "/post_synth_resources.xml",
+                )
 
-    return model
+                post_synth_resources = model.analysis(post_synth_res)
+                with open(report_dir + "/post_synth_resources.json", "w") as f:
+                    json.dump(post_synth_resources, f, indent=2)
 
+                vivado_pynq_proj_dir = model.get_metadata_prop("vivado_pynq_proj")
+                timing_rpt = (
+                    "%s/finn_zynq_link.runs/impl_1/top_wrapper_timing_summary_routed.rpt"
+                    % vivado_pynq_proj_dir
+                )
+                copy(timing_rpt, report_dir + "/post_route_timing.rpt")
 
-def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Create a deployment package including the driver and bitfile."""
+            elif cfg.shell_flow_type == ShellFlowType.VITIS_ALVEO:
+                model = model.transform(
+                    VitisBuild(
+                        cfg._resolve_fpga_part(),
+                        cfg.synth_clk_period_ns,
+                        cfg._resolve_vitis_platform(),
+                        strategy=cfg._resolve_vitis_opt_strategy(),
+                        enable_debug=cfg.enable_hw_debug,
+                        floorplan_file=cfg.vitis_floorplan_file,
+                        partition_model_dir=partition_model_dir,
+                    )
+                )
+                copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.xclbin")
+                copy(
+                    model.get_metadata_prop("vivado_synth_rpt"),
+                    report_dir + "/post_synth_resources.xml",
+                )
 
-    if DataflowOutputType.DEPLOYMENT_PACKAGE in cfg.generate_outputs:
-        deploy_dir = cfg.output_dir + "/deploy"
-        bitfile_dir = cfg.output_dir + "/bitfile"
-        driver_dir = cfg.output_dir + "/driver"
-        os.makedirs(deploy_dir, exist_ok=True)
-        shutil.copytree(bitfile_dir, deploy_dir + "/bitfile", dirs_exist_ok=True)
-        shutil.copytree(
-            driver_dir,
-            deploy_dir + "/driver",
-            dirs_exist_ok=True,
-            copy_function=shutil.copyfile,
-        )
+                post_synth_resources = model.analysis(post_synth_res)
+                with open(report_dir + "/post_synth_resources.json", "w") as f:
+                    json.dump(post_synth_resources, f, indent=2)
+            else:
+                raise Exception("Unrecognized shell_flow_type: " + str(cfg.shell_flow_type))
+
+            print("Bitfile written into " + bitfile_dir)
+
     return model
 
 
@@ -902,5 +949,4 @@ build_dataflow_step_lookup = {
     "step_make_driver": step_make_driver,
     "step_out_of_context_synthesis": step_out_of_context_synthesis,
     "step_synthesize_bitfile": step_synthesize_bitfile,
-    "step_deployment_package": step_deployment_package,
 }

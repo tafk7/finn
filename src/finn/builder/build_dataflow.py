@@ -175,9 +175,13 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
             # print exception info and traceback
             extype, value, tb = sys.exc_info()
             traceback.print_exc()
-            # start postmortem debug if configured
-            if cfg.enable_build_pdb_debug:
+            # start postmortem debug if configured and stdin is interactive
+            # Check if stdin is actually usable (not captured by pytest or CI)
+            stdin_is_interactive = sys.stdin.isatty() if hasattr(sys.stdin, 'isatty') else False
+            if cfg.enable_build_pdb_debug and stdin_is_interactive:
                 pdb.post_mortem(tb)
+            elif cfg.enable_build_pdb_debug and not stdin_is_interactive:
+                print("Skipping pdb (stdin not interactive - likely pytest or CI environment)")
             else:
                 print("enable_build_pdb_debug not set in build config, exiting...")
             print("Build failed")

@@ -257,11 +257,27 @@ class DataflowBuildConfig:
     #: Target shell flow, only needed for generating full bitfiles where the FINN
     #: design is integrated into a shell. See documentation of ShellFlowType
     #: for options.
+    #: DEPRECATED: Use synthesis_backend and integration_flow instead.
+    #: This field is maintained for backward compatibility only.
     shell_flow_type: Optional[ShellFlowType] = None
 
     #: Target Xilinx FPGA part. Only needed when board is not specified.
     #: e.g. "xc7z020clg400-1"
     fpga_part: Optional[str] = None
+
+    #: (Optional, New API) Synthesis backend to use for IP synthesis.
+    #: e.g. "vivado_hls", "vitis_hls", "rtl_only"
+    #: If not specified, will be auto-selected based on platform characteristics.
+    #: Overrides shell_flow_type if both are specified.
+    #: Use get_fpga_target_spec() to access the resolved method.
+    synthesis_backend: Optional[str] = None
+
+    #: (Optional, New API) Integration flow method to use for system integration.
+    #: e.g. "zynq_ps", "alveo_xrt", "standalone"
+    #: If not specified, will be auto-selected based on platform characteristics.
+    #: Overrides shell_flow_type if both are specified.
+    #: Use get_fpga_target_spec() to access the resolved method.
+    integration_flow: Optional[str] = None
 
     #: Whether FIFO depths will be set automatically. Involves running stitched
     #: rtlsim and can take a long time.
@@ -378,6 +394,265 @@ class DataflowBuildConfig:
     #: Used by BrainSmith integration for kernel-specific hardware mapping.
     kernel_selections: Optional[List[tuple]] = None
 
+    def __post_init__(self):
+        """Initialize FPGA target specification from configuration.
+
+        This method handles:
+        1. Legacy shell_flow_type mapping to new API
+        2. Platform resolution from board/fpga_part
+        3. Synthesis_backend and integration_flow resolution
+        4. FPGATargetSpec creation and validation
+        5. Deprecation warnings
+
+        The resolved FPGATargetSpec is stored in self._fpga_target_spec and can
+        be accessed via get_fpga_target_spec().
+        """
+        import warnings
+
+        # Only initialize platform abstraction if bitfile generation is requested
+        if DataflowOutputType.BITFILE not in self.generate_outputs:
+            # No platform/bitfile needed, skip initialization
+            self._fpga_target_spec = None
+            return
+
+        from finn.builder.platforms import (
+            get_platform,
+            get_synthesis_backend,
+            get_integration_flow,
+            get_compatible_synthesis_backends,
+            get_compatible_integration_flows,
+            FPGATargetSpec,
+        )
+
+        # String-based resolution (JSON/CLI mode)
+        # Legacy mapping from shell_flow_type to new API
+        _LEGACY_SHELL_FLOW_MAPPING = {
+            ShellFlowType.VIVADO_ZYNQ: {
+                "synthesis_backend": "vivado_hls",
+                "integration_flow": "zynq_ps",
+            },
+            ShellFlowType.VITIS_ALVEO: {
+                "synthesis_backend": "vitis_hls",
+                "integration_flow": "alveo_xrt",
+            },
+        }
+
+        # Step 1: Resolve platform from fpga_part or board
+        fpga_part_resolved = self._resolve_fpga_part()
+
+        try:
+            platform = get_platform(fpga_part_resolved)
+        except KeyError:
+            # Try board name if fpga_part lookup failed
+            if self.board is not None:
+                try:
+                    platform = get_platform(self.board)
+                except KeyError:
+                    raise ValueError(
+                        f"Platform not found for fpga_part='{fpga_part_resolved}' "
+                        f"and board='{self.board}'. "
+                        f"Ensure the platform is registered in finn.builder.platforms."
+                    )
+            else:
+                raise ValueError(
+                    f"Platform not found for fpga_part='{fpga_part_resolved}'. "
+                    f"Ensure the platform is registered in finn.builder.platforms."
+                )
+
+        # Step 2: Resolve synthesis_backend (new API > legacy API > auto-select)
+        backend_name = self.synthesis_backend
+
+        if backend_name is None and self.shell_flow_type is not None:
+            # Use legacy mapping
+            backend_name = _LEGACY_SHELL_FLOW_MAPPING[self.shell_flow_type]["synthesis_backend"]
+            warnings.warn(
+                f"shell_flow_type is deprecated. Using synthesis_backend='{backend_name}' "
+                f"based on shell_flow_type={self.shell_flow_type}. "
+                f"Please use synthesis_backend and integration_flow fields directly.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        if backend_name is None:
+            # No auto-selection - require explicit specification
+            compatible = get_compatible_synthesis_backends(platform)
+            compatible_names = [m.name for m in compatible] if compatible else []
+            raise ValueError(
+                f"synthesis_backend must be specified explicitly. "
+                f"Available synthesis backends for platform '{platform.part_number}' "
+                f"(vendor: {platform.vendor}): {compatible_names}. "
+                f"Use synthesis_backend='<name>' in your DataflowBuildConfig, "
+                f"or use shell_flow_type for legacy configurations."
+            )
+
+        try:
+            synthesis_backend = get_synthesis_backend(backend_name)
+        except KeyError as e:
+            raise ValueError(
+                f"Synthesis backend '{backend_name}' not found. {e}"
+            )
+
+        # Step 3: Resolve integration_flow (new API > legacy API > auto-select)
+        int_flow_name = self.integration_flow
+
+        if int_flow_name is None and self.shell_flow_type is not None:
+            # Use legacy mapping
+            int_flow_name = _LEGACY_SHELL_FLOW_MAPPING[self.shell_flow_type]["integration_flow"]
+
+        if int_flow_name is None:
+            # No auto-selection - require explicit specification
+            compatible = get_compatible_integration_flows(platform)
+            compatible_names = [f.name for f in compatible] if compatible else []
+            raise ValueError(
+                f"integration_flow must be specified explicitly. "
+                f"Available integration flows for platform '{platform.part_number}' "
+                f"(vendor: {platform.vendor}): {compatible_names}. "
+                f"Use integration_flow='<name>' in your DataflowBuildConfig, "
+                f"or use shell_flow_type for legacy configurations."
+            )
+
+        try:
+            integration_flow = get_integration_flow(int_flow_name)
+        except KeyError as e:
+            raise ValueError(
+                f"Integration flow '{int_flow_name}' not found. {e}"
+            )
+
+        # Step 4: Create and validate FPGATargetSpec
+        try:
+            self._fpga_target_spec = FPGATargetSpec(
+                platform=platform,
+                synthesis_backend=synthesis_backend,
+                integration_flow=integration_flow,
+            )
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid FPGA target specification: {e}\n"
+                f"Platform: {platform.part_number}\n"
+                f"Synthesis backend: {backend_name}\n"
+                f"Integration flow: {int_flow_name}"
+            )
+
+    def get_fpga_target_spec(self):
+        """Get the resolved FPGA target specification.
+
+        Returns:
+            FPGATargetSpec: Immutable target specification containing:
+                - platform: Target FPGA platform
+                - synthesis_backend: Synthesis backend method
+                - integration_flow: Integration flow method
+
+            Returns None if bitfile generation is not requested.
+
+        Raises:
+            AttributeError: If __post_init__ hasn't run yet (should not happen
+                           in normal use with dataclasses)
+
+        Example:
+            >>> cfg = DataflowBuildConfig(
+            ...     output_dir="/tmp/build",
+            ...     synth_clk_period_ns=10.0,
+            ...     board="Pynq-Z1",
+            ...     generate_outputs=[DataflowOutputType.BITFILE]
+            ... )
+            >>> spec = cfg.get_fpga_target_spec()
+            >>> spec.platform.part_number
+            'xc7z020clg400-1'
+            >>> spec.synthesis_backend.name
+            'vivado_hls'
+            >>> spec.integration_flow.name
+            'zynq_ps'
+        """
+        if not hasattr(self, "_fpga_target_spec"):
+            raise AttributeError(
+                "FPGATargetSpec not initialized. "
+                "This should be set automatically in __post_init__. "
+                "If you're seeing this error, there may be an issue with dataclass initialization."
+            )
+        return self._fpga_target_spec
+
+    def _resolve_config_param(self, param_name: str):
+        """Resolve a config parameter only if required by the active integration flow.
+
+        This enables flow-driven parameter resolution, where only parameters
+        needed by the current integration flow are resolved. This prevents
+        errors like trying to resolve vitis_platform for Zynq builds.
+
+        Args:
+            param_name: Name of the parameter to resolve (e.g., "vitis_platform")
+
+        Returns:
+            Resolved parameter value, or None if not required by the active flow
+
+        Raises:
+            Exception: If parameter is required but cannot be resolved
+
+        Example:
+            # Only resolves vitis_platform for flows that require it (e.g., Alveo XRT)
+            vitis_platform = cfg._resolve_config_param("vitis_platform")
+            if vitis_platform is not None:
+                # Use vitis_platform for this flow
+                handler_kwargs["vitis_platform"] = vitis_platform
+
+        Two-Tier Parameter Resolution:
+            1. Check if parameter is required/optional for active integration flow
+            2. If not needed by flow, return None (skip resolution)
+            3. If needed, call the appropriate _resolve_X() method
+            4. Fall back to direct attribute access or optional default
+        """
+        # Get the active integration flow
+        spec = self.get_fpga_target_spec()
+        if spec is None:
+            # No FPGA target spec (e.g., ESTIMATE_ONLY), parameters don't matter
+            return None
+
+        flow = spec.integration_flow
+
+        # Check if parameter is required or optional for this flow
+        is_required = param_name in flow.required_params
+        is_optional = param_name in flow.optional_params
+
+        if not is_required and not is_optional:
+            # Parameter not needed by this flow - skip resolution
+            return None
+
+        # Parameter is needed by the flow - resolve it
+        resolver_method_name = f"_resolve_{param_name}"
+
+        if hasattr(self, resolver_method_name):
+            # Use dedicated resolver method
+            resolver = getattr(self, resolver_method_name)
+            try:
+                return resolver()
+            except Exception as e:
+                if is_required:
+                    # Required parameter failed to resolve - propagate error
+                    raise
+                else:
+                    # Optional parameter failed - return default
+                    return flow.optional_params.get(param_name)
+        else:
+            # No dedicated resolver - try direct attribute access
+            value = getattr(self, param_name, None)
+            if value is not None:
+                return value
+            elif is_optional:
+                # Return optional default
+                return flow.optional_params.get(param_name)
+            else:
+                # Required but not available
+                raise Exception(
+                    f"Required parameter '{param_name}' for flow '{flow.name}' "
+                    f"could not be resolved (no resolver method or direct attribute)"
+                )
+
+    def _resolve_output_dir(self):
+        """Resolve output_dir for integration flows.
+
+        Returns the configured output directory for placing build artifacts.
+        """
+        return self.output_dir
+
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:
             # use same clk for synth and hls if not explicitly specified
@@ -386,6 +661,26 @@ class DataflowBuildConfig:
             return self.hls_clk_period_ns
 
     def _resolve_driver_platform(self):
+        # Prefer platform abstraction if available
+        if hasattr(self, "_fpga_target_spec") and self._fpga_target_spec is not None:
+            flow_name = self._fpga_target_spec.integration_flow.name
+            if flow_name == "zynq_ps":
+                return "zynq-iodma"
+            elif flow_name == "alveo_xrt":
+                return "alveo"
+            elif flow_name == "standalone":
+                return "standalone"
+            else:
+                # Unknown integration flow, try to infer from platform
+                if self._fpga_target_spec.platform.has_ps:
+                    return "zynq-iodma"
+                elif self._fpga_target_spec.platform.part_number.startswith("xcu"):
+                    # Alveo datacenter cards use xcu part numbers
+                    return "alveo"
+                else:
+                    return "standalone"
+
+        # Fallback to legacy resolution
         if self.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:
             return "zynq-iodma"
         elif self.shell_flow_type == ShellFlowType.VITIS_ALVEO:
@@ -394,6 +689,11 @@ class DataflowBuildConfig:
             raise Exception("Couldn't resolve driver platform for " + str(self.shell_flow_type))
 
     def _resolve_fpga_part(self):
+        # Prefer platform abstraction if available
+        if hasattr(self, "_fpga_target_spec") and self._fpga_target_spec is not None:
+            return self._fpga_target_spec.platform.part_number
+
+        # Fallback to legacy resolution
         if self.fpga_part is None:
             # lookup from part map if not specified
             try:

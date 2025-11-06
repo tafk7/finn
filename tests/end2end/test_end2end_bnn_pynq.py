@@ -456,6 +456,25 @@ def pytest_generate_tests(metafunc):
             )
             scenarios.extend(test_cases)
 
+    # If no scenarios generated from markers, use minimal default for TestEnd2End
+    # This allows -k keyword filters to work without requiring markers
+    if "TestEnd2End" in metafunc.cls.__name__ if metafunc.cls else False:
+        expected_params = ["topology", "wbits", "abits", "board"]
+        needs_parametrization = any(param in metafunc.fixturenames for param in expected_params)
+
+        if needs_parametrization and len(scenarios) == 0:
+            # No markers specified: provide minimal default scenario
+            # Use one simple test case (lfc, 1-bit, Pynq-Z1)
+            scenarios.extend(
+                get_full_parameterized_test_list(
+                    "default",
+                    wbits_list=[1],
+                    abits_list=[1],
+                    topology_list=["lfc"],
+                    board_list=[test_board_map[0]],  # Pynq-Z1
+                )
+            )
+
     if len(scenarios) > 0:
         for i, scenario in enumerate(scenarios):
             idlist.append(scenario[0])
