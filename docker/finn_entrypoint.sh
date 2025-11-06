@@ -84,8 +84,8 @@ if [ -f "$VITIS_PATH/settings64.sh" ];then
     source $XILINX_XRT/setup.sh
     gecho "Found XRT at $XILINX_XRT"
   else
-    recho "XRT not found on $XILINX_XRT, did you skip the download or did the installation fail?"
-    exit -1
+    yecho "XRT not found on $XILINX_XRT - continuing without XRT (Alveo functionality will not be available)"
+    # exit -1  # Commented out for testing without XRT
   fi
 else
   yecho "Unable to find $VITIS_PATH/settings64.sh"

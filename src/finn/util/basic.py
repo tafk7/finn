@@ -26,11 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import logging
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 from qonnx.util.basic import roundup_to_integer_multiple
+from typing import Optional, Tuple, Union
 
 # test boards
 test_board_map = ["Pynq-Z1", "KV260_SOM", "ZCU104", "U250"]
@@ -200,23 +203,228 @@ class CppBuilder:
         process_compile.communicate()
 
 
-def launch_process_helper(args, proc_env=None, cwd=None):
-    """Helper function to launch a process in a way that facilitates logging
-    stdout/stderr with Python loggers.
-    Returns (cmd_out, cmd_err)."""
+def _detect_log_level(line: str, default: int) -> int:
+    """
+    Parse tool output to assign appropriate log level.
+
+    Detects patterns from Xilinx tools (xelab, Vivado) and standard output.
+
+    Args:
+        line: Output line to analyze
+        default: Default level if no pattern matches
+
+    Returns:
+        Appropriate logging level constant
+    """
+    line_upper = line.upper()
+
+    # Error patterns (highest priority)
+    if any(x in line_upper for x in ["ERROR:", "FATAL:", "FAILED", "EXCEPTION"]):
+        return logging.ERROR
+
+    # Warning patterns
+    if any(x in line_upper for x in ["WARNING:", "WARN:"]):
+        return logging.WARNING
+
+    # Verbose/debug patterns (tool spam)
+    if any(
+        x in line_upper
+        for x in [
+            "COMPILING MODULE",
+            "COMPILING ARCHITECTURE",
+            "ANALYZING ENTITY",
+            "ELABORATING ENTITY",
+        ]
+    ):
+        return logging.DEBUG
+
+    # Info patterns
+    if any(x in line_upper for x in ["INFO:", "NOTE:"]):
+        return logging.INFO
+
+    return default
+
+
+def launch_process_helper(
+    args,
+    proc_env=None,
+    cwd=None,
+    logger: Optional[logging.Logger] = None,
+    use_logging: bool = False,
+    stdout_level: int = logging.INFO,
+    stderr_level: int = logging.WARNING,
+    detect_levels: bool = True,
+    raise_on_error: bool = False,
+) -> Union[Tuple[str, str], int]:
+    """
+    Launch subprocess with configurable output handling.
+
+    This function provides two modes of operation:
+
+    **Legacy Mode (default, use_logging=False)**:
+    - Buffers all output via communicate()
+    - Writes to sys.stdout/sys.stderr directly
+    - Returns (stdout_str, stderr_str) tuple
+    - No exit code checking
+    - Backward compatible with all existing code
+
+    **Logging Mode (use_logging=True)**:
+    - Streams output line-by-line through Python logging
+    - Enables application-level log filtering and formatting
+    - Returns exit code integer
+    - Optional automatic error raising on non-zero exit
+    - Thread-safe streaming of stdout and stderr
+
+    Args:
+        args: Command and arguments as list (e.g., ["xelab", "-prj", "sim.prj"])
+        proc_env: Environment variables dict (default: os.environ.copy())
+        cwd: Working directory for subprocess (default: current directory)
+        logger: Logger instance for logging mode (default: 'finn.subprocess')
+        use_logging: Enable logging mode (default: False for compatibility)
+        stdout_level: Base log level for stdout (default: INFO)
+        stderr_level: Base log level for stderr (default: WARNING)
+        detect_levels: Auto-detect log levels from output patterns (default: True)
+        raise_on_error: Raise CalledProcessError on non-zero exit (default: False)
+
+    Returns:
+        - If use_logging=False: (stdout: str, stderr: str) tuple
+        - If use_logging=True: exit_code: int
+
+    Raises:
+        subprocess.CalledProcessError: If use_logging=True, raise_on_error=True,
+                                       and subprocess exits with non-zero code
+
+    Examples:
+        Legacy mode (backward compatible)::
+
+            out, err = launch_process_helper(["echo", "hello"])
+            # Writes "hello" to sys.stdout, returns tuple
+
+        Logging mode (new)::
+
+            import logging
+            logging.basicConfig(level=logging.INFO)
+
+            exitcode = launch_process_helper(
+                ["xelab", "work.top", "-prj", "sim.prj"],
+                use_logging=True,
+                logger=logging.getLogger('finn.xsi'),
+                stdout_level=logging.DEBUG,
+                stderr_level=logging.WARNING,
+                raise_on_error=True
+            )
+
+    Notes:
+        - Return value change when use_logging=True is safe: all existing FINN
+          code discards return values (verified by codebase analysis)
+        - Logging mode uses threads for non-blocking stdout/stderr reading
+        - Pattern detection (detect_levels=True) automatically adjusts levels
+          based on tool output (ERROR:, WARNING:, etc.)
+        - For long-running processes, logging mode is more memory-efficient
+          than legacy mode (streams vs. buffers)
+    """
     if proc_env is None:
         proc_env = os.environ.copy()
-    with subprocess.Popen(
-        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proc_env, cwd=cwd
-    ) as proc:
-        (cmd_out, cmd_err) = proc.communicate()
-    if cmd_out is not None:
-        cmd_out = cmd_out.decode("utf-8")
-        sys.stdout.write(cmd_out)
-    if cmd_err is not None:
-        cmd_err = cmd_err.decode("utf-8")
-        sys.stderr.write(cmd_err)
-    return (cmd_out, cmd_err)
+
+    # ============================================================
+    # LEGACY MODE: Preserve existing behavior exactly
+    # ============================================================
+    if not use_logging:
+        with subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proc_env, cwd=cwd
+        ) as proc:
+            (cmd_out, cmd_err) = proc.communicate()
+
+        if cmd_out is not None:
+            cmd_out = cmd_out.decode("utf-8")
+            sys.stdout.write(cmd_out)
+        if cmd_err is not None:
+            cmd_err = cmd_err.decode("utf-8")
+            sys.stderr.write(cmd_err)
+
+        return (cmd_out, cmd_err)
+
+    # ============================================================
+    # LOGGING MODE: Stream through Python logging
+    # ============================================================
+
+    # Default logger if not specified
+    if logger is None:
+        logger = logging.getLogger("finn.subprocess")
+
+    # Log command being executed (at DEBUG level)
+    logger.debug(f"Launching: {' '.join(args)}")
+    if cwd:
+        logger.debug(f"Working directory: {cwd}")
+
+    # Start subprocess with pipes
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=proc_env,
+        cwd=cwd,
+        text=True,  # Text mode (not bytes)
+        bufsize=1,  # Line buffered
+    )
+
+    def stream_output(pipe, base_level, stream_name):
+        """Read from pipe and log line-by-line."""
+        try:
+            for line in iter(pipe.readline, ""):
+                if not line:
+                    break
+
+                line = line.rstrip()
+                if not line:  # Skip empty lines
+                    continue
+
+                # Determine log level (with optional detection)
+                if detect_levels:
+                    level = _detect_log_level(line, base_level)
+                else:
+                    level = base_level
+
+                logger.log(level, line)
+        except Exception as e:
+            logger.exception(f"Error streaming {stream_name}: {e}")
+        finally:
+            pipe.close()
+
+    # Create threads for parallel stdout/stderr reading
+    # (prevents deadlock if one buffer fills up)
+    t_out = threading.Thread(
+        target=stream_output,
+        args=(proc.stdout, stdout_level, "stdout"),
+        daemon=True,
+        name=f"finn-stdout-{proc.pid}",
+    )
+    t_err = threading.Thread(
+        target=stream_output,
+        args=(proc.stderr, stderr_level, "stderr"),
+        daemon=True,
+        name=f"finn-stderr-{proc.pid}",
+    )
+
+    t_out.start()
+    t_err.start()
+
+    # Wait for process to complete
+    returncode = proc.wait()
+
+    # Wait for threads to finish reading
+    t_out.join(timeout=5.0)
+    t_err.join(timeout=5.0)
+
+    # Handle errors
+    if returncode != 0:
+        cmd_str = " ".join(args)
+        logger.error(f"Command failed with exit code {returncode}: {cmd_str}")
+
+        if raise_on_error:
+            raise subprocess.CalledProcessError(returncode, args)
+
+    return returncode
 
 
 def which(program):

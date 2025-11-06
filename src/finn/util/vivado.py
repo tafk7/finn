@@ -26,6 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import logging
 import os
 
 from finn.util.basic import launch_process_helper, which
@@ -58,7 +59,18 @@ def out_of_context_synth(
         float(clk_period_ns),
     )
     call_omx = call_omx.split()
-    launch_process_helper(call_omx, proc_env=os.environ.copy(), cwd=verilog_dir)
+    logger = logging.getLogger("finn.vivado")
+    launch_process_helper(
+        call_omx,
+        proc_env=os.environ.copy(),
+        cwd=verilog_dir,
+        use_logging=True,
+        logger=logger,
+        stdout_level=logging.DEBUG,
+        stderr_level=logging.WARNING,
+        detect_levels=True,
+        raise_on_error=True,
+    )
 
     vivado_proj_folder = "%s/results_%s" % (verilog_dir, top_name)
     res_counts_path = vivado_proj_folder + "/res.txt"
