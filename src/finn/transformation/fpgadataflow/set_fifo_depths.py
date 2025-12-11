@@ -362,6 +362,8 @@ class InsertAndSetFIFODepths(Transformation):
                                 dummy_threshs = gen_finn_dt_tensor(tdt, tuple(tshape))
                                 if node.onnx_node.op_type == "Thresholding_rtl":
                                     dummy_threshs = np.sort(dummy_threshs, axis=1)
+                                if node.onnx_node.op_type.startswith("Elementwise") and hasattr(node, "kernel_schema"):
+                                    node.set_nodeattr("input1MemType", "embedded")
                                 model.set_initializer(param_input, dummy_threshs)
                                 self.ind_map[node.onnx_node.name] = ind
                     self.mlo_max_iter = mlo_max_iter
@@ -494,7 +496,10 @@ class InsertAndSetFIFODepths(Transformation):
             model.graph.input.insert(self.ind_map[node.name], param_input_vi)
             model.graph.value_info.remove(param_input_vi)
             if node.op_type.startswith("Elementwise"):
-                node_inst.set_nodeattr("rhs_style", "input")
+                if hasattr(node_inst, "kernel_schema"):
+                    node_inst.set_nodeattr("input1MemType", "dynamic")
+                else:
+                    node_inst.set_nodeattr("rhs_style", "input")
             reset_implementation(node_inst)
             modified_mlo_nodes.remove(node.name)
 
