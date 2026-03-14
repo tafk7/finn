@@ -881,7 +881,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
 
         return verilog_files
 
-    def code_generation_ipi(self, behavioral=False):
+    def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
@@ -948,7 +948,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
 
         # update attributes and perform sanity check
         original_buffer_depth = self.get_buffer_depth()
-        self.set_nodeattr("IFMDim", ifm_dim)
+        self.set_nodeattr("IFMDim", list(ifm_dim))
         self.set_nodeattr("OFMDim", ofm_dim)
         self.set_nodeattr("Stride", stride)
         self.set_nodeattr("Dilation", dilation)

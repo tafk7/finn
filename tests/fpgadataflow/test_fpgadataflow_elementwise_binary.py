@@ -78,6 +78,7 @@ NUMPY_REFERENCES = {
     "ElementwiseBitwiseAnd": np.bitwise_and,
     "ElementwiseBitwiseOr": np.bitwise_or,
     "ElementwiseBitwiseXor": np.bitwise_xor,
+    "ElementwiseMax": np.maximum,
     # TODO: "ElementwiseBitShift": np.left_shift / np.right_shift
     # TODO: "ElementwisePow": np.power
 }
@@ -132,7 +133,13 @@ def create_elementwise_binary_operation_onnx(
 # Data type of the left-hand-side and right-hand-side input elements
 @pytest.mark.parametrize(
     "lhs_dtype_rhs_dtype",
-    [("INT8", "INT8"), ("INT8", "FLOAT32"), ("FLOAT32", "FLOAT32"), ("FLOAT16", "FLOAT16")],
+    [
+        ("INT8", "INT8"),
+        ("INT8", "FLOAT32"),
+        ("FLOAT32", "FLOAT32"),
+        ("FLOAT16", "FLOAT16"),
+        ("FIXED<8,4>", "FIXED<10,5>"),
+    ],
 )
 # Shape of the left-hand-side input
 @pytest.mark.parametrize("lhs_shape", [[3, 1, 7, 1], [1]])
@@ -156,12 +163,16 @@ def test_elementwise_binary_operation(
     op_type, lhs_dtype_rhs_dtype, lhs_shape, rhs_shape, pe, initializers, exec_mode
 ):
     lhs_dtype, rhs_dtype = lhs_dtype_rhs_dtype
-    if "Bitwise" in op_type and (lhs_dtype.startswith("FLOAT") or rhs_dtype.startswith("FLOAT")):
-        pytest.skip("Float datatypes are not meaningful for bitwise ops, skipping those tests.")
-    if op_type in ["ElementwiseAnd", "ElementwiseOr", "ElementwiseXor"] and (
-        lhs_dtype.startswith("FLOAT") or rhs_dtype.startswith("FLOAT")
+    if "Bitwise" in op_type and not ("INT" in lhs_dtype and "INT" in rhs_dtype):
+        pytest.skip(
+            "Non-integer datatypes are not meaningful for bitwise ops, skipping those tests."
+        )
+    if op_type in ["ElementwiseAnd", "ElementwiseOr", "ElementwiseXor"] and not (
+        "INT" in lhs_dtype and "INT" in rhs_dtype
     ):
-        pytest.skip("Float datatypes are not meaningful for logical ops, skipping those tests.")
+        pytest.skip(
+            "Non-integer datatypes are not meaningful for logical ops, skipping those tests."
+        )
     out_dtype = "FLOAT16" if lhs_dtype == "FLOAT16" and rhs_dtype == "FLOAT16" else "FLOAT32"
     # Make dummy model for testing
     model = create_elementwise_binary_operation_onnx(
@@ -248,7 +259,13 @@ def test_elementwise_binary_operation(
 # Data type of the left-hand-side and right-hand-side input elements
 @pytest.mark.parametrize(
     "lhs_dtype_rhs_dtype",
-    [("INT8", "INT8"), ("INT8", "FLOAT32"), ("FLOAT32", "FLOAT32"), ("FLOAT16", "FLOAT16")],
+    [
+        ("INT8", "INT8"),
+        ("INT8", "FLOAT32"),
+        ("FLOAT32", "FLOAT32"),
+        ("FLOAT16", "FLOAT16"),
+        ("FIXED<8,4>", "FIXED<10,5>"),
+    ],
 )
 # Shape of the left-hand-side input
 @pytest.mark.parametrize("lhs_shape", [[3, 1, 7, 1]])
@@ -326,7 +343,7 @@ def test_elementwise_binary_operation_stitched_ip(
     o_expected = numpy_reference(lhs, rhs)
 
     # node-by-node rtlsim
-    o_produced = execute_onnx(model, context)[model.graph.output[0].name]
+    o_produced = execute_onnx(model, context)[model.get_first_global_out()]
 
     if out_dtype == "FLOAT16":
         # Equivalence checking is more relaxed for arithmetic operations in fp16
@@ -351,16 +368,16 @@ def test_elementwise_binary_operation_stitched_ip(
     # Tensor names might have changed during the test, so assembling an updated context dict
     io_dict = {}
     if not initializers:
-        io_dict[model.graph.input[0].name] = lhs
+        io_dict[model.get_first_global_in()] = lhs
         io_dict[model.graph.input[1].name] = rhs
     elif len(initializers) == 1:
         if initializers[0] == "in_x":
-            io_dict[model.graph.input[0].name] = rhs
+            io_dict[model.get_first_global_in()] = rhs
         elif initializers[0] == "in_y":
-            io_dict[model.graph.input[0].name] = lhs
+            io_dict[model.get_first_global_in()] = lhs
     # stitched-ip rtlsim
     model.set_metadata_prop("exec_mode", "rtlsim")
-    o_produced = execute_onnx(model, io_dict)[model.graph.output[0].name]
+    o_produced = execute_onnx(model, io_dict)[model.get_first_global_out()]
 
     if out_dtype == "FLOAT16":
         # Equivalence checking is more relaxed for arithmetic operations in fp16

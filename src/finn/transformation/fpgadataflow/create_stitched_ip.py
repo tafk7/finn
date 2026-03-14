@@ -85,9 +85,7 @@ class CreateStitchedIP(Transformation):
     The packaged block design IP can be found under the ip subdirectory.
     """
 
-    def __init__(
-        self, fpgapart, clk_ns, ip_name="finn_design", vitis=False, signature=[], behavioral=False
-    ):
+    def __init__(self, fpgapart, clk_ns, ip_name="finn_design", vitis=False, signature=[]):
         super().__init__()
         self.fpgapart = fpgapart
         self.clk_ns = clk_ns
@@ -95,7 +93,6 @@ class CreateStitchedIP(Transformation):
         self.is_mlo = False
         self.vitis = vitis
         self.signature = signature
-        self.behavioral = behavioral
         self.has_aximm = False
         self.aximm_idx = 0
         self.has_m_axis = False
@@ -220,7 +217,7 @@ class CreateStitchedIP(Transformation):
                     self.connect_cmds.append(
                         "set_property range 256M [get_bd_addr_segs {%s}]" % (seg_name)
                     )
-                    self.intf_names["aximm"].append([(mm_intf_name[0], mm_intf_name[1])])
+                    self.intf_names["aximm"].append((mm_intf_name[0], mm_intf_name[1]))
                     self.has_aximm = True
                     self.aximm_idx += 1
 
@@ -242,7 +239,7 @@ class CreateStitchedIP(Transformation):
                 self.connect_cmds.append(
                     "set_property range 4G [get_bd_addr_segs {%s}]" % (seg_name)
                 )
-                self.intf_names["aximm"].append([(ext_if_name, aximm_intf_name[0][1])])
+                self.intf_names["aximm"].append((ext_if_name, aximm_intf_name[0][1]))
                 self.has_aximm = True
                 self.aximm_idx += 1
         else:
@@ -273,7 +270,7 @@ class CreateStitchedIP(Transformation):
                 self.connect_cmds.append(
                     "set_property range 256M [get_bd_addr_segs {%s}]" % (seg_name)
                 )
-                self.intf_names["aximm"].append([(ext_if_name, mm_intf_name[1])])
+                self.intf_names["aximm"].append((ext_if_name, mm_intf_name[1]))
                 self.has_aximm = True
                 self.aximm_idx += 1
 
@@ -419,7 +416,7 @@ class CreateStitchedIP(Transformation):
             ip_dir_value = node_inst.get_nodeattr("ip_path")
             assert os.path.isdir(ip_dir_value), "IP generation directory doesn't exist."
             ip_dirs += [ip_dir_value]
-            self.create_cmds += node_inst.code_generation_ipi(self.behavioral)
+            self.create_cmds += node_inst.code_generation_ipi()
             self.connect_clk_rst(node, model)
             self.connect_ap_none_external(node, model)
             self.connect_axi(node, model)
@@ -702,44 +699,10 @@ close $ofile
 
         # export list of used Verilog files (for rtlsim later on)
         tcl.append(
-            """
-proc find_xci_files {dir} {
-    set xci_files [list]
-    foreach file [glob -nocomplain -directory $dir *] {
-        if {[file isdirectory $file]} {
-            # Recursively search subdirectories
-            set subdir_files [find_xci_files $file]
-            set xci_files [concat $xci_files $subdir_files]
-        } elseif {[string match *.xci $file]} {
-            # Add .xci files with absolute paths to the list
-            lappend xci_files [file normalize $file]
-        }
-    }
-    return $xci_files
-}"""
-        )
-        tcl.append('set xci_files [find_xci_files "ip/src"]')
-        tcl.append(
-            """
-foreach xci_file $xci_files {
-    read_ip $xci_file
-    set ip [get_ips -of_objects [get_files $xci_file]]
-    foreach ip_instance $ip {
-        set ip_name [get_property NAME $ip_instance]
-        if {[string match *finn_design* $ip_name]} {
-            continue
-        }
-        generate_target all $ip_instance
-    }
-}
-        """
-        )
-        tcl.append(
             "set all_v_files [get_files -filter {USED_IN_SYNTHESIS == 1 "
             + "&& (FILE_TYPE == Verilog || FILE_TYPE == SystemVerilog "
             + '|| FILE_TYPE =="Verilog Header" || FILE_TYPE == XCI || FILE_TYPE == VHDL)}]'
         )
-        # tcl.append("set all_v_files [concat $all_v_files $xci_files]")
         v_file_list = "%s/all_verilog_srcs.txt" % vivado_stitch_proj_dir
         tcl.append("set fp [open %s w]" % v_file_list)
         # write each verilog filename to all_verilog_srcs.txt
