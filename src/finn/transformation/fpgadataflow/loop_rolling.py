@@ -11,6 +11,7 @@
 ###################################################################################
 
 import copy
+import logging
 import numpy as np
 import onnx
 import onnxscript
@@ -25,6 +26,9 @@ from typing import List, Tuple
 
 from finn.util import onnxscript_helpers as osh
 from finn.util.basic import getHWCustomOp
+from finn.util.fpgadataflow import is_fpgadataflow_node
+
+logger = logging.getLogger(__name__)
 
 
 def get_constant_from_value(value):
@@ -69,17 +73,13 @@ def build_loop_replace_pattern(graph, LoopBody):
             g_shape = nodes[0].inputs[i].shape
             for node in nodes:
                 if node.inputs[i].shape != g_shape:
-                    print(
-                        (
-                            f"LoopRolling: Index {i} expected shape {g_shape}, "
-                            f"got {node.inputs[i].shape}."
-                        )
+                    logger.debug(
+                        f"LoopRolling: Index {i} expected shape {g_shape}, "
+                        f"got {node.inputs[i].shape}."
                     )
                     raise Exception(
-                        (
-                            "LoopRolling: all loop-body initializers of the same index "
-                            "must have the same shape."
-                        )
+                        "LoopRolling: all loop-body initializers of the same index "
+                        "must have the same shape."
                     )
 
             # Build Concat Node
@@ -247,13 +247,26 @@ class LoopExtraction(Transformation):
         for node in unadded_nodes:
             preds = node.predecessors()
             succs = node.successors()
-            if len(preds) > 0:
-                mnode = preds[0]
-            elif len(succs) > 0:
-                mnode = succs[0]
-            else:
-                print("error: could not find metadata for node")
-                exit(1)
+
+            # Search for a neighbor with valid metadata
+            mnode = None
+            for pred in preds:
+                if ("pkg.torch.onnx.name_scopes" in pred.metadata_props and
+                    "pkg.torch.onnx.class_hierarchy" in pred.metadata_props):
+                    mnode = pred
+                    break
+
+            # If no predecessor has metadata, try successors
+            if mnode is None:
+                for succ in succs:
+                    if ("pkg.torch.onnx.name_scopes" in succ.metadata_props and
+                        "pkg.torch.onnx.class_hierarchy" in succ.metadata_props):
+                        mnode = succ
+                        break
+
+            if mnode is None:
+                logger.debug(f"warning: could not find metadata for node {node.name}, skipping")
+                continue
 
             node.metadata_props["pkg.torch.onnx.name_scopes"] = mnode.metadata_props[
                 "pkg.torch.onnx.name_scopes"
@@ -367,8 +380,19 @@ def validate_loop_io_tensor_pair(tensor_a, tensor_b):
 
 
 def validate_loop_io_tensors(loop_node: ir.Node):
-    # Validate that loop body activation input and output types and shapes match
+    """Validate FINNLoop I/O tensor consistency.
+
+    Validates that for each output index i:
+    1. loop_node.inputs[i] matches body_graph.inputs[i] (input consistency)
+    2. loop_node.outputs[i] matches body_graph.outputs[i] (output consistency)
+    3. body_graph.inputs[i] matches body_graph.outputs[i] (loop-carried variable consistency)
+
+    Note: This iterates over body_graph.outputs count, which should equal the number
+    of activation inputs/outputs. Parameter inputs have higher indices and are not
+    validated here.
+    """
     body_graph = loop_node.attributes["body"].value
+
     for i in range(len(body_graph.outputs)):
         validate_loop_io_tensor_pair(loop_node.inputs[i], body_graph.inputs[i])
         validate_loop_io_tensor_pair(loop_node.outputs[i], body_graph.outputs[i])
@@ -562,34 +586,107 @@ class LoopRolling(Transformation):
         change_function_calls_to_loop = pattern.RewriteRule(LoopMatchPattern, loop_replace_pattern)
         rewrite_set = pattern.RewriteRuleSet([change_function_calls_to_loop])
         count = rewrite_set.apply_to_model(model_ir, verbose=None)
-        print(f"Rolled {count} function calls into a loop operator")
+        logger.info(f"Rolled {count} loop iterations into FINNLoop operator")
 
         for node in model_ir.graph._nodes:
             if node.op_type == "FINNLoop":
                 validate_loop_node(node)
 
+        # Serialize IR model back to protobuf
         model = onnxscript.ir.serde.serialize_model(model_ir)
-
         model_wrapper = ModelWrapper(model)
 
         # Allow operators in the loop body to adapt their attributes based on
         # the determined input signature (e.g., changing parameter styles from
         # "const" to "input" for streamed parameters)
         # This must be done after serialization so we can work with protobuf nodes
+        from qonnx.custom_op.registry import getCustomOp
 
         for loop_node in model_wrapper.get_nodes_by_op_type("FINNLoop"):
-            loop_body = getHWCustomOp(loop_node).get_nodeattr("body")
-            for node in loop_body.graph.node:
-                if not is_custom_op(node.domain):
+            # Get the FINNLoop instance and extract its body ModelWrapper
+            # (get_nodeattr("body") already wraps GraphProto in ModelWrapper)
+            loop_node_inst = getHWCustomOp(loop_node, model_wrapper)
+            loop_body_model = loop_node_inst.get_nodeattr("body")
+            iterations = loop_node_inst.get_nodeattr("iteration")
+
+            # CRITICAL: Set mlo_max_iter on protobuf nodes
+            # ONNX-IR set these attributes in lines 108-119, but they're lost during serialization
+            # Must re-apply them to protobuf nodes after serde.serialize_model()
+            for i, input_type in enumerate(LoopBody.signature):
+                if input_type == LoopBodyInputType.PARAMETER:
+                    # Find consumer of this loop body input
+                    input_name = loop_body_model.graph.input[i].name
+                    for node in loop_body_model.graph.node:
+                        if input_name in node.input:
+                            # This node consumes a PARAMETER input - set MLO attributes
+                            if is_fpgadataflow_node(node):
+                                from onnx import helper
+                                # Check if attribute already exists
+                                existing_attrs = {a.name for a in node.attribute}
+                                if "mlo_max_iter" not in existing_attrs:
+                                    node.attribute.append(helper.make_attribute("mlo_max_iter", iterations))
+                                if "inFIFODepths" not in existing_attrs:
+                                    node.attribute.append(helper.make_attribute("inFIFODepths", [2, 2]))
+                            break  # Only first consumer per input
+
+            for node in loop_body_model.graph.node:
+                # Skip standard ONNX nodes (empty domain)
+                if not is_fpgadataflow_node(node):
                     continue
                 try:
-                    inst = getHWCustomOp(node)
-                    inst.adapt_for_loop_body(LoopBody.signature)
+                    # Get custom op WITHOUT building design space
+                    inst = getCustomOp(node)
+
+                    # Adapt for loop body context if supported
+                    if hasattr(inst, 'adapt_for_loop_body'):
+                        inst.adapt_for_loop_body(LoopBody.signature)
+
                 except (KeyError, AttributeError):
                     # Operator doesn't need adaptation or doesn't support it
                     pass
-            getHWCustomOp(loop_node).set_nodeattr("body", loop_body.graph)
+                except Exception as e:
+                    logger.error(f"Error adapting node {node.name} for loop body: {e}")
+                    raise
 
+            # CRITICAL: Save the modified loop body back to the FINNLoop node
+            # set_nodeattr expects a GraphProto, not a ModelWrapper
+            loop_node_inst.set_nodeattr("body", loop_body_model.graph)
+
+        # Apply FoldConstants to parent and subgraphs - folds constant expressions
+        # CRITICAL: Must apply FoldConstants BEFORE setting metadata because FoldConstants
+        # may create new value_info entries that would lose metadata
         model = model_wrapper.transform(FoldConstants(), apply_to_subgraphs=True)
+
+        # Add metadata to tensors in parent model to mark their loop body input type
+        # This enables correct handling during FIFO sizing (slice PARAMETER, copy CONSTANT)
+        # CRITICAL: Must happen AFTER FoldConstants to avoid metadata loss
+        from qonnx.util.basic import set_tensor_metadata_prop
+
+        for finn_loop_node in model.get_nodes_by_op_type("FINNLoop"):
+            # Map FINNLoop inputs back to LoopBody signature
+            # CONSTANT inputs were removed from signature during build_loop_replace_pattern
+            # So FINNLoop has fewer inputs than original signature
+            finn_loop_input_idx = 0
+            for sig_idx, input_type in enumerate(LoopBody.signature):
+                if input_type == LoopBodyInputType.CONSTANT:
+                    # CONSTANT inputs were pushed into loop body, skip
+                    continue
+
+                if finn_loop_input_idx >= len(finn_loop_node.input):
+                    logger.error(
+                        f"FINNLoop input index mismatch: expected {finn_loop_input_idx}, "
+                        f"but node only has {len(finn_loop_node.input)} inputs"
+                    )
+                    break
+
+                tensor_name = finn_loop_node.input[finn_loop_input_idx]
+
+                # Mark metadata for FIFO sizing (slice PARAMETER, copy CONSTANT)
+                if input_type == LoopBodyInputType.ACTIVATION:
+                    set_tensor_metadata_prop(model, tensor_name, "mlo_input_type", "activation")
+                elif input_type == LoopBodyInputType.PARAMETER:
+                    set_tensor_metadata_prop(model, tensor_name, "mlo_input_type", "parameter")
+
+                finn_loop_input_idx += 1
 
         return (model, False)

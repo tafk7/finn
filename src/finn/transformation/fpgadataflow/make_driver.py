@@ -28,6 +28,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import json
+import logging
 import numpy as np
 import os
 import qonnx
@@ -45,6 +46,8 @@ from finn.util.basic import get_driver_shapes, getHWCustomOp, make_build_dir
 from finn.util.data_packing import to_external_tensor
 
 from . import template_driver
+
+logger = logging.getLogger("finn.vitis.driver")
 
 
 class MakeCPPDriver(Transformation):
@@ -106,10 +109,10 @@ class MakeCPPDriver(Transformation):
                 shlex.split(command), cwd=cwd, check=True, text=True, capture_output=True
             )
             if debug:
-                print(result.stdout)  # Print the output for debugging purposes
+                logger.debug(result.stdout)
         except subprocess.CalledProcessError as e:
-            print(f"Error running command: {command}")
-            print(f"Output:{e.stdout}; Error:{e.stderr}")
+            logger.error(f"Error running command: {command}")
+            logger.error(f"Output:{e.stdout}; Error:{e.stderr}")
             raise e
 
     def _build_vitis_config(self, model: ModelWrapper):

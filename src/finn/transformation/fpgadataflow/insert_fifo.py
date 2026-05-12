@@ -91,6 +91,20 @@ class InsertFIFO(Transformation):
         self.max_qsrl_depth = max_qsrl_depth
         self.vivado_ram_style = vivado_ram_style
 
+    def _generate_unique_fifo_name(self, model, base_name):
+        """Generate a unique FIFO name by appending a counter if needed."""
+        existing_names = {n.name for n in model.graph.node}
+
+        # Try the base name first
+        if base_name not in existing_names:
+            return base_name
+
+        # Append counter to make it unique
+        counter = 0
+        while f"{base_name}_{counter}" in existing_names:
+            counter += 1
+        return f"{base_name}_{counter}"
+
     def apply(self, model):
         graph = model.graph
         node_ind = -1
@@ -157,10 +171,15 @@ class InsertFIFO(Transformation):
                             else:
                                 impl_style = "vivado"
 
+                            # Generate unique name for FIFO
+                            fifo_base_name = f"{first_node.name}_to_{consumer.name}_fifo"
+                            fifo_name = self._generate_unique_fifo_name(model, fifo_base_name)
+
                             fifo_node = oh.make_node(
                                 "StreamingFIFO",
                                 [output_name],
                                 [fifo_output_tensor.name],
+                                name=fifo_name,
                                 domain="finn.custom_op.fpgadataflow",
                                 backend="fpgadataflow",
                                 depth=fifo_depth,
@@ -193,8 +212,14 @@ class InsertFIFO(Transformation):
                     inp_ind = list(first_node.input).index(graph_in_name)
                     n_input = first_node.input[inp_ind]
                     n0 = getHWCustomOp(first_node, model)
-                    if n0.get_nodeattr("mlo_max_iter") and inp_ind > 0:
-                        continue
+                    if inp_ind > 0:
+                        mlo_max_iter = n0.get_nodeattr("mlo_max_iter")
+                        if mlo_max_iter and mlo_max_iter > 0:
+                            # This is MLO execution mode - parameters come from loop,
+                            # not graph inputs, so no FIFO needed
+                            continue
+                        # else: FIFO sizing mode (mlo_max_iter == 0) or non-MLO node
+                        # Parameters are graph inputs, create FIFOs normally
                     # determine fifo node attributes
                     fld_shape = n0.get_folded_input_shape(inp_ind)
                     n_shape = n0.get_normal_input_shape(inp_ind)
@@ -219,10 +244,15 @@ class InsertFIFO(Transformation):
                         # (top-level IOs should not have impl_style=vivado)
                         impl_style = "rtl"
 
+                        # Generate unique name for input FIFO
+                        fifo_base_name = f"input_{graph_in_name}_fifo"
+                        fifo_name = self._generate_unique_fifo_name(model, fifo_base_name)
+
                         fifo_node = oh.make_node(
                             "StreamingFIFO",
                             [n_input],
                             [fifo_output_tensor.name],
+                            name=fifo_name,
                             domain="finn.custom_op.fpgadataflow",
                             backend="fpgadataflow",
                             depth=fifo_depth,
@@ -283,10 +313,15 @@ class InsertFIFO(Transformation):
                         # (top-level IOs should not have impl_style=vivado)
                         impl_style = "rtl"
 
+                        # Generate unique name for output FIFO
+                        fifo_base_name = f"{final_node.name}_output_fifo"
+                        fifo_name = self._generate_unique_fifo_name(model, fifo_base_name)
+
                         fifo_node = oh.make_node(
                             "StreamingFIFO",
                             [fifo_input_tensor.name],
                             [graph_out_name],
+                            name=fifo_name,
                             domain="finn.custom_op.fpgadataflow",
                             backend="fpgadataflow",
                             depth=fifo_depth,

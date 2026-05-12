@@ -98,7 +98,12 @@ class RoundAndClipThresholds(Transformation):
                 # If hw op we need to set the weight data type attribute as well
                 if op_type.startswith("Thresholding"):
                     inst = getHWCustomOp(node)
-                    inst.set_nodeattr("weightDataType", tdt.name)
+                    # Brainsmith KernelOps expose kernel_schema and use input1Datatype;
+                    # FINN HWCustomOps don't and use weightDataType.
+                    if hasattr(inst, "kernel_schema"):
+                        inst.set_nodeattr("input1Datatype", tdt.name)
+                    else:
+                        inst.set_nodeattr("weightDataType", tdt.name)
                 # ones
                 if np.any(new_thresholds != thresholds):
                     # Track the graph has been modified to inform the transform

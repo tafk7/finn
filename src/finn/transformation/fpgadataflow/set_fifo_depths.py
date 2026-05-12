@@ -289,7 +289,10 @@ class InsertAndSetFIFODepths(Transformation):
         self.ind_map = {}
 
     def apply(self, model):
-        model = model.transform(GiveUniqueNodeNames())
+        # Only name nodes that don't have names (e.g., newly inserted FIFOs)
+        # Preserve existing node names (including prefixes from loop body processing)
+        model = model.transform(GiveUniqueNodeNames(only_empty=True))
+
         model = model.transform(GiveReadableTensorNames())
         for x in model.graph.node:
             if x.op_type == "FINNLoop":
@@ -313,6 +316,7 @@ class InsertAndSetFIFODepths(Transformation):
             "ElementwiseAdd_rtl",
             "ElementwiseMul_rtl",
             "ElementwiseSub_rtl",
+            "ElementwiseBinaryOp_hls",
         ]
         modified_mlo_nodes = []
         for node in model.graph.node:
@@ -366,29 +370,48 @@ class InsertAndSetFIFODepths(Transformation):
                         node.onnx_node.op_type == "Thresholding_rtl"
                         or node.onnx_node.op_type.startswith("Elementwise")
                     ):
-                        # set thresholding array to a dummy value
                         param_input = node.onnx_node.input[1]
-                        # remember index of input
-                        inputs = [x.name for x in model.graph.input]
-                        ind = inputs.index(param_input)
-                        tdt = model.get_tensor_datatype(param_input)
-                        tshape = model.get_tensor_shape(param_input)
-                        dummy_threshs = gen_finn_dt_tensor(tdt, tuple(tshape))
-                        if node.onnx_node.op_type == "Thresholding_rtl":
-                            dummy_threshs = np.sort(dummy_threshs, axis=1)
-                        model.set_initializer(param_input, dummy_threshs)
-                        self.ind_map[node.onnx_node.name] = ind
-                        # For elementwise ops, temporarily set rhs_style to const
-                        # since we converted the parameter to an initializer
-                        if node.onnx_node.op_type.startswith("Elementwise"):
-                            node.set_nodeattr("rhs_style", "const")
+                        # Check if real parameter data already exists as initializer
+                        if model.get_initializer(param_input) is not None:
+                            # Real data provided from parent model - use it as-is.
+                            pass
+                        else:
+                            # Parameter is a graph input — convert to dummy initializer
+                            # so downstream code has data to work with.
+                            inputs = [x.name for x in model.graph.input]
+                            if param_input in inputs:
+                                ind = inputs.index(param_input)
+                                tdt = model.get_tensor_datatype(param_input)
+                                tshape = model.get_tensor_shape(param_input)
+                                dummy_threshs = gen_finn_dt_tensor(tdt, tuple(tshape))
+                                if node.onnx_node.op_type == "Thresholding_rtl":
+                                    dummy_threshs = np.sort(dummy_threshs, axis=1)
+                                model.set_initializer(param_input, dummy_threshs)
+                                self.ind_map[node.onnx_node.name] = ind
+                                # For elementwise ops, temporarily flag the parameter
+                                # so the kernel knows it has been turned into an initializer.
+                                if node.onnx_node.op_type.startswith("Elementwise"):
+                                    if hasattr(node, "kernel_schema"):
+                                        node.set_nodeattr("input1MemType", "embedded")
+                                    else:
+                                        node.set_nodeattr("rhs_style", "const")
                     self.mlo_max_iter = mlo_max_iter
                     reset_implementation(node)
         # insert stream infrastructure (DWC/FIFO)
         model = model.transform(InsertDWC())
         model = model.transform(InsertFIFO(create_shallow_fifos=True))
         model = model.transform(SpecializeLayers(self.fpgapart))
-        model = model.transform(GiveUniqueNodeNames())
+
+        # Preserve prefix when naming FIFO nodes
+        # Only rename if there are unnamed or duplicate nodes from InsertFIFO
+        node_names = [node.name for node in model.graph.node]
+        has_unnamed_nodes = any(name == "" for name in node_names)
+        has_duplicate_names = len(node_names) != len(set(node_names))
+
+        if has_unnamed_nodes or has_duplicate_names:
+            model = model.transform(GiveUniqueNodeNames())
+        # else: preserve existing names (keep loop body prefix)
+
         model = model.transform(GiveReadableTensorNames())
 
         # gather FIFO names, check they are of expected depth
@@ -493,8 +516,11 @@ class InsertAndSetFIFODepths(Transformation):
             model.graph.input.insert(self.ind_map[node.name], param_input_vi)
             model.graph.value_info.remove(param_input_vi)
             if node.op_type.startswith("Elementwise"):
-                # Restore rhs_style to "input" (it must have been "input" for MLO nodes)
-                node_inst.set_nodeattr("rhs_style", "input")
+                # Restore the parameter style flipped above (rhs_style/input1MemType).
+                if hasattr(node_inst, "kernel_schema"):
+                    node_inst.set_nodeattr("input1MemType", "dynamic")
+                else:
+                    node_inst.set_nodeattr("rhs_style", "input")
             reset_implementation(node_inst)
             modified_mlo_nodes.remove(node.name)
 
