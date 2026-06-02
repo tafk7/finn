@@ -332,11 +332,6 @@ class DataflowBuildConfig:
     #: Otherwise, these will be suppressed and only appear in the build log.
     verbose: Optional[bool] = False
 
-    #: When True, stdout/stderr will not be redirected even when verbose=False.
-    #: Useful for applications using terminal-aware libraries (e.g., Rich, tqdm)
-    #: that require direct terminal access and break with stream redirection.
-    no_stdout_redirect: Optional[bool] = False
-
     #: If given, only run the steps in the list. If not, run default steps.
     #: See `default_build_dataflow_steps` for the default list of steps.
     #: When specified:
