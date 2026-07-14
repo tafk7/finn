@@ -47,6 +47,16 @@ def make_thresholding_model(num_channels=8, num_steps=7, pe=2, act_val=0,
     return model, node, attrs, thr_data
 
 
+def emit_config(attrs, impl_cls, module_name="th0"):
+    """Build the resolved config emit() consumes, folding in an impl's declared
+    knob defaults — the same contract core.resolve_config fulfills in real flow.
+    """
+    config = {**attrs, "module_name": module_name}
+    for knob, spec in getattr(impl_cls, "knob_specs", {}).items():
+        config.setdefault(knob, spec[2] if len(spec) > 2 else "")
+    return config
+
+
 @pytest.fixture
 def thresholding_model():
     return make_thresholding_model()

@@ -74,6 +74,25 @@ def test_resolve_config_gathers_nodeattrs_as_data():
     assert cfg["module_name"] == "th0"
 
 
+def test_selected_backend_knob_resolves_into_config():
+    """A backend knob (ram_style) is declared in knob_specs, so once the impl is
+    selected core.resolve_config surfaces it — with its declared default when the
+    nodeattr is unset — rather than the backend silently reading a hard-coded
+    fallback (the leak the review found)."""
+    model, node, attrs, _ = make_thresholding_model()
+    core = _core(attrs, model, node)
+    attrs[IMPLEMENTATION_ATTR] = "Thresholding_hls"
+
+    # default surfaces
+    assert core.resolve_config()["ram_style"] == "distributed"
+    # and an explicit value is honored, reaching the generated pragma
+    attrs["ram_style"] = "block"
+    cfg = core.resolve_config()
+    assert cfg["ram_style"] == "block"
+    cpp = core.emit().generated[0].content()
+    assert "ROM_2P_BRAM" in cpp
+
+
 # ---------------------------------------------------------------- selection
 def test_select_persists_implementation_nodeattr():
     model, node, attrs, _ = make_thresholding_model()

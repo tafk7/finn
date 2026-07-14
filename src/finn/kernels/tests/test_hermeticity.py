@@ -22,7 +22,7 @@ from finn.kernels.kernels.thresholding import ThresholdingOp
 from finn.kernels.kernels.thresholding.impl_hls import ThresholdingHLS
 from finn.kernels.kernels.thresholding.impl_rtl import ThresholdingRTL
 
-from .conftest import make_thresholding_model
+from .conftest import emit_config, make_thresholding_model
 
 ALL_IMPLS = [ThresholdingHLS, ThresholdingRTL]
 
@@ -43,7 +43,7 @@ def test_emit_runs_with_graph_destroyed(impl_cls):
     model, node, attrs, _ = make_thresholding_model(act_val=-3)
     dp, params = _derive(model, node, attrs)
 
-    config = {**attrs, "module_name": "th0"}
+    config = emit_config(attrs, impl_cls)
 
     # Obliterate the graph. Nothing emit is allowed to touch survives.
     del model, node
@@ -63,7 +63,7 @@ def test_hls_emit_artifact_content():
     dp, params = _derive(model, node, attrs)
     del model, node
     gc.collect()
-    arts = ThresholdingHLS().emit(dp, params, {**attrs, "module_name": "th0"})
+    arts = ThresholdingHLS().emit(dp, params, emit_config(attrs, ThresholdingHLS))
     cpp = arts.generated[0].content()
     assert "Thresholding_Batch<ImgDim1, NumChannels1, PE1" in cpp
     assert "#define NumChannels1 8" in cpp and "#define PE1 2" in cpp
@@ -79,7 +79,7 @@ def test_rtl_emit_artifact_content():
     dp, params = _derive(model, node, attrs)
     del model, node
     gc.collect()
-    arts = ThresholdingRTL().emit(dp, params, {**attrs, "module_name": "th0"})
+    arts = ThresholdingRTL().emit(dp, params, emit_config(attrs, ThresholdingRTL))
     v = arts.generated[0].content()
     assert "module th0" in v and "thresholding_axi #(" in v
     assert ".PE(PE)" in v and "$clog2(SETS)" in v   # verilog clog2 preserved
@@ -116,7 +116,7 @@ def test_emit_is_deterministic(impl_cls):
     """Pure function: same inputs → identical artifacts."""
     model, node, attrs, _ = make_thresholding_model(act_val=-3)
     dp, params = _derive(model, node, attrs)
-    config = {**attrs, "module_name": "th0"}
+    config = emit_config(attrs, impl_cls)
     a = impl_cls().emit(dp, params, config)
     b = impl_cls().emit(dp, params, config)
     assert a.generated[0].content() == b.generated[0].content()

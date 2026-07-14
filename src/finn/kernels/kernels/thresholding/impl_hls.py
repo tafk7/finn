@@ -70,7 +70,10 @@ class ThresholdingHLS(Implementation):
     op_kind = "Thresholding"
     language = "hls"
     priority = 10  # HLS is the fallback; RTL (lower number) preferred when feasible
-    knob_specs: Mapping[str, tuple] = {}
+    knob_specs: Mapping[str, tuple] = {
+        # threshold-memory resource type; nodeattr so it round-trips + is DSE-visible
+        "ram_style": ("s", False, "distributed", {"distributed", "block"}),
+    }
 
     # ------------------------------------------------------------- feasibility
     def precondition(self, ctx: SelectionContext) -> bool:
@@ -88,14 +91,19 @@ class ThresholdingHLS(Implementation):
         config: Mapping[str, Any],
     ) -> Artifacts:
         dp = design_point
-        idt = dp.inputs["input"].datatype
+        inp = dp.inputs["input"]
+        idt = inp.datatype
         tdt = dp.inputs["thresholds"].datatype
         odt = dp.outputs["output"].datatype
 
-        num_channels = dp.inputs["input"].tensor_shape[-1]
+        num_channels = inp.tensor_shape[-1]
         pe = dp.config["PE"]
-        tmem = num_channels // pe
-        img_dim = int(np.prod(dp.inputs["input"].tensor_shape[:-1]))  # N*H*W
+        # Folding is DERIVED, not hand-computed: block_folding_factor is the
+        # channel fold (== NumChannels/PE == TMEM); tensor_blocks_shape counts
+        # the spatial vectors (N*H*W). Read them from the design point rather
+        # than open-coding // pe and np.prod(tensor_shape[:-1]).
+        tmem = inp.block_folding_factor
+        img_dim = int(np.prod(inp.tensor_blocks_shape))
         act_val = int(config["act_val"])
 
         in_width = dp.inputs["input"].stream_width_bits
@@ -122,7 +130,7 @@ class ThresholdingHLS(Implementation):
                 f"#define numReps 1",
                 f"#define ImgDim1 {img_dim}",
             ],
-            "PRAGMAS": self._pragmas(pe, num_channels, config.get("ram_style", "distributed")),
+            "PRAGMAS": self._pragmas(pe, num_channels, config["ram_style"]),
             "DOCOMPUTE": (
                 f"    Thresholding_Batch<ImgDim1, NumChannels1, PE1, {tsrc}, {tdst}>"
                 f"(in0_V, out0_V, threshs, numReps);"
