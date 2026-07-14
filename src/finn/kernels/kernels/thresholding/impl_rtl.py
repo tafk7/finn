@@ -127,6 +127,21 @@ endmodule
 )
 
 
+def _has_uram(fpgapart: str) -> bool:
+    """UltraRAM exists only on UltraScale+ and Versal. 7-series (``xc7*``),
+    Zynq-7000, and Spartan have none. This is a coarse but real device rule;
+    inside full FINN, prefer ``finn.util.basic`` part-family helpers."""
+    p = fpgapart.lower()
+    if p.startswith(("xcv", "xqv", "xcvm", "xcvc", "xcvp", "xcve")):  # Versal
+        return True
+    if p.startswith("xc7") or p.startswith("xa7") or p.startswith("xq7"):  # 7-series
+        return False
+    # UltraScale+ parts carry a trailing speed/family marker; the reliable
+    # signal is the 'u' family tag (e.g. xcku, xczu, xcau). Plain UltraScale
+    # (xcvu without '+') also lacks URAM, but xcu*+ / xczu* do.
+    return "u+" in p or p.startswith(("xczu", "xcku", "xcau", "xcvu"))
+
+
 class ThresholdingRTL(Implementation):
     """Embedded RTL implementation of Thresholding (finn-rtllib)."""
 
@@ -142,13 +157,22 @@ class ThresholdingRTL(Implementation):
 
     # ------------------------------------------------------------- feasibility
     def precondition(self, ctx: SelectionContext) -> bool:
-        """The finn-rtllib thresholding core targets integer thresholding. It is
-        buildable across parts; the memory-primitive selection it does inside is
-        Versal-aware but does not *gate* feasibility. We keep one real
-        device-dependent guard to exercise the selection seam: floating-point
-        inputs are not supported by this RTL core (the HLS path is)."""
-        idt = ctx.design_point.inputs["input"].datatype
-        return idt.is_integer()
+        """Feasibility over the device-aware context — the seam neither prior
+        system had on the backend itself.
+
+        The finn-rtllib thresholding core packs its threshold memory into URAM
+        when a ``depth_trigger_uram`` is requested; UltraRAM exists only on
+        UltraScale+ and Versal parts. So a URAM request on a 7-series part is
+        genuinely infeasible for this backend (the HLS path, which uses
+        LUTRAM/BRAM, still is). With no URAM request, RTL is buildable anywhere.
+
+        This is exactly the kind of ``fpgapart``-dependent guard the baseline
+        centralized in ``_mvu_rtl_possible`` and that the prototype's
+        context-free ``Callable[[Kernel], bool]`` could not express."""
+        wants_uram = int(ctx.config.get("depth_trigger_uram", 0)) > 0
+        if wants_uram and not _has_uram(ctx.fpgapart):
+            return False
+        return True
 
     # -------------------------------------------------------------------- emit
     def emit(

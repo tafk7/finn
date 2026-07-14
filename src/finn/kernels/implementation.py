@@ -81,6 +81,10 @@ class SelectionContext:
     fpgapart: str
     design_point: "KernelDesignPoint"
     params: ParamBundle | None = None
+    #: Resolved nodeattr map available at selection time (kernel params + knobs).
+    #: A backend's precondition may consult declared knobs (e.g. a URAM request)
+    #: alongside ``fpgapart`` — but never touches the graph to get them.
+    config: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def is_versal(self) -> bool:

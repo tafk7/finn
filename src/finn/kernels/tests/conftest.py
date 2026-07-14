@@ -29,7 +29,7 @@ def make_thresholding_model(num_channels=8, num_steps=7, pe=2, act_val=0,
     node = helper.make_node(
         "Thresholding", ["inp", "thr"], ["out"], domain="finn.kernels", name="th0",
         num_steps=num_steps, act_val=act_val, PE=pe,
-        input0Datatype=idt, thresholds0Datatype=tdt, output0Datatype=odt,
+        input0Datatype=idt, input1Datatype=tdt, output0Datatype=odt,
     )
     graph = helper.make_graph(
         [node], "g", [inp, thr], [out],
@@ -41,7 +41,7 @@ def make_thresholding_model(num_channels=8, num_steps=7, pe=2, act_val=0,
     model.set_tensor_datatype("thr", DataType[tdt])
     model.set_tensor_datatype("out", DataType[odt])
     attrs = {
-        "PE": pe, "input0Datatype": idt, "thresholds0Datatype": tdt,
+        "PE": pe, "input0Datatype": idt, "input1Datatype": tdt,
         "output0Datatype": odt, "num_steps": num_steps, "act_val": act_val,
     }
     return model, node, attrs, thr_data
