@@ -26,6 +26,7 @@ Verilog ``$clog2(...)`` expressions are left untouched (they are not
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import numpy as np
@@ -34,6 +35,7 @@ from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
+from ...derivation import ParameterSpec
 from ...implementation import (
     Artifacts,
     DataFile,
@@ -142,6 +144,33 @@ def _has_uram(fpgapart: str) -> bool:
     return "u+" in p or p.startswith(("xczu", "xcku", "xcau", "xcvu"))
 
 
+@dataclass(frozen=True)
+class _UramRequiresUltraScale:
+    """Realization constraint: a URAM threshold-memory request is only buildable
+    on parts that have UltraRAM. A ``realization``-phase constraint — evaluated
+    at selection time against a device-aware context, not by the op-level builder.
+    """
+
+    @property
+    def evaluation_phase(self) -> str:
+        return "realization"
+
+    def describe(self) -> str:
+        return "URAM threshold memory requires an UltraScale+/Versal part"
+
+    def check(self, ctx) -> str | None:
+        try:
+            wants_uram = int(ctx.get_param("depth_trigger_uram")) > 0
+        except KeyError:
+            wants_uram = False
+        if wants_uram and not _has_uram(ctx.fpgapart):
+            return (
+                f"depth_trigger_uram set but {ctx.fpgapart} has no UltraRAM "
+                f"(UltraScale+/Versal only)"
+            )
+        return None
+
+
 class ThresholdingRTL(Implementation):
     """Embedded RTL implementation of Thresholding (finn-rtllib)."""
 
@@ -149,30 +178,32 @@ class ThresholdingRTL(Implementation):
     op_kind = "Thresholding"
     language = "rtl"
     priority = 0  # preferred over HLS when feasible (lower = better)
-    knob_specs: Mapping[str, tuple] = {
-        "depth_trigger_uram": ("i", False, 0),
-        "depth_trigger_bram": ("i", False, 0),
-        "deep_pipeline": ("i", False, 1, {0, 1}),
-    }
+
+    def dse_parameters(self) -> Mapping[str, ParameterSpec]:
+        # RTL-only design-space parameters. Contributed to the composed space
+        # when RTL is selected; auto-registered as nodeattrs, round-trip, sweepable.
+        # depth_trigger_{uram,bram}: force local mems of >= this depth into
+        # URAM/BRAM (0 = off). deep_pipeline: extra timing-closure stages.
+        return {
+            "depth_trigger_uram": ParameterSpec(
+                "depth_trigger_uram", [0, 256, 512, 1024, 2048], default=0
+            ),
+            "depth_trigger_bram": ParameterSpec(
+                "depth_trigger_bram", [0, 256, 512, 1024, 2048], default=0
+            ),
+            "deep_pipeline": ParameterSpec("deep_pipeline", {0, 1}, default=1),
+        }
 
     # ------------------------------------------------------------- feasibility
-    def precondition(self, ctx: SelectionContext) -> bool:
-        """Feasibility over the device-aware context — the seam neither prior
-        system had on the backend itself.
-
-        The finn-rtllib thresholding core packs its threshold memory into URAM
-        when a ``depth_trigger_uram`` is requested; UltraRAM exists only on
-        UltraScale+ and Versal parts. So a URAM request on a 7-series part is
-        genuinely infeasible for this backend (the HLS path, which uses
-        LUTRAM/BRAM, still is). With no URAM request, RTL is buildable anywhere.
-
-        This is exactly the kind of ``fpgapart``-dependent guard the baseline
-        centralized in ``_mvu_rtl_possible`` and that the prototype's
-        context-free ``Callable[[Kernel], bool]`` could not express."""
-        wants_uram = int(ctx.config.get("depth_trigger_uram", 0)) > 0
-        if wants_uram and not _has_uram(ctx.fpgapart):
-            return False
-        return True
+    def realization_constraints(self):
+        """Device-aware feasibility as ``realization``-phase constraint data — the
+        seam neither prior system had on the backend itself. The finn-rtllib core
+        packs threshold memory into URAM when ``depth_trigger_uram`` is requested,
+        and UltraRAM exists only on UltraScale+/Versal; the HLS path (LUTRAM/BRAM)
+        is unaffected. Exactly the ``fpgapart``-dependent guard the baseline
+        centralized in ``_mvu_rtl_possible`` and the prototype's context-free
+        ``Callable[[Kernel], bool]`` could not express."""
+        return [_UramRequiresUltraScale()]
 
     # -------------------------------------------------------------------- emit
     def emit(

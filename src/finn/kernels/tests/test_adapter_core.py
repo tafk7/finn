@@ -74,11 +74,11 @@ def test_resolve_config_gathers_nodeattrs_as_data():
     assert cfg["module_name"] == "th0"
 
 
-def test_selected_backend_knob_resolves_into_config():
-    """A backend knob (ram_style) is declared in knob_specs, so once the impl is
-    selected core.resolve_config surfaces it — with its declared default when the
-    nodeattr is unset — rather than the backend silently reading a hard-coded
-    fallback (the leak the review found)."""
+def test_selected_backend_dse_param_resolves_into_config():
+    """A backend dse_parameter (ram_style) is composed into the schema once the
+    impl is selected, so core.resolve_config surfaces it — with its declared
+    default when the nodeattr is unset — rather than the backend reading a
+    hard-coded fallback (the leak the review found)."""
     model, node, attrs, _ = make_thresholding_model()
     core = _core(attrs, model, node)
     attrs[IMPLEMENTATION_ATTR] = "Thresholding_hls"
@@ -91,6 +91,26 @@ def test_selected_backend_knob_resolves_into_config():
     assert cfg["ram_style"] == "block"
     cpp = core.emit().generated[0].content()
     assert "ROM_2P_BRAM" in cpp
+
+
+def test_backend_dse_param_composes_into_design_space():
+    """The selected backend's dse_parameters become real design-space dimensions
+    (composed space = op params ⊕ backend params), not dead knobs."""
+    model, node, attrs, _ = make_thresholding_model()
+    core = _core(attrs, model, node)
+    # op-only space: just the tiling param
+    assert set(core._composed_schema().dse_parameters) == set()
+
+    attrs[IMPLEMENTATION_ATTR] = "Thresholding_hls"
+    core.invalidate()
+    assert "ram_style" in core.design_point.design_space.parameters
+
+    attrs[IMPLEMENTATION_ATTR] = "Thresholding_rtl"
+    attrs.pop("ram_style", None)
+    core.invalidate()
+    rtl_params = set(core.design_point.design_space.parameters)
+    assert {"depth_trigger_uram", "depth_trigger_bram", "deep_pipeline"} <= rtl_params
+    assert "ram_style" not in rtl_params  # HLS-only knob absent under RTL
 
 
 # ---------------------------------------------------------------- selection

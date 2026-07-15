@@ -73,12 +73,31 @@ class KernelCore:
         self._point = None
 
     # ----------------------------------------------------------- derivation
+    def _composed_schema(self):
+        """The op schema, extended with the selected backend's ``dse_parameters``
+        (op params ⊕ selected-backend params). Before a backend is selected this
+        is just the op schema. This is where the design space becomes *composed*.
+        """
+        import dataclasses
+
+        schema = self.identity.build_schema(self.node, self.model)
+        impl_name = self._get(IMPLEMENTATION_ATTR)
+        if not impl_name:
+            return schema
+        impl = self.registry.get_by_name(impl_name)
+        backend_params = dict(impl.dse_parameters())
+        if not backend_params:
+            return schema
+        merged = {**schema.dse_parameters, **backend_params}
+        return dataclasses.replace(schema, dse_parameters=merged)
+
     @property
     def design_point(self):
         if self._point is None:
             if self._space is None:
                 self._space = self.identity.build_design_space(
-                    self.node, self.model, self._get, self._set
+                    self.node, self.model, self._get, self._set,
+                    schema=self._composed_schema(),
                 )
             self._point = self.identity.derive_design_point(self._space, self._get)
         return self._point
@@ -89,14 +108,14 @@ class KernelCore:
 
     # ------------------------------------------------------- config resolve
     def resolve_config(self, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """Read the resolved nodeattr map ``emit`` and ``precondition`` consume.
+        """Read the resolved nodeattr map ``emit`` and realization constraints consume.
 
         This is the *one* place nodeattrs are read for codegen. Kernel params
         (``act_val``, ``num_steps``), interface datatype strings, the module
         name, and any selected backend's knobs are gathered here and passed on
         as plain data.
         """
-        schema = self.identity.build_schema(self.node, self.model)
+        schema = self._composed_schema()
         config: dict[str, Any] = {}
         for name in schema.kernel_params:
             config[name] = self._get(name)
@@ -107,17 +126,17 @@ class KernelCore:
             key = f"output{i}Datatype"
             config[key] = self._get(key)
         config["module_name"] = self.node.name
-        # Selected backend's knobs, if any. Fall back to each knob's declared
-        # default when the nodeattr is unset (the spec's 3rd tuple element),
-        # rather than passing an empty string downstream.
-        impl_name = self._get(IMPLEMENTATION_ATTR)
-        if impl_name:
-            impl_cls = self.registry.get_by_name(impl_name).__class__
-            for knob, spec in getattr(impl_cls, "knob_specs", {}).items():
-                value = self._get(knob)
-                if value in ("", None):
-                    value = spec[2] if len(spec) > 2 else value
-                config[knob] = value
+        # Backend dse_parameters (ram_style, depth_trigger_*, …) resolve through
+        # the same schema nodeattr registry as op params: read the value, fall
+        # back to the declared default when unset.
+        registry = schema.build_nodeattr_registry()
+        for name, spec in registry.items():
+            if name in config:
+                continue
+            value = self._get(name)
+            if value in ("", None):
+                value = spec[2] if len(spec) > 2 else value
+            config[name] = value
         if extra:
             config.update(extra)
         return config

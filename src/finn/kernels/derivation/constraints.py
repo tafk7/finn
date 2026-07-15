@@ -95,9 +95,18 @@ class Constraint(Protocol):
                             Constraints that bound optimization space
                             (stream shapes, parallelization parameters, etc.)
 
+            'realization' - Evaluated at backend-selection time (Phase 3), against
+                           a device-aware context (fpgapart, toolchain). Device- or
+                           backend-dependent feasibility that the op-level builder
+                           cannot decide (it has no device). NOT evaluated by the
+                           DesignSpaceBuilder; the registry runs these when choosing
+                           an Implementation. Owned by the backend, not the op.
+
         Default implementation uses heuristic:
         - Constraints with hierarchy == STREAM are optimization constraints
         - All other constraints are structural
+        (A realization constraint must override this property to return
+        'realization' explicitly — the heuristic never infers it.)
 
         Subclasses can override this property for explicit classification.
 

@@ -51,6 +51,7 @@ from .types import (
 from .validation import (
     ConfigurationValidationContext,
     DesignSpaceValidationContext,
+    RealizationValidationContext,
     ValidationError,
 )
 
@@ -74,6 +75,7 @@ __all__ = [
     "ValidationError",
     "DesignSpaceValidationContext",
     "ConfigurationValidationContext",
+    "RealizationValidationContext",
     "DatatypeInteger",
     "DimensionDivisible",
     "IsDynamic",

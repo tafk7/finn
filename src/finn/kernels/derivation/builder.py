@@ -266,17 +266,23 @@ class DesignSpaceBuilder:
             except ValueError as e:
                 raise ValueError(f"Failed to build output '{schema.name}': {e}") from e
 
-        # Separate constraints by evaluation phase (structural vs optimization)
+        # Separate constraints by evaluation phase (three-way):
+        #   structural   - validated here, once, against the design space
+        #   optimization - stored on the space, re-run per configure()
+        #   realization  - device-aware; NOT evaluated here (the builder has no
+        #                  fpgapart). Passed through untouched for the registry to
+        #                  evaluate at backend-selection time.
         structural_constraints = [
             c for c in ctx.schema.constraints if c.evaluation_phase == "structural"
         ]
         optimization_constraints = [
-            c for c in ctx.schema.constraints if c.evaluation_phase != "structural"
+            c for c in ctx.schema.constraints if c.evaluation_phase == "optimization"
         ]
 
         logger.debug(
             f"  Split {len(ctx.schema.constraints)} constraints: "
-            f"{len(structural_constraints)} structural, {len(optimization_constraints)} optimization"
+            f"{len(structural_constraints)} structural, {len(optimization_constraints)} optimization "
+            f"(realization constraints, if any, deferred to selection)"
         )
 
         # Validate structural constraints against design space

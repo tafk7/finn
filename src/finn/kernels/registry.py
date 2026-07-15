@@ -8,7 +8,7 @@
 
 Selection is ``feasibility ⊥ preference`` — the two are orthogonal:
 
-* **Feasibility** is a hard predicate, :meth:`Implementation.precondition`,
+* **Feasibility** is a hard predicate, :meth:`Implementation.realizability`,
   evaluated against a device-aware :class:`SelectionContext` (carrying
   ``fpgapart`` + the derived design point). This is the seam neither prior
   system had: the prototype's constraint was ``Callable[[Kernel], bool]`` with
@@ -70,13 +70,21 @@ class KernelRegistry:
         return self._by_name[name]()
 
     # ------------------------------------------------------------------- select
-    def feasible(self, op_kind: str, ctx: SelectionContext) -> list[Implementation]:
-        """All feasible candidates, priority-sorted (lower priority first, then
-        name for a deterministic tie-break — no import-order dependence)."""
+    def feasibility(
+        self, op_kind: str, ctx: SelectionContext
+    ) -> list[tuple[Implementation, str | None]]:
+        """Every candidate paired with its realization verdict: ``None`` if
+        feasible, else the reason string it was rejected for. Priority-sorted for
+        a deterministic, import-order-independent order. The basis for an
+        ``explain``-style "why this backend / why not that one" report."""
         candidates = [cls() for cls in self._pool.get(op_kind, [])]
-        viable = [impl for impl in candidates if impl.precondition(ctx)]
-        viable.sort(key=lambda impl: (impl.priority, impl.name))
-        return viable
+        candidates.sort(key=lambda impl: (impl.priority, impl.name))
+        return [(impl, impl.realizability(ctx)) for impl in candidates]
+
+    def feasible(self, op_kind: str, ctx: SelectionContext) -> list[Implementation]:
+        """The feasible candidates only, priority-sorted (realization constraints
+        all pass)."""
+        return [impl for impl, reason in self.feasibility(op_kind, ctx) if reason is None]
 
     def select(
         self,
@@ -89,10 +97,15 @@ class KernelRegistry:
         ``cost_fn`` is the open preference seam; when absent, the
         lowest-``priority`` feasible candidate wins.
         """
-        viable = self.feasible(op_kind, ctx)
+        verdicts = self.feasibility(op_kind, ctx)
+        viable = [impl for impl, reason in verdicts if reason is None]
         if not viable:
+            rejected = "; ".join(
+                f"{impl.name}: {reason}" for impl, reason in verdicts if reason
+            )
             raise NoFeasibleImplementation(
                 f"no feasible implementation for {op_kind!r} on {ctx.fpgapart!r}"
+                + (f" — {rejected}" if rejected else "")
             )
         if cost_fn is None:
             return viable[0]

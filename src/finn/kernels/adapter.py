@@ -85,16 +85,23 @@ class KernelCustomOp(_Base):
 
     # --------------------------------------------------------------- nodeattrs
     def get_nodeattr_types(self):
+        import dataclasses
+
         attrs = super().get_nodeattr_types() if _HAVE_HWCUSTOMOP else {}
         attrs[IMPLEMENTATION_ATTR] = ("s", False, "")
-        # Schema-derived nodeattrs (datatypes, tiling params, kernel params).
+        # Schema-derived nodeattrs (datatypes, tiling params, kernel params), plus
+        # the selected backend's dse_parameters composed into the schema so they
+        # register + round-trip through the same mechanism.
         schema = self._identity().build_schema(self.onnx_node, None)
-        attrs.update(schema.build_nodeattr_registry())
-        # Any selected backend's knobs.
         impl_name = _safe_get(self, IMPLEMENTATION_ATTR)
         if impl_name:
-            impl_cls = default_registry.get_by_name(impl_name).__class__
-            attrs.update(getattr(impl_cls, "knob_specs", {}))
+            impl = default_registry.get_by_name(impl_name)
+            backend_params = dict(impl.dse_parameters())
+            if backend_params:
+                schema = dataclasses.replace(
+                    schema, dse_parameters={**schema.dse_parameters, **backend_params}
+                )
+        attrs.update(schema.build_nodeattr_registry())
         return attrs
 
     # ---------------------------------------------------- FINN shape delegation

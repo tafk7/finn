@@ -28,6 +28,7 @@ from qonnx.util.basic import interleave_matrix_outer_dim_from_partitions
 
 from finn.util.data_packing import numpy_to_hls_code
 
+from ...derivation import ParameterSpec
 from ...implementation import (
     Artifacts,
     DataFile,
@@ -70,18 +71,20 @@ class ThresholdingHLS(Implementation):
     op_kind = "Thresholding"
     language = "hls"
     priority = 10  # HLS is the fallback; RTL (lower number) preferred when feasible
-    knob_specs: Mapping[str, tuple] = {
-        # threshold-memory resource type; nodeattr so it round-trips + is DSE-visible
-        "ram_style": ("s", False, "distributed", {"distributed", "block"}),
-    }
 
-    # ------------------------------------------------------------- feasibility
-    def precondition(self, ctx: SelectionContext) -> bool:
-        """HLS-embedded builds integer thresholding on any part. Thresholding's
-        schema already constrains input/output to integer; nothing device- or
-        dtype-specific blocks HLS, so it is always feasible (the always-viable
-        fallback)."""
-        return True
+    def dse_parameters(self) -> Mapping[str, ParameterSpec]:
+        # Threshold-memory resource type — an HLS-only design-space parameter.
+        # Contributed to the composed space when HLS is selected; auto-registered
+        # as a nodeattr, round-trips, and is sweepable.
+        return {
+            "ram_style": ParameterSpec(
+                "ram_style", {"distributed", "block"}, default="distributed"
+            ),
+        }
+
+    # feasibility: HLS-embedded builds integer thresholding on any part (the
+    # schema already constrains dtypes to integer), so it declares NO realization
+    # constraints — the always-viable fallback. See Implementation.realizability.
 
     # -------------------------------------------------------------------- emit
     def emit(

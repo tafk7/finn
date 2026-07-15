@@ -53,26 +53,28 @@ def test_feasible_set_is_priority_sorted():
     assert [type(v) for v in viable] == [ThresholdingRTL, ThresholdingHLS]
 
 
-def test_precondition_gates_on_device():
+def test_realizability_gates_on_device():
     """A URAM request is feasible on a Versal part but not on 7-series (no
-    UltraRAM). The RTL backend's precondition sees ``fpgapart`` + the requested
-    knob and gates accordingly — exactly the device-aware predicate the
+    UltraRAM). The RTL backend's realization constraint sees ``fpgapart`` + the
+    requested knob and gates accordingly — the device-aware predicate the
     prototype's context-free ``Callable[[Kernel],bool]`` and Brainsmith's ported
-    central ladder could not express on the backend itself."""
+    central ladder could not express on the backend itself. Feasible → ``None``;
+    infeasible → a reason string."""
     rtl = ThresholdingRTL()
     uram_cfg = {"depth_trigger_uram": 256}
 
     # No URAM request: RTL feasible on either part.
-    assert rtl.precondition(_ctx("xc7z020")) is True
-    assert rtl.precondition(_ctx("xcvc1902")) is True
+    assert rtl.realizability(_ctx("xc7z020")) is None
+    assert rtl.realizability(_ctx("xcvc1902")) is None
 
-    # URAM requested: feasible on Versal, infeasible on 7-series.
-    assert rtl.precondition(_ctx("xcvc1902", config=uram_cfg)) is True
-    assert rtl.precondition(_ctx("xc7z020", config=uram_cfg)) is False
+    # URAM requested: feasible on Versal, infeasible on 7-series (with a reason).
+    assert rtl.realizability(_ctx("xcvc1902", config=uram_cfg)) is None
+    reason = rtl.realizability(_ctx("xc7z020", config=uram_cfg))
+    assert reason is not None and "UltraRAM" in reason
 
-    # HLS (LUTRAM/BRAM) is unaffected by the URAM request on either part.
+    # HLS (LUTRAM/BRAM) declares no device constraint — always realizable.
     hls = ThresholdingHLS()
-    assert hls.precondition(_ctx("xc7z020", config=uram_cfg)) is True
+    assert hls.realizability(_ctx("xc7z020", config=uram_cfg)) is None
 
 
 def test_selection_flips_to_hls_when_rtl_infeasible():
@@ -82,6 +84,16 @@ def test_selection_flips_to_hls_when_rtl_infeasible():
     assert isinstance(chosen, ThresholdingHLS)
 
 
+def test_infeasible_reason_surfaces_on_selection_failure():
+    """When nothing is feasible, the rejection reasons are surfaced (explain-style),
+    not swallowed."""
+    # Force both to fail: a hypothetical op with only the RTL backend + URAM on 7-series.
+    ctx = _ctx("xc7z020", config={"depth_trigger_uram": 256})
+    reasons = registry.feasibility("Thresholding", ctx)
+    rtl_reason = next(r for impl, r in reasons if impl.name == "Thresholding_rtl")
+    assert rtl_reason is not None and "UltraRAM" in rtl_reason
+
+
 def test_no_feasible_raises():
     """An empty pool / all-infeasible context raises rather than guessing."""
     empty = KernelRegistry()
@@ -89,8 +101,17 @@ def test_no_feasible_raises():
     class _Never(Implementation):
         name, op_kind, language, priority = "never", "Thresholding", "hls", 0
 
-        def precondition(self, ctx):
-            return False
+        def realization_constraints(self):
+            class _Block:
+                evaluation_phase = "realization"
+
+                def describe(self):
+                    return "never realizable"
+
+                def check(self, ctx):
+                    return "never realizable (test stub)"
+
+            return [_Block()]
 
         def emit(self, design_point, params, config):
             raise AssertionError("unreachable")

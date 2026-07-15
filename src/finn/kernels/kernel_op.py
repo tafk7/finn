@@ -81,9 +81,16 @@ class KernelOp(ABC):
         model: ModelWrapper,
         param_getter: Callable[[str], Any],
         param_setter: Callable[[str, Any], None],
+        schema: KernelSchema | None = None,
     ) -> KernelDesignSpace:
-        """Construct the design space from the graph + current nodeattrs."""
-        schema = self.build_schema(node, model)
+        """Construct the design space from the graph + current nodeattrs.
+
+        ``schema`` overrides the op's own schema — used to build the *composed*
+        space (op params ⊕ selected-backend ``dse_parameters``). When ``None``,
+        the op's plain schema is used.
+        """
+        if schema is None:
+            schema = self.build_schema(node, model)
         ctx = BuildContext(
             schema=schema,
             model_w=model,
@@ -100,8 +107,26 @@ class KernelOp(ABC):
         design_space: KernelDesignSpace,
         param_getter: Callable[[str], Any],
     ) -> KernelDesignPoint:
-        """Configure a concrete design point from current nodeattr values."""
-        config = {name: param_getter(name) for name in design_space.parameters}
+        """Configure a concrete design point from current nodeattr values.
+
+        For any space parameter whose nodeattr is unset (empty/None) — e.g. a
+        freshly-composed backend ``dse_parameter`` before it has been chosen —
+        fall back to the parameter's declared default, mirroring how FINN's
+        ``get_nodeattr`` returns a declared default. Keeps derivation robust
+        regardless of the getter's unset-value convention.
+        """
+        from .derivation import OrderedParameter
+
+        config = {}
+        for name, param in design_space.parameters.items():
+            value = param_getter(name)
+            if value in ("", None):
+                value = (
+                    param.get_default()
+                    if isinstance(param, OrderedParameter)
+                    else sorted(param)[0]
+                )
+            config[name] = value
         return design_space.configure(config)
 
     # ----------------------------------------------------------- param extract

@@ -32,7 +32,12 @@ from typing import TYPE_CHECKING, Any, Mapping
 import numpy as np
 
 if TYPE_CHECKING:
-    from .derivation import KernelDesignPoint
+    from .derivation import (
+        Constraint,
+        KernelDesignPoint,
+        ParameterSpec,
+        RealizationValidationContext,
+    )
 
 
 # =============================================================================
@@ -65,13 +70,13 @@ class ParamBundle:
 
 
 # =============================================================================
-# SelectionContext — the device-aware context precondition() gates on
+# SelectionContext — the device-aware context realization constraints gate on
 # =============================================================================
 
 
 @dataclass(frozen=True)
 class SelectionContext:
-    """Everything an :meth:`Implementation.precondition` needs to decide
+    """Everything an :meth:`Implementation.realizability` needs to decide
     feasibility. This is the seam neither prior system had: the prototype's
     constraint was ``Callable[[Kernel], bool]`` with no device info, and
     Brainsmith ported FINN's centralized device ladder. Here feasibility is a
@@ -82,9 +87,11 @@ class SelectionContext:
     design_point: "KernelDesignPoint"
     params: ParamBundle | None = None
     #: Resolved nodeattr map available at selection time (kernel params + knobs).
-    #: A backend's precondition may consult declared knobs (e.g. a URAM request)
-    #: alongside ``fpgapart`` — but never touches the graph to get them.
+    #: A backend's realization constraints may consult declared knobs (e.g. a
+    #: URAM request) alongside ``fpgapart`` — but never touch the graph.
     config: Mapping[str, Any] = field(default_factory=dict)
+    #: Optional toolchain version (some device paths are version-gated).
+    toolchain_version: str | None = None
 
     @property
     def is_versal(self) -> bool:
@@ -95,6 +102,20 @@ class SelectionContext:
         """
         p = self.fpgapart.lower()
         return p.startswith(("xcv", "xqv")) or p.startswith("xcvm") or p.startswith("xcvc")
+
+    def realization_context(self) -> "RealizationValidationContext":
+        """Build the device-aware validation context a ``realization`` constraint
+        checks against: the configured design point + params + ``fpgapart`` +
+        toolchain. The resolved ``config`` is exposed to constraints via
+        ``get_param`` so a rule can read a requested knob (e.g. depth_trigger)."""
+        from .derivation import RealizationValidationContext
+
+        return RealizationValidationContext(
+            configured_model=self.design_point,
+            params=dict(self.config),
+            fpgapart=self.fpgapart,
+            toolchain_version=self.toolchain_version,
+        )
 
 
 # =============================================================================
@@ -239,17 +260,48 @@ class Implementation(ABC):
     language: str
     #: Selection tie-break; lower is preferred (mirrors the prototype's scheme).
     priority: int = 0
-    #: Backend-specific knob *declarations* (nodeattr tuples), e.g.
-    #: ``{"ram_style": ("s", False, "distributed")}``. The adapter registers
-    #: these as nodeattrs; their resolved *values* arrive in ``emit``'s
-    #: ``config`` map alongside the op's kernel params.
-    knob_specs: Mapping[str, tuple] = {}
 
-    @abstractmethod
-    def precondition(self, ctx: SelectionContext) -> bool:
-        """Return True iff this backend can build the node in the given device
-        context. This is the hard feasibility half of selection (⊥ preference).
+    def dse_parameters(self) -> Mapping[str, "ParameterSpec"]:
+        """Backend-specific explorable parameters this Implementation contributes
+        to the design space (e.g. ``ram_style`` for HLS, ``depth_trigger_*`` for
+        RTL).
+
+        These are merged into the op's ``KernelSchema.dse_parameters`` once this
+        backend is selected, so the effective design space is *composed*
+        (op params ⊕ selected-backend params). Because they go through the same
+        ``ParameterSpec`` machinery, they are auto-registered as nodeattrs,
+        round-trip to ONNX, and are DSE-visible — unlike a bare backend knob.
+
+        A knob like ``ram_style`` simply does not exist in the design space until
+        this backend is chosen, which is the honest model. Default: none.
         """
+        return {}
+
+    def realization_constraints(self) -> "list[Constraint]":
+        """Device-aware feasibility rules, as ``realization``-phase constraint
+        data (each has ``check(ctx) -> str | None`` and
+        ``evaluation_phase == "realization"``).
+
+        This is the hard feasibility half of selection (⊥ preference), expressed
+        in the same constraint vocabulary as the op's structural/optimization
+        constraints — one phase later, with a device-aware context. The registry
+        evaluates these at selection time. Default: no device constraints (the
+        backend is buildable wherever its op is valid). Preference (``priority``,
+        cost) stays separate — never encode "prefer RTL" here.
+        """
+        return []
+
+    def realizability(self, ctx: SelectionContext) -> str | None:
+        """Evaluate this backend's realization constraints against the device
+        context. Returns ``None`` if feasible, else the first failing reason
+        string (for an ``explain``-style "why was this backend rejected").
+        """
+        rctx = ctx.realization_context()
+        for constraint in self.realization_constraints():
+            reason = constraint.check(rctx)
+            if reason:
+                return reason
+        return None
 
     @abstractmethod
     def emit(

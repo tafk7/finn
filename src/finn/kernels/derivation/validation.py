@@ -369,8 +369,44 @@ class ConfigurationValidationContext:
         return self.params[name]
 
 
+# =============================================================================
+# Realization Validation Context (Device-Aware Feasibility — Phase 3)
+# =============================================================================
+
+
+@dataclass
+class RealizationValidationContext(ConfigurationValidationContext):
+    """Validation context for ``realization``-phase constraints, evaluated at
+    backend-selection time.
+
+    Extends the configuration context (so a realization constraint can inspect
+    datatypes / shapes / params of the configured design point) with the
+    device-aware information the op-level phases lack: the target ``fpgapart``
+    and toolchain version. This is the seam neither prior system had — the
+    place a backend's device-dependent feasibility rule (e.g. "URAM only on
+    UltraScale+/Versal", "RTL narrow-weight path needs DSP58") gets a home.
+
+    A realization constraint's ``check(ctx)`` returns ``None`` if the backend can
+    build on this device, else a human-readable reason string.
+
+    Attributes:
+        fpgapart: Target FPGA part string (e.g. "xcvc1902", "xc7z020").
+        toolchain_version: Optional Vitis/Vivado version (some paths are
+            version-gated, e.g. Versal URAM codegen). None if unknown.
+    """
+
+    fpgapart: str = ""
+    toolchain_version: str | None = None
+
+    @property
+    def is_versal(self) -> bool:
+        p = self.fpgapart.lower()
+        return p.startswith(("xcv", "xqv"))
+
+
 __all__ = [
     "ValidationError",
     "DesignSpaceValidationContext",
     "ConfigurationValidationContext",
+    "RealizationValidationContext",
 ]
