@@ -1,0 +1,305 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+############################################################################
+
+"""The MVAU fixture proves the six acceptance criteria (RESOLVE-CORE-HANDOFF §4).
+
+1. A guarded axis (ram_style) is absent when its guard is false; reading errors.
+2. The device prunes the implementation pool (DSP58-only impl -> Illegal on 7-series).
+3. Forced-derived values (dsp_primitive, accDataType) are computed, never axes.
+4. The combination predicate fires (ram_style=ultra & not versal => rw=1).
+5. resolve returns a Point carrying derived on legal input; Illegal on illegal.
+6. Enumerating a slice yields the dependent-space count, not the cartesian product.
+"""
+
+import itertools
+
+import numpy as np
+import pytest
+from qonnx.core.datatype import DataType
+
+from finn.design_space.space import AbsentAxisError, Context, Illegal, Point, resolve
+from finn.design_space.fixtures.mvau import (
+    MVAU_DSP_PACKED,
+    MVAU_DSP_SOFTVEC,
+    MVAU_HLS,
+    mvau_schema,
+)
+
+SEVEN_SERIES = "xc7z020clg400-1"  # Zynq-7000, DSP48E1, not Versal
+ULTRASCALE = "xcku040-ffva1156-2-e"  # Kintex UltraScale, DSP48E2, not Versal
+VERSAL = "xcvc1902-vsva2197-2MP-e-S"  # Versal, DSP58
+
+
+@pytest.fixture
+def schema():
+    return mvau_schema()
+
+
+def narrow_weights(shape=(6, 8), wdt="INT4"):
+    """Weights whose minimum is strictly above the dtype minimum, so narrow_weights
+    derives to 1 (required for the RTL soft-vec core on a DSP48E1 part)."""
+    lo = int(DataType[wdt].min()) + 1
+    hi = int(DataType[wdt].max())
+    rng = np.random.RandomState(0)
+    return rng.randint(lo, hi + 1, size=shape).astype(np.float32)
+
+
+def make_context(fpgapart=SEVEN_SERIES, weights=None, wdt="INT4", idt="INT4"):
+    if weights is None:
+        rng = np.random.RandomState(0)
+        weights = rng.randint(-8, 8, size=(6, 8)).astype(np.float32)
+    return Context(
+        shapes={"weights": weights.shape, "inp": (1, weights.shape[0]), "out": (1, weights.shape[1])},
+        datatypes={"weights": DataType[wdt], "inp": DataType[idt], "out": DataType["INT16"]},
+        initializers={"weights": weights},
+        fpgapart=fpgapart,
+        clk_ns=5.0,
+    )
+
+
+def base_assignment(**overrides):
+    a = {
+        "implementation": MVAU_HLS,
+        "PE": 4,
+        "SIMD": 2,
+        "mem_mode": "internal_decoupled",
+        "noActivation": 1,
+    }
+    a.update(overrides)
+    return a
+
+
+# ---------------------------------------------------------------------------
+# #1 — guarded axis absent, reading errors
+# ---------------------------------------------------------------------------
+
+
+def test_ram_style_absent_when_not_decoupled(schema):
+    r = resolve(schema, make_context(), base_assignment(mem_mode="internal_embedded"))
+    assert isinstance(r, Point)
+    assert "ram_style" not in r
+    assert "runtime_writeable_weights" not in r
+    with pytest.raises(AbsentAxisError):
+        _ = r.ram_style
+
+
+def test_ram_style_present_when_decoupled(schema):
+    r = resolve(schema, make_context(), base_assignment(mem_mode="internal_decoupled"))
+    assert isinstance(r, Point)
+    assert "ram_style" in r
+    assert r.ram_style == "auto"
+
+
+# ---------------------------------------------------------------------------
+# #2 — device prunes the implementation pool
+# ---------------------------------------------------------------------------
+
+
+def test_packed_impl_illegal_on_seven_series(schema):
+    # mvau_dsp_packed (DSP58 INT8-packed core) physically requires DSP58.
+    r = resolve(
+        schema,
+        make_context(SEVEN_SERIES, weights=narrow_weights()),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Illegal)
+    assert any("DSP58" in reason for reason in r.reasons)
+
+
+def test_other_impls_remain_on_seven_series(schema):
+    # softvec (any DSP part, needs narrow weights on DSP48E1) and hls (no DSP
+    # requirement) both resolve on 7-series.
+    r_sv = resolve(
+        schema,
+        make_context(SEVEN_SERIES, weights=narrow_weights()),
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r_sv, Point)
+    r_hls = resolve(schema, make_context(SEVEN_SERIES), base_assignment(mem_mode="internal_embedded"))
+    assert isinstance(r_hls, Point)
+
+
+def test_packed_impl_legal_on_versal(schema):
+    r = resolve(
+        schema,
+        make_context(VERSAL, weights=narrow_weights()),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Point)
+    assert r.dsp_primitive == "DSP58"
+
+
+def test_packed_impl_illegal_on_versal_with_wide_weights(schema):
+    # The packed core is feasible on DSP58 only for w<=8 & a<=9. A DSP58 part is
+    # necessary but NOT sufficient — wide (INT16) weights rule packed out even on
+    # Versal, while softvec/hls remain. Proves the feasibility gate reads dtype,
+    # not just device (mvu_vvu_axi.sv:313).
+    ctx = make_context(VERSAL, weights=narrow_weights(shape=(6, 8), wdt="INT16"), wdt="INT16")
+    r = resolve(
+        schema,
+        ctx,
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Illegal)
+    assert any("weight_width<=8" in reason for reason in r.reasons)
+    # softvec is still feasible on the same wide-weight Versal context
+    r2 = resolve(
+        schema, ctx,
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r2, Point)
+
+
+# ---------------------------------------------------------------------------
+# #3 — forced-derived values computed, never enumerated as axes
+# ---------------------------------------------------------------------------
+
+
+def test_dsp_primitive_forced_from_fpgapart(schema):
+    # dsp_primitive is FORCED from the device, not chosen. softvec runs on any DSP
+    # part; use narrow weights so the DSP48E1 RTL-feasibility gate is satisfied.
+    for part, expected in [(SEVEN_SERIES, "DSP48E1"), (ULTRASCALE, "DSP48E2"), (VERSAL, "DSP58")]:
+        r = resolve(
+            schema,
+            make_context(part, weights=narrow_weights()),
+            base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+        )
+        assert isinstance(r, Point), r
+        assert r.dsp_primitive == expected
+
+
+def test_forced_and_derived_names_are_not_axes(schema):
+    axis_names = schema.axis_names
+    for name in ("dsp_primitive", "accDataType", "WMEM", "language", "SEGMENTLEN"):
+        assert name not in axis_names, f"{name} must be Derived, not an Axis"
+
+
+def test_acc_datatype_data_dependent_static(schema):
+    # Small-valued static weights -> narrower accumulator than the worst case.
+    small = np.ones((6, 8), dtype=np.float32)  # all +1
+    r_small = resolve(schema, make_context(weights=small), base_assignment())
+    big = np.full((6, 8), -8.0, dtype=np.float32)  # INT4 extreme everywhere
+    r_big = resolve(schema, make_context(weights=big), base_assignment())
+    assert isinstance(r_small, Point) and isinstance(r_big, Point)
+    assert r_small.accDataType.bitwidth() < r_big.accDataType.bitwidth()
+
+
+def test_acc_datatype_worst_case_when_runtime_writeable(schema):
+    # runtime_writeable_weights forces worst-case bounds regardless of actual values.
+    small = np.ones((6, 8), dtype=np.float32)
+    r_static = resolve(schema, make_context(weights=small), base_assignment(noActivation=1))
+    r_rtw = resolve(
+        schema,
+        make_context(weights=small),
+        base_assignment(noActivation=1, runtime_writeable_weights=1),
+    )
+    assert isinstance(r_static, Point) and isinstance(r_rtw, Point)
+    assert r_rtw.accDataType.bitwidth() >= r_static.accDataType.bitwidth()
+
+
+# ---------------------------------------------------------------------------
+# #4 — the combination predicate (config + device) fires
+# ---------------------------------------------------------------------------
+
+
+def test_uram_requires_runtime_writeable_on_ultrascale(schema):
+    illegal = resolve(
+        schema,
+        make_context(ULTRASCALE),
+        base_assignment(ram_style="ultra", runtime_writeable_weights=0),
+    )
+    assert isinstance(illegal, Illegal)
+    assert any("URAM" in reason for reason in illegal.reasons)
+
+    legal = resolve(
+        schema,
+        make_context(ULTRASCALE),
+        base_assignment(ram_style="ultra", runtime_writeable_weights=1),
+    )
+    assert isinstance(legal, Point)
+
+
+def test_uram_ok_on_versal_without_runtime_writeable(schema):
+    # On Versal the URAM rule does not apply.
+    r = resolve(
+        schema,
+        make_context(VERSAL),
+        base_assignment(ram_style="ultra", runtime_writeable_weights=0),
+    )
+    assert isinstance(r, Point)
+
+
+# ---------------------------------------------------------------------------
+# #5 — legal -> Point with derived; illegal -> Illegal([reasons])
+# ---------------------------------------------------------------------------
+
+
+def test_legal_point_carries_derived(schema):
+    r = resolve(schema, make_context(), base_assignment(PE=4, SIMD=2))
+    assert isinstance(r, Point)
+    assert r.WMEM == 6 * 8 // (4 * 2)
+    assert r.language == "hls"
+    assert r.outstream_width == r.outputDataType.bitwidth() * 4
+
+
+def test_domain_violation_illegal(schema):
+    # PE=5 does not divide MH=8 -> not in divisor domain.
+    r = resolve(schema, make_context(), base_assignment(PE=5))
+    assert isinstance(r, Illegal)
+    assert "PE" in r.reasons[0]
+
+
+def test_predicate_violation_illegal(schema):
+    # pumpedCompute with SIMD=1 fires the config predicate.
+    r = resolve(
+        schema,
+        make_context(),
+        base_assignment(
+            implementation=MVAU_DSP_SOFTVEC, resType="dsp", SIMD=1, pumpedCompute=1
+        ),
+    )
+    assert isinstance(r, Illegal)
+    assert any("pumpedCompute" in reason for reason in r.reasons)
+
+
+# ---------------------------------------------------------------------------
+# #6 — guards compress: dependent-space count < naive cartesian product
+# ---------------------------------------------------------------------------
+
+
+def test_guards_compress_the_space(schema):
+    # Enumerate a slice over mem_mode x the decoupled-only ram cluster. Under a
+    # naive cartesian product every mem_mode would carry ram_style x rw; guards
+    # make the embedded/external branches collapse to a single point each.
+    ctx = make_context()
+    mem_modes = ["internal_embedded", "internal_decoupled", "external"]
+    ram_styles = ["auto", "block", "distributed"]  # skip ultra (needs rw=1 pairing)
+    rw = [0, 1]
+
+    naive = len(mem_modes) * len(ram_styles) * len(rw)
+
+    # Count distinct legal points in the dependent space.
+    seen = set()
+    for mm, rs, w in itertools.product(mem_modes, ram_styles, rw):
+        assignment = base_assignment(mem_mode=mm)
+        if mm == "internal_decoupled":
+            assignment["ram_style"] = rs
+            assignment["runtime_writeable_weights"] = w
+        r = resolve(schema, ctx, assignment)
+        if isinstance(r, Point):
+            # Identify the point by the axes that actually exist in it.
+            key = (
+                r.mem_mode,
+                r.get("ram_style"),
+                r.get("runtime_writeable_weights"),
+            )
+            seen.add(key)
+
+    dependent = len(seen)
+    # Decoupled: 3 ram x 2 rw = 6 distinct; embedded + external collapse to 1 each.
+    assert dependent == 6 + 1 + 1
+    assert dependent < naive
