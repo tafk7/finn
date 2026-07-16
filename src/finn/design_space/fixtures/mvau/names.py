@@ -28,5 +28,6 @@ WEIGHTS = "weights"
 INPUT = "inp"
 OUTPUT = "out"
 
-# DSP block -> $VERSION$ (silicon consequence, FORCED from fpgapart; §1.2.2).
-VERSION = {"DSP48E1": 1, "DSP48E2": 2, "DSP58": 3}
+# DSP block -> $VERSION$ map (op-agnostic; single source of truth in _dsp_rtl).
+# Re-exported here so MVAU bundles can import it alongside the other names.
+from finn.design_space.fixtures._dsp_rtl import VERSION  # noqa: E402,F401

@@ -429,7 +429,7 @@ def test_registry_makes_addition_structural():
     # This simulates a third-party `impl_*.py` that self-registers on import.
     from finn.design_space.space import Implementation
     from finn.design_space.fixtures.mvau import mvau_pool, mvau_schema
-    from finn.design_space.fixtures.mvau.registry import register, _REGISTRY
+    from finn.design_space.fixtures.mvau.registry import register, unregister
 
     before = {b.name for b in mvau_pool()}
     assert "mvau_stub_backend" not in before
@@ -451,4 +451,4 @@ def test_registry_makes_addition_structural():
         assert r.sources == ("stub.sv",)
     finally:
         # Keep the registry clean for other tests (registration is a global side effect).
-        _REGISTRY.pop("mvau_stub_backend", None)
+        unregister("mvau_stub_backend")
