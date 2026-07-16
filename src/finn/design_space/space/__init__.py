@@ -24,6 +24,7 @@ from .axis import (
 )
 from .context import Context
 from .derived import Derived
+from .implementation import Implementation, PoolError, pool_schema
 from .point import AbsentAxisError, Illegal, Point
 from .predicate import Predicate, predicate
 from .resolve import resolve
@@ -41,6 +42,9 @@ __all__ = [
     "Derived",
     "Predicate",
     "predicate",
+    "Implementation",
+    "pool_schema",
+    "PoolError",
     "Point",
     "Illegal",
     "AbsentAxisError",

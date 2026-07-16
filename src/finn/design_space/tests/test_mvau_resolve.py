@@ -21,13 +21,14 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.design_space.space import AbsentAxisError, Context, Illegal, Point, resolve
+from finn.design_space.space import AbsentAxisError, Context, Derived, Illegal, Point, resolve
 from finn.design_space.fixtures.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
     mvau_schema,
 )
+from finn.util.basic import is_versal
 
 SEVEN_SERIES = "xc7z020clg400-1"  # Zynq-7000, DSP48E1, not Versal
 ULTRASCALE = "xcku040-ffva1156-2-e"  # Kintex UltraScale, DSP48E2, not Versal
@@ -124,9 +125,11 @@ def test_other_impls_remain_on_seven_series(schema):
 
 
 def test_packed_impl_legal_on_versal(schema):
+    # INT8 weights (w=8, a=4) on DSP58 -> NUM_LANES=2 (<=3), so packed is feasible.
+    # (INT4 would give 4 lanes and route to softvec -- see test_packed_num_lanes_gate.)
     r = resolve(
         schema,
-        make_context(VERSAL, weights=narrow_weights()),
+        make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
         base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
     )
     assert isinstance(r, Point)
@@ -303,3 +306,149 @@ def test_guards_compress_the_space(schema):
     # Decoupled: 3 ram x 2 rw = 6 distinct; embedded + external collapse to 1 each.
     assert dependent == 6 + 1 + 1
     assert dependent < naive
+
+
+# ---------------------------------------------------------------------------
+# F1 — packed feasibility computes NUM_LANES for real (not the dropped-term bug)
+# ---------------------------------------------------------------------------
+
+
+def test_packed_num_lanes_gate(schema):
+    # F1 regression: w<=8 & a<=9 on DSP58 is necessary but NOT sufficient -- packed
+    # also needs NUM_LANES<=3. Small widths yield MORE lanes: INT4 (w=4,a=4) on DSP58
+    # gives NUM_LANES = 1 + (27-0-4)//7 = 4 (>3), so packed is INFEASIBLE and FINN
+    # routes to softvec. The old predicate dropped this term and wrongly accepted it.
+    ctx = make_context(VERSAL, weights=narrow_weights(wdt="INT4"), wdt="INT4", idt="INT4")
+    r = resolve(
+        schema,
+        ctx,
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Illegal)
+    assert any("NUM_LANES" in reason for reason in r.reasons)
+    # softvec remains feasible on the very same context.
+    r_sv = resolve(
+        schema,
+        ctx,
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r_sv, Point)
+
+
+def test_packed_num_lanes_ok_for_int8(schema):
+    # The complement: INT8 (w=8) on DSP58 gives NUM_LANES=2 (<=3) -> packed feasible.
+    ctx = make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8")
+    r = resolve(
+        schema,
+        ctx,
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Point)
+
+
+# ---------------------------------------------------------------------------
+# F3 — true-binary rejection reads the full condition (input OR weight, no xnor)
+# ---------------------------------------------------------------------------
+
+
+def test_hls_rejects_binary_weights(schema):
+    # F3: binary WEIGHTS (not just binary input) must be rejected on HLS when not in
+    # binaryXnorMode. The old predicate checked only the input and under-rejected.
+    ctx = make_context(weights=np.ones((6, 8), dtype=np.float32), wdt="BINARY", idt="INT4")
+    r = resolve(schema, ctx, base_assignment(implementation=MVAU_HLS, binaryXnorMode=0))
+    assert isinstance(r, Illegal)
+    assert any("binary" in reason.lower() for reason in r.reasons)
+
+
+def test_hls_binary_ok_in_xnor_mode(schema):
+    # F3 escape: binaryXnorMode reinterprets binary as bipolar -> allowed.
+    ctx = make_context(weights=np.ones((6, 8), dtype=np.float32), wdt="BINARY", idt="BINARY")
+    r = resolve(schema, ctx, base_assignment(implementation=MVAU_HLS, binaryXnorMode=1))
+    assert isinstance(r, Point)
+
+
+# ---------------------------------------------------------------------------
+# The composability thesis test (acceptance §3.3): a 4th bundle composes with
+# ZERO edits to the three real bundles or the op-level shared elements.
+# ---------------------------------------------------------------------------
+
+
+def test_fourth_implementation_composes_additively():
+    from finn.design_space.space import Implementation, pool_schema
+    from finn.design_space.fixtures.mvau import mvau_pool, mvau_shared
+
+    # A hypothetical LUT-based RTL MVU, declared as ONE new bundle. It carries its
+    # OWN feasibility (say: only legal on non-Versal parts) and its own axes/sources.
+    def lut_rtl_feasible(p, ctx):
+        if is_versal(ctx.fpgapart):
+            return "mvau_lut_rtl targets non-Versal parts only (hypothetical)"
+        return None
+
+    lut_rtl = Implementation(
+        name="mvau_lut_rtl",
+        feasible=lut_rtl_feasible,
+        axes=(),  # inherits only op-level shared axes
+        derived=(Derived("language", lambda p, ctx: "rtl"),),
+        predicates=(),
+        sources=("mvu_lut.sv",),
+    )
+
+    # Assemble the pool with the 4th member appended -- the three real bundles and
+    # the shared elements are used verbatim, unedited.
+    axes, derived, predicates = mvau_shared()
+    schema4 = pool_schema("implementation", axes, derived, predicates, mvau_pool() + (lut_rtl,))
+
+    # It appears as a pool member and resolves per its OWN feasibility.
+    legal = resolve(
+        schema4,
+        make_context(SEVEN_SERIES),  # non-Versal -> feasible
+        base_assignment(implementation="mvau_lut_rtl", mem_mode="internal_embedded"),
+    )
+    assert isinstance(legal, Point)
+    assert legal.language == "rtl"
+    assert legal.sources == ("mvu_lut.sv",)
+
+    illegal = resolve(
+        schema4,
+        make_context(VERSAL),  # Versal -> its own feasible() rejects
+        base_assignment(implementation="mvau_lut_rtl", mem_mode="internal_embedded"),
+    )
+    assert isinstance(illegal, Illegal)
+    assert any("non-Versal" in reason for reason in illegal.reasons)
+
+    # And the three original implementations still resolve unchanged in the extended
+    # pool -- adding the 4th did not perturb them.
+    r_hls = resolve(schema4, make_context(SEVEN_SERIES), base_assignment(mem_mode="internal_embedded"))
+    assert isinstance(r_hls, Point)
+    assert r_hls.language == "hls"
+
+
+def test_registry_makes_addition_structural():
+    # The structural form of the thesis: a bundle registered from its OWN module
+    # appears in mvau_pool() with ZERO edits to the package, shared.py, or a sibling.
+    # This simulates a third-party `impl_*.py` that self-registers on import.
+    from finn.design_space.space import Implementation
+    from finn.design_space.fixtures.mvau import mvau_pool, mvau_schema
+    from finn.design_space.fixtures.mvau.registry import register, _REGISTRY
+
+    before = {b.name for b in mvau_pool()}
+    assert "mvau_stub_backend" not in before
+
+    @register
+    def _stub_bundle():
+        return Implementation(name="mvau_stub_backend", sources=("stub.sv",))
+
+    try:
+        after = {b.name for b in mvau_pool()}
+        assert after == before | {"mvau_stub_backend"}
+        # It resolves as a real pool member via the normal schema path.
+        r = resolve(
+            mvau_schema(),
+            make_context(SEVEN_SERIES),
+            base_assignment(implementation="mvau_stub_backend", mem_mode="internal_embedded"),
+        )
+        assert isinstance(r, Point)
+        assert r.sources == ("stub.sv",)
+    finally:
+        # Keep the registry clean for other tests (registration is a global side effect).
+        _REGISTRY.pop("mvau_stub_backend", None)
