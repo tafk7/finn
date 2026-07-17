@@ -12,7 +12,7 @@ resolve against; a bundle never edits this file.
 Includes the AXI/replay/output plumbing that only *looks* softvec/packed-shared
 (every MVU needs it), the PE×SIMD combinatorial mass, the threshold cluster, and the
 weight-delivery cluster (a RESERVED COMPOSITION SEAM — see below). Source of truth
-with file:line into real FINN: ``kernel-final-design/mvau-design-space.md``.
+with file:line into real FINN: ``kernel-design/kernel-final-design/mvau-design-space.md``.
 """
 
 from __future__ import annotations

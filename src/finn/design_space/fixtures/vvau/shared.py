@@ -13,7 +13,7 @@ the depthwise inner-product dim is the kernel window ``K = k_h*k_w`` and the out
 dim is ``Channels``. **PE folds Channels** (nf = Channels//PE); **SIMD folds the
 kernel window** (sf = K//SIMD). Contrast MVAU where PE/SIMD fold matrix rows/cols.
 The weight-delivery cluster (mem_mode/ram_style/…) is shared by both impls, same as
-MVAU. Source of truth: ``kernel-final-design/mvau-design-space.md`` +
+MVAU. Source of truth: ``kernel-design/kernel-final-design/mvau-design-space.md`` +
 ``vectorvectoractivation.py``.
 
 Context convention: the weight tensor ``"weights"`` shape is ``(Channels, 1, k_h,

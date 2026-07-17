@@ -21,7 +21,7 @@ Op-level shared is deliberately SMALL (``shared.py``): ``PE`` (folds ``NumChanne
 ``numSteps``, ``ActVal``, ``numInputVectors``, ``runtime_writeable_weights`` (shared
 intent). Both backends have IDENTICAL integer dtype envelopes — there is intentionally
 NO per-bundle dtype feasibility gate (a fabricated one was falsified;
-``kernel-final-design/toy-vs-brainsmith-thresholding.md`` A1).
+``kernel-design/kernel-final-design/toy-vs-brainsmith-thresholding.md`` A1).
 """
 
 from __future__ import annotations

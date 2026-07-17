@@ -16,7 +16,7 @@ itself** (``registry.py``). Adding a backend is purely additive — drop in one
 This is the thesis realised *structurally*, not merely asserted: no bundle imports a
 sibling, and the pool is assembled from the registry, so a new backend cannot perturb
 an existing one. Source of truth for each axis/derived/predicate (file:line into real
-FINN): ``kernel-final-design/mvau-design-space.md``.
+FINN): ``kernel-design/kernel-final-design/mvau-design-space.md``.
 
 Two structural relationships, kept distinct (see the model §1.2.2/§5):
   * SELECTION (sum) — HLS *or* RTL soft-vec *or* RTL DSP58-packed. The pool. Built

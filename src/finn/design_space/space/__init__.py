@@ -10,7 +10,7 @@
 A design space is data — a :class:`Schema` of guarded :class:`Axis` choices,
 computed :class:`Derived` quantities, and :class:`Predicate` legality checks —
 resolved against a :class:`Context` of givens into a :class:`Point` or an
-:class:`Illegal`. See ``kernel-final-design/design-space-model.md``.
+:class:`Illegal`. See ``kernel-design/kernel-final-design/design-space-model.md``.
 """
 
 from .axis import (
