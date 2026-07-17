@@ -13,6 +13,10 @@ handoffs, and as-is analysis that drive the `design_space` code.
     Context / Axis / Derived / Predicate; §1.2.2 pool-vs-Derived; §8 worked MVAU tree).
   - `mvau-design-space.md` — MVAU's full space as declarative data (file:line into
     real FINN); the acid-test the model is validated against.
+  - `param-delivery-design-space.md` — the COMPOSITION acid-test: weight/threshold
+    delivery + memory access + MLO as three orthogonal coordinates (storage ⊥
+    selection-cardinality ⊥ staticness), RTL-grounded. The delivery-half analogue of
+    `mvau-design-space.md`.
   - `roles-and-interfaces.md`, `derivation-dissection.md` — supporting design.
   - `*-HANDOFF.md` — self-contained task specs (RESOLVE-CORE, DECOMPOSE-
     IMPLEMENTATIONS, SPLIT-MVU-WRAPPER). SPLIT-MVU-WRAPPER is the next open task.
