@@ -88,22 +88,24 @@ class EmitError(ValueError):
     implementation is not in the pool."""
 
 
-def emit_point(pool, point, context) -> Artifacts:
+def emit_point(pool, point, context, *, root: str = "implementation") -> Artifacts:
     """Dispatch codegen for a resolved ``point`` to its selected bundle's ``emit``.
 
-    Looks up the pool member named by ``point.implementation`` and calls its
-    ``emit(point, context)``. Raises :class:`EmitError` if that bundle has no emit
-    yet, or if the point's implementation is not a pool member.
+    Looks up the pool member named by ``point[root]`` and calls its ``emit(point,
+    context)``. ``root`` is the pool's selection axis — ``"implementation"`` for a
+    compute pool, ``"parameters.topology"`` for the composed parameters pool. Raises
+    :class:`EmitError` if that bundle has no emit yet, or if the point's selection is
+    not a pool member.
     """
-    impl = point["implementation"]
+    impl = point[root]
     by_name = {b.name: b for b in pool}
     bundle = by_name.get(impl)
     if bundle is None:
         raise EmitError(
-            f"implementation {impl!r} is not in the pool (have {sorted(by_name)})"
+            f"{root} {impl!r} is not in the pool (have {sorted(by_name)})"
         )
     if bundle.emit is None:
-        raise EmitError(f"emit not implemented for implementation {impl!r}")
+        raise EmitError(f"emit not implemented for {root} {impl!r}")
     return bundle.emit(point, context)
 
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 from finn.design_space.space import discrete_axis, predicate
 from finn.util.basic import is_versal
 
+from .emit_memstream import emit_memstream
 from .names import DECOUPLED, PUMPED_MEMORY, RAM_STYLE, RUNTIME_WRITEABLE
 from .registry import register
 from .topology import storage_topology
@@ -80,5 +81,5 @@ def decoupled_topology():
         axes=_decoupled_axes(),
         predicates=(_uram_requires_ultrascale,),
         sources=("memstream_axi.sv", "memstream.sv", "axilite.sv"),
-        # emit wired in Phase 3 (emit_memstream).
+        emit=emit_memstream,
     )
