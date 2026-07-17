@@ -19,6 +19,7 @@ from __future__ import annotations
 from finn.design_space.space import Implementation
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
+from .emit_rtl import emit_mvau_rtl
 from .names import MVAU_DSP_SOFTVEC
 from .registry import register
 
@@ -40,4 +41,5 @@ def softvec_bundle() -> Implementation:
         derived=derived,
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu.sv",),
+        emit=emit_mvau_rtl,
     )

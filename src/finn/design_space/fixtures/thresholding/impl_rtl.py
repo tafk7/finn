@@ -26,6 +26,7 @@ import numpy as np
 
 from finn.design_space.space import Derived, Implementation, discrete_axis, predicate, predicate_axis
 
+from .emit_rtl import emit_thresholding_rtl
 from .names import THRESHOLDING_RTL, THRESHOLDS
 from .registry import register
 
@@ -63,4 +64,5 @@ def rtl_bundle() -> Implementation:
             "thresholding_axi.sv",
             "axilite.sv",
         ),
+        emit=emit_thresholding_rtl,
     )

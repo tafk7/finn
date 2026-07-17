@@ -20,6 +20,7 @@ from finn.design_space.space import Implementation
 from finn.util.basic import get_dsp_block
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
+from .emit_rtl import emit_mvau_rtl
 from .names import INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
 from .registry import register
 
@@ -61,4 +62,5 @@ def packed_bundle() -> Implementation:
         derived=derived,
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_8sx9_dsp58.sv",),
+        emit=emit_mvau_rtl,
     )

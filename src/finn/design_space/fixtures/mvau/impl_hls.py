@@ -18,6 +18,7 @@ from qonnx.core.datatype import DataType
 
 from finn.design_space.space import Derived, Implementation, discrete_axis, predicate
 
+from .emit_hls import emit_mvau_hls
 from .names import INPUT, MVAU_HLS, WEIGHTS
 from .registry import register
 
@@ -55,4 +56,5 @@ def hls_bundle() -> Implementation:
         derived=(Derived("language", lambda p, ctx: "hls"),),
         predicates=(_hls_simd_lower_bound, _no_true_binary),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
+        emit=emit_mvau_hls,
     )

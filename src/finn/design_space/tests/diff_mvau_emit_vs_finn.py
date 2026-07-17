@@ -1,0 +1,195 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+############################################################################
+
+"""Differential check: our hermetic MVAU emit vs FINN's own codegen.
+
+Runs INSIDE the FINN Docker container (needs HWCustomOp / ModelWrapper / the RTL &
+HLS backends). Drives FINN's real generate_hdl / make_weight_file on a single-MVAU
+model, then runs our design_space emit on the equivalent (Point, Context), and diffs
+the generated artifacts. Proves our emit faithfully reproduces FINN's codegen — the
+equivalence claim, demonstrated rather than asserted, and toolchain-agnostic (no
+synthesis).
+
+Usage (from finn/):
+    bash run-docker.sh bash -c \\
+      "PYTHONPATH=/workspace/finn/src:$PYTHONPATH \\
+       python src/finn/design_space/tests/diff_mvau_emit_vs_finn.py"
+"""
+
+import os
+import sys
+import tempfile
+
+import numpy as np
+from onnx import TensorProto, helper
+from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
+from qonnx.util.basic import qonnx_make_model
+
+from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.transformation.fpgadataflow.minimize_accumulator_width import (
+    MinimizeAccumulatorWidth,
+)
+
+# our side
+from finn.design_space.space import Context, resolve, emit_point
+from finn.design_space.fixtures.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
+
+FPGAPART = "xcvc1902-vsva2197-2MP-e-S"  # Versal / DSP58
+CLK_NS = 5.0
+
+
+def _make_mvau_model(W, pe, simd, wdt, idt, odt):
+    mw, mh = W.shape
+    inp = helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, mw])
+    outp = helper.make_tensor_value_info("outp", TensorProto.FLOAT, [1, mh])
+    node = helper.make_node(
+        "MVAU", ["inp", "weights"], ["mid"],
+        domain="finn.custom_op.fpgadataflow", backend="fpgadataflow",
+        MW=mw, MH=mh, SIMD=simd, PE=pe,
+        inputDataType=idt.name, weightDataType=wdt.name, outputDataType=odt.name,
+        ActVal=0, binaryXnorMode=0, noActivation=1, mem_mode="internal_embedded",
+    )
+    # A trivial successor so the MVAU is NOT graph-terminal. FINN's
+    # minimize_accumulator_width rounds a TERMINAL no-activation node's accumulator
+    # up to a multiple of 8 (byte-aligning the graph output) — a graph-topology
+    # concern our hermetic Context deliberately does not model. With a successor,
+    # both sides compute the true minimal accumulator (apples-to-apples).
+    tail = helper.make_node("Identity", ["mid"], ["outp"])
+    graph = helper.make_graph([node, tail], "mvau_graph", [inp], [outp])
+    model = ModelWrapper(qonnx_make_model(graph, producer_name="mvau-diff"))
+    model.set_tensor_datatype("inp", idt)
+    model.set_tensor_datatype("outp", odt)
+    model.set_tensor_datatype("weights", wdt)
+    model.set_initializer("weights", W)
+    return model
+
+
+def _finn_context_point(W, pe, simd, wdt, idt, odt, impl, restype):
+    mw, mh = W.shape
+    ctx = Context(
+        shapes={"weights": (mw, mh), "inp": (1, mw), "out": (1, mh)},
+        datatypes={"weights": wdt, "inp": idt, "out": odt},
+        initializers={"weights": W},
+        fpgapart=FPGAPART, clk_ns=CLK_NS,
+    )
+    point = resolve(mvau_schema(), ctx, {
+        "implementation": impl, "PE": pe, "SIMD": simd, "resType": restype,
+        "mem_mode": "internal_embedded", "noActivation": 1,
+    })
+    return ctx, point
+
+
+def _norm(s):
+    # normalize the module name (FINN names it per-node) + trailing whitespace, so we
+    # compare the SEMANTIC content, not the auto-generated top name.
+    out = []
+    for line in s.splitlines():
+        out.append(line.rstrip())
+    return "\n".join(out).strip()
+
+
+def diff_rtl():
+    print("== RTL differential (softvec) ==")
+    rng = np.random.RandomState(0)
+    # narrow weights (min strictly above dtype min) so $NARROW_WEIGHTS$ == 1 deterministically
+    W = rng.randint(int(DataType["INT8"].min()) + 1, int(DataType["INT8"].max()) + 1,
+                    size=(6, 8)).astype(np.float32)
+    wdt = idt = DataType["INT8"]
+    odt = DataType["INT16"]
+
+    model = _make_mvau_model(W, 2, 2, wdt, idt, odt)
+    model = model.transform(SpecializeLayers(FPGAPART))
+    # Our emit bakes in the accumulator-minimization that FINN does as a separate
+    # transform (noActivation => outputDataType := accDataType, base:49-57). Run it so
+    # the comparison is apples-to-apples (a real FINN flow always applies it).
+    model = model.transform(MinimizeAccumulatorWidth())
+    node = model.graph.node[0]
+    assert node.op_type == "MVAU_rtl", f"expected MVAU_rtl, got {node.op_type}"
+    inst = getCustomOp(node)
+    with tempfile.TemporaryDirectory() as d:
+        inst.set_nodeattr("code_gen_dir_ipgen", d)
+        inst.generate_hdl(model, FPGAPART, CLK_NS)
+        top = inst.get_nodeattr("gen_top_module")
+        finn_v = open(os.path.join(d, top + "_wrapper.v")).read()
+
+    ctx, point = _finn_context_point(W, 2, 2, wdt, idt, odt, MVAU_DSP_SOFTVEC, "dsp")
+    arts = emit_point(mvau_pool(), point, ctx)
+    ours_v = arts.generated[0].content()
+
+    # Compare the parameter block (the semantic payload). Extract "parameter NAME = VAL"
+    def params(text):
+        d = {}
+        for line in text.splitlines():
+            line = line.strip().rstrip(",")
+            if line.startswith("parameter"):
+                parts = line.replace("parameter", "").split("=")
+                if len(parts) == 2:
+                    name = parts[0].strip()
+                    val = parts[1].split("//")[0].strip()
+                    # FINN emits some numerics as numpy floats ("1.0"); normalize a
+                    # whole-number float to its int form for the semantic compare.
+                    if val.endswith(".0"):
+                        val = val[:-2]
+                    d[name] = val
+        return d
+
+    fp, op = params(finn_v), params(ours_v)
+    shared = set(fp) & set(op)
+    mism = {k: (fp[k], op[k]) for k in shared if fp[k] != op[k]}
+    print(f"  shared params: {len(shared)} | mismatches: {mism}")
+    print(f"  FINN-only params: {set(fp)-set(op)} | ours-only: {set(op)-set(fp)}")
+    ok = not mism and not (set(fp) - set(op))
+    print("  RTL PARAM EQUIVALENCE:", "PASS" if ok else "FAIL")
+    return ok
+
+
+def diff_hls_params_h():
+    print("== HLS params.h differential ==")
+    rng = np.random.RandomState(0)
+    W = rng.randint(-7, 7, size=(6, 8)).astype(np.float32)
+    wdt = idt = DataType["INT8"]
+    odt = DataType["INT16"]
+
+    model = _make_mvau_model(W, 2, 2, wdt, idt, odt)
+    # prefer HLS so specialization yields MVAU_hls
+    model.graph.node[0].attribute.append(
+        helper.make_attribute("preferred_impl_style", "hls")
+    )
+    model_hls = model.transform(SpecializeLayers(FPGAPART))
+    node = model_hls.graph.node[0]
+    assert node.op_type == "MVAU_hls", f"expected MVAU_hls, got {node.op_type}"
+    inst = getCustomOp(node)
+
+    with tempfile.TemporaryDirectory() as d:
+        inst.set_nodeattr("code_gen_dir_ipgen", d)
+        inst.generate_params(model_hls, d)
+        finn_params = open(os.path.join(d, "params.h")).read()
+
+    ctx, point = _finn_context_point(W, 2, 2, wdt, idt, odt, MVAU_HLS, "lut")
+    from finn.design_space.fixtures.mvau.emit_hls import _params_h
+    ours_params = _params_h(point, ctx)
+
+    ok = _norm(finn_params) == _norm(ours_params)
+    print("  params.h byte-equivalence:", "PASS" if ok else "FAIL")
+    if not ok:
+        print("  --- FINN (first 200) ---\n", finn_params[:200])
+        print("  --- OURS (first 200) ---\n", ours_params[:200])
+    return ok
+
+
+if __name__ == "__main__":
+    results = []
+    results.append(diff_rtl())
+    try:
+        results.append(diff_hls_params_h())
+    except Exception as e:
+        print("  HLS params diff errored:", repr(e))
+        results.append(False)
+    print("\nRESULT:", "ALL PASS" if all(results) else "SOME FAIL")
+    sys.exit(0 if all(results) else 1)

@@ -22,9 +22,18 @@ from .axis import (
     fixed_axis,
     predicate_axis,
 )
+from .artifacts import (
+    Artifacts,
+    DataFile,
+    GeneratedFile,
+    IPICommands,
+    StaticFile,
+    Template,
+    TemplateError,
+)
 from .context import Context
 from .derived import Derived
-from .implementation import Implementation, PoolError, pool_schema
+from .implementation import EmitError, Implementation, PoolError, emit_point, pool_schema
 from .point import AbsentAxisError, Illegal, Point
 from .predicate import Predicate, predicate
 from .resolve import resolve
@@ -45,6 +54,15 @@ __all__ = [
     "Implementation",
     "pool_schema",
     "PoolError",
+    "emit_point",
+    "EmitError",
+    "Template",
+    "TemplateError",
+    "GeneratedFile",
+    "DataFile",
+    "StaticFile",
+    "IPICommands",
+    "Artifacts",
     "Point",
     "Illegal",
     "AbsentAxisError",

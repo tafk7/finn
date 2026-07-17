@@ -33,6 +33,7 @@ from typing import Any
 
 from .axis import Axis, discrete_axis
 from .derived import Derived
+from .artifacts import Artifacts
 from .predicate import Predicate
 from .schema import Schema
 
@@ -61,6 +62,10 @@ class Implementation:
         predicates: this bundle's OWN legality checks (fire only when selected).
         sources: the RTL/HLS source files this bundle owns (declared association;
             overlaps between bundles surface non-separation — handoff §2b).
+        emit: this bundle's hermetic codegen, ``(point, context) -> Artifacts``, or
+            None if emit is not yet implemented for this backend. Dispatched by
+            :func:`emit_point`. Reads the resolved ``point`` + frozen ``context``
+            (which carries initializer VALUES) — never the graph.
     """
 
     name: str
@@ -69,12 +74,37 @@ class Implementation:
     derived: tuple[Derived, ...] = ()
     predicates: tuple[Predicate, ...] = ()
     sources: tuple[str, ...] = ()
+    emit: Callable[[Any, Any], "Artifacts"] | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))
         object.__setattr__(self, "derived", tuple(self.derived))
         object.__setattr__(self, "predicates", tuple(self.predicates))
         object.__setattr__(self, "sources", tuple(self.sources))
+
+
+class EmitError(ValueError):
+    """Raised when emit is requested for a point whose bundle has no emit, or whose
+    implementation is not in the pool."""
+
+
+def emit_point(pool, point, context) -> Artifacts:
+    """Dispatch codegen for a resolved ``point`` to its selected bundle's ``emit``.
+
+    Looks up the pool member named by ``point.implementation`` and calls its
+    ``emit(point, context)``. Raises :class:`EmitError` if that bundle has no emit
+    yet, or if the point's implementation is not a pool member.
+    """
+    impl = point["implementation"]
+    by_name = {b.name: b for b in pool}
+    bundle = by_name.get(impl)
+    if bundle is None:
+        raise EmitError(
+            f"implementation {impl!r} is not in the pool (have {sorted(by_name)})"
+        )
+    if bundle.emit is None:
+        raise EmitError(f"emit not implemented for implementation {impl!r}")
+    return bundle.emit(point, context)
 
 
 class PoolError(ValueError):
