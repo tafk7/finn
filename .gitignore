@@ -96,3 +96,7 @@ MANIFEST
 
 # downloaded dep repos
 /deps/
+
+# Docker-run scratch output from design_space emit validation runners
+_diff_out.txt
+_elab_out.txt

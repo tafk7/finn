@@ -151,12 +151,13 @@ pass a single script path, not an inline `bash -c` with spaces):
 
 ```
 # from finn/ :
-bash run-docker.sh bash /home/tkeller/prj-kernels/finn/<your_runner>.sh
+bash run-docker.sh bash src/finn/design_space/tests/<your_runner>.sh
 # runner cds to $FINN_ROOT, runs python, tees output to a file in the mounted tree.
 ```
-(See `finn/_run_diff.sh` / `finn/_run_elaborate.sh` for the working pattern. Output to
-`$FINN_ROOT/<x>.txt` so it's host-visible via the bind mount. run-docker.sh rebuilds +
-reinstalls deps each call — ~2-4 min startup; budget for it.)
+(See `src/finn/design_space/tests/run_diff.sh` / `run_elaborate.sh` for the working
+pattern. They tee to `$FINN_ROOT/_diff_out.txt` / `_elab_out.txt` — gitignored,
+host-visible via the bind mount. run-docker.sh rebuilds + reinstalls deps each call —
+~2-4 min startup; budget for it.)
 
 **Acceptance gates (all must pass):**
 1. **Elaboration:** `xvlog -sv` + `xelab` on each per-core wrapper's OWN source set
@@ -260,4 +261,4 @@ Derived, the split's theoretical basis) and §8; `kernel-final-design/mvau-desig
 `kernel-final-design/DECOMPOSE-IMPLEMENTATIONS-HANDOFF.md` (the original 2c deferral, §2c);
 memory notes `impl-bundles`, `emit-phase`, `dev-environment`. The differential +
 elaboration harnesses (`finn/src/finn/design_space/tests/{diff,elaborate}_mvau_emit*.py`
-+ `finn/_run_{diff,elaborate}.sh`) are your working Docker/Vivado examples.
++ `src/finn/design_space/tests/run_{diff,elaborate}.sh`) are your working Docker/Vivado examples.
