@@ -28,6 +28,14 @@ from finn.design_space.fixtures.mvau import (
     MVAU_HLS,
     mvau_schema,
 )
+from finn.design_space.fixtures.parameters.names import (
+    DECOUPLED as PARAM_DECOUPLED,
+    EMBEDDED as PARAM_EMBEDDED,
+    PUMPED_MEMORY as PARAM_PUMPED_MEMORY,
+    RAM_STYLE as PARAM_RAM_STYLE,
+    RUNTIME_WRITEABLE as PARAM_RUNTIME_WRITEABLE,
+    TOPOLOGY as PARAM_TOPOLOGY,
+)
 from finn.util.basic import is_versal
 
 SEVEN_SERIES = "xc7z020clg400-1"  # Zynq-7000, DSP48E1, not Versal
@@ -63,6 +71,11 @@ def make_context(fpgapart=SEVEN_SERIES, weights=None, wdt="INT4", idt="INT4"):
 
 
 def base_assignment(**overrides):
+    """Build an MVAU assignment. The weight-delivery cluster moved to the composed
+    ``parameters`` pool, so this shim translates the legacy delivery kwargs
+    (``mem_mode``/``ram_style``/``runtime_writeable_weights``/``pumpedMemory``) into the
+    namespaced ``parameters.*`` keys, keeping call sites terse. ``mem_mode`` maps to a
+    storage topology: internal_embedded→embedded, internal_decoupled→decoupled."""
     a = {
         "implementation": MVAU_HLS,
         "PE": 4,
@@ -71,7 +84,31 @@ def base_assignment(**overrides):
         "noActivation": 1,
     }
     a.update(overrides)
-    return a
+    return _translate_parameters(a)
+
+
+_MEM_MODE_TO_TOPOLOGY = {
+    "internal_embedded": PARAM_EMBEDDED,
+    "internal_decoupled": PARAM_DECOUPLED,
+}
+_DELIVERY_KEYS = {
+    "ram_style": PARAM_RAM_STYLE,
+    "runtime_writeable_weights": PARAM_RUNTIME_WRITEABLE,
+    "pumpedMemory": PARAM_PUMPED_MEMORY,
+}
+
+
+def _translate_parameters(a):
+    """Rewrite legacy delivery kwargs to composed ``parameters.*`` keys."""
+    out = {}
+    for k, v in a.items():
+        if k == "mem_mode":
+            out[PARAM_TOPOLOGY] = _MEM_MODE_TO_TOPOLOGY[v]
+        elif k in _DELIVERY_KEYS:
+            out[_DELIVERY_KEYS[k]] = v
+        else:
+            out[k] = v
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -82,17 +119,17 @@ def base_assignment(**overrides):
 def test_ram_style_absent_when_not_decoupled(schema):
     r = resolve(schema, make_context(), base_assignment(mem_mode="internal_embedded"))
     assert isinstance(r, Point)
-    assert "ram_style" not in r
-    assert "runtime_writeable_weights" not in r
+    assert PARAM_RAM_STYLE not in r
+    assert PARAM_RUNTIME_WRITEABLE not in r
     with pytest.raises(AbsentAxisError):
-        _ = r.ram_style
+        _ = r[PARAM_RAM_STYLE]
 
 
 def test_ram_style_present_when_decoupled(schema):
     r = resolve(schema, make_context(), base_assignment(mem_mode="internal_decoupled"))
     assert isinstance(r, Point)
-    assert "ram_style" in r
-    assert r.ram_style == "auto"
+    assert PARAM_RAM_STYLE in r
+    assert r[PARAM_RAM_STYLE] == "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -275,36 +312,36 @@ def test_predicate_violation_illegal(schema):
 
 
 def test_guards_compress_the_space(schema):
-    # Enumerate a slice over mem_mode x the decoupled-only ram cluster. Under a
-    # naive cartesian product every mem_mode would carry ram_style x rw; guards
-    # make the embedded/external branches collapse to a single point each.
+    # Enumerate a slice over the composed parameters pool: topology x the decoupled-
+    # only ram cluster. Under a naive cartesian product every topology would carry
+    # ram_style x rw; guards make the embedded branch collapse to a single point.
     ctx = make_context()
-    mem_modes = ["internal_embedded", "internal_decoupled", "external"]
+    topologies = ["internal_embedded", "internal_decoupled"]  # mem_mode shim -> topology
     ram_styles = ["auto", "block", "distributed"]  # skip ultra (needs rw=1 pairing)
     rw = [0, 1]
 
-    naive = len(mem_modes) * len(ram_styles) * len(rw)
+    naive = len(topologies) * len(ram_styles) * len(rw)
 
     # Count distinct legal points in the dependent space.
     seen = set()
-    for mm, rs, w in itertools.product(mem_modes, ram_styles, rw):
+    for mm, rs, w in itertools.product(topologies, ram_styles, rw):
         assignment = base_assignment(mem_mode=mm)
         if mm == "internal_decoupled":
-            assignment["ram_style"] = rs
-            assignment["runtime_writeable_weights"] = w
+            assignment[PARAM_RAM_STYLE] = rs
+            assignment[PARAM_RUNTIME_WRITEABLE] = w
         r = resolve(schema, ctx, assignment)
         if isinstance(r, Point):
-            # Identify the point by the axes that actually exist in it.
+            # Identify the point by the parameters axes that actually exist in it.
             key = (
-                r.mem_mode,
-                r.get("ram_style"),
-                r.get("runtime_writeable_weights"),
+                r[PARAM_TOPOLOGY],
+                r.get(PARAM_RAM_STYLE),
+                r.get(PARAM_RUNTIME_WRITEABLE),
             )
             seen.add(key)
 
     dependent = len(seen)
-    # Decoupled: 3 ram x 2 rw = 6 distinct; embedded + external collapse to 1 each.
-    assert dependent == 6 + 1 + 1
+    # Decoupled: 3 ram x 2 rw = 6 distinct; embedded collapses to 1.
+    assert dependent == 6 + 1
     assert dependent < naive
 
 

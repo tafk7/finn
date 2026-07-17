@@ -30,9 +30,9 @@ from finn.design_space.space import (
     predicate,
     predicate_axis,
 )
-from finn.util.basic import is_versal
+from finn.design_space.fixtures.parameters.names import RUNTIME_WRITEABLE
 
-from .names import DECOUPLED, EMBEDDED, EXTERNAL, INPUT, OUTPUT, WEIGHTS
+from .names import INPUT, OUTPUT, WEIGHTS
 
 
 # =============================================================================
@@ -40,29 +40,22 @@ from .names import DECOUPLED, EMBEDDED, EXTERNAL, INPUT, OUTPUT, WEIGHTS
 # =============================================================================
 
 
-def _is_decoupled(p) -> bool:
-    return p.mem_mode == DECOUPLED
-
-
-def _is_decoupled_or_external(p) -> bool:
-    return p.mem_mode in (DECOUPLED, EXTERNAL)
-
-
 def _has_activation(p) -> bool:
     return p.noActivation == 0
 
 
 def weights_may_change(p) -> bool:
-    """Weights are not statically known (runtime-writeable / external / dynamic /
-    multi-layer-offload) — accDataType/weightDataType must use worst-case bounds
-    rather than actual values (base:482-498). Exposed for bundle derived that share
-    the same data-staticness test (e.g. narrow_weights)."""
-    return bool(
-        p.get("runtime_writeable_weights", 0)
-        or p.mem_mode == EXTERNAL
-        or p.get("mlo_max_iter", 0)
-        or p.get("dynamic_input", 0)
-    )
+    """Weights are not statically known — accDataType/weightDataType must use
+    worst-case bounds rather than actual values (base:482-498). This is the one
+    CROSS-COORDINATE coupling from the parameters subsystem back into the compute
+    dtype derivations: staticness (coordinate C) is decided by the composed
+    ``parameters.*`` fields. Reads with ``.get`` so it is safe on a point where the
+    parameters pool is absent (a future param-free op) — absent ⇒ statically known.
+
+    Increment-1 topologies are ``embedded`` (static) and ``decoupled`` (static unless
+    runtime-writable). The external / dynamic / MLO staticness sources return when
+    those topologies land (each will be its own ``parameters.topology`` value)."""
+    return bool(p.get(RUNTIME_WRITEABLE, 0))
 
 
 def _matrix_dim(idx):
@@ -117,34 +110,15 @@ def op_axes():
         # table size, hwcustomop.py:378) — a different entity that does not bound
         # this axis (hwcustomop.py:317-319, mlo_max_iter unbounded).
         predicate_axis("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
-        # --- weight-delivery cluster -----------------------------------------
-        # RESERVED COMPOSITION SEAM (design-space-model.md §5): mem_mode is really a
-        # *selector* over which weight-delivery SUB-KERNEL is composed in
-        # (internal_decoupled -> memstream, dynamic_input -> dynload, mlo -> fetch-
-        # weights; rtl:312-322). ram_style/runtime_writeable/pumpedMemory/sip_depth
-        # are that sub-kernel's OWN axes/derived, surfaced here at the op level only
-        # because composition is deferred. When the memstream Kernel lands, this
-        # whole cluster MOVES OUT through a `weight_delivery` Derived (a Derived
-        # returning a resolved sub-Point) rather than being re-modelled.
-        discrete_axis("mem_mode", {EMBEDDED, DECOUPLED, EXTERNAL}, DECOUPLED),
-        discrete_axis(
-            "ram_style",
-            {"auto", "block", "distributed", "ultra"},
-            "auto",
-            guard=_is_decoupled,
-            deps={"mem_mode"},
-        ),
-        discrete_axis(
-            "runtime_writeable_weights", {0, 1}, 0, guard=_is_decoupled, deps={"mem_mode"}
-        ),
-        discrete_axis("pumpedMemory", {0, 1}, 0, guard=_is_decoupled, deps={"mem_mode"}),
-        discrete_axis(
-            "dynamic_input",
-            {0, 1},
-            0,
-            guard=_is_decoupled_or_external,
-            deps={"mem_mode"},
-        ),
+        # --- weight-delivery cluster: MOVED OUT to the `parameters` pool ------
+        # mem_mode/ram_style/runtime_writeable_weights/pumpedMemory/dynamic_input used
+        # to live here as the "reserved composition seam". They are now the
+        # `parameters` subsystem (fixtures/parameters/), composed into the MVAU schema
+        # via `compose(...)` under the `parameters.*` namespace. mem_mode is gone:
+        # being the `decoupled` topology IS "internal_decoupled". The cross-coordinate
+        # couplings (memstream geometry, the pumpedMemory/fold gate) are contributed at
+        # compose time by mvau/parameters_coupling.py. See
+        # kernel-design/kernel-final-design/param-delivery-design-space.md.
     )
 
 
@@ -205,18 +179,14 @@ def _instream_width(p, ctx):
     return ctx.tensor_datatype(INPUT).bitwidth() * p.SIMD
 
 
-def _weight_stream_width(p, ctx):
-    # base:256-275 — 0 for embedded (no port); PE*SIMD*wbits otherwise.
-    if p.mem_mode == EMBEDDED:
-        return 0
-    return p.PE * p.SIMD * ctx.tensor_datatype(WEIGHTS).bitwidth()
-
-
 def _outstream_width(p, ctx):
     return _output_datatype(p, ctx).bitwidth() * p.PE
 
 
 def op_derived():
+    # NOTE: `weight_stream_width` (0 for embedded, PE*SIMD*wbits otherwise) is
+    # CROSS-COORDINATE — it reads both the compute fold AND the parameters topology —
+    # so it is contributed at compose time by mvau/parameters_coupling.py, not here.
     return (
         Derived("WMEM", _wmem),
         Derived("TMEM", _tmem),
@@ -224,7 +194,6 @@ def op_derived():
         Derived("weightDataType", _weight_datatype),
         Derived("outputDataType", _output_datatype),
         Derived("instream_width", _instream_width),
-        Derived("weight_stream_width", _weight_stream_width),
         Derived("outstream_width", _outstream_width),
     )
 
@@ -244,36 +213,22 @@ def _simd_divides_mw(p, ctx):
     return None if p.MW % p.SIMD == 0 else f"MW={p.MW} not divisible by SIMD={p.SIMD}"
 
 
-@predicate("pumpedMemory => not (PE == SIMD == 1)")
-def _pumped_memory_not_1x1(p, ctx):
-    if p.get("pumpedMemory", 0) and p.PE == 1 and p.SIMD == 1:
-        return "pumpedMemory with PE=SIMD=1 is a known-bad configuration (base:717)"
-    return None
+# The `pumpedMemory => not(PE==SIMD==1)` gate and the `ram_style=ultra & not versal
+# => runtime_writeable=1` URAM gate MOVED to the parameters subsystem: the URAM gate
+# is self-contained in the decoupled topology bundle; the pumpedMemory/fold gate is
+# cross-coordinate (reads the compute fold) and is contributed at compose time by
+# mvau/parameters_coupling.py.
 
 
-@predicate("ram_style=ultra & not versal => runtime_writeable=1")
-def _uram_requires_ultrascale(p, ctx):
-    # THE combination gate — reads point AND device in one condition (hls:147).
-    if "ram_style" not in p:
-        return None
-    if (
-        p.ram_style == "ultra"
-        and not p.get("mlo_max_iter", 0)
-        and not is_versal(ctx.fpgapart)
-        and p.get("runtime_writeable_weights", 0) != 1
-    ):
-        return (
-            "URAM weights on a non-Versal (UltraScale) device require "
-            "runtime_writeable_weights=1 (hls:147)"
-        )
-    return None
-
-
-@predicate("weight initializer must exist unless external/dynamic/mlo")
+@predicate("weight initializer must exist unless params are not statically known")
 def _weights_present(p, ctx):
+    # Weights must exist as an initializer unless the parameters subsystem says they
+    # are not statically known (runtime-writable / external / dynamic / MLO). Reads
+    # the composed staticness via weights_may_change (parameters.*), with .get safety
+    # for a future param-free op (no parameters pool ⇒ still requires an initializer).
     if ctx.initializer(WEIGHTS) is None:
-        if not (p.mem_mode == EXTERNAL or p.get("dynamic_input", 0) or p.get("mlo_max_iter", 0)):
-            return "weight initializer required unless external/dynamic/mlo (base:782)"
+        if not weights_may_change(p):
+            return "weight initializer required unless params are not static (base:782)"
     return None
 
 
@@ -289,7 +244,5 @@ def op_predicates():
     return (
         _pe_divides_mh,
         _simd_divides_mw,
-        _pumped_memory_not_1x1,
-        _uram_requires_ultrascale,
         _weights_present,
     )

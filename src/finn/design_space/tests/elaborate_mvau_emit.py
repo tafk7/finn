@@ -28,6 +28,7 @@ from qonnx.core.datatype import DataType
 
 from finn.design_space.space import Context, resolve, emit_point
 from finn.design_space.fixtures.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC
+from finn.design_space.fixtures.parameters.names import EMBEDDED, TOPOLOGY
 
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"
 RTLLIB = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib")
@@ -47,7 +48,7 @@ def main():
     )
     point = resolve(mvau_schema(), ctx, {
         "implementation": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2, "resType": "dsp",
-        "mem_mode": "internal_embedded", "noActivation": 1,
+        TOPOLOGY: EMBEDDED, "noActivation": 1,
     })
     arts = emit_point(mvau_pool(), point, ctx)
 

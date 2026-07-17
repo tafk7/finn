@@ -69,13 +69,15 @@ Tensor-name convention for the Context this schema resolves against:
 
 from __future__ import annotations
 
-from finn.design_space.space import Schema, pool_schema
+from finn.design_space.space import Schema, compose, pool_schema
+from finn.design_space.fixtures.parameters import parameters_schema
 
 from .names import (  # noqa: F401  (re-exported for callers/tests)
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
 )
+from .parameters_coupling import coupling_derived, coupling_predicates
 from .registry import build_pool
 from .shared import op_axes, op_derived, op_predicates
 
@@ -97,6 +99,21 @@ def mvau_pool():
 
 
 def mvau_schema() -> Schema:
-    """The full MVAU design space as a resolve ``Schema``."""
+    """The full MVAU design space as a resolve ``Schema``.
+
+    Two selection pools composed into one space: the COMPUTE pool (``implementation``:
+    HLS / DSP-softvec / DSP-packed) and the PARAMETERS pool (``parameters.topology``:
+    embedded / decoupled memstream). The cross-coordinate couplings that read both the
+    compute fold and the chosen topology (``weight_stream_width``, the pumpedMemory/
+    fold gate) are appended to the compute op schema before compose, where both
+    surfaces are in scope. Composition is a plain schema union — no new engine
+    primitive ([[param-delivery-space]], ``tests/test_composition_mapping.py``)."""
     axes, derived, predicates = mvau_shared()
-    return pool_schema("implementation", axes, derived, predicates, mvau_pool())
+    op = pool_schema(
+        "implementation",
+        axes,
+        derived + coupling_derived(),
+        predicates + coupling_predicates(),
+        mvau_pool(),
+    )
+    return compose(op, parameters_schema())

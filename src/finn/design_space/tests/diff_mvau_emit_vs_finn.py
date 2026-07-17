@@ -39,6 +39,7 @@ from finn.transformation.fpgadataflow.minimize_accumulator_width import (
 # our side
 from finn.design_space.space import Context, resolve, emit_point
 from finn.design_space.fixtures.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
+from finn.design_space.fixtures.parameters.names import EMBEDDED, TOPOLOGY
 
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"  # Versal / DSP58
 CLK_NS = 5.0
@@ -80,7 +81,7 @@ def _finn_context_point(W, pe, simd, wdt, idt, odt, impl, restype):
     )
     point = resolve(mvau_schema(), ctx, {
         "implementation": impl, "PE": pe, "SIMD": simd, "resType": restype,
-        "mem_mode": "internal_embedded", "noActivation": 1,
+        TOPOLOGY: EMBEDDED, "noActivation": 1,
     })
     return ctx, point
 

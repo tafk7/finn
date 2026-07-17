@@ -33,7 +33,14 @@ from .artifacts import (
 )
 from .context import Context
 from .derived import Derived
-from .implementation import EmitError, Implementation, PoolError, emit_point, pool_schema
+from .implementation import (
+    EmitError,
+    Implementation,
+    PoolError,
+    compose,
+    emit_point,
+    pool_schema,
+)
 from .point import AbsentAxisError, Illegal, Point
 from .predicate import Predicate, predicate
 from .resolve import resolve
@@ -53,6 +60,7 @@ __all__ = [
     "predicate",
     "Implementation",
     "pool_schema",
+    "compose",
     "PoolError",
     "emit_point",
     "EmitError",

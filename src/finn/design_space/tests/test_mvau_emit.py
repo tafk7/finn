@@ -25,6 +25,7 @@ from finn.design_space.fixtures.mvau import (
     mvau_pool,
     mvau_schema,
 )
+from finn.design_space.fixtures.parameters.names import EMBEDDED, TOPOLOGY
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 _UNFILLED = re.compile(r"\$[A-Z][A-Z0-9_]*\$")
@@ -48,7 +49,7 @@ def dsp_point(schema, ctx, impl, **overrides):
         "PE": 2,
         "SIMD": 2,
         "resType": "dsp",
-        "mem_mode": "internal_embedded",
+        TOPOLOGY: EMBEDDED,
         "noActivation": 1,
     }
     a.update(overrides)
@@ -61,7 +62,7 @@ def hls_point(schema, ctx, **overrides):
         "PE": 2,
         "SIMD": 2,
         "resType": "lut",
-        "mem_mode": "internal_embedded",
+        TOPOLOGY: EMBEDDED,
         "noActivation": 1,
     }
     a.update(overrides)
