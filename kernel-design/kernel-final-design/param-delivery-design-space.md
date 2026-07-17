@@ -7,6 +7,14 @@ analogue of [[mvau-design-space]] but for the DELIVERY half that MVAU-emit delib
 deferred (the "compute half only" scope). This is the ANALYSIS artifact for the kernel
 COMPOSITION arc; it maps the space, it does not yet map onto the resolve engine.*
 
+**NAMING (settled 2026-07-17):** this coordinate/sub-kernel is named **`parameters`** — the
+honest expansion of FINN's "weights" (thresholds are parameters too; Thresholding's native
+MLO path is exactly this coordinate). It names the SUBSYSTEM (storage + transport + selection),
+not the payload. Values stay a Context given; the `parameters` kernel owns where params live,
+how they reach compute, and how a set is selected — never the numbers. Point namespace:
+`parameters.*`; fixture package: `fixtures/parameters/`. ("delivery"/"param-delivery" in this
+doc's older prose and filename predate the naming decision and mean `parameters`.)
+
 Files (ground truth, file:line throughout):
 - **RTL** = `finn/finn-rtllib/{memstream,fetch_weights,mvu_tiled,mlo,stream_tap,thresholding}/`
 - **finnloop** = `finn/src/finn/custom_op/fpgadataflow/rtl/finn_loop.py`
