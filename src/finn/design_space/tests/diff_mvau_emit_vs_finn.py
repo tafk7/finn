@@ -39,7 +39,14 @@ from finn.transformation.fpgadataflow.minimize_accumulator_width import (
 # our side
 from finn.design_space.space import Context, resolve, emit_point
 from finn.design_space.fixtures.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
-from finn.design_space.fixtures.parameters.names import EMBEDDED, TOPOLOGY
+from finn.design_space.fixtures.parameters import parameters_pool
+from finn.design_space.fixtures.parameters.names import (
+    DECOUPLED as PARAM_DECOUPLED,
+    EMBEDDED,
+    RAM_STYLE as PARAM_RAM_STYLE,
+    TOPOLOGY as PARAM_TOPOLOGY,
+    TOPOLOGY,
+)
 
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"  # Versal / DSP58
 CLK_NS = 5.0
@@ -184,6 +191,86 @@ def diff_hls_params_h():
     return ok
 
 
+def _memstream_params(text):
+    """Extract 'parameter NAME = VAL' from a memstream wrapper, normalizing the
+    per-node module name and INIT_FILE path (FINN writes an absolute code_gen_dir
+    path; we emit the bare basename) — compare the SEMANTIC geometry, not paths."""
+    d = {}
+    for line in text.splitlines():
+        line = line.strip().rstrip(",")
+        if line.startswith("parameter") and "=" in line:
+            body = line.replace("parameter", "").split("//")[0]
+            name, val = body.split("=", 1)
+            name, val = name.strip(), val.strip()
+            # skip the two $clog2-derived params (AXILITE_ADDR_WIDTH / SET_BITS) —
+            # both sides carry the identical Verilog expression, not a value.
+            if name in ("AXILITE_ADDR_WIDTH", "SET_BITS"):
+                continue
+            if name == "INIT_FILE":
+                val = '"' + val.strip('"').split("/")[-1] + '"'  # basename only
+            d[name] = val
+    return d
+
+
+def diff_memstream():
+    print("== memstream differential (decoupled: wrapper params + .dat) ==")
+    rng = np.random.RandomState(0)
+    W = rng.randint(int(DataType["INT8"].min()) + 1, int(DataType["INT8"].max()) + 1,
+                    size=(6, 8)).astype(np.float32)
+    wdt = idt = DataType["INT8"]
+    odt = DataType["INT16"]
+    pe, simd = 2, 2
+
+    # FINN side: an internal_decoupled MVAU. generate_hdl_memstream writes the wrapper;
+    # generate_params writes memblock.dat.
+    model = _make_mvau_model(W, pe, simd, wdt, idt, odt)
+    model = model.transform(SpecializeLayers(FPGAPART))
+    model = model.transform(MinimizeAccumulatorWidth())
+    node = model.graph.node[0]
+    inst = getCustomOp(node)
+    inst.set_nodeattr("mem_mode", "internal_decoupled")
+    inst.set_nodeattr("ram_style", "block")
+    with tempfile.TemporaryDirectory() as d:
+        inst.set_nodeattr("code_gen_dir_ipgen", d)
+        inst.generate_hdl_memstream(FPGAPART, 0)
+        finn_v = open(os.path.join(d, node.name + "_memstream_wrapper.v")).read()
+        inst.generate_params(model, d)
+        finn_dat = open(os.path.join(d, "memblock.dat")).read()
+
+    # our side: resolve a decoupled point and emit.
+    ctx = Context(
+        shapes={"weights": W.shape, "inp": (1, W.shape[0]), "out": (1, W.shape[1])},
+        datatypes={"weights": wdt, "inp": idt, "out": odt},
+        initializers={"weights": W},
+        fpgapart=FPGAPART, clk_ns=CLK_NS,
+    )
+    point = resolve(mvau_schema(), ctx, {
+        "implementation": MVAU_HLS, "PE": pe, "SIMD": simd, "resType": "lut",
+        "noActivation": 1, PARAM_TOPOLOGY: PARAM_DECOUPLED, PARAM_RAM_STYLE: "block",
+    })
+    arts = emit_point(parameters_pool(), point, ctx, root=PARAM_TOPOLOGY)
+    ours_v = arts.generated[0].content()
+    ours_dat = [f for f in arts.data_files if f.filename == "memblock.dat"][0].content
+
+    # 1) wrapper param equivalence
+    fp, op = _memstream_params(finn_v), _memstream_params(ours_v)
+    shared = set(fp) & set(op)
+    mism = {k: (fp[k], op[k]) for k in shared if fp[k] != op[k]}
+    print(f"  wrapper params: shared={len(shared)} mismatches={mism}")
+    print(f"  FINN-only={set(fp)-set(op)} ours-only={set(op)-set(fp)}")
+    v_ok = not mism and not (set(fp) - set(op))
+    print("  WRAPPER PARAM EQUIVALENCE:", "PASS" if v_ok else "FAIL")
+
+    # 2) .dat byte equivalence
+    dat_ok = _norm(finn_dat) == _norm(ours_dat)
+    print("  memblock.dat byte-equivalence:", "PASS" if dat_ok else "FAIL")
+    if not dat_ok:
+        fl, ol = finn_dat.strip().split("\n"), ours_dat.strip().split("\n")
+        print(f"    FINN {len(fl)} lines first3={fl[:3]}")
+        print(f"    OURS {len(ol)} lines first3={ol[:3]}")
+    return v_ok and dat_ok
+
+
 if __name__ == "__main__":
     results = []
     results.append(diff_rtl())
@@ -191,6 +278,13 @@ if __name__ == "__main__":
         results.append(diff_hls_params_h())
     except Exception as e:
         print("  HLS params diff errored:", repr(e))
+        results.append(False)
+    try:
+        results.append(diff_memstream())
+    except Exception as e:
+        import traceback
+        print("  memstream diff errored:", repr(e))
+        traceback.print_exc()
         results.append(False)
     print("\nRESULT:", "ALL PASS" if all(results) else "SOME FAIL")
     sys.exit(0 if all(results) else 1)
