@@ -17,6 +17,10 @@ handoffs, and as-is analysis that drive the `design_space` code.
     delivery + memory access + MLO as three orthogonal coordinates (storage ⊥
     selection-cardinality ⊥ staticness), RTL-grounded. The delivery-half analogue of
     `mvau-design-space.md`.
+  - `generality-gaps.md` — durable checklist of where the compute-pool + parameters-pool
+    model holds/strains/breaks across ALL 28 FINN ops (from the op-census audit). The
+    five additive model-extension tracks (port model, param kind, outer containers,
+    compute⊗compute, runtime geometry) and which ops force each.
   - `roles-and-interfaces.md`, `derivation-dissection.md` — supporting design.
   - `*-HANDOFF.md` — self-contained task specs (RESOLVE-CORE, DECOMPOSE-
     IMPLEMENTATIONS, SPLIT-MVU-WRAPPER). SPLIT-MVU-WRAPPER is the next open task.
