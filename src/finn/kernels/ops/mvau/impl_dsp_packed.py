@@ -1,0 +1,66 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+############################################################################
+
+"""Implementation bundle: ``mvau_dsp_packed`` — the DSP58 INT8-packed core
+(``mvu_vvu_8sx9_dsp58.sv``).
+
+It OVERLAPS softvec on DSP58+small-widths (the wrapper's ``else: genSoftVec`` branch
+proves softvec also builds there) ⇒ a genuine CHOICE, its own pool member. Its
+feasibility is its OWN — it computes NUM_LANES for real (audit F1) rather than
+replicating the shared wrapper's ``generate`` fork.
+"""
+
+from __future__ import annotations
+
+from finn.kernels.space import Implementation
+from finn.util.basic import get_dsp_block
+
+from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
+from .emit_rtl import emit_mvau_rtl
+from .names import INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
+from .registry import register
+
+
+def _packed_feasible(p, ctx):
+    # F1 — the DSP58 INT8-packed core (mvu_vvu_8sx9_dsp58.sv) is feasible only under
+    # the FULL generate condition (mvu_vvu_axi.sv:313): DSP58 AND w<=8 AND a<=9 AND
+    # NUM_LANES<=3. The old predicate dropped the NUM_LANES<=3 term on a false lemma
+    # ("lanes<=3 follows from w<=8 & a<=9") — false: small widths yield MORE lanes
+    # (W=2,A=2 on DSP58 -> 9 lanes -> FINN routes to softvec). Compute NUM_LANES for
+    # real. This is packed's OWN feasibility, not a fork-replication.
+    dsp = get_dsp_block(ctx.fpgapart)
+    if dsp != "DSP58":
+        return f"{MVAU_DSP_PACKED} requires DSP58; {ctx.fpgapart} has {dsp}"
+    w = ctx.tensor_datatype(WEIGHTS).bitwidth()
+    a = ctx.tensor_datatype(INPUT).bitwidth()
+    if w > 8 or a > 9:
+        return (
+            f"{MVAU_DSP_PACKED} requires weight_width<=8 (got {w}) and "
+            f"activation_width<=9 (got {a}) (mvu_vvu_axi.sv:313)"
+        )
+    lanes = num_lanes(w, a, VERSION[dsp], p.narrow_weights)
+    if lanes > 3:
+        return (
+            f"{MVAU_DSP_PACKED} requires NUM_LANES<=3 (got {lanes} for "
+            f"w={w}, a={a}, narrow={p.narrow_weights}); FINN routes this to softvec "
+            f"(mvu_vvu_axi.sv:311-313)"
+        )
+    return None
+
+
+@register
+def packed_bundle() -> Implementation:
+    axes, derived, predicates = dsp_rtl_common()
+    return Implementation(
+        name=MVAU_DSP_PACKED,
+        feasible=_packed_feasible,
+        axes=axes,
+        derived=derived,
+        predicates=predicates,
+        sources=SHARED_SOURCES + ("mvu_vvu_8sx9_dsp58.sv",),
+        emit=emit_mvau_rtl,
+    )
