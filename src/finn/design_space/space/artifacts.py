@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from .ports import Port
+
 _TOKEN_RE = re.compile(r"\$([A-Z][A-Z0-9_]*)\$")
 
 
@@ -129,9 +131,29 @@ class IPICommands:
 @dataclass(frozen=True)
 class Artifacts:
     """The complete, filesystem-free output of ``emit``. The adapter — not emit —
-    writes these to a code-gen directory."""
+    writes these to a code-gen directory.
+
+    ``ports`` is the block's declared port taxonomy (:class:`Port`) — the surface the
+    composition stitch (``space/stitch.py``) binds against. A single-cell emit
+    declares its own ports; :meth:`merge` unions the artifacts of two composed cells
+    (compute + parameter delivery) so the resolver can wire them."""
 
     generated: tuple[GeneratedFile, ...] = ()
     data_files: tuple[DataFile, ...] = ()
     static_files: tuple[StaticFile, ...] = ()
     ipi: IPICommands = field(default_factory=IPICommands)
+    ports: tuple[Port, ...] = ()
+
+    def merge(self, other: "Artifacts") -> "Artifacts":
+        """Union two cells' artifacts (files + static + IPI commands + ports),
+        preserving order (self first). Used by ``emit_composed`` to gather both
+        halves of a composed kernel before the stitch wires their ports. Ports are
+        NOT deduplicated — each cell owns a distinct port surface; the resolver
+        distinguishes them by cell membership, not by identity."""
+        return Artifacts(
+            generated=self.generated + other.generated,
+            data_files=self.data_files + other.data_files,
+            static_files=self.static_files + other.static_files,
+            ipi=IPICommands(self.ipi.commands + other.ipi.commands),
+            ports=self.ports + other.ports,
+        )

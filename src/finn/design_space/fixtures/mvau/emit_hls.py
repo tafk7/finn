@@ -29,7 +29,17 @@ import numpy as np
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import interleave_matrix_outer_dim_from_partitions
 
-from finn.design_space.space import Artifacts, DataFile, GeneratedFile, StaticFile, Template
+from finn.design_space.space import (
+    Artifacts,
+    DataFile,
+    Direction,
+    GeneratedFile,
+    Kind,
+    Port,
+    Role,
+    StaticFile,
+    Template,
+)
 from finn.util.data_packing import numpy_to_hls_code
 
 from .names import INPUT, OUTPUT, WEIGHTS
@@ -111,9 +121,23 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
 
     params_h = DataFile("params.h", _params_h(point, context))
 
+    # HLS embedded: weights are compiled into params.h (FixedPointWeights), so there
+    # is NO weight-stream port — the blackbox exposes only in0_V/out0_V (both dataflow
+    # boundary edges) + clk/rst. The absence of a WEIGHT_SINK IS the embedded topology:
+    # the stitch finds nothing to bind, which is correct.
+    ports = (
+        Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0,
+             width=point.instream_width, boundary=True),
+        Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0,
+             width=point.outstream_width, boundary=True),
+        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
+        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+    )
+
     return Artifacts(
         generated=(top,),
         data_files=(params_h,),
+        ports=ports,
         static_files=(
             StaticFile("finn.data", "deps/finn-hlslib/weights.hpp"),
             StaticFile("finn.data", "deps/finn-hlslib/activations.hpp"),

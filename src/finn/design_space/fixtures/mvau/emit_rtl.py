@@ -27,7 +27,17 @@ this embedded wrapper alone.
 
 from __future__ import annotations
 
-from finn.design_space.space import Artifacts, GeneratedFile, IPICommands, StaticFile, Template
+from finn.design_space.space import (
+    Artifacts,
+    Direction,
+    GeneratedFile,
+    IPICommands,
+    Kind,
+    Port,
+    Role,
+    StaticFile,
+    Template,
+)
 
 from .names import INPUT, WEIGHTS
 
@@ -112,6 +122,11 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     idt = context.tensor_datatype(INPUT)
     wdt = context.tensor_datatype(WEIGHTS)
 
+    # Padded weight-stream width: (PE*SIMD*WEIGHT_WIDTH + 7)//8 * 8 — matches the
+    # wrapper's WEIGHT_STREAM_WIDTH_BA and the memstream m_axis_0 width the stitch
+    # binds against.
+    weight_width = (point.PE * point.SIMD * wdt.bitwidth() + 7) // 8 * 8
+
     bindings = {
         "MODULE_NAME_AXI_WRAPPER": module_name,
         "IS_MVU": 1,
@@ -137,10 +152,35 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
         StaticFile("finn.data", f"finn-rtllib/mvu/{s}") for s in point.sources
     )
 
+    # The compute core exposes: activation in (in0_V), activation out (out0_V), a
+    # weight-stream input (in1_V), clock, reset. in0_V/out0_V are dataflow-graph edges
+    # (boundary — they export to the enclosing region). in1_V is a WEIGHT_SINK: the
+    # stitch binds it to a delivery cell's WEIGHT_SOURCE. When there is no delivery
+    # cell (embedded compilation), the stitch finds no complementary source and in1_V
+    # exports up as a boundary weight port — the topology-driven role behaviour, decided
+    # by the resolver at compose time, not hardcoded here.
+    ports = (
+        Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0,
+             width=point.instream_width, boundary=True),
+        Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0,
+             width=point.outstream_width, boundary=True),
+        Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "in1_V", index=0,
+             width=weight_width),
+        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
+        # ap_clk2x is a real port on the wrapper. For a non-pumped compute it must be
+        # driven by the same clock as ap_clk (FINN ties them, emit_rtl's own IPI did the
+        # self-tie); as a CLOCK-role port it fans out from the region ap_clk port in the
+        # stitch broadcast — the non-pumped tie, done structurally. (A pumped design
+        # would bind it to a distinct region 2x-clock port — a documented extension.)
+        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk2x"),
+        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+    )
+
     return Artifacts(
         generated=(top,),
         data_files=(),  # embedded needs no weight file; weights arrive via in1_V stream
         static_files=static,
+        ports=ports,
         ipi=IPICommands(
             (
                 f"create_bd_cell -type hier -reference {module_name} {module_name}",

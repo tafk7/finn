@@ -42,8 +42,16 @@ from .implementation import (
     pool_schema,
 )
 from .point import AbsentAxisError, Illegal, Point
+from .ports import (
+    Direction,
+    Kind,
+    Port,
+    Role,
+    STANDARD_BINDINGS,
+)
 from .predicate import Predicate, predicate
 from .resolve import resolve
+from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
 
 __all__ = [
@@ -74,6 +82,14 @@ __all__ = [
     "Point",
     "Illegal",
     "AbsentAxisError",
+    "Direction",
+    "Kind",
+    "Role",
+    "Port",
+    "STANDARD_BINDINGS",
+    "Cell",
+    "stitch",
+    "StitchError",
     "Schema",
     "SchemaError",
     "resolve",

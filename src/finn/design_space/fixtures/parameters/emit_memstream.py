@@ -30,7 +30,18 @@ import numpy as np
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
 
-from finn.design_space.space import Artifacts, DataFile, GeneratedFile, IPICommands, StaticFile, Template
+from finn.design_space.space import (
+    Artifacts,
+    DataFile,
+    Direction,
+    GeneratedFile,
+    IPICommands,
+    Kind,
+    Port,
+    Role,
+    StaticFile,
+    Template,
+)
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
 from .names import (
@@ -40,8 +51,14 @@ from .names import (
     PARAM_WIDTH,
     PUMPED_MEMORY,
     RAM_STYLE,
+    RUNTIME_WRITEABLE,
     WEIGHTS,
 )
+
+# Real finn-rtllib subdir per static source (base:1170,1182-1184). Anything not listed
+# defaults to memstream/hdl (the memstream cores' home).
+_SOURCE_DIRS = {"axilite.sv": "finn-rtllib/axi/hdl"}
+
 
 # The parameter tensor's fold-shape helper needs PE/SIMD/WMEM — read off the point.
 # We reuse the compute-side _hw_weight_tensor shape (transpose+interleave+reshape),
@@ -182,16 +199,43 @@ def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
     if init_file:
         data_files = (DataFile("memblock.dat", _memblock_dat(point, context)),)
 
-    # Static memstream HDL — read straight off the selected topology's sources.
+    # Static memstream HDL — read straight off the selected topology's sources, each
+    # resolved to its real finn-rtllib subdir. axilite.sv lives under axi/hdl/, the
+    # memstream cores under memstream/hdl/ (matches FINN base:1182-1184); a bare
+    # single-dir prefix would mis-locate axilite.sv.
     static = tuple(
-        StaticFile("finn.data", f"finn-rtllib/memstream/hdl/{s}")
+        StaticFile("finn.data", f"{_SOURCE_DIRS.get(s, 'finn-rtllib/memstream/hdl')}/{s}")
         for s in point.get("parameters.sources", ())
     )
+
+    # The delivery cell publishes a WEIGHT_SOURCE (m_axis_0) — the resolver binds it to
+    # the compute cell's WEIGHT_SINK (in1_V) by role, matching width. Its width is the
+    # same padded PE*SIMD*wbits geometry (parameters.width). CONFIG (s_axilite) is
+    # present only when weights are runtime-writable; it exports up as a boundary
+    # register surface. The set-selector stream (s_axis_0, INDEX_SINK) exists in RTL but
+    # is inert for SETS=1 (single-cardinality) — declared documented, not bound here.
+    width = point[PARAM_WIDTH]
+    ports = [
+        Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m_axis_0", index=0,
+             width=width),
+        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
+        # ap_clk2x: non-pumped memory ties it to ap_clk (fans from the region ap_clk in
+        # the broadcast); a pumped-memory design binds it to a distinct 2x-clock port
+        # (documented extension — the built path is non-pumped).
+        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk2x"),
+        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+    ]
+    if point.get(RUNTIME_WRITEABLE, 0):
+        ports.append(
+            Port(Direction.IN, Kind.AXILITE, Role.CONFIG, "s_axilite", index=0,
+                 boundary=True)
+        )
 
     return Artifacts(
         generated=(wrapper,),
         data_files=data_files,
         static_files=static,
+        ports=tuple(ports),
         ipi=IPICommands(
             (
                 f"create_bd_cell -type hier -reference {module_name}_memstream_wrapper "
