@@ -3,6 +3,10 @@
 # Licensed under the MIT License.
 #
 # @author       Thomas Keller <thomaskeller@microsoft.com>
+#
+# Inlined verbatim from microsoft/brainsmith:brainsmith/dataflow/ordered_parameter.py
+# @ 38faaf9 (MIT). Temporary vendored copy — see Stage 3 (source model) in
+# kernel-design/kernel-final-design/KERNEL_REFACTOR_PLAN.md for the de-vendoring plan.
 ############################################################################
 
 """Ordered parameter for Design Space Exploration (DSE) navigation.

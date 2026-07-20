@@ -3,6 +3,10 @@
 # Licensed under the MIT License.
 #
 # @author       Thomas Keller <thomaskeller@microsoft.com>
+#
+# Distilled variant of the interface value-objects in microsoft/brainsmith
+# @ 38faaf9 (MIT) — not a pristine mirror. Temporary vendored copy — see Stage 3
+# (source model) in kernel-design/kernel-final-design/KERNEL_REFACTOR_PLAN.md.
 ############################################################################
 """Interface design-space + design-point value objects (shape/width/folding).
 

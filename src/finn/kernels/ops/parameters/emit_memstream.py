@@ -1,12 +1,13 @@
 ############################################################################
 # Copyright (C) 2025, Advanced Micro Devices, Inc.
 # All rights reserved.
+# Portions of this content consist of AI generated content.
 #
 # The wrapper template is finn-rtllib/memstream/hdl/memstream_wrapper_template.v
 # verbatim; the .dat packing reproduces make_weight_file(...,"decoupled_verilog_dat")
 # (matrixvectoractivation.py:715-811) as a pure function of (point, context).
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
 """Hermetic RTL codegen for the ``decoupled`` (memstream) storage topology.

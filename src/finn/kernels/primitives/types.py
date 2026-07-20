@@ -3,6 +3,10 @@
 # Licensed under the MIT License.
 #
 # @author       Thomas Keller <thomaskeller@microsoft.com>
+#
+# Inlined from microsoft/brainsmith:brainsmith/dataflow/types.py @ 38faaf9 (MIT),
+# plus a local TilingSpec alias. Temporary vendored copy — see Stage 3 (source
+# model) in kernel-design/kernel-final-design/KERNEL_REFACTOR_PLAN.md.
 ############################################################################
 
 """Basic types for kernel modeling"""

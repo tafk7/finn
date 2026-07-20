@@ -1,8 +1,9 @@
 ############################################################################
 # Copyright (C) 2025, Advanced Micro Devices, Inc.
 # All rights reserved.
+# Portions of this content consist of AI generated content.
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: BSD-3-Clause
 #
 # The .cpp fragments reproduce matrixvectoractivation_hls.py (global_includes/
 # defines/docompute/blackboxfunction/pragmas, internal_embedded branch) and the
