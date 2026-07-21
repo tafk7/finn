@@ -191,6 +191,31 @@ foundation. This is also the natural point to commit the foundation as a reviewe
 landed submodule rather than a working branch.
 **Not in scope:** no new capability — purely consolidation of what §4 proved.
 
+### Stage 0.5 — The KernelOp model layer (op-native surface; between foundation and integration) [done]
+
+A model-layer increment that sits between Stage 0 (consolidation, no new capability) and
+Stage 1 (FINN-flow integration): the **op-native** WHAT-surface, built and tested purely
+in the venv against a hand-built Context — no `ModelWrapper`, no build flow, no adapter.
+Grounded in `kernelop-tensor-block-stream.md` and stress-tested on MVU + LayerNorm +
+Elementwise from both FINN and brainsmith source. **Built:**
+- the stream-tiling **expression evaluator** (`space/tiling.py`) — acid-tested on MVU's
+  weight port `WSIMD=PE·SIMD/TH` and the elementwise broadcast replicate;
+- the **`KernelOp` façade** (`space/kernel_op.py`) projecting the Tier-3 op surface from a
+  resolved Point: the port-indexed normal/folded shapes + stream widths, and a rough
+  monotone `get_exp_cycles` (the reduction-aware op `cost_model` where BLOCK demands it);
+- **impl-owned tiling** (`Implementation.tiling`) + the BLOCK/STREAM ownership split
+  (§5.1) + the unified GIVEN/op-default/backend-override principle across tiling, cost,
+  and datatype (§5.2);
+- **MVAU routed through the façade** (`mvau_kernel_op`; `mvau_schema` now delegates to
+  it), with the KernelOp getters cross-validated to agree exactly with the emit-side
+  op-derived stream widths. The stale pre-KernelOp **VVAU fixture was deleted** (see
+  Stage 3.1 note).
+**NOT built (this is Stage 1, not here):** the `resolve` transform replacing
+`specialize_layers`; the `get_nodeattr`/`set_nodeattr` adapter view over the Point;
+`node_res_estimation` (only `get_exp_cycles` exists — the *resource* getter is unbuilt);
+mixed-graph; the `estimate_layer_resources.json` proof. Stage 0.5 is the op-native model;
+Stage 1 is its integration into the FINN pipeline.
+
 ### Stage 1 — The seam + estimate-only tier (harness; MVAU as first rider)
 
 **Build:** the `resolve` transform replacing `specialize_layers` (step 6); the
@@ -236,7 +261,10 @@ Each op family is now additive — declare its design space, ride the existing a
 1. **VVAU + the source model** — VVAU is a clean weights sibling of MVAU (near-zero new
    compute surface; proves the ladder isn't MVAU-shaped), but it shares MVU's RTL, so
    it is the forcing function for the **source/provenance/composition model** (G3,
-   MOTIVATION §1.4). This is where the `finn-mvu-split` exploration lands: the
+   MOTIVATION §1.4). *Note:* the earlier pre-KernelOp VVAU fixture (resolve-only, no
+   emit, never migrated to the composed parameters pool) was **deleted** in Stage 0.5 —
+   the decks are cleared, so this step builds VVAU fresh as a KernelOp, not a migration
+   of the old fixture. This is where the `finn-mvu-split` exploration lands: the
    monolithic `mvu_vvu_axi.sv` splits into shared `base_head/base_tail.svh` +
    per-microarchitecture `packed.sv`/`softvec.sv`, and each resolved Implementation
    must declare *which core → which shared includes* as composable artifacts, not
@@ -285,6 +313,10 @@ Two decisions shape the stages and are recorded here for resolution:
    cycle estimates for new kernels, no codegen). If the team values only end-to-end
    bitfile, Stage 1 collapses into Stage 2 and we lose the cheapest proof point.
    **Recommendation: keep separate** — it de-risks the seam before the heavy tail.
+   *Informed by Stage 0.5:* the op-native Tier-3 surface (shapes/widths/rough cost) is
+   already built and venv-tested as a cleanly separable layer with zero Vivado — strong
+   reinforcement that estimate-only stands alone. (Caveat: `node_res_estimation` is still
+   unbuilt; the cycle side of estimate-only exists, the resource side does not.)
 
 2. **Resolution staging — incremental vs atomically-deferred** (introduced in §3).
    Incremental: `resolve` commits `implementation` at step 6, folding at 7–9, as
@@ -294,7 +326,11 @@ Two decisions shape the stages and are recorded here for resolution:
    Atomic-deferred would force the frontend into a config accumulator that breaks the
    "each step commits what it owns" symmetry. This determines what "replace
    `specialize_layers`" emits (a partial Point, not a config bag), so it is
-   load-bearing for Stage 1.
+   load-bearing for Stage 1. *Informed by Stage 0.5:* the Tier-3 getters as built
+   presuppose a **fully-resolved** point (they read `implementation` + folding dials), so
+   incremental staging must guarantee each getter is only *called* after its required
+   axes are committed — a small ordering constraint the depth-keyed staging already
+   satisfies (folding-dependent getters are consumed at step 7+).
 
 ---
 
@@ -303,9 +339,16 @@ Two decisions shape the stages and are recorded here for resolution:
 The foundation is proven: the three-legged thesis (G1 declarative space, G2
 declarative composition, G3 hermetic substrate) holds on the hardest op, to a
 functionally correct composed rtlsim, byte-equivalent to FINN at every emit boundary.
-The engine has needed **no new primitive** since the first milestone — selection,
-parameter-delivery composition, the stitch, and (on paper) MLO all ride the same four
-primitives.
+The **resolve core** has needed **no new primitive** since the first milestone —
+selection, parameter-delivery composition, the stitch, and (on paper) MLO all ride the
+same four primitives (Context / Axis / Derived / Predicate → resolve). *Above* that
+core, the KernelOp folding/projection layer did add two things — a derived
+stream-tiling **expression sub-language** (`space/tiling.py`: `derive`/`param`/`Mul`/
+`Div`/`broadcast_aware`, an introspectable AST so cross-interface fold deps stay
+orderable) and the **`KernelOp` façade** (`space/kernel_op.py`: op-side `Interface`,
+`Implementation.tiling`, `cost_model`). These are a projection layer *on top of*
+resolve, not new resolve primitives — the core is untouched (see
+`kernelop-tensor-block-stream.md` §6).
 
 What remains is the majority of the effort, and it is *scoped, not exploratory*: the
 consumer surface is audited (a fixed ~30-method adapter list + a risk register that

@@ -361,6 +361,65 @@ to `mvau_rtl_tiled`.
 
 ---
 
+## 5.2 The unified ownership principle: GIVEN / op-BLOCK-default / backend-STREAM-override
+
+Tiling, cost, and datatype are not three ad-hoc ownership calls — they are **one pattern**,
+and their differences fall out of *where each sits on the BLOCK↔STREAM axis*. Every coordinate
+decomposes into three provenances:
+
+- **GIVEN** — fixed by the ONNX graph / Context; neither op nor backend owns it.
+- **op-STRUCTURAL default** — a rule whose *shape* is dictated by the op's BLOCK structure
+  (the reduction topology / the math), which *reads backend-owned STREAM dials as inputs*.
+- **backend-STREAM override** — the microarchitecture's realization, deviating from the
+  op-structural ideal when the hardware clamps or deviates from steady state.
+
+| Coordinate | GIVEN | op-STRUCTURAL default (BLOCK) | backend-STREAM override | Why it lands here |
+|---|---|---|---|---|
+| **Tiling** | — | **none** | **fully backend** | *pure STREAM* — no BLOCK content, so there is nothing for the op to default (this is *why* §5.1 has no op-level tiling default) |
+| **Cost** | — | yes — reduction-aware formula | yes — fill / stall / drain | formula *shape* is BLOCK (reduction), *inputs* are backend STREAM dials |
+| **Datatype** | input dtypes; param dtype **ceiling** | yes — envelope from reduction length + givens | yes — hardware clamp (e.g. 48-bit DSP accumulator) | envelope is BLOCK-derivable; realization may clamp it |
+
+**This is the deep answer to "why no op-level tiling default but an op-level cost default":**
+tiling is the *pure STREAM* case, so it has no op content; cost and datatype are *mixed* —
+their shape is BLOCK-structural (reduction-dependent) even though they read STREAM dials as
+inputs. The op-level cost model earns its place through **reduction ownership**, NOT parallelism
+ownership: MVU's cost is a *product across the reduction* (`nf·sf·n_vecs`) that the engine's
+generic max-over-interfaces floor under-counts because MW is a reduction domain that must be
+fully traversed per output — an op-owned math fact; elementwise has no reduction ⇒ BLOCK=TENSOR
+⇒ the generic floor is exact ⇒ `cost_model is None`. (Both validated:
+`test_kernelop_mvu.py` / `test_kernelop_elementwise.py`.)
+
+### Datatype: the three-provenance split, precisely
+
+"Datatypes are Derived with one source of truth" (MOTIVATION §1.5) is right *per fact* but hides
+a gradient of provenance:
+
+1. **Input / activation dtypes — GIVEN.** Read from the graph; we do not control the activation
+   data handed to us. The op only *names which tensor* carries them (interface identity). Zero
+   ownership.
+2. **Param dtypes — GIVEN ceiling + gated narrowing.** The graph declares the dtype (a ceiling).
+   The kernel may narrow it value-optimized from the actual param values — but ONLY when the
+   params are **static**, and staticness is a *parameter-delivery* coordinate (the composed
+   sub-pool). Graph sets the ceiling; the delivery topology decides whether narrowing is legal;
+   the narrowing is math on the values.
+3. **Internal (accumulator) + output dtypes — op-DERIVED envelope, backend-overridable.**
+   `accDataType = f(input_dtype, param_dtype, reduction_length)` — a function of GIVENs and the
+   BLOCK reduction length (op-owned math), so the *semantic envelope* is op-derivable and lives
+   as an op-level `Derived`. The backend enters ONLY when its microarchitecture **constrains**
+   the envelope (a hard DSP accumulator width, a fixed output packing): then it *overrides* the
+   op's ideal with its realizable dtype. Output = accumulator when no activation, else GIVEN.
+
+**Clean statement:** the graph owns the GIVENs; the op owns the datatype **contract** (which
+ports carry dtypes + the semantic rules relating them — one source per fact, MOTIVATION §1.5
+preserved); the backend owns the **realization** (the envelope its hardware actually provides).
+**Honest current state:** in FINN *and* our MVAU, all three derived dtypes are op-level and **no
+backend overrides one yet** — every backend accumulates full-precision. The backend override is
+the design *affordance* (same slot-shape as the cost override), not exercised today. "Usually
+determined by the backend" is more precisely: *derived by an op-level rule that a backend may
+realize differently* — and today they always agree.
+
+---
+
 ## 6. Engine features this requires BEFORE KernelOp code
 
 The model survives MVU (the hardest case) only with three features the naive last-axis

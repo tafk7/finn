@@ -142,7 +142,14 @@ an op can quietly violate it with no error. Three concrete standards, each silen
   `[31:0]` on both TDATA ports and the HLS side hardcodes `TO=float`, while
   `get_instream_width` computes from the attr, so fp32 is fused across three layers
   with **no single source of truth** and the declared width contract is silently
-  overridden by the emitted hardware. Nothing flags the divergence.
+  overridden by the emitted hardware. Nothing flags the divergence. (Our fix makes the
+  single source of truth *per fact*, but that source has three distinct **provenances** —
+  the split matters and is spelled out in `kernelop-tensor-block-stream.md` §5.2: input
+  dtypes are GIVEN by the graph; a param dtype is a graph-GIVEN ceiling the kernel may
+  narrow only when the delivery topology makes it static; accumulator/output dtypes are an
+  op-DERIVED envelope (a function of the givens and the BLOCK reduction length) that a
+  backend may OVERRIDE when its microarchitecture clamps it. One source per fact, but
+  given-vs-derived-vs-realized are different owners.)
 - **Input ports / the `ind` parameter.** Nominally `ind` selects a port index. But its
   *meaning* is per-op: on MVAU `get_instream_width(1)` is the weight stream; on
   Requant `get_instream_width` returns 0 for `ind != 0` purely to signal "this input
@@ -211,9 +218,14 @@ Device-dependent RTL feasibility (`_mvu_rtl_possible` DSP48-vs-DSP58, Versal) ha
 *no home* in its constraint contract (a bare `Callable[[Kernel],bool]` with no
 `fpgapart`), so it was **dropped, not moved** — MVAU shipped with no RTL variant at
 all. MLO/fetch-weights was never ported. Its selection `cost_fn` was stubbed;
-viability was discovered by try-construct-and-`print()`. And by walking away from
-`HWCustomOp` entirely it fell **out of the FINN ecosystem** — the 20-step build flow
-was never integrated. The lesson: composition-as-a-value-object is the right
+viability was discovered by try-construct-and-`print()`. (The stubbed `cost_fn` now has
+a resolved answer: cost is a three-tier structure — an engine generic default
+(trip-count product over resolved stream shapes), an op-level `cost_model` needed only
+where the BLOCK reduction structure makes that default wrong (MVU's product-across-
+reduction), and a per-Implementation override for microarchitecture deviations
+(pipeline fill, drain); see `kernelop-tensor-block-stream.md` §5.2.) And by walking away
+from `HWCustomOp` entirely it fell **out of the FINN ecosystem** — the 20-step build
+flow was never integrated. The lesson: composition-as-a-value-object is the right
 skeleton, but **feasibility and the design space itself must be modeled data, or
 they get thrown away** — and a clean break that abandons the build flow forfeits the
 migration path.
@@ -230,7 +242,10 @@ op. Its decisive, shipping-code contributions (`four-way-synthesis.md`):
 - **Legal folds are a derived fact**, not hand-written divisibility: the
   `divisors(gcd(dims where a token appears))` rule, with a shared token across
   interfaces automatically becoming one coupled knob. This *unifies* fold math that
-  even the paper "ideal" left per-op.
+  even the paper "ideal" left per-op. The folding model underneath this — brainsmith's
+  **TENSOR → BLOCK → STREAM** hierarchy — is the mechanism our G1 folding rides
+  (`kernelop-tensor-block-stream.md`): TENSOR from the graph, BLOCK = how the op's
+  *math* segments the tensor (the reduction quantum), STREAM = elements/cycle.
 - **Design-space exploration is a first-class kernel contract** —
   `design_space`/`design_point`/`get_valid_ranges` + navigable ordered parameters +
   sweeps. **No other system models this at all.** For a transformer-DSE future this
@@ -242,6 +257,17 @@ op. Its decisive, shipping-code contributions (`four-way-synthesis.md`):
 bypasses to raw HWCustomOp), and its backend-viability check is *still* a per-op `if
 optype==` god-switch — it declared the DSE space but not backend feasibility. It
 dissolves the derivation-layer defects while inheriting the substrate ones.
+
+**One place we deliberately *reject* brainsmith's design, not just its substrate.**
+Brainsmith's schema OWNS the folding/tiling and datatype resolution (`build_schema` on
+one shared object; the backend is a subclass that inherits it). We invert that: because
+our backends are pool members (not subclasses), and because **STREAM tiling IS the
+BLOCK→STREAM lowering — an RTL realization detail, not op math** — tiling and
+value-optimized datatype narrowing are **Implementation-owned**, while the op owns only
+the BLOCK structure (reduction topology) and the datatype *contract*. This is the
+BLOCK=op / STREAM=backend line, developed in `kernelop-tensor-block-stream.md` §5.1–5.2.
+We keep brainsmith's declarative, DSE-rich *body*; we move tiling ownership down to the
+backend where the pool model puts it.
 
 ### 2.3 The synthesis that defines the goal
 
