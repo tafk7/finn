@@ -17,7 +17,7 @@ For the *why* and the multi-stage plan, see
 |---|---|
 | `space/` | **The engine.** The four resolve primitives (Context, Axis, Derived, Predicate) → `resolve` → a `Point`; plus composition/codegen: `implementation` (pool + emit dispatch), `artifacts` (typed emit outputs), `ports` (role-tagged port taxonomy), `stitch` (op-agnostic block-design wiring). |
 | `primitives/` | Reused domain value objects — ordered parameters, datatype range-builders, template resolution, interface shape/width. **Vendored from `microsoft/brainsmith` (MIT); see Provenance.** |
-| `ops/` | The op library: `mvau`, `vvau`, `thresholding`, `parameters` (weight/threshold delivery). Each declares its design space as data over the engine. |
+| `ops/` | The op library: `mvau`, `thresholding`, `parameters` (weight/threshold delivery). Each declares its design space as data over the engine; `mvau` is expressed through the `KernelOp` façade (`space/kernel_op.py`) with impl-owned tiling. |
 | `tests/unit/` | The venv-pure test suite (126 tests, no Vivado/Docker). |
 | `tests/hardware/` | Docker/Vivado validation harnesses (elaborate, rtlsim, byte-diff vs FINN). See [`tests/hardware/README.md`](tests/hardware/README.md). |
 

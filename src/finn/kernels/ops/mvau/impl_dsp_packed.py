@@ -24,6 +24,7 @@ from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
 from .emit_rtl import emit_mvau_rtl
 from .names import INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
 from .registry import register
+from .shared import COMPUTE_TILING
 
 
 def _packed_feasible(p, ctx):
@@ -64,4 +65,5 @@ def packed_bundle() -> Implementation:
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_8sx9_dsp58.sv",),
         emit=emit_mvau_rtl,
+        tiling=COMPUTE_TILING,
     )

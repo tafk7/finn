@@ -25,6 +25,7 @@ from qonnx.util.basic import calculate_matvec_accumulator_range
 from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
     Derived,
+    derive,
     discrete_axis,
     divisor_axis,
     fixed_axis,
@@ -34,6 +35,18 @@ from finn.kernels.space import (
 from finn.kernels.ops.parameters.names import RUNTIME_WRITEABLE
 
 from .names import INPUT, OUTPUT, WEIGHTS
+
+
+# The compute-cell BLOCK->STREAM lowering, shared by all three compute impls (they fold
+# identically — SIMD folds the reduction dim MW on the activation, PE folds the output dim
+# MH; the weight lane width is PE*SIMD elements). Impl-owned per kernelop-tensor-block-
+# stream.md §5.1, but identical across the current pool so declared once here; a tiled
+# backend (WSIMD=PE*SIMD/TH) would override the "weights" entry with its own /TH.
+COMPUTE_TILING = {
+    INPUT: "SIMD",
+    OUTPUT: "PE",
+    WEIGHTS: derive("PE") * derive("SIMD"),
+}
 
 
 # =============================================================================

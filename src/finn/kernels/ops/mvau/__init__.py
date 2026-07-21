@@ -70,13 +70,24 @@ Tensor-name convention for the Context this schema resolves against:
 
 from __future__ import annotations
 
-from finn.kernels.space import Schema, compose, pool_schema
+from finn.kernels.space import (
+    Direction,
+    Interface,
+    KernelOp,
+    Role,
+    Schema,
+    compose,
+    pool_schema,
+)
 from finn.kernels.ops.parameters import parameters_schema
 
 from .names import (  # noqa: F401  (re-exported for callers/tests)
+    INPUT,
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
+    OUTPUT,
+    WEIGHTS,
 )
 from .parameters_coupling import coupling_derived, coupling_predicates
 from .registry import build_pool
@@ -99,22 +110,59 @@ def mvau_pool():
     return build_pool()
 
 
-def mvau_schema() -> Schema:
-    """The full MVAU design space as a resolve ``Schema``.
+def _mvau_cost(point, context):
+    """Rough throughput cost: nf * sf * n_vecs — the reduction trip (MW/SIMD) times the
+    output trip (MH/PE) times the input-vector count. A PRODUCT the generic max-over-
+    interfaces floor cannot see (the reduction coupling; kernelop-tensor-block-stream.md
+    §2.2), so MVAU supplies it as the op-level cost_model."""
+    sf = point.MW // point.SIMD
+    nf = point.MH // point.PE
+    n_vecs = 1
+    for d in context.tensor_shape(INPUT)[:-1]:
+        n_vecs *= int(d)
+    return nf * sf * n_vecs
 
-    Two selection pools composed into one space: the COMPUTE pool (``implementation``:
-    HLS / DSP-softvec / DSP-packed) and the PARAMETERS pool (``parameters.topology``:
-    embedded / decoupled memstream). The cross-coordinate couplings that read both the
-    compute fold and the chosen topology (``weight_stream_width``, the pumpedMemory/
-    fold gate) are appended to the compute op schema before compose, where both
-    surfaces are in scope. Composition is a plain schema union — no new engine
-    primitive ([[param-delivery-space]], ``tests/test_composition_mapping.py``)."""
-    axes, derived, predicates = mvau_shared()
-    op = pool_schema(
-        "implementation",
-        axes,
-        derived + coupling_derived(),
-        predicates + coupling_predicates(),
-        mvau_pool(),
+
+def mvau_interfaces():
+    """The op-side interface list — identity + role, no tiling (tiling is impl-owned).
+
+    ``weights`` is a PARAM port whose stream WIDTH is PE*SIMD (a cross-interface expr,
+    not a fold of the weight tensor's own axes), so ``folds_last_axis=False``: its width
+    resolves via the tiling evaluator, but a folded-SHAPE request raises."""
+    return (
+        Interface("inp", INPUT, Direction.IN, Role.DATA_IN, index=0),
+        Interface("weights", WEIGHTS, Direction.IN, Role.WEIGHT_SINK, index=1,
+                  folds_last_axis=False),
+        Interface("out", OUTPUT, Direction.OUT, Role.DATA_OUT, index=0),
     )
-    return compose(op, parameters_schema())
+
+
+def mvau_kernel_op() -> KernelOp:
+    """The full MVAU design space as a :class:`KernelOp` — the WHAT-owning op node.
+
+    The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
+    tiling, composed with the PARAMETERS pool (``parameters.topology``). The cross-
+    coordinate couplings that read both the compute fold and the chosen topology
+    (``weight_stream_width``, the pumpedMemory/fold gate) go in ``op_derived``/
+    ``op_predicates`` (appended before compose, where both surfaces are in scope). The
+    getters (folded shapes, stream widths, rough cost) project from a resolved point via
+    the impl ``tiling``."""
+    axes, derived, predicates = mvau_shared()
+    return KernelOp(
+        name="MVAU",
+        interfaces=mvau_interfaces(),
+        pool=mvau_pool(),
+        op_axes=axes,
+        op_derived=derived + coupling_derived(),
+        op_predicates=predicates + coupling_predicates(),
+        cost_model=_mvau_cost,
+        sub_schemas=(parameters_schema(),),
+    )
+
+
+def mvau_schema() -> Schema:
+    """The full MVAU design space as a resolve ``Schema`` — now delegates to the
+    :func:`mvau_kernel_op` façade (identical assembly: compute pool + coupling derived/
+    predicates, composed with the parameters pool). Kept as the name emit/composition
+    tests resolve against."""
+    return mvau_kernel_op().schema()

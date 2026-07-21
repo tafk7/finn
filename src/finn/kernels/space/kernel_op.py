@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .context import Context
-from .implementation import Implementation, pool_schema
+from .implementation import Implementation, compose, pool_schema
 from .point import Illegal, Point
 from .ports import Role
 from .resolve import resolve
@@ -97,24 +97,33 @@ class KernelOp:
     op_derived: tuple = ()
     op_predicates: tuple = ()
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
+    sub_schemas: tuple = ()  # secondary pools (e.g. parameters) composed via `compose`
     _by_name: Mapping[str, Interface] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
         object.__setattr__(self, "interfaces", tuple(self.interfaces))
         object.__setattr__(self, "pool", tuple(self.pool))
+        object.__setattr__(self, "sub_schemas", tuple(self.sub_schemas))
         object.__setattr__(self, "_by_name", {i.name: i for i in self.interfaces})
 
     # -- schema / resolve ---------------------------------------------------
 
     def schema(self) -> Schema:
-        """The full design space: op-level shared elements + the implementation pool."""
-        return pool_schema(
+        """The full design space: op-level shared elements + the implementation pool,
+        plus any composed secondary pools (``sub_schemas`` — e.g. the parameters/weight-
+        delivery pool). ``op_derived``/``op_predicates`` already include the cross-
+        coordinate couplings (those that read BOTH the compute fold and a sub-pool's
+        topology), appended by the op before composition, matching ``mvau_schema``."""
+        op = pool_schema(
             "implementation",
             tuple(self.op_axes),
             tuple(self.op_derived),
             tuple(self.op_predicates),
             self.pool,
         )
+        for sub in self.sub_schemas:
+            op = compose(op, sub)
+        return op
 
     def configure(self, context: Context, assignment: Mapping | None = None):
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""

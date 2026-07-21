@@ -22,6 +22,7 @@ from finn.kernels.space import Derived, Implementation, discrete_axis, predicate
 from .emit_hls import emit_mvau_hls
 from .names import INPUT, MVAU_HLS, WEIGHTS
 from .registry import register
+from .shared import COMPUTE_TILING
 
 
 @predicate("HLS: SIMD >= MW/1024")
@@ -58,4 +59,5 @@ def hls_bundle() -> Implementation:
         predicates=(_hls_simd_lower_bound, _no_true_binary),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
+        tiling=COMPUTE_TILING,
     )
