@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``KernelOp`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
+"""``Kernel`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
 it projects from a resolved :class:`~finn.kernels.space.point.Point`
 (kernelop-tensor-block-stream.md §3, §7; consumer-surface-model.md Tier 0-3).
 
@@ -43,8 +43,8 @@ from .schema import Schema
 from .tiling import TileError, eval_entry
 
 
-class KernelOpError(ValueError):
-    """Raised for an ill-formed KernelOp query (unknown interface index, a folded-shape
+class KernelError(ValueError):
+    """Raised for an ill-formed Kernel query (unknown interface index, a folded-shape
     request on a non-last-axis PARAM port, or a stream dial that does not divide)."""
 
 
@@ -80,7 +80,7 @@ class Interface:
 
 
 @dataclass(frozen=True)
-class KernelOp:
+class Kernel:
     """A hardware kernel op: interfaces + op-level design space + an implementation pool.
 
     ``op_axes``/``op_derived``/``op_predicates`` are the op-level shared elements (the
@@ -144,13 +144,13 @@ class KernelOp:
     def _input(self, ind: int) -> Interface:
         ins = self.inputs()
         if ind < 0 or ind >= len(ins):
-            raise KernelOpError(f"input index {ind} out of range (have {len(ins)})")
+            raise KernelError(f"input index {ind} out of range (have {len(ins)})")
         return ins[ind]
 
     def _output(self, ind: int) -> Interface:
         outs = self.outputs()
         if ind < 0 or ind >= len(outs):
-            raise KernelOpError(f"output index {ind} out of range (have {len(outs)})")
+            raise KernelError(f"output index {ind} out of range (have {len(outs)})")
         return outs[ind]
 
     # -- Tier-3 getters: normal (TENSOR) shapes — no backend needed ---------
@@ -221,7 +221,7 @@ class KernelOp:
         by_name = {b.name: b for b in self.pool}
         bundle = by_name.get(impl_name)
         if bundle is None:
-            raise KernelOpError(
+            raise KernelError(
                 f"resolved implementation {impl_name!r} is not in the pool "
                 f"(have {sorted(by_name)})"
             )
@@ -235,7 +235,7 @@ class KernelOp:
         try:
             return eval_entry(entry, point)
         except TileError as exc:
-            raise KernelOpError(f"interface {iface.name!r} tiling: {exc}") from exc
+            raise KernelError(f"interface {iface.name!r} tiling: {exc}") from exc
 
     def _folded_shape(self, iface: Interface, point: Point, context: Context):
         """Last-axis fold: ``normal[:-1] + (fold, elems)`` where ``elems`` is the stream
@@ -244,7 +244,7 @@ class KernelOp:
         a last-axis fold at all (``folds_last_axis=False`` — the MVU weight port, whose
         WIDTH resolves via the evaluator but whose SHAPE is not a tensor-axis reshape)."""
         if not iface.folds_last_axis:
-            raise KernelOpError(
+            raise KernelError(
                 f"interface {iface.name!r} does not fold a tensor axis (folds_last_axis="
                 f"False); its stream WIDTH resolves via get_*stream_width, but a folded "
                 f"SHAPE is not a plain reshape for this port (e.g. MVU weight WSIMD)"
@@ -252,10 +252,10 @@ class KernelOp:
         normal = tuple(context.tensor_shape(iface.tensor))
         elems = self._stream_elems(iface, point)
         if not normal:
-            raise KernelOpError(f"interface {iface.name!r} has no shape to fold")
+            raise KernelError(f"interface {iface.name!r} has no shape to fold")
         last = normal[-1]
         if last % elems != 0:
-            raise KernelOpError(
+            raise KernelError(
                 f"interface {iface.name!r}: stream {elems} does not divide last dim {last} "
                 f"(illegal fold)"
             )

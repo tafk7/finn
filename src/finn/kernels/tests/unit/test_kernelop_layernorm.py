@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""LayerNorm — the Tier-3 (estimate-only) KernelOp worked example
+"""LayerNorm — the Tier-3 (estimate-only) Kernel worked example
 (kernelop-tensor-block-stream.md §4, §7).
 
 The cleanest op to prove the vertical slice: 1-in / 1-out, last-axis (channel) fold by
@@ -34,22 +34,22 @@ from finn.kernels.space import (
     Illegal,
     Implementation,
     Interface,
-    KernelOp,
-    KernelOpError,
+    Kernel,
+    KernelError,
     Role,
     divisor_axis,
 )
 
 
 # ---------------------------------------------------------------------------
-# The LayerNorm KernelOp: two impls (hls/rtl), both fold the channel dim by SIMD.
+# The LayerNorm Kernel: two impls (hls/rtl), both fold the channel dim by SIMD.
 # ---------------------------------------------------------------------------
 
 CHANNELS = 64
 IFM = (1, 56, CHANNELS)  # (batch, spatial, channels) — NHWC-ish, channels last
 
 
-def _layernorm_op() -> KernelOp:
+def _layernorm_op() -> Kernel:
     # Op-level shared axis: SIMD folds the last (channel) dim. In the full design this
     # would be Implementation-owned, but both impls share it identically here, so it
     # lives op-level as the folding dial the tiling references.
@@ -62,7 +62,7 @@ def _layernorm_op() -> KernelOp:
     hls = Implementation(name="layernorm_hls", tiling={"input": "SIMD", "output": "SIMD"})
     rtl = Implementation(name="layernorm_rtl", tiling={"input": "SIMD", "output": "SIMD"})
 
-    return KernelOp(
+    return Kernel(
         name="LayerNorm",
         interfaces=(
             Interface("input", "inp", Direction.IN, Role.DATA_IN, index=0),
@@ -154,7 +154,7 @@ def test_exp_cycles_monotone_in_simd():
 def test_bad_index_raises():
     op, ctx = _layernorm_op(), _ctx()
     pt = op.configure(ctx, {"SIMD": 16})
-    with pytest.raises(KernelOpError, match="input index 1 out of range"):
+    with pytest.raises(KernelError, match="input index 1 out of range"):
         op.get_folded_input_shape(pt, ctx, 1)
 
 

@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""MVU — the Tier-3 KernelOp acid test (kernelop-tensor-block-stream.md §4, §5.1).
+"""MVU — the Tier-3 Kernel acid test (kernelop-tensor-block-stream.md §4, §5.1).
 
 MVU is the case that forces everything LayerNorm didn't:
 
@@ -37,8 +37,8 @@ from finn.kernels.space import (
     Illegal,
     Implementation,
     Interface,
-    KernelOp,
-    KernelOpError,
+    Kernel,
+    KernelError,
     Role,
     derive,
     discrete_axis,
@@ -54,7 +54,7 @@ VECS = (1,)  # numInputVectors leading dims
 
 
 # ---------------------------------------------------------------------------
-# The MVU KernelOp.
+# The MVU Kernel.
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def _mvu_cost(point, context):
     return nf * sf * n_vecs * th
 
 
-def _mvu_op() -> KernelOp:
+def _mvu_op() -> Kernel:
     mw = fixed_axis("MW", lambda p, ctx: ctx.tensor_shape("inp")[-1])
     mh = fixed_axis("MH", lambda p, ctx: ctx.tensor_shape("out")[-1])
     simd = divisor_axis("SIMD", "MW", 1, deps={"MW"})
@@ -97,7 +97,7 @@ def _mvu_op() -> KernelOp:
         tiling={"act": "SIMD", "out": "PE", "weights": derive("PE") * derive("SIMD") / param("TH")},
     )
 
-    return KernelOp(
+    return Kernel(
         name="MVU",
         interfaces=(
             Interface("act", "inp", Direction.IN, Role.DATA_IN, index=0),
@@ -172,7 +172,7 @@ def test_tiled_weight_width_is_wsimd_over_th(th):
 def test_weight_folded_shape_raises_not_fakes():
     op, ctx = _mvu_op(), _ctx()
     pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
-    with pytest.raises(KernelOpError, match="does not fold a tensor axis"):
+    with pytest.raises(KernelError, match="does not fold a tensor axis"):
         op.get_folded_input_shape(pt, ctx, 1)
 
 

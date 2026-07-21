@@ -73,7 +73,7 @@ from __future__ import annotations
 from finn.kernels.space import (
     Direction,
     Interface,
-    KernelOp,
+    Kernel,
     Role,
     Schema,
     compose,
@@ -137,8 +137,8 @@ def mvau_interfaces():
     )
 
 
-def mvau_kernel_op() -> KernelOp:
-    """The full MVAU design space as a :class:`KernelOp` — the WHAT-owning op node.
+def mvau_kernel() -> Kernel:
+    """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
     tiling, composed with the PARAMETERS pool (``parameters.topology``). The cross-
@@ -148,7 +148,7 @@ def mvau_kernel_op() -> KernelOp:
     getters (folded shapes, stream widths, rough cost) project from a resolved point via
     the impl ``tiling``."""
     axes, derived, predicates = mvau_shared()
-    return KernelOp(
+    return Kernel(
         name="MVAU",
         interfaces=mvau_interfaces(),
         pool=mvau_pool(),
@@ -162,7 +162,7 @@ def mvau_kernel_op() -> KernelOp:
 
 def mvau_schema() -> Schema:
     """The full MVAU design space as a resolve ``Schema`` — now delegates to the
-    :func:`mvau_kernel_op` façade (identical assembly: compute pool + coupling derived/
+    :func:`mvau_kernel` façade (identical assembly: compute pool + coupling derived/
     predicates, composed with the parameters pool). Kept as the name emit/composition
     tests resolve against."""
-    return mvau_kernel_op().schema()
+    return mvau_kernel().schema()

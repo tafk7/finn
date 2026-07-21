@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Elementwise binary — the Tier-3 KernelOp N-port stress test
+"""Elementwise binary — the Tier-3 Kernel N-port stress test
 (kernelop-tensor-block-stream.md §4).
 
 Elementwise proves what a single-input op cannot:
@@ -37,7 +37,7 @@ from finn.kernels.space import (
     Illegal,
     Implementation,
     Interface,
-    KernelOp,
+    Kernel,
     Role,
     broadcast_aware,
     derive,
@@ -49,7 +49,7 @@ from finn.kernels.space import (
 N = 128  # last (channel) dim of lhs / output
 
 
-def _elementwise_op() -> KernelOp:
+def _elementwise_op() -> Kernel:
     # lhs last dim drives PE; rhs_last is a context-fixed quantity broadcast_aware reads.
     lhs_last = fixed_axis("lhs_last", lambda p, ctx: ctx.tensor_shape("lhs")[-1])
     rhs_last = fixed_axis("rhs_last", lambda p, ctx: ctx.tensor_shape("rhs")[-1])
@@ -70,7 +70,7 @@ def _elementwise_op() -> KernelOp:
     hls = Implementation(name="elementwise_hls", tiling=tiling)
     rtl = Implementation(name="elementwise_rtl", tiling=tiling)
 
-    return KernelOp(
+    return Kernel(
         name="ElementwiseBinary",
         interfaces=(
             Interface("lhs", "lhs", Direction.IN, Role.DATA_IN, index=0),

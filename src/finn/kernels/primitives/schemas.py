@@ -333,7 +333,7 @@ class KernelSchema:
 
     Combines interface definitions, validation constraints, and design space
     parameters. Defines structure only - shapes come from ONNX context,
-    execution logic lives in KernelOp.
+    execution logic lives in Kernel.
 
     Attributes:
         name: Kernel name

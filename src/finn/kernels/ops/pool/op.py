@@ -1,0 +1,190 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+# Portions of this content consist of AI generated content.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+############################################################################
+
+"""The Pool Kernel — WHAT an ONNX pool computes (MaxPool / AveragePool).
+
+Read this file to understand the op; read ``impl_hls.py`` to write a backend. Everything
+here is op-owned (graph-given geometry, derived shapes, legality, cost); a backend owns
+only the stream tiling. The engine derives the 8 port-indexed shape/width getters + the
+folded shapes from this declaration — an author writes ZERO folding code.
+
+This is the declarative echo of the classic ``custom_op/fpgadataflow/pool.py``, in the
+same top-to-bottom order but as data:
+
+    pool.py method              →  here
+    ----------------------------------------------------------------
+    get_nodeattr_types          →  pool_design_space  (axes + the Function param)
+    get_output_datatype (rule)  →  _dtype_rule        (a Predicate)
+    get_normal/​folded_*_shape   →  DERIVED by the engine from the interfaces + tiling
+    get_exp_cycles              →  pool_cost
+    (input im2col'd by ConvGen) →  we model the WHOLE ONNX op: geometry.py derives the
+                                    output spatial shape and validates it vs the graph
+
+Layout: NHWC at the hardware boundary (channels last ⇒ PE folds the last axis). ONNX
+pooling is NCHW, so a layout transform precedes; the windowing math is layout-independent.
+"""
+
+from __future__ import annotations
+
+from finn.kernels.space import (
+    Direction,
+    Interface,
+    Kernel,
+    Role,
+    divisor_axis,
+    fixed_axis,
+    predicate,
+)
+
+from .geometry import PoolGeometry
+from .impl_hls import pool_hls_impl
+from .names import AVGPOOL, INDICES, INPUT, MAXPOOL, OUTPUT
+
+
+# =============================================================================
+# Shape helpers — NHWC convention: (batch, *spatial, channels).
+# =============================================================================
+
+
+def _channels(shape):
+    return shape[-1]
+
+
+def _spatial(shape):
+    return tuple(shape[1:-1])
+
+
+# =============================================================================
+# Interfaces — the op's arity. Input, output, and MaxPool's OPTIONAL Indices.
+# =============================================================================
+
+
+def pool_interfaces(*, has_indices: bool) -> tuple[Interface, ...]:
+    """The port list. MaxPool may emit a second output (Indices, the argmax positions);
+    it is present ONLY when the node wires it — the guarded/optional-interface shape."""
+    interfaces = [
+        Interface(INPUT, INPUT, Direction.IN, Role.DATA_IN, index=0),
+        Interface(OUTPUT, OUTPUT, Direction.OUT, Role.DATA_OUT, index=0),
+    ]
+    if has_indices:
+        interfaces.append(Interface(INDICES, INDICES, Direction.OUT, Role.DATA_OUT, index=1))
+    return tuple(interfaces)
+
+
+# =============================================================================
+# Design space — the op's free/fixed choices (the declarative get_nodeattr_types).
+# =============================================================================
+
+
+def pool_design_space(function: str):
+    """Op-level axes: the channel count (context-fixed), the PE channel fold, and the
+    ``Function`` structural param. PE is the one folding dial; a backend references it via
+    tiling. ``Function`` (MaxPool/AveragePool) is fixed per node — it drives the dtype
+    rule + cost, so it lives on the point."""
+    return (
+        fixed_axis("Channels", lambda p, ctx: _channels(ctx.tensor_shape(INPUT))),
+        divisor_axis("PE", "Channels", 1, deps={"Channels"}),
+        fixed_axis("Function", lambda p, ctx, _f=function: _f),
+    )
+
+
+# =============================================================================
+# Legality — the op's predicates (fold divisibility, geometry, dtype rule).
+# =============================================================================
+
+
+def pool_predicates(function: str, geom: PoolGeometry):
+    @predicate("Channels % PE == 0")
+    def _pe_divides_channels(p, ctx):
+        if p.Channels % p.PE != 0:
+            return f"Channels={p.Channels} not divisible by PE={p.PE}"
+        return None
+
+    @predicate("graph output spatial shape matches the derived pooling geometry")
+    def _out_shape_matches_geometry(p, ctx):
+        # The output spatial shape is op-DERIVED (windowing math). We do not read it off an
+        # attribute — we compute it and REJECT a graph whose declared output disagrees.
+        derived = geom.output_spatial(_spatial(ctx.tensor_shape(INPUT)))
+        actual = _spatial(ctx.tensor_shape(OUTPUT))
+        if derived != actual:
+            return (
+                f"output spatial shape {actual} != derived pooling geometry {derived} "
+                f"(kernel={geom.kernel_shape}, strides={geom.strides}, pads={geom.pads}, "
+                f"dilations={geom.dilations}, ceil_mode={geom.ceil_mode})"
+            )
+        return None
+
+    @predicate("Function-driven output datatype rule")
+    def _dtype_rule(p, ctx):
+        # op-DERIVED datatype RULE (§5.2), the declarative form of pool.py's
+        # get_output_datatype asserts: MaxPool selects an existing element ⇒ out == in;
+        # AveragePool may requantize but must not flip signedness.
+        idt, odt = ctx.tensor_datatype(INPUT), ctx.tensor_datatype(OUTPUT)
+        if function == MAXPOOL and idt != odt:
+            return f"MaxPool requires out dtype == in dtype (got {idt} vs {odt})"
+        if function == AVGPOOL and idt.signed() != odt.signed():
+            return "AveragePool cannot mix signed and unsigned datatypes"
+        return None
+
+    return (_pe_divides_channels, _out_shape_matches_geometry, _dtype_rule)
+
+
+# =============================================================================
+# Cost — the rough throughput model (the declarative get_exp_cycles).
+# =============================================================================
+
+
+def pool_cost(geom: PoolGeometry):
+    """``batch * ∏OutSpatial * (Channels * ∏kernel) / PE`` — the kernel window is a
+    reduction the generic per-interface floor cannot see, so Pool supplies it op-level."""
+
+    def cost(point, context):
+        out_spatial = geom.output_spatial(_spatial(context.tensor_shape(INPUT)))
+        ospatial = 1
+        for d in out_spatial:
+            ospatial *= int(d)
+        batch = int(context.tensor_shape(INPUT)[0])
+        return int(batch * ospatial * (point.Channels * geom.kernel_elements) // point.PE)
+
+    return cost
+
+
+# =============================================================================
+# Assembly — one node's geometry -> a Kernel.
+# =============================================================================
+
+
+def pool_kernel(
+    *,
+    function: str = MAXPOOL,
+    kernel_shape,
+    strides=None,
+    pads=None,
+    dilations=None,
+    ceil_mode: bool = False,
+    has_indices: bool = False,
+) -> Kernel:
+    """Build a Pool Kernel for one ONNX node. The windowing attributes
+    (``kernel_shape``/``strides``/``pads``/``dilations``/``ceil_mode``) are node geometry,
+    so the op is constructed per-node; ``has_indices`` adds MaxPool's optional Indices
+    output."""
+    geom = PoolGeometry.build(
+        kernel_shape=kernel_shape,
+        strides=strides,
+        pads=pads,
+        dilations=dilations,
+        ceil_mode=ceil_mode,
+    )
+    return Kernel(
+        name="Pool",
+        interfaces=pool_interfaces(has_indices=has_indices),
+        pool=(pool_hls_impl(has_indices=has_indices),),
+        op_axes=pool_design_space(function),
+        op_predicates=pool_predicates(function, geom),
+        cost_model=pool_cost(geom),
+    )

@@ -6,14 +6,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""MVAU routed through the KernelOp façade — the pilot proving the Tier-3 surface
+"""MVAU routed through the Kernel façade — the pilot proving the Tier-3 surface
 agrees with the real op's battle-tested emit-side derivations.
 
-``mvau_kernel_op()`` wraps the SAME shared axes/derived/predicates + compute pool +
+``mvau_kernel()`` wraps the SAME shared axes/derived/predicates + compute pool +
 parameters composition that ``mvau_schema()`` always used (they are now the same
-object — ``mvau_schema`` delegates to the KernelOp). This test proves:
+object — ``mvau_schema`` delegates to the Kernel). This test proves:
 
-  * the KernelOp getters (folded shapes, stream widths) agree EXACTLY with the
+  * the Kernel getters (folded shapes, stream widths) agree EXACTLY with the
     op-level ``instream_width``/``outstream_width`` derived that emit reads — the two
     surfaces are consistent, not a reimplementation that drifts;
   * the impl-owned ``tiling`` (SIMD folds inp, PE folds out, weights=PE*SIMD) resolves
@@ -26,7 +26,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, Illegal
-from finn.kernels.ops.mvau import mvau_kernel_op
+from finn.kernels.ops.mvau import mvau_kernel
 
 MW, MH = 128, 64
 
@@ -45,7 +45,7 @@ def _ctx() -> Context:
 
 
 def _configure(simd, pe, impl="mvau_hls"):
-    op, ctx = mvau_kernel_op(), _ctx()
+    op, ctx = mvau_kernel(), _ctx()
     pt = op.configure(ctx, {"implementation": impl, "SIMD": simd, "PE": pe})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     return op, ctx, pt
@@ -53,7 +53,7 @@ def _configure(simd, pe, impl="mvau_hls"):
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64), (1, 1)])
 def test_kernelop_getters_agree_with_op_derived_widths(simd, pe):
-    # The KernelOp stream-width getters must equal the emit-side op-derived widths.
+    # The Kernel stream-width getters must equal the emit-side op-derived widths.
     op, ctx, pt = _configure(simd, pe)
     assert op.get_instream_width(pt, ctx, 0) == pt.instream_width
     assert op.get_outstream_width(pt, ctx, 0) == pt.outstream_width
@@ -68,12 +68,12 @@ def test_folded_data_shapes(simd, pe):
 
 def test_weight_port_width_is_pe_simd_and_shape_raises():
     op, ctx, pt = _configure(16, 4)
-    from finn.kernels.space import KernelOpError
+    from finn.kernels.space import KernelError
 
     # weight WIDTH = PE*SIMD*wbits resolves via the tiling evaluator...
     assert op.get_instream_width(pt, ctx, 1) == (4 * 16) * 8
     # ...but its folded SHAPE is not a tensor-axis reshape -> raises, not fakes.
-    with pytest.raises(KernelOpError, match="does not fold a tensor axis"):
+    with pytest.raises(KernelError, match="does not fold a tensor axis"):
         op.get_folded_input_shape(pt, ctx, 1)
 
 
@@ -85,7 +85,7 @@ def test_cost_model_is_reduction_product(simd, pe):
 
 
 def test_all_three_compute_impls_carry_tiling():
-    op, ctx = mvau_kernel_op(), _ctx()
+    op, ctx = mvau_kernel(), _ctx()
     for impl in ("mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"):
         pt = op.configure(ctx, {"implementation": impl, "SIMD": 8, "PE": 8})
         if isinstance(pt, Illegal):
@@ -94,9 +94,9 @@ def test_all_three_compute_impls_carry_tiling():
         assert op.get_instream_width(pt, ctx, 0) == 8 * 8
 
 
-def test_mvau_schema_delegates_to_kernel_op():
-    # mvau_schema() must be exactly the KernelOp's schema (same axis set), so all the
+def test_mvau_schema_delegates_to_kernel():
+    # mvau_schema() must be exactly the Kernel's schema (same axis set), so all the
     # existing emit/composition tests exercise the refactored assembly.
     from finn.kernels.ops.mvau import mvau_schema
 
-    assert mvau_schema().axis_names == mvau_kernel_op().schema().axis_names
+    assert mvau_schema().axis_names == mvau_kernel().schema().axis_names
