@@ -42,12 +42,17 @@ explicitly — see [`tests/hardware/README.md`](tests/hardware/README.md).
 ## Provenance & licensing
 
 - This module is **BSD-3-Clause** (FINN's license), except `primitives/`.
-- The five `primitives/` files are **MIT**, inlined from
+- The seven `primitives/` files are **MIT**, inlined from
   [`microsoft/brainsmith`](https://github.com/microsoft/brainsmith)
-  (`brainsmith/dataflow/`) @ `38faaf9`. Three are byte-identical; `types.py` adds a local
-  `TilingSpec` alias; `interface.py` is a distilled variant. Each file carries a
-  provenance header. These are a **temporary vendored copy** — de-vendoring is Stage 3
-  (the source model) of the refactor plan.
+  (`brainsmith/dataflow/`) @ `38faaf9`. `ordered_parameter.py`, `template_resolution.py`,
+  `schemas.py`, and `dse_models.py` are byte-identical; `spec_helpers.py` retargets three
+  docstring import examples to the `finn.kernels.primitives` home; `types.py` adds a local
+  `TilingSpec` alias; `interface.py` is a distilled variant. `schemas.py` (the
+  `KernelSchema`/`InputSchema`/`OutputSchema` interface-list declaration) and `dse_models.py`
+  (the TENSOR→BLOCK→STREAM shape resolution) back the KernelOp folding model — see
+  [`kernel-design/kernel-final-design/kernelop-tensor-block-stream.md`](../../../kernel-design/kernel-final-design/kernelop-tensor-block-stream.md).
+  Each file carries a provenance header. These are a **temporary vendored copy** —
+  de-vendoring is Stage 3 (the source model) of the refactor plan.
 
 ## Design docs
 

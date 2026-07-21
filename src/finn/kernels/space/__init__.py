@@ -54,6 +54,22 @@ from .predicate import Predicate, predicate
 from .resolve import resolve
 from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
+from .tiling import (
+    BroadcastAware,
+    Const,
+    Div,
+    Mul,
+    Param,
+    Ref,
+    TileError,
+    TileExpr,
+    broadcast_aware,
+    const,
+    derive,
+    entry_deps,
+    eval_entry,
+    param,
+)
 
 __all__ = [
     "Context",
@@ -94,4 +110,18 @@ __all__ = [
     "Schema",
     "SchemaError",
     "resolve",
+    "TileExpr",
+    "TileError",
+    "Ref",
+    "Param",
+    "Const",
+    "Mul",
+    "Div",
+    "BroadcastAware",
+    "derive",
+    "param",
+    "const",
+    "broadcast_aware",
+    "eval_entry",
+    "entry_deps",
 ]

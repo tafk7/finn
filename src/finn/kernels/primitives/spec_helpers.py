@@ -62,7 +62,8 @@ def derive_dim(
 
     Example:
         # Explicit function-based derivation
-        from finn.kernels.derivation import derive_dim, ShapeHierarchy
+        from finn.kernels.primitives.spec_helpers import derive_dim
+        from finn.kernels.primitives.types import ShapeHierarchy
         block_tiling=[derive_dim("input", ShapeHierarchy.BLOCK, -1)]
 
         # Shorthand for common case (STREAM hierarchy, last dimension)
@@ -174,7 +175,7 @@ def constant_datatype(datatype_name: str) -> Callable[[dict, Callable, Any, str]
 
     Example:
         # Use constant_datatype for fixed output types
-        from finn.kernels.derivation.spec_helpers import constant_datatype
+        from finn.kernels.primitives.spec_helpers import constant_datatype
         datatype=constant_datatype("FLOAT32")  # Always outputs FLOAT32
 
         # Common use case: Softmax always outputs float
@@ -221,7 +222,7 @@ def value_optimized_datatype() -> Callable[[dict, Callable, Any, str], "BaseData
 
     Example:
         # Sentinel constant (recommended)
-        from finn.kernels.derivation import VALUE_OPTIMIZED
+        from finn.kernels.primitives.types import VALUE_OPTIMIZED
         datatype=VALUE_OPTIMIZED
 
         # Explicit function-based
