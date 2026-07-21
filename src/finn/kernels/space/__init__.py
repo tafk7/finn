@@ -54,6 +54,7 @@ from .predicate import Predicate, predicate
 from .resolve import resolve
 from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
+from .kernel_op import Interface, KernelOp, KernelOpError
 from .tiling import (
     BroadcastAware,
     Const,
@@ -110,6 +111,9 @@ __all__ = [
     "Schema",
     "SchemaError",
     "resolve",
+    "KernelOp",
+    "Interface",
+    "KernelOpError",
     "TileExpr",
     "TileError",
     "Ref",
