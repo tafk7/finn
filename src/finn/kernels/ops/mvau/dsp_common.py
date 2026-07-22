@@ -23,7 +23,7 @@ import numpy as np
 from finn.kernels.ops._dsp_rtl import (
     dsp_primitive,
     dsp_version,
-    num_lanes,  # noqa: F401  (re-exported for impl_dsp_packed)
+    num_lanes,  # noqa: F401  (re-exported for impl_rtl_packed)
     pumped_compute_needs_simd,
     rtl_no_lut,
     segmentlen,
@@ -32,7 +32,7 @@ from finn.kernels.ops._dsp_rtl import (
 from finn.kernels.space import Derived, discrete_axis, predicate
 from finn.util.basic import get_dsp_block
 
-from .names import INPUT, WEIGHTS
+from .op import INPUT, WEIGHTS
 
 
 def _narrow_weights(p, ctx):

@@ -106,6 +106,6 @@ custom_op["OuterShuffle_hls"] = OuterShuffle_hls
 # they live in the .hls domain so is_hls_node sees them (the real compute impl is chosen
 # by the `implementation` nodeattr, not the domain). Registered by direct assignment to
 # bypass register_custom_op's HLSBackend assertion.
-from finn.kernels.adapter import MvauKernelOp
+from finn.kernels.ops.mvau import MvauKernelOp
 
 custom_op["MVAUKernel_hls"] = MvauKernelOp

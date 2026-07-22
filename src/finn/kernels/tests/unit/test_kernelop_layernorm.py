@@ -37,7 +37,6 @@ from finn.kernels.space import (
     Kernel,
     KernelError,
     Role,
-    divisor_axis,
 )
 
 
@@ -50,17 +49,21 @@ IFM = (1, 56, CHANNELS)  # (batch, spatial, channels) — NHWC-ish, channels las
 
 
 def _layernorm_op() -> Kernel:
-    # Op-level shared axis: SIMD folds the last (channel) dim. In the full design this
-    # would be Implementation-owned, but both impls share it identically here, so it
-    # lives op-level as the folding dial the tiling references.
-    simd = divisor_axis("SIMD", "channels", 1, deps={"channels"})
-    # `channels` is a context-fixed quantity SIMD's divisor domain reads.
-    from finn.kernels.space import fixed_axis
+    # SIMD folds the last (channel) dim. The impls declare that via a Fold spec; the
+    # tiling engine derives the SIMD dial (divisors of the channel count), its
+    # divisibility predicate, and the stream widths — none hand-written.
+    from finn.kernels.space import Fold, Full
 
-    channels = fixed_axis("channels", lambda p, ctx: ctx.tensor_shape("inp")[-1])
-
-    hls = Implementation(name="layernorm_hls", tiling={"input": "SIMD", "output": "SIMD"})
-    rtl = Implementation(name="layernorm_rtl", tiling={"input": "SIMD", "output": "SIMD"})
+    # rank-3 NHWC-ish (batch, spatial, channels): fold the last axis.
+    channel_fold = [Full(), Full(), Fold("SIMD")]
+    hls = Implementation(
+        name="layernorm_hls",
+        tiling={"input": list(channel_fold), "output": list(channel_fold)},
+    )
+    rtl = Implementation(
+        name="layernorm_rtl",
+        tiling={"input": list(channel_fold), "output": list(channel_fold)},
+    )
 
     return Kernel(
         name="LayerNorm",
@@ -69,7 +72,6 @@ def _layernorm_op() -> Kernel:
             Interface("output", "out", Direction.OUT, Role.DATA_OUT, index=0),
         ),
         pool=(hls, rtl),
-        op_axes=(channels, simd),
     )
 
 

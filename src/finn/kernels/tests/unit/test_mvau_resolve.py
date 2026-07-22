@@ -412,11 +412,14 @@ def test_hls_binary_ok_in_xnor_mode(schema):
 
 
 def test_fourth_implementation_composes_additively():
-    from finn.kernels.space import Implementation, pool_schema
-    from finn.kernels.ops.mvau import mvau_pool, mvau_shared
+    from finn.kernels.space import Implementation
+    from finn.kernels.ops.mvau import mvau_kernel, mvau_pool
+    from finn.kernels.ops.mvau.op import COMPUTE_TILING
 
     # A hypothetical LUT-based RTL MVU, declared as ONE new bundle. It carries its
     # OWN feasibility (say: only legal on non-Versal parts) and its own axes/sources.
+    # It folds like the other MVU compute cores (same COMPUTE_TILING), so the engine
+    # derives its SIMD/PE dials identically.
     def lut_rtl_feasible(p, ctx):
         if is_versal(ctx.fpgapart):
             return "mvau_lut_rtl targets non-Versal parts only (hypothetical)"
@@ -425,16 +428,21 @@ def test_fourth_implementation_composes_additively():
     lut_rtl = Implementation(
         name="mvau_lut_rtl",
         feasible=lut_rtl_feasible,
-        axes=(),  # inherits only op-level shared axes
+        axes=(),  # inherits only op-level shared axes + engine-derived fold dials
         derived=(Derived("language", lambda p, ctx: "rtl"),),
         predicates=(),
         sources=("mvu_lut.sv",),
+        tiling=COMPUTE_TILING,
     )
 
-    # Assemble the pool with the 4th member appended -- the three real bundles and
-    # the shared elements are used verbatim, unedited.
-    axes, derived, predicates = mvau_shared()
-    schema4 = pool_schema("implementation", axes, derived, predicates, mvau_pool() + (lut_rtl,))
+    # Assemble the FULL kernel with the 4th member appended -- the three real bundles
+    # and the shared elements are used verbatim, unedited. Route through the Kernel
+    # facade so the tiling engine generates each impl's fold dials.
+    from dataclasses import replace
+
+    base = mvau_kernel()
+    kernel4 = replace(base, pool=mvau_pool() + (lut_rtl,))
+    schema4 = kernel4.schema()
 
     # It appears as a pool member and resolves per its OWN feasibility.
     legal = resolve(
@@ -467,6 +475,7 @@ def test_registry_makes_addition_structural():
     # This simulates a third-party `impl_*.py` that self-registers on import.
     from finn.kernels.space import Implementation
     from finn.kernels.ops.mvau import mvau_pool, mvau_schema
+    from finn.kernels.ops.mvau.op import COMPUTE_TILING
     from finn.kernels.ops.mvau.registry import register, unregister
 
     before = {b.name for b in mvau_pool()}
@@ -474,7 +483,11 @@ def test_registry_makes_addition_structural():
 
     @register
     def _stub_bundle():
-        return Implementation(name="mvau_stub_backend", sources=("stub.sv",))
+        # A real MVU compute peer folds like the others, so it carries COMPUTE_TILING;
+        # the engine derives its SIMD/PE dials from that.
+        return Implementation(
+            name="mvau_stub_backend", sources=("stub.sv",), tiling=COMPUTE_TILING
+        )
 
     try:
         after = {b.name for b in mvau_pool()}

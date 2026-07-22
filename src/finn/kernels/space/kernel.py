@@ -40,7 +40,7 @@ from .point import Illegal, Point
 from .ports import Role
 from .resolve import resolve
 from .schema import Schema
-from .tiling import TileError, eval_entry
+from .tiling import TileError, generate_tiling
 
 
 class KernelError(ValueError):
@@ -68,7 +68,13 @@ class Interface:
             (DATA ports). False for a PARAM port whose stream WIDTH is a cross-interface
             expression not tied to its own tensor axes (MVU weight ``WSIMD=PE*SIMD/TH``):
             its width still resolves via the tiling evaluator, but a folded-shape request
-            raises rather than fake a reshape.
+            raises rather than fake a reshape. When the impl declares tiling as spec lists
+            (Full/Fold/WidthOnly), the engine derives this per interface (any WidthOnly
+            position ⇒ not a plain reshape); this field is then the fallback/legacy path.
+        dtype_source: the point key whose DataType supplies this interface's stream-width
+            bitwidth, when it differs from the raw tensor dtype. MVAU's ``out`` sets
+            ``"outputDataType"`` (= the accumulator type under ``noActivation``), so the
+            generated stream width matches the emit-side derived. None ⇒ the tensor dtype.
     """
 
     name: str
@@ -77,6 +83,7 @@ class Interface:
     role: Role
     index: int = 0
     folds_last_axis: bool = True
+    dtype_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,27 +106,61 @@ class Kernel:
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
     sub_schemas: tuple = ()  # secondary pools (e.g. parameters) composed via `compose`
     _by_name: Mapping[str, Interface] = field(default_factory=dict, init=False, repr=False)
+    _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "interfaces", tuple(self.interfaces))
         object.__setattr__(self, "pool", tuple(self.pool))
         object.__setattr__(self, "sub_schemas", tuple(self.sub_schemas))
         object.__setattr__(self, "_by_name", {i.name: i for i in self.interfaces})
+        object.__setattr__(self, "_tiling_cache", {})
 
     # -- schema / resolve ---------------------------------------------------
 
+    def _generated(self, impl: Implementation):
+        """The tiling engine's generated fragments + fold map for one Implementation,
+        derived from its ``tiling`` spec map. Memoized per Kernel by impl name."""
+        cache = self._tiling_cache
+        got = cache.get(impl.name)
+        if got is None:
+            got = generate_tiling(self.interfaces, dict(impl.tiling))
+            cache[impl.name] = got
+        return got
+
+    def _augmented_pool(self) -> tuple[Implementation, ...]:
+        """Each Implementation with the tiling-engine-generated axes/divisibility
+        predicates appended to its OWN axes/predicates (so ``pool_schema`` dispatches
+        them on selection), and the generated stream-width deriveds. The impl's declared
+        tiling map is the single source; the fold dials, their ranges, the divisibility,
+        and the widths are all derived here — not hand-written on the op."""
+        from dataclasses import replace
+
+        out = []
+        for impl in self.pool:
+            gen = self._generated(impl)
+            out.append(
+                replace(
+                    impl,
+                    axes=tuple(impl.axes) + gen.axes,
+                    derived=tuple(impl.derived) + gen.derived,
+                    predicates=tuple(impl.predicates) + gen.predicates,
+                )
+            )
+        return tuple(out)
+
     def schema(self) -> Schema:
-        """The full design space: op-level shared elements + the implementation pool,
-        plus any composed secondary pools (``sub_schemas`` — e.g. the parameters/weight-
-        delivery pool). ``op_derived``/``op_predicates`` already include the cross-
-        coordinate couplings (those that read BOTH the compute fold and a sub-pool's
-        topology), appended by the op before composition, matching ``mvau_schema``."""
+        """The full design space: op-level shared elements + the implementation pool
+        (each impl augmented with its tiling-engine-derived fold dials / divisibility /
+        widths), plus any composed secondary pools (``sub_schemas`` — e.g. the parameters
+        pool). ``op_derived``/``op_predicates`` already include the cross-coordinate
+        couplings (those that read BOTH the compute fold and a sub-pool's topology),
+        appended by the op before composition."""
         op = pool_schema(
             "implementation",
             tuple(self.op_axes),
             tuple(self.op_derived),
             tuple(self.op_predicates),
-            self.pool,
+            self._augmented_pool(),
         )
         for sub in self.sub_schemas:
             op = compose(op, sub)
@@ -176,12 +217,10 @@ class Kernel:
         return self._folded_shape(self._output(ind), point, context)
 
     def get_instream_width(self, point: Point, context: Context, ind: int = 0) -> int:
-        iface = self._input(ind)
-        return self._stream_elems(iface, point) * context.tensor_datatype(iface.tensor).bitwidth()
+        return self._stream_width(self._input(ind), point, context)
 
     def get_outstream_width(self, point: Point, context: Context, ind: int = 0) -> int:
-        iface = self._output(ind)
-        return self._stream_elems(iface, point) * context.tensor_datatype(iface.tensor).bitwidth()
+        return self._stream_width(self._output(ind), point, context)
 
     # -- rough cost: prod(stream_cycles) over the interfaces ----------------
 
@@ -214,9 +253,8 @@ class Kernel:
 
     # -- internals ----------------------------------------------------------
 
-    def _tiling_entry(self, iface: Interface, point: Point):
-        """The selected Implementation's stream-tiling entry for this interface, or None
-        (unfolded). Looks the impl up by the resolved ``implementation`` axis."""
+    def _selected(self, point: Point) -> Implementation:
+        """The pool member named by the resolved ``implementation`` axis."""
         impl_name = point["implementation"]
         by_name = {b.name: b for b in self.pool}
         bundle = by_name.get(impl_name)
@@ -225,41 +263,75 @@ class Kernel:
                 f"resolved implementation {impl_name!r} is not in the pool "
                 f"(have {sorted(by_name)})"
             )
-        return bundle.tiling.get(iface.name)
+        return bundle
 
     def _stream_elems(self, iface: Interface, point: Point) -> int:
-        """Elements/cycle for this interface = the resolved stream dial (1 if unfolded)."""
-        entry = self._tiling_entry(iface, point)
-        if entry is None:
+        """Elements/cycle for this interface = the generated stream-width expression for
+        the selected impl (1 if the impl declares no tiling for it)."""
+        gen = self._generated(self._selected(point))
+        expr = gen.width_exprs.get(iface.name)
+        if expr is None:
             return 1
         try:
-            return eval_entry(entry, point)
+            return int(expr.eval(point))
         except TileError as exc:
             raise KernelError(f"interface {iface.name!r} tiling: {exc}") from exc
 
+    def _stream_width(self, iface: Interface, point: Point, context: Context) -> int:
+        """Stream width in bits = elements/cycle * bitwidth(dtype). The dtype is the
+        interface's declared ``dtype_source`` (a point key, e.g. ``outputDataType``) when
+        set — so a derived output type is honored — else the raw tensor dtype."""
+        elems = self._stream_elems(iface, point)
+        if iface.dtype_source is not None:
+            dt = point[iface.dtype_source]
+        else:
+            dt = context.tensor_datatype(iface.tensor)
+        return elems * dt.bitwidth()
+
+    def _folds_reshape(self, iface: Interface, point: Point) -> bool:
+        """Whether a folded SHAPE is a plain reshape for this interface under the selected
+        impl. Derived from the tiling specs (any WidthOnly position ⇒ not a reshape);
+        falls back to the legacy ``folds_last_axis`` flag when the impl declares no
+        tiling for the interface."""
+        gen = self._generated(self._selected(point))
+        if iface.name in gen.reshapes:
+            return gen.reshapes[iface.name]
+        return iface.folds_last_axis
+
     def _folded_shape(self, iface: Interface, point: Point, context: Context):
-        """Last-axis fold: ``normal[:-1] + (fold, elems)`` where ``elems`` is the stream
-        dial and ``fold = last_dim / elems``. Raises if the dial does not divide the last
-        axis (a real illegal fold, not a silent floor), or if the interface's width is not
-        a last-axis fold at all (``folds_last_axis=False`` — the MVU weight port, whose
-        WIDTH resolves via the evaluator but whose SHAPE is not a tensor-axis reshape)."""
-        if not iface.folds_last_axis:
+        """Fold the dims the impl's tiling map binds to a dial: for each folded position
+        ``(dim_index, dial)``, split that tensor dim into ``(extent // elems, elems)``.
+        The engine's ``fold_map`` names WHICH dim each dial folds (not just the last).
+        Raises for a WidthOnly interface (the MVU weight port — width resolves via
+        ``get_*stream_width`` but a folded SHAPE is not a plain reshape)."""
+        if not self._folds_reshape(iface, point):
             raise KernelError(
-                f"interface {iface.name!r} does not fold a tensor axis (folds_last_axis="
-                f"False); its stream WIDTH resolves via get_*stream_width, but a folded "
-                f"SHAPE is not a plain reshape for this port (e.g. MVU weight WSIMD)"
+                f"interface {iface.name!r} does not fold a tensor axis (its stream WIDTH "
+                f"resolves via get_*stream_width, but a folded SHAPE is not a plain "
+                f"reshape for this port, e.g. MVU weight WSIMD)"
             )
         normal = tuple(context.tensor_shape(iface.tensor))
-        elems = self._stream_elems(iface, point)
         if not normal:
             raise KernelError(f"interface {iface.name!r} has no shape to fold")
-        last = normal[-1]
-        if last % elems != 0:
-            raise KernelError(
-                f"interface {iface.name!r}: stream {elems} does not divide last dim {last} "
-                f"(illegal fold)"
-            )
-        return normal[:-1] + (last // elems, elems)
+        gen = self._generated(self._selected(point))
+        fmap = gen.fold_map.get(iface.name)
+        if fmap is None:
+            return normal  # no tiling for this interface ⇒ unfolded
+        # Build the folded shape by expanding each folded position into (fold, elems).
+        out: list[int] = []
+        for dim_idx, dial in fmap:
+            extent = int(normal[dim_idx])
+            if dial is None:
+                out.append(extent)
+                continue
+            elems = int(point[dial])
+            if elems <= 0 or extent % elems != 0:
+                raise KernelError(
+                    f"interface {iface.name!r}: stream {elems} does not divide dim "
+                    f"{dim_idx} = {extent} (illegal fold)"
+                )
+            out.extend((extent // elems, elems))
+        return tuple(out)
 
 
 def _prod(shape) -> int:

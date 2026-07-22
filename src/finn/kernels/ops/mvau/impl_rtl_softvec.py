@@ -21,9 +21,8 @@ from finn.kernels.space import Implementation
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import emit_mvau_rtl
-from .names import MVAU_DSP_SOFTVEC
+from .op import COMPUTE_TILING, MVAU_DSP_SOFTVEC
 from .registry import register
-from .shared import COMPUTE_TILING
 
 
 def _softvec_feasible(p, ctx):

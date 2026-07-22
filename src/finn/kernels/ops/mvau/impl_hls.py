@@ -20,9 +20,8 @@ from qonnx.core.datatype import DataType
 from finn.kernels.space import Derived, Implementation, discrete_axis, predicate
 
 from .emit_hls import emit_mvau_hls
-from .names import INPUT, MVAU_HLS, WEIGHTS
+from .op import COMPUTE_TILING, INPUT, MVAU_HLS, WEIGHTS
 from .registry import register
-from .shared import COMPUTE_TILING
 
 
 @predicate("HLS: SIMD >= MW/1024")

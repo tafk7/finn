@@ -43,7 +43,7 @@ from finn.kernels.space import (
 )
 from finn.util.data_packing import numpy_to_hls_code
 
-from .names import INPUT, OUTPUT, WEIGHTS
+from .op import INPUT, OUTPUT, WEIGHTS
 
 _MULT_STYLE = {"auto": "ap_resource_dflt()", "lut": "ap_resource_lut()", "dsp": "ap_resource_dsp()"}
 

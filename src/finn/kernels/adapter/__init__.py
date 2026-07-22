@@ -6,12 +6,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""The FINN adapter layer: ``KernelOp(HWCustomOp)`` — lets a model-free ``Kernel``
-back a real ONNX node and answer FINN's build-flow contract.
+"""The FINN adapter layer: ``KernelOp(HWCustomOp)`` — the op-agnostic base that lets a
+model-free ``Kernel`` back a real ONNX node and answer FINN's build-flow contract.
 
 ``kernel_op.py``     the base adapter (nodeattr↔Context bridge, the HWCustomOp getters).
-``mvau_kernel_op.py`` the MVAU concrete op (increment 1).
 ``nodeattr_registry.py`` schema-axes → FINN nodeattr types (the R12 dissolution).
+
+Concrete per-op wrappers live WITH their kernel definition (e.g.
+``finn.kernels.ops.mvau.MvauKernelOp``), not here — this package is the shared
+infrastructure only.
 
 See ``kernel-design/finn-hw-backend-analysis/consumer-surface-model.md`` for the
 consumer surface this satisfies, and the design doc
@@ -19,6 +22,5 @@ consumer surface this satisfies, and the design doc
 """
 
 from .kernel_op import KernelOp, PortSpec
-from .mvau_kernel_op import MvauKernelOp
 
-__all__ = ["KernelOp", "PortSpec", "MvauKernelOp"]
+__all__ = ["KernelOp", "PortSpec"]

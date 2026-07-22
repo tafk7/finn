@@ -37,7 +37,7 @@ PUMPED_MEMORY = ns("pumpedMemory")
 SOURCES = ns("sources")  # this pool's sources-derived key (distinct from compute's)
 
 # Memstream GEOMETRY — cross-coordinate derived (read the compute fold), contributed
-# by the composing op (mvau/parameters_coupling.py), consumed by the memstream emit.
+# by the composing op (ops/mvau/op.py §5), consumed by the memstream emit.
 PARAM_DEPTH = ns("depth")  # memory lines = WMEM * TH
 PARAM_WIDTH = ns("width")  # padded stream width in bits = roundup(PE*SIMD*wbits, 8)
 PARAM_SETS = ns("sets")  # 1, or mlo_max_iter (MLO set count)

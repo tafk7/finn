@@ -40,7 +40,7 @@ from finn.kernels.space import (
     Template,
 )
 
-from .names import INPUT, WEIGHTS
+from .op import INPUT, WEIGHTS
 
 # finn-rtllib/mvu/mvu_vvu_axi_wrapper.v — 14 $UPPERCASE$ slots (all compute-core
 # config; none touch the weight-delivery cluster). Verilog expressions like

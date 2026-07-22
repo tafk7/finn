@@ -22,9 +22,8 @@ from finn.util.basic import get_dsp_block
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
 from .emit_rtl import emit_mvau_rtl
-from .names import INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
+from .op import COMPUTE_TILING, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
 from .registry import register
-from .shared import COMPUTE_TILING
 
 
 def _packed_feasible(p, ctx):

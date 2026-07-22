@@ -1,0 +1,531 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+# Portions of this content consist of AI generated content.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+############################################################################
+
+"""MVAU — the matrix-vector activation kernel: WHAT it is, and how FINN sees it.
+
+This is the one op-definition file (mirrors FINN's ``matrixvectoractivation.py``, but
+declarative). A backend author reads it top to bottom; each ``impl_*.py`` bundle in this
+package declares only the HOW for one compute core. Source of truth for each
+axis/derived/predicate (file:line into real FINN):
+``kernel-design/kernel-final-design/mvau-design-space.md``.
+
+Sections (what each replaces in the classic FINN MVAU):
+    1. CONSTANTS         tensor names + pool-member identities
+    2. INTERFACES        the ONNX-facing arity + roles  (FINN: node in/out wiring)
+    3. OP DESIGN SPACE   op_axes/op_derived/op_predicates — the shared BLOCK structure
+                         (FINN: get_nodeattr_types + the shape/dtype getters' math)
+    4. COMPUTE TILING    the BLOCK->STREAM lowering shared by the pool
+    5. PARAMETERS        cross-coordinate couplings to the composed weight-delivery pool
+    6. COST              rough op-level get_exp_cycles  (FINN: get_exp_cycles)
+    7. ASSEMBLY          mvau_kernel() / mvau_schema()  (FINN: the class itself)
+    8. FINN WRAPPER      MvauKernelOp(KernelOp)         (FINN: MVAU(HWCustomOp))
+
+Tensor-name convention for the Context this schema resolves against:
+    "inp"      the activation input tensor   (inputDataType, dynamic)
+    "weights"  the weight tensor             (weightDataType + initializer VALUES)
+    "out"      the output tensor             (outputDataType, unless derived)
+"""
+
+from __future__ import annotations
+
+import numpy as np
+from qonnx.core.datatype import DataType
+from qonnx.util.basic import (
+    calculate_matvec_accumulator_range,
+    roundup_to_integer_multiple,
+)
+
+from finn.kernels.adapter import KernelOp, PortSpec
+from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
+from finn.kernels.space import (
+    Derived,
+    Direction,
+    Fold,
+    Full,
+    Illegal,  # noqa: F401  (kept available for callers/tests)
+    Interface,
+    Kernel,
+    Predicate,
+    Role,
+    Schema,
+    WidthOnly,
+    derive,
+    discrete_axis,
+    fixed_axis,
+    predicate,
+    predicate_axis,
+)
+from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
+from finn.kernels.ops.parameters import parameters_schema
+from finn.kernels.ops.parameters.names import (
+    DECOUPLED,
+    EMBEDDED,
+    PARAM_DEPTH,
+    PARAM_INIT_FILE,
+    PARAM_SETS,
+    PARAM_WIDTH,
+    PUMPED_MEMORY,
+    RAM_STYLE,
+    RUNTIME_WRITEABLE,
+    TOPOLOGY,
+)
+
+from .registry import build_pool
+
+
+# =============================================================================
+# 1. CONSTANTS
+# =============================================================================
+
+# Pool-member identities (values of the root `implementation` axis). A new backend
+# defines its own name in its own bundle file; these three are the built-ins.
+MVAU_HLS = "mvau_hls"
+MVAU_DSP_SOFTVEC = "mvau_dsp_softvec"
+MVAU_DSP_PACKED = "mvau_dsp_packed"
+
+# Context tensor names this schema resolves against.
+WEIGHTS = "weights"
+INPUT = "inp"
+OUTPUT = "out"
+
+
+# =============================================================================
+# 2. INTERFACES — the ONNX-facing arity + roles (no tiling; tiling is impl-owned)
+# =============================================================================
+
+
+def mvau_interfaces():
+    """The op-side interface list — identity + role, no tiling (tiling is impl-owned).
+
+    ``weights`` is a PARAM port whose stream WIDTH is PE*SIMD (a cross-interface expr,
+    not a fold of the weight tensor's own axes), so ``folds_last_axis=False``: its width
+    resolves via the tiling evaluator, but a folded-SHAPE request raises."""
+    return (
+        Interface("inp", INPUT, Direction.IN, Role.DATA_IN, index=0),
+        Interface("weights", WEIGHTS, Direction.IN, Role.WEIGHT_SINK, index=1,
+                  folds_last_axis=False),
+        # dtype_source="outputDataType": the stream width uses the derived output type
+        # (= accDataType under noActivation), not the raw graph dtype — so the generated
+        # outstream_width matches the emit-side value.
+        Interface("out", OUTPUT, Direction.OUT, Role.DATA_OUT, index=0,
+                  dtype_source="outputDataType"),
+    )
+
+
+# =============================================================================
+# 3. OP DESIGN SPACE — the shared BLOCK structure (axes / derived / predicates).
+#    Everything every MVU has, regardless of the chosen compute core. An impl
+#    bundle never edits this; it resolves against it.
+# =============================================================================
+
+# -- small guard/helper functions (named, not lambdas, for legible tracebacks) --
+
+
+def _has_activation(p) -> bool:
+    return p.noActivation == 0
+
+
+def weights_may_change(p) -> bool:
+    """Weights are not statically known — accDataType/weightDataType must use
+    worst-case bounds rather than actual values (base:482-498). This is the one
+    CROSS-COORDINATE coupling from the parameters subsystem back into the compute
+    dtype derivations: staticness (coordinate C) is decided by the composed
+    ``parameters.*`` fields. Reads with ``.get`` so it is safe on a point where the
+    parameters pool is absent (a future param-free op) — absent ⇒ statically known.
+
+    Increment-1 topologies are ``embedded`` (static) and ``decoupled`` (static unless
+    runtime-writable). The external / dynamic / MLO staticness sources return when
+    those topologies land (each will be its own ``parameters.topology`` value)."""
+    return bool(p.get(RUNTIME_WRITEABLE, 0))
+
+
+def _matrix_dim(idx):
+    def default(p, ctx):
+        return ctx.tensor_shape(WEIGHTS)[idx]
+
+    return default
+
+
+def _is_int_list(v) -> bool:
+    return isinstance(v, (list, tuple)) and all(isinstance(x, int) for x in v)
+
+
+def _is_nonneg_int(v) -> bool:
+    return isinstance(v, int) and v >= 0
+
+
+# -- op-level SHARED axes — present under every implementation ------------------
+
+
+def op_axes():
+    return (
+        # --- context-fixed matrix dims (addressed like axes) -----------------
+        # MW/MH are BLOCK extents (the matmul's reduction + output dims), read from the
+        # weight tensor. The PE/SIMD fold DIALS that divide them are NOT declared here —
+        # the tiling engine derives them from each impl's COMPUTE_TILING (Fold specs).
+        fixed_axis("MW", _matrix_dim(0)),
+        fixed_axis("MH", _matrix_dim(1)),
+        # --- activation / threshold cluster ----------------------------------
+        discrete_axis("noActivation", {0, 1}, 0),
+        predicate_axis(
+            "ActVal",
+            "int",
+            lambda v: isinstance(v, int),
+            0,
+            guard=_has_activation,
+            deps={"noActivation"},
+        ),
+        discrete_axis(
+            "ram_style_thresholds",
+            {"auto", "block", "distributed"},
+            "auto",
+            guard=_has_activation,
+            deps={"noActivation"},
+        ),
+        discrete_axis("binaryXnorMode", {0, 1}, 0),
+        predicate_axis("numInputVectors", "list[int]", _is_int_list, [1]),
+        # F4: mlo_max_iter is a per-node iteration count, unbounded non-neg int.
+        # The `64` in the old {0..64} domain was n_max_layers (a fabric-wide MLO
+        # table size, hwcustomop.py:378) — a different entity that does not bound
+        # this axis (hwcustomop.py:317-319, mlo_max_iter unbounded).
+        predicate_axis("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
+        # --- weight-delivery cluster: MOVED OUT to the `parameters` pool ------
+        # mem_mode/ram_style/runtime_writeable_weights/pumpedMemory/dynamic_input used
+        # to live here as the "reserved composition seam". They are now the
+        # `parameters` subsystem (ops/parameters/), composed into the MVAU schema
+        # via `compose(...)` under the `parameters.*` namespace. mem_mode is gone:
+        # being the `decoupled` topology IS "internal_decoupled". The cross-coordinate
+        # couplings (memstream geometry, the pumpedMemory/fold gate) are contributed in
+        # section 5 below (appended to the op schema before compose).
+    )
+
+
+# -- op-level SHARED derived — computed for every implementation ----------------
+
+
+def _wmem(p, ctx):
+    return p.MW * p.MH // (p.PE * p.SIMD)
+
+
+def _tmem(p, ctx):
+    return p.MH // p.PE if p.noActivation == 0 else 0
+
+
+def _acc_datatype(p, ctx):
+    # base:469-527 — worst-case type bounds when weights may change, actual weight
+    # VALUES when static. The canonical data-dependent Derived.
+    idt = ctx.tensor_datatype(INPUT)
+    wdt = ctx.tensor_datatype(WEIGHTS)
+    weights = ctx.initializer(WEIGHTS)
+    if p.binaryXnorMode == 1 and weights is not None:
+        weights = 2 * weights - 1
+    if weights_may_change(p) or weights is None:
+        lower = wdt.min() * np.ones((p.MW, p.MH))
+        upper = wdt.max() * np.ones((p.MW, p.MH))
+        lo_r = calculate_matvec_accumulator_range(lower, idt)
+        hi_r = calculate_matvec_accumulator_range(upper, idt)
+        acc_min = min(min(lo_r), min(hi_r))
+        acc_max = max(max(lo_r), max(hi_r))
+    else:
+        acc_min, acc_max = calculate_matvec_accumulator_range(weights, idt)
+    return smallest_datatype_for_range(float(acc_min), float(acc_max))
+
+
+def _weight_datatype(p, ctx):
+    # base:529-549 — VALUE_OPTIMIZED narrow, only when weights are statically known.
+    weights = ctx.initializer(WEIGHTS)
+    if weights is None or weights_may_change(p):
+        return ctx.tensor_datatype(WEIGHTS)
+    w_min = float(weights.min())
+    w_max = float(weights.max())
+    if w_min < 0:
+        extreme = w_min if abs(w_min) > w_max else -w_max - 1
+        return DataType.get_smallest_possible(extreme)
+    return DataType.get_smallest_possible(w_max)
+
+
+def _output_datatype(p, ctx):
+    # base:517 — outputDataType = accDataType when noActivation, else the graph dtype.
+    if p.noActivation == 1:
+        return _acc_datatype(p, ctx)
+    return ctx.tensor_datatype(OUTPUT)
+
+
+def op_derived():
+    # NOTE: `instream_width`/`outstream_width` are NOT here — the tiling engine generates
+    # them from COMPUTE_TILING (SIMD·inbits / PE·outbits), with the `out` interface's
+    # dtype_source="outputDataType" so the width uses the accumulator type under
+    # noActivation. `weight_stream_width` (0 for embedded, PE*SIMD*wbits otherwise) is
+    # CROSS-COORDINATE — it reads both the compute fold AND the parameters topology — so
+    # it is contributed in section 5 (coupling_derived), not here.
+    return (
+        Derived("WMEM", _wmem),
+        Derived("TMEM", _tmem),
+        Derived("accDataType", _acc_datatype),
+        Derived("weightDataType", _weight_datatype),
+        Derived("outputDataType", _output_datatype),
+    )
+
+
+# -- op-level SHARED predicates — one kind; provenance is what each reads --------
+
+
+# The divisibility predicates (MH%PE==0, MW%SIMD==0) are NOT hand-written here — the
+# tiling engine generates one per Fold spec from COMPUTE_TILING. The op declares only
+# the block-structural math facts below.
+
+
+# The `pumpedMemory => not(PE==SIMD==1)` gate and the `ram_style=ultra & not versal
+# => runtime_writeable=1` URAM gate live in the parameters subsystem: the URAM gate
+# is self-contained in the decoupled topology bundle; the pumpedMemory/fold gate is
+# cross-coordinate (reads the compute fold) and is contributed in section 5.
+
+
+@predicate("weight initializer must exist unless params are not statically known")
+def _weights_present(p, ctx):
+    # Weights must exist as an initializer unless the parameters subsystem says they
+    # are not statically known (runtime-writable / external / dynamic / MLO). Reads
+    # the composed staticness via weights_may_change (parameters.*), with .get safety
+    # for a future param-free op (no parameters pool ⇒ still requires an initializer).
+    if ctx.initializer(WEIGHTS) is None:
+        if not weights_may_change(p):
+            return "weight initializer required unless params are not static (base:782)"
+    return None
+
+
+# NOTE (audit F2, DROPPED): a `bipolar x bipolar => nonneg thresholds` predicate used
+# to live here, but it checked the scalar `ActVal` (the threshold activation's bias,
+# base:156) whereas FINN's assertion is over the THRESHOLD TENSOR VALUES
+# (`orig_thres_matrix >= 0`, base:578) — a different object. The Context models
+# inp/weights/out; thresholds are NOT a first-class Context tensor, so the correct
+# action is to drop it. Reinstate when thresholds become a Context tensor.
+
+
+def op_predicates():
+    return (_weights_present,)
+
+
+# =============================================================================
+# 4. COMPUTE TILING — the BLOCK->STREAM lowering shared by all three compute impls.
+# =============================================================================
+
+# They fold identically — SIMD folds the reduction dim MW on the activation (last axis),
+# PE folds the output dim MH (last axis); the weight lane width is PE*SIMD elements (a
+# cross-interface WidthOnly — not a reshape of the weight tensor's own axes). Impl-owned
+# per kernelop-tensor-block-stream.md §5.1, but identical across the current pool so
+# declared once here; a tiled backend would override "weights" with WidthOnly(PE*SIMD/TH).
+# From these specs the tiling engine DERIVES the SIMD/PE fold-dial axes (divisor domains),
+# the divisibility predicates, and the stream-width deriveds — none are hand-written.
+COMPUTE_TILING = {
+    INPUT: [Full(), Fold("SIMD")],
+    OUTPUT: [Full(), Fold("PE")],
+    WEIGHTS: [WidthOnly(derive("PE") * derive("SIMD"))],
+}
+
+
+# =============================================================================
+# 5. PARAMETERS — cross-coordinate couplings to the composed weight-delivery pool.
+#    A few quantities read BOTH the compute fold (PE/SIMD/WMEM) AND the chosen storage
+#    topology (parameters.topology). They cannot live in either pool alone, so they are
+#    appended to the op schema right before `compose` merges the two pools — the one
+#    place both surfaces are in scope. See param-delivery-design-space.md §2.
+# =============================================================================
+
+
+def _weight_stream_width(p, ctx):
+    # base:256-275 — 0 for embedded (weights baked in, no stream port); PE*SIMD*wbits
+    # otherwise. Reads the topology (parameters) AND the fold (compute) — the canonical
+    # cross-coordinate coupling.
+    if p.get(TOPOLOGY) == EMBEDDED:
+        return 0
+    return p.PE * p.SIMD * ctx.tensor_datatype(WEIGHTS).bitwidth()
+
+
+def _pumped_memory_not_1x1(p, ctx):
+    # pumpedMemory splits each weight word across a double-pumped memory; with
+    # PE==SIMD==1 there is nothing to split (base:717 "known bug"). Cross-coordinate:
+    # pumpedMemory is a parameters axis, PE/SIMD are the compute fold.
+    if p.get(PUMPED_MEMORY, 0) and p.PE == 1 and p.SIMD == 1:
+        return "pumpedMemory with PE=SIMD=1 is a known-bad configuration (base:717)"
+    return None
+
+
+# --- Memstream GEOMETRY (decoupled only; None for embedded) ------------------
+# These reproduce hwcustomop.py:307-353 generate_hdl_memstream as pure functions of
+# the composed point + context. They read the compute fold (PE/SIMD/WMEM) AND the
+# parameters topology, so they live here, not in the parameters bundle. Absent
+# (None) for embedded, where there is no streamer.
+
+
+def _is_decoupled(p) -> bool:
+    return p.get(TOPOLOGY) == DECOUPLED
+
+
+def _mem_width(p, ctx):
+    # WIDTH = get_instream_width_padded(1) = roundup(PE*SIMD*wbits, 8). base:326.
+    if not _is_decoupled(p):
+        return None
+    wbits = ctx.tensor_datatype(WEIGHTS).bitwidth()
+    return int(roundup_to_integer_multiple(p.PE * p.SIMD * wbits, 8))
+
+
+def _mem_depth(p, ctx):
+    # DEPTH = calc_wmem() * TH (MVAU). base:323. TH defaults to 1 (no tiling here).
+    if not _is_decoupled(p):
+        return None
+    return int(p.WMEM * p.get("TH", 1))
+
+
+def _mem_sets(p, ctx):
+    # SETS = mlo_max_iter or 1. base:316-319. Coordinate B (cardinality) — 1 until MLO.
+    if not _is_decoupled(p):
+        return None
+    return int(p.get("mlo_max_iter", 0) or 1)
+
+
+def _mem_init_file(p, ctx):
+    # INIT_FILE = "memblock.dat", blanked for URAM on a non-Versal part (base:331-332):
+    # URAM cannot be preloaded from a .dat on UltraScale (loaded via AXI-lite instead).
+    if not _is_decoupled(p):
+        return None
+    from finn.util.basic import is_versal
+
+    if p.get(RAM_STYLE) == "ultra" and not is_versal(ctx.fpgapart):
+        return ""
+    return "memblock.dat"
+
+
+def coupling_derived():
+    """Cross-coordinate derived to append to the MVAU op schema before compose."""
+    return (
+        Derived("weight_stream_width", _weight_stream_width),
+        # memstream geometry (decoupled only; None for embedded) — consumed by emit
+        Derived(PARAM_WIDTH, _mem_width),
+        Derived(PARAM_DEPTH, _mem_depth),
+        Derived(PARAM_SETS, _mem_sets),
+        Derived(PARAM_INIT_FILE, _mem_init_file),
+    )
+
+
+def coupling_predicates():
+    """Cross-coordinate predicates to append to the MVAU op schema before compose."""
+    return (
+        Predicate(
+            check=_pumped_memory_not_1x1,
+            description="parameters.pumpedMemory => not (PE == SIMD == 1)",
+        ),
+    )
+
+
+# =============================================================================
+# 6. COST — rough op-level get_exp_cycles.
+# =============================================================================
+
+
+def _mvau_cost(point, context):
+    """Rough throughput cost: nf * sf * n_vecs — the reduction trip (MW/SIMD) times the
+    output trip (MH/PE) times the input-vector count. A PRODUCT the generic max-over-
+    interfaces floor cannot see (the reduction coupling; kernelop-tensor-block-stream.md
+    §2.2), so MVAU supplies it as the op-level cost_model."""
+    sf = point.MW // point.SIMD
+    nf = point.MH // point.PE
+    n_vecs = 1
+    for d in context.tensor_shape(INPUT)[:-1]:
+        n_vecs *= int(d)
+    return nf * sf * n_vecs
+
+
+# =============================================================================
+# 7. ASSEMBLY — the full MVAU design space as a Kernel (and as a bare Schema).
+# =============================================================================
+
+
+def mvau_shared():
+    """The op-level shared (axes, derived, predicates) — everything every MVU has,
+    independent of the composed parameters couplings. Used by tests that assemble a
+    bare ``pool_schema`` directly."""
+    return op_axes(), op_derived(), op_predicates()
+
+
+def mvau_pool():
+    """The registered MVAU implementations (flat peers), in registration order."""
+    return build_pool()
+
+
+def mvau_kernel() -> Kernel:
+    """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
+
+    The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
+    tiling, composed with the PARAMETERS pool (``parameters.topology``). The cross-
+    coordinate couplings that read both the compute fold and the chosen topology
+    (``weight_stream_width``, the pumpedMemory/fold gate) go in ``op_derived``/
+    ``op_predicates`` (appended before compose, where both surfaces are in scope). The
+    getters (folded shapes, stream widths, rough cost) project from a resolved point via
+    the impl ``tiling``."""
+    return Kernel(
+        name="MVAU",
+        interfaces=mvau_interfaces(),
+        pool=mvau_pool(),
+        op_axes=op_axes(),
+        op_derived=op_derived() + coupling_derived(),
+        op_predicates=op_predicates() + coupling_predicates(),
+        cost_model=_mvau_cost,
+        sub_schemas=(parameters_schema(),),
+    )
+
+
+def mvau_schema() -> Schema:
+    """The full MVAU design space as a resolve ``Schema`` — delegates to
+    :func:`mvau_kernel` (identical assembly). Kept as the name emit/composition tests
+    resolve against."""
+    return mvau_kernel().schema()
+
+
+# =============================================================================
+# 8. FINN WRAPPER — MvauKernelOp(KernelOp): how FINN's build flow sees this kernel.
+# =============================================================================
+#
+# Binds the kernel to a FINN node: three ports (activation in, weights in, activation
+# out) mapping the graph's tensor slots to the kernel's inp/weights/out interfaces.
+# Registered as ``MVAUKernel_hls`` in the ``finn.custom_op.fpgadataflow.hls`` domain
+# (see the hls custom_op dict) so ``is_hls_node`` sees it and the estimate analyses run
+# — while the real compute impl is chosen by the ``implementation`` nodeattr, not the
+# domain (consumer-surface-model.md R11).
+
+_PORTS = (
+    PortSpec(iface="inp", direction="in", index=0, role=Role.DATA_IN),
+    PortSpec(iface="weights", direction="in", index=1, role=Role.WEIGHT_SINK),
+    PortSpec(iface="out", direction="out", index=0, role=Role.DATA_OUT),
+)
+
+
+class MvauKernelOp(KernelOp):
+    """MVAU (matrix-vector activation) as a Kernel-backed FINN op."""
+
+    def kernel(self):
+        return mvau_kernel()
+
+    def ports(self) -> tuple[PortSpec, ...]:
+        return _PORTS
+
+    def _output_datatype_from_point(self, kernel, ctx, point, index):
+        # MVAU's outputDataType is a resolved derived: the graph dtype when forwarding,
+        # or the weight-derived accumulator type under noActivation. Read it off the
+        # point so infer propagates the exact (possibly narrowed) type.
+        if index == 0 and "outputDataType" in point:
+            return point["outputDataType"]
+        return super()._output_datatype_from_point(kernel, ctx, point, index)
+
+    def get_folding_axes(self):
+        """The folding dials this op exposes, each mapped to its resolved max value —
+        the capability SetFolding queries instead of op_type prefix-matching
+        (consumer-surface-model.md R1). SIMD folds the reduction dim MW, PE the output
+        dim MH; both are context-derived (from the weights shape), so we read them off a
+        resolved point rather than from a stored nodeattr."""
+        _, _, point = self._point()
+        return {"SIMD": int(point.MW), "PE": int(point.MH)}

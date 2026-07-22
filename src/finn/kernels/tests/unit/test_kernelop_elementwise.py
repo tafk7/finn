@@ -39,10 +39,7 @@ from finn.kernels.space import (
     Interface,
     Kernel,
     Role,
-    broadcast_aware,
-    derive,
     discrete_axis,
-    divisor_axis,
     fixed_axis,
 )
 
@@ -50,10 +47,12 @@ N = 128  # last (channel) dim of lhs / output
 
 
 def _elementwise_op() -> Kernel:
-    # lhs last dim drives PE; rhs_last is a context-fixed quantity broadcast_aware reads.
-    lhs_last = fixed_axis("lhs_last", lambda p, ctx: ctx.tensor_shape("lhs")[-1])
+    from finn.kernels.space import Broadcast, Fold, Full
+
+    # rhs_last is a context-fixed quantity the Broadcast spec reads (the rhs last-dim
+    # length; 1 ⇒ broadcast). The PE dial is engine-derived from the lhs/output Fold specs
+    # (divisors of the lhs channel count) — a broadcast rhs does NOT shrink its domain.
     rhs_last = fixed_axis("rhs_last", lambda p, ctx: ctx.tensor_shape("rhs")[-1])
-    pe = divisor_axis("PE", "lhs_last", 1, deps={"lhs_last"})
     # func / input_pattern: structural op params (func affects output dtype rule at
     # Tier-4; input_pattern reassigns rhs role at Tier-4 — both inert for Tier-3 shapes).
     func = discrete_axis("func", {"Add", "Mul", "Sub"}, "Add")
@@ -61,11 +60,12 @@ def _elementwise_op() -> Kernel:
         "input_pattern", {"dynamic_dynamic", "dynamic_static"}, "dynamic_dynamic"
     )
 
+    # rank-3 channel-last. lhs/output fold last by PE; rhs folds by PE UNLESS broadcast
+    # (rhs_last == 1), then it streams 1 (the Broadcast spec).
     tiling = {
-        "lhs": "PE",
-        # rhs folds by PE UNLESS it is broadcast (rhs_last == 1), then it streams 1.
-        "rhs": broadcast_aware("rhs_last", derive("PE")),
-        "output": "PE",
+        "lhs": [Full(), Full(), Fold("PE")],
+        "rhs": [Full(), Full(), Broadcast("rhs_last", "PE")],
+        "output": [Full(), Full(), Fold("PE")],
     }
     hls = Implementation(name="elementwise_hls", tiling=tiling)
     rtl = Implementation(name="elementwise_rtl", tiling=tiling)
@@ -78,7 +78,7 @@ def _elementwise_op() -> Kernel:
             Interface("output", "out", Direction.OUT, Role.DATA_OUT, index=0),
         ),
         pool=(hls, rtl),
-        op_axes=(lhs_last, rhs_last, pe, func, pattern),
+        op_axes=(rhs_last, func, pattern),
     )
 
 

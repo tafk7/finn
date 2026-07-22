@@ -18,9 +18,9 @@ and the ``memblock.dat`` weight file the on-chip RAM is initialized from. Both a
 pure functions of the resolved point + the frozen context (which carries the weight
 VALUES) — no graph, no ``FINN_ROOT``.
 
-The geometry derived are contributed at compose time by
-``fixtures/mvau/parameters_coupling.py`` (they read the compute fold), so this emit
-just reads them off the point. The ``.dat`` packing is the decoupled-verilog-dat path:
+The geometry derived are contributed at compose time by the composing op's
+cross-coordinate couplings (``ops/mvau/op.py`` §5 — they read the compute fold), so this
+emit just reads them off the point. The ``.dat`` packing is the decoupled-verilog-dat path:
 transpose ``(1,PE,WMEM,SIMD)`` → PE-flip → hex-pack each ``PE*SIMD`` group to a
 4-bit-padded hex word; ``pumpedMemory`` splits each word into two half-width entries.
 """

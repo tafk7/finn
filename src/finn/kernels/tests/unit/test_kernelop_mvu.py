@@ -42,10 +42,8 @@ from finn.kernels.space import (
     Role,
     derive,
     discrete_axis,
-    divisor_axis,
     fixed_axis,
     param,
-    predicate,
 )
 
 MW = 128  # reduction dim (act last axis)
@@ -56,16 +54,6 @@ VECS = (1,)  # numInputVectors leading dims
 # ---------------------------------------------------------------------------
 # The MVU Kernel.
 # ---------------------------------------------------------------------------
-
-
-@predicate("MW % SIMD == 0")
-def _simd_divides_mw(p, ctx):
-    return None if p.MW % p.SIMD == 0 else f"MW={p.MW} not divisible by SIMD={p.SIMD}"
-
-
-@predicate("MH % PE == 0")
-def _pe_divides_mh(p, ctx):
-    return None if p.MH % p.PE == 0 else f"MH={p.MH} not divisible by PE={p.PE}"
 
 
 def _mvu_cost(point, context):
@@ -80,21 +68,32 @@ def _mvu_cost(point, context):
 
 
 def _mvu_op() -> Kernel:
+    from finn.kernels.space import Fold, Full, WidthOnly
+
     mw = fixed_axis("MW", lambda p, ctx: ctx.tensor_shape("inp")[-1])
     mh = fixed_axis("MH", lambda p, ctx: ctx.tensor_shape("out")[-1])
-    simd = divisor_axis("SIMD", "MW", 1, deps={"MW"})
-    pe = divisor_axis("PE", "MH", 1, deps={"MH"})
 
-    # act folds MW by SIMD; out folds MH by PE; weight width = PE*SIMD (no TH).
-    untiled_tiling = {"act": "SIMD", "out": "PE", "weights": derive("PE") * derive("SIMD")}
+    # act folds MW by SIMD (last axis); out folds MH by PE; weight width = PE*SIMD, a
+    # cross-interface WidthOnly (not a reshape of the weight tensor's own axes). The engine
+    # derives the SIMD/PE dials + divisibility from these Fold specs.
+    untiled_tiling = {
+        "act": [Full(), Fold("SIMD")],
+        "out": [Full(), Fold("PE")],
+        "weights": [WidthOnly(derive("PE") * derive("SIMD"))],
+    }
 
     hls = Implementation(name="mvau_hls", tiling=untiled_tiling)
     rtl_untiled = Implementation(name="mvau_rtl_untiled", tiling=untiled_tiling)
-    # tiled backend OWNS TH; weight width = (PE*SIMD)/TH.
+    # tiled backend OWNS TH; weight width = (PE*SIMD)/TH — the acid test that a backend
+    # can fold DIFFERENTLY from its peers (impl-owned tiling).
     rtl_tiled = Implementation(
         name="mvau_rtl_tiled",
         axes=(discrete_axis("TH", {1, 2, 4}, 2),),
-        tiling={"act": "SIMD", "out": "PE", "weights": derive("PE") * derive("SIMD") / param("TH")},
+        tiling={
+            "act": [Full(), Fold("SIMD")],
+            "out": [Full(), Fold("PE")],
+            "weights": [WidthOnly(derive("PE") * derive("SIMD") / param("TH"))],
+        },
     )
 
     return Kernel(
@@ -107,8 +106,7 @@ def _mvu_op() -> Kernel:
             Interface("out", "out", Direction.OUT, Role.DATA_OUT, index=0),
         ),
         pool=(hls, rtl_untiled, rtl_tiled),
-        op_axes=(mw, mh, simd, pe),
-        op_predicates=(_simd_divides_mw, _pe_divides_mh),
+        op_axes=(mw, mh),
         cost_model=_mvu_cost,
     )
 
