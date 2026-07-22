@@ -35,7 +35,7 @@ from finn.kernels.space import (
     Context,
     Direction,
     Illegal,
-    Implementation,
+    Backend,
     Interface,
     Kernel,
     KernelError,
@@ -81,13 +81,13 @@ def _mvu_op() -> Kernel:
         "weights": ["SIMD", "PE"],
     }
 
-    hls = Implementation(name="mvau_hls", stream=untiled_stream)
-    rtl_untiled = Implementation(name="mvau_rtl_untiled", stream=untiled_stream)
+    hls = Backend(name="mvau_hls", stream=untiled_stream)
+    rtl_untiled = Backend(name="mvau_rtl_untiled", stream=untiled_stream)
     # tiled backend OWNS TH; weight delivered as ONE cross-interface expr (PE*SIMD)/TH —
     # the acid test that a backend can STREAM DIFFERENTLY from its peers (impl-owned) while
     # the BLOCK is identical. This weight position is an expr (not a plain dial) so its
     # folded SHAPE is width-only (raises), but its width resolves.
-    rtl_tiled = Implementation(
+    rtl_tiled = Backend(
         name="mvau_rtl_tiled",
         axes=(discrete_axis("TH", {1, 2, 4}, 2),),
         stream={

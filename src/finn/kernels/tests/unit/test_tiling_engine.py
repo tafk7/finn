@@ -7,7 +7,7 @@
 ############################################################################
 
 """The tiling ENGINE — ``generate_tiling`` joins the op interfaces' BLOCK extents with an
-Implementation's STREAM folds (positionally) and derives the fold-dial axes (+ divisor
+Backend's STREAM folds (positionally) and derives the fold-dial axes (+ divisor
 ranges), divisibility predicates, stream-width deriveds, and the fold map. Exercised
 directly, isolated from any op.
 """
@@ -20,7 +20,7 @@ from finn.kernels.space import (
     Context,
     Derived,
     Illegal,
-    Implementation,
+    Backend,
     Interface,
     Kernel,
     Role,
@@ -131,7 +131,7 @@ def test_multi_fold_gcd_domain():
 
 def _mvu_kernel():
     stream = {"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}
-    impl = Implementation(name="mvu", stream=stream)
+    impl = Backend(name="mvu", stream=stream)
     return Kernel(name="MVU", interfaces=MVU_IFACES, pool=(impl,), op_axes=())
 
 
@@ -196,7 +196,7 @@ def test_width_uses_dtype_source():
         Interface("inp", Role.DATA_IN, block=[1, FULL]),
         Interface("out", Role.DATA_OUT, block=[1, FULL], dtype_source="acc"),
     )
-    impl = Implementation(name="k", stream={"inp": [1, "SIMD"], "out": [1, "PE"]})
+    impl = Backend(name="k", stream={"inp": [1, "SIMD"], "out": [1, "PE"]})
     k = Kernel(
         name="K",
         interfaces=ifaces,

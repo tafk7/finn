@@ -34,9 +34,9 @@ from .artifacts import (
 )
 from .context import Context
 from .derived import Derived
-from .implementation import (
+from .backend import (
+    Backend,
     EmitError,
-    Implementation,
     PoolError,
     compose,
     emit_point,
@@ -89,7 +89,7 @@ __all__ = [
     "Derived",
     "Predicate",
     "predicate",
-    "Implementation",
+    "Backend",
     "pool_schema",
     "compose",
     "PoolError",

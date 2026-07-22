@@ -34,7 +34,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.space import (
     Context,
     Illegal,
-    Implementation,
+    Backend,
     Interface,
     Kernel,
     Role,
@@ -67,8 +67,8 @@ def _elementwise_op() -> Kernel:
         "rhs": [1, 1, broadcast_aware("rhs_last", derive("PE"))],
         "out": [1, 1, "PE"],
     }
-    hls = Implementation(name="elementwise_hls", stream=stream)
-    rtl = Implementation(name="elementwise_rtl", stream=stream)
+    hls = Backend(name="elementwise_hls", stream=stream)
+    rtl = Backend(name="elementwise_rtl", stream=stream)
 
     return Kernel(
         name="ElementwiseBinary",

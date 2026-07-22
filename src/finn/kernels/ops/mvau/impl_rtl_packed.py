@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Implementation bundle: ``mvau_dsp_packed`` — the DSP58 INT8-packed core
+"""Backend bundle: ``mvau_dsp_packed`` — the DSP58 INT8-packed core
 (``mvu_vvu_8sx9_dsp58.sv``).
 
 It OVERLAPS softvec on DSP58+small-widths (the wrapper's ``else: genSoftVec`` branch
@@ -17,7 +17,7 @@ replicating the shared wrapper's ``generate`` fork.
 
 from __future__ import annotations
 
-from finn.kernels.space import Implementation
+from finn.kernels.space import Backend
 from finn.util.basic import get_dsp_block
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
@@ -54,9 +54,9 @@ def _packed_feasible(p, ctx):
 
 
 @register
-def packed_bundle() -> Implementation:
+def packed_bundle() -> Backend:
     axes, derived, predicates = dsp_rtl_common()
-    return Implementation(
+    return Backend(
         name=MVAU_DSP_PACKED,
         feasible=_packed_feasible,
         axes=axes,

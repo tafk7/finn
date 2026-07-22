@@ -11,7 +11,7 @@ it projects from a resolved :class:`~finn.kernels.space.point.Point`
 (kernelop-tensor-block-stream.md §3, §7; consumer-surface-model.md Tier 0-3).
 
 The op declares its **interfaces** (identity + role — the ONNX-facing arity, the
-BLOCK/reduction structure) and a **pool** of Implementations. Each Implementation owns
+BLOCK/reduction structure) and a **pool** of Backends. Each Backend owns
 its **stream tiling** (the BLOCK->STREAM lowering) — so a *normal* shape resolves with
 no backend, while a *folded* shape needs a resolved point that names the selected impl
 and its fold dials.
@@ -19,7 +19,7 @@ and its fold dials.
 This module builds ONLY the estimate-only surface: the port-indexed normal/folded
 shapes + stream widths, and a rough ``get_exp_cycles`` (``prod(stream_cycles)`` — the
 monotone throughput floor that drives folding search). No emit, no codegen, no Vivado
-(those are Tier-4). Cost is a defaultable op-level derived; an Implementation may
+(those are Tier-4). Cost is a defaultable op-level derived; a Backend may
 override it (not exercised here).
 
 SCOPE (increment 1): folding is a LAST-AXIS reshape of a DATA interface — the common
@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .context import Context
-from .implementation import Implementation, compose, pool_schema
+from .backend import Backend, compose, pool_schema
 from .point import Illegal, Point
 from .ports import Role
 from .resolve import resolve
@@ -53,14 +53,14 @@ class Interface:
     """One op-side interface — identity + role + BLOCK structure (the math), NOT stream.
 
     The op declares the arity, the semantic role, and how the block segments this tensor
-    (``block`` — which dims a calc-state quantum spans). The selected Implementation owns
+    (``block`` — which dims a calc-state quantum spans). The selected Backend owns
     how the block is folded into a stream (its ``stream`` map). Block folding is the math
     → op-owned; stream folding is the realization → impl-owned. An impl cannot change the
     block: it has no field to express one (the ownership split, made structural).
 
     Attributes:
         name: the interface key — ALSO the Context tensor name (shape + datatype). Matched
-            against an Implementation's ``stream`` map.
+            against a Backend's ``stream`` map.
         role: the port-taxonomy role (DATA_IN/DATA_OUT/WEIGHT_SINK/…). The DIRECTION is
             implied by the role (:func:`~finn.kernels.space.ports.role_direction`) — a
             sink/in-role consumes, a source/out-role produces; never restated here.
@@ -106,14 +106,14 @@ class Kernel:
 
     ``op_axes``/``op_derived``/``op_predicates`` are the op-level shared elements (the
     ONNX-invariant space every impl resolves against — folding-independent geometry,
-    datatype rules, legality). ``pool`` is the flat list of Implementations; each owns
+    datatype rules, legality). ``pool`` is the flat list of Backends; each owns
     its tiling, feasibility, sources, emit. :meth:`schema` assembles them via
     ``pool_schema``; :meth:`configure` resolves a point; the getters project from it.
     """
 
     name: str
     interfaces: tuple[Interface, ...]
-    pool: tuple[Implementation, ...]
+    pool: tuple[Backend, ...]
     op_axes: tuple = ()
     op_derived: tuple = ()
     op_predicates: tuple = ()
@@ -131,8 +131,8 @@ class Kernel:
 
     # -- schema / resolve ---------------------------------------------------
 
-    def _generated(self, impl: Implementation):
-        """The tiling engine's generated fragments + fold map for one Implementation,
+    def _generated(self, impl: Backend):
+        """The tiling engine's generated fragments + fold map for one Backend,
         derived from its ``stream`` map joined against the op interfaces' ``block``.
         Memoized per Kernel by impl name."""
         cache = self._tiling_cache
@@ -142,8 +142,8 @@ class Kernel:
             cache[impl.name] = got
         return got
 
-    def _augmented_pool(self) -> tuple[Implementation, ...]:
-        """Each Implementation with the tiling-engine-generated axes/divisibility
+    def _augmented_pool(self) -> tuple[Backend, ...]:
+        """Each Backend with the tiling-engine-generated axes/divisibility
         predicates appended to its OWN axes/predicates (so ``pool_schema`` dispatches
         them on selection), and the generated stream-width deriveds. The impl's declared
         tiling map is the single source; the fold dials, their ranges, the divisibility,
@@ -264,7 +264,7 @@ class Kernel:
 
     # -- internals ----------------------------------------------------------
 
-    def _selected(self, point: Point) -> Implementation:
+    def _selected(self, point: Point) -> Backend:
         """The pool member named by the resolved ``implementation`` axis."""
         impl_name = point["implementation"]
         by_name = {b.name: b for b in self.pool}

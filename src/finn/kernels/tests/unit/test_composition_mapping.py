@@ -27,7 +27,7 @@ from finn.kernels.space import (
     Context,
     Derived,
     Illegal,
-    Implementation,
+    Backend,
     Point,
     Predicate,
     Schema,
@@ -181,13 +181,13 @@ def test_assigning_a_guarded_out_lifted_axis_is_illegal():
 def _delivery_pool() -> Schema:
     """Storage TOPOLOGY as a pool of delivery bundles — the SAME shape as the compute
     impl pool. ``storage`` is the root selector; each bundle owns its guarded axes."""
-    embedded = Implementation(name="embedded")  # weights baked in — no axes
-    onchip = Implementation(
+    embedded = Backend(name="embedded")  # weights baked in — no axes
+    onchip = Backend(
         name="onchip",
         axes=(discrete_axis("ram_style", {"block", "ultra"}, "block"),),
         derived=(Derived("needs_streamer", lambda p, c: True),),
     )
-    offchip = Implementation(
+    offchip = Backend(
         name="offchip",
         axes=(discrete_axis("dma_burst", {32, 64, 128}, 64),),
         derived=(Derived("needs_streamer", lambda p, c: True),),
@@ -228,13 +228,13 @@ def _composed_op_schema() -> Schema:
     """Compute pool + delivery pool + a cardinality axis, merged into one op schema.
     This is selection (sum) NESTED in composition (product): three independent
     coordinates in a single flat Schema, no new primitive."""
-    hls = Implementation(name="mvau_hls", axes=(discrete_axis("resType", {"lut", "dsp"}, "lut"),))
-    rtl = Implementation(name="mvau_rtl", axes=(discrete_axis("pumpedCompute", {0, 1}, 0),))
+    hls = Backend(name="mvau_hls", axes=(discrete_axis("resType", {"lut", "dsp"}, "lut"),))
+    rtl = Backend(name="mvau_rtl", axes=(discrete_axis("pumpedCompute", {0, 1}, 0),))
     compute = pool_schema("implementation", (), (), (), (hls, rtl))
 
-    emb = Implementation(name="embedded")
-    onc = Implementation(name="onchip", axes=(discrete_axis("ram_style", {"block", "ultra"}, "block"),))
-    ofc = Implementation(name="offchip")
+    emb = Backend(name="embedded")
+    onc = Backend(name="onchip", axes=(discrete_axis("ram_style", {"block", "ultra"}, "block"),))
+    ofc = Backend(name="offchip")
     delivery = pool_schema("storage", (), (), (), (emb, onc, ofc))
 
     return Schema(

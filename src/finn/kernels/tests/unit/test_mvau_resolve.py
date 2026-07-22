@@ -412,7 +412,7 @@ def test_hls_binary_ok_in_xnor_mode(schema):
 
 
 def test_fourth_implementation_composes_additively():
-    from finn.kernels.space import Implementation
+    from finn.kernels.space import Backend
     from finn.kernels.ops.mvau import mvau_kernel, mvau_pool
     from finn.kernels.ops.mvau.op import COMPUTE_STREAM
 
@@ -425,7 +425,7 @@ def test_fourth_implementation_composes_additively():
             return "mvau_lut_rtl targets non-Versal parts only (hypothetical)"
         return None
 
-    lut_rtl = Implementation(
+    lut_rtl = Backend(
         name="mvau_lut_rtl",
         feasible=lut_rtl_feasible,
         axes=(),  # inherits only op-level shared axes + engine-derived fold dials
@@ -473,7 +473,7 @@ def test_registry_makes_addition_structural():
     # The structural form of the thesis: a bundle registered from its OWN module
     # appears in mvau_pool() with ZERO edits to the package, shared.py, or a sibling.
     # This simulates a third-party `impl_*.py` that self-registers on import.
-    from finn.kernels.space import Implementation
+    from finn.kernels.space import Backend
     from finn.kernels.ops.mvau import mvau_pool, mvau_schema
     from finn.kernels.ops.mvau.op import COMPUTE_STREAM
     from finn.kernels.ops.mvau.registry import register, unregister
@@ -485,7 +485,7 @@ def test_registry_makes_addition_structural():
     def _stub_bundle():
         # A real MVU compute peer folds like the others, so it carries COMPUTE_TILING;
         # the engine derives its SIMD/PE dials from that.
-        return Implementation(
+        return Backend(
             name="mvau_stub_backend", sources=("stub.sv",), stream=COMPUTE_STREAM
         )
 

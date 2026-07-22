@@ -11,7 +11,7 @@
 
 The cleanest op to prove the vertical slice: 1-in / 1-out, last-axis (channel) fold by
 SIMD, no weights, no reduction-across-interfaces. The op declares interfaces + shape/
-dtype; each Implementation owns the ``{input: "SIMD", output: "SIMD"}`` tiling. We
+dtype; each Backend owns the ``{input: "SIMD", output: "SIMD"}`` tiling. We
 validate the projected getters against FINN's own LayerNorm formulas
 (``src/finn/custom_op/fpgadataflow/layernorm.py``):
 
@@ -31,7 +31,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.space import (
     Context,
     Illegal,
-    Implementation,
+    Backend,
     Interface,
     Kernel,
     KernelError,
@@ -56,11 +56,11 @@ def _layernorm_op() -> Kernel:
     # rank-3 NHWC-ish (batch, spatial, channels): block spans the channel dim.
     channel_block = [1, 1, FULL]
     channel_stream = [1, 1, "SIMD"]
-    hls = Implementation(
+    hls = Backend(
         name="layernorm_hls",
         stream={"inp": list(channel_stream), "out": list(channel_stream)},
     )
-    rtl = Implementation(
+    rtl = Backend(
         name="layernorm_rtl",
         stream={"inp": list(channel_stream), "out": list(channel_stream)},
     )

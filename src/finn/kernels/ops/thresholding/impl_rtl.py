@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Implementation bundle: ``thresholding_rtl`` — the RTL backend.
+"""Backend bundle: ``thresholding_rtl`` — the RTL backend.
 
 A single template family (binary-search comparator core). No device feasibility gate
 (there is no ``_thresholding_rtl_possible`` — RTL is the default). Its impl-local axes
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from finn.kernels.space import Derived, Implementation, discrete_axis, predicate, predicate_axis
+from finn.kernels.space import Derived, Backend, discrete_axis, predicate, predicate_axis
 
 from .emit_rtl import emit_thresholding_rtl
 from .names import THRESHOLDING_RTL, THRESHOLDS
@@ -47,8 +47,8 @@ def _thresholds_sorted(p, ctx):
 
 
 @register
-def rtl_bundle() -> Implementation:
-    return Implementation(
+def rtl_bundle() -> Backend:
+    return Backend(
         name=THRESHOLDING_RTL,
         # No device gate — RTL is the default for Thresholding.
         axes=(

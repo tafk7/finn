@@ -14,7 +14,7 @@ The mechanism makes "add a backend = add one ``impl_*.py`` that self-registers, 
 nothing else" literally true, per op, with no shared global state between ops.
 
 A bundle module registers itself at import time via the ``register`` decorator on a
-zero-arg factory returning an :class:`Implementation`. The op package ``__init__``
+zero-arg factory returning a :class:`Backend`. The op package ``__init__``
 imports its built-in bundle modules for that side effect; assembling the schema just
 reads whatever has registered. Registration order is preserved, so the first-
 registered bundle is the pool default (the root axis default).
@@ -24,16 +24,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from finn.kernels.space import Implementation
+from finn.kernels.space import Backend
 
 
 def make_registry(op_name: str):
     """Build a fresh registry for one op. Returns ``(register, build_pool,
     registered_names, unregister)`` closed over a private ordered dict."""
-    registry: dict[str, Callable[[], Implementation]] = {}
+    registry: dict[str, Callable[[], Backend]] = {}
 
-    def register(factory: Callable[[], Implementation]) -> Callable[[], Implementation]:
-        """Decorator: register a zero-arg ``Implementation`` factory by its bundle
+    def register(factory: Callable[[], Backend]) -> Callable[[], Backend]:
+        """Decorator: register a zero-arg ``Backend`` factory by its bundle
         name. The factory is called once here to read ``.name`` (bundles are cheap to
         build); it is re-invoked per :func:`build_pool` so each schema gets fresh
         axis/derived objects. Duplicate names are a registration error."""
@@ -43,7 +43,7 @@ def make_registry(op_name: str):
         registry[name] = factory
         return factory
 
-    def build_pool() -> tuple[Implementation, ...]:
+    def build_pool() -> tuple[Backend, ...]:
         """Instantiate every registered bundle (fresh objects), registration order."""
         return tuple(factory() for factory in registry.values())
 

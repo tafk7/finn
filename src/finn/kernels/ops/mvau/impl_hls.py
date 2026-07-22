@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Implementation bundle: ``mvau_hls`` — the HLS compute core.
+"""Backend bundle: ``mvau_hls`` — the HLS compute core.
 
 Self-contained: its axes/derived/predicates/feasibility/sources live here and
 nowhere else. Registers itself via the registry decorator; adding or removing this
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import Derived, Implementation, discrete_axis, predicate
+from finn.kernels.space import Derived, Backend, discrete_axis, predicate
 
 from .emit_hls import emit_mvau_hls
 from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, WEIGHTS
@@ -46,8 +46,8 @@ def _no_true_binary(p, ctx):
 
 
 @register
-def hls_bundle() -> Implementation:
-    return Implementation(
+def hls_bundle() -> Backend:
+    return Backend(
         name=MVAU_HLS,
         # HLS has no device/dtype feasibility gate — it builds anywhere.
         axes=(

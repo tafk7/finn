@@ -21,12 +21,12 @@ bundle declares how one realization folds it. That is the whole op/backend split
 
 from __future__ import annotations
 
-from finn.kernels.space import Implementation
+from finn.kernels.space import Backend
 
 from .names import INDICES, INPUT, OUTPUT, POOL_HLS
 
 
-def pool_hls_impl(*, has_indices: bool, rank: int) -> Implementation:
+def pool_hls_impl(*, has_indices: bool, rank: int) -> Backend:
     """The HLS Pool backend. ``has_indices`` mirrors the op's optional Indices output so
     the streamer folds that port too when present; ``rank`` is the data tensor rank (NHWC
     ⇒ 4) so the PE fold lands on the channel (last) axis with leading dims passed through.
@@ -40,4 +40,4 @@ def pool_hls_impl(*, has_indices: bool, rank: int) -> Implementation:
     stream = {INPUT: list(channel_fold), OUTPUT: list(channel_fold)}
     if has_indices:
         stream[INDICES] = list(channel_fold)
-    return Implementation(name=POOL_HLS, stream=stream)
+    return Backend(name=POOL_HLS, stream=stream)

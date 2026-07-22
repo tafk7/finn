@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Implementation bundle: ``mvau_dsp_softvec`` — the unified soft-vectorized DSP
+"""Backend bundle: ``mvau_dsp_softvec`` — the unified soft-vectorized DSP
 core (``mvu.sv``).
 
 Spans ALL DSP primitives (DSP48E1/E2/DSP58 via ``case(VERSION)``, mvu.sv:337-710);
@@ -17,7 +17,7 @@ bundle). Shares DSP-RTL declarations with the packed bundle via ``dsp_rtl_common
 
 from __future__ import annotations
 
-from finn.kernels.space import Implementation
+from finn.kernels.space import Backend
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import emit_mvau_rtl
@@ -33,9 +33,9 @@ def _softvec_feasible(p, ctx):
 
 
 @register
-def softvec_bundle() -> Implementation:
+def softvec_bundle() -> Backend:
     axes, derived, predicates = dsp_rtl_common()
-    return Implementation(
+    return Backend(
         name=MVAU_DSP_SOFTVEC,
         feasible=_softvec_feasible,
         axes=axes,

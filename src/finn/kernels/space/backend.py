@@ -6,14 +6,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``Implementation`` — a self-contained backend realization bundle, and
+"""``Backend`` — a self-contained backend realization bundle, and
 ``pool_schema`` — the assembler that lowers a pool of bundles + op-level shared
 elements into the flat :class:`Schema` the existing ``resolve`` consumes.
 
 This is the SELECTION half of the composability thesis (design-space-model.md
 §1.2.1/§1.2.2): the op has one root ``implementation`` axis whose domain is the
 pool of buildable designs (HLS, RTL soft-vec, RTL DSP58-packed for MVAU). Each
-:class:`Implementation` owns its axes/derived/predicates/feasibility/sources in one
+:class:`Backend` owns its axes/derived/predicates/feasibility/sources in one
 place; ``pool_schema`` merges them so that ONLY the selected bundle's contributions
 are active for a given point. Adding a backend is then purely additive — declare
 one bundle, pass it in the pool, edit nothing else.
@@ -49,7 +49,7 @@ def _feasible_ok(_point, _context) -> None:
 
 
 @dataclass(frozen=True)
-class Implementation:
+class Backend:
     """One buildable realization of an op — a self-contained bundle.
 
     Attributes:
@@ -130,7 +130,7 @@ def pool_schema(
     shared_axes: tuple[Axis, ...],
     shared_derived: tuple[Derived, ...],
     shared_predicates: tuple[Predicate, ...],
-    pool: tuple[Implementation, ...],
+    pool: tuple[Backend, ...],
     *,
     sources_key: str = SOURCES_KEY,
 ) -> Schema:
@@ -148,7 +148,7 @@ def pool_schema(
     (``"parameters.sources"``) so the two pools' source lists never collide.
     """
     if not pool:
-        raise PoolError("pool must contain at least one Implementation")
+        raise PoolError("pool must contain at least one Backend")
 
     names = [b.name for b in pool]
     if len(names) != len(set(names)):
@@ -282,8 +282,8 @@ def _check_no_derived_shadowing(shared_derived, pool, sources_key=SOURCES_KEY) -
                 )
 
 
-def _owners_by_axis(pool) -> dict[str, list[Implementation]]:
-    owners: dict[str, list[Implementation]] = {}
+def _owners_by_axis(pool) -> dict[str, list[Backend]]:
+    owners: dict[str, list[Backend]] = {}
     for bundle in pool:
         for axis in bundle.axes:
             owners.setdefault(axis.name, []).append(bundle)
@@ -359,7 +359,7 @@ def _merge_derived(root_name, pool) -> list[Derived]:
     """Merge bundle derived by name; compute returns the owning bundle's value when
     its impl is selected, else None (present-but-None — matches the pre-restructure
     behaviour where e.g. SEGMENTLEN is None on HLS)."""
-    owners: dict[str, list[Implementation]] = {}
+    owners: dict[str, list[Backend]] = {}
     for bundle in pool:
         for d in bundle.derived:
             owners.setdefault(d.name, []).append(bundle)

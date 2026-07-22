@@ -22,7 +22,7 @@ stream-tiling entry that reads ``PE``, ``SIMD`` and ``TH`` must expose those nam
 the schema can order it and so an evaluator can check they are in scope. ``.deps()``
 walks the tree and returns exactly the point keys the expr reads — never a guess.
 
-These exprs live on an **Implementation**'s interface (they ARE the RTL translation),
+These exprs live on a **Backend**'s interface (they ARE the RTL translation),
 so their operands are backend-local: ``mvau_rtl_tiled``'s weight port
 ``div(mul(Ref('PE'), Ref('SIMD')), Param('TH'))`` reads ``TH``, which exists only on
 that bundle, so every dep is in scope wherever the expr is declared.
@@ -204,7 +204,7 @@ class BroadcastAware(TileExpr):
 
 
 # =============================================================================
-# Authoring helpers — the surface an Implementation interface declares tiling with.
+# Authoring helpers — the surface a Backend interface declares tiling with.
 # =============================================================================
 
 
@@ -252,7 +252,7 @@ def _as_int(name: str, value) -> int:
 # fragments (fold-dial axes, divisibility predicates, stream-width deriveds) and
 # the dim↔dial fold map, from ONE declaration (kernelop-tensor-block-stream.md §5).
 #
-# An Implementation declares, per interface, a list of specs positional over the
+# A Backend declares, per interface, a list of specs positional over the
 # interface tensor's dims. The engine derives what every op used to hand-write four
 # times (divisor_axis + divisibility predicate + width derived + implicit last-axis
 # fold): the single authoritative statement is "this dial folds this dim".
@@ -325,7 +325,7 @@ class GeneratedTiling:
     joined against the op interfaces' ``block``.
 
     Attributes:
-        axes/derived/predicates: fragments to append to the Implementation's own before
+        axes/derived/predicates: fragments to append to the Backend's own before
             ``pool_schema`` merges them (so they dispatch on the selected impl).
         width_exprs: ``{interface_name: TileExpr}`` — the elements/cycle width, used by
             the Kernel getters (``_stream_elems``).
@@ -346,7 +346,7 @@ class GeneratedTiling:
 
 
 def generate_tiling(interfaces, stream: dict) -> GeneratedTiling:
-    """Derive design-space fragments + the fold map from one Implementation's ``stream``
+    """Derive design-space fragments + the fold map from one Backend's ``stream``
     map joined against the op ``interfaces`` block structure.
 
     ``interfaces`` is the Kernel's interface tuple — each carries the op-owned ``block``
