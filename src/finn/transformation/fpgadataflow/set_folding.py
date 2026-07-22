@@ -152,7 +152,14 @@ class SetFolding(Transformation):
                 continue
             op_type = node.op_type
             node_inst = getCustomOp(node)
-            if op_type in ["MVAU_hls", "MVAU_rtl"]:
+            # Capability query (R1 down-payment): a Kernel-engine-backed op advertises
+            # its folding dials mapped to each dial's resolved max, so SetFolding folds
+            # it without matching op_type strings. Each dial is swept low→high until the
+            # cycle target is met, exactly like the classic branches.
+            if hasattr(node_inst, "get_folding_axes"):
+                for axis_name, max_val in node_inst.get_folding_axes().items():
+                    self.optimize_attribute_val(node_inst, max_val, axis_name)
+            elif op_type in ["MVAU_hls", "MVAU_rtl"]:
                 max_simd = node_inst.get_nodeattr("MW")
                 max_pe = node_inst.get_nodeattr("MH")
                 node_inst.set_nodeattr("PE", 1)

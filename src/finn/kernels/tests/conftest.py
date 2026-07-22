@@ -25,6 +25,12 @@ _PINNED_QONNX = os.path.join(_REPO_ROOT, "deps", "qonnx")
 
 
 def pytest_configure(config):
+    # The adapter tests import FINN's custom_op tree, whose hwcustomop module reads
+    # FINN_ROOT to probe for an optional XSI simulator. That probe never fires in the
+    # venv-pure unit suite (no xsi.so present), so default FINN_ROOT to the repo root
+    # rather than require every invocation to export it.
+    os.environ.setdefault("FINN_ROOT", _REPO_ROOT)
+
     pinned = os.path.realpath(_PINNED_QONNX)
     try:
         import qonnx

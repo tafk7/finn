@@ -100,3 +100,12 @@ custom_op["MVAU_hls"] = MVAU_hls
 custom_op["VVAU_hls"] = VVAU_hls
 custom_op["HWSoftmax_hls"] = HWSoftmax_hls
 custom_op["OuterShuffle_hls"] = OuterShuffle_hls
+
+# Kernel-engine-backed ops (finn.kernels adapter). These subclass HWCustomOp only —
+# no HLSBackend mixin — because the estimate-only (Tier 0-3) surface needs no codegen;
+# they live in the .hls domain so is_hls_node sees them (the real compute impl is chosen
+# by the `implementation` nodeattr, not the domain). Registered by direct assignment to
+# bypass register_custom_op's HLSBackend assertion.
+from finn.kernels.adapter import MvauKernelOp
+
+custom_op["MVAUKernel_hls"] = MvauKernelOp

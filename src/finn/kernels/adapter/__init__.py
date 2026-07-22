@@ -1,0 +1,24 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+# Portions of this content consist of AI generated content.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+############################################################################
+
+"""The FINN adapter layer: ``KernelOp(HWCustomOp)`` — lets a model-free ``Kernel``
+back a real ONNX node and answer FINN's build-flow contract.
+
+``kernel_op.py``     the base adapter (nodeattr↔Context bridge, the HWCustomOp getters).
+``mvau_kernel_op.py`` the MVAU concrete op (increment 1).
+``nodeattr_registry.py`` schema-axes → FINN nodeattr types (the R12 dissolution).
+
+See ``kernel-design/finn-hw-backend-analysis/consumer-surface-model.md`` for the
+consumer surface this satisfies, and the design doc
+``kernel-design/kernel-final-design/kernelop-tensor-block-stream.md`` for the model.
+"""
+
+from .kernel_op import KernelOp, PortSpec
+from .mvau_kernel_op import MvauKernelOp
+
+__all__ = ["KernelOp", "PortSpec", "MvauKernelOp"]
