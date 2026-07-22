@@ -31,7 +31,8 @@ from __future__ import annotations
 
 from finn.kernels.space import Schema, pool_schema
 
-from .names import DECOUPLED, EMBEDDED, SOURCES, TOPOLOGY  # noqa: F401 (re-exported)
+from .demand import ParamDemand  # noqa: F401 (re-exported)
+from .names import DECOUPLED, DEMAND, EMBEDDED, SOURCES, TOPOLOGY  # noqa: F401 (re-exported)
 from .registry import build_pool
 
 # Import the built-in topology modules for their registration side effect. A new

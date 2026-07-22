@@ -36,12 +36,23 @@ RUNTIME_WRITEABLE = ns("runtime_writeable_weights")
 PUMPED_MEMORY = ns("pumpedMemory")
 SOURCES = ns("sources")  # this pool's sources-derived key (distinct from compute's)
 
-# Memstream GEOMETRY — cross-coordinate derived (read the compute fold), contributed
-# by the composing op (ops/mvau/op.py §5), consumed by the memstream emit.
-PARAM_DEPTH = ns("depth")  # memory lines = WMEM * TH
-PARAM_WIDTH = ns("width")  # padded stream width in bits = roundup(PE*SIMD*wbits, 8)
-PARAM_SETS = ns("sets")  # 1, or mlo_max_iter (MLO set count)
+# The compute→memory DEMAND spec — a ParamDemand the composing op publishes (pure
+# compute facts: parallelism, elem_bits, depth, cadence), read by the delivery
+# topology to size its own realization. See demand.py. The op publishes THIS; the
+# memstream geometry below is now derived by the parameters pool FROM it, not by the op.
+DEMAND = ns("demand")
+
+# Memstream GEOMETRY — now derived by the DECOUPLED topology bundle FROM the demand spec
+# (impl_decoupled.py), no longer contributed by the composing op. Consumed by the
+# memstream emit. Present-but-None for topologies with no streamer (embedded).
+PARAM_DEPTH = ns("depth")  # memory lines = demand.depth
+PARAM_WIDTH = ns("width")  # padded stream width in bits = roundup(demand.bit_rate, 8)
+PARAM_SETS = ns("sets")  # 1, or the MLO set count (cardinality — coord B, later)
 PARAM_INIT_FILE = ns("init_file")  # memblock.dat basename, or "" for URAM-non-Versal
+
+# The weight-delivery stream WIDTH in bits, dispatched per topology (a per-topology fact,
+# NOT an op-level branch): 0 for embedded (no port), demand.bit_rate for decoupled.
+WEIGHT_STREAM_WIDTH = "weight_stream_width"  # UNnamespaced: the compute side reads it too
 
 # --- Storage-topology member identities (VALUES of the topology axis) --------
 # Increment 1 ships two; external/dynamic/off-chip-DMA topologies are later members.

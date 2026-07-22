@@ -35,10 +35,7 @@ from __future__ import annotations
 
 import numpy as np
 from qonnx.core.datatype import DataType
-from qonnx.util.basic import (
-    calculate_matvec_accumulator_range,
-    roundup_to_integer_multiple,
-)
+from qonnx.util.basic import calculate_matvec_accumulator_range
 
 from finn.kernels.adapter import KernelOp, PortSpec
 from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
@@ -48,7 +45,6 @@ from finn.kernels.space import (
     Illegal,  # noqa: F401  (kept available for callers/tests)
     Interface,
     Kernel,
-    Predicate,
     Role,
     Schema,
     discrete_axis,
@@ -57,19 +53,8 @@ from finn.kernels.space import (
     predicate_axis,
 )
 from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
-from finn.kernels.ops.parameters import parameters_schema
-from finn.kernels.ops.parameters.names import (
-    DECOUPLED,
-    EMBEDDED,
-    PARAM_DEPTH,
-    PARAM_INIT_FILE,
-    PARAM_SETS,
-    PARAM_WIDTH,
-    PUMPED_MEMORY,
-    RAM_STYLE,
-    RUNTIME_WRITEABLE,
-    TOPOLOGY,
-)
+from finn.kernels.ops.parameters import ParamDemand, parameters_schema
+from finn.kernels.ops.parameters.names import DEMAND, RUNTIME_WRITEABLE
 
 from .registry import build_pool
 
@@ -259,9 +244,12 @@ def op_derived():
     # NOTE: `instream_width`/`outstream_width` are NOT here — the tiling engine generates
     # them from the impls' `stream` folds, with the `out` interface's
     # dtype_source="outputDataType" so the width uses the accumulator type under
-    # noActivation. `weight_stream_width` (0 for embedded, PE*SIMD*wbits otherwise) is
-    # CROSS-COORDINATE — it reads both the compute fold AND the parameters topology — so
-    # it is contributed in section 5 (coupling_derived), not here.
+    # noActivation. `weight_stream_width` is NOT here either — it is a per-TOPOLOGY fact
+    # (0 for embedded, the demand's bit_rate for decoupled) owned by the parameters pool.
+    #
+    # `parameters.demand` (below) is the compute→memory DEMAND the op publishes: pure
+    # compute facts the selected delivery topology sizes its memstream from. It reads
+    # WMEM, so it follows WMEM in this list (resolve computes deriveds in order).
     #
     # MIGRATION ALIASES: MW/MH/WMEM/TMEM survive as emit-facing deriveds so Tier-4
     # (Vivado-validated emit_hls/emit_rtl, which read point.MW/MH/WMEM) is UNTOUCHED. They
@@ -277,6 +265,7 @@ def op_derived():
         Derived("accDataType", _acc_datatype),
         Derived("weightDataType", _weight_datatype),
         Derived("outputDataType", _output_datatype),
+        Derived(DEMAND, _weight_demand),
     )
 
 
@@ -337,96 +326,27 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# 5. PARAMETERS — cross-coordinate couplings to the composed weight-delivery pool.
-#    A few quantities read BOTH the compute fold (PE/SIMD/WMEM) AND the chosen storage
-#    topology (parameters.topology). They cannot live in either pool alone, so they are
-#    appended to the op schema right before `compose` merges the two pools — the one
-#    place both surfaces are in scope. See param-delivery-design-space.md §2.
+# 5. PARAMETERS — the compute→memory DEMAND the op publishes to the delivery pool.
+#    The op no longer reaches into memstream: it publishes ONE realization-free
+#    ParamDemand (what the compute core consumes of its weight interface), and the
+#    selected parameters topology sizes ITS OWN geometry from it (impl_decoupled.py).
+#    This is the compute→memory demand channel (param-delivery-design-space.md §4
+#    Level-1 / §7 Q1): the memory backend owns memstream width/depth/sets/init_file +
+#    the pumped/URAM gates + weight_stream_width; the op owns only the demand.
 # =============================================================================
 
 
-def _weight_stream_width(p, ctx):
-    # base:256-275 — 0 for embedded (weights baked in, no stream port); PE*SIMD*wbits
-    # otherwise. Reads the topology (parameters) AND the fold (compute) — the canonical
-    # cross-coordinate coupling.
-    if p.get(TOPOLOGY) == EMBEDDED:
-        return 0
-    return p.PE * p.SIMD * ctx.tensor_datatype(WEIGHTS).bitwidth()
-
-
-def _pumped_memory_not_1x1(p, ctx):
-    # pumpedMemory splits each weight word across a double-pumped memory; with
-    # PE==SIMD==1 there is nothing to split (base:717 "known bug"). Cross-coordinate:
-    # pumpedMemory is a parameters axis, PE/SIMD are the compute fold.
-    if p.get(PUMPED_MEMORY, 0) and p.PE == 1 and p.SIMD == 1:
-        return "pumpedMemory with PE=SIMD=1 is a known-bad configuration (base:717)"
-    return None
-
-
-# --- Memstream GEOMETRY (decoupled only; None for embedded) ------------------
-# These reproduce hwcustomop.py:307-353 generate_hdl_memstream as pure functions of
-# the composed point + context. They read the compute fold (PE/SIMD/WMEM) AND the
-# parameters topology, so they live here, not in the parameters bundle. Absent
-# (None) for embedded, where there is no streamer.
-
-
-def _is_decoupled(p) -> bool:
-    return p.get(TOPOLOGY) == DECOUPLED
-
-
-def _mem_width(p, ctx):
-    # WIDTH = get_instream_width_padded(1) = roundup(PE*SIMD*wbits, 8). base:326.
-    if not _is_decoupled(p):
-        return None
-    wbits = ctx.tensor_datatype(WEIGHTS).bitwidth()
-    return int(roundup_to_integer_multiple(p.PE * p.SIMD * wbits, 8))
-
-
-def _mem_depth(p, ctx):
-    # DEPTH = calc_wmem() * TH (MVAU). base:323. TH defaults to 1 (no tiling here).
-    if not _is_decoupled(p):
-        return None
-    return int(p.WMEM * p.get("TH", 1))
-
-
-def _mem_sets(p, ctx):
-    # SETS = mlo_max_iter or 1. base:316-319. Coordinate B (cardinality) — 1 until MLO.
-    if not _is_decoupled(p):
-        return None
-    return int(p.get("mlo_max_iter", 0) or 1)
-
-
-def _mem_init_file(p, ctx):
-    # INIT_FILE = "memblock.dat", blanked for URAM on a non-Versal part (base:331-332):
-    # URAM cannot be preloaded from a .dat on UltraScale (loaded via AXI-lite instead).
-    if not _is_decoupled(p):
-        return None
-    from finn.util.basic import is_versal
-
-    if p.get(RAM_STYLE) == "ultra" and not is_versal(ctx.fpgapart):
-        return ""
-    return "memblock.dat"
-
-
-def coupling_derived():
-    """Cross-coordinate derived to append to the MVAU op schema before compose."""
-    return (
-        Derived("weight_stream_width", _weight_stream_width),
-        # memstream geometry (decoupled only; None for embedded) — consumed by emit
-        Derived(PARAM_WIDTH, _mem_width),
-        Derived(PARAM_DEPTH, _mem_depth),
-        Derived(PARAM_SETS, _mem_sets),
-        Derived(PARAM_INIT_FILE, _mem_init_file),
-    )
-
-
-def coupling_predicates():
-    """Cross-coordinate predicates to append to the MVAU op schema before compose."""
-    return (
-        Predicate(
-            check=_pumped_memory_not_1x1,
-            description="parameters.pumpedMemory => not (PE == SIMD == 1)",
-        ),
+def _weight_demand(p, ctx):
+    # The compute core's demand on its `weights` WEIGHT_SINK interface: parallelism =
+    # PE*SIMD elements/cycle, elem_bits = weight dtype width, depth = WMEM words/set,
+    # cadence = 1 (weights consumed once per layer; thresholds would be per-activation).
+    # Pure compute facts — no topology, no memstream realization. The delivery pool reads
+    # this to size its stream + memory.
+    return ParamDemand(
+        parallelism=p.PE * p.SIMD,
+        elem_bits=ctx.tensor_datatype(WEIGHTS).bitwidth(),
+        depth=p.WMEM,
+        cadence=1,
     )
 
 
@@ -462,19 +382,18 @@ def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
-    tiling, composed with the PARAMETERS pool (``parameters.topology``). The cross-
-    coordinate couplings that read both the compute fold and the chosen topology
-    (``weight_stream_width``, the pumpedMemory/fold gate) go in ``op_derived``/
-    ``op_predicates`` (appended before compose, where both surfaces are in scope). The
-    getters (folded shapes, stream widths, rough cost) project from a resolved point via
-    the impl ``tiling``."""
+    tiling, composed with the PARAMETERS pool (``parameters.topology``). The op publishes
+    ONE compute→memory ``parameters.demand`` derived (in ``op_derived``); the selected
+    delivery topology sizes its own memstream geometry + ports from it — the op no longer
+    brokers memstream realization. The getters (folded shapes, stream widths, rough cost)
+    project from a resolved point via the impl ``stream``."""
     return Kernel(
         name="MVAU",
         interfaces=mvau_interfaces(),
         pool=mvau_pool(),
         op_axes=op_axes(),
-        op_derived=op_derived() + coupling_derived(),
-        op_predicates=op_predicates() + coupling_predicates(),
+        op_derived=op_derived(),
+        op_predicates=op_predicates(),
         sub_schemas=(parameters_schema(),),
     )
 
