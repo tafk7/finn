@@ -73,7 +73,7 @@ def test_binary_flag_axis_is_int_with_membership():
     assert spec[3] == frozenset({0, 1})
 
 
-def test_list_valued_axis_is_ints():
-    spec = _reg()["numInputVectors"]
-    assert spec[0] == "ints"
-    assert spec[2] == [1]
+def test_num_input_vectors_is_not_an_axis():
+    # numInputVectors is the input tensor's leading dims — a derived alias, not an axis,
+    # so it is absent from the nodeattr registry (like MW/MH).
+    assert "numInputVectors" not in _reg()

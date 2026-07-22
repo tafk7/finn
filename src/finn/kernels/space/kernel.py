@@ -240,16 +240,15 @@ class Kernel:
     # -- rough cost: prod(stream_cycles) over the interfaces ----------------
 
     def get_exp_cycles(self, point: Point, context: Context) -> int:
-        """Expected cycles for a resolved point — the max over interfaces of each
-        interface's stream-cycle count (``prod(tensor) / stream_elems``), monotone in the
-        fold dials (the property SetFolding needs).
-
-        The reduction cost falls out of this floor when the reduced operand is modelled as
-        a full block: MVU's weight tensor ``(MW, MH)`` streamed ``SIMD·PE`` gives
-        ``MW·MH/(SIMD·PE) = sf·nf`` cycles, the largest term — so the generic floor
-        reproduces the reduction product with NO op-level override (that's why MVAU no
-        longer sets ``cost_model``). ``cost_model`` remains an optional per-op escape hatch
-        for a coupling no block model can express; a precise per-IMPL override is Tier-4."""
+        """PLACEHOLDER cost — NOT accurate. Returns the max over interfaces of each
+        interface's stream-cycle count (``prod(tensor) / stream_elems``): monotone in the
+        fold dials (so SetFolding still converges), but it does NOT model the nested
+        cross-interface coupling real cost needs — e.g. MVU re-traverses the weight block
+        once per input vector, so true cost is ``nf·sf·n_vecs`` while this floor gives only
+        ``max(nf·sf, ...)`` (undercounts whenever n_vecs>1, i.e. conv-as-matmul). A proper
+        cost model (nested block traversal, pipeline fill/drain, per-impl overrides) is a
+        FUTURE PASS; cost modelling is deliberately ignored for now. ``cost_model`` remains
+        an op-level escape hatch if an op needs a real number before then."""
         if self.cost_model is not None:
             return int(self.cost_model(point, context))
         cycles = 1

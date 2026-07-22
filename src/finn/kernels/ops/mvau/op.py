@@ -147,8 +147,11 @@ def _matrix_dim(idx):
     return default
 
 
-def _is_int_list(v) -> bool:
-    return isinstance(v, (list, tuple)) and all(isinstance(x, int) for x in v)
+def _num_input_vectors(p, ctx):
+    # The input tensor's leading (non-reduction) dims — FINN's numInputVectors. The last
+    # dim is MW (the reduction), so the vectors are everything before it. [1] for a plain
+    # (1, MW) FC input; e.g. [1, H, W] for a conv-as-matmul.
+    return list(ctx.tensor_shape(INPUT)[:-1])
 
 
 def _is_nonneg_int(v) -> bool:
@@ -182,7 +185,9 @@ def op_axes():
             deps={"noActivation"},
         ),
         discrete_axis("binaryXnorMode", {0, 1}, 0),
-        predicate_axis("numInputVectors", "list[int]", _is_int_list, [1]),
+        # numInputVectors is NOT an axis — it IS the input tensor's leading (non-reduction)
+        # dims (FINN: get_normal_input_shape = numInputVectors + [MW]). Derived from the
+        # block/tensor below (an emit-facing migration alias), same as MW/MH.
         # F4: mlo_max_iter is a per-node iteration count, unbounded non-neg int.
         # The `64` in the old {0..64} domain was n_max_layers (a fabric-wide MLO
         # table size, hwcustomop.py:378) — a different entity that does not bound
@@ -266,6 +271,7 @@ def op_derived():
     return (
         Derived("MW", _matrix_dim(0)),
         Derived("MH", _matrix_dim(1)),
+        Derived("numInputVectors", _num_input_vectors),
         Derived("WMEM", _wmem),
         Derived("TMEM", _tmem),
         Derived("accDataType", _acc_datatype),

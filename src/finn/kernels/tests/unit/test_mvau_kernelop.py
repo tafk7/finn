@@ -76,11 +76,11 @@ def test_weight_port_is_a_2d_block_fold():
 
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64)])
-def test_exp_cycles_is_reduction_product_from_the_floor(simd, pe):
+def test_exp_cycles_placeholder_floor(simd, pe):
     op, ctx, pt = _configure(simd, pe)
-    # nf * sf * n_vecs (n_vecs == 1 here) — the reduction x output product. This now falls
-    # out of the generic max-over-interfaces floor (weights = MW*MH/(SIMD*PE) = sf*nf is the
-    # largest term) with NO op-level cost_model override.
+    # PLACEHOLDER cost (accurate cost is a FUTURE PASS). For n_vecs==1 the max-over-
+    # interfaces floor happens to equal the weight-block term sf*nf; it UNDERCOUNTS for
+    # n_vecs>1 (no nested-traversal coupling). Asserted here only to pin current behavior.
     assert op.get_exp_cycles(pt, ctx) == (MH // pe) * (MW // simd)
 
 
