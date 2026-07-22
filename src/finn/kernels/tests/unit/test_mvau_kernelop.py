@@ -66,21 +66,21 @@ def test_folded_data_shapes(simd, pe):
     assert op.get_folded_output_shape(pt, ctx, 0) == (1, MH // pe, pe)
 
 
-def test_weight_port_width_is_pe_simd_and_shape_raises():
+def test_weight_port_is_a_2d_block_fold():
     op, ctx, pt = _configure(16, 4)
-    from finn.kernels.space import KernelError
-
-    # weight WIDTH = PE*SIMD*wbits resolves via the tiling evaluator...
+    # weights (MW, MH) is a proper 2-D block streamed [SIMD, PE]: WIDTH = PE*SIMD*wbits...
     assert op.get_instream_width(pt, ctx, 1) == (4 * 16) * 8
-    # ...but its folded SHAPE is not a tensor-axis reshape -> raises, not fakes.
-    with pytest.raises(KernelError, match="does not fold a tensor axis"):
-        op.get_folded_input_shape(pt, ctx, 1)
+    # ...and its folded SHAPE is the 2-D fold (MW/SIMD, MH/PE, SIMD, PE) — no longer a
+    # WidthOnly special case that raises.
+    assert op.get_folded_input_shape(pt, ctx, 1) == (MW // 16, MH // 4, 16, 4)
 
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64)])
-def test_cost_model_is_reduction_product(simd, pe):
+def test_exp_cycles_is_reduction_product_from_the_floor(simd, pe):
     op, ctx, pt = _configure(simd, pe)
-    # nf * sf * n_vecs (n_vecs == 1 here) — the reduction x output product.
+    # nf * sf * n_vecs (n_vecs == 1 here) — the reduction x output product. This now falls
+    # out of the generic max-over-interfaces floor (weights = MW*MH/(SIMD*PE) = sf*nf is the
+    # largest term) with NO op-level cost_model override.
     assert op.get_exp_cycles(pt, ctx) == (MH // pe) * (MW // simd)
 
 

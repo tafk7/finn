@@ -37,8 +37,14 @@ def test_folding_dials_are_ints():
     reg = _reg()
     assert reg["PE"][0] == "i"
     assert reg["SIMD"][0] == "i"
-    assert reg["MW"][0] == "i"
-    assert reg["MH"][0] == "i"
+
+
+def test_matrix_dims_are_not_axes():
+    # MW/MH are BLOCK extents (interface block shapes) + emit-facing migration aliases —
+    # NOT design axes, so they are absent from the nodeattr registry (which covers axes).
+    reg = _reg()
+    assert "MW" not in reg
+    assert "MH" not in reg
 
 
 def test_implementation_is_the_string_selection_axis():

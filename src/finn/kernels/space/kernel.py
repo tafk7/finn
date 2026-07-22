@@ -50,40 +50,54 @@ class KernelError(ValueError):
 
 @dataclass(frozen=True)
 class Interface:
-    """One op-side interface — identity + role, NOT tiling.
+    """One op-side interface — identity + role + BLOCK structure (the math), NOT stream.
 
-    The op declares the arity and semantics (which tensor, which direction, what role);
-    the selected Implementation owns how it is folded into a stream (its ``tiling``).
+    The op declares the arity, the semantic role, and how the block segments this tensor
+    (``block`` — which dims a calc-state quantum spans). The selected Implementation owns
+    how the block is folded into a stream (its ``stream`` map). Block folding is the math
+    → op-owned; stream folding is the realization → impl-owned. An impl cannot change the
+    block: it has no field to express one (the ownership split, made structural).
 
     Attributes:
-        name: the interface key, matched against an Implementation's ``tiling`` map.
-        tensor: the Context tensor name carrying this interface's shape + datatype.
-        direction: ``Direction.IN`` / ``Direction.OUT``.
-        role: the port-taxonomy role (DATA_IN/DATA_OUT/WEIGHT_SINK/…). DATA/WEIGHT roles
-            carry a folded tensor shape; others do not.
-        index: disambiguates same-direction interfaces (the port index the FINN getters
-            use — 0=activation, 1=weights).
-        folds_last_axis: True (default) when the stream folds this interface's last tensor
-            axis, so a folded SHAPE is a plain ``normal[:-1] + (fold, elems)`` reshape
-            (DATA ports). False for a PARAM port whose stream WIDTH is a cross-interface
-            expression not tied to its own tensor axes (MVU weight ``WSIMD=PE*SIMD/TH``):
-            its width still resolves via the tiling evaluator, but a folded-shape request
-            raises rather than fake a reshape. When the impl declares tiling as spec lists
-            (Full/Fold/WidthOnly), the engine derives this per interface (any WidthOnly
-            position ⇒ not a plain reshape); this field is then the fallback/legacy path.
+        name: the interface key — ALSO the Context tensor name (shape + datatype). Matched
+            against an Implementation's ``stream`` map.
+        role: the port-taxonomy role (DATA_IN/DATA_OUT/WEIGHT_SINK/…). The DIRECTION is
+            implied by the role (:func:`~finn.kernels.space.ports.role_direction`) — a
+            sink/in-role consumes, a source/out-role produces; never restated here.
+        block: per-tensor-dim BLOCK extents, positional over the tensor's dims. Each is
+            ``FULL`` (the whole dim sits in one block), ``1`` (iterate one at a time), an
+            int size, or a ``derive(...)`` expr (a bounded / cross-interface block, e.g. a
+            conv window). NO reduce/free tag — reduction is emergent from the math, not
+            declared (matches brainsmith's block_tiling). The impl's ``stream[name][i]``
+            folds ``block[i]``, positionally.
         dtype_source: the point key whose DataType supplies this interface's stream-width
             bitwidth, when it differs from the raw tensor dtype. MVAU's ``out`` sets
-            ``"outputDataType"`` (= the accumulator type under ``noActivation``), so the
-            generated stream width matches the emit-side derived. None ⇒ the tensor dtype.
+            ``"outputDataType"`` (= the accumulator type under ``noActivation``). None ⇒
+            the tensor dtype.
+
+    ``direction`` and ``index`` are DERIVED, not stored: direction from the role; index
+    from position among same-role peers in the kernel's interface list (0=first, 1=…).
     """
 
     name: str
-    tensor: str
-    direction: Any  # Direction
     role: Role
-    index: int = 0
-    folds_last_axis: bool = True
+    block: tuple = ()
     dtype_source: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "block", tuple(self.block))
+
+    @property
+    def tensor(self) -> str:
+        """The Context tensor name — equals ``name`` (the two were always the same key)."""
+        return self.name
+
+    @property
+    def direction(self):
+        """The direction implied by the role (never stored — a sink is IN, a source OUT)."""
+        from .ports import role_direction
+
+        return role_direction(self.role)
 
 
 @dataclass(frozen=True)
@@ -119,11 +133,12 @@ class Kernel:
 
     def _generated(self, impl: Implementation):
         """The tiling engine's generated fragments + fold map for one Implementation,
-        derived from its ``tiling`` spec map. Memoized per Kernel by impl name."""
+        derived from its ``stream`` map joined against the op interfaces' ``block``.
+        Memoized per Kernel by impl name."""
         cache = self._tiling_cache
         got = cache.get(impl.name)
         if got is None:
-            got = generate_tiling(self.interfaces, dict(impl.tiling))
+            got = generate_tiling(self.interfaces, dict(impl.stream))
             cache[impl.name] = got
         return got
 
@@ -225,23 +240,20 @@ class Kernel:
     # -- rough cost: prod(stream_cycles) over the interfaces ----------------
 
     def get_exp_cycles(self, point: Point, context: Context) -> int:
-        """Expected cycles for a resolved point.
+        """Expected cycles for a resolved point — the max over interfaces of each
+        interface's stream-cycle count (``prod(tensor) / stream_elems``), monotone in the
+        fold dials (the property SetFolding needs).
 
-        If the op declares a ``cost_model`` (a ``(point, context) -> int``), use it — the
-        op-level model that captures cross-interface coupling the generic floor cannot
-        (e.g. MVU's reduction trip x output trip x TH, invisible to the per-interface
-        stream shapes; kernelop-tensor-block-stream.md §2.2). Otherwise fall back to the
-        rough default: the max over interfaces of that interface's stream-cycle count
-        (``prod(normal_shape) / stream_elems``), monotone in the fold dials — the property
-        SetFolding needs. A precise per-IMPL override is Tier-4 work."""
+        The reduction cost falls out of this floor when the reduced operand is modelled as
+        a full block: MVU's weight tensor ``(MW, MH)`` streamed ``SIMD·PE`` gives
+        ``MW·MH/(SIMD·PE) = sf·nf`` cycles, the largest term — so the generic floor
+        reproduces the reduction product with NO op-level override (that's why MVAU no
+        longer sets ``cost_model``). ``cost_model`` remains an optional per-op escape hatch
+        for a coupling no block model can express; a precise per-IMPL override is Tier-4."""
         if self.cost_model is not None:
             return int(self.cost_model(point, context))
         cycles = 1
         for iface in self.interfaces:
-            # A PARAM port that does not fold its own tensor axes has no per-output stream-
-            # cycle count; it does not bound the streaming throughput floor (skip it).
-            if not iface.folds_last_axis:
-                continue
             n = _prod(context.tensor_shape(iface.tensor))
             elems = self._stream_elems(iface, point)
             if elems <= 0 or n % elems != 0:
@@ -290,25 +302,23 @@ class Kernel:
 
     def _folds_reshape(self, iface: Interface, point: Point) -> bool:
         """Whether a folded SHAPE is a plain reshape for this interface under the selected
-        impl. Derived from the tiling specs (any WidthOnly position ⇒ not a reshape);
-        falls back to the legacy ``folds_last_axis`` flag when the impl declares no
-        tiling for the interface."""
+        impl. Derived from the stream folds (a fold whose width is a cross-interface expr
+        ⇒ not a plain reshape). True when the impl declares no stream for the interface."""
         gen = self._generated(self._selected(point))
-        if iface.name in gen.reshapes:
-            return gen.reshapes[iface.name]
-        return iface.folds_last_axis
+        return gen.reshapes.get(iface.name, True)
 
     def _folded_shape(self, iface: Interface, point: Point, context: Context):
-        """Fold the dims the impl's tiling map binds to a dial: for each folded position
-        ``(dim_index, dial)``, split that tensor dim into ``(extent // elems, elems)``.
-        The engine's ``fold_map`` names WHICH dim each dial folds (not just the last).
-        Raises for a WidthOnly interface (the MVU weight port — width resolves via
-        ``get_*stream_width`` but a folded SHAPE is not a plain reshape)."""
+        """Fold each dim the impl's stream map folds: for each position ``(dim_index,
+        elems_expr)``, split that tensor dim into ``(extent // elems, elems)``. The engine's
+        ``fold_map`` names WHICH dims fold (any dim, not just the last), so a 2-D weight
+        block ``(MW, MH)`` streamed ``[SIMD, PE]`` folds to ``(MW/SIMD, MH/PE, SIMD, PE)``.
+        Raises when a fold width is a cross-interface expr (not a plain tensor-axis
+        reshape)."""
         if not self._folds_reshape(iface, point):
             raise KernelError(
                 f"interface {iface.name!r} does not fold a tensor axis (its stream WIDTH "
                 f"resolves via get_*stream_width, but a folded SHAPE is not a plain "
-                f"reshape for this port, e.g. MVU weight WSIMD)"
+                f"reshape for this port, e.g. a cross-interface weight width)"
             )
         normal = tuple(context.tensor_shape(iface.tensor))
         if not normal:
@@ -316,15 +326,15 @@ class Kernel:
         gen = self._generated(self._selected(point))
         fmap = gen.fold_map.get(iface.name)
         if fmap is None:
-            return normal  # no tiling for this interface ⇒ unfolded
+            return normal  # no stream for this interface ⇒ unfolded
         # Build the folded shape by expanding each folded position into (fold, elems).
         out: list[int] = []
-        for dim_idx, dial in fmap:
+        for dim_idx, elems_expr in fmap:
             extent = int(normal[dim_idx])
-            if dial is None:
+            if elems_expr is None:
                 out.append(extent)
                 continue
-            elems = int(point[dial])
+            elems = int(elems_expr.eval(point))
             if elems <= 0 or extent % elems != 0:
                 raise KernelError(
                     f"interface {iface.name!r}: stream {elems} does not divide dim "

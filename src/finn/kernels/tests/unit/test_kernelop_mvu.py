@@ -68,42 +68,41 @@ def _mvu_cost(point, context):
 
 
 def _mvu_op() -> Kernel:
-    from finn.kernels.space import Fold, Full, WidthOnly
+    from finn.kernels.space import FULL
 
     mw = fixed_axis("MW", lambda p, ctx: ctx.tensor_shape("inp")[-1])
     mh = fixed_axis("MH", lambda p, ctx: ctx.tensor_shape("out")[-1])
 
-    # act folds MW by SIMD (last axis); out folds MH by PE; weight width = PE*SIMD, a
-    # cross-interface WidthOnly (not a reshape of the weight tensor's own axes). The engine
-    # derives the SIMD/PE dials + divisibility from these Fold specs.
-    untiled_tiling = {
-        "act": [Full(), Fold("SIMD")],
-        "out": [Full(), Fold("PE")],
-        "weights": [WidthOnly(derive("PE") * derive("SIMD"))],
+    # inp folds MW by SIMD (last axis); out folds MH by PE; weights is a 2-D block streamed
+    # SIMD·PE. The engine derives the SIMD/PE dials + divisibility from these stream folds.
+    untiled_stream = {
+        "inp": [1, "SIMD"],
+        "out": [1, "PE"],
+        "weights": ["SIMD", "PE"],
     }
 
-    hls = Implementation(name="mvau_hls", tiling=untiled_tiling)
-    rtl_untiled = Implementation(name="mvau_rtl_untiled", tiling=untiled_tiling)
-    # tiled backend OWNS TH; weight width = (PE*SIMD)/TH — the acid test that a backend
-    # can fold DIFFERENTLY from its peers (impl-owned tiling).
+    hls = Implementation(name="mvau_hls", stream=untiled_stream)
+    rtl_untiled = Implementation(name="mvau_rtl_untiled", stream=untiled_stream)
+    # tiled backend OWNS TH; weight delivered as ONE cross-interface expr (PE*SIMD)/TH —
+    # the acid test that a backend can STREAM DIFFERENTLY from its peers (impl-owned) while
+    # the BLOCK is identical. This weight position is an expr (not a plain dial) so its
+    # folded SHAPE is width-only (raises), but its width resolves.
     rtl_tiled = Implementation(
         name="mvau_rtl_tiled",
         axes=(discrete_axis("TH", {1, 2, 4}, 2),),
-        tiling={
-            "act": [Full(), Fold("SIMD")],
-            "out": [Full(), Fold("PE")],
-            "weights": [WidthOnly(derive("PE") * derive("SIMD") / param("TH"))],
+        stream={
+            "inp": [1, "SIMD"],
+            "out": [1, "PE"],
+            "weights": [derive("PE") * derive("SIMD") / param("TH")],
         },
     )
 
     return Kernel(
         name="MVU",
         interfaces=(
-            Interface("act", "inp", Direction.IN, Role.DATA_IN, index=0),
-            # weight PARAM port: width is WSIMD, NOT a fold of the weight tensor's axes.
-            Interface("weights", "weights", Direction.IN, Role.WEIGHT_SINK, index=1,
-                      folds_last_axis=False),
-            Interface("out", "out", Direction.OUT, Role.DATA_OUT, index=0),
+            Interface("inp", Role.DATA_IN, block=[1, FULL]),
+            Interface("weights", Role.WEIGHT_SINK, block=[FULL, FULL]),
+            Interface("out", Role.DATA_OUT, block=[1, FULL]),
         ),
         pool=(hls, rtl_untiled, rtl_tiled),
         op_axes=(mw, mh),
@@ -167,9 +166,18 @@ def test_tiled_weight_width_is_wsimd_over_th(th):
     assert op.get_instream_width(pt, ctx, 1) == ((4 * 16) // th) * 8
 
 
-def test_weight_folded_shape_raises_not_fakes():
+def test_untiled_weight_folds_as_2d_block():
+    # The untiled backend streams weights [SIMD, PE] — a proper 2-D block fold of (MW, MH).
     op, ctx = _mvu_op(), _ctx()
     pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
+    assert op.get_folded_input_shape(pt, ctx, 1) == (MW // 16, MH // 4, 16, 4)
+
+
+def test_tiled_weight_folded_shape_raises_not_fakes():
+    # The tiled backend delivers weights as ONE cross-interface expr (PE*SIMD/TH), not a
+    # per-dim reshape — so its folded SHAPE raises (width still resolves).
+    op, ctx = _mvu_op(), _ctx()
+    pt = op.configure(ctx, {"implementation": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": 2})
     with pytest.raises(KernelError, match="does not fold a tensor axis"):
         op.get_folded_input_shape(pt, ctx, 1)
 

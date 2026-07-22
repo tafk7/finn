@@ -259,119 +259,82 @@ def _as_int(name: str, value) -> int:
 # =============================================================================
 
 
-class DimSpec:
-    """Base of a per-dimension fold spec. Subclasses are immutable value objects."""
+# -- BLOCK extents (op-owned) -------------------------------------------------
+# An op interface declares, per tensor dim, a BLOCK extent: how much of the dim sits in
+# one calc-state quantum. NO reduce/free tag — reduction is emergent from the math, not
+# declared (matches brainsmith's block_tiling). The tokens:
+#   FULL     — the whole tensor dim is in one block (brainsmith FULL_DIM)
+#   1        — iterate one at a time (unblocked)
+#   int > 1  — a bounded block (e.g. a conv window size)
+#   TileExpr — a derived/cross-interface block extent
 
 
-@dataclass(frozen=True)
-class Full(DimSpec):
-    """This dim passes through unfolded — one element/cycle in this position."""
+class _FullType:
+    """Singleton sentinel: the whole tensor dim sits in one block."""
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "FULL"
 
 
-@dataclass(frozen=True)
-class Fold(DimSpec):
-    """A fold dial folds THIS dim. The block dim it divides is the interface tensor's
-    extent at this position (from the Context). This is the one authoritative binding
-    from which the dial's divisor domain, its divisibility predicate, and the folded-
-    shape reshape all derive."""
+FULL = _FullType()
 
-    dial: str
+# A block extent (op-side): FULL sentinel, an int, or a derived expr.
+BlockExtent = Union["_FullType", int, TileExpr]
+# A stream fold (impl-side): 1 (unfolded), a dial name, an int width, or an expr.
+StreamFold = Union[str, int, TileExpr]
 
 
-@dataclass(frozen=True)
-class WidthOnly(DimSpec):
-    """A stream WIDTH that is not a reshape of this interface's own tensor axes — a
-    cross-interface expression (MVU weight port ``PE*SIMD`` or ``PE*SIMD/TH``). Its
-    width resolves via the :class:`TileExpr` evaluator; a folded-SHAPE request raises
-    (today's ``folds_last_axis=False``). It never sources a dial's range — the dials it
-    references are declared elsewhere (as normal impl axes, e.g. ``TH``)."""
-
-    expr: TileExpr
-
-    def __init__(self, expr: TileEntry):
-        object.__setattr__(self, "expr", _coerce(expr))
+def _block_extent(extent: BlockExtent, iface, dim_idx: int, context) -> int:
+    """Resolve a block extent to a concrete int against the Context. FULL → the tensor
+    dim; an int → itself; a TileExpr → evaluated (rare, cross-interface block)."""
+    if extent is FULL:
+        return int(tuple(context.tensor_shape(iface.tensor))[dim_idx])
+    if isinstance(extent, TileExpr):
+        return int(extent.eval_ctx(context)) if hasattr(extent, "eval_ctx") else int(extent.eval(context))
+    return int(extent)
 
 
-@dataclass(frozen=True)
-class Broadcast(DimSpec):
-    """The size-1 replicate exception: fold this dim by ``dial`` normally, but when the
-    dim's tensor extent is 1 stream a single replicated element (elementwise ``rhs``).
-    ``extent`` is the point key carrying that dim's length."""
-
-    extent: str
-    dial: str
+def _is_fold_dial(fold: StreamFold) -> str | None:
+    """The dial name if this stream fold is a bare axis name (a genuine fold that sources
+    a dial range), else None (``1``/int width/expr — folds shape but not a range source)."""
+    return fold if isinstance(fold, str) else None
 
 
-# The stream-tiling map an Implementation declares: interface name -> spec list, OR a
-# legacy bare entry (a name/int/TileExpr) that lowers to a last-axis Fold/WidthOnly.
-TilingSpec = Union[list, tuple, str, int, TileExpr]
-
-
-def _normalize_specs(entry) -> list[DimSpec]:
-    """Lower a tiling-map value to a list of DimSpec. A list/tuple is taken as-is (each
-    element a DimSpec). A bare legacy entry lowers to a single trailing spec: a plain
-    axis name/int -> Fold on the last axis (its width IS that dial); a TileExpr ->
-    WidthOnly (a cross-interface width). Leading dims are implicitly Full."""
-    if isinstance(entry, (list, tuple)):
-        specs = list(entry)
-        for s in specs:
-            if not isinstance(s, DimSpec):
-                raise TileError(
-                    f"tiling spec list may contain only DimSpec (Full/Fold/WidthOnly/"
-                    f"Broadcast), got {s!r} ({type(s).__name__})"
-                )
-        return specs
-    if isinstance(entry, str):
-        return [Fold(entry)]
-    if isinstance(entry, int):
-        # A literal fold width with no named dial — a constant single-position fold.
-        return [WidthOnly(Const(entry))]
-    if isinstance(entry, TileExpr):
-        return [WidthOnly(entry)]
-    raise TileError(
-        f"cannot interpret tiling entry {entry!r} ({type(entry).__name__})"
-    )
-
-
-def _stream_width_expr(specs: list[DimSpec]) -> TileExpr:
-    """The elements/cycle width for an interface = product of every folded position's
-    stream dial (Full contributes 1). Fold -> Ref(dial); Broadcast -> BroadcastAware;
-    WidthOnly -> its expr. This is what ``get_*stream_width`` evaluates."""
-    width: TileExpr = Const(1)
-    for s in specs:
-        if isinstance(s, Full):
-            continue
-        elif isinstance(s, Fold):
-            width = Mul(width, Ref(s.dial))
-        elif isinstance(s, Broadcast):
-            width = Mul(width, BroadcastAware(s.extent, Ref(s.dial)))
-        elif isinstance(s, WidthOnly):
-            width = Mul(width, s.expr)
-        else:
-            raise TileError(f"unknown DimSpec {s!r}")
-    return width
-
-
-def folds_a_tensor_axis(specs: list[DimSpec]) -> bool:
-    """True when the interface's stream is a reshape of its OWN tensor axes (every spec
-    is Full/Fold/Broadcast) — a folded SHAPE is a plain reshape. False when any position
-    is WidthOnly (a cross-interface width; folded-shape must raise)."""
-    return all(not isinstance(s, WidthOnly) for s in specs)
+def _fold_elems_expr(fold: StreamFold) -> TileExpr:
+    """The elements/cycle expression for one stream-fold entry: ``1``→Const(1); a dial
+    name→Ref; an int→Const; a TileExpr→itself."""
+    if isinstance(fold, str):
+        return Ref(fold)
+    if isinstance(fold, int):
+        return Const(fold)
+    if isinstance(fold, TileExpr):
+        return fold
+    raise TileError(f"bad stream fold {fold!r} ({type(fold).__name__})")
 
 
 @dataclass(frozen=True)
 class GeneratedTiling:
-    """The schema fragments + fold map the engine derives from one impl's tiling map.
+    """The schema fragments + fold map the engine derives from one impl's ``stream`` map
+    joined against the op interfaces' ``block``.
 
     Attributes:
         axes/derived/predicates: fragments to append to the Implementation's own before
             ``pool_schema`` merges them (so they dispatch on the selected impl).
         width_exprs: ``{interface_name: TileExpr}`` — the elements/cycle width, used by
             the Kernel getters (``_stream_elems``).
-        fold_map: ``{interface_name: [(dim_index, dial | None)]}`` — the authoritative
-            dim↔dial binding the facade uses to fold the correct axis; None = unfolded.
+        fold_map: ``{interface_name: [(dim_index, elems_expr | None)]}`` — the folded
+            positions and their stream-element expressions; None = unfolded pass-through.
         reshapes: ``{interface_name: bool}`` — whether a folded SHAPE is a plain reshape
-            (all Full/Fold/Broadcast) or must raise (any WidthOnly).
+            of the interface's own tensor axes (all folds are named dials / 1) or must
+            raise (a fold whose width is a cross-interface expr, e.g. the MVU weight port
+            declared as an expr rather than per-dim dials).
     """
 
     axes: tuple
@@ -382,82 +345,85 @@ class GeneratedTiling:
     reshapes: dict[str, bool]
 
 
-def generate_tiling(interfaces, tiling: dict) -> GeneratedTiling:
-    """Derive design-space fragments + the fold map from one Implementation's tiling.
+def generate_tiling(interfaces, stream: dict) -> GeneratedTiling:
+    """Derive design-space fragments + the fold map from one Implementation's ``stream``
+    map joined against the op ``interfaces`` block structure.
 
-    ``interfaces`` is the Kernel's interface tuple (for tensor names, roles, dtype
-    sources); ``tiling`` is ``{interface_name: TilingSpec}``. Generates, for insertion
-    into the schema:
+    ``interfaces`` is the Kernel's interface tuple — each carries the op-owned ``block``
+    (extents per tensor dim). ``stream`` is ``{interface_name: [StreamFold, ...]}`` —
+    positional over the SAME dims: ``stream[iface][i]`` folds ``block[iface][i]``.
+    Generates, for insertion into the schema:
 
-      * a ``divisor_axis`` per fold DIAL — domain = divisors(GCD of every block dim the
-        dial folds, across interfaces). Only ``Fold`` appearances source the range; a
-        dial that appears only inside ``WidthOnly`` has no range source and must be a
-        declared impl axis (raises here if it is not resolvable that way — see below).
+      * a ``divisor_axis`` per fold DIAL — domain = divisors(GCD of every BLOCK extent the
+        dial folds, across interfaces). Only bare-dial folds source a range; an int width
+        or a cross-interface expr does not.
       * a divisibility ``Predicate`` per ``(dial, block-dim)`` fold.
-      * a stream-width ``Derived`` named ``instream_width``/``outstream_width`` — ONLY
-        for a single-DATA_IN / single-DATA_OUT op (what emit reads). Multi-input ops
-        rely on the port-indexed getters and get no named derived (avoids collisions).
-
-    The block dim a ``Fold`` divides is the interface tensor's extent at that position,
-    read at resolve time from the Context via a ``fixed_axis``-style domain closure — so
-    the generated dial's domain is context-dependent exactly like a hand-written
-    ``divisor_axis``.
+      * a stream-width ``Derived`` named ``instream_width``/``outstream_width`` — ONLY for
+        a single-DATA_IN / single-DATA_OUT op (what emit reads). Multi-input ops rely on
+        the port-indexed getters and get no named derived (avoids collisions).
     """
-    from .axis import Axis
-    from .derived import Derived
-    from .predicate import Predicate
-    from .ports import Direction, Role
+    from .ports import Role
 
     by_name = {i.name: i for i in interfaces}
 
     width_exprs: dict[str, TileExpr] = {}
     fold_map: dict[str, list] = {}
     reshapes: dict[str, bool] = {}
-    # dial -> list of (interface_name, dim_index) where a plain Fold binds it. ONLY plain
-    # Fold specs source a dial's range + divisibility. A Broadcast dim (extent may be 1)
-    # does NOT — a broadcast operand must not shrink the dial's domain to {1}; its own
-    # divisibility is handled by the broadcast-aware width (1 when broadcast).
+    # dial -> [(interface_name, dim_index)] where a bare-dial fold binds it. Only these
+    # source a dial's range + divisibility.
     dial_folds: dict[str, list[tuple[str, int]]] = {}
 
-    for iface_name, entry in tiling.items():
+    for iface_name, folds in stream.items():
         if iface_name not in by_name:
             raise TileError(
-                f"tiling names interface {iface_name!r} not in the kernel "
+                f"stream names interface {iface_name!r} not in the kernel "
                 f"(have {sorted(by_name)})"
             )
-        specs = _normalize_specs(entry)
-        width_exprs[iface_name] = _stream_width_expr(specs)
-        reshapes[iface_name] = folds_a_tensor_axis(specs)
+        iface = by_name[iface_name]
+        folds = list(folds)
+        # A folds-list may be shorter than the block (leading dims default to unfolded).
+        block = list(iface.block) if iface.block else [FULL] * len(folds)
+        if len(folds) > len(block):
+            raise TileError(
+                f"interface {iface_name!r}: stream has {len(folds)} entries but block has "
+                f"{len(block)} dims"
+            )
+        # Left-pad folds with 1 (unfolded) so positions align to the block's trailing dims.
+        folds = [1] * (len(block) - len(folds)) + folds
+
+        width: TileExpr = Const(1)
         fmap: list = []
-        for dim_idx, s in enumerate(specs):
-            if isinstance(s, Fold):
-                fmap.append((dim_idx, s.dial))
-                dial_folds.setdefault(s.dial, []).append((iface_name, dim_idx))
-            elif isinstance(s, Broadcast):
-                # Folds the dim for SHAPE purposes, but does not constrain the dial range.
-                fmap.append((dim_idx, s.dial))
-            else:
+        plain_reshape = True
+        for dim_idx, fold in enumerate(folds):
+            if fold == 1:
                 fmap.append((dim_idx, None))
+                continue
+            elems = _fold_elems_expr(fold)
+            width = Mul(width, elems)
+            fmap.append((dim_idx, elems))
+            dial = _is_fold_dial(fold)
+            if dial is not None:
+                dial_folds.setdefault(dial, []).append((iface_name, dim_idx))
+            elif isinstance(fold, BroadcastAware):
+                # A broadcast-aware fold is a per-dim fold of THIS interface's own axis
+                # (streams 1 when broadcast, else the inner dial) — it reshapes. Its dial
+                # range is sourced by a plain Fold elsewhere (a broadcast dim, extent maybe
+                # 1, must not shrink the domain), so it is NOT added to dial_folds.
+                pass
+            elif isinstance(fold, TileExpr):
+                # A general cross-interface width expr (e.g. the MVU weight PE*SIMD/TH) is
+                # not a reshape of this interface's own tensor axes -> folded-shape raises.
+                plain_reshape = False
+        width_exprs[iface_name] = width
         fold_map[iface_name] = fmap
+        reshapes[iface_name] = plain_reshape
 
-    # A dial referenced by a Broadcast must also be a real Fold somewhere (its range
-    # source); otherwise it has no domain. (A dial only inside WidthOnly is likewise
-    # unsourced — declare it as a normal impl axis, e.g. TH.)
-    for iface_name, entry in tiling.items():
-        for s in _normalize_specs(entry):
-            if isinstance(s, Broadcast) and s.dial not in dial_folds:
-                raise TileError(
-                    f"tiling dial {s.dial!r} is used only in a Broadcast (interface "
-                    f"{iface_name!r}) and never as a plain Fold — it has no range source. "
-                    f"Fold it on a non-broadcast interface, or declare it as an impl axis."
-                )
-
-    # -- fold-dial axes: divisor of the GCD of every block dim the dial FOLDS -------
+    # -- fold-dial axes: divisor of the GCD of every BLOCK extent the dial folds ----
     axes: list = []
     for dial, binds in dial_folds.items():
         axes.append(_fold_dial_axis(dial, binds, by_name))
 
-    # -- divisibility predicates: block_dim % dial == 0, per plain Fold -------------
+    # -- divisibility predicates: block_extent % dial == 0, per bare-dial fold ------
     predicates: list = []
     for dial, binds in dial_folds.items():
         for iface_name, dim_idx in binds:
@@ -486,25 +452,19 @@ def generate_tiling(interfaces, tiling: dict) -> GeneratedTiling:
     )
 
 
-def _block_dim(iface, dim_idx: int, context) -> int:
-    """The interface tensor's extent at ``dim_idx`` (the block dim a fold divides).
-    Supports negative-style indexing implicitly via Python list indexing."""
-    shape = tuple(context.tensor_shape(iface.tensor))
-    return int(shape[dim_idx])
-
-
 def _fold_dial_axis(dial: str, binds, by_name):
-    """A ``divisor_axis`` for ``dial``: domain = divisors of the GCD of every block dim
-    it folds. Built directly (not via the axis factory) so the domain closure reads the
-    Context at resolve time and the deps include ``implementation`` implicitly via the
-    pool merge."""
+    """A ``divisor_axis`` for ``dial``: domain = divisors of the GCD of every BLOCK extent
+    it folds. Built directly so the domain closure reads the Context at resolve time; deps
+    include ``implementation`` implicitly via the pool merge."""
     from .axis import Axis
     from finn.kernels.primitives.ordered_parameter import OrderedParameter
 
     def _gcd_block(context) -> int:
         g = 0
         for iface_name, dim_idx in binds:
-            g = gcd(g, _block_dim(by_name[iface_name], dim_idx, context))
+            iface = by_name[iface_name]
+            extent = iface.block[dim_idx] if iface.block else FULL
+            g = gcd(g, _block_extent(extent, iface, dim_idx, context))
         return g
 
     def domain(p, ctx, _dial=dial):
@@ -522,15 +482,16 @@ def _divisibility_predicate(dial: str, iface, dim_idx: int):
     from .predicate import Predicate
 
     def check(point, context, _dial=dial, _iface=iface, _idx=dim_idx):
-        block = _block_dim(_iface, _idx, context)
+        extent = _iface.block[_idx] if _iface.block else FULL
+        block = _block_extent(extent, _iface, _idx, context)
         val = point.get(_dial)
         if val is None:
             return None  # dial guarded out under this impl — nothing to check
         if block % val != 0:
-            return f"{_iface.tensor} dim {_idx} = {block} not divisible by {_dial} = {val}"
+            return f"{_iface.tensor} block dim {_idx} = {block} not divisible by {_dial} = {val}"
         return None
 
-    return Predicate(check=check, description=f"{iface.tensor}[{dim_idx}] % {dial} == 0")
+    return Predicate(check=check, description=f"{iface.tensor} block[{dim_idx}] % {dial} == 0")
 
 
 def _width_derived(name: str, iface, width_expr: TileExpr):

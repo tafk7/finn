@@ -32,7 +32,7 @@ pooling is NCHW, so a layout transform precedes; the windowing math is layout-in
 from __future__ import annotations
 
 from finn.kernels.space import (
-    Direction,
+    FULL,
     Interface,
     Kernel,
     Role,
@@ -63,15 +63,20 @@ def _spatial(shape):
 # =============================================================================
 
 
-def pool_interfaces(*, has_indices: bool) -> tuple[Interface, ...]:
+def pool_interfaces(*, has_indices: bool, rank: int) -> tuple[Interface, ...]:
     """The port list. MaxPool may emit a second output (Indices, the argmax positions);
-    it is present ONLY when the node wires it — the guarded/optional-interface shape."""
+    it is present ONLY when the node wires it — the guarded/optional-interface shape.
+
+    NHWC block: the channel (last) dim is FULL (one block spans all channels — the pooling
+    reduction is per-channel), the spatial+batch dims iterate one at a time. ``rank`` =
+    spatial_dims + 2. The impl's PE stream folds the FULL channel dim."""
+    channel_block = [1] * (rank - 1) + [FULL]
     interfaces = [
-        Interface(INPUT, INPUT, Direction.IN, Role.DATA_IN, index=0),
-        Interface(OUTPUT, OUTPUT, Direction.OUT, Role.DATA_OUT, index=0),
+        Interface(INPUT, Role.DATA_IN, block=list(channel_block)),
+        Interface(OUTPUT, Role.DATA_OUT, block=list(channel_block)),
     ]
     if has_indices:
-        interfaces.append(Interface(INDICES, INDICES, Direction.OUT, Role.DATA_OUT, index=1))
+        interfaces.append(Interface(INDICES, Role.DATA_OUT, block=list(channel_block)))
     return tuple(interfaces)
 
 
@@ -181,7 +186,7 @@ def pool_kernel(
     rank = len(geom.kernel_shape) + 2
     return Kernel(
         name="Pool",
-        interfaces=pool_interfaces(has_indices=has_indices),
+        interfaces=pool_interfaces(has_indices=has_indices, rank=rank),
         pool=(pool_hls_impl(has_indices=has_indices, rank=rank),),
         op_axes=pool_design_space(function),
         op_predicates=pool_predicates(function, geom),

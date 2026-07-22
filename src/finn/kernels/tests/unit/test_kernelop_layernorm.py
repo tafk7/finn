@@ -30,7 +30,6 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.space import (
     Context,
-    Direction,
     Illegal,
     Implementation,
     Interface,
@@ -49,27 +48,28 @@ IFM = (1, 56, CHANNELS)  # (batch, spatial, channels) — NHWC-ish, channels las
 
 
 def _layernorm_op() -> Kernel:
-    # SIMD folds the last (channel) dim. The impls declare that via a Fold spec; the
-    # tiling engine derives the SIMD dial (divisors of the channel count), its
-    # divisibility predicate, and the stream widths — none hand-written.
-    from finn.kernels.space import Fold, Full
+    # SIMD folds the last (channel) dim. The op declares the block (channel dim FULL — the
+    # normalization spans all channels); the impls declare the SIMD stream fold. The engine
+    # derives the SIMD dial (divisors of the channel count), divisibility, and widths.
+    from finn.kernels.space import FULL
 
-    # rank-3 NHWC-ish (batch, spatial, channels): fold the last axis.
-    channel_fold = [Full(), Full(), Fold("SIMD")]
+    # rank-3 NHWC-ish (batch, spatial, channels): block spans the channel dim.
+    channel_block = [1, 1, FULL]
+    channel_stream = [1, 1, "SIMD"]
     hls = Implementation(
         name="layernorm_hls",
-        tiling={"input": list(channel_fold), "output": list(channel_fold)},
+        stream={"inp": list(channel_stream), "out": list(channel_stream)},
     )
     rtl = Implementation(
         name="layernorm_rtl",
-        tiling={"input": list(channel_fold), "output": list(channel_fold)},
+        stream={"inp": list(channel_stream), "out": list(channel_stream)},
     )
 
     return Kernel(
         name="LayerNorm",
         interfaces=(
-            Interface("input", "inp", Direction.IN, Role.DATA_IN, index=0),
-            Interface("output", "out", Direction.OUT, Role.DATA_OUT, index=0),
+            Interface("inp", Role.DATA_IN, block=list(channel_block)),
+            Interface("out", Role.DATA_OUT, block=list(channel_block)),
         ),
         pool=(hls, rtl),
     )

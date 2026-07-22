@@ -43,18 +43,14 @@ from qonnx.util.basic import (
 from finn.kernels.adapter import KernelOp, PortSpec
 from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
+    FULL,
     Derived,
-    Direction,
-    Fold,
-    Full,
     Illegal,  # noqa: F401  (kept available for callers/tests)
     Interface,
     Kernel,
     Predicate,
     Role,
     Schema,
-    WidthOnly,
-    derive,
     discrete_axis,
     fixed_axis,
     predicate,
@@ -100,20 +96,20 @@ OUTPUT = "out"
 
 
 def mvau_interfaces():
-    """The op-side interface list — identity + role, no tiling (tiling is impl-owned).
+    """The op-side interface list — identity + role + BLOCK structure (the math). Direction
+    is implied by role; stream folding (SIMD/PE) is impl-owned.
 
-    ``weights`` is a PARAM port whose stream WIDTH is PE*SIMD (a cross-interface expr,
-    not a fold of the weight tensor's own axes), so ``folds_last_axis=False``: its width
-    resolves via the tiling evaluator, but a folded-SHAPE request raises."""
+    The block reads as the matmul: ``inp`` iterates its vector count (``1``) and holds the
+    reduction dim MW in-block (``FULL``); ``weights`` is the whole matrix ``(MW, MH)`` in one
+    block; ``out`` iterates vectors and holds MH. ``weights`` is an ORDINARY interface — no
+    WidthOnly, no special flag; its PE·SIMD stream is just a 2-D fold of a 2-D block."""
     return (
-        Interface("inp", INPUT, Direction.IN, Role.DATA_IN, index=0),
-        Interface("weights", WEIGHTS, Direction.IN, Role.WEIGHT_SINK, index=1,
-                  folds_last_axis=False),
+        Interface("inp", Role.DATA_IN, block=[1, FULL]),        # (n_vecs, MW)
+        Interface("weights", Role.WEIGHT_SINK, block=[FULL, FULL]),  # (MW, MH)
         # dtype_source="outputDataType": the stream width uses the derived output type
         # (= accDataType under noActivation), not the raw graph dtype — so the generated
         # outstream_width matches the emit-side value.
-        Interface("out", OUTPUT, Direction.OUT, Role.DATA_OUT, index=0,
-                  dtype_source="outputDataType"),
+        Interface("out", Role.DATA_OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
 
@@ -164,12 +160,10 @@ def _is_nonneg_int(v) -> bool:
 
 def op_axes():
     return (
-        # --- context-fixed matrix dims (addressed like axes) -----------------
-        # MW/MH are BLOCK extents (the matmul's reduction + output dims), read from the
-        # weight tensor. The PE/SIMD fold DIALS that divide them are NOT declared here —
-        # the tiling engine derives them from each impl's COMPUTE_TILING (Fold specs).
-        fixed_axis("MW", _matrix_dim(0)),
-        fixed_axis("MH", _matrix_dim(1)),
+        # MW/MH are NO LONGER axes — they are BLOCK extents (the matmul's reduction +
+        # output dims) declared on the interfaces' `block`, and the PE/SIMD fold DIALS the
+        # engine derives from each impl's `stream`. MW/MH survive only as emit-facing
+        # migration aliases (see op_derived below).
         # --- activation / threshold cluster ----------------------------------
         discrete_axis("noActivation", {0, 1}, 0),
         predicate_axis(
@@ -258,12 +252,20 @@ def _output_datatype(p, ctx):
 
 def op_derived():
     # NOTE: `instream_width`/`outstream_width` are NOT here — the tiling engine generates
-    # them from COMPUTE_TILING (SIMD·inbits / PE·outbits), with the `out` interface's
+    # them from the impls' `stream` folds, with the `out` interface's
     # dtype_source="outputDataType" so the width uses the accumulator type under
     # noActivation. `weight_stream_width` (0 for embedded, PE*SIMD*wbits otherwise) is
     # CROSS-COORDINATE — it reads both the compute fold AND the parameters topology — so
     # it is contributed in section 5 (coupling_derived), not here.
+    #
+    # MIGRATION ALIASES: MW/MH/WMEM/TMEM survive as emit-facing deriveds so Tier-4
+    # (Vivado-validated emit_hls/emit_rtl, which read point.MW/MH/WMEM) is UNTOUCHED. They
+    # are sourced from the block/weight shapes, not from named op axes. New code should read
+    # extents from the interface block shapes directly; retire these when emit is reworked.
+    # Order matters: MW/MH precede WMEM/TMEM (resolve computes deriveds in list order).
     return (
+        Derived("MW", _matrix_dim(0)),
+        Derived("MH", _matrix_dim(1)),
         Derived("WMEM", _wmem),
         Derived("TMEM", _tmem),
         Derived("accDataType", _acc_datatype),
@@ -315,16 +317,16 @@ def op_predicates():
 # =============================================================================
 
 # They fold identically — SIMD folds the reduction dim MW on the activation (last axis),
-# PE folds the output dim MH (last axis); the weight lane width is PE*SIMD elements (a
-# cross-interface WidthOnly — not a reshape of the weight tensor's own axes). Impl-owned
-# per kernelop-tensor-block-stream.md §5.1, but identical across the current pool so
-# declared once here; a tiled backend would override "weights" with WidthOnly(PE*SIMD/TH).
-# From these specs the tiling engine DERIVES the SIMD/PE fold-dial axes (divisor domains),
-# the divisibility predicates, and the stream-width deriveds — none are hand-written.
-COMPUTE_TILING = {
-    INPUT: [Full(), Fold("SIMD")],
-    OUTPUT: [Full(), Fold("PE")],
-    WEIGHTS: [WidthOnly(derive("PE") * derive("SIMD"))],
+# The STREAM folding shared by all three compute impls: SIMD folds the reduction dim MW
+# (inp position 1, weights position 0), PE folds the output dim MH (out position 1, weights
+# position 1). weights is a 2-D fold of its 2-D block → PE·SIMD tile/cycle. Positional over
+# each interface's `block`. Declared once here; a tiled backend overrides only the weights
+# entry (deliver PE/TH along MH). The engine DERIVES the SIMD/PE dials (divisor domains),
+# divisibility, and widths from these — none hand-written.
+COMPUTE_STREAM = {
+    INPUT: [1, "SIMD"],
+    OUTPUT: [1, "PE"],
+    WEIGHTS: ["SIMD", "PE"],
 }
 
 
@@ -423,21 +425,14 @@ def coupling_predicates():
 
 
 # =============================================================================
-# 6. COST — rough op-level get_exp_cycles.
+# 6. COST — no op-level override needed.
 # =============================================================================
-
-
-def _mvau_cost(point, context):
-    """Rough throughput cost: nf * sf * n_vecs — the reduction trip (MW/SIMD) times the
-    output trip (MH/PE) times the input-vector count. A PRODUCT the generic max-over-
-    interfaces floor cannot see (the reduction coupling; kernelop-tensor-block-stream.md
-    §2.2), so MVAU supplies it as the op-level cost_model."""
-    sf = point.MW // point.SIMD
-    nf = point.MH // point.PE
-    n_vecs = 1
-    for d in context.tensor_shape(INPUT)[:-1]:
-        n_vecs *= int(d)
-    return nf * sf * n_vecs
+#
+# MVAU's cost IS the reduction product nf·sf·n_vecs, and it falls out of the generic
+# max-over-interfaces floor for FREE now that `weights` is a proper 2-D block streamed
+# SIMD·PE: its stream-cycle count is MW·MH/(SIMD·PE) = sf·nf — the largest interface term,
+# times the input's n_vecs leading dims. So MVAU declares NO cost_model (the old override
+# only existed because weights was modelled as a width-only port skipped by the floor).
 
 
 # =============================================================================
@@ -474,7 +469,6 @@ def mvau_kernel() -> Kernel:
         op_axes=op_axes(),
         op_derived=op_derived() + coupling_derived(),
         op_predicates=op_predicates() + coupling_predicates(),
-        cost_model=_mvau_cost,
         sub_schemas=(parameters_schema(),),
     )
 

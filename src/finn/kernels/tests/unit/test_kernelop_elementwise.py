@@ -33,7 +33,6 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.space import (
     Context,
-    Direction,
     Illegal,
     Implementation,
     Interface,
@@ -47,11 +46,11 @@ N = 128  # last (channel) dim of lhs / output
 
 
 def _elementwise_op() -> Kernel:
-    from finn.kernels.space import Broadcast, Fold, Full
+    from finn.kernels.space import FULL, broadcast_aware, derive
 
-    # rhs_last is a context-fixed quantity the Broadcast spec reads (the rhs last-dim
-    # length; 1 ⇒ broadcast). The PE dial is engine-derived from the lhs/output Fold specs
-    # (divisors of the lhs channel count) — a broadcast rhs does NOT shrink its domain.
+    # rhs_last is a context-fixed quantity the broadcast_aware fold reads (the rhs last-dim
+    # length; 1 ⇒ broadcast). The PE dial is engine-derived from the lhs/out plain PE folds
+    # (divisors of the channel count) — a broadcast rhs does NOT shrink its domain.
     rhs_last = fixed_axis("rhs_last", lambda p, ctx: ctx.tensor_shape("rhs")[-1])
     # func / input_pattern: structural op params (func affects output dtype rule at
     # Tier-4; input_pattern reassigns rhs role at Tier-4 — both inert for Tier-3 shapes).
@@ -60,22 +59,23 @@ def _elementwise_op() -> Kernel:
         "input_pattern", {"dynamic_dynamic", "dynamic_static"}, "dynamic_dynamic"
     )
 
-    # rank-3 channel-last. lhs/output fold last by PE; rhs folds by PE UNLESS broadcast
-    # (rhs_last == 1), then it streams 1 (the Broadcast spec).
-    tiling = {
-        "lhs": [Full(), Full(), Fold("PE")],
-        "rhs": [Full(), Full(), Broadcast("rhs_last", "PE")],
-        "output": [Full(), Full(), Fold("PE")],
+    # rank-3 channel-last, no reduction (BLOCK=TENSOR: channel dim FULL). lhs/out fold the
+    # channel by PE; rhs folds by PE UNLESS broadcast (rhs_last == 1), then it streams 1.
+    channel_block = [1, 1, FULL]
+    stream = {
+        "lhs": [1, 1, "PE"],
+        "rhs": [1, 1, broadcast_aware("rhs_last", derive("PE"))],
+        "out": [1, 1, "PE"],
     }
-    hls = Implementation(name="elementwise_hls", tiling=tiling)
-    rtl = Implementation(name="elementwise_rtl", tiling=tiling)
+    hls = Implementation(name="elementwise_hls", stream=stream)
+    rtl = Implementation(name="elementwise_rtl", stream=stream)
 
     return Kernel(
         name="ElementwiseBinary",
         interfaces=(
-            Interface("lhs", "lhs", Direction.IN, Role.DATA_IN, index=0),
-            Interface("rhs", "rhs", Direction.IN, Role.DATA_IN, index=1),
-            Interface("output", "out", Direction.OUT, Role.DATA_OUT, index=0),
+            Interface("lhs", Role.DATA_IN, block=list(channel_block)),
+            Interface("rhs", Role.DATA_IN, block=list(channel_block)),
+            Interface("out", Role.DATA_OUT, block=list(channel_block)),
         ),
         pool=(hls, rtl),
         op_axes=(rhs_last, func, pattern),

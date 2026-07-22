@@ -86,6 +86,18 @@ class Role(Enum):
 # raises on the AXI-MM side" is a category error the TYPE forbids, not a runtime bug.
 _SHAPED_ROLES = frozenset({Role.DATA_IN, Role.DATA_OUT, Role.WEIGHT_SINK, Role.WEIGHT_SOURCE})
 
+# A role IMPLIES its direction — a SINK/IN-role consumes (IN), a SOURCE/OUT-role produces
+# (OUT). So an Interface declares only its role; the direction is derived, never restated.
+_OUT_ROLES = frozenset(
+    {Role.DATA_OUT, Role.WEIGHT_SOURCE, Role.INDEX_SOURCE, Role.STATUS, Role.MEMORY_MASTER}
+)
+
+
+def role_direction(role: Role) -> Direction:
+    """The direction implied by a role. OUT for source/output/master/status roles; IN for
+    everything else (sinks, data-in, config, clock, reset)."""
+    return Direction.OUT if role in _OUT_ROLES else Direction.IN
+
 
 @dataclass(frozen=True)
 class Port:

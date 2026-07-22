@@ -22,7 +22,7 @@ from finn.util.basic import get_dsp_block
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
 from .emit_rtl import emit_mvau_rtl
-from .op import COMPUTE_TILING, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
+from .op import COMPUTE_STREAM, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
 from .registry import register
 
 
@@ -64,5 +64,5 @@ def packed_bundle() -> Implementation:
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_8sx9_dsp58.sv",),
         emit=emit_mvau_rtl,
-        tiling=COMPUTE_TILING,
+        stream=COMPUTE_STREAM,
     )

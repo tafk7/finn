@@ -67,13 +67,15 @@ class Implementation:
             None if emit is not yet implemented for this backend. Dispatched by
             :func:`emit_point`. Reads the resolved ``point`` + frozen ``context``
             (which carries initializer VALUES) — never the graph.
-        tiling: this bundle's BLOCK->STREAM lowering, ``{interface_name -> TileEntry}``
-            — the stream dial (or composed expr) folding each interface. Impl-owned by
-            construction: tiling IS the RTL translation of the op's block structure
-            (kernelop-tensor-block-stream.md §5.1). A bare axis name (``"SIMD"``), an
-            int, or a :class:`~finn.kernels.space.tiling.TileExpr`
-            (``derive("PE")*derive("SIMD")/param("TH")``). An interface absent from the
-            map is unfolded (stream = 1 element/cycle).
+        stream: this bundle's STREAM folding, ``{interface_name -> [StreamFold, ...]}`` —
+            a list positional over the op interface's ``block`` dims: ``stream[iface][i]``
+            folds ``block[iface][i]``. Each entry is ``1`` (unfolded), a bare axis name
+            (``"SIMD"`` — the string IS the dial declaration), or a
+            :class:`~finn.kernels.space.tiling.TileExpr`
+            (``derive("PE")/param("TH")``). Impl-owned by construction: STREAM folding IS
+            the RTL realization of the op's block structure — there is NO block field here,
+            so an impl cannot change the math (kernelop-tensor-block-stream.md §5). An
+            interface absent from the map is unfolded (stream = 1 element/cycle).
     """
 
     name: str
@@ -83,14 +85,14 @@ class Implementation:
     predicates: tuple[Predicate, ...] = ()
     sources: tuple[str, ...] = ()
     emit: Callable[[Any, Any], "Artifacts"] | None = None
-    tiling: Mapping[str, Any] = field(default_factory=dict)
+    stream: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))
         object.__setattr__(self, "derived", tuple(self.derived))
         object.__setattr__(self, "predicates", tuple(self.predicates))
         object.__setattr__(self, "sources", tuple(self.sources))
-        object.__setattr__(self, "tiling", dict(self.tiling))
+        object.__setattr__(self, "stream", dict(self.stream))
 
 
 class EmitError(ValueError):

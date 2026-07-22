@@ -100,8 +100,12 @@ def test_getcustomop_resolves_to_mvau_kernel_op():
 
 def test_nodeattr_types_include_axes_and_geometry():
     attrs = _inst(_build_model()).get_nodeattr_types()
-    for key in ("implementation", "PE", "SIMD", "MW", "MH", "noActivation"):
+    for key in ("implementation", "PE", "SIMD", "noActivation"):
         assert key in attrs, f"design axis {key} missing from nodeattr schema"
+    # MW/MH are NOT axes — they are block extents (interface block shapes) + emit-facing
+    # migration aliases, so they are not nodeattrs. The geometry is carried by the baked
+    # per-interface shape attrs instead.
+    assert "MW" not in attrs and "MH" not in attrs
     for key in ("inp_shape", "inp_dtype", "weights_shape", "out_dtype"):
         assert key in attrs, f"geometry attr {key} missing"
 
