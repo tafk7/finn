@@ -101,33 +101,83 @@ class Interface:
 
 
 @dataclass(frozen=True)
-class Kernel:
-    """A hardware kernel op: interfaces + op-level design space + an implementation pool.
+class KernelSchema:
+    """The Kernel's immutable, ONNX-invariant IDENTITY half — grouped into one named
+    object so the identity ⊥ realization spine is structural in the code, not just
+    conceptual (kernel-layers.md §2).
 
-    ``op_axes``/``op_derived``/``op_predicates`` are the op-level shared elements (the
-    ONNX-invariant space every impl resolves against — folding-independent geometry,
-    datatype rules, legality). ``pool`` is the flat list of Backends; each owns
-    its tiling, feasibility, sources, emit. :meth:`schema` assembles them via
-    ``pool_schema``; :meth:`configure` resolves a point; the getters project from it.
-    """
+    Holds only what is true regardless of HOW the op is built: its ``name``, its
+    ``interfaces`` (the inter-node communication contract — direction + BLOCK structure),
+    and the op-level shared design space (``op_axes``/``op_derived``/``op_predicates`` —
+    folding-independent geometry, datatype rules, legality), plus a rough op-level
+    ``cost_model`` default. Every field is independently optional: a minimal op declares
+    only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
+
+    EXCLUDES the realization half — the pool of Backends and the composed ``sub_schemas``
+    (weight delivery, memory) are held by the :class:`Kernel` alongside this, never inside
+    it. A ``KernelSchema`` compiles (with the pool) down to the flat resolve
+    :class:`~finn.kernels.space.schema.Schema` via :meth:`Kernel.schema`."""
 
     name: str
     interfaces: tuple[Interface, ...]
-    pool: tuple[Backend, ...]
     op_axes: tuple = ()
     op_derived: tuple = ()
     op_predicates: tuple = ()
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
-    sub_schemas: tuple = ()  # secondary pools (e.g. parameters) composed via `compose`
-    _by_name: Mapping[str, Interface] = field(default_factory=dict, init=False, repr=False)
-    _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "interfaces", tuple(self.interfaces))
+
+
+@dataclass(frozen=True)
+class Kernel:
+    """A hardware kernel op: a :class:`KernelSchema` (identity) + a pool of Backends
+    (realizations) + composed ``sub_schemas`` (weight delivery, memory).
+
+    ``identity`` is the ONNX-invariant half (name, interfaces, op-level axes/derived/
+    predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
+    feasibility, sources, emit. ``sub_schemas`` are secondary pools composed via
+    ``compose``. :meth:`schema` assembles all three into the flat resolve ``Schema``;
+    :meth:`configure` resolves a point; the getters project from it. The identity fields
+    are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to
+    ``identity``) so callers read them off the Kernel unchanged.
+    """
+
+    identity: KernelSchema
+    pool: tuple[Backend, ...]
+    sub_schemas: tuple = ()  # secondary pools (e.g. parameters) composed via `compose`
+    _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
         object.__setattr__(self, "sub_schemas", tuple(self.sub_schemas))
-        object.__setattr__(self, "_by_name", {i.name: i for i in self.interfaces})
         object.__setattr__(self, "_tiling_cache", {})
+
+    # -- identity passthroughs: read the KernelSchema fields off the Kernel ---
+
+    @property
+    def name(self) -> str:
+        return self.identity.name
+
+    @property
+    def interfaces(self) -> tuple[Interface, ...]:
+        return self.identity.interfaces
+
+    @property
+    def op_axes(self) -> tuple:
+        return self.identity.op_axes
+
+    @property
+    def op_derived(self) -> tuple:
+        return self.identity.op_derived
+
+    @property
+    def op_predicates(self) -> tuple:
+        return self.identity.op_predicates
+
+    @property
+    def cost_model(self):
+        return self.identity.cost_model
 
     # -- schema / resolve ---------------------------------------------------
 
@@ -164,12 +214,13 @@ class Kernel:
         return tuple(out)
 
     def schema(self) -> Schema:
-        """The full design space: op-level shared elements + the implementation pool
-        (each impl augmented with its tiling-engine-derived fold dials / divisibility /
-        widths), plus any composed secondary pools (``sub_schemas`` — e.g. the parameters
-        pool). ``op_derived``/``op_predicates`` already include the cross-coordinate
-        couplings (those that read BOTH the compute fold and a sub-pool's topology),
-        appended by the op before composition."""
+        """The full design space: the identity's op-level shared elements + the
+        implementation pool (each impl augmented with its tiling-engine-derived fold dials
+        / divisibility / widths), plus any composed secondary pools (``sub_schemas`` — the
+        DEMAND stage + the parameters pool). ``op_derived``/``op_predicates`` are PURE
+        identity — the cross-coordinate memory couplings that once lived here relocated
+        into the parameters pool, and the compute→memory demand crosses the seam as its own
+        composed ``sub_schema`` (never appended to the op's identity)."""
         op = pool_schema(
             "implementation",
             tuple(self.op_axes),

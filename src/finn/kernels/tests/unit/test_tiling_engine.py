@@ -24,6 +24,7 @@ from finn.kernels.space import (
     Backend,
     Interface,
     Kernel,
+    KernelSchema,
     derive,
     fixed_axis,
     param,
@@ -133,7 +134,10 @@ def test_multi_fold_gcd_domain():
 def _mvu_kernel():
     stream = {"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}
     impl = Backend(name="mvu", stream=stream)
-    return Kernel(name="MVU", interfaces=MVU_IFACES, pool=(impl,), op_axes=())
+    return Kernel(
+        identity=KernelSchema(name="MVU", interfaces=MVU_IFACES, op_axes=()),
+        pool=(impl,),
+    )
 
 
 def test_weight_2d_block_folds_and_width():
@@ -199,10 +203,12 @@ def test_width_uses_dtype_source():
     )
     impl = Backend(name="k", stream={"inp": [1, "SIMD"], "out": [1, "PE"]})
     k = Kernel(
-        name="K",
-        interfaces=ifaces,
+        identity=KernelSchema(
+            name="K",
+            interfaces=ifaces,
+            op_derived=(Derived("acc", lambda p, ctx: DataType["INT16"]),),
+        ),
         pool=(impl,),
-        op_derived=(Derived("acc", lambda p, ctx: DataType["INT16"]),),
     )
     ctx = Context(
         shapes={"inp": (1, 128), "out": (1, 64)},

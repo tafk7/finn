@@ -36,6 +36,7 @@ from finn.kernels.space import (
     Interface,
     Kernel,
     KernelError,
+    KernelSchema,
 )
 
 
@@ -66,10 +67,12 @@ def _layernorm_op() -> Kernel:
     )
 
     return Kernel(
-        name="LayerNorm",
-        interfaces=(
-            Interface("inp", Direction.IN, block=list(channel_block)),
-            Interface("out", Direction.OUT, block=list(channel_block)),
+        identity=KernelSchema(
+            name="LayerNorm",
+            interfaces=(
+                Interface("inp", Direction.IN, block=list(channel_block)),
+                Interface("out", Direction.OUT, block=list(channel_block)),
+            ),
         ),
         pool=(hls, rtl),
     )

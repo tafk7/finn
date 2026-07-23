@@ -38,6 +38,7 @@ from finn.kernels.space import (
     Backend,
     Interface,
     Kernel,
+    KernelSchema,
     discrete_axis,
     fixed_axis,
 )
@@ -71,14 +72,16 @@ def _elementwise_op() -> Kernel:
     rtl = Backend(name="elementwise_rtl", stream=stream)
 
     return Kernel(
-        name="ElementwiseBinary",
-        interfaces=(
-            Interface("lhs", Direction.IN, block=list(channel_block)),
-            Interface("rhs", Direction.IN, block=list(channel_block)),
-            Interface("out", Direction.OUT, block=list(channel_block)),
+        identity=KernelSchema(
+            name="ElementwiseBinary",
+            interfaces=(
+                Interface("lhs", Direction.IN, block=list(channel_block)),
+                Interface("rhs", Direction.IN, block=list(channel_block)),
+                Interface("out", Direction.OUT, block=list(channel_block)),
+            ),
+            op_axes=(rhs_last, func, pattern),
         ),
         pool=(hls, rtl),
-        op_axes=(rhs_last, func, pattern),
     )
 
 

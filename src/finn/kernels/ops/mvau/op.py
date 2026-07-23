@@ -16,11 +16,11 @@ axis/derived/predicate (file:line into real FINN):
 
 Sections (what each replaces in the classic FINN MVAU):
     1. CONSTANTS         tensor names + pool-member identities
-    2. INTERFACES        the ONNX-facing arity + roles  (FINN: node in/out wiring)
+    2. INTERFACES        the ONNX-facing arity + direction  (FINN: node in/out wiring)
     3. OP DESIGN SPACE   op_axes/op_derived/op_predicates — the shared BLOCK structure
                          (FINN: get_nodeattr_types + the shape/dtype getters' math)
     4. COMPUTE TILING    the BLOCK->STREAM lowering shared by the pool
-    5. PARAMETERS        cross-coordinate couplings to the composed weight-delivery pool
+    5. DEMAND            the compute->memory demand stage of the supply waterfall
     6. COST              rough op-level get_exp_cycles  (FINN: get_exp_cycles)
     7. ASSEMBLY          mvau_kernel() / mvau_schema()  (FINN: the class itself)
     8. FINN WRAPPER      MvauKernelOp(KernelOp)         (FINN: MVAU(HWCustomOp))
@@ -46,6 +46,7 @@ from finn.kernels.space import (
     Illegal,  # noqa: F401  (kept available for callers/tests)
     Interface,
     Kernel,
+    KernelSchema,
     Role,
     Schema,
     discrete_axis,
@@ -78,7 +79,7 @@ OUTPUT = "out"
 
 
 # =============================================================================
-# 2. INTERFACES — the ONNX-facing arity + roles (no tiling; tiling is impl-owned)
+# 2. INTERFACES — the ONNX-facing arity + direction (no tiling; tiling is impl-owned)
 # =============================================================================
 
 
@@ -121,6 +122,11 @@ def weights_may_change(p) -> bool:
     dtype derivations: staticness (coordinate C) is decided by the composed
     ``parameters.*`` fields. Reads with ``.get`` so it is safe on a point where the
     parameters pool is absent (a future param-free op) — absent ⇒ statically known.
+
+    This is a FORK, not a cycle (interface-supply-waterfall.md §3): one given fact
+    (staticness) fans out to two consumers — compute dtype (up) and the memory reload port
+    (down). A future M2 increment relocates staticness to the requirement tier both READ,
+    at which point this helper reads that given instead of the parameters axis.
 
     Increment-1 topologies are ``embedded`` (static) and ``decoupled`` (static unless
     runtime-writable). The external / dynamic / MLO staticness sources return when
@@ -243,33 +249,46 @@ def _output_datatype(p, ctx):
     return ctx.tensor_datatype(OUTPUT)
 
 
-def op_derived():
-    # NOTE: `stream_width.<iface>` are NOT here — the tiling engine generates one per
-    # interface from the impls' `stream` folds, with the `out` interface's
-    # dtype_source="outputDataType" so the width uses the accumulator type under
-    # noActivation. `weight_stream_width` is NOT here either — it is a per-TOPOLOGY fact
-    # (0 for embedded, the demand's bit_rate for decoupled) owned by the parameters pool.
-    #
-    # `parameters.demand` is NOT here either — it is the DEMAND stage of the supply
-    # waterfall (`demand_schema()`), composed BETWEEN the compute pool and the parameters
-    # pool, because it reads the compute pool's resolved `stream_width.weights` (only on the
-    # point AFTER the compute-pool tiling deriveds run). See `demand_schema`.
-    #
-    # MIGRATION ALIASES: MW/MH/WMEM/TMEM survive as emit-facing deriveds so Tier-4
-    # (Vivado-validated emit_hls/emit_rtl, which read point.MW/MH/WMEM) is UNTOUCHED. They
-    # are sourced from the block/weight shapes, not from named op axes. New code should read
-    # extents from the interface block shapes directly; retire these when emit is reworked.
-    # Order matters: MW/MH precede WMEM/TMEM (resolve computes deriveds in list order).
+def _identity_geometry_derived():
+    """EMIT-MIGRATION ALIASES — MW/MH/numInputVectors/WMEM/TMEM. Emit-facing extents
+    sourced from the block/weight shapes (NOT named op axes), so Tier-4 emit_hls/emit_rtl
+    (which read point.MW/MH/WMEM/TMEM) is untouched. New code should read extents from the
+    interface block shapes directly; these retire when emit is reworked (NOT this task).
+    Order matters: MW/MH precede WMEM/TMEM, which read them (resolve computes deriveds in
+    list order)."""
     return (
         Derived("MW", _matrix_dim(0)),
         Derived("MH", _matrix_dim(1)),
         Derived("numInputVectors", _num_input_vectors),
         Derived("WMEM", _wmem),
         Derived("TMEM", _tmem),
+    )
+
+
+def _identity_dtype_derived():
+    """THE REAL DATATYPE CONTRACT (base:469-549) — accDataType/weightDataType/outputDataType.
+    Data-dependent derivations: they read the actual weight VALUES when static, worst-case
+    bounds otherwise. ``weights_may_change`` is the one static→dtype coupling that gates
+    them (a FORK, not a cycle — see its docstring)."""
+    return (
         Derived("accDataType", _acc_datatype),
         Derived("weightDataType", _weight_datatype),
         Derived("outputDataType", _output_datatype),
     )
+
+
+def op_derived():
+    # PURE IDENTITY. Two groups, concatenated (order load-bearing — geometry aliases precede
+    # the dtype contract; WMEM/TMEM read MW/MH). NOT here, by design:
+    #   * `stream_width.<iface>` — the tiling engine generates one per interface from each
+    #     impl's `stream` folds (the `out` interface's dtype_source="outputDataType" gives it
+    #     the accumulator type under noActivation).
+    #   * `weight_stream_width` — a per-TOPOLOGY fact (0 embedded / demand bit_rate decoupled)
+    #     owned by the parameters pool.
+    #   * `parameters.demand` — the DEMAND stage of the supply waterfall (`demand_schema()`),
+    #     a composed sub_schema between the compute pool and the parameters pool (it reads the
+    #     compute pool's resolved `stream_width.weights`, only present AFTER compute tiling).
+    return _identity_geometry_derived() + _identity_dtype_derived()
 
 
 # -- op-level SHARED predicates — one kind; provenance is what each reads --------
@@ -432,12 +451,14 @@ def mvau_kernel() -> Kernel:
     longer brokers memstream realization. The getters (folded shapes, stream widths, rough
     cost) project from a resolved point via the impl ``stream``."""
     return Kernel(
-        name="MVAU",
-        interfaces=mvau_interfaces(),
+        identity=KernelSchema(
+            name="MVAU",
+            interfaces=mvau_interfaces(),
+            op_axes=op_axes(),
+            op_derived=op_derived(),
+            op_predicates=op_predicates(),
+        ),
         pool=mvau_pool(),
-        op_axes=op_axes(),
-        op_derived=op_derived(),
-        op_predicates=op_predicates(),
         sub_schemas=(demand_schema(), parameters_schema()),
     )
 

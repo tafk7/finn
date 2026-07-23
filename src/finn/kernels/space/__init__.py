@@ -54,7 +54,7 @@ from .predicate import Predicate, predicate
 from .resolve import resolve
 from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
-from .kernel import Interface, Kernel, KernelError
+from .kernel import Interface, Kernel, KernelError, KernelSchema
 from .tiling import (
     FULL,
     BlockExtent,
@@ -118,6 +118,7 @@ __all__ = [
     "SchemaError",
     "resolve",
     "Kernel",
+    "KernelSchema",
     "Interface",
     "KernelError",
     "TileExpr",

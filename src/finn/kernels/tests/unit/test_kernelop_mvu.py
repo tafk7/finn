@@ -39,6 +39,7 @@ from finn.kernels.space import (
     Interface,
     Kernel,
     KernelError,
+    KernelSchema,
     derive,
     discrete_axis,
     fixed_axis,
@@ -97,15 +98,17 @@ def _mvu_op() -> Kernel:
     )
 
     return Kernel(
-        name="MVU",
-        interfaces=(
-            Interface("inp", Direction.IN, block=[1, FULL]),
-            Interface("weights", Direction.IN, block=[FULL, FULL]),
-            Interface("out", Direction.OUT, block=[1, FULL]),
+        identity=KernelSchema(
+            name="MVU",
+            interfaces=(
+                Interface("inp", Direction.IN, block=[1, FULL]),
+                Interface("weights", Direction.IN, block=[FULL, FULL]),
+                Interface("out", Direction.OUT, block=[1, FULL]),
+            ),
+            op_axes=(mw, mh),
+            cost_model=_mvu_cost,
         ),
         pool=(hls, rtl_untiled, rtl_tiled),
-        op_axes=(mw, mh),
-        cost_model=_mvu_cost,
     )
 
 
