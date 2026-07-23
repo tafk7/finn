@@ -32,11 +32,19 @@ from finn.kernels.ops.mvau import (
 from finn.kernels.ops.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
-    PUMPED_MEMORY as PARAM_PUMPED_MEMORY,
-    RAM_STYLE as PARAM_RAM_STYLE,
-    RUNTIME_WRITEABLE as PARAM_RUNTIME_WRITEABLE,
-    TOPOLOGY as PARAM_TOPOLOGY,
+    WEIGHTS as PARAM_WEIGHTS,
+    pumped_memory_key,
+    ram_style_key,
+    runtime_writeable_key,
+    topology_key,
 )
+
+# The parameters pool is composed per parameter interface; MVAU's live one is ``weights``,
+# so every delivery point key is ``parameters.weights.*``.
+PARAM_TOPOLOGY = topology_key(PARAM_WEIGHTS)
+PARAM_RAM_STYLE = ram_style_key(PARAM_WEIGHTS)
+PARAM_RUNTIME_WRITEABLE = runtime_writeable_key(PARAM_WEIGHTS)
+PARAM_PUMPED_MEMORY = pumped_memory_key(PARAM_WEIGHTS)
 from finn.util.basic import is_versal
 
 SEVEN_SERIES = "xc7z020clg400-1"  # Zynq-7000, DSP48E1, not Versal

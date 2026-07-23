@@ -46,14 +46,15 @@ from finn.kernels.space import (
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
 from .names import (
-    PARAM_DEPTH,
-    PARAM_INIT_FILE,
-    PARAM_SETS,
-    PARAM_WIDTH,
-    PUMPED_MEMORY,
-    RAM_STYLE,
-    RUNTIME_WRITEABLE,
     WEIGHTS,
+    depth_key,
+    init_file_key,
+    pumped_memory_key,
+    ram_style_key,
+    runtime_writeable_key,
+    sets_key,
+    sources_key,
+    width_key,
 )
 
 # Real finn-rtllib subdir per static source (base:1170,1182-1184). Anything not listed
@@ -176,20 +177,22 @@ endmodule // $MODULE_NAME$_memstream_wrapper
 )
 
 
-def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
-    """Produce the decoupled (memstream) weight-delivery artifacts from a resolved
-    point: the memstream wrapper ``.v`` + the ``memblock.dat`` weight file + the
-    static memstream HDL (read off ``parameters.sources``)."""
-    init_file = point[PARAM_INIT_FILE]
+def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = WEIGHTS) -> Artifacts:
+    """Produce the decoupled (memstream) parameter-delivery artifacts from a resolved
+    point: the memstream wrapper ``.v`` + the ``memblock.dat`` weight file + the static
+    memstream HDL (read off ``parameters.<iface>.sources``). ``iface`` is the parameter
+    interface this cell delivers (``weights`` this increment — the only stream-mode
+    interface); it selects the interface-namespaced geometry keys."""
+    init_file = point[init_file_key(iface)]
 
     bindings = {
         "MODULE_NAME": module_name,
-        "SETS": point[PARAM_SETS],
-        "DEPTH": point[PARAM_DEPTH],
-        "WIDTH": point[PARAM_WIDTH],
+        "SETS": point[sets_key(iface)],
+        "DEPTH": point[depth_key(iface)],
+        "WIDTH": point[width_key(iface)],
         "INIT_FILE": init_file,
-        "RAM_STYLE": point[RAM_STYLE],
-        "PUMPED_MEMORY": int(point.get(PUMPED_MEMORY, 0)),
+        "RAM_STYLE": point[ram_style_key(iface)],
+        "PUMPED_MEMORY": int(point.get(pumped_memory_key(iface), 0)),
     }
     wrapper = GeneratedFile(f"{module_name}_memstream_wrapper.v", _MEMSTREAM_WRAPPER, bindings)
 
@@ -198,7 +201,7 @@ def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
     # AXI-lite). base:330-332.
     data_files = ()
     if init_file:
-        data_files = (DataFile("memblock.dat", _memblock_dat(point, context)),)
+        data_files = (DataFile("memblock.dat", _memblock_dat(point, context, iface)),)
 
     # Static memstream HDL — read straight off the selected topology's sources, each
     # resolved to its real finn-rtllib subdir. axilite.sv lives under axi/hdl/, the
@@ -206,7 +209,7 @@ def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
     # single-dir prefix would mis-locate axilite.sv.
     static = tuple(
         StaticFile("finn.data", f"{_SOURCE_DIRS.get(s, 'finn-rtllib/memstream/hdl')}/{s}")
-        for s in point.get("parameters.sources", ())
+        for s in point.get(sources_key(iface), ())
     )
 
     # The delivery cell publishes a WEIGHT_SOURCE (m_axis_0) — the resolver binds it to
@@ -215,7 +218,7 @@ def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
     # present only when weights are runtime-writable; it exports up as a boundary
     # register surface. The set-selector stream (s_axis_0, INDEX_SINK) exists in RTL but
     # is inert for SETS=1 (single-cardinality) — declared documented, not bound here.
-    width = point[PARAM_WIDTH]
+    width = point[width_key(iface)]
     ports = [
         Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m_axis_0", index=0,
              width=width),
@@ -226,7 +229,7 @@ def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
         Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk2x"),
         Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
     ]
-    if point.get(RUNTIME_WRITEABLE, 0):
+    if point.get(runtime_writeable_key(iface), 0):
         ports.append(
             Port(Direction.IN, Kind.AXILITE, Role.CONFIG, "s_axilite", index=0,
                  boundary=True)
@@ -249,7 +252,7 @@ def emit_memstream(point, context, module_name: str = "mvau_top") -> Artifacts:
 # ------------------------------------------------------------- pure helpers
 
 
-def _memblock_dat(point, context) -> str:
+def _memblock_dat(point, context, iface: str = WEIGHTS) -> str:
     """make_weight_file "decoupled_verilog_dat" (matrixvectoractivation.py:715-811):
     transpose (1,PE,WMEM,SIMD) → PE-flip → reshape (1,-1,PE*SIMD) → hex-pack each group
     to a 4-bit-padded hex word; pumpedMemory splits each word into two half-width
@@ -283,7 +286,7 @@ def _memblock_dat(point, context) -> str:
     )
     weight_stream = packed.flatten().copy()
 
-    if point.get(PUMPED_MEMORY, 0):
+    if point.get(pumped_memory_key(iface), 0):
         # split each hex word into two half-width entries (low half first). base:801-808.
         split = []
         for w in weight_stream:

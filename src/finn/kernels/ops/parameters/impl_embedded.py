@@ -34,7 +34,12 @@ def _no_stream_width(p, ctx):
 
 
 @register
-def embedded_topology():
+def embedded_topology(iface):
+    # ``iface`` (the parameter interface this topology delivers) is accepted for a uniform
+    # bundle-factory signature; embedded owns no interface-namespaced axes/geometry (it is
+    # the ``constant`` mode — nothing is delivered), so it uses only the weights-only global
+    # WEIGHT_STREAM_WIDTH alias (see names.py). A future thresholds increment that
+    # generalizes that width will key it off ``iface``.
     return storage_topology(
         EMBEDDED,
         derived=(Derived(WEIGHT_STREAM_WIDTH, _no_stream_width),),

@@ -32,7 +32,14 @@ from __future__ import annotations
 from finn.kernels.space import Schema, pool_schema
 
 from .demand import ParamDemand  # noqa: F401 (re-exported)
-from .names import DECOUPLED, DEMAND, EMBEDDED, SOURCES, TOPOLOGY  # noqa: F401 (re-exported)
+from .names import (  # noqa: F401 (re-exported)
+    DECOUPLED,
+    EMBEDDED,
+    WEIGHTS,
+    demand_key,
+    sources_key,
+    topology_key,
+)
 from .registry import build_pool
 
 # Import the built-in topology modules for their registration side effect. A new
@@ -41,18 +48,25 @@ from . import impl_embedded  # noqa: E402,F401
 from . import impl_decoupled  # noqa: E402,F401
 
 
-def parameters_pool():
-    """The registered storage topologies (flat peers), in registration order."""
-    return build_pool()
+def parameters_pool(iface: str = WEIGHTS):
+    """The registered storage topologies (flat peers), in registration order, built for
+    the parameter interface ``iface`` (its axes/geometry are ``parameters.<iface>.*``)."""
+    return build_pool(iface)
 
 
-def parameters_schema() -> Schema:
-    """The parameters subsystem as a standalone resolve ``Schema``.
+def parameters_schema(iface: str = WEIGHTS) -> Schema:
+    """The parameters subsystem for one parameter interface as a standalone resolve
+    ``Schema``.
 
-    Root axis ``topology`` selects one storage topology; the selected topology's axes
-    are present, the others absent. Has no op-level shared axes of its own — topology
-    selection IS the surface. Cross-coordinate couplings (memstream depth/width, which
-    read the compute fold) are contributed by the composing op, not here, so this
-    standalone schema resolves without a compute context.
+    Root axis ``parameters.<iface>.topology`` selects one storage topology; the selected
+    topology's axes are present, the others absent. Has no op-level shared axes of its own
+    — topology selection IS the surface. Cross-coordinate couplings (memstream
+    depth/width, which read the compute fold; the topology-domain guard, which reads the
+    selected compute backend's ``consumes``) are contributed by the composing op, not
+    here, so this standalone schema resolves without a compute context. Composing the pool
+    for a second interface is just a second ``parameters_schema(other)`` — the keys never
+    collide.
     """
-    return pool_schema(TOPOLOGY, (), (), (), parameters_pool(), sources_key=SOURCES)
+    return pool_schema(
+        topology_key(iface), (), (), (), parameters_pool(iface), sources_key=sources_key(iface)
+    )

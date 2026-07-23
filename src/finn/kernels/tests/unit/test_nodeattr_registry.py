@@ -15,6 +15,7 @@ selected implementation.
 """
 
 from finn.kernels.ops.mvau import mvau_kernel
+from finn.kernels.ops.parameters.names import WEIGHTS, ram_style_key
 from finn.kernels.adapter.nodeattr_registry import axis_nodeattr_types
 
 
@@ -62,7 +63,7 @@ def test_pool_dispatched_string_axis_unions_allowed_values():
 
 
 def test_ram_style_unions_across_topologies():
-    spec = _reg()["parameters.ram_style"]
+    spec = _reg()[ram_style_key(WEIGHTS)]  # parameters.weights.ram_style
     assert spec[0] == "s"
     assert {"block", "distributed", "ultra"} <= set(spec[3])
 

@@ -22,16 +22,25 @@ from finn.kernels.space import AbsentAxisError, Context, Illegal, resolve
 from finn.kernels.ops.parameters import (
     DECOUPLED,
     EMBEDDED,
+    WEIGHTS,
     parameters_pool,
     parameters_schema,
 )
 from finn.kernels.ops.parameters.names import (
-    PUMPED_MEMORY,
-    RAM_STYLE,
-    RUNTIME_WRITEABLE,
-    SOURCES,
-    TOPOLOGY,
+    pumped_memory_key,
+    ram_style_key,
+    runtime_writeable_key,
+    sources_key,
+    topology_key,
 )
+
+# The parameters pool is composed per parameter interface; standalone tests use ``weights``
+# (the default/only live interface), so every point key is ``parameters.weights.*``.
+TOPOLOGY = topology_key(WEIGHTS)
+RAM_STYLE = ram_style_key(WEIGHTS)
+RUNTIME_WRITEABLE = runtime_writeable_key(WEIGHTS)
+PUMPED_MEMORY = pumped_memory_key(WEIGHTS)
+SOURCES = sources_key(WEIGHTS)
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 ULTRASCALE = "xcku040-ffva1156-2-e"  # not Versal
@@ -183,7 +192,7 @@ def test_mvau_pumped_memory_fold_gate_fires():
             "resType": "lut",
             "noActivation": 1,
             TOPOLOGY: DECOUPLED,
-            "parameters.pumpedMemory": 1,
+            PUMPED_MEMORY: 1,
         },
     )
     assert isinstance(r, Illegal)

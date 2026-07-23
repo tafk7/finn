@@ -39,8 +39,12 @@ from finn.kernels.space import (
 from finn.kernels.space import stitch as stitch_module_ref  # for the guard grep
 from finn.kernels.ops.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
 from finn.kernels.ops.mvau.compose_emit import emit_composed
-from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED
-from finn.kernels.ops.parameters.names import RAM_STYLE, TOPOLOGY
+from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, WEIGHTS
+from finn.kernels.ops.parameters.names import ram_style_key, topology_key
+
+# Composed for the ``weights`` interface -> ``parameters.weights.*`` point keys.
+RAM_STYLE = ram_style_key(WEIGHTS)
+TOPOLOGY = topology_key(WEIGHTS)
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 

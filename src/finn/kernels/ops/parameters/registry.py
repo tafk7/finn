@@ -11,10 +11,20 @@
 ``parameters`` subsystem. Topology bundle modules import ``register`` from here; the
 package ``__init__`` uses ``build_pool``. Adding a storage topology = add one
 self-registering ``impl_*.py``, edit nothing else.
+
+Unlike a plain compute pool, a storage topology is built FOR a specific parameter
+interface (its point keys are interface-namespaced, ``parameters.<iface>.*``). So bundle
+factories take the interface name, and ``build_pool(iface)`` threads it. The topology
+IDENTITY (``.name`` = ``embedded``/``decoupled``) is interface-independent, so the
+registry probes with ``WEIGHTS`` (the default/only live interface) to read ``.name``.
 """
 
 from __future__ import annotations
 
 from finn.kernels.ops._registry import make_registry
 
-register, build_pool, registered_names, unregister = make_registry("parameters")
+from .names import WEIGHTS
+
+register, build_pool, registered_names, unregister = make_registry(
+    "parameters", probe_arg=WEIGHTS
+)

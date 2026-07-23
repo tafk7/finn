@@ -26,7 +26,7 @@ from __future__ import annotations
 from finn.kernels.space import Artifacts
 from finn.kernels.space.stitch import Cell, stitch
 from finn.kernels.ops.parameters import parameters_pool
-from finn.kernels.ops.parameters.names import TOPOLOGY
+from finn.kernels.ops.parameters.names import WEIGHTS, topology_key
 
 from . import mvau_pool
 
@@ -73,12 +73,14 @@ def _emit_compute(point, context, module_name):
 
 
 def _emit_delivery(point, context, module_name):
-    """Dispatch the selected parameters topology's emit, or None when the topology has
-    no streamer (embedded, ``emit=None``). Looks the bundle up by the pool's own root
-    axis so a new topology needs no change here. Calls the emit directly (rather than
-    ``emit_point``) to thread ``module_name`` into the wrapper name."""
-    topo = point[TOPOLOGY]
-    bundle = {b.name: b for b in parameters_pool()}[topo]
+    """Dispatch the selected parameters topology's emit for the ``weights`` interface, or
+    None when the topology has no streamer (embedded / ``constant`` mode, ``emit=None``).
+    Looks the bundle up by the pool's own (interface-keyed) root axis so a new topology
+    needs no change here. Calls the emit directly (rather than ``emit_point``) to thread
+    ``module_name`` into the wrapper name. Weights is the only stream-mode parameter
+    interface this increment; a second interface adds another delivery cell here."""
+    topo = point[topology_key(WEIGHTS)]
+    bundle = {b.name: b for b in parameters_pool(WEIGHTS)}[topo]
     if bundle.emit is None:
         return None
-    return bundle.emit(point, context, module_name)
+    return bundle.emit(point, context, module_name, WEIGHTS)

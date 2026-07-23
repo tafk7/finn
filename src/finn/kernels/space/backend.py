@@ -76,6 +76,17 @@ class Backend:
             the RTL realization of the op's block structure — there is NO block field here,
             so an impl cannot change the math (kernelop-tensor-block-stream.md §5). An
             interface absent from the map is unfolded (stream = 1 element/cycle).
+        consumes: this bundle's per-parameter-interface CONSUMPTION MODES,
+            ``{interface_name -> frozenset[str]}`` over ``{"constant", "stream"}``. The
+            consumption mode is how the compute core takes a parameter interface:
+            ``constant`` (baked into the core — an HLS ROM/``params.h``; no port) or
+            ``stream`` (an AXIS port a delivery block feeds). It restricts which delivery
+            topologies are legal for that interface (a topology carries a mode; the domain
+            keeps only topologies whose mode this backend consumes). An interface ABSENT
+            from the map is PERMISSIVE (both modes) — so a backend that declares nothing
+            regresses nothing. "embedded" is not a delivery topology but the ``constant``
+            mode (consumption-mode-delivery.md). A flat second per-interface dict beside
+            ``stream`` for now; a future InterfaceSchema may group them.
     """
 
     name: str
@@ -86,6 +97,7 @@ class Backend:
     sources: tuple[str, ...] = ()
     emit: Callable[[Any, Any], "Artifacts"] | None = None
     stream: Mapping[str, Any] = field(default_factory=dict)
+    consumes: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))
@@ -93,6 +105,9 @@ class Backend:
         object.__setattr__(self, "predicates", tuple(self.predicates))
         object.__setattr__(self, "sources", tuple(self.sources))
         object.__setattr__(self, "stream", dict(self.stream))
+        object.__setattr__(
+            self, "consumes", {k: frozenset(v) for k, v in dict(self.consumes).items()}
+        )
 
 
 class EmitError(ValueError):

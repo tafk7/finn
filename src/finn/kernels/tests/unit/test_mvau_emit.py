@@ -26,7 +26,10 @@ from finn.kernels.ops.mvau import (
     mvau_pool,
     mvau_schema,
 )
-from finn.kernels.ops.parameters.names import EMBEDDED, TOPOLOGY
+from finn.kernels.ops.parameters.names import EMBEDDED, WEIGHTS, topology_key
+
+# Composed for the ``weights`` interface -> ``parameters.weights.topology``.
+TOPOLOGY = topology_key(WEIGHTS)
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 _UNFILLED = re.compile(r"\$[A-Z][A-Z0-9_]*\$")

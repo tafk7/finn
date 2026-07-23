@@ -17,9 +17,10 @@ compute fold (``PE``/``SIMD``/``WMEM``). That put memory-backend knowledge (roun
 ``.dat`` naming, URAM blanking) on the op — the wrong owner.
 
 The demand contract inverts it: the compute side publishes a small, realization-free
-:class:`ParamDemand` under the pool-declared :data:`~finn.kernels.ops.parameters.names.DEMAND`
-key (pure facts about what the core consumes), and the delivery Backend reads THAT and
-computes its own geometry inside its bundle. The op stops knowing how memstream is built.
+:class:`ParamDemand` under the pool-declared per-interface
+:func:`~finn.kernels.ops.parameters.names.demand_key` key (pure facts about what the core
+consumes), and the delivery Backend reads THAT and computes its own geometry inside its
+bundle. The op stops knowing how memstream is built.
 
 The spec is **per-parameter-interface**: ``cadence`` is the field that varies by operand
 (weights are consumed once per layer → ``cadence=1``; thresholds once per activation beat

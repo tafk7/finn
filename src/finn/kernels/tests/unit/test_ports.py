@@ -38,14 +38,20 @@ from finn.kernels.ops.mvau import (
     mvau_pool,
     mvau_schema,
 )
-from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, parameters_pool
+from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, WEIGHTS, parameters_pool
 from finn.kernels.ops.parameters.emit_memstream import emit_memstream
 from finn.kernels.ops.parameters.names import (
-    PARAM_WIDTH,
-    RAM_STYLE,
-    RUNTIME_WRITEABLE,
-    TOPOLOGY,
+    ram_style_key,
+    runtime_writeable_key,
+    topology_key,
+    width_key,
 )
+
+# Composed for the ``weights`` interface -> ``parameters.weights.*`` point keys.
+PARAM_WIDTH = width_key(WEIGHTS)
+RAM_STYLE = ram_style_key(WEIGHTS)
+RUNTIME_WRITEABLE = runtime_writeable_key(WEIGHTS)
+TOPOLOGY = topology_key(WEIGHTS)
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 

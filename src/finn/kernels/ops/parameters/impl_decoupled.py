@@ -34,19 +34,18 @@ from qonnx.util.basic import roundup_to_integer_multiple
 from finn.kernels.space import Derived, discrete_axis, predicate
 from finn.util.basic import is_versal
 
-from .demand import ParamDemand
 from .emit_memstream import emit_memstream
 from .names import (
     DECOUPLED,
-    DEMAND,
-    PARAM_DEPTH,
-    PARAM_INIT_FILE,
-    PARAM_SETS,
-    PARAM_WIDTH,
-    PUMPED_MEMORY,
-    RAM_STYLE,
-    RUNTIME_WRITEABLE,
     WEIGHT_STREAM_WIDTH,
+    demand_key,
+    depth_key,
+    init_file_key,
+    pumped_memory_key,
+    ram_style_key,
+    runtime_writeable_key,
+    sets_key,
+    width_key,
 )
 from .registry import register
 from .topology import storage_topology
@@ -55,16 +54,17 @@ from .topology import storage_topology
 # =============================================================================
 # Selection axes — the free choices of the decoupled (memstream) topology.
 # These are always present when this topology is selected (the pool guards them on
-# selection); no further guard is needed inside the bundle. Names are namespaced
-# ``parameters.*`` (self-identification; keeps the composed op point collision-safe).
+# selection); no further guard is needed inside the bundle. Names are namespaced AND
+# interface-keyed ``parameters.<iface>.*`` (self-identification; keeps the composed op
+# point collision-safe AND lets the pool compose once per parameter interface).
 # =============================================================================
 
 
-def _decoupled_axes():
+def _decoupled_axes(iface):
     return (
-        discrete_axis(RAM_STYLE, {"auto", "block", "distributed", "ultra"}, "auto"),
-        discrete_axis(RUNTIME_WRITEABLE, {0, 1}, 0),
-        discrete_axis(PUMPED_MEMORY, {0, 1}, 0),
+        discrete_axis(ram_style_key(iface), {"auto", "block", "distributed", "ultra"}, "auto"),
+        discrete_axis(runtime_writeable_key(iface), {0, 1}, 0),
+        discrete_axis(pumped_memory_key(iface), {0, 1}, 0),
     )
 
 
@@ -78,29 +78,38 @@ def _decoupled_axes():
 # =============================================================================
 
 
-@predicate("parameters.ram_style=ultra & not versal => runtime_writeable=1")
-def _uram_requires_ultrascale(p, ctx):
-    # THE combination gate — reads point AND device in one condition (hls:147).
-    if p.get(RAM_STYLE) == "ultra" and not is_versal(ctx.fpgapart) and (
-        p.get(RUNTIME_WRITEABLE, 0) != 1
-    ):
-        return (
-            "URAM weights on a non-Versal (UltraScale) device require "
-            "runtime_writeable_weights=1 (hls:147)"
-        )
-    return None
+def _uram_gate(iface):
+    @predicate(f"{ram_style_key(iface)}=ultra & not versal => runtime_writeable=1")
+    def _uram_requires_ultrascale(p, ctx):
+        # THE combination gate — reads point AND device in one condition (hls:147).
+        if p.get(ram_style_key(iface)) == "ultra" and not is_versal(ctx.fpgapart) and (
+            p.get(runtime_writeable_key(iface), 0) != 1
+        ):
+            return (
+                "URAM weights on a non-Versal (UltraScale) device require "
+                "runtime_writeable_weights=1 (hls:147)"
+            )
+        return None
+
+    return _uram_requires_ultrascale
 
 
-@predicate("parameters.pumpedMemory => not (parallelism == 1)")
-def _pumped_memory_needs_parallelism(p, ctx):
-    # pumpedMemory splits each weight word across a double-pumped memory; with a
-    # 1-element demand (PE==SIMD==1) there is nothing to split (base:717 "known bug").
-    # Reads the demand's parallelism, not the raw compute fold — so the gate is owned
-    # here, not brokered by the op. Absent demand ⇒ no gate.
-    demand = _demand(p)
-    if p.get(PUMPED_MEMORY, 0) and demand is not None and demand.parallelism == 1:
-        return "pumpedMemory with parallelism=1 (PE=SIMD=1) is a known-bad configuration (base:717)"
-    return None
+def _pumped_gate(iface):
+    @predicate(f"{pumped_memory_key(iface)} => not (parallelism == 1)")
+    def _pumped_memory_needs_parallelism(p, ctx):
+        # pumpedMemory splits each weight word across a double-pumped memory; with a
+        # 1-element demand (PE==SIMD==1) there is nothing to split (base:717 "known bug").
+        # Reads the demand's parallelism, not the raw compute fold — so the gate is owned
+        # here, not brokered by the op. Absent demand ⇒ no gate.
+        demand = _demand(p, iface)
+        if p.get(pumped_memory_key(iface), 0) and demand is not None and demand.parallelism == 1:
+            return (
+                "pumpedMemory with parallelism=1 (PE=SIMD=1) is a known-bad "
+                "configuration (base:717)"
+            )
+        return None
+
+    return _pumped_memory_needs_parallelism
 
 
 # =============================================================================
@@ -108,77 +117,76 @@ def _pumped_memory_needs_parallelism(p, ctx):
 #
 # Historically the composing op computed these (it had the compute fold in scope and
 # the parameters bundle did not). With the demand contract the op publishes a
-# realization-free ParamDemand under `parameters.demand`, and THIS bundle turns it into
-# memstream geometry — the memory backend owning its own realization. Each returns None
-# when the demand is absent (standalone resolve, no compute core), preserving the pool's
-# stand-alone resolvability.
+# realization-free ParamDemand under `parameters.<iface>.demand`, and THIS bundle turns it
+# into memstream geometry — the memory backend owning its own realization. Each returns
+# None when the demand is absent (standalone resolve, no compute core, OR the interface is
+# consumed in constant mode), preserving the pool's stand-alone resolvability.
 # =============================================================================
 
 
-def _demand(p):
-    """The compute→memory demand the op published, or None (standalone / no core)."""
-    return p.get(DEMAND, None)
+def _demand(p, iface):
+    """The compute→memory demand the op published for ``iface``, or None (standalone /
+    no core / constant-mode consumption)."""
+    return p.get(demand_key(iface), None)
 
 
-def _mem_width(p, ctx):
-    # WIDTH = roundup(bit_rate, 8) = roundup(PE*SIMD*wbits, 8) (base:326).
-    demand = _demand(p)
-    if demand is None:
-        return None
-    return int(roundup_to_integer_multiple(demand.bit_rate, 8))
+def _geometry_derived(iface):
+    def _mem_width(p, ctx):
+        # WIDTH = roundup(bit_rate, 8) = roundup(PE*SIMD*wbits, 8) (base:326).
+        demand = _demand(p, iface)
+        if demand is None:
+            return None
+        return int(roundup_to_integer_multiple(demand.bit_rate, 8))
 
+    def _mem_depth(p, ctx):
+        # DEPTH = the demand's word count per set (= WMEM*TH for MVAU) (base:323).
+        demand = _demand(p, iface)
+        if demand is None:
+            return None
+        return int(demand.depth)
 
-def _mem_depth(p, ctx):
-    # DEPTH = the demand's word count per set (= WMEM*TH for MVAU) (base:323).
-    demand = _demand(p)
-    if demand is None:
-        return None
-    return int(demand.depth)
+    def _mem_sets(p, ctx):
+        # SETS = MLO set count (cardinality — coord B). 1 until MLO is first-class; the
+        # demand carries no cardinality yet, so it is 1 whenever a demand is present.
+        demand = _demand(p, iface)
+        if demand is None:
+            return None
+        return 1
 
+    def _mem_init_file(p, ctx):
+        # INIT_FILE = "memblock.dat", blanked for URAM on a non-Versal part (base:331-332):
+        # URAM cannot be preloaded from a .dat on UltraScale (loaded via AXI-lite instead).
+        if _demand(p, iface) is None:
+            return None
+        if p.get(ram_style_key(iface)) == "ultra" and not is_versal(ctx.fpgapart):
+            return ""
+        return "memblock.dat"
 
-def _mem_sets(p, ctx):
-    # SETS = MLO set count (cardinality — coord B). 1 until MLO is first-class; the
-    # demand carries no cardinality yet, so it is 1 whenever a demand is present.
-    demand = _demand(p)
-    if demand is None:
-        return None
-    return 1
+    def _stream_width(p, ctx):
+        # A decoupled weight port carries bit_rate = PE*SIMD*wbits (un-padded — the
+        # memstream WIDTH pads to a byte; the compute-side stream width does not). 0 with
+        # no demand.
+        demand = _demand(p, iface)
+        return 0 if demand is None else int(demand.bit_rate)
 
-
-def _mem_init_file(p, ctx):
-    # INIT_FILE = "memblock.dat", blanked for URAM on a non-Versal part (base:331-332):
-    # URAM cannot be preloaded from a .dat on UltraScale (loaded via AXI-lite instead).
-    if _demand(p) is None:
-        return None
-    if p.get(RAM_STYLE) == "ultra" and not is_versal(ctx.fpgapart):
-        return ""
-    return "memblock.dat"
-
-
-def _stream_width(p, ctx):
-    # A decoupled weight port carries bit_rate = PE*SIMD*wbits (un-padded — the memstream
-    # WIDTH pads to a byte; the compute-side stream width does not). 0 with no demand.
-    demand = _demand(p)
-    return 0 if demand is None else int(demand.bit_rate)
-
-
-def _geometry_derived():
     return (
+        # WEIGHT_STREAM_WIDTH stays the weights-only un-namespaced compute-facing alias
+        # this increment (see names.py); the geometry keys are interface-namespaced.
         Derived(WEIGHT_STREAM_WIDTH, _stream_width),
-        Derived(PARAM_WIDTH, _mem_width),
-        Derived(PARAM_DEPTH, _mem_depth),
-        Derived(PARAM_SETS, _mem_sets),
-        Derived(PARAM_INIT_FILE, _mem_init_file),
+        Derived(width_key(iface), _mem_width),
+        Derived(depth_key(iface), _mem_depth),
+        Derived(sets_key(iface), _mem_sets),
+        Derived(init_file_key(iface), _mem_init_file),
     )
 
 
 @register
-def decoupled_topology():
+def decoupled_topology(iface):
     return storage_topology(
         DECOUPLED,
-        axes=_decoupled_axes(),
-        derived=_geometry_derived(),
-        predicates=(_uram_requires_ultrascale, _pumped_memory_needs_parallelism),
+        axes=_decoupled_axes(iface),
+        derived=_geometry_derived(iface),
+        predicates=(_uram_gate(iface), _pumped_gate(iface)),
         sources=("memstream_axi.sv", "memstream.sv", "axilite.sv"),
         emit=emit_memstream,
     )

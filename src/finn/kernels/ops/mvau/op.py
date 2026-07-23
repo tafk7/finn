@@ -56,8 +56,14 @@ from finn.kernels.space import (
     stream_width_key,
 )
 from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
-from finn.kernels.ops.parameters import ParamDemand, parameters_schema
-from finn.kernels.ops.parameters.names import DEMAND, RUNTIME_WRITEABLE
+from finn.kernels.ops.parameters import ParamDemand, parameters_pool, parameters_schema
+from finn.kernels.ops.parameters.names import (
+    ALL_MODES,
+    TOPOLOGY_MODE,
+    demand_key,
+    runtime_writeable_key,
+    topology_key,
+)
 
 from .registry import build_pool
 
@@ -130,8 +136,8 @@ def weights_may_change(p) -> bool:
 
     Increment-1 topologies are ``embedded`` (static) and ``decoupled`` (static unless
     runtime-writable). The external / dynamic / MLO staticness sources return when
-    those topologies land (each will be its own ``parameters.topology`` value)."""
-    return bool(p.get(RUNTIME_WRITEABLE, 0))
+    those topologies land (each will be its own ``parameters.<iface>.topology`` value)."""
+    return bool(p.get(runtime_writeable_key(WEIGHTS), 0))
 
 
 def _matrix_dim(idx):
@@ -361,36 +367,47 @@ COMPUTE_STREAM = {
 # =============================================================================
 
 
-_WEIGHTS_WIDTH_KEY = stream_width_key(WEIGHTS)
+def _demand_for(iface):
+    """The compute core's DEMAND on parameter interface ``iface``, as a resolve closure.
 
+    Sourced from the RESOLVED interface geometry — NOT from named backend dials
+    (PE/SIMD/WMEM). This is the supply-waterfall's DEMAND stage: it reads what the COMPUTE
+    stage produced (``stream_width.<iface>``, the tiling engine's per-interface resolved
+    width) and the block extents, so a tiled/systolic/packed backend that folds the
+    interface in its own terms works automatically (interface-supply-waterfall.md Q1).
 
-def _weight_demand(p, ctx):
-    # The compute core's demand on its `weights` interface, sourced from the RESOLVED
-    # interface geometry — NOT from named backend dials (PE/SIMD/WMEM). This is the
-    # supply-waterfall's DEMAND stage: it reads what the COMPUTE stage produced
-    # (stream_width.weights, the tiling engine's per-interface resolved width) and the
-    # weight block extents, so a tiled/systolic/packed backend that folds weights in its
-    # own terms works automatically (interface-supply-waterfall.md Q1).
-    #
-    # Whether `weights` IS a parameter feed is EMERGENT, read from context here: an
-    # initializer attached ⇒ a stored parameter the memory pool supplies (real demand);
-    # no initializer ⇒ a live activation (e.g. dynamic matmul operand B) that streams in
-    # like any dataflow edge ⇒ NO demand (returns None; the delivery pool sizes to nothing
-    # and the interface exports as a boundary). This dissolves the dynamic-matmul case with
-    # no special flag (resolution-phases.md: a Context-reading fact is a phase-3 closure).
-    if ctx.initializer(WEIGHTS) is None:
-        return None
-    width_bits = int(p[_WEIGHTS_WIDTH_KEY])  # resolved stream width (PE*SIMD*wbits)
-    elem_bits = ctx.tensor_datatype(WEIGHTS).bitwidth()
-    parallelism = width_bits // elem_bits  # elements/cycle, in the backend's own fold
-    block = ctx.tensor_shape(WEIGHTS)  # the weight block extents (MW, MH)
-    depth = _prod(block) // parallelism  # words/set = WMEM, from geometry not p.WMEM
-    return ParamDemand(
-        parallelism=parallelism,
-        elem_bits=elem_bits,
-        depth=depth,
-        cadence=1,  # weights consumed once per layer; thresholds would be per-activation
-    )
+    Returns ``None`` (nothing to deliver) in two emergent cases:
+
+    * **no initializer** — the interface is a live activation (e.g. dynamic matmul operand
+      B), not a stored parameter; it streams in like any dataflow edge, the delivery pool
+      sizes to nothing, the port exports as a boundary. Dissolves the dynamic-matmul case
+      with no special flag (resolution-phases.md: a Context-reading fact is a phase-3
+      closure).
+    * **constant consumption mode** — the selected topology bakes the parameter into the
+      compute core (``embedded`` = the ``constant`` mode, consumption-mode-delivery.md);
+      there is no stream to size, so no demand. The topology domain was itself already
+      filtered to the compute backend's consumable modes (see ``_topology_domain``).
+    """
+    width_key = stream_width_key(iface)
+
+    def compute(p, ctx):
+        if ctx.initializer(iface) is None:
+            return None
+        if TOPOLOGY_MODE[p[topology_key(iface)]] == "constant":
+            return None
+        width_bits = int(p[width_key])  # resolved stream width (PE*SIMD*wbits)
+        elem_bits = ctx.tensor_datatype(iface).bitwidth()
+        parallelism = width_bits // elem_bits  # elements/cycle, in the backend's own fold
+        block = ctx.tensor_shape(iface)  # the block extents (MW, MH for weights)
+        depth = _prod(block) // parallelism  # words/set = WMEM, from geometry not p.WMEM
+        return ParamDemand(
+            parallelism=parallelism,
+            elem_bits=elem_bits,
+            depth=depth,
+            cadence=1,  # weights consumed once per layer; thresholds per-activation (later)
+        )
+
+    return compute
 
 
 def _prod(shape) -> int:
@@ -400,15 +417,55 @@ def _prod(shape) -> int:
     return out
 
 
-def demand_schema() -> Schema:
-    """The DEMAND stage of the supply waterfall as a derived-only schema, composed BETWEEN
-    the compute pool and the parameters (memory) pool. It exists as its own compose stage —
-    not in ``op_derived`` — because the demand reads the tiling engine's resolved
-    ``stream_width.weights``, which is generated by the compute pool and so is only on the
-    point AFTER it (resolve computes deriveds in schema order: op_derived → compute-pool
-    tiling → THIS → parameters pool). Encoding COMPUTE→DEMAND→MEMORY as compose order makes
-    the waterfall structural."""
-    return Schema(axes=(), derived=(Derived(DEMAND, _weight_demand),), predicates=())
+def _topology_domain(iface):
+    """A domain override for ``parameters.<iface>.topology`` that keeps only the storage
+    topologies whose CONSUMPTION MODE the selected compute backend can consume for this
+    interface (consumption-mode-delivery.md §2c).
+
+    The compute backend is master: it declares, per interface, which modes it consumes
+    (``Backend.consumes``); delivery provisions to that. An interface the backend says
+    nothing about is PERMISSIVE (both modes) — so the default is today's full topology set
+    (embedded default), and nothing regresses until a backend declares a restriction. Reads
+    the resolved ``implementation`` (a phase-3 cross-coordinate coupling — hence appended by
+    the op before ``compose``, where both the compute pool and the parameters pool are in
+    scope; backend.py:189-192)."""
+    topologies = tuple(b.name for b in parameters_pool(iface))
+
+    def legal(p):
+        # Defensive read: during real resolve `implementation` is fixed before this axis;
+        # under a bare probe point (nodeattr-registry typing) it is absent → permissive
+        # (all modes), which is exactly the no-restriction default.
+        impl = p.get("implementation") if hasattr(p, "get") else None
+        backend = {b.name: b for b in mvau_pool()}.get(impl)
+        modes = (backend.consumes.get(iface) if backend else None) or ALL_MODES
+        return tuple(t for t in topologies if TOPOLOGY_MODE[t] in modes)
+
+    return lambda p, ctx: frozenset(legal(p)), legal
+
+
+def _topology_default(iface, base_default, legal):
+    """The topology axis's default, guarded to the consumable modes: keep the pool's own
+    first-registered default (``embedded``) when the selected backend can consume it, else
+    fall to the first in-domain topology (a stream-only backend defaults to the first
+    streamer). Prevents an out-of-domain default from making an unpinned topology illegal."""
+
+    def default(p, ctx):
+        allowed = legal(p)
+        d = base_default(p, ctx)
+        return d if d in allowed else (allowed[0] if allowed else d)
+
+    return default
+
+
+def demand_schema(iface) -> Schema:
+    """The DEMAND stage of the supply waterfall as a derived-only schema for one parameter
+    interface, composed BETWEEN the compute pool and the parameters (memory) pool. It exists
+    as its own compose stage — not in ``op_derived`` — because the demand reads the tiling
+    engine's resolved ``stream_width.<iface>`` (and the resolved topology mode), both
+    generated by earlier compose stages and so only on the point AFTER them (resolve
+    computes deriveds in schema order: op_derived → compute-pool tiling → THIS → parameters
+    pool). Encoding COMPUTE→DEMAND→MEMORY as compose order makes the waterfall structural."""
+    return Schema(axes=(), derived=(Derived(demand_key(iface), _demand_for(iface)),), predicates=())
 
 
 # =============================================================================
@@ -439,17 +496,54 @@ def mvau_pool():
     return build_pool()
 
 
+def _params_subschema(iface) -> Schema:
+    """The parameters pool for ``iface`` with its topology root axis's domain overridden to
+    the consumption-mode guard (``_topology_domain``): only topologies the selected compute
+    backend can consume for this interface remain selectable. This is the cross-coordinate
+    coupling the op owns — it reads BOTH the compute ``implementation`` and the parameters
+    topology, so it is applied HERE (the op has both pools in scope), not inside the
+    standalone ``parameters_schema`` (backend.py:189-192).
+
+    The domain reads the resolved ``implementation``; ``compose`` appends this topology axis
+    after the compute pool's ``implementation`` axis (which is first), and ``_topo_sort``
+    preserves input order among independent axes, so resolve always fixes the compute backend
+    before this domain runs. (A ``deps={"implementation"}`` declaration would be more explicit
+    but cannot live on the STANDALONE parameters schema, where ``implementation`` is absent,
+    so the ordering is relied on, exactly as the existing merged param axes rely on the
+    topology root resolving before them.)"""
+    from dataclasses import replace
+
+    schema = parameters_schema(iface)
+    root = schema.axes[0]  # pool_schema emits the root topology axis first
+    domain, legal = _topology_domain(iface)
+    guarded = replace(
+        root, domain=domain, default=_topology_default(iface, root.default, legal)
+    )
+    return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))
+
+
+# The parameter interfaces this op delivers through the parameters pool. Only ``weights``
+# is live (initializer-backed) this increment; a thresholds interface joins here once it is
+# a first-class Context tensor — one more (demand_schema, _params_subschema) pair, no engine
+# change (consumption-mode-delivery.md §6).
+_PARAM_INTERFACES = (WEIGHTS,)
+
+
 def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
-    tiling, composed with the DEMAND stage and then the PARAMETERS pool
-    (``parameters.topology``). The ``sub_schemas`` order IS the supply waterfall
-    COMPUTE→DEMAND→MEMORY: the demand stage reads the compute pool's resolved
-    ``stream_width.weights`` and publishes ``parameters.demand``; the selected delivery
-    topology then sizes its own memstream geometry + ports from that demand — the op no
-    longer brokers memstream realization. The getters (folded shapes, stream widths, rough
-    cost) project from a resolved point via the impl ``stream``."""
+    tiling, composed — PER parameter interface — with that interface's DEMAND stage and then
+    its PARAMETERS pool (``parameters.<iface>.topology``). The ``sub_schemas`` order IS the
+    supply waterfall COMPUTE→DEMAND→MEMORY: the demand stage reads the compute pool's
+    resolved ``stream_width.<iface>`` and publishes ``parameters.<iface>.demand``; the
+    selected delivery topology (whose domain is guarded to the backend's consumable modes)
+    then sizes its own memstream geometry + ports from that demand — the op no longer brokers
+    memstream realization. The getters project from a resolved point via the impl
+    ``stream``."""
+    sub_schemas = ()
+    for iface in _PARAM_INTERFACES:
+        sub_schemas += (demand_schema(iface), _params_subschema(iface))
     return Kernel(
         identity=KernelSchema(
             name="MVAU",
@@ -459,7 +553,7 @@ def mvau_kernel() -> Kernel:
             op_predicates=op_predicates(),
         ),
         pool=mvau_pool(),
-        sub_schemas=(demand_schema(), parameters_schema()),
+        sub_schemas=sub_schemas,
     )
 
 

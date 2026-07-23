@@ -23,17 +23,26 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Artifacts, Context, emit_point, resolve
 from finn.kernels.ops.mvau import MVAU_HLS, mvau_schema
-from finn.kernels.ops.parameters import DECOUPLED, parameters_pool
+from finn.kernels.ops.parameters import DECOUPLED, WEIGHTS, parameters_pool
 from finn.kernels.ops.parameters.emit_memstream import emit_memstream
 from finn.kernels.ops.parameters.names import (
-    PARAM_DEPTH,
-    PARAM_SETS,
-    PARAM_WIDTH,
-    PUMPED_MEMORY,
-    RAM_STYLE,
-    RUNTIME_WRITEABLE,
-    TOPOLOGY,
+    depth_key,
+    pumped_memory_key,
+    ram_style_key,
+    runtime_writeable_key,
+    sets_key,
+    topology_key,
+    width_key,
 )
+
+# Composed for the ``weights`` interface -> ``parameters.weights.*`` point keys.
+PARAM_DEPTH = depth_key(WEIGHTS)
+PARAM_SETS = sets_key(WEIGHTS)
+PARAM_WIDTH = width_key(WEIGHTS)
+PUMPED_MEMORY = pumped_memory_key(WEIGHTS)
+RAM_STYLE = ram_style_key(WEIGHTS)
+RUNTIME_WRITEABLE = runtime_writeable_key(WEIGHTS)
+TOPOLOGY = topology_key(WEIGHTS)
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 ULTRASCALE = "xcku040-ffva1156-2-e"
