@@ -37,10 +37,10 @@ from typing import Any, Mapping
 from .context import Context
 from .backend import Backend, compose, pool_schema
 from .point import Illegal, Point
-from .ports import Role
+from .ports import Direction
 from .resolve import resolve
 from .schema import Schema
-from .tiling import TileError, generate_tiling
+from .tiling import TileError, generate_tiling, stream_width_key as _stream_width_key
 
 
 class KernelError(ValueError):
@@ -50,20 +50,27 @@ class KernelError(ValueError):
 
 @dataclass(frozen=True)
 class Interface:
-    """One op-side interface — identity + role + BLOCK structure (the math), NOT stream.
+    """One op-side interface — identity + DIRECTION + BLOCK structure (the math), NOT stream.
 
-    The op declares the arity, the semantic role, and how the block segments this tensor
-    (``block`` — which dims a calc-state quantum spans). The selected Backend owns
-    how the block is folded into a stream (its ``stream`` map). Block folding is the math
-    → op-owned; stream folding is the realization → impl-owned. An impl cannot change the
-    block: it has no field to express one (the ownership split, made structural).
+    The op declares the arity, the direction (which node slot), and how the block segments
+    this tensor (``block`` — which dims a calc-state quantum spans). The selected Backend
+    owns how the block is folded into a stream (its ``stream`` map). Block folding is the
+    math → op-owned; stream folding is the realization → impl-owned. An impl cannot change
+    the block: it has no field to express one (the ownership split, made structural).
+
+    NO SEMANTIC ROLE. An interface is neutral: whether it is a weight/parameter feed or a
+    dataflow activation is NOT declared — it EMERGES from graph context at resolve time
+    (initializer attached → parameter; a producer → dataflow; else → boundary), read by the
+    derived/predicate closures via ``ctx.initializer`` (resolution-phases.md: a
+    Context-reading fact is phase-3, never a phase-1 declared field). Only DIRECTION (IN/OUT)
+    is declared — a node-slot fact known from the op's math alone.
 
     Attributes:
         name: the interface key — ALSO the Context tensor name (shape + datatype). Matched
             against a Backend's ``stream`` map.
-        role: the port-taxonomy role (DATA_IN/DATA_OUT/WEIGHT_SINK/…). The DIRECTION is
-            implied by the role (:func:`~finn.kernels.space.ports.role_direction`) — a
-            sink/in-role consumes, a source/out-role produces; never restated here.
+        direction: IN or OUT — which side of the node this interface sits on. A declare-time
+            structural fact (the node slot), stored explicitly (not derived from list
+            position — no positional rule survives inp/weights/out vs inp/out/indices).
         block: per-tensor-dim BLOCK extents, positional over the tensor's dims. Each is
             ``FULL`` (the whole dim sits in one block), ``1`` (iterate one at a time), an
             int size, or a ``derive(...)`` expr (a bounded / cross-interface block, e.g. a
@@ -75,12 +82,12 @@ class Interface:
             ``"outputDataType"`` (= the accumulator type under ``noActivation``). None ⇒
             the tensor dtype.
 
-    ``direction`` and ``index`` are DERIVED, not stored: direction from the role; index
-    from position among same-role peers in the kernel's interface list (0=first, 1=…).
+    ``index`` is DERIVED, not stored: position among same-direction peers in the kernel's
+    interface list (0=first, 1=…).
     """
 
     name: str
-    role: Role
+    direction: "Direction"
     block: tuple = ()
     dtype_source: str | None = None
 
@@ -91,13 +98,6 @@ class Interface:
     def tensor(self) -> str:
         """The Context tensor name — equals ``name`` (the two were always the same key)."""
         return self.name
-
-    @property
-    def direction(self):
-        """The direction implied by the role (never stored — a sink is IN, a source OUT)."""
-        from .ports import role_direction
-
-        return role_direction(self.role)
 
 
 @dataclass(frozen=True)
@@ -188,13 +188,9 @@ class Kernel:
     # -- interface lookup ---------------------------------------------------
 
     def inputs(self) -> tuple[Interface, ...]:
-        from .ports import Direction
-
         return tuple(i for i in self.interfaces if i.direction == Direction.IN)
 
     def outputs(self) -> tuple[Interface, ...]:
-        from .ports import Direction
-
         return tuple(i for i in self.interfaces if i.direction == Direction.OUT)
 
     def _input(self, ind: int) -> Interface:
@@ -289,9 +285,17 @@ class Kernel:
             raise KernelError(f"interface {iface.name!r} tiling: {exc}") from exc
 
     def _stream_width(self, iface: Interface, point: Point, context: Context) -> int:
-        """Stream width in bits = elements/cycle * bitwidth(dtype). The dtype is the
-        interface's declared ``dtype_source`` (a point key, e.g. ``outputDataType``) when
-        set — so a derived output type is honored — else the raw tensor dtype."""
+        """Stream width in bits for this interface. Reads the per-interface
+        ``stream_width.<iface>`` derived the tiling engine produced on the point — the
+        SAME value emit reads, so the getter (FINN's contract) and emit share one produced
+        quantity instead of a recompute-vs-precompute pair. Falls back to recomputing from
+        ``width_exprs`` when the interface has no generated width key (an impl that declares
+        no stream for it — the key is absent from the point)."""
+        key = _stream_width_key(iface.name)
+        if key in point:
+            return int(point[key])
+        # No generated width derived (impl declares no stream for this interface): the
+        # stream is one element/cycle at the interface's dtype.
         elems = self._stream_elems(iface, point)
         if iface.dtype_source is not None:
             dt = point[iface.dtype_source]

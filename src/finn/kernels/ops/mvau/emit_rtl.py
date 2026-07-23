@@ -162,9 +162,9 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     # by the resolver at compose time, not hardcoded here.
     ports = (
         Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0,
-             width=point.instream_width, boundary=True),
+             width=point["stream_width.inp"], boundary=True),
         Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0,
-             width=point.outstream_width, boundary=True),
+             width=point["stream_width.out"], boundary=True),
         Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "in1_V", index=0,
              width=weight_width),
         Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),

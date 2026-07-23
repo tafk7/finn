@@ -97,8 +97,8 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     ]
 
     blackbox = (
-        f"void {module_name}(hls::stream<ap_uint<{point.instream_width}>> &in0_V,\n"
-        f"                    hls::stream<ap_uint<{point.outstream_width}>> &out0_V\n"
+        f"void {module_name}(hls::stream<ap_uint<{point['stream_width.inp']}>> &in0_V,\n"
+        f"                    hls::stream<ap_uint<{point['stream_width.out']}>> &out0_V\n"
         f"                    )"
     )
 
@@ -128,9 +128,9 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     # the stitch finds nothing to bind, which is correct.
     ports = (
         Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0,
-             width=point.instream_width, boundary=True),
+             width=point["stream_width.inp"], boundary=True),
         Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0,
-             width=point.outstream_width, boundary=True),
+             width=point["stream_width.out"], boundary=True),
         Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
         Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
     )
@@ -153,7 +153,7 @@ def _ap_int_max_w(point, context) -> int:
     # this from stream widths; the packed weight header dominates here).
     wdt = context.tensor_datatype(WEIGHTS)
     weight_stream = point.PE * point.SIMD * wdt.bitwidth()
-    return max(point.instream_width, point.outstream_width, weight_stream, 32)
+    return max(point["stream_width.inp"], point["stream_width.out"], weight_stream, 32)
 
 
 # ------------------------------------------------------------- pure helpers

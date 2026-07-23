@@ -19,11 +19,11 @@ from finn.kernels.space import (
     FULL,
     Context,
     Derived,
+    Direction,
     Illegal,
     Backend,
     Interface,
     Kernel,
-    Role,
     derive,
     fixed_axis,
     param,
@@ -32,11 +32,12 @@ from finn.kernels.space.point import Point
 from finn.kernels.space.tiling import TileError, generate_tiling
 
 
-# MVU-shaped interfaces: inp (1, MW), weights (MW, MH), out (1, MH).
+# MVU-shaped interfaces: inp (1, MW), weights (MW, MH), out (1, MH). No semantic role —
+# direction only; weight-vs-activation is emergent from context.
 MVU_IFACES = (
-    Interface("inp", Role.DATA_IN, block=[1, FULL]),
-    Interface("weights", Role.WEIGHT_SINK, block=[FULL, FULL]),
-    Interface("out", Role.DATA_OUT, block=[1, FULL]),
+    Interface("inp", Direction.IN, block=[1, FULL]),
+    Interface("weights", Direction.IN, block=[FULL, FULL]),
+    Interface("out", Direction.OUT, block=[1, FULL]),
 )
 
 
@@ -110,8 +111,8 @@ def test_expr_fold_is_widthonly_no_range_source():
 
 def test_multi_fold_gcd_domain():
     ifaces = (
-        Interface("a", Role.DATA_IN, block=[1, FULL]),
-        Interface("b", Role.DATA_OUT, block=[1, FULL]),
+        Interface("a", Direction.IN, block=[1, FULL]),
+        Interface("b", Direction.OUT, block=[1, FULL]),
     )
     stream = {"a": [1, "PE"], "b": [1, "PE"]}
     ctx = Context(
@@ -170,12 +171,12 @@ def test_exp_cycles_is_reduction_product_from_floor(simd, pe):
 # ---------------------------------------------------------------------------
 
 
-def test_role_implies_direction():
-    from finn.kernels.space.ports import Direction
-
-    assert Interface("a", Role.DATA_IN).direction == Direction.IN
-    assert Interface("w", Role.WEIGHT_SINK).direction == Direction.IN
-    assert Interface("o", Role.DATA_OUT).direction == Direction.OUT
+def test_direction_is_declared_not_role():
+    # Direction is an explicit declared field (a node-slot fact), no longer derived from a
+    # semantic role. An interface carries no role at all — weight-vs-activation is emergent.
+    assert Interface("a", Direction.IN).direction == Direction.IN
+    assert Interface("w", Direction.IN).direction == Direction.IN
+    assert Interface("o", Direction.OUT).direction == Direction.OUT
 
 
 def test_index_derived_from_position():
@@ -193,8 +194,8 @@ def test_index_derived_from_position():
 
 def test_width_uses_dtype_source():
     ifaces = (
-        Interface("inp", Role.DATA_IN, block=[1, FULL]),
-        Interface("out", Role.DATA_OUT, block=[1, FULL], dtype_source="acc"),
+        Interface("inp", Direction.IN, block=[1, FULL]),
+        Interface("out", Direction.OUT, block=[1, FULL], dtype_source="acc"),
     )
     impl = Backend(name="k", stream={"inp": [1, "SIMD"], "out": [1, "PE"]})
     k = Kernel(
@@ -211,4 +212,4 @@ def test_width_uses_dtype_source():
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # PE=4 elements * INT16 (from dtype_source "acc"), NOT INT32 (the tensor dtype).
     assert k.get_outstream_width(pt, ctx, 0) == 4 * 16
-    assert pt["outstream_width"] == 4 * 16
+    assert pt["stream_width.out"] == 4 * 16

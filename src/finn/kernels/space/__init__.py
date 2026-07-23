@@ -75,6 +75,7 @@ from .tiling import (
     eval_entry,
     generate_tiling,
     param,
+    stream_width_key,
 )
 
 __all__ = [
@@ -132,6 +133,7 @@ __all__ = [
     "StreamFold",
     "GeneratedTiling",
     "generate_tiling",
+    "stream_width_key",
     "derive",
     "param",
     "const",

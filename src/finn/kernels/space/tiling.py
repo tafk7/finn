@@ -358,12 +358,10 @@ def generate_tiling(interfaces, stream: dict) -> GeneratedTiling:
         dial folds, across interfaces). Only bare-dial folds source a range; an int width
         or a cross-interface expr does not.
       * a divisibility ``Predicate`` per ``(dial, block-dim)`` fold.
-      * a stream-width ``Derived`` named ``instream_width``/``outstream_width`` — ONLY for
-        a single-DATA_IN / single-DATA_OUT op (what emit reads). Multi-input ops rely on
-        the port-indexed getters and get no named derived (avoids collisions).
+      * a stream-width ``Derived`` keyed ``stream_width.<iface>`` per interface that folds
+        (what emit + the getters read). One per interface — no singular-stream assumption,
+        no arity guard; a multi-input op simply gets one width key per input.
     """
-    from .ports import Role
-
     by_name = {i.name: i for i in interfaces}
 
     width_exprs: dict[str, TileExpr] = {}
@@ -429,18 +427,15 @@ def generate_tiling(interfaces, stream: dict) -> GeneratedTiling:
         for iface_name, dim_idx in binds:
             predicates.append(_divisibility_predicate(dial, by_name[iface_name], dim_idx))
 
-    # -- stream-width deriveds (single DATA_IN / DATA_OUT only) --------------------
+    # -- stream-width deriveds: one PER INTERFACE (no arity guard) -----------------
+    # Every interface with a fold expr publishes its own ``stream_width.<iface>`` key.
+    # There is no "which one is THE instream/outstream" decision — the singular-stream
+    # assumption (and its role filter + ``len==1`` guard) is dissolved, not relocated
+    # (resolution-phases.md §4). Emit and the getter both read the per-interface key.
     derived: list = []
-    data_ins = [i for i in interfaces if i.role == Role.DATA_IN]
-    data_outs = [i for i in interfaces if i.role == Role.DATA_OUT]
-    if len(data_ins) == 1 and data_ins[0].name in width_exprs:
-        derived.append(
-            _width_derived("instream_width", data_ins[0], width_exprs[data_ins[0].name])
-        )
-    if len(data_outs) == 1 and data_outs[0].name in width_exprs:
-        derived.append(
-            _width_derived("outstream_width", data_outs[0], width_exprs[data_outs[0].name])
-        )
+    for iface_name in stream:
+        if iface_name in width_exprs:
+            derived.append(_width_derived(by_name[iface_name], width_exprs[iface_name]))
 
     return GeneratedTiling(
         axes=tuple(axes),
@@ -494,11 +489,19 @@ def _divisibility_predicate(dial: str, iface, dim_idx: int):
     return Predicate(check=check, description=f"{iface.tensor} block[{dim_idx}] % {dial} == 0")
 
 
-def _width_derived(name: str, iface, width_expr: TileExpr):
-    """A stream-width ``Derived`` = fold_width * bitwidth(dtype_source). The dtype is the
-    interface's declared ``dtype_source`` (a derived name, e.g. ``outputDataType``) when
-    set, else the raw tensor dtype. Names it ``instream_width``/``outstream_width`` — the
-    keys emit reads off the point."""
+def stream_width_key(iface_name: str) -> str:
+    """The point key under which an interface's resolved stream width (bits/cycle) is
+    published. One PER INTERFACE (``stream_width.<iface>``, dotted like ``parameters.*``) —
+    replacing the old singular ``instream_width``/``outstream_width`` pair, so there is no
+    "which one is THE instream" arity decision. Both emit (subscript read) and the FINN
+    getter path read this one produced value."""
+    return f"stream_width.{iface_name}"
+
+
+def _width_derived(iface, width_expr: TileExpr):
+    """A per-interface stream-width ``Derived`` = fold_width * bitwidth(dtype_source), keyed
+    ``stream_width.<iface>``. The dtype is the interface's declared ``dtype_source`` (a
+    derived name, e.g. ``outputDataType``) when set, else the raw tensor dtype."""
     from .derived import Derived
 
     dtype_source = getattr(iface, "dtype_source", None)
@@ -511,4 +514,4 @@ def _width_derived(name: str, iface, width_expr: TileExpr):
             dt = context.tensor_datatype(_iface.tensor)
         return int(elems) * dt.bitwidth()
 
-    return Derived(name, compute)
+    return Derived(stream_width_key(iface.name), compute)

@@ -42,6 +42,7 @@ from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
     FULL,
     Derived,
+    Direction,
     Illegal,  # noqa: F401  (kept available for callers/tests)
     Interface,
     Kernel,
@@ -51,6 +52,7 @@ from finn.kernels.space import (
     fixed_axis,
     predicate,
     predicate_axis,
+    stream_width_key,
 )
 from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
 from finn.kernels.ops.parameters import ParamDemand, parameters_schema
@@ -81,20 +83,21 @@ OUTPUT = "out"
 
 
 def mvau_interfaces():
-    """The op-side interface list — identity + role + BLOCK structure (the math). Direction
-    is implied by role; stream folding (SIMD/PE) is impl-owned.
+    """The op-side interface list — identity + DIRECTION + BLOCK structure (the math). No
+    semantic role: whether ``weights`` is a stored parameter or a live activation emerges
+    from graph context (initializer?) at resolve time. Stream folding (SIMD/PE) is impl-owned.
 
     The block reads as the matmul: ``inp`` iterates its vector count (``1``) and holds the
     reduction dim MW in-block (``FULL``); ``weights`` is the whole matrix ``(MW, MH)`` in one
     block; ``out`` iterates vectors and holds MH. ``weights`` is an ORDINARY interface — no
     WidthOnly, no special flag; its PE·SIMD stream is just a 2-D fold of a 2-D block."""
     return (
-        Interface("inp", Role.DATA_IN, block=[1, FULL]),        # (n_vecs, MW)
-        Interface("weights", Role.WEIGHT_SINK, block=[FULL, FULL]),  # (MW, MH)
+        Interface("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
+        Interface("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
         # dtype_source="outputDataType": the stream width uses the derived output type
         # (= accDataType under noActivation), not the raw graph dtype — so the generated
-        # outstream_width matches the emit-side value.
-        Interface("out", Role.DATA_OUT, block=[1, FULL], dtype_source="outputDataType"),
+        # stream_width.out matches the emit-side value.
+        Interface("out", Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
 
@@ -241,15 +244,16 @@ def _output_datatype(p, ctx):
 
 
 def op_derived():
-    # NOTE: `instream_width`/`outstream_width` are NOT here — the tiling engine generates
-    # them from the impls' `stream` folds, with the `out` interface's
+    # NOTE: `stream_width.<iface>` are NOT here — the tiling engine generates one per
+    # interface from the impls' `stream` folds, with the `out` interface's
     # dtype_source="outputDataType" so the width uses the accumulator type under
     # noActivation. `weight_stream_width` is NOT here either — it is a per-TOPOLOGY fact
     # (0 for embedded, the demand's bit_rate for decoupled) owned by the parameters pool.
     #
-    # `parameters.demand` (below) is the compute→memory DEMAND the op publishes: pure
-    # compute facts the selected delivery topology sizes its memstream from. It reads
-    # WMEM, so it follows WMEM in this list (resolve computes deriveds in order).
+    # `parameters.demand` is NOT here either — it is the DEMAND stage of the supply
+    # waterfall (`demand_schema()`), composed BETWEEN the compute pool and the parameters
+    # pool, because it reads the compute pool's resolved `stream_width.weights` (only on the
+    # point AFTER the compute-pool tiling deriveds run). See `demand_schema`.
     #
     # MIGRATION ALIASES: MW/MH/WMEM/TMEM survive as emit-facing deriveds so Tier-4
     # (Vivado-validated emit_hls/emit_rtl, which read point.MW/MH/WMEM) is UNTOUCHED. They
@@ -265,7 +269,6 @@ def op_derived():
         Derived("accDataType", _acc_datatype),
         Derived("weightDataType", _weight_datatype),
         Derived("outputDataType", _output_datatype),
-        Derived(DEMAND, _weight_demand),
     )
 
 
@@ -326,28 +329,67 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# 5. PARAMETERS — the compute→memory DEMAND the op publishes to the delivery pool.
-#    The op no longer reaches into memstream: it publishes ONE realization-free
-#    ParamDemand (what the compute core consumes of its weight interface), and the
-#    selected parameters topology sizes ITS OWN geometry from it (impl_decoupled.py).
-#    This is the compute→memory demand channel (param-delivery-design-space.md §4
-#    Level-1 / §7 Q1): the memory backend owns memstream width/depth/sets/init_file +
-#    the pumped/URAM gates + weight_stream_width; the op owns only the demand.
+# 5. DEMAND — the compute→memory DEMAND stage of the supply waterfall.
+#    The op no longer reaches into memstream: the DEMAND stage publishes ONE
+#    realization-free ParamDemand (what the compute core consumes of its weight
+#    interface), sourced from the RESOLVED interface geometry (stream_width.weights +
+#    block extents), NOT from named backend dials. The selected parameters topology
+#    sizes ITS OWN geometry from it (impl_decoupled.py). This is the compute→memory
+#    demand channel (param-delivery-design-space.md §4 Level-1 / §7 Q1;
+#    interface-supply-waterfall.md Q1): the memory backend owns memstream
+#    width/depth/sets/init_file + the pumped/URAM gates + weight_stream_width; the
+#    demand stage owns only the (realization-free) demand.
 # =============================================================================
 
 
+_WEIGHTS_WIDTH_KEY = stream_width_key(WEIGHTS)
+
+
 def _weight_demand(p, ctx):
-    # The compute core's demand on its `weights` WEIGHT_SINK interface: parallelism =
-    # PE*SIMD elements/cycle, elem_bits = weight dtype width, depth = WMEM words/set,
-    # cadence = 1 (weights consumed once per layer; thresholds would be per-activation).
-    # Pure compute facts — no topology, no memstream realization. The delivery pool reads
-    # this to size its stream + memory.
+    # The compute core's demand on its `weights` interface, sourced from the RESOLVED
+    # interface geometry — NOT from named backend dials (PE/SIMD/WMEM). This is the
+    # supply-waterfall's DEMAND stage: it reads what the COMPUTE stage produced
+    # (stream_width.weights, the tiling engine's per-interface resolved width) and the
+    # weight block extents, so a tiled/systolic/packed backend that folds weights in its
+    # own terms works automatically (interface-supply-waterfall.md Q1).
+    #
+    # Whether `weights` IS a parameter feed is EMERGENT, read from context here: an
+    # initializer attached ⇒ a stored parameter the memory pool supplies (real demand);
+    # no initializer ⇒ a live activation (e.g. dynamic matmul operand B) that streams in
+    # like any dataflow edge ⇒ NO demand (returns None; the delivery pool sizes to nothing
+    # and the interface exports as a boundary). This dissolves the dynamic-matmul case with
+    # no special flag (resolution-phases.md: a Context-reading fact is a phase-3 closure).
+    if ctx.initializer(WEIGHTS) is None:
+        return None
+    width_bits = int(p[_WEIGHTS_WIDTH_KEY])  # resolved stream width (PE*SIMD*wbits)
+    elem_bits = ctx.tensor_datatype(WEIGHTS).bitwidth()
+    parallelism = width_bits // elem_bits  # elements/cycle, in the backend's own fold
+    block = ctx.tensor_shape(WEIGHTS)  # the weight block extents (MW, MH)
+    depth = _prod(block) // parallelism  # words/set = WMEM, from geometry not p.WMEM
     return ParamDemand(
-        parallelism=p.PE * p.SIMD,
-        elem_bits=ctx.tensor_datatype(WEIGHTS).bitwidth(),
-        depth=p.WMEM,
-        cadence=1,
+        parallelism=parallelism,
+        elem_bits=elem_bits,
+        depth=depth,
+        cadence=1,  # weights consumed once per layer; thresholds would be per-activation
     )
+
+
+def _prod(shape) -> int:
+    out = 1
+    for d in shape:
+        out *= int(d)
+    return out
+
+
+def demand_schema() -> Schema:
+    """The DEMAND stage of the supply waterfall as a derived-only schema, composed BETWEEN
+    the compute pool and the parameters (memory) pool. It exists as its own compose stage —
+    not in ``op_derived`` — because the demand reads the tiling engine's resolved
+    ``stream_width.weights``, which is generated by the compute pool and so is only on the
+    point AFTER it (resolve computes deriveds in schema order: op_derived → compute-pool
+    tiling → THIS → parameters pool). Encoding COMPUTE→DEMAND→MEMORY as compose order makes
+    the waterfall structural."""
+    return Schema(axes=(), derived=(Derived(DEMAND, _weight_demand),), predicates=())
 
 
 # =============================================================================
@@ -382,11 +424,13 @@ def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
-    tiling, composed with the PARAMETERS pool (``parameters.topology``). The op publishes
-    ONE compute→memory ``parameters.demand`` derived (in ``op_derived``); the selected
-    delivery topology sizes its own memstream geometry + ports from it — the op no longer
-    brokers memstream realization. The getters (folded shapes, stream widths, rough cost)
-    project from a resolved point via the impl ``stream``."""
+    tiling, composed with the DEMAND stage and then the PARAMETERS pool
+    (``parameters.topology``). The ``sub_schemas`` order IS the supply waterfall
+    COMPUTE→DEMAND→MEMORY: the demand stage reads the compute pool's resolved
+    ``stream_width.weights`` and publishes ``parameters.demand``; the selected delivery
+    topology then sizes its own memstream geometry + ports from that demand — the op no
+    longer brokers memstream realization. The getters (folded shapes, stream widths, rough
+    cost) project from a resolved point via the impl ``stream``."""
     return Kernel(
         name="MVAU",
         interfaces=mvau_interfaces(),
@@ -394,7 +438,7 @@ def mvau_kernel() -> Kernel:
         op_axes=op_axes(),
         op_derived=op_derived(),
         op_predicates=op_predicates(),
-        sub_schemas=(parameters_schema(),),
+        sub_schemas=(demand_schema(), parameters_schema()),
     )
 
 

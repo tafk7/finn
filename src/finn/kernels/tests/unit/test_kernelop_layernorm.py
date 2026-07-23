@@ -32,10 +32,10 @@ from finn.kernels.space import (
     Context,
     Illegal,
     Backend,
+    Direction,
     Interface,
     Kernel,
     KernelError,
-    Role,
 )
 
 
@@ -68,8 +68,8 @@ def _layernorm_op() -> Kernel:
     return Kernel(
         name="LayerNorm",
         interfaces=(
-            Interface("inp", Role.DATA_IN, block=list(channel_block)),
-            Interface("out", Role.DATA_OUT, block=list(channel_block)),
+            Interface("inp", Direction.IN, block=list(channel_block)),
+            Interface("out", Direction.OUT, block=list(channel_block)),
         ),
         pool=(hls, rtl),
     )

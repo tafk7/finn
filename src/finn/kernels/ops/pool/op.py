@@ -33,9 +33,9 @@ from __future__ import annotations
 
 from finn.kernels.space import (
     FULL,
+    Direction,
     Interface,
     Kernel,
-    Role,
     fixed_axis,
     predicate,
 )
@@ -72,11 +72,11 @@ def pool_interfaces(*, has_indices: bool, rank: int) -> tuple[Interface, ...]:
     spatial_dims + 2. The impl's PE stream folds the FULL channel dim."""
     channel_block = [1] * (rank - 1) + [FULL]
     interfaces = [
-        Interface(INPUT, Role.DATA_IN, block=list(channel_block)),
-        Interface(OUTPUT, Role.DATA_OUT, block=list(channel_block)),
+        Interface(INPUT, Direction.IN, block=list(channel_block)),
+        Interface(OUTPUT, Direction.OUT, block=list(channel_block)),
     ]
     if has_indices:
-        interfaces.append(Interface(INDICES, Role.DATA_OUT, block=list(channel_block)))
+        interfaces.append(Interface(INDICES, Direction.OUT, block=list(channel_block)))
     return tuple(interfaces)
 
 

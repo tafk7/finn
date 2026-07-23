@@ -33,11 +33,11 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.space import (
     Context,
+    Direction,
     Illegal,
     Backend,
     Interface,
     Kernel,
-    Role,
     discrete_axis,
     fixed_axis,
 )
@@ -73,9 +73,9 @@ def _elementwise_op() -> Kernel:
     return Kernel(
         name="ElementwiseBinary",
         interfaces=(
-            Interface("lhs", Role.DATA_IN, block=list(channel_block)),
-            Interface("rhs", Role.DATA_IN, block=list(channel_block)),
-            Interface("out", Role.DATA_OUT, block=list(channel_block)),
+            Interface("lhs", Direction.IN, block=list(channel_block)),
+            Interface("rhs", Direction.IN, block=list(channel_block)),
+            Interface("out", Direction.OUT, block=list(channel_block)),
         ),
         pool=(hls, rtl),
         op_axes=(rhs_last, func, pattern),

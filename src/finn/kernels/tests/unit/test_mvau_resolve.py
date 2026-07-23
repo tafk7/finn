@@ -284,7 +284,7 @@ def test_legal_point_carries_derived(schema):
     assert isinstance(r, Point)
     assert r.WMEM == 6 * 8 // (4 * 2)
     assert r.language == "hls"
-    assert r.outstream_width == r.outputDataType.bitwidth() * 4
+    assert r["stream_width.out"] == r.outputDataType.bitwidth() * 4
 
 
 def test_domain_violation_illegal(schema):

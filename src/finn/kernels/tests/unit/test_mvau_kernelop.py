@@ -14,8 +14,8 @@ parameters composition that ``mvau_schema()`` always used (they are now the same
 object — ``mvau_schema`` delegates to the Kernel). This test proves:
 
   * the Kernel getters (folded shapes, stream widths) agree EXACTLY with the
-    op-level ``instream_width``/``outstream_width`` derived that emit reads — the two
-    surfaces are consistent, not a reimplementation that drifts;
+    per-interface ``stream_width.<iface>`` deriveds that emit reads — the getter now
+    READS that produced value (no recompute), so the two surfaces are one quantity;
   * the impl-owned ``tiling`` (SIMD folds inp, PE folds out, weights=PE*SIMD) resolves
     per compute impl;
   * the op-level ``cost_model`` gives the reduction-coupled product nf*sf*n_vecs.
@@ -53,10 +53,10 @@ def _configure(simd, pe, impl="mvau_hls"):
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64), (1, 1)])
 def test_kernelop_getters_agree_with_op_derived_widths(simd, pe):
-    # The Kernel stream-width getters must equal the emit-side op-derived widths.
+    # The Kernel stream-width getters must equal the per-interface stream_width deriveds.
     op, ctx, pt = _configure(simd, pe)
-    assert op.get_instream_width(pt, ctx, 0) == pt.instream_width
-    assert op.get_outstream_width(pt, ctx, 0) == pt.outstream_width
+    assert op.get_instream_width(pt, ctx, 0) == pt["stream_width.inp"]
+    assert op.get_outstream_width(pt, ctx, 0) == pt["stream_width.out"]
 
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64)])
