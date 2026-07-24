@@ -6,29 +6,31 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``KernelOp`` — the FINN adapter that lets a model-free :class:`Kernel` back a real
-ONNX node and answer FINN's ``HWCustomOp`` contract.
+"""``KernelOp`` — the FINN adapter that lets a :class:`Kernel` back a real ONNX node and
+answer FINN's ``HWCustomOp`` contract.
 
 The engine (``space/``) is pure and graph-free: its getters take a :class:`Context`
-(shapes/datatypes as data) and a resolved :class:`Point`. FINN, by contrast, builds a
-fresh transient op instance per ``getCustomOp(node)`` call **with no model**, yet calls
-model-free getters (``get_exp_cycles()``, ``get_folded_input_shape(ind)``). This adapter
-bridges the two by the discipline FINN's own MVAU already uses: **geometry is baked into
-nodeattrs**, and the getters rebuild a ``Context`` *from nodeattrs* — never from the
-graph. Three jobs (kernelop-tensor-block-stream.md §7; consumer-surface-model.md Tier 0-3):
+(shapes/datatypes/VALUES as data) and a resolved :class:`Point`. This adapter sources that
+Context from the **live model**, following the ONNX ownership rule: a node owns ONLY its
+own internals (the design axes ``implementation``/PE/SIMD/…), never graph-owned facts
+(tensor shapes, datatypes, weight values). Those come from the model at construction, not
+from baked ``<iface>_shape``/``<iface>_dtype`` nodeattrs (which would be a second, staling
+source of truth). The op is built model-bearing via :func:`getHWCustomOp` (mirroring the
+brainsmith ``_ensure_ready``/``invalidate`` pattern); the model-built Context is cached and
+regenerated when a new model is attached. Three jobs (kernelop-tensor-block-stream.md §7;
+consumer-surface-model.md Tier 0-3):
 
-  1. **Bridge** — ``_context()`` builds a model-free Context from the baked per-interface
-     shape/dtype nodeattrs, keyed to the kernel's literal interface tensor names.
-  2. **Configure** — ``_point()`` reads the design axes (``implementation``/PE/SIMD/…)
-     off nodeattrs and ``kernel.configure``s them into a Point (or raises on Illegal).
+  1. **Bridge** — ``_context()`` builds the Context from the ATTACHED model (shapes,
+     dtypes, REAL initializer values), re-keyed to the kernel's literal interface names.
+  2. **Configure** — ``_point()`` reads the design axes off nodeattrs and
+     ``kernel.configure``s them into a Point (or raises on Illegal).
   3. **Project** — each FINN getter delegates to the matching Kernel getter, adapting the
      ``(ind)`` FINN signature to the engine's ``(point, context, ind)``.
 
-Value-dependent work (datatype narrowing that needs weight VALUES) is NOT done here —
-it belongs to the model-bearing ABC calls FINN already makes (``infer_node_datatype``),
-which read the live graph and bake results into tensor annotations. The getter path uses
-a shape/dtype-faithful **placeholder** initializer for weight interfaces so the schema
-resolves; the Tier-3 getters read only shapes/widths/cycles, never value-derived dtypes.
+Because the Context carries REAL weight values, value-derived dtypes (MVAU's accumulator
+under ``noActivation``) are exact for the getters too — not correct-only-by-luck under a
+placeholder. FINN build-flow ``getCustomOp(node)`` integration (threading the model into
+every transient op) is deferred; tests construct via :func:`getHWCustomOp`.
 
 Specialization is by the ``implementation`` nodeattr (mapping onto the engine's
 ``implementation`` selection axis), NOT by FINN's domain mutation — one KernelOp class
@@ -41,7 +43,6 @@ from abc import abstractmethod
 from dataclasses import dataclass
 
 import numpy as np
-from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.kernels.space import Context, Illegal, Role
@@ -56,12 +57,11 @@ class PortSpec:
         iface: the Kernel interface name (== its Context tensor key, e.g. "inp").
         direction: "in" or "out" — which side of the node this port is on.
         index: the FINN port index within that direction (0=activation, 1=weights).
-        role: the port-taxonomy Role, so the adapter knows which ports are params
-            (needing a placeholder initializer at getter time).
+        role: the port-taxonomy Role (which ports are params vs dataflow edges).
         optional: whether the node may omit this input slot (an OPTIONAL operand, e.g. MVU
             thresholds — the emergent-existence interface, ``Interface.optional``). When the
-            node does not wire the slot, the adapter SKIPS the port everywhere (no baked
-            geometry, no Context tensor), so the kernel sees the interface as absent.
+            node does not wire the slot, the adapter SKIPS the port everywhere (no Context
+            tensor), so the kernel sees the interface as absent.
     """
 
     iface: str
@@ -95,59 +95,71 @@ class KernelOp(HWCustomOp):
     # -- nodeattr schema ----------------------------------------------------
 
     def get_nodeattr_types(self):
-        """HWCustomOp base attrs + the schema-derived design axes + baked geometry.
+        """HWCustomOp base attrs + the schema-derived design axes ONLY.
 
         The design axes come straight from the kernel schema (the R12 dissolution —
-        ``nodeattr_registry``); the geometry attrs (``<iface>_shape``/``<iface>_dtype``)
-        carry the per-interface tensor shape + datatype baked at convert/infer time so
-        the getters are model-free."""
+        ``nodeattr_registry``). Graph-owned geometry (tensor shapes/datatypes/values) is
+        NOT baked onto the node — it is sourced from the live model at construction, per
+        ONNX ownership. So there are no ``<iface>_shape``/``<iface>_dtype`` nodeattrs."""
         attrs = super().get_nodeattr_types()
         attrs.update(axis_nodeattr_types(self.kernel().schema()))
-        for port in self.ports():
-            attrs[self._shape_key(port.iface)] = ("ints", False, [])
-            attrs[self._dtype_key(port.iface)] = ("s", False, "")
         return attrs
 
-    # -- the bridge: nodeattrs -> Context -----------------------------------
+    # -- model attach + Context cache (brainsmith _ensure_ready pattern) ----
 
-    def _baked_ports(self) -> tuple[PortSpec, ...]:
-        """The ports whose geometry is baked (present). A required port is always present;
-        an OPTIONAL port is present only when its shape nodeattr was baked non-empty (the
-        node wired that slot) — an absent optional operand leaves the default ``[]`` and is
-        skipped, so the kernel sees the interface as absent (emergent existence, model-free
-        mirror of ``ctx.initializer`` being None)."""
-        out = []
-        for port in self.ports():
-            if port.optional and not list(self.get_nodeattr(self._shape_key(port.iface))):
-                continue
-            out.append(port)
-        return tuple(out)
+    def attach_model(self, model) -> "KernelOp":
+        """Attach the live model this op belongs to, so the getters can source their
+        Context (shapes/dtypes/REAL values) from it. Caches the built Context; a later
+        attach with a different model regenerates it (``invalidate``). Returns ``self`` so
+        :func:`getHWCustomOp` can construct-and-attach in one expression."""
+        self._model = model
+        self._context_cache = None
+        return self
 
     def _context(self) -> Context:
-        """Build a model-free Context from the baked geometry nodeattrs, keyed to the
-        kernel's literal interface tensor names. A WEIGHT-role interface gets a
-        shape/dtype-faithful placeholder initializer so the schema resolves; its VALUES
-        are never read by the Tier-3 getters (they drive only value-derived dtypes,
-        which are baked separately at infer time)."""
+        """Build (and cache) the Context from the ATTACHED model: per-interface shapes,
+        datatypes, and REAL initializer values, re-keyed from the node's actual tensor
+        names to the kernel's literal interface names ("inp"/"weights"/"out"). An OPTIONAL
+        port the node did not wire is skipped, so the kernel sees the interface as absent
+        (emergent existence). Raises if no model was attached — the getters are
+        model-bearing by construction now, not model-free."""
+        cached = getattr(self, "_context_cache", None)
+        if cached is not None:
+            return cached
+        model = getattr(self, "_model", None)
+        if model is None:
+            raise ValueError(
+                f"{type(self).__name__}: no model attached — construct via "
+                f"getHWCustomOp(node, model) so the Context can be built from the live graph"
+            )
+        graph_ctx = Context.from_model(model, self._fpgapart_from(model))
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict = {}
         initializers: dict[str, np.ndarray] = {}
-        for port in self._baked_ports():
-            shape = tuple(int(d) for d in self.get_nodeattr(self._shape_key(port.iface)))
-            dtype = DataType[self.get_nodeattr(self._dtype_key(port.iface))]
-            shapes[port.iface] = shape
-            datatypes[port.iface] = dtype
-            if port.role in (Role.WEIGHT_SINK, Role.INDEX_SINK):
-                initializers[port.iface] = np.zeros(shape, dtype=np.float32)
-        return Context(
+        for port in self.ports():
+            tname = self._tensor_name(port)
+            if tname is None:
+                continue  # optional operand not wired on this node
+            if tname in graph_ctx.shapes:
+                shapes[port.iface] = graph_ctx.shapes[tname]
+            if tname in graph_ctx.datatypes:
+                datatypes[port.iface] = graph_ctx.datatypes[tname]
+            init = graph_ctx.initializer(tname)
+            if init is not None:
+                initializers[port.iface] = init
+        ctx = Context(
             shapes=shapes,
             datatypes=datatypes,
             initializers=initializers,
-            fpgapart=self._fpgapart(),
+            fpgapart=graph_ctx.fpgapart,
+            toolchain_version=graph_ctx.toolchain_version,
+            clk_ns=graph_ctx.clk_ns,
         )
+        self._context_cache = ctx
+        return ctx
 
-    def _fpgapart(self) -> str:
-        # Placement/part is harness-owned; absent on a bare estimate node is fine.
+    def _fpgapart_from(self, model) -> str:
+        # Placement/part is harness-owned; prefer the node's own attr, else empty.
         try:
             return self.get_nodeattr("fpgapart")
         except AttributeError:
@@ -225,20 +237,13 @@ class KernelOp(HWCustomOp):
     # -- base ABC (model-bearing) -------------------------------------------
 
     def infer_node_datatype(self, model):
-        """Derive and propagate output datatypes into the graph. This is the one
-        model-bearing hook where value-dependent derivation happens: we resolve a Point
-        against a Context built from the *live graph* (real weight VALUES available), so
-        the ``outputDataType`` derived is exact — the graph dtype when the op just
-        forwards it, or the weight-derived accumulator type under ``noActivation``.
-        Annotates the node's output tensors; idempotent."""
-        kernel = self.kernel()
-        ctx = self._remap_context(Context.from_model(model, self._fpgapart()))
-        result = kernel.configure(ctx, self._assignment())
-        if isinstance(result, Illegal):
-            raise ValueError(
-                f"{self.onnx_node.name}: configuration is illegal during infer: "
-                f"{'; '.join(result.reasons)}"
-            )
+        """Derive and propagate output datatypes into the graph. Attaches ``model`` (so the
+        Context carries real weight VALUES) and resolves a Point, making the
+        ``outputDataType`` derived exact — the graph dtype when the op just forwards it, or
+        the weight-derived accumulator type under ``noActivation``. Annotates the node's
+        output tensors; idempotent."""
+        self.attach_model(model)
+        kernel, ctx, result = self._point()
         for port in self.ports():
             if port.direction == "out":
                 odt = self._output_datatype_from_point(kernel, ctx, result, port.index)
@@ -253,32 +258,10 @@ class KernelOp(HWCustomOp):
         ``noActivation``) overrides to read the derived off the ``point``."""
         return kernel.get_output_datatype(ctx, index)
 
-    def _remap_context(self, ctx: Context) -> Context:
-        """Re-key a graph-built Context from real tensor names to the kernel's literal
-        interface names, so the kernel getters (which reference "inp"/"weights"/"out")
-        line up with the node's actual tensors."""
-        shapes, datatypes, initializers = {}, {}, {}
-        for port in self.ports():
-            tname = self._tensor_name(port)
-            if tname is None:
-                continue  # optional operand not wired on this node
-            if tname in ctx.shapes:
-                shapes[port.iface] = ctx.shapes[tname]
-            if tname in ctx.datatypes:
-                datatypes[port.iface] = ctx.datatypes[tname]
-            init = ctx.initializer(tname)
-            if init is not None:
-                initializers[port.iface] = init
-        return Context(
-            shapes=shapes,
-            datatypes=datatypes,
-            initializers=initializers,
-            fpgapart=ctx.fpgapart,
-            toolchain_version=ctx.toolchain_version,
-            clk_ns=ctx.clk_ns,
-        )
-
     def make_shape_compatible_op(self, model):
+        # InferShapes hands us the model — attach it so the output-shape getter can source
+        # its Context from the live graph.
+        self.attach_model(model)
         return super().make_const_shape_op(self.get_normal_output_shape())
 
     def execute_node(self, context, graph):
@@ -286,22 +269,6 @@ class KernelOp(HWCustomOp):
             f"{type(self).__name__}: execute_node is not part of the estimate-only "
             f"surface (Tier 0-3); implement it when functional exec is needed."
         )
-
-    # -- geometry baking (called at convert/infer time, model in hand) ------
-
-    def bake_geometry(self, model):
-        """Snapshot per-interface shape + datatype from the live graph into nodeattrs,
-        so the model-free getters can rebuild a Context. Call from a model-bearing
-        context (convert/infer). Matches how FINN's MVAU stores MW/MH/dtypes."""
-        for port in self.ports():
-            tname = self._tensor_name(port)
-            if tname is None:
-                continue  # optional operand not wired on this node — leave its geometry unbaked
-            shape = model.get_tensor_shape(tname)
-            if shape is not None:
-                self.set_nodeattr(self._shape_key(port.iface), [int(d) for d in shape])
-            dt = model.get_tensor_datatype(tname)
-            self.set_nodeattr(self._dtype_key(port.iface), dt.name)
 
     # -- helpers ------------------------------------------------------------
 
@@ -315,10 +282,17 @@ class KernelOp(HWCustomOp):
         name = slot[port.index]
         return name if name else None
 
-    @staticmethod
-    def _shape_key(iface: str) -> str:
-        return f"{iface}_shape"
 
-    @staticmethod
-    def _dtype_key(iface: str) -> str:
-        return f"{iface}_dtype"
+def getHWCustomOp(node, model):
+    """Construct the :class:`KernelOp` for ``node`` and attach ``model`` — the
+    model-bearing analogue of QONNX ``getCustomOp(node)``. Because a ``KernelOp`` sources
+    its Context (shapes/dtypes/weight VALUES) from the live model rather than from baked
+    nodeattrs, it must be built WITH the model in hand. FINN build-flow integration (making
+    ``getCustomOp`` thread the model through automatically) is deferred; tests and local
+    callers use this helper.
+
+    Returns the attached op. ``model`` is a ``ModelWrapper`` owning ``node``.
+    """
+    from qonnx.custom_op.registry import getCustomOp
+
+    return getCustomOp(node).attach_model(model)

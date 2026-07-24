@@ -21,6 +21,6 @@ consumer surface this satisfies, and the design doc
 ``kernel-design/kernel-final-design/kernelop-tensor-block-stream.md`` for the model.
 """
 
-from .kernel_op import KernelOp, PortSpec
+from .kernel_op import KernelOp, PortSpec, getHWCustomOp
 
-__all__ = ["KernelOp", "PortSpec"]
+__all__ = ["KernelOp", "PortSpec", "getHWCustomOp"]
