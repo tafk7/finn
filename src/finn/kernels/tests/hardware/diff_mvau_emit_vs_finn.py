@@ -192,7 +192,8 @@ def diff_hls_params_h():
 
     ctx, point = _finn_context_point(W, 2, 2, wdt, idt, odt, MVAU_HLS, "lut")
     from finn.kernels.ops.mvau.emit_hls import _params_h
-    ours_params = _params_h(point, ctx)
+    from finn.kernels.ops.mvau.geometry import mvau_geometry
+    ours_params = _params_h(point, ctx, mvau_geometry(point, ctx))
 
     ok = _norm(finn_params) == _norm(ours_params)
     print("  params.h byte-equivalence:", "PASS" if ok else "FAIL")
