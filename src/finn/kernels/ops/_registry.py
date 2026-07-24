@@ -19,17 +19,19 @@ built-in bundle modules for that side effect; assembling the schema just reads w
 has registered. Registration order is preserved, so the first-registered bundle is the
 pool default (the root axis default).
 
-**Factory arity.** A factory may be zero-arg (``() -> Backend``, the common case) OR take
-a single argument threaded through by ``build_pool`` (``(arg) -> Backend``). The
-``parameters`` pool uses the latter to build each storage topology for a specific
-parameter INTERFACE (its axis/derived point keys are interface-namespaced). The bundle
-IDENTITY (``.name``) must not depend on that argument, so ``register`` reads ``.name`` by
-probing the factory with the registry's ``probe_arg`` — ``None`` for a zero-arg pool.
+**Factory arity is DECLARED, not sniffed.** A registry is either zero-arg (``() ->
+Backend`` factories, the common compute pool) or INTERFACE-THREADED (``(iface) -> Backend``
+factories) — every factory in one registry is the same kind. The kind is declared once at
+construction by passing ``probe_arg``: leave it ``None`` for a zero-arg pool, or pass the
+default interface (e.g. ``WEIGHTS``) for an interface-threaded pool. There is NO per-factory
+signature inspection — the registry knows its own arity from that single declaration. The
+``parameters`` pool is interface-threaded (each storage topology is built for a specific
+parameter INTERFACE, its point keys interface-namespaced); the bundle IDENTITY (``.name``)
+is interface-independent, so ``register`` probes with ``probe_arg`` to read it.
 """
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 
 from finn.kernels.space import Backend
@@ -39,15 +41,17 @@ def make_registry(op_name: str, *, probe_arg=None):
     """Build a fresh registry for one op. Returns ``(register, build_pool,
     registered_names, unregister)`` closed over a private ordered dict.
 
-    ``probe_arg`` is the value passed to a factory (a) once at registration to read its
-    interface-independent ``.name``, and (b) as the default when ``build_pool`` is called
-    with no argument. Leave it ``None`` for a plain zero-arg pool (the factory is then
-    called with no arguments)."""
+    ``probe_arg`` DECLARES the registry's arity: ``None`` (default) → a zero-arg pool whose
+    factories are called ``factory()``; a non-``None`` value → an interface-threaded pool
+    whose factories are called ``factory(arg)`` (``arg`` defaults to ``probe_arg``). It is
+    also the value passed once at registration to read a bundle's interface-independent
+    ``.name``."""
     registry: dict[str, Callable[..., Backend]] = {}
+    interface_threaded = probe_arg is not None
 
     def _invoke(factory, arg):
-        # Support both zero-arg factories and single-arg (interface-threaded) factories.
-        return factory() if _is_zero_arg(factory) else factory(arg)
+        # Arity is a registry-level fact (declared via probe_arg), not a per-factory sniff.
+        return factory(arg) if interface_threaded else factory()
 
     def register(factory: Callable[..., Backend]) -> Callable[..., Backend]:
         """Decorator: register a ``Backend`` factory by its bundle name. The factory is
@@ -62,8 +66,8 @@ def make_registry(op_name: str, *, probe_arg=None):
 
     def build_pool(arg=probe_arg) -> tuple[Backend, ...]:
         """Instantiate every registered bundle (fresh objects), registration order. ``arg``
-        is threaded to each single-arg factory (e.g. the parameter interface name);
-        defaults to the registry's ``probe_arg``."""
+        is threaded to each factory on an interface-threaded pool (e.g. the parameter
+        interface name); defaults to the registry's ``probe_arg``."""
         return tuple(_invoke(factory, arg) for factory in registry.values())
 
     def registered_names() -> tuple[str, ...]:
@@ -75,16 +79,3 @@ def make_registry(op_name: str, *, probe_arg=None):
         registry.pop(name, None)
 
     return register, build_pool, registered_names, unregister
-
-
-def _is_zero_arg(factory) -> bool:
-    """True if ``factory`` takes no required positional parameters (a plain ``() ->
-    Backend`` bundle); False if it expects one (an interface-threaded bundle)."""
-    try:
-        sig = inspect.signature(factory)
-    except (TypeError, ValueError):
-        return True
-    return not any(
-        p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
-        for p in sig.parameters.values()
-    )
