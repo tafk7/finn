@@ -41,6 +41,7 @@ from .artifacts import (
 )
 from .context import Context
 from .derived import Derived
+from .folding import threshold_fold_depth, weight_fold_depth
 from .backend import (
     Backend,
     EmitError,
@@ -96,6 +97,8 @@ __all__ = [
     "fixed_axis",
     "predicate_axis",
     "Derived",
+    "weight_fold_depth",
+    "threshold_fold_depth",
     "Predicate",
     "predicate",
     "Backend",
