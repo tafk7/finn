@@ -5,5 +5,5 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
-"""Domain primitives reused by the resolve engine: ordered parameters, datatype
-range-builders, template resolution, and interface shape/width value objects."""
+"""Domain primitives reused by the resolve engine: ordered parameters
+(``ordered_parameter``) and the datatype range-builder (``spec_helpers``)."""
