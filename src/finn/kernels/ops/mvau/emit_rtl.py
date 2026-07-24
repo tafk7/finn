@@ -30,16 +30,23 @@ from __future__ import annotations
 
 from finn.kernels.space import (
     Artifacts,
+    BitWidth,
+    Bool,
+    Dim,
     Direction,
     GeneratedFile,
     IPICommands,
     Kind,
     Port,
+    Raw,
     Role,
+    RtlModule,
     StaticFile,
     Template,
+    bind,
 )
 
+from .geometry import mvau_geometry
 from .op import INPUT, WEIGHTS
 
 # finn-rtllib/mvu/mvu_vvu_axi_wrapper.v — 14 $UPPERCASE$ slots (all compute-core
@@ -117,33 +124,65 @@ endmodule // $MODULE_NAME_AXI_WRAPPER$
 """
 )
 
+# The TYPE signature of _V_WRAPPER (F4) — one type per $SLOT$. Owned by the artifact
+# (this file), not the Backend: softvec + packed share this one wrapper, so one schema
+# (design pitch §5). bind() type-checks values against it before render, catching the
+# `[31:0]`-into-a-width-slot silent-wrongness class. Verilog-expression parameters
+# (WEIGHT_STREAM_WIDTH_BA etc.) are deduced in-template and are NOT slots.
+_V_WRAPPER_SCHEMA = RtlModule(
+    "mvu_vvu_axi_wrapper",
+    {
+        "MODULE_NAME_AXI_WRAPPER": Raw,
+        "IS_MVU": Dim,
+        "VERSION": Dim,
+        "PUMPED_COMPUTE": Bool,
+        "MW": Dim,
+        "MH": Dim,
+        "PE": Dim,
+        "SIMD": Dim,
+        "ACTIVATION_WIDTH": BitWidth,
+        "WEIGHT_WIDTH": BitWidth,
+        "ACCU_WIDTH": BitWidth,
+        "NARROW_WEIGHTS": Bool,
+        "SIGNED_ACTIVATIONS": Bool,
+        "SEGMENTLEN": Dim,
+    },
+)
+
 
 def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     """Produce embedded-mode RTL MVAU compute-core artifacts from a resolved point."""
     idt = context.tensor_datatype(INPUT)
     wdt = context.tensor_datatype(WEIGHTS)
+    geo = mvau_geometry(point, context)
 
     # Padded weight-stream width: (PE*SIMD*WEIGHT_WIDTH + 7)//8 * 8 — matches the
     # wrapper's WEIGHT_STREAM_WIDTH_BA and the memstream m_axis_0 width the stitch
     # binds against.
     weight_width = (point.PE * point.SIMD * wdt.bitwidth() + 7) // 8 * 8
 
-    bindings = {
-        "MODULE_NAME_AXI_WRAPPER": module_name,
-        "IS_MVU": 1,
-        "VERSION": point.dsp_version,  # forced from device (DSP48E1/E2/DSP58 -> 1/2/3)
-        "PUMPED_COMPUTE": int(point.get("pumpedCompute", 0)),
-        "MW": point.MW,
-        "MH": point.MH,
-        "PE": point.PE,
-        "SIMD": point.SIMD,
-        "ACTIVATION_WIDTH": idt.bitwidth(),
-        "WEIGHT_WIDTH": wdt.bitwidth(),
-        "ACCU_WIDTH": point.accDataType.bitwidth(),
-        "NARROW_WEIGHTS": int(point.narrow_weights),
-        "SIGNED_ACTIVATIONS": 1 if idt.min() < 0 else 0,
-        "SEGMENTLEN": point.SEGMENTLEN,
-    }
+    # Typed bind against the wrapper's RtlModule schema (F4). ACCU_WIDTH from the
+    # resolved accDataType (kernel-model.md §A1). bind() checks types + slot coverage
+    # and returns the {slot: str} dict Template.render consumes — bytes unchanged.
+    bindings = bind(
+        _V_WRAPPER_SCHEMA,
+        {
+            "MODULE_NAME_AXI_WRAPPER": Raw(module_name),
+            "IS_MVU": Dim(1),
+            "VERSION": Dim(point.dsp_version),  # forced from device (E1/E2/DSP58 -> 1/2/3)
+            "PUMPED_COMPUTE": Bool(point.get("pumpedCompute", 0)),
+            "MW": Dim(geo.MW),
+            "MH": Dim(geo.MH),
+            "PE": Dim(point.PE),
+            "SIMD": Dim(point.SIMD),
+            "ACTIVATION_WIDTH": BitWidth(idt.bitwidth()),
+            "WEIGHT_WIDTH": BitWidth(wdt.bitwidth()),
+            "ACCU_WIDTH": BitWidth(point.accDataType.bitwidth()),
+            "NARROW_WEIGHTS": Bool(point.narrow_weights),
+            "SIGNED_ACTIVATIONS": Bool(idt.min() < 0),
+            "SEGMENTLEN": Dim(point.SEGMENTLEN),
+        },
+    )
     top = GeneratedFile(f"{module_name}.v", _V_WRAPPER, bindings)
 
     # Static .sv are read straight off point.sources — softvec ships mvu.sv, packed

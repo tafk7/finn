@@ -43,6 +43,7 @@ from finn.kernels.space import (
 )
 from finn.util.data_packing import numpy_to_hls_code
 
+from .geometry import mvau_geometry
 from .op import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
 
 _MULT_STYLE = {"auto": "ap_resource_dflt()", "lut": "ap_resource_lut()", "dsp": "ap_resource_dsp()"}
@@ -67,11 +68,18 @@ $DOCOMPUTE$
 """
 )
 
+# NB (F4 HLS asymmetry): unlike the RTL wrapper's discrete #() params, the HLS
+# geometry lands INSIDE free-form `#define` strings ($DEFINES$ is a list of lines),
+# not discrete typed slots. So HLS keeps Raw slots and the typed-bind win is RTL-side;
+# the geometry here is still sourced from the ONE shared accessor (mvau_geometry), so
+# HLS and RTL cannot diverge (F3). Full HLS typing = standardize the HLS surface = Arc 2.
+
 
 def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     """Produce embedded-mode HLS MVAU compute-core artifacts from a resolved point."""
     idt = context.tensor_datatype(INPUT)
     odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    geo = mvau_geometry(point, context)
 
     idt_hls = idt.get_hls_datatype_str()
     odt_hls = odt.get_hls_datatype_str()
@@ -87,13 +95,13 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
         globals_.append('#include "thresh.h"')
 
     defines = [
-        f"#define MW1 {point.MW}",
-        f"#define MH1 {point.MH}",
+        f"#define MW1 {geo.MW}",
+        f"#define MH1 {geo.MH}",
         f"#define SIMD1 {point.SIMD}",
         f"#define PE1 {point.PE}",
-        f"#define WMEM1 {point.WMEM}",
-        f"#define TMEM1 {point.TMEM}",
-        f"#define numReps {int(np.prod(point.numInputVectors))}",
+        f"#define WMEM1 {geo.depth}",
+        f"#define TMEM1 {geo.tdepth}",
+        f"#define numReps {geo.num_reps}",
     ]
 
     # Non-bipolar integer case: TSrcI=Slice<idt>, TWeightI=Identity, TDstI=Slice<odt>. The
@@ -133,12 +141,12 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     }
     top = GeneratedFile(f"top_{module_name}.cpp", _CPP, bindings)
 
-    params_h = DataFile("params.h", _params_h(point, context))
+    params_h = DataFile("params.h", _params_h(point, context, geo))
     # thresh.h — the baked ThresholdsActivation, only when the node has thresholds (constant
     # mode). Like params.h, no port: it is compiled into the core.
     data_files = (params_h,)
     if has_thresh:
-        data_files += (DataFile("thresh.h", _thresh_h(point, context)),)
+        data_files += (DataFile("thresh.h", _thresh_h(point, context, geo)),)
 
     # HLS embedded: weights are compiled into params.h (FixedPointWeights), so there
     # is NO weight-stream port — the blackbox exposes only in0_V/out0_V (both dataflow
@@ -190,23 +198,23 @@ def _hw_weight_tensor(weights, mw, mh, pe, simd, wmem, wdt):
     return ret
 
 
-def _params_h(point, context) -> str:
+def _params_h(point, context, geo) -> str:
     """make_weight_file "hls_header" (matrixvectoractivation.py:659): pack the weight
     tensor into a FixedPointWeights/BinaryWeights C++ initializer."""
     weights = np.asarray(context.initializer(WEIGHTS))
     wdt = context.tensor_datatype(WEIGHTS)
     export_wdt = DataType["BINARY"] if wdt == DataType["BIPOLAR"] else wdt
 
-    tensor = _hw_weight_tensor(weights, point.MW, point.MH, point.PE, point.SIMD, point.WMEM, wdt)
+    tensor = _hw_weight_tensor(weights, geo.MW, geo.MH, point.PE, point.SIMD, geo.depth, wdt)
     hls_code = numpy_to_hls_code(tensor, export_wdt, "weights", True, True)
 
     if export_wdt.bitwidth() != 1:
         head = "const FixedPointWeights<{},{},{},{}> weights = ".format(
-            point.SIMD, export_wdt.get_hls_datatype_str(), point.PE, point.WMEM
+            point.SIMD, export_wdt.get_hls_datatype_str(), point.PE, geo.depth
         )
     else:
         head = "const BinaryWeights<{},{},{}> weights = ".format(
-            point.SIMD, point.PE, point.WMEM
+            point.SIMD, point.PE, geo.depth
         )
     return head + hls_code
 
@@ -222,7 +230,7 @@ def _hw_threshold_tensor(thresholds, mh, pe, tmem, n_steps):
     return ret.reshape(1, pe, tmem, n_steps)
 
 
-def _thresh_h(point, context) -> str:
+def _thresh_h(point, context, geo) -> str:
     """Bake thresholds into a ThresholdsActivation C++ initializer (matrixvectoractivation.py:
     868-914), the constant-mode HLS threshold delivery. Pure over (point, context): reads the
     threshold VALUES + the resolved threshold dtype (``thresholdDataType``), never the graph."""
@@ -232,13 +240,13 @@ def _thresh_h(point, context) -> str:
     export_odt = DataType["BINARY"] if odt == DataType["BIPOLAR"] else odt
 
     n_steps = thresholds.shape[-1]
-    tensor = _hw_threshold_tensor(thresholds, point.MH, point.PE, point.TMEM, n_steps)
+    tensor = _hw_threshold_tensor(thresholds, geo.MH, point.PE, geo.tdepth, n_steps)
     hls_code = numpy_to_hls_code(tensor, tdt, "thresholds", False, True)
 
     tdt_hls = tdt.get_hls_datatype_str()
     odt_hls = export_odt.get_hls_datatype_str()
     head = "static ThresholdsActivation<{},{},{},{},{},{},{}> threshs = ".format(
-        point.TMEM, point.PE, n_steps, tdt_hls, odt_hls, point.ActVal,
+        geo.tdepth, point.PE, n_steps, tdt_hls, odt_hls, point.ActVal,
         f"comp::less_equal<{tdt_hls}, {tdt_hls}>",
     )
     return head + hls_code
