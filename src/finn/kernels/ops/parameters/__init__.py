@@ -30,16 +30,14 @@ namespaces it and guards its root so a param-free op simply omits it.
 from __future__ import annotations
 
 from finn.kernels.space import Schema, pool_schema
-
-from .demand import ParamDemand  # noqa: F401 (re-exported)
-from .names import (  # noqa: F401 (re-exported)
-    DECOUPLED,
-    EMBEDDED,
-    WEIGHTS,
+from finn.kernels.space.demand import ParamDemand  # noqa: F401 (re-exported)
+from finn.kernels.space.param_names import (  # noqa: F401 (re-exported)
     demand_key,
     sources_key,
     topology_key,
 )
+
+from .names import DECOUPLED, EMBEDDED, WEIGHTS  # noqa: F401 (re-exported)
 from .registry import build_pool
 
 # Import the built-in topology modules for their registration side effect. A new

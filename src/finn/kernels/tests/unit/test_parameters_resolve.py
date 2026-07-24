@@ -26,7 +26,7 @@ from finn.kernels.ops.parameters import (
     parameters_pool,
     parameters_schema,
 )
-from finn.kernels.ops.parameters.names import (
+from finn.kernels.space.param_names import (
     pumped_memory_key,
     ram_style_key,
     runtime_writeable_key,
@@ -156,7 +156,7 @@ def test_mvau_schema_carries_both_coordinates():
     r = resolve(
         mvau_schema(),
         _mvau_ctx(),
-        {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut", "noActivation": 1},
+        {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"},
     )
     assert not isinstance(r, Illegal)
     assert r.implementation == "mvau_hls"
@@ -170,7 +170,7 @@ def test_mvau_weight_stream_width_coupling():
     PE*SIMD*wbits for decoupled — reads BOTH topology and the compute fold."""
     from finn.kernels.ops.mvau import mvau_schema
 
-    base = {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut", "noActivation": 1}
+    base = {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     r_emb = resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: EMBEDDED})
     assert r_emb.weight_stream_width == 0
     r_dec = resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: DECOUPLED})
@@ -190,7 +190,6 @@ def test_mvau_pumped_memory_fold_gate_fires():
             "PE": 1,
             "SIMD": 1,
             "resType": "lut",
-            "noActivation": 1,
             TOPOLOGY: DECOUPLED,
             PUMPED_MEMORY: 1,
         },

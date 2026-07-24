@@ -18,6 +18,7 @@ replicating the shared wrapper's ``generate`` fork.
 from __future__ import annotations
 
 from finn.kernels.space import Backend
+from finn.kernels.space.param_names import STREAM
 from finn.util.basic import get_dsp_block
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
@@ -65,4 +66,7 @@ def packed_bundle() -> Backend:
         sources=SHARED_SOURCES + ("mvu_vvu_8sx9_dsp58.sv",),
         emit=emit_mvau_rtl,
         stream=COMPUTE_STREAM,
+        # Streamed-weight DSP core (see softvec) — weights STREAM-only (embedded illegal),
+        # thresholds rejected by the _rtl_mvu_feasible gate, so no thresholds consumes entry.
+        consumes={WEIGHTS: {STREAM}},
     )

@@ -32,7 +32,7 @@ from finn.kernels.ops._dsp_rtl import (
 from finn.kernels.space import Derived, discrete_axis, predicate
 from finn.util.basic import get_dsp_block
 
-from .op import INPUT, WEIGHTS
+from .op import INPUT, THRESHOLDS, WEIGHTS
 
 
 def _narrow_weights(p, ctx):
@@ -51,8 +51,11 @@ def _narrow_weights(p, ctx):
 def _rtl_mvu_feasible(p, ctx):
     # The real gate deciding whether an RTL-MVU can be used at all
     # (specialize_layers.py:235 `_mvu_rtl_possible`). Reads config + device + data.
-    if p.noActivation != 1:
-        return "RTL-MVU requires noActivation=1 (embedded thresholds unsupported)"
+    # Emergent: the RTL/DSP core has no activation/threshold logic, so it is feasible only
+    # on a node WITHOUT thresholds — the emergent form of the old `noActivation==1` gate,
+    # and equivalently "the DSP core cannot consume thresholds" (there is no threshold port).
+    if ctx.initializer(THRESHOLDS) is not None:
+        return "RTL-MVU cannot consume thresholds (embedded thresholding unsupported; specialize_layers:241)"
     if p.binaryXnorMode != 0:
         return "RTL-MVU does not support binaryXnorMode"
     wdt = ctx.tensor_datatype(WEIGHTS)

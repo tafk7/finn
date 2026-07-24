@@ -33,7 +33,6 @@ def _build_model():
         implementation="mvau_hls",
         SIMD=1,
         PE=1,
-        noActivation=0,
         inp_shape=[1, MW],
         inp_dtype="INT8",
         weights_shape=[MW, MH],

@@ -43,7 +43,7 @@ from finn.kernels.space import (
 )
 from finn.util.data_packing import numpy_to_hls_code
 
-from .op import INPUT, OUTPUT, WEIGHTS
+from .op import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
 
 _MULT_STYLE = {"auto": "ap_resource_dflt()", "lut": "ap_resource_lut()", "dsp": "ap_resource_dsp()"}
 
@@ -76,7 +76,15 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     idt_hls = idt.get_hls_datatype_str()
     odt_hls = odt.get_hls_datatype_str()
 
+    # THRESHOLDS are OPTIONAL (a 3-input fused MVU) and ALWAYS constant here — baked into
+    # thresh.h as a ThresholdsActivation, exactly like weights bake into params.h. Existence
+    # is emergent: a threshold initializer is attached. When absent, the activation is a
+    # PassThrough (output IS the accumulator, base:517).
+    has_thresh = context.initializer(THRESHOLDS) is not None
+
     globals_ = ['#include "weights.hpp"', '#include "activations.hpp"', '#include "mvau.hpp"']
+    if has_thresh:
+        globals_.append('#include "thresh.h"')
 
     defines = [
         f"#define MW1 {point.MW}",
@@ -88,11 +96,13 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
         f"#define numReps {int(np.prod(point.numInputVectors))}",
     ]
 
-    # Non-bipolar integer case: TSrcI=Slice<idt>, TWeightI=Identity, TDstI=Slice<odt>.
+    # Non-bipolar integer case: TSrcI=Slice<idt>, TWeightI=Identity, TDstI=Slice<odt>. The
+    # activation is the baked `threshs` ThresholdsActivation when present, else PassThrough.
+    activation = "threshs" if has_thresh else f"PassThroughActivation<{odt_hls}>()"
     docompute = [
         f"Matrix_Vector_Activate_Batch<MW1, MH1, SIMD1, PE1, 1, "
         f"Slice<{idt_hls}>, Slice<{odt_hls}>, Identity>\n"
-        f"                (in0_V, out0_V, weights, PassThroughActivation<{odt_hls}>(), "
+        f"                (in0_V, out0_V, weights, {activation}, "
         f"numReps, {_MULT_STYLE[point.resType]});"
     ]
 
@@ -109,6 +119,9 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
         '#include "params.h"',
         "#pragma HLS ARRAY_PARTITION variable=weights.m_weights complete dim=1",
     ]
+    if has_thresh:
+        pragmas.append("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=1")
+        pragmas.append("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=3")
 
     bindings = {
         "AP_INT_MAX_W": _ap_int_max_w(point, context),
@@ -121,6 +134,11 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     top = GeneratedFile(f"top_{module_name}.cpp", _CPP, bindings)
 
     params_h = DataFile("params.h", _params_h(point, context))
+    # thresh.h — the baked ThresholdsActivation, only when the node has thresholds (constant
+    # mode). Like params.h, no port: it is compiled into the core.
+    data_files = (params_h,)
+    if has_thresh:
+        data_files += (DataFile("thresh.h", _thresh_h(point, context)),)
 
     # HLS embedded: weights are compiled into params.h (FixedPointWeights), so there
     # is NO weight-stream port — the blackbox exposes only in0_V/out0_V (both dataflow
@@ -137,7 +155,7 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
 
     return Artifacts(
         generated=(top,),
-        data_files=(params_h,),
+        data_files=data_files,
         ports=ports,
         static_files=(
             StaticFile("finn.data", "deps/finn-hlslib/weights.hpp"),
@@ -190,4 +208,37 @@ def _params_h(point, context) -> str:
         head = "const BinaryWeights<{},{},{}> weights = ".format(
             point.SIMD, point.PE, point.WMEM
         )
+    return head + hls_code
+
+
+def _hw_threshold_tensor(thresholds, mh, pe, tmem, n_steps):
+    """get_hw_compatible_threshold_tensor (matrixvectoractivation.py:584): tile a
+    per-tensor (1, n_steps) threshold matrix up to MH channels, interleave rows across
+    PEs, reshape (1, PE, TMEM, n_steps). Pure."""
+    ret = thresholds
+    if ret.shape[0] == 1:
+        ret = np.tile(ret, (mh, 1))
+    ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
+    return ret.reshape(1, pe, tmem, n_steps)
+
+
+def _thresh_h(point, context) -> str:
+    """Bake thresholds into a ThresholdsActivation C++ initializer (matrixvectoractivation.py:
+    868-914), the constant-mode HLS threshold delivery. Pure over (point, context): reads the
+    threshold VALUES + the resolved threshold dtype (``thresholdDataType``), never the graph."""
+    thresholds = np.asarray(context.initializer(THRESHOLDS))
+    tdt = point.thresholdDataType
+    odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    export_odt = DataType["BINARY"] if odt == DataType["BIPOLAR"] else odt
+
+    n_steps = thresholds.shape[-1]
+    tensor = _hw_threshold_tensor(thresholds, point.MH, point.PE, point.TMEM, n_steps)
+    hls_code = numpy_to_hls_code(tensor, tdt, "thresholds", False, True)
+
+    tdt_hls = tdt.get_hls_datatype_str()
+    odt_hls = export_odt.get_hls_datatype_str()
+    head = "static ThresholdsActivation<{},{},{},{},{},{},{}> threshs = ".format(
+        point.TMEM, point.PE, n_steps, tdt_hls, odt_hls, point.ActVal,
+        f"comp::less_equal<{tdt_hls}, {tdt_hls}>",
+    )
     return head + hls_code

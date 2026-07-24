@@ -18,10 +18,11 @@ bundle). Shares DSP-RTL declarations with the packed bundle via ``dsp_rtl_common
 from __future__ import annotations
 
 from finn.kernels.space import Backend
+from finn.kernels.space.param_names import STREAM
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import emit_mvau_rtl
-from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC
+from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, WEIGHTS
 from .registry import register
 
 
@@ -44,4 +45,11 @@ def softvec_bundle() -> Backend:
         sources=SHARED_SOURCES + ("mvu.sv",),
         emit=emit_mvau_rtl,
         stream=COMPUTE_STREAM,
+        # The RTL/DSP core is a streamed-weight core: it has NO embedded-weight path (base
+        # FINN: internal_embedded is HLS-only), so it consumes weights in STREAM mode only —
+        # this makes the `embedded` topology illegal for it (a correctness fix, not a new
+        # restriction). It also has no activation logic; the _rtl_mvu_feasible gate rejects
+        # any node WITH thresholds, so thresholds never reaches delivery here (no consumes
+        # entry needed — an absent interface is permissive, and the gate is the real rejecter).
+        consumes={WEIGHTS: {STREAM}},
     )

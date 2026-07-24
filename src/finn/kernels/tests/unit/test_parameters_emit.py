@@ -25,7 +25,7 @@ from finn.kernels.space import Artifacts, Context, emit_point, resolve
 from finn.kernels.ops.mvau import MVAU_HLS, mvau_schema
 from finn.kernels.ops.parameters import DECOUPLED, WEIGHTS, parameters_pool
 from finn.kernels.ops.parameters.emit_memstream import emit_memstream
-from finn.kernels.ops.parameters.names import (
+from finn.kernels.space.param_names import (
     depth_key,
     pumped_memory_key,
     ram_style_key,
@@ -66,7 +66,6 @@ def _decoupled_point(ctx, pe=2, simd=2, **extra):
         "PE": pe,
         "SIMD": simd,
         "resType": "lut",
-        "noActivation": 1,
         TOPOLOGY: DECOUPLED,
         RAM_STYLE: "block",
     }
@@ -92,7 +91,7 @@ def test_geometry_absent_for_embedded():
     r = resolve(
         mvau_schema(),
         ctx,
-        {"implementation": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut", "noActivation": 1, TOPOLOGY: EMBEDDED},
+        {"implementation": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut", TOPOLOGY: EMBEDDED},
     )
     # geometry derived are present-but-None under embedded (no streamer)
     assert r[PARAM_DEPTH] is None

@@ -33,6 +33,8 @@ from finn.kernels.ops.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
     WEIGHTS as PARAM_WEIGHTS,
+)
+from finn.kernels.space.param_names import (
     pumped_memory_key,
     ram_style_key,
     runtime_writeable_key,
@@ -90,7 +92,6 @@ def base_assignment(**overrides):
         "PE": 4,
         "SIMD": 2,
         "mem_mode": "internal_decoupled",
-        "noActivation": 1,
     }
     a.update(overrides)
     return _translate_parameters(a)
@@ -108,9 +109,13 @@ _DELIVERY_KEYS = {
 
 
 def _translate_parameters(a):
-    """Rewrite legacy delivery kwargs to composed ``parameters.*`` keys."""
+    """Rewrite legacy delivery kwargs to composed ``parameters.*`` keys. Drops the dissolved
+    ``noActivation`` (no longer an axis — activation existence is emergent from the thresholds
+    tensor in the Context), so legacy call sites that still pass it are a harmless no-op."""
     out = {}
     for k, v in a.items():
+        if k == "noActivation":
+            continue
         if k == "mem_mode":
             out[PARAM_TOPOLOGY] = _MEM_MODE_TO_TOPOLOGY[v]
         elif k in _DELIVERY_KEYS:
@@ -151,7 +156,7 @@ def test_packed_impl_illegal_on_seven_series(schema):
     r = resolve(
         schema,
         make_context(SEVEN_SERIES, weights=narrow_weights()),
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Illegal)
     assert any("DSP58" in reason for reason in r.reasons)
@@ -163,7 +168,7 @@ def test_other_impls_remain_on_seven_series(schema):
     r_sv = resolve(
         schema,
         make_context(SEVEN_SERIES, weights=narrow_weights()),
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r_sv, Point)
     r_hls = resolve(schema, make_context(SEVEN_SERIES), base_assignment(mem_mode="internal_embedded"))
@@ -176,7 +181,7 @@ def test_packed_impl_legal_on_versal(schema):
     r = resolve(
         schema,
         make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Point)
     assert r.dsp_primitive == "DSP58"
@@ -191,14 +196,14 @@ def test_packed_impl_illegal_on_versal_with_wide_weights(schema):
     r = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Illegal)
     assert any("weight_width<=8" in reason for reason in r.reasons)
     # softvec is still feasible on the same wide-weight Versal context
     r2 = resolve(
         schema, ctx,
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r2, Point)
 
@@ -215,7 +220,7 @@ def test_dsp_primitive_forced_from_fpgapart(schema):
         r = resolve(
             schema,
             make_context(part, weights=narrow_weights()),
-            base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+            base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
         )
         assert isinstance(r, Point), r
         assert r.dsp_primitive == expected
@@ -368,7 +373,7 @@ def test_packed_num_lanes_gate(schema):
     r = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Illegal)
     assert any("NUM_LANES" in reason for reason in r.reasons)
@@ -376,7 +381,7 @@ def test_packed_num_lanes_gate(schema):
     r_sv = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r_sv, Point)
 
@@ -387,7 +392,7 @@ def test_packed_num_lanes_ok_for_int8(schema):
     r = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Point)
 
@@ -511,3 +516,165 @@ def test_registry_makes_addition_structural():
     finally:
         # Keep the registry clean for other tests (registration is a global side effect).
         unregister("mvau_stub_backend")
+
+
+# ---------------------------------------------------------------------------
+# thresholds — the optional 3rd interface (B1): present iff an initializer is
+# attached; its identity (numSteps/thresholdDataType) populates only then.
+# ---------------------------------------------------------------------------
+
+
+def make_thresh_context(fpgapart=SEVEN_SERIES, weights=None, steps=7, tdt="INT16", idt="INT4"):
+    """A 3-input MVU context: the base weight context plus a thresholds tensor
+    (NumChannels=MH, numSteps) with an initializer, so ctx.initializer('thresholds')
+    is not None and the threshold identity resolves live."""
+    if weights is None:
+        rng = np.random.RandomState(0)
+        weights = rng.randint(-8, 8, size=(6, 8)).astype(np.float32)
+    mh = weights.shape[1]
+    thr = np.sort(np.random.RandomState(1).randint(0, 100, size=(mh, steps)).astype(np.float32), axis=1)
+    return Context(
+        shapes={
+            "weights": weights.shape,
+            "inp": (1, weights.shape[0]),
+            "out": (1, mh),
+            "thresholds": (mh, steps),
+        },
+        datatypes={
+            "weights": DataType["INT4"],
+            "inp": DataType[idt],
+            "out": DataType["INT16"],
+            "thresholds": DataType[tdt],
+        },
+        initializers={"weights": weights, "thresholds": thr},
+        fpgapart=fpgapart,
+        clk_ns=5.0,
+    )
+
+
+def test_no_threshold_node_leaves_threshold_identity_none(schema):
+    # A 2-input node (default fixture, no thresholds tensor): the optional interface is
+    # absent, so numSteps/thresholdDataType resolve to None (no KeyError).
+    r = resolve(schema, make_context(), base_assignment())
+    assert isinstance(r, Point)
+    assert r["numSteps"] is None
+    assert r["thresholdDataType"] is None
+
+
+def test_thresholded_node_populates_threshold_identity(schema):
+    # A 3-input node: thresholds present -> numSteps = tensor step dim, thresholdDataType
+    # value-narrowed. Activation existence is emergent from the thresholds tensor.
+    r = resolve(
+        schema,
+        make_thresh_context(steps=7),
+        base_assignment(),
+    )
+    assert isinstance(r, Point)
+    assert r["numSteps"] == 7
+    assert r["thresholdDataType"] is not None
+
+
+def test_malformed_threshold_tensor_is_illegal(schema):
+    # numSteps is DERIVED from the tensor step dim in the fused core (not a free axis), so a
+    # step mismatch is structurally impossible — but a non-2-D threshold tensor is still
+    # caught by the reinstated shape predicate.
+    ctx = make_thresh_context(steps=7)
+    n_ch = ctx.shapes["thresholds"][0]
+    bad = Context(
+        shapes={**ctx.shapes, "thresholds": (n_ch,)},  # 1-D, malformed
+        datatypes=ctx.datatypes,
+        initializers={**ctx.initializers, "thresholds": np.zeros((n_ch,), np.float32)},
+        fpgapart=ctx.fpgapart,
+        clk_ns=5.0,
+    )
+    r = resolve(schema, bad, base_assignment())
+    assert isinstance(r, Illegal)
+    assert any("2D" in reason or "2-d" in reason.lower() for reason in r.reasons)
+
+
+def test_unsigned_input_requires_nonneg_thresholds(schema):
+    # Unsigned activation + a negative threshold value -> illegal (reinstated F2 predicate).
+    ctx = make_thresh_context(steps=4, idt="UINT4")
+    neg = np.array(ctx.initializer("thresholds"))
+    neg[0, 0] = -1.0
+    ctx = Context(
+        shapes=ctx.shapes,
+        datatypes=ctx.datatypes,
+        initializers={**ctx.initializers, "thresholds": neg},
+        fpgapart=ctx.fpgapart,
+        clk_ns=5.0,
+    )
+    r = resolve(schema, ctx, base_assignment(numSteps=4))
+    assert isinstance(r, Illegal)
+    assert any("thresholds >= 0" in reason or "non-negative" in reason.lower() for reason in r.reasons)
+
+
+# ---------------------------------------------------------------------------
+# consumes — the DSP cores are streamed-weight-only (embedded illegal), and reject
+# any node that carries thresholds (no activation logic in the RTL core).
+# ---------------------------------------------------------------------------
+
+
+def test_dsp_core_rejects_embedded_weights(schema):
+    # The DSP/RTL core declares consumes={weights:{stream}} -> the `embedded` topology is
+    # filtered out of its domain, so pinning it is illegal (a correctness fix: base FINN has
+    # no embedded-weight RTL path).
+    r = resolve(
+        schema,
+        make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Illegal)
+    assert any("embedded" in reason for reason in r.reasons)
+
+
+def test_dsp_core_default_weight_topology_is_decoupled(schema):
+    # With embedded filtered out, an UNPINNED DSP node falls to the first in-domain topology
+    # (decoupled) instead of the pool default (embedded) — no crash, a legal stream topology.
+    r = resolve(
+        schema,
+        make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
+        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp"),  # no mem_mode pin
+    )
+    assert isinstance(r, Point)
+    assert r[PARAM_TOPOLOGY] == PARAM_DECOUPLED
+
+
+def test_dsp_core_rejects_thresholded_node(schema):
+    # The DSP/RTL core has no activation logic (_rtl_mvu_feasible): a node WITH a threshold
+    # initializer is illegal on it, so it is never selected for a thresholded fused MVU.
+    r = resolve(
+        schema,
+        make_thresh_context(VERSAL, weights=narrow_weights(wdt="INT8")),
+        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp"),
+    )
+    assert isinstance(r, Illegal)
+    assert any("threshold" in reason.lower() for reason in r.reasons)
+
+
+# ---------------------------------------------------------------------------
+# cadence — weights consumed once per layer; thresholds once per activation beat.
+# ---------------------------------------------------------------------------
+
+
+def test_cadence_differs_by_interface(schema):
+    # A conv-as-matmul input (leading dims > [1]) makes prod(numInputVectors) > 1, so the
+    # threshold cadence (per-activation-beat = prod(numInputVectors)) differs from the weight
+    # cadence (per-layer = 1). Exercised on the resolve closures directly (the fused core is
+    # constant-mode for thresholds, so cadence does not size a live streamer yet).
+    from finn.kernels.ops.mvau.op import _weight_cadence, _threshold_cadence
+
+    # inp shape (1, H=4, MW=6) -> numInputVectors = [1, 4] -> prod = 4.
+    weights = np.random.RandomState(0).randint(-8, 8, size=(6, 8)).astype(np.float32)
+    ctx = Context(
+        shapes={"weights": (6, 8), "inp": (1, 4, 6), "out": (1, 4, 8)},
+        datatypes={"weights": DataType["INT4"], "inp": DataType["INT4"], "out": DataType["INT16"]},
+        initializers={"weights": weights},
+        fpgapart=SEVEN_SERIES,
+        clk_ns=5.0,
+    )
+    r = resolve(schema, ctx, base_assignment())
+    assert isinstance(r, Point)
+    assert list(r.numInputVectors) == [1, 4]
+    assert _weight_cadence(r, ctx) == 1
+    assert _threshold_cadence(r, ctx) == 4  # prod([1, 4])

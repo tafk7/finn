@@ -36,6 +36,7 @@ from typing import Any, Mapping
 
 from .context import Context
 from .backend import Backend, compose, pool_schema
+from .delivery import delivery_subschemas
 from .point import Illegal, Point
 from .ports import Direction
 from .resolve import resolve
@@ -82,6 +83,15 @@ class Interface:
             ``"outputDataType"`` (= the accumulator type under ``noActivation``). None ⇒
             the tensor dtype.
 
+        optional: whether this is an OPTIONAL node input (0-or-1). An ONNX-invariant
+            identity fact (like ``direction``) — the opset says the slot may be absent (MVU
+            thresholds, a bias, MaxPool indices). Its PRESENCE for a given node is EMERGENT
+            from Context (its tensor exists), read at projection time by
+            :meth:`Kernel.present_interfaces` — the same declared-slot / emergent-existence
+            split as role emergence. A required interface (default ``False``) is always
+            present. (Variadic 0-to-N is a later additive generalization of the same rule:
+            present interfaces come from Context, not the declared list.)
+
     ``index`` is DERIVED, not stored: position among same-direction peers in the kernel's
     interface list (0=first, 1=…).
     """
@@ -90,6 +100,7 @@ class Interface:
     direction: "Direction"
     block: tuple = ()
     dtype_source: str | None = None
+    optional: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, "block", tuple(self.block))
@@ -146,11 +157,13 @@ class Kernel:
     identity: KernelSchema
     pool: tuple[Backend, ...]
     sub_schemas: tuple = ()  # secondary pools (e.g. parameters) composed via `compose`
+    delivered_parameters: tuple = ()  # DeliveredParam per delivered interface; wired generically
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
         object.__setattr__(self, "sub_schemas", tuple(self.sub_schemas))
+        object.__setattr__(self, "delivered_parameters", tuple(self.delivered_parameters))
         object.__setattr__(self, "_tiling_cache", {})
 
     # -- identity passthroughs: read the KernelSchema fields off the Kernel ---
@@ -228,7 +241,12 @@ class Kernel:
             tuple(self.op_predicates),
             self._augmented_pool(),
         )
-        for sub in self.sub_schemas:
+        # DELIVERED PARAMETERS: the generic compute→delivery wiring (DEMAND stage + guarded
+        # delivery sub-schema per interface), synthesized from the DeliveredParam declarations
+        # in supply-waterfall order. Reads the compute pool's `consumes` + each topology's
+        # `mode` — no op-specific logic here.
+        subs = tuple(self.sub_schemas) + delivery_subschemas(self.pool, self.delivered_parameters)
+        for sub in subs:
             op = compose(op, sub)
         return op
 
@@ -237,6 +255,19 @@ class Kernel:
         return resolve(self.schema(), context, assignment)
 
     # -- interface lookup ---------------------------------------------------
+
+    def present_interfaces(self, context: Context) -> tuple[Interface, ...]:
+        """The interfaces PRESENT for this node: all required ones, plus each optional one
+        whose Context tensor exists. Presence is emergent (phase-3) — an ``optional=True``
+        interface with no tensor in ``context`` is absent (the node did not wire that slot),
+        so Context-reading loops (cost, any all-interface projection) skip it rather than
+        ``KeyError``-ing on its shape. Required interfaces are always present."""
+        out = []
+        for i in self.interfaces:
+            if i.optional and i.name not in context.shapes:
+                continue
+            out.append(i)
+        return tuple(out)
 
     def inputs(self) -> tuple[Interface, ...]:
         return tuple(i for i in self.interfaces if i.direction == Direction.IN)
@@ -299,7 +330,7 @@ class Kernel:
         if self.cost_model is not None:
             return int(self.cost_model(point, context))
         cycles = 1
-        for iface in self.interfaces:
+        for iface in self.present_interfaces(context):
             n = _prod(context.tensor_shape(iface.tensor))
             elems = self._stream_elems(iface, point)
             if elems <= 0 or n % elems != 0:

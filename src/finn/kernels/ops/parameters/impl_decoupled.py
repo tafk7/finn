@@ -32,11 +32,8 @@ from __future__ import annotations
 from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.kernels.space import Derived, discrete_axis, predicate
-from finn.util.basic import is_versal
-
-from .emit_memstream import emit_memstream
-from .names import (
-    DECOUPLED,
+from finn.kernels.space.param_names import (
+    STREAM,
     WEIGHT_STREAM_WIDTH,
     demand_key,
     depth_key,
@@ -47,6 +44,10 @@ from .names import (
     sets_key,
     width_key,
 )
+from finn.util.basic import is_versal
+
+from .emit_memstream import emit_memstream
+from .names import DECOUPLED, WEIGHTS
 from .registry import register
 from .topology import storage_topology
 
@@ -169,10 +170,12 @@ def _geometry_derived(iface):
         demand = _demand(p, iface)
         return 0 if demand is None else int(demand.bit_rate)
 
-    return (
-        # WEIGHT_STREAM_WIDTH stays the weights-only un-namespaced compute-facing alias
-        # this increment (see names.py); the geometry keys are interface-namespaced.
-        Derived(WEIGHT_STREAM_WIDTH, _stream_width),
+    # WEIGHT_STREAM_WIDTH is the weights-only UN-namespaced compute-facing alias; emit it
+    # ONLY for the ``weights`` interface, else a second interface (thresholds) composing
+    # after weights would overwrite the weights value with its own (0). The geometry keys
+    # are interface-namespaced, so they never collide.
+    weight_alias = (Derived(WEIGHT_STREAM_WIDTH, _stream_width),) if iface == WEIGHTS else ()
+    return weight_alias + (
         Derived(width_key(iface), _mem_width),
         Derived(depth_key(iface), _mem_depth),
         Derived(sets_key(iface), _mem_sets),
@@ -184,6 +187,7 @@ def _geometry_derived(iface):
 def decoupled_topology(iface):
     return storage_topology(
         DECOUPLED,
+        mode=STREAM,  # an AXIS port a memstream block feeds
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface),
         predicates=(_uram_gate(iface), _pumped_gate(iface)),

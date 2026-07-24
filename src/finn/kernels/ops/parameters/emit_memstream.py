@@ -45,8 +45,7 @@ from finn.kernels.space import (
 )
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
-from .names import (
-    WEIGHTS,
+from finn.kernels.space.param_names import (
     depth_key,
     init_file_key,
     pumped_memory_key,
@@ -56,6 +55,8 @@ from .names import (
     sources_key,
     width_key,
 )
+
+from .names import WEIGHTS
 
 # Real finn-rtllib subdir per static source (base:1170,1182-1184). Anything not listed
 # defaults to memstream/hdl (the memstream cores' home).

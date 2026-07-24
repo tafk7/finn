@@ -26,7 +26,8 @@ from finn.kernels.ops.mvau import (
     mvau_pool,
     mvau_schema,
 )
-from finn.kernels.ops.parameters.names import EMBEDDED, WEIGHTS, topology_key
+from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
+from finn.kernels.space.param_names import topology_key
 
 # Composed for the ``weights`` interface -> ``parameters.weights.topology``.
 TOPOLOGY = topology_key(WEIGHTS)
@@ -48,13 +49,16 @@ def make_context(mw=6, mh=8, wdt="INT8", idt="INT8", weights=None):
 
 
 def dsp_point(schema, ctx, impl, **overrides):
+    # The DSP/RTL core is a streamed-weight core (embedded is illegal for it — base FINN has
+    # no embedded-weight RTL path), so its delivery topology is `decoupled`. The COMPUTE-half
+    # emit (emit_point over the compute pool) is topology-independent — the memstream is the
+    # separate delivery half — so these compute-core golden tests are unaffected by the mode.
     a = {
         "implementation": impl,
         "PE": 2,
         "SIMD": 2,
         "resType": "dsp",
-        TOPOLOGY: EMBEDDED,
-        "noActivation": 1,
+        TOPOLOGY: DECOUPLED,
     }
     a.update(overrides)
     return resolve(schema, ctx, a)
@@ -67,7 +71,6 @@ def hls_point(schema, ctx, **overrides):
         "SIMD": 2,
         "resType": "lut",
         TOPOLOGY: EMBEDDED,
-        "noActivation": 1,
     }
     a.update(overrides)
     return resolve(schema, ctx, a)
@@ -190,3 +193,53 @@ def test_all_three_bundles_emit():
         arts = emit_point(mvau_pool(), p, ctx)
         assert isinstance(arts, Artifacts), impl
         assert len(arts.generated) == 1, impl
+
+
+# --- thresholds bake (Part C) ----------------------------------------------
+
+
+def _thresh_context(mw=6, mh=8, steps=7, tdt="INT16"):
+    weights = np.random.RandomState(0).randint(-7, 7, size=(mw, mh)).astype(np.float32)
+    thr = np.sort(
+        np.random.RandomState(1).randint(0, 100, size=(mh, steps)).astype(np.float32), axis=1
+    )
+    return Context(
+        shapes={"weights": (mw, mh), "inp": (1, mw), "out": (1, mh), "thresholds": (mh, steps)},
+        datatypes={
+            "weights": DataType["INT4"], "inp": DataType["INT4"],
+            "out": DataType["INT16"], "thresholds": DataType[tdt],
+        },
+        initializers={"weights": weights, "thresholds": thr},
+        fpgapart=VERSAL, clk_ns=5.0,
+    )
+
+
+def test_hls_thresholded_node_bakes_thresh_h():
+    # A 3-input HLS node bakes a ThresholdsActivation into thresh.h and uses `threshs` in the
+    # docompute (not PassThrough); the core includes thresh.h. Thresholds are constant → no port.
+    schema = mvau_schema()
+    ctx = _thresh_context(steps=7)
+    p = hls_point(schema, ctx, PE=2, SIMD=2, resType="lut")
+    arts = emit_point(mvau_pool(), p, ctx)
+    files = {d.filename for d in arts.data_files}
+    assert "thresh.h" in files
+    thresh = next(d for d in arts.data_files if d.filename == "thresh.h").content
+    assert "ThresholdsActivation<" in thresh
+    assert "comp::less_equal" in thresh
+    cpp = arts.generated[0].content()
+    assert '#include "thresh.h"' in cpp
+    assert "threshs," in cpp
+    assert "PassThroughActivation" not in cpp
+    assert not _UNFILLED.search(cpp)
+
+
+def test_hls_no_threshold_node_has_no_thresh_h():
+    # A 2-input node bakes no thresh.h and keeps the PassThrough activation.
+    schema = mvau_schema()
+    ctx = make_context()
+    p = hls_point(schema, ctx, PE=2, SIMD=2, resType="lut")
+    arts = emit_point(mvau_pool(), p, ctx)
+    assert "thresh.h" not in {d.filename for d in arts.data_files}
+    cpp = arts.generated[0].content()
+    assert "PassThroughActivation" in cpp
+    assert '#include "thresh.h"' not in cpp

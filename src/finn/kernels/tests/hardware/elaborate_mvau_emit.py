@@ -29,7 +29,10 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, resolve, emit_point
 from finn.kernels.ops.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC
-from finn.kernels.ops.parameters.names import EMBEDDED, TOPOLOGY
+from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
+from finn.kernels.space.param_names import topology_key
+
+TOPOLOGY = topology_key(WEIGHTS)
 
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"
 RTLLIB = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib")
@@ -47,9 +50,11 @@ def main():
         initializers={"weights": W},
         fpgapart=FPGAPART, clk_ns=5.0,
     )
+    # The DSP core is streamed-weight-only (embedded illegal); use decoupled. The compute-
+    # half emit is topology-independent, so this elaboration is unaffected.
     point = resolve(mvau_schema(), ctx, {
         "implementation": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2, "resType": "dsp",
-        TOPOLOGY: EMBEDDED, "noActivation": 1,
+        TOPOLOGY: DECOUPLED,
     })
     arts = emit_point(mvau_pool(), point, ctx)
 

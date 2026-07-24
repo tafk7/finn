@@ -21,8 +21,9 @@ parameters point.
 from __future__ import annotations
 
 from finn.kernels.space import Derived
+from finn.kernels.space.param_names import CONSTANT, WEIGHT_STREAM_WIDTH
 
-from .names import EMBEDDED, WEIGHT_STREAM_WIDTH
+from .names import EMBEDDED, WEIGHTS
 from .registry import register
 from .topology import storage_topology
 
@@ -35,12 +36,14 @@ def _no_stream_width(p, ctx):
 
 @register
 def embedded_topology(iface):
-    # ``iface`` (the parameter interface this topology delivers) is accepted for a uniform
-    # bundle-factory signature; embedded owns no interface-namespaced axes/geometry (it is
-    # the ``constant`` mode — nothing is delivered), so it uses only the weights-only global
-    # WEIGHT_STREAM_WIDTH alias (see names.py). A future thresholds increment that
-    # generalizes that width will key it off ``iface``.
+    # embedded owns no interface-namespaced axes/geometry (it is the ``constant`` mode —
+    # nothing is delivered). The one thing it contributes is the weights-only global
+    # WEIGHT_STREAM_WIDTH alias (0 — no port), which the COMPUTE side reads; it is emitted
+    # ONLY for the ``weights`` interface, since it is un-namespaced and a second interface
+    # (thresholds) composing after weights would otherwise overwrite the weights value.
+    derived = (Derived(WEIGHT_STREAM_WIDTH, _no_stream_width),) if iface == WEIGHTS else ()
     return storage_topology(
         EMBEDDED,
-        derived=(Derived(WEIGHT_STREAM_WIDTH, _no_stream_width),),
+        mode=CONSTANT,  # baked into the compute core — no streamer, no port
+        derived=derived,
     )

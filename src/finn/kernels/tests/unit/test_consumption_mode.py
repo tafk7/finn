@@ -30,6 +30,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.space import (
     Backend,
     Context,
+    DeliveredParam,
     Illegal,
     Interface,
     Kernel,
@@ -39,18 +40,22 @@ from finn.kernels.space import (
     pool_schema,
     resolve,
 )
-from finn.kernels.ops.parameters import WEIGHTS, parameters_pool
-from finn.kernels.ops.parameters.names import (
+from finn.kernels.space.param_names import (
     CONSTANT,
-    DECOUPLED,
-    EMBEDDED,
     STREAM,
-    TOPOLOGY_MODE,
     demand_key,
     depth_key,
     topology_key,
     width_key,
 )
+from finn.kernels.ops.parameters import WEIGHTS, parameters_pool
+from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED
+
+
+def _topo_mode(name, iface=WEIGHTS):
+    """The consumption mode a topology carries (Backend.mode) — the structural replacement
+    for the old TOPOLOGY_MODE name→mode side-table."""
+    return {b.name: b.mode for b in parameters_pool(iface)}[name]
 
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
@@ -70,7 +75,7 @@ def _mvau_ctx(part=VERSAL):
 def _resolve_mvau(assignment):
     from finn.kernels.ops.mvau import mvau_schema
 
-    base = {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut", "noActivation": 1}
+    base = {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     base.update(assignment)
     return resolve(mvau_schema(), _mvau_ctx(), base)
 
@@ -82,8 +87,9 @@ def _resolve_mvau(assignment):
 
 def test_embedded_is_constant_decoupled_is_stream():
     # The one structural claim: embedded IS the constant mode, decoupled a stream mode.
-    assert TOPOLOGY_MODE[EMBEDDED] == CONSTANT
-    assert TOPOLOGY_MODE[DECOUPLED] == STREAM
+    # The mode is now CARRIED on each topology's Backend (Backend.mode), not a side-table.
+    assert _topo_mode(EMBEDDED) == CONSTANT
+    assert _topo_mode(DECOUPLED) == STREAM
 
 
 # ---------------------------------------------------------------------------
@@ -139,19 +145,18 @@ def test_consumes_stream_only_domain_excludes_embedded():
         stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
         consumes={WEIGHTS: {STREAM}},
     )
-    topologies = [b.name for b in parameters_pool(WEIGHTS)]
-    legal = {t for t in topologies if TOPOLOGY_MODE[t] in backend.consumes[WEIGHTS]}
+    legal = {
+        b.name for b in parameters_pool(WEIGHTS) if b.mode in backend.consumes[WEIGHTS]
+    }
     assert EMBEDDED not in legal
     assert DECOUPLED in legal
 
 
 def _restricted_kernel(consumes):
     """A minimal MVU-shaped Kernel whose single backend declares ``consumes`` for weights,
-    composed with the weights parameters pool under the same consumption-mode guard MVAU
-    uses — so the restriction is exercised through a real ``resolve``, not just the filter
-    math. Mirrors ``_params_subschema``/``_topology_domain`` generically (no MVAU internals)."""
-    from dataclasses import replace
-
+    delivering the weights pool through the GENERIC ``delivered_parameters`` wiring — so the
+    restriction is exercised through the real ``space/delivery.py`` guard + a real ``resolve``,
+    not a hand-rolled copy. This is exactly the wiring MVAU now uses (no MVAU internals)."""
     ifaces = (
         Interface("inp", Direction.IN, block=[1, FULL]),
         Interface("weights", Direction.IN, block=[FULL, FULL]),
@@ -162,29 +167,12 @@ def _restricted_kernel(consumes):
         stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
         consumes=consumes,
     )
-
-    def legal(p):
-        modes = backend.consumes.get(WEIGHTS) or frozenset({CONSTANT, STREAM})
-        topos = [b.name for b in parameters_pool(WEIGHTS)]
-        return tuple(t for t in topos if TOPOLOGY_MODE[t] in modes)
-
-    def topology_domain(p, ctx):
-        return frozenset(legal(p))
-
-    params = pool_schema(topology_key(WEIGHTS), (), (), (), parameters_pool(WEIGHTS))
-    root = params.axes[0]
-
-    def topology_default(p, ctx):
-        allowed = legal(p)
-        d = root.default(p, ctx)
-        return d if d in allowed else (allowed[0] if allowed else d)
-
-    guarded = replace(root, domain=topology_domain, default=topology_default)
-    params = replace(params, axes=(guarded,) + tuple(params.axes[1:]))
     return Kernel(
         identity=KernelSchema(name="MVU", interfaces=ifaces),
         pool=(backend,),
-        sub_schemas=(params,),
+        delivered_parameters=(
+            DeliveredParam(WEIGHTS, lambda p, ctx: 1, pool=parameters_pool(WEIGHTS)),
+        ),
     )
 
 

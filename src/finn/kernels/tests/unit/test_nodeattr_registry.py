@@ -15,7 +15,8 @@ selected implementation.
 """
 
 from finn.kernels.ops.mvau import mvau_kernel
-from finn.kernels.ops.parameters.names import WEIGHTS, ram_style_key
+from finn.kernels.ops.parameters.names import WEIGHTS
+from finn.kernels.space.param_names import ram_style_key
 from finn.kernels.adapter.nodeattr_registry import axis_nodeattr_types
 
 
@@ -69,7 +70,9 @@ def test_ram_style_unions_across_topologies():
 
 
 def test_binary_flag_axis_is_int_with_membership():
-    spec = _reg()["noActivation"]
+    # binaryXnorMode is the surviving {0,1} discrete axis (noActivation was dissolved into
+    # the emergent thresholds-initializer existence, so it is no longer a nodeattr axis).
+    spec = _reg()["binaryXnorMode"]
     assert spec[0] == "i"
     assert spec[3] == frozenset({0, 1})
 

@@ -39,7 +39,11 @@ from finn.util.basic import get_liveness_threshold_cycles, make_build_dir
 from finn.kernels.space import Context, resolve
 from finn.kernels.ops.mvau import mvau_schema, MVAU_DSP_SOFTVEC
 from finn.kernels.ops.mvau.compose_emit import emit_composed
-from finn.kernels.ops.parameters.names import DECOUPLED, RAM_STYLE, TOPOLOGY
+from finn.kernels.ops.parameters.names import DECOUPLED, WEIGHTS
+from finn.kernels.space.param_names import ram_style_key, topology_key
+
+RAM_STYLE = ram_style_key(WEIGHTS)
+TOPOLOGY = topology_key(WEIGHTS)
 
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"
 CLK_NS = 5.0
@@ -63,7 +67,7 @@ def _setup():
     )
     point = resolve(mvau_schema(), ctx, {
         "implementation": MVAU_DSP_SOFTVEC, "PE": PE, "SIMD": SIMD, "resType": "dsp",
-        "noActivation": 1, TOPOLOGY: DECOUPLED, RAM_STYLE: "block",
+        TOPOLOGY: DECOUPLED, RAM_STYLE: "block",
     })
     return ctx, point, W, X, idt, odt
 

@@ -25,10 +25,10 @@ from __future__ import annotations
 
 from finn.kernels.space import Artifacts
 from finn.kernels.space.stitch import Cell, stitch
-from finn.kernels.ops.parameters import parameters_pool
-from finn.kernels.ops.parameters.names import WEIGHTS, topology_key
+from finn.kernels.space.param_names import topology_key
 
 from . import mvau_pool
+from .op import mvau_kernel
 
 
 def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
@@ -40,17 +40,22 @@ def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
     cells = [Cell(instance=module_name, module=module_name, ports=compute_arts.ports)]
     merged = compute_arts
 
-    delivery_arts = _emit_delivery(point, context, module_name)
-    if delivery_arts is not None:
-        wstrm = f"{module_name}_wstrm"
-        cells.append(
-            Cell(
-                instance=wstrm,
-                module=f"{module_name}_memstream_wrapper",
-                ports=delivery_arts.ports,
+    # One delivery cell per DELIVERED PARAMETER whose selected topology streams (constant-mode
+    # topologies have emit=None → no cell, e.g. embedded weights or the always-constant fused
+    # thresholds). Iterate the Kernel's declared delivered_parameters so a second interface
+    # needs no change here — symmetric with the generic resolve-side wiring (space/delivery.py).
+    for dp in mvau_kernel().delivered_parameters:
+        delivery_arts = _emit_delivery(point, context, module_name, dp)
+        if delivery_arts is not None:
+            strm = f"{module_name}_{dp.iface}strm"
+            cells.append(
+                Cell(
+                    instance=strm,
+                    module=f"{module_name}_memstream_wrapper",
+                    ports=delivery_arts.ports,
+                )
             )
-        )
-        merged = merged.merge(delivery_arts)
+            merged = merged.merge(delivery_arts)
 
     commands = stitch(tuple(cells), region_name=module_name)
     # Replace the merged (per-emit, hand-built) IPI with the resolver's output — the
@@ -72,15 +77,14 @@ def _emit_compute(point, context, module_name):
     return bundle.emit(point, context, module_name)
 
 
-def _emit_delivery(point, context, module_name):
-    """Dispatch the selected parameters topology's emit for the ``weights`` interface, or
-    None when the topology has no streamer (embedded / ``constant`` mode, ``emit=None``).
-    Looks the bundle up by the pool's own (interface-keyed) root axis so a new topology
-    needs no change here. Calls the emit directly (rather than ``emit_point``) to thread
-    ``module_name`` into the wrapper name. Weights is the only stream-mode parameter
-    interface this increment; a second interface adds another delivery cell here."""
-    topo = point[topology_key(WEIGHTS)]
-    bundle = {b.name: b for b in parameters_pool(WEIGHTS)}[topo]
+def _emit_delivery(point, context, module_name, dp):
+    """Dispatch the selected delivery topology's emit for one delivered parameter, or None
+    when the topology has no streamer (``constant`` mode / ``emit=None`` — embedded weights or
+    the always-constant fused thresholds). Looks the bundle up by the interface-keyed root axis
+    from the DeliveredParam's own pool, so a new topology or interface needs no change here.
+    Calls the emit directly (not ``emit_point``) to thread ``module_name`` + the interface."""
+    topo = point[topology_key(dp.iface)]
+    bundle = {b.name: b for b in dp.pool}[topo]
     if bundle.emit is None:
         return None
-    return bundle.emit(point, context, module_name, WEIGHTS)
+    return bundle.emit(point, context, module_name, dp.iface)

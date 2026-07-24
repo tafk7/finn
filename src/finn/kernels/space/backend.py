@@ -87,6 +87,13 @@ class Backend:
             regresses nothing. "embedded" is not a delivery topology but the ``constant``
             mode (consumption-mode-delivery.md). A flat second per-interface dict beside
             ``stream`` for now; a future InterfaceSchema may group them.
+        mode: for a DELIVERY-pool member (a storage topology), the CONSUMPTION MODE it
+            presents — ``"constant"`` (baked into the core, no port) or ``"stream"`` (an
+            AXIS port). A topology CARRIES its own mode here, so the generic delivery guard
+            reads ``topology.mode`` vs a compute backend's ``consumes[iface]`` — both
+            ``Backend`` fields — with no string→mode side-table and no knowledge of the
+            topology's identity string. ``None`` for a compute-pool member (it has no
+            delivery mode; it CONSUMES modes via ``consumes``).
     """
 
     name: str
@@ -98,6 +105,7 @@ class Backend:
     emit: Callable[[Any, Any], "Artifacts"] | None = None
     stream: Mapping[str, Any] = field(default_factory=dict)
     consumes: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    mode: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))

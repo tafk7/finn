@@ -42,12 +42,15 @@ from finn.kernels.space import Context, resolve, emit_point
 from finn.kernels.ops.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
 from finn.kernels.ops.parameters import parameters_pool
 from finn.kernels.ops.parameters.names import (
+    DECOUPLED,
     DECOUPLED as PARAM_DECOUPLED,
-    EMBEDDED,
-    RAM_STYLE as PARAM_RAM_STYLE,
-    TOPOLOGY as PARAM_TOPOLOGY,
-    TOPOLOGY,
+    WEIGHTS,
 )
+from finn.kernels.space.param_names import ram_style_key, topology_key
+
+# The delivery pool is composed per parameter interface; MVAU's live one is ``weights``.
+PARAM_TOPOLOGY = TOPOLOGY = topology_key(WEIGHTS)
+PARAM_RAM_STYLE = ram_style_key(WEIGHTS)
 
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"  # Versal / DSP58
 CLK_NS = 5.0
@@ -62,6 +65,10 @@ def _make_mvau_model(W, pe, simd, wdt, idt, odt):
         domain="finn.custom_op.fpgadataflow", backend="fpgadataflow",
         MW=mw, MH=mh, SIMD=simd, PE=pe,
         inputDataType=idt.name, weightDataType=wdt.name, outputDataType=odt.name,
+        # This is the BASE-FINN MVAU op, which still declares noActivation — set it to 1
+        # (no-activation) to match our hermetic embedded-weights compute core. (Our KernelOp
+        # dissolved noActivation into the emergent thresholds tensor; base FINN did not, so it
+        # must be set explicitly here.)
         ActVal=0, binaryXnorMode=0, noActivation=1, mem_mode="internal_embedded",
     )
     # A trivial successor so the MVAU is NOT graph-terminal. FINN's
@@ -87,9 +94,12 @@ def _finn_context_point(W, pe, simd, wdt, idt, odt, impl, restype):
         initializers={"weights": W},
         fpgapart=FPGAPART, clk_ns=CLK_NS,
     )
+    # Compute-half emit is topology-independent; use a topology legal for the given core —
+    # DSP is streamed-weight-only (embedded illegal), HLS supports both. decoupled is legal
+    # for both, so use it uniformly here.
     point = resolve(mvau_schema(), ctx, {
         "implementation": impl, "PE": pe, "SIMD": simd, "resType": restype,
-        TOPOLOGY: EMBEDDED, "noActivation": 1,
+        TOPOLOGY: DECOUPLED,
     })
     return ctx, point
 
@@ -247,7 +257,7 @@ def diff_memstream():
     )
     point = resolve(mvau_schema(), ctx, {
         "implementation": MVAU_HLS, "PE": pe, "SIMD": simd, "resType": "lut",
-        "noActivation": 1, PARAM_TOPOLOGY: PARAM_DECOUPLED, PARAM_RAM_STYLE: "block",
+        PARAM_TOPOLOGY: PARAM_DECOUPLED, PARAM_RAM_STYLE: "block",
     })
     arts = emit_point(parameters_pool(), point, ctx, root=PARAM_TOPOLOGY)
     ours_v = arts.generated[0].content()

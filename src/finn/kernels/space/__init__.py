@@ -54,6 +54,8 @@ from .predicate import Predicate, predicate
 from .resolve import resolve
 from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
+from .demand import ParamDemand
+from .delivery import DeliveredParam, delivery_subschemas
 from .kernel import Interface, Kernel, KernelError, KernelSchema
 from .tiling import (
     FULL,
@@ -121,6 +123,9 @@ __all__ = [
     "KernelSchema",
     "Interface",
     "KernelError",
+    "ParamDemand",
+    "DeliveredParam",
+    "delivery_subschemas",
     "TileExpr",
     "TileError",
     "Ref",

@@ -41,6 +41,7 @@ from finn.kernels.adapter import KernelOp, PortSpec
 from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
     FULL,
+    DeliveredParam,
     Derived,
     Direction,
     Illegal,  # noqa: F401  (kept available for callers/tests)
@@ -48,21 +49,19 @@ from finn.kernels.space import (
     Kernel,
     KernelSchema,
     Role,
-    Schema,
     discrete_axis,
     fixed_axis,
     predicate,
     predicate_axis,
-    stream_width_key,
 )
+from finn.kernels.space.param_names import runtime_writeable_key
 from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
-from finn.kernels.ops.parameters import ParamDemand, parameters_pool, parameters_schema
-from finn.kernels.ops.parameters.names import (
-    ALL_MODES,
-    TOPOLOGY_MODE,
-    demand_key,
-    runtime_writeable_key,
-    topology_key,
+from finn.kernels.ops.parameters import parameters_pool
+from finn.kernels.ops.thresholding.shared import (
+    _num_steps_default,
+    _threshold_datatype,
+    _threshold_shape_matches_steps,
+    _unsigned_input_nonneg_thresholds,
 )
 
 from .registry import build_pool
@@ -82,6 +81,11 @@ MVAU_DSP_PACKED = "mvau_dsp_packed"
 WEIGHTS = "weights"
 INPUT = "inp"
 OUTPUT = "out"
+# The optional activation-threshold operand. Shares the spelling with the standalone
+# Thresholding op, so ``ctx.initializer(THRESHOLDS)`` reads the same node slot. Present iff
+# the fused node has a threshold initializer (a 3-input node) — the emergent existence that
+# supersedes the declared ``noActivation`` flag.
+THRESHOLDS = "thresholds"
 
 
 # =============================================================================
@@ -101,6 +105,12 @@ def mvau_interfaces():
     return (
         Interface("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
         Interface("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
+        # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff
+        # a threshold initializer is attached (a 3-input node); absent nodes skip it in every
+        # Context-reading loop. ALWAYS constant in the fused core (baked into thresh.h — no
+        # port, no stream), so no impl declares a `stream` fold for it: it carries only
+        # identity (block + the Context tensor binding) for the threshold deriveds/predicates.
+        Interface("thresholds", Direction.IN, block=[FULL, FULL], optional=True),
         # dtype_source="outputDataType": the stream width uses the derived output type
         # (= accDataType under noActivation), not the raw graph dtype — so the generated
         # stream_width.out matches the emit-side value.
@@ -115,10 +125,6 @@ def mvau_interfaces():
 # =============================================================================
 
 # -- small guard/helper functions (named, not lambdas, for legible tracebacks) --
-
-
-def _has_activation(p) -> bool:
-    return p.noActivation == 0
 
 
 def weights_may_change(p) -> bool:
@@ -168,22 +174,14 @@ def op_axes():
         # engine derives from each impl's `stream`. MW/MH survive only as emit-facing
         # migration aliases (see op_derived below).
         # --- activation / threshold cluster ----------------------------------
-        discrete_axis("noActivation", {0, 1}, 0),
-        predicate_axis(
-            "ActVal",
-            "int",
-            lambda v: isinstance(v, int),
-            0,
-            guard=_has_activation,
-            deps={"noActivation"},
-        ),
-        discrete_axis(
-            "ram_style_thresholds",
-            {"auto", "block", "distributed"},
-            "auto",
-            guard=_has_activation,
-            deps={"noActivation"},
-        ),
+        # noActivation is GONE: whether the fused MVU has an activation is EMERGENT —
+        # ``ctx.initializer(THRESHOLDS) is not None`` (a 3-input node). The old declared flag
+        # + its guards dissolve into that Context read (the same declared-slot / emergent-
+        # existence motion as role emergence). ActVal is now an always-present bias axis (as
+        # in the standalone Thresholding op); it is simply unused on a no-threshold node.
+        # ram_style_thresholds is dropped: thresholds are constant-only in the fused core
+        # (baked into thresh.h, no threshold RAM), so there is no ram-style choice to make.
+        predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
         discrete_axis("binaryXnorMode", {0, 1}, 0),
         # numInputVectors is NOT an axis — it IS the input tensor's leading (non-reduction)
         # dims (FINN: get_normal_input_shape = numInputVectors + [MW]). Derived from the
@@ -212,7 +210,9 @@ def _wmem(p, ctx):
 
 
 def _tmem(p, ctx):
-    return p.MH // p.PE if p.noActivation == 0 else 0
+    # TMEM = threshold memory depth = MH/PE when the node HAS thresholds, else 0. Emergent:
+    # the presence of a threshold initializer, not the old declared noActivation flag.
+    return p.MH // p.PE if _has_thresholds(ctx) else 0
 
 
 def _acc_datatype(p, ctx):
@@ -249,10 +249,43 @@ def _weight_datatype(p, ctx):
 
 
 def _output_datatype(p, ctx):
-    # base:517 — outputDataType = accDataType when noActivation, else the graph dtype.
-    if p.noActivation == 1:
+    # base:517 — outputDataType = accDataType when there is NO activation (output IS the
+    # accumulator), else the graph output dtype (the thresholds map the accumulator down).
+    # Emergent: no threshold initializer ⇒ no activation.
+    if not _has_thresholds(ctx):
         return _acc_datatype(p, ctx)
     return ctx.tensor_datatype(OUTPUT)
+
+
+# -- threshold identity — present iff a threshold initializer is attached ---------
+#
+# The fused MVU's thresholds operand is OPTIONAL (a 3-input node). Existence is emergent:
+# ``ctx.initializer(THRESHOLDS) is not None``. These reuse the STANDALONE Thresholding op's
+# helpers (imported), wrapped so they no-op (return None / pass) on a no-threshold node
+# rather than KeyError-ing on the absent tensor — the identity carries a live value only
+# when the operand is present.
+
+
+def _has_thresholds(ctx) -> bool:
+    return ctx.initializer(THRESHOLDS) is not None
+
+
+def _num_steps(p, ctx):
+    # numSteps = the threshold tensor's step dim (standalone _num_steps_default), or None
+    # when the node has no thresholds. Defensive on a malformed (non-2-D) tensor: return
+    # None so the shape PREDICATE emits the clean legality error rather than this derived
+    # crashing first (deriveds run before predicates).
+    if not _has_thresholds(ctx):
+        return None
+    if len(ctx.tensor_shape(THRESHOLDS)) != 2:
+        return None
+    return _num_steps_default(p, ctx)
+
+
+def _threshold_dtype(p, ctx):
+    # thresholdDataType = value-narrowed threshold dtype (standalone _threshold_datatype),
+    # or None when absent. Mirrors the weight-dtype derive.
+    return _threshold_datatype(p, ctx) if _has_thresholds(ctx) else None
 
 
 def _identity_geometry_derived():
@@ -280,6 +313,9 @@ def _identity_dtype_derived():
         Derived("accDataType", _acc_datatype),
         Derived("weightDataType", _weight_datatype),
         Derived("outputDataType", _output_datatype),
+        # threshold identity — live values iff the operand is present, else None.
+        Derived("numSteps", _num_steps),
+        Derived("thresholdDataType", _threshold_dtype),
     )
 
 
@@ -288,12 +324,13 @@ def op_derived():
     # the dtype contract; WMEM/TMEM read MW/MH). NOT here, by design:
     #   * `stream_width.<iface>` — the tiling engine generates one per interface from each
     #     impl's `stream` folds (the `out` interface's dtype_source="outputDataType" gives it
-    #     the accumulator type under noActivation).
+    #     the accumulator type when the node has no activation).
     #   * `weight_stream_width` — a per-TOPOLOGY fact (0 embedded / demand bit_rate decoupled)
-    #     owned by the parameters pool.
-    #   * `parameters.demand` — the DEMAND stage of the supply waterfall (`demand_schema()`),
-    #     a composed sub_schema between the compute pool and the parameters pool (it reads the
-    #     compute pool's resolved `stream_width.weights`, only present AFTER compute tiling).
+    #     owned by the delivery pool.
+    #   * `parameters.<iface>.demand` — the DEMAND stage of the supply waterfall, synthesized
+    #     generically by the Kernel from the declared `delivered_parameters` (space/delivery.py),
+    #     between the compute pool and the delivery pool (it reads the compute pool's resolved
+    #     `stream_width.<iface>`, only present AFTER compute tiling).
     return _identity_geometry_derived() + _identity_dtype_derived()
 
 
@@ -323,16 +360,30 @@ def _weights_present(p, ctx):
     return None
 
 
-# NOTE (audit F2, DROPPED): a `bipolar x bipolar => nonneg thresholds` predicate used
-# to live here, but it checked the scalar `ActVal` (the threshold activation's bias,
-# base:156) whereas FINN's assertion is over the THRESHOLD TENSOR VALUES
-# (`orig_thres_matrix >= 0`, base:578) — a different object. The Context models
-# inp/weights/out; thresholds are NOT a first-class Context tensor, so the correct
-# action is to drop it. Reinstate when thresholds become a Context tensor.
+# Threshold legality — reinstated now that thresholds ARE a first-class Context tensor
+# (the F2 drop-note below was explicit: "Reinstate when thresholds become a Context tensor").
+# Both reuse the standalone Thresholding op's predicates, wrapped to no-op on a no-threshold
+# node (the operand is optional). FINN's assertion is over the THRESHOLD TENSOR VALUES
+# (`orig_thres_matrix >= 0`, base:578) / the 2-D (NumChannels, numSteps) shape — exactly what
+# the standalone predicates check, now that the tensor exists.
+
+
+@predicate("threshold tensor is 2D with shape[1] == numSteps (when present)")
+def _mvau_threshold_shape(p, ctx):
+    if not _has_thresholds(ctx):
+        return None
+    return _threshold_shape_matches_steps.check(p, ctx)
+
+
+@predicate("unsigned input => thresholds >= 0 (when present)")
+def _mvau_threshold_nonneg(p, ctx):
+    if not _has_thresholds(ctx):
+        return None
+    return _unsigned_input_nonneg_thresholds.check(p, ctx)
 
 
 def op_predicates():
-    return (_weights_present,)
+    return (_weights_present, _mvau_threshold_shape, _mvau_threshold_nonneg)
 
 
 # =============================================================================
@@ -354,118 +405,14 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# 5. DEMAND — the compute→memory DEMAND stage of the supply waterfall.
-#    The op no longer reaches into memstream: the DEMAND stage publishes ONE
-#    realization-free ParamDemand (what the compute core consumes of its weight
-#    interface), sourced from the RESOLVED interface geometry (stream_width.weights +
-#    block extents), NOT from named backend dials. The selected parameters topology
-#    sizes ITS OWN geometry from it (impl_decoupled.py). This is the compute→memory
-#    demand channel (param-delivery-design-space.md §4 Level-1 / §7 Q1;
-#    interface-supply-waterfall.md Q1): the memory backend owns memstream
-#    width/depth/sets/init_file + the pumped/URAM gates + weight_stream_width; the
-#    demand stage owns only the (realization-free) demand.
+# 5. DELIVERY — the compute→memory supply waterfall is now GENERIC (space/delivery.py).
+#    The op no longer hand-wires the DEMAND stage or the topology-mode guard: it DECLARES
+#    which interfaces it delivers + each one's CADENCE (see mvau_kernel's
+#    delivered_parameters), and the Kernel synthesizes the (demand, guarded delivery
+#    sub-schema) pair generically — reading each compute backend's `consumes` and each
+#    topology's `mode`. The memory backend still owns its own realization (memstream
+#    width/depth/sets/init_file + the pumped/URAM gates), sized from the published demand.
 # =============================================================================
-
-
-def _demand_for(iface):
-    """The compute core's DEMAND on parameter interface ``iface``, as a resolve closure.
-
-    Sourced from the RESOLVED interface geometry — NOT from named backend dials
-    (PE/SIMD/WMEM). This is the supply-waterfall's DEMAND stage: it reads what the COMPUTE
-    stage produced (``stream_width.<iface>``, the tiling engine's per-interface resolved
-    width) and the block extents, so a tiled/systolic/packed backend that folds the
-    interface in its own terms works automatically (interface-supply-waterfall.md Q1).
-
-    Returns ``None`` (nothing to deliver) in two emergent cases:
-
-    * **no initializer** — the interface is a live activation (e.g. dynamic matmul operand
-      B), not a stored parameter; it streams in like any dataflow edge, the delivery pool
-      sizes to nothing, the port exports as a boundary. Dissolves the dynamic-matmul case
-      with no special flag (resolution-phases.md: a Context-reading fact is a phase-3
-      closure).
-    * **constant consumption mode** — the selected topology bakes the parameter into the
-      compute core (``embedded`` = the ``constant`` mode, consumption-mode-delivery.md);
-      there is no stream to size, so no demand. The topology domain was itself already
-      filtered to the compute backend's consumable modes (see ``_topology_domain``).
-    """
-    width_key = stream_width_key(iface)
-
-    def compute(p, ctx):
-        if ctx.initializer(iface) is None:
-            return None
-        if TOPOLOGY_MODE[p[topology_key(iface)]] == "constant":
-            return None
-        width_bits = int(p[width_key])  # resolved stream width (PE*SIMD*wbits)
-        elem_bits = ctx.tensor_datatype(iface).bitwidth()
-        parallelism = width_bits // elem_bits  # elements/cycle, in the backend's own fold
-        block = ctx.tensor_shape(iface)  # the block extents (MW, MH for weights)
-        depth = _prod(block) // parallelism  # words/set = WMEM, from geometry not p.WMEM
-        return ParamDemand(
-            parallelism=parallelism,
-            elem_bits=elem_bits,
-            depth=depth,
-            cadence=1,  # weights consumed once per layer; thresholds per-activation (later)
-        )
-
-    return compute
-
-
-def _prod(shape) -> int:
-    out = 1
-    for d in shape:
-        out *= int(d)
-    return out
-
-
-def _topology_domain(iface):
-    """A domain override for ``parameters.<iface>.topology`` that keeps only the storage
-    topologies whose CONSUMPTION MODE the selected compute backend can consume for this
-    interface (consumption-mode-delivery.md §2c).
-
-    The compute backend is master: it declares, per interface, which modes it consumes
-    (``Backend.consumes``); delivery provisions to that. An interface the backend says
-    nothing about is PERMISSIVE (both modes) — so the default is today's full topology set
-    (embedded default), and nothing regresses until a backend declares a restriction. Reads
-    the resolved ``implementation`` (a phase-3 cross-coordinate coupling — hence appended by
-    the op before ``compose``, where both the compute pool and the parameters pool are in
-    scope; backend.py:189-192)."""
-    topologies = tuple(b.name for b in parameters_pool(iface))
-
-    def legal(p):
-        # Defensive read: during real resolve `implementation` is fixed before this axis;
-        # under a bare probe point (nodeattr-registry typing) it is absent → permissive
-        # (all modes), which is exactly the no-restriction default.
-        impl = p.get("implementation") if hasattr(p, "get") else None
-        backend = {b.name: b for b in mvau_pool()}.get(impl)
-        modes = (backend.consumes.get(iface) if backend else None) or ALL_MODES
-        return tuple(t for t in topologies if TOPOLOGY_MODE[t] in modes)
-
-    return lambda p, ctx: frozenset(legal(p)), legal
-
-
-def _topology_default(iface, base_default, legal):
-    """The topology axis's default, guarded to the consumable modes: keep the pool's own
-    first-registered default (``embedded``) when the selected backend can consume it, else
-    fall to the first in-domain topology (a stream-only backend defaults to the first
-    streamer). Prevents an out-of-domain default from making an unpinned topology illegal."""
-
-    def default(p, ctx):
-        allowed = legal(p)
-        d = base_default(p, ctx)
-        return d if d in allowed else (allowed[0] if allowed else d)
-
-    return default
-
-
-def demand_schema(iface) -> Schema:
-    """The DEMAND stage of the supply waterfall as a derived-only schema for one parameter
-    interface, composed BETWEEN the compute pool and the parameters (memory) pool. It exists
-    as its own compose stage — not in ``op_derived`` — because the demand reads the tiling
-    engine's resolved ``stream_width.<iface>`` (and the resolved topology mode), both
-    generated by earlier compose stages and so only on the point AFTER them (resolve
-    computes deriveds in schema order: op_derived → compute-pool tiling → THIS → parameters
-    pool). Encoding COMPUTE→DEMAND→MEMORY as compose order makes the waterfall structural."""
-    return Schema(axes=(), derived=(Derived(demand_key(iface), _demand_for(iface)),), predicates=())
 
 
 # =============================================================================
@@ -496,54 +443,44 @@ def mvau_pool():
     return build_pool()
 
 
-def _params_subschema(iface) -> Schema:
-    """The parameters pool for ``iface`` with its topology root axis's domain overridden to
-    the consumption-mode guard (``_topology_domain``): only topologies the selected compute
-    backend can consume for this interface remain selectable. This is the cross-coordinate
-    coupling the op owns — it reads BOTH the compute ``implementation`` and the parameters
-    topology, so it is applied HERE (the op has both pools in scope), not inside the
-    standalone ``parameters_schema`` (backend.py:189-192).
+def _weight_cadence(p, ctx) -> int:
+    # Weights are consumed once per layer.
+    return 1
 
-    The domain reads the resolved ``implementation``; ``compose`` appends this topology axis
-    after the compute pool's ``implementation`` axis (which is first), and ``_topo_sort``
-    preserves input order among independent axes, so resolve always fixes the compute backend
-    before this domain runs. (A ``deps={"implementation"}`` declaration would be more explicit
-    but cannot live on the STANDALONE parameters schema, where ``implementation`` is absent,
-    so the ordering is relied on, exactly as the existing merged param axes rely on the
-    topology root resolving before them.)"""
-    from dataclasses import replace
 
-    schema = parameters_schema(iface)
-    root = schema.axes[0]  # pool_schema emits the root topology axis first
-    domain, legal = _topology_domain(iface)
-    guarded = replace(
-        root, domain=domain, default=_topology_default(iface, root.default, legal)
+def _threshold_cadence(p, ctx) -> int:
+    # Thresholds are consumed once per ACTIVATION output beat: cadence = prod(folded_in[:-1])
+    # = prod(numInputVectors) — the TAP_REP (param-delivery-design-space.md §3.1). folded_in is
+    # numInputVectors + [MW/SIMD]; its leading dims [:-1] are exactly numInputVectors (the input
+    # tensor's non-reduction dims), so the threshold memory is re-traversed once per output
+    # vector. Sized from resolved geometry (numInputVectors is an op derived), same waterfall
+    # stage as demand. In the fused core thresholds are constant (demand=None), so this does not
+    # yet size a streamer — but it is the real quantity a decoupled/MLO threshold variant needs.
+    return int(np.prod(p.numInputVectors))
+
+
+# The parameter interfaces this op delivers, as DeliveredParam declarations (WHAT + cadence);
+# the generic Kernel wiring (space/delivery.py) owns the HOW. ``weights`` is always live;
+# ``thresholds`` is the optional activation operand (present iff its initializer is attached,
+# always constant-mode in the fused core → demand None → baked into thresh.h).
+def _delivered_parameters():
+    return (
+        DeliveredParam("weights", _weight_cadence, pool=parameters_pool(WEIGHTS)),
+        DeliveredParam(THRESHOLDS, _threshold_cadence, pool=parameters_pool(THRESHOLDS)),
     )
-    return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))
-
-
-# The parameter interfaces this op delivers through the parameters pool. Only ``weights``
-# is live (initializer-backed) this increment; a thresholds interface joins here once it is
-# a first-class Context tensor — one more (demand_schema, _params_subschema) pair, no engine
-# change (consumption-mode-delivery.md §6).
-_PARAM_INTERFACES = (WEIGHTS,)
 
 
 def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
-    tiling, composed — PER parameter interface — with that interface's DEMAND stage and then
-    its PARAMETERS pool (``parameters.<iface>.topology``). The ``sub_schemas`` order IS the
-    supply waterfall COMPUTE→DEMAND→MEMORY: the demand stage reads the compute pool's
-    resolved ``stream_width.<iface>`` and publishes ``parameters.<iface>.demand``; the
-    selected delivery topology (whose domain is guarded to the backend's consumable modes)
-    then sizes its own memstream geometry + ports from that demand — the op no longer brokers
-    memstream realization. The getters project from a resolved point via the impl
-    ``stream``."""
-    sub_schemas = ()
-    for iface in _PARAM_INTERFACES:
-        sub_schemas += (demand_schema(iface), _params_subschema(iface))
+    tiling, plus DECLARED delivered parameters (weights + thresholds). The Kernel synthesizes
+    the supply waterfall COMPUTE→DEMAND→MEMORY per interface generically (space/delivery.py):
+    the demand stage reads the compute pool's resolved ``stream_width.<iface>`` and publishes
+    ``parameters.<iface>.demand``; the selected delivery topology (its domain guarded to the
+    backend's consumable modes) then sizes its own memstream geometry from that demand — the
+    op no longer brokers memstream realization or the topology guard. The getters project from
+    a resolved point via the impl ``stream``."""
     return Kernel(
         identity=KernelSchema(
             name="MVAU",
@@ -553,11 +490,11 @@ def mvau_kernel() -> Kernel:
             op_predicates=op_predicates(),
         ),
         pool=mvau_pool(),
-        sub_schemas=sub_schemas,
+        delivered_parameters=_delivered_parameters(),
     )
 
 
-def mvau_schema() -> Schema:
+def mvau_schema():
     """The full MVAU design space as a resolve ``Schema`` — delegates to
     :func:`mvau_kernel` (identical assembly). Kept as the name emit/composition tests
     resolve against."""
@@ -578,6 +515,11 @@ def mvau_schema() -> Schema:
 _PORTS = (
     PortSpec(iface="inp", direction="in", index=0, role=Role.DATA_IN),
     PortSpec(iface="weights", direction="in", index=1, role=Role.WEIGHT_SINK),
+    # thresholds — the OPTIONAL 3rd input (a 3-input fused MVU). WEIGHT_SINK: a parameter the
+    # kernel consumes internally (always baked/constant here). Skipped by the adapter when the
+    # node omits the slot (a 2-input node), so its Context tensor is absent — the emergent
+    # existence that supersedes noActivation.
+    PortSpec(iface="thresholds", direction="in", index=2, role=Role.WEIGHT_SINK, optional=True),
     PortSpec(iface="out", direction="out", index=0, role=Role.DATA_OUT),
 )
 
@@ -592,9 +534,10 @@ class MvauKernelOp(KernelOp):
         return _PORTS
 
     def _output_datatype_from_point(self, kernel, ctx, point, index):
-        # MVAU's outputDataType is a resolved derived: the graph dtype when forwarding,
-        # or the weight-derived accumulator type under noActivation. Read it off the
-        # point so infer propagates the exact (possibly narrowed) type.
+        # MVAU's outputDataType is a resolved derived: the graph dtype when the node has
+        # thresholds (they map the accumulator down), or the weight-derived accumulator type
+        # when it has none. Read it off the point so infer propagates the exact (possibly
+        # narrowed) type.
         if index == 0 and "outputDataType" in point:
             return point["outputDataType"]
         return super()._output_datatype_from_point(kernel, ctx, point, index)

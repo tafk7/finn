@@ -40,7 +40,7 @@ from finn.kernels.space import stitch as stitch_module_ref  # for the guard grep
 from finn.kernels.ops.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
 from finn.kernels.ops.mvau.compose_emit import emit_composed
 from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, WEIGHTS
-from finn.kernels.ops.parameters.names import ram_style_key, topology_key
+from finn.kernels.space.param_names import ram_style_key, topology_key
 
 # Composed for the ``weights`` interface -> ``parameters.weights.*`` point keys.
 RAM_STYLE = ram_style_key(WEIGHTS)
@@ -66,7 +66,6 @@ def _point(ctx, topo=DECOUPLED, impl=MVAU_DSP_SOFTVEC, **extra):
         "PE": 2,
         "SIMD": 2,
         "resType": "lut" if impl == MVAU_HLS else "dsp",
-        "noActivation": 1,
         TOPOLOGY: topo,
     }
     if topo == DECOUPLED:
@@ -84,13 +83,15 @@ def test_decoupled_binds_weight_net():
     cmds = arts.ipi.commands
     # two cells instantiated
     assert sum(c.startswith("create_bd_cell") for c in cmds) == 2
-    # THE weight net: memstream m_axis_0 -> compute in1_V, by role, not by pin lookup
+    # THE weight net: memstream m_axis_0 -> compute in1_V, by role, not by pin lookup. The
+    # delivery cell is namespaced per interface (``{module}_{iface}strm``) so a second stream
+    # interface never collides — weights' cell is ``mvau_top_weightsstrm``.
     net = [c for c in cmds if "connect_bd_intf_net" in c]
-    assert any("mvau_top/in1_V" in c and "mvau_top_wstrm/m_axis_0" in c for c in net)
+    assert any("mvau_top/in1_V" in c and "mvau_top_weightsstrm/m_axis_0" in c for c in net)
     # clk + rst broadcast: region-level bd_port fans out to each cell's clk pin
     clk = [c for c in cmds if "connect_bd_net" in c and "ap_clk" in c]
     assert any("get_bd_ports ap_clk" in c and "mvau_top/ap_clk" in c for c in clk)
-    assert any("get_bd_ports ap_clk" in c and "mvau_top_wstrm/ap_clk" in c for c in clk)
+    assert any("get_bd_ports ap_clk" in c and "mvau_top_weightsstrm/ap_clk" in c for c in clk)
 
 
 def test_decoupled_exports_data_boundary():
@@ -115,16 +116,13 @@ def test_embedded_has_no_weight_net_and_exports_nothing_extra():
     assert any("in0_V" in c for c in ext) and any("out0_V" in c for c in ext)
 
 
-def test_embedded_rtl_weight_sink_exports_as_boundary():
-    # RTL embedded DOES have an in1_V port (the core reads a weight stream) but no
-    # delivery sibling — so the sink exports up rather than binding. The topology-driven
-    # role behaviour, decided by the resolver, not hardcoded.
-    ctx = _ctx()
-    arts = emit_composed(_point(ctx, EMBEDDED, impl=MVAU_DSP_SOFTVEC), ctx)
-    cmds = arts.ipi.commands
-    assert not any("connect_bd_intf_net" in c for c in cmds)
-    ext = [c for c in cmds if "make_bd_intf_pins_external" in c]
-    assert any("in1_V" in c for c in ext)  # unbound weight sink exported
+# NOTE: the former test_embedded_rtl_weight_sink_exports_as_boundary was REMOVED — it
+# exercised a DSP/RTL core on the `embedded` topology, which is now illegal (the DSP core is
+# streamed-weight-only; base FINN has no embedded-weight RTL path, so its `consumes` is
+# {weights: {stream}} and `embedded` is filtered out of its topology domain). The scenario it
+# tested — a weight-stream port with NO delivery sibling, exporting as a boundary — belongs to
+# the future `external` topology (stream mode, no memstream cell); re-add a boundary-export
+# test there when `external` lands.
 
 
 # ============================================================= the op-agnostic guard
@@ -240,3 +238,29 @@ def test_width_mismatch_raises():
     sink = Cell("b", "m", (Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "s", index=0, width=16),))
     with pytest.raises(StitchError, match="width mismatch"):
         stitch((src, sink), "region")
+
+
+def test_thresholded_hls_node_has_no_threshold_delivery_cell():
+    # A 3-input HLS node with DECOUPLED weights: weights get a delivery cell, but thresholds
+    # are constant (baked into thresh.h) so they add NO delivery cell — exactly two cells
+    # (compute + weight streamer), and only the weight net is wired. Proves emit iterates
+    # delivered parameters and a constant interface contributes no stream.
+    w = np.random.RandomState(0).randint(-7, 7, size=(6, 8)).astype(np.float32)
+    thr = np.sort(np.random.RandomState(1).randint(0, 100, size=(8, 7)).astype(np.float32), axis=1)
+    ctx = Context(
+        shapes={"weights": (6, 8), "inp": (1, 6), "out": (1, 8), "thresholds": (8, 7)},
+        datatypes={
+            "weights": DataType["INT4"], "inp": DataType["INT4"],
+            "out": DataType["INT16"], "thresholds": DataType["INT16"],
+        },
+        initializers={"weights": w, "thresholds": thr},
+        fpgapart=VERSAL, clk_ns=5.0,
+    )
+    point = _point(ctx, DECOUPLED, impl=MVAU_HLS)
+    arts = emit_composed(point, ctx, module_name="mvau_top")
+    cmds = arts.ipi.commands
+    # compute + ONE weight streamer only (no thresholds cell).
+    assert sum(c.startswith("create_bd_cell") for c in cmds) == 2
+    assert not any("thresholdsstrm" in c for c in cmds)
+    # thresh.h is baked into the compute core.
+    assert "thresh.h" in {d.filename for d in arts.data_files}

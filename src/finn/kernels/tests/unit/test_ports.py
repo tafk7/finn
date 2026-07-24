@@ -40,7 +40,7 @@ from finn.kernels.ops.mvau import (
 )
 from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, WEIGHTS, parameters_pool
 from finn.kernels.ops.parameters.emit_memstream import emit_memstream
-from finn.kernels.ops.parameters.names import (
+from finn.kernels.space.param_names import (
     ram_style_key,
     runtime_writeable_key,
     topology_key,
@@ -73,7 +73,6 @@ def _decoupled_point(ctx, impl=MVAU_HLS, pe=2, simd=2, **extra):
         "PE": pe,
         "SIMD": simd,
         "resType": "lut" if impl == MVAU_HLS else "dsp",
-        "noActivation": 1,
         TOPOLOGY: DECOUPLED,
         RAM_STYLE: "block",
     }
@@ -87,7 +86,6 @@ def _embedded_point(ctx, impl=MVAU_HLS, pe=2, simd=2, **extra):
         "PE": pe,
         "SIMD": simd,
         "resType": "lut" if impl == MVAU_HLS else "dsp",
-        "noActivation": 1,
         TOPOLOGY: EMBEDDED,
     }
     a.update(extra)

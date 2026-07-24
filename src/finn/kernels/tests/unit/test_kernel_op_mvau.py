@@ -33,18 +33,20 @@ DOMAIN = "finn.custom_op.fpgadataflow.hls"
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"
 
 
-def _build_model(simd=16, pe=4, noActivation=0, annotate_out=True):
-    """A single-node MVAUKernel_hls graph with geometry baked into nodeattrs."""
-    node = helper.make_node(
-        OP_TYPE,
-        ["inp", "weights"],
-        ["out"],
-        domain=DOMAIN,
-        backend="fpgadataflow",
-        implementation="mvau_hls",
-        SIMD=simd,
-        PE=pe,
-        noActivation=noActivation,
+NUM_STEPS = 7  # thresholds have 2^k-1 steps; a plain positive count is fine for the estimate surface
+
+
+def _build_model(simd=16, pe=4, thresholds=True, annotate_out=True):
+    """A single-node MVAUKernel_hls graph with geometry baked into nodeattrs.
+
+    ``thresholds=True`` builds a 3-input HAS-activation node (a real ``thresholds`` tensor),
+    the default: its output forwards the graph dtype, so the model-free getters stay on the
+    value-INDEPENDENT dtype branch (a no-activation node's output is the weight-derived
+    accumulator, which the placeholder-weight getters cannot compute — that path is asserted
+    via ``infer_node_datatype`` with real weights instead). ``thresholds=False`` builds the
+    2-input no-activation node (``noActivation`` dissolved into the absent 3rd input)."""
+    inputs = ["inp", "weights", "thresholds"] if thresholds else ["inp", "weights"]
+    geom = dict(
         inp_shape=[1, MW],
         inp_dtype="INT8",
         weights_shape=[MW, MH],
@@ -52,13 +54,34 @@ def _build_model(simd=16, pe=4, noActivation=0, annotate_out=True):
         out_shape=[1, MH],
         out_dtype="INT32",
     )
+    if thresholds:
+        # Bake the optional operand's geometry so the model-free getters see it as present
+        # (a 3-input HAS-activation node), mirroring what bake_geometry would snapshot.
+        geom["thresholds_shape"] = [MH, NUM_STEPS]
+        geom["thresholds_dtype"] = "INT16"
+    node = helper.make_node(
+        OP_TYPE,
+        inputs,
+        ["out"],
+        domain=DOMAIN,
+        backend="fpgadataflow",
+        implementation="mvau_hls",
+        SIMD=simd,
+        PE=pe,
+        **geom,
+    )
+    value_info = [
+        helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, MW]),
+        helper.make_tensor_value_info("weights", TensorProto.FLOAT, [MW, MH]),
+    ]
+    if thresholds:
+        value_info.append(
+            helper.make_tensor_value_info("thresholds", TensorProto.FLOAT, [MH, NUM_STEPS])
+        )
     graph = helper.make_graph(
         [node],
         "mvau_kernel_graph",
-        [
-            helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, MW]),
-            helper.make_tensor_value_info("weights", TensorProto.FLOAT, [MW, MH]),
-        ],
+        value_info,
         [helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, MH])],
     )
     model = ModelWrapper(qonnx_make_model(graph))
@@ -67,19 +90,31 @@ def _build_model(simd=16, pe=4, noActivation=0, annotate_out=True):
     if annotate_out:
         model.set_tensor_datatype("out", DataType["INT32"])
     model.set_initializer("weights", np.ones((MW, MH), dtype=np.float32))
+    if thresholds:
+        model.set_tensor_datatype("thresholds", DataType["INT16"])
+        thr = np.sort(
+            np.random.RandomState(2).randint(0, 100, size=(MH, NUM_STEPS)).astype(np.float32),
+            axis=1,
+        )
+        model.set_initializer("thresholds", thr)
     return model
 
 
-def _ctx():
-    """The equivalent pure Context, to cross-check the adapter against the engine."""
+def _ctx(thresholds=True):
+    """The equivalent pure Context, to cross-check the adapter against the engine. Mirrors
+    ``_build_model``: a has-activation node carries a thresholds tensor (its initializer is a
+    placeholder in the model-free getter, so only shape/dtype must line up here)."""
+    shapes = {"inp": (1, MW), "weights": (MW, MH), "out": (1, MH)}
+    datatypes = {"inp": DataType["INT8"], "weights": DataType["INT8"], "out": DataType["INT32"]}
+    initializers = {"weights": np.ones((MW, MH), dtype=np.float32)}
+    if thresholds:
+        shapes["thresholds"] = (MH, NUM_STEPS)
+        datatypes["thresholds"] = DataType["INT16"]
+        initializers["thresholds"] = np.zeros((MH, NUM_STEPS), dtype=np.float32)
     return Context(
-        shapes={"inp": (1, MW), "weights": (MW, MH), "out": (1, MH)},
-        datatypes={
-            "inp": DataType["INT8"],
-            "weights": DataType["INT8"],
-            "out": DataType["INT32"],
-        },
-        initializers={"weights": np.ones((MW, MH), dtype=np.float32)},
+        shapes=shapes,
+        datatypes=datatypes,
+        initializers=initializers,
         fpgapart=FPGAPART,
     )
 
@@ -100,8 +135,11 @@ def test_getcustomop_resolves_to_mvau_kernel_op():
 
 def test_nodeattr_types_include_axes_and_geometry():
     attrs = _inst(_build_model()).get_nodeattr_types()
-    for key in ("implementation", "PE", "SIMD", "noActivation"):
+    for key in ("implementation", "PE", "SIMD", "ActVal"):
         assert key in attrs, f"design axis {key} missing from nodeattr schema"
+    # noActivation is DISSOLVED — it is no longer a design axis (existence is emergent from
+    # the thresholds initializer), so it is absent from the schema.
+    assert "noActivation" not in attrs
     # MW/MH are NOT axes — they are block extents (interface block shapes) + emit-facing
     # migration aliases, so they are not nodeattrs. The geometry is carried by the baked
     # per-interface shape attrs instead.
@@ -147,13 +185,15 @@ def test_number_output_values():
 
 
 def test_infer_datatype_forwards_graph_dtype():
-    model = _build_model(noActivation=0, annotate_out=True)
+    # HAS thresholds -> the activation maps the accumulator down to the graph output dtype.
+    model = _build_model(thresholds=True, annotate_out=True)
     _inst(model).infer_node_datatype(model)
     assert model.get_tensor_datatype("out") == DataType["INT32"]
 
 
 def test_infer_datatype_derives_accumulator_under_noactivation():
-    model = _build_model(noActivation=1, annotate_out=False)
+    # NO thresholds -> the output IS the weight-derived accumulator type (emergent).
+    model = _build_model(thresholds=False, annotate_out=False)
     inst = _inst(model)
     inst.infer_node_datatype(model)
     first = model.get_tensor_datatype("out")

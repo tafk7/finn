@@ -36,6 +36,7 @@ def _feasible_ok(_point, _context) -> None:
 def storage_topology(
     name: str,
     *,
+    mode: str,
     feasible: Callable[[Any, Any], str | None] = _feasible_ok,
     axes: tuple[Axis, ...] = (),
     derived: tuple[Derived, ...] = (),
@@ -45,12 +46,15 @@ def storage_topology(
 ) -> Backend:
     """Declare one storage topology as a parameters-pool member.
 
-    Thin wrapper over :class:`Backend` — same fields, topology-flavoured name.
-    The pool's root axis is ``topology`` (see :func:`parameters_schema`); ``name`` is
-    the value that selects this topology.
+    Thin wrapper over :class:`Backend` — same fields, topology-flavoured name. The pool's
+    root axis is ``topology`` (see :func:`parameters_schema`); ``name`` is the value that
+    selects this topology. ``mode`` is the CONSUMPTION MODE this topology presents
+    (``"constant"``/``"stream"``) — carried on the ``Backend`` so the generic delivery guard
+    reads it structurally (no string→mode side-table).
     """
     return Backend(
         name=name,
+        mode=mode,
         feasible=feasible,
         axes=axes,
         derived=derived,

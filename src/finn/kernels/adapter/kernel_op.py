@@ -58,12 +58,17 @@ class PortSpec:
         index: the FINN port index within that direction (0=activation, 1=weights).
         role: the port-taxonomy Role, so the adapter knows which ports are params
             (needing a placeholder initializer at getter time).
+        optional: whether the node may omit this input slot (an OPTIONAL operand, e.g. MVU
+            thresholds — the emergent-existence interface, ``Interface.optional``). When the
+            node does not wire the slot, the adapter SKIPS the port everywhere (no baked
+            geometry, no Context tensor), so the kernel sees the interface as absent.
     """
 
     iface: str
     direction: str
     index: int
     role: Role
+    optional: bool = False
 
 
 class KernelOp(HWCustomOp):
@@ -105,6 +110,19 @@ class KernelOp(HWCustomOp):
 
     # -- the bridge: nodeattrs -> Context -----------------------------------
 
+    def _baked_ports(self) -> tuple[PortSpec, ...]:
+        """The ports whose geometry is baked (present). A required port is always present;
+        an OPTIONAL port is present only when its shape nodeattr was baked non-empty (the
+        node wired that slot) — an absent optional operand leaves the default ``[]`` and is
+        skipped, so the kernel sees the interface as absent (emergent existence, model-free
+        mirror of ``ctx.initializer`` being None)."""
+        out = []
+        for port in self.ports():
+            if port.optional and not list(self.get_nodeattr(self._shape_key(port.iface))):
+                continue
+            out.append(port)
+        return tuple(out)
+
     def _context(self) -> Context:
         """Build a model-free Context from the baked geometry nodeattrs, keyed to the
         kernel's literal interface tensor names. A WEIGHT-role interface gets a
@@ -114,7 +132,7 @@ class KernelOp(HWCustomOp):
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict = {}
         initializers: dict[str, np.ndarray] = {}
-        for port in self.ports():
+        for port in self._baked_ports():
             shape = tuple(int(d) for d in self.get_nodeattr(self._shape_key(port.iface)))
             dtype = DataType[self.get_nodeattr(self._dtype_key(port.iface))]
             shapes[port.iface] = shape
@@ -242,6 +260,8 @@ class KernelOp(HWCustomOp):
         shapes, datatypes, initializers = {}, {}, {}
         for port in self.ports():
             tname = self._tensor_name(port)
+            if tname is None:
+                continue  # optional operand not wired on this node
             if tname in ctx.shapes:
                 shapes[port.iface] = ctx.shapes[tname]
             if tname in ctx.datatypes:
@@ -275,6 +295,8 @@ class KernelOp(HWCustomOp):
         context (convert/infer). Matches how FINN's MVAU stores MW/MH/dtypes."""
         for port in self.ports():
             tname = self._tensor_name(port)
+            if tname is None:
+                continue  # optional operand not wired on this node — leave its geometry unbaked
             shape = model.get_tensor_shape(tname)
             if shape is not None:
                 self.set_nodeattr(self._shape_key(port.iface), [int(d) for d in shape])
@@ -283,9 +305,15 @@ class KernelOp(HWCustomOp):
 
     # -- helpers ------------------------------------------------------------
 
-    def _tensor_name(self, port: PortSpec) -> str:
+    def _tensor_name(self, port: PortSpec) -> str | None:
+        """The node tensor name bound to ``port``, or None when the slot is not wired — an
+        OPTIONAL operand the node omitted (a shorter input list, or an empty-string slot).
+        Callers skip a None-tensor port so an absent optional operand contributes nothing."""
         slot = self.onnx_node.input if port.direction == "in" else self.onnx_node.output
-        return slot[port.index]
+        if port.index >= len(slot):
+            return None
+        name = slot[port.index]
+        return name if name else None
 
     @staticmethod
     def _shape_key(iface: str) -> str:
