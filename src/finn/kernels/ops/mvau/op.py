@@ -325,8 +325,8 @@ def op_derived():
     #   * `stream_width.<iface>` — the tiling engine generates one per interface from each
     #     impl's `stream` folds (the `out` interface's dtype_source="outputDataType" gives it
     #     the accumulator type when the node has no activation).
-    #   * `weight_stream_width` — a per-TOPOLOGY fact (0 embedded / demand bit_rate decoupled)
-    #     owned by the delivery pool.
+    #   * `parameters.<iface>.stream_width` — a per-TOPOLOGY fact (0 embedded / demand
+    #     bit_rate decoupled) owned by the delivery pool, namespaced per interface.
     #   * `parameters.<iface>.demand` — the DEMAND stage of the supply waterfall, synthesized
     #     generically by the Kernel from the declared `delivered_parameters` (space/delivery.py),
     #     between the compute pool and the delivery pool (it reads the compute pool's resolved

@@ -30,12 +30,6 @@ from __future__ import annotations
 NS = "parameters"
 
 
-def ns(name: str) -> str:
-    """Namespace a bare field name into the ``parameters.*`` point key (iface-agnostic —
-    used only for the ``weights``-only global :data:`WEIGHT_STREAM_WIDTH` alias below)."""
-    return f"{NS}.{name}"
-
-
 def _key(iface: str, field: str) -> str:
     """The interface-keyed point key ``parameters.<iface>.<field>``."""
     return f"{NS}.{iface}.{field}"
@@ -91,11 +85,15 @@ def init_file_key(iface: str) -> str:
     return _key(iface, "init_file")  # memblock.dat basename, or "" for URAM-non-Versal
 
 
-# The weight-delivery stream WIDTH in bits, dispatched per topology (a per-topology fact,
-# NOT an op-level branch): 0 for embedded (no port), demand.bit_rate for decoupled. Kept
-# UN-namespaced and weights-only this increment — the compute side reads it, and weights is
-# the only live parameter interface; a second interface generalizes it (thresholds increment).
-WEIGHT_STREAM_WIDTH = "weight_stream_width"
+def param_stream_width_key(iface: str) -> str:
+    # The parameter-delivery stream WIDTH in bits, dispatched per topology (a per-topology
+    # fact, NOT an op-level branch): 0 for a constant-mode topology (embedded — no port),
+    # demand.bit_rate for a stream-mode topology (decoupled). The COMPUTE side reads it.
+    # Namespaced per interface (``parameters.<iface>.stream_width``) so a second streamed
+    # parameter interface never collides — the uniform ``parameters.<iface>.*`` rule. (The
+    # tiling engine's ``stream_width.<iface>`` is a DIFFERENT key — the compute-fold width;
+    # this is the delivery-port width the topology publishes.)
+    return _key(iface, "stream_width")
 
 
 # --- Consumption modes (the tag OVER coordinate A) ---------------------------

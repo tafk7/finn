@@ -27,6 +27,7 @@ from finn.kernels.ops.parameters import (
     parameters_schema,
 )
 from finn.kernels.space.param_names import (
+    param_stream_width_key,
     pumped_memory_key,
     ram_style_key,
     runtime_writeable_key,
@@ -166,15 +167,18 @@ def test_mvau_schema_carries_both_coordinates():
 
 
 def test_mvau_weight_stream_width_coupling():
-    """The cross-coordinate weight_stream_width derived: 0 for embedded (baked in),
-    PE*SIMD*wbits for decoupled — reads BOTH topology and the compute fold."""
+    """The cross-coordinate parameters.weights.stream_width derived: 0 for embedded (baked
+    in), PE*SIMD*wbits for decoupled — reads BOTH topology and the compute fold. Namespaced
+    per interface (``parameters.weights.stream_width``), replacing the old un-namespaced
+    ``weight_stream_width`` global."""
     from finn.kernels.ops.mvau import mvau_schema
 
+    swk = param_stream_width_key(WEIGHTS)
     base = {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     r_emb = resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: EMBEDDED})
-    assert r_emb.weight_stream_width == 0
+    assert r_emb[swk] == 0
     r_dec = resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: DECOUPLED})
-    assert r_dec.weight_stream_width == 2 * 2 * 8  # PE*SIMD*wbits(INT8)
+    assert r_dec[swk] == 2 * 2 * 8  # PE*SIMD*wbits(INT8)
 
 
 def test_mvau_pumped_memory_fold_gate_fires():
