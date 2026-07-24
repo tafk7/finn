@@ -36,7 +36,7 @@ from typing import Any, Mapping
 
 from .context import Context
 from .backend import Backend, compose, pool_schema
-from .delivery import delivery_subschemas
+from .backend_interface import backend_interface_for
 from .point import Illegal, Point
 from .ports import Direction
 from .resolve import resolve
@@ -241,11 +241,16 @@ class Kernel:
             tuple(self.op_predicates),
             self._augmented_pool(),
         )
-        # DELIVERED PARAMETERS: the generic compute→delivery wiring (DEMAND stage + guarded
-        # delivery sub-schema per interface), synthesized from the DeliveredParam declarations
-        # in supply-waterfall order. Reads the compute pool's `consumes` + each topology's
-        # `mode` — no op-specific logic here.
-        subs = tuple(self.sub_schemas) + delivery_subschemas(self.pool, self.delivered_parameters)
+        # DELIVERED PARAMETERS: the generic compute→delivery wiring, now OWNED by a
+        # BackendInterface per delivered interface — the realization-side per-port object
+        # that holds the DEMAND stage + guarded delivery sub-schema (design pitch §2). Its
+        # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
+        # one owner and the waterfall is structural (its declared two-root deps) rather than
+        # list-position. Reads the compute pool's `consumes` + each topology's `mode` — no
+        # op-specific logic here.
+        subs = tuple(self.sub_schemas)
+        for dp in self.delivered_parameters:
+            subs += backend_interface_for(dp, self.pool).to_subschemas()
         for sub in subs:
             op = compose(op, sub)
         return op

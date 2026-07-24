@@ -173,3 +173,32 @@ def test_backend_interface_reads_backend_consumes_map():
     bi2 = backend_interface_for(_weights_dp(), (perm,))
     assert bi2.consumes["perm"] is None
     assert ALL_MODES == frozenset({CONSTANT, STREAM})
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: a full mvau_kernel().configure() for a decoupled-weights node resolves
+# to the SAME parameters.weights.{width,depth,demand} as the pre-T4 baseline (captured
+# as literals — the BackendInterface wiring is behavior-invariant vs the split path).
+# ---------------------------------------------------------------------------
+
+
+def test_decoupled_weights_resolve_matches_pre_t4_baseline():
+    from finn.kernels.ops.mvau.op import mvau_kernel
+    from finn.kernels.space.param_names import depth_key, width_key
+
+    k = mvau_kernel()
+    ctx = _mvau_ctx()
+    r = k.configure(
+        ctx,
+        {
+            "implementation": "mvau_hls",
+            "PE": 2,
+            "SIMD": 2,
+            "resType": "lut",
+            topology_key(WEIGHTS): DECOUPLED,
+        },
+    )
+    assert r[width_key(WEIGHTS)] == 32
+    assert r[depth_key(WEIGHTS)] == 12
+    demand = r[demand_key(WEIGHTS)]
+    assert (demand.parallelism, demand.elem_bits, demand.depth, demand.cadence) == (4, 8, 12, 1)
