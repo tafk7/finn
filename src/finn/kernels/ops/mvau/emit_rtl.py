@@ -35,7 +35,6 @@ from finn.kernels.space import (
     Dim,
     Direction,
     GeneratedFile,
-    IPICommands,
     Kind,
     Port,
     Raw,
@@ -216,17 +215,13 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
         Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
     )
 
+    # No per-emit IPICommands: emit_composed builds the authoritative IPI from stitch
+    # (compose_emit.py) — the per-emit instantiation line + the ap_clk2x self-tie were
+    # dead output. The structural CLOCK-role ap_clk2x port + stitch's clock broadcast
+    # already carry the non-pumped tie, so stitch is the sole IPI source (F5/F6).
     return Artifacts(
         generated=(top,),
         data_files=(),  # embedded needs no weight file; weights arrive via in1_V stream
         static_files=static,
         ports=ports,
-        ipi=IPICommands(
-            (
-                f"create_bd_cell -type hier -reference {module_name} {module_name}",
-                # non-pumped: tie the core's ap_clk2x to ap_clk.
-                f"connect_bd_net [get_bd_pins {module_name}/ap_clk] "
-                f"[get_bd_pins {module_name}/ap_clk2x]",
-            )
-        ),
     )

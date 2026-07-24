@@ -33,15 +33,20 @@ from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.kernels.space import (
     Artifacts,
+    Bool,
     DataFile,
+    Dim,
     Direction,
     GeneratedFile,
-    IPICommands,
     Kind,
     Port,
+    Raw,
     Role,
+    RtlModule,
     StaticFile,
     Template,
+    bind,
+    weight_fold_depth,
 )
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
@@ -177,6 +182,22 @@ endmodule // $MODULE_NAME$_memstream_wrapper
 """
 )
 
+# The TYPE signature of _MEMSTREAM_WRAPPER (F4) — one type per $SLOT$. SETS/DEPTH/WIDTH
+# are geometry Dims; INIT_FILE/RAM_STYLE are free-form Verilog string literals (Raw);
+# PUMPED_MEMORY is a Bool flag. bind() type-checks before render — bytes unchanged.
+_MEMSTREAM_WRAPPER_SCHEMA = RtlModule(
+    "memstream_wrapper",
+    {
+        "MODULE_NAME": Raw,
+        "SETS": Dim,
+        "DEPTH": Dim,
+        "WIDTH": Dim,
+        "INIT_FILE": Raw,
+        "RAM_STYLE": Raw,
+        "PUMPED_MEMORY": Bool,
+    },
+)
+
 
 def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = WEIGHTS) -> Artifacts:
     """Produce the decoupled (memstream) parameter-delivery artifacts from a resolved
@@ -186,15 +207,18 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
     interface); it selects the interface-namespaced geometry keys."""
     init_file = point[init_file_key(iface)]
 
-    bindings = {
-        "MODULE_NAME": module_name,
-        "SETS": point[sets_key(iface)],
-        "DEPTH": point[depth_key(iface)],
-        "WIDTH": point[width_key(iface)],
-        "INIT_FILE": init_file,
-        "RAM_STYLE": point[ram_style_key(iface)],
-        "PUMPED_MEMORY": int(point.get(pumped_memory_key(iface), 0)),
-    }
+    bindings = bind(
+        _MEMSTREAM_WRAPPER_SCHEMA,
+        {
+            "MODULE_NAME": Raw(module_name),
+            "SETS": Dim(point[sets_key(iface)]),
+            "DEPTH": Dim(point[depth_key(iface)]),
+            "WIDTH": Dim(point[width_key(iface)]),
+            "INIT_FILE": Raw(init_file),
+            "RAM_STYLE": Raw(point[ram_style_key(iface)]),
+            "PUMPED_MEMORY": Bool(point.get(pumped_memory_key(iface), 0)),
+        },
+    )
     wrapper = GeneratedFile(f"{module_name}_memstream_wrapper.v", _MEMSTREAM_WRAPPER, bindings)
 
     # The weight .dat is emitted only when the RAM is initialized from a file (i.e.
@@ -236,17 +260,14 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
                  boundary=True)
         )
 
+    # No per-emit IPICommands: emit_composed builds the authoritative IPI from stitch
+    # over the declared ports and SUBSTITUTES it (compose_emit.py) — the per-emit
+    # instantiation line was dead output. stitch is the sole IPI source (F5).
     return Artifacts(
         generated=(wrapper,),
         data_files=data_files,
         static_files=static,
         ports=tuple(ports),
-        ipi=IPICommands(
-            (
-                f"create_bd_cell -type hier -reference {module_name}_memstream_wrapper "
-                f"{module_name}/{module_name}_wstrm",
-            )
-        ),
     )
 
 
@@ -263,7 +284,10 @@ def _memblock_dat(point, context, iface: str = WEIGHTS) -> str:
     weights = np.asarray(context.initializer(WEIGHTS))
     wdt = context.tensor_datatype(WEIGHTS)
     export_wdt = DataType["BINARY"] if wdt == DataType["BIPOLAR"] else wdt
-    pe, simd, wmem = point.PE, point.SIMD, point.WMEM
+    # WMEM from the topology-independent fold-depth query (F1) — the same geometry the
+    # wrapper's DEPTH slot traces to via depth_key, no longer the op's point.WMEM alias.
+    pe, simd = point.PE, point.SIMD
+    wmem = weight_fold_depth(point, context, iface)
 
     # get_hw_compatible_weight_tensor → (1, PE, WMEM, SIMD).
     ret = weights.T
