@@ -86,6 +86,105 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+# -- typed value-binding (F4) --------------------------------------------------
+#
+# `Template.render` validates slot↔binding NAMES but not VALUE TYPES — so a width
+# slot could silently receive a Verilog range string, the layernorm `[31:0]`
+# silent-wrongness class. `RtlModule` adds a TYPE per slot; `bind` type-checks the
+# values against it and returns the same `{str: str}` dict `Template.render` consumes.
+# Each typed value's `.render()` produces EXACTLY the string the untyped binding did
+# (`BitWidth(14) -> "14"`, `Bool(True) -> "1"`), so rendered bytes are unchanged.
+
+
+class BindError(TemplateError):
+    """Raised when a value binding does not match its :class:`RtlModule` schema —
+    a missing slot, an extra value, or a value whose type is not the declared one."""
+
+
+@dataclass(frozen=True)
+class BitWidth:
+    """A bit-width slot (an ``ap_int``/``ACCU_WIDTH`` count). Renders as the decimal int."""
+
+    value: int
+
+    def render(self) -> str:
+        return str(int(self.value))
+
+
+@dataclass(frozen=True)
+class Dim:
+    """A geometry extent / fold dial (``MW``, ``PE``, ``VERSION``, …). Decimal int."""
+
+    value: int
+
+    def render(self) -> str:
+        return str(int(self.value))
+
+
+@dataclass(frozen=True)
+class Bool:
+    """A boolean flag slot (``SIGNED_ACTIVATIONS``, ``NARROW_WEIGHTS``). Renders ``1``/``0``."""
+
+    value: bool
+
+    def render(self) -> str:
+        return "1" if self.value else "0"
+
+
+@dataclass(frozen=True)
+class Raw:
+    """An escape hatch for a slot that is a free-form string, not geometry — a Verilog
+    module name or an ``AP_INT_MAX_W`` knob. Renders the string verbatim."""
+
+    value: str
+
+    def render(self) -> str:
+        return self.value
+
+
+# The set of concrete typed-value classes a schema may declare and `bind` accepts.
+TypedValue = (BitWidth, Dim, Bool, Raw)
+
+
+@dataclass(frozen=True)
+class RtlModule:
+    """The TYPE signature of a :class:`Template` — the second half of the artifact
+    contract. Where ``Template`` declares slot NAMES, ``RtlModule`` declares each
+    slot's TYPE (one of :data:`TypedValue`), so :func:`bind` catches a value whose
+    type is wrong before it reaches the template. Owned by the artifact (defined next
+    to its ``Template``), not the ``Backend`` — softvec + packed share one wrapper,
+    hence one schema (design pitch §5)."""
+
+    name: str
+    params: Mapping[str, type]
+
+
+def bind(module: RtlModule, values: Mapping[str, Any]) -> dict[str, str]:
+    """Type-check ``values`` against ``module``'s schema and return the stringified
+    ``{slot: str}`` dict :meth:`Template.render` consumes. Raises :class:`BindError`
+    on a missing slot, an extra value, or a value whose type is not the declared one."""
+    schema = frozenset(module.params)
+    given = frozenset(values)
+
+    missing = schema - given
+    if missing:
+        raise BindError(f"{module.name}: schema slots with no value: {sorted(missing)}")
+    extra = given - schema
+    if extra:
+        raise BindError(f"{module.name}: values with no schema slot: {sorted(extra)}")
+
+    out: dict[str, str] = {}
+    for name, expected in module.params.items():
+        value = values[name]
+        if type(value) is not expected:
+            raise BindError(
+                f"{module.name}.{name}: expected {expected.__name__}, "
+                f"got {type(value).__name__}"
+            )
+        out[name] = value.render()
+    return out
+
+
 @dataclass(frozen=True)
 class GeneratedFile:
     """A generated top file (``.cpp`` / ``.v``): a template + typed bindings.

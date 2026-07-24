@@ -25,12 +25,19 @@ from .axis import (
 )
 from .artifacts import (
     Artifacts,
+    BindError,
+    BitWidth,
+    Bool,
     DataFile,
+    Dim,
     GeneratedFile,
     IPICommands,
+    Raw,
+    RtlModule,
     StaticFile,
     Template,
     TemplateError,
+    bind,
 )
 from .context import Context
 from .derived import Derived
@@ -98,6 +105,13 @@ __all__ = [
     "EmitError",
     "Template",
     "TemplateError",
+    "RtlModule",
+    "bind",
+    "BindError",
+    "BitWidth",
+    "Dim",
+    "Bool",
+    "Raw",
     "GeneratedFile",
     "DataFile",
     "StaticFile",
