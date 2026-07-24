@@ -10,10 +10,10 @@
 data (kernelop-tensor-block-stream.md §5.1, §6.2).
 
 A stream-tiling entry is either a plain axis name (``"SIMD"``) or a composed
-:class:`TileExpr`. An expr is a small typed AST — ``Ref`` (an axis/derived value on
-the point), ``Const``, ``Param`` (a kernel_param), ``Mul``/``Div`` (integer folding
-arithmetic), and ``BroadcastAware`` (the size-1 replicate exception) — evaluated
-against a resolved :class:`~finn.kernels.space.point.Point`.
+:class:`TileExpr`. An expr is a small typed AST — ``Ref`` (an axis/derived/kernel_param
+value on the point), ``Const``, ``Mul``/``Div`` (integer folding arithmetic), and
+``BroadcastAware`` (the size-1 replicate exception) — evaluated against a resolved
+:class:`~finn.kernels.space.point.Point`.
 
 Why an AST and not an opaque closure: the engine orders resolution by *declared*
 dependencies because "closures cannot be introspected reliably" (the exact reason
@@ -24,7 +24,7 @@ walks the tree and returns exactly the point keys the expr reads — never a gue
 
 These exprs live on a **Backend**'s interface (they ARE the RTL translation),
 so their operands are backend-local: ``mvau_rtl_tiled``'s weight port
-``div(mul(Ref('PE'), Ref('SIMD')), Param('TH'))`` reads ``TH``, which exists only on
+``div(mul(Ref('PE'), Ref('SIMD')), param('TH'))`` reads ``TH``, which exists only on
 that bundle, so every dep is in scope wherever the expr is declared.
 """
 
@@ -116,27 +116,6 @@ class Ref(TileExpr):
 
 
 @dataclass(frozen=True)
-class Param(TileExpr):
-    """A kernel_param value read off the point (e.g. ``Param("TH")``). Distinct from
-    :class:`Ref` only in intent — a structural op parameter rather than a folding axis
-    — but resolved identically; both are point keys."""
-
-    name: str
-
-    def eval(self, point: Point) -> int:
-        try:
-            value = point[self.name]
-        except Exception as exc:
-            raise TileError(
-                f"tiling expr reads kernel_param {self.name!r}, absent from the point"
-            ) from exc
-        return _as_int(self.name, value)
-
-    def deps(self) -> frozenset[str]:
-        return frozenset({self.name})
-
-
-@dataclass(frozen=True)
 class Mul(TileExpr):
     """Integer product of two exprs (e.g. weight-lane width ``PE * SIMD``)."""
 
@@ -213,9 +192,11 @@ def derive(name: str) -> Ref:
     return Ref(name)
 
 
-def param(name: str) -> Param:
-    """Reference a kernel_param on the point: ``param("TH")``."""
-    return Param(name)
+def param(name: str) -> Ref:
+    """Reference a kernel_param on the point: ``param("TH")``. A kernel_param is a point
+    key resolved identically to any axis/derived, so this returns a :class:`Ref` — the
+    helper survives to let call sites read structural-parameter intent."""
+    return Ref(name)
 
 
 def const(value: int) -> Const:
