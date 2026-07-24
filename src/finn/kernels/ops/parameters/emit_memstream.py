@@ -68,9 +68,10 @@ from .names import WEIGHTS
 _SOURCE_DIRS = {"axilite.sv": "finn-rtllib/axi/hdl"}
 
 
-# The parameter tensor's fold-shape helper needs PE/SIMD/WMEM — read off the point.
-# We reuse the compute-side _hw_weight_tensor shape (transpose+interleave+reshape),
-# then apply the decoupled PE-flip. Kept local to avoid a cross-package emit import.
+# The parameter tensor's fold-shape helper needs PE/SIMD (off the point) and WMEM (the
+# topology-independent fold-depth query). We reuse the compute-side _hw_weight_tensor
+# shape (transpose+interleave+reshape), then apply the decoupled PE-flip. Kept local to
+# avoid a cross-package emit import.
 
 
 # finn-rtllib/memstream/hdl/memstream_wrapper_template.v — 7 $UPPER$ slots. Verilog

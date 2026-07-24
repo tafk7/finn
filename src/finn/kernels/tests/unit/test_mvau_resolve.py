@@ -228,7 +228,7 @@ def test_dsp_primitive_forced_from_fpgapart(schema):
 
 def test_forced_and_derived_names_are_not_axes(schema):
     axis_names = schema.axis_names
-    for name in ("dsp_primitive", "accDataType", "WMEM", "language", "SEGMENTLEN"):
+    for name in ("dsp_primitive", "accDataType", "weightDataType", "language", "SEGMENTLEN"):
         assert name not in axis_names, f"{name} must be Derived, not an Axis"
 
 
@@ -293,9 +293,14 @@ def test_uram_ok_on_versal_without_runtime_writeable(schema):
 
 
 def test_legal_point_carries_derived(schema):
-    r = resolve(schema, make_context(), base_assignment(PE=4, SIMD=2))
+    from finn.kernels.space import weight_fold_depth
+    from finn.kernels.ops.mvau.op import WEIGHTS
+
+    ctx = make_context()
+    r = resolve(schema, ctx, base_assignment(PE=4, SIMD=2))
     assert isinstance(r, Point)
-    assert r.WMEM == 6 * 8 // (4 * 2)
+    # WMEM is no longer a point alias — the fold depth comes from the geometry query.
+    assert weight_fold_depth(r, ctx, WEIGHTS) == 6 * 8 // (4 * 2)
     assert r.language == "hls"
     assert r["stream_width.out"] == r.outputDataType.bitwidth() * 4
 
@@ -675,6 +680,7 @@ def test_cadence_differs_by_interface(schema):
     )
     r = resolve(schema, ctx, base_assignment())
     assert isinstance(r, Point)
-    assert list(r.numInputVectors) == [1, 4]
+    # numInputVectors is no longer a point alias — the cadence closures read the input's
+    # leading dims (prod([1, 4]) = 4) straight off the Context.
     assert _weight_cadence(r, ctx) == 1
     assert _threshold_cadence(r, ctx) == 4  # prod([1, 4])

@@ -146,20 +146,6 @@ def weights_may_change(p) -> bool:
     return bool(p.get(runtime_writeable_key(WEIGHTS), 0))
 
 
-def _matrix_dim(idx):
-    def default(p, ctx):
-        return ctx.tensor_shape(WEIGHTS)[idx]
-
-    return default
-
-
-def _num_input_vectors(p, ctx):
-    # The input tensor's leading (non-reduction) dims — FINN's numInputVectors. The last
-    # dim is MW (the reduction), so the vectors are everything before it. [1] for a plain
-    # (1, MW) FC input; e.g. [1, H, W] for a conv-as-matmul.
-    return list(ctx.tensor_shape(INPUT)[:-1])
-
-
 def _is_nonneg_int(v) -> bool:
     return isinstance(v, int) and v >= 0
 
@@ -169,10 +155,10 @@ def _is_nonneg_int(v) -> bool:
 
 def op_axes():
     return (
-        # MW/MH are NO LONGER axes — they are BLOCK extents (the matmul's reduction +
-        # output dims) declared on the interfaces' `block`, and the PE/SIMD fold DIALS the
-        # engine derives from each impl's `stream`. MW/MH survive only as emit-facing
-        # migration aliases (see op_derived below).
+        # MW/MH are NOT axes and NO LONGER point aliases — they are BLOCK extents (the
+        # matmul's reduction + output dims) declared on the interfaces' `block`, read
+        # straight off the Context by emit (the shared mvau_geometry accessor). The PE/SIMD
+        # fold DIALS the engine derives from each impl's `stream`.
         # --- activation / threshold cluster ----------------------------------
         # noActivation is GONE: whether the fused MVU has an activation is EMERGENT —
         # ``ctx.initializer(THRESHOLDS) is not None`` (a 3-input node). The old declared flag
@@ -183,9 +169,9 @@ def op_axes():
         # (baked into thresh.h, no threshold RAM), so there is no ram-style choice to make.
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
         discrete_axis("binaryXnorMode", {0, 1}, 0),
-        # numInputVectors is NOT an axis — it IS the input tensor's leading (non-reduction)
-        # dims (FINN: get_normal_input_shape = numInputVectors + [MW]). Derived from the
-        # block/tensor below (an emit-facing migration alias), same as MW/MH.
+        # numInputVectors is NOT an axis and NOT a point alias — it IS the input tensor's
+        # leading (non-reduction) dims (FINN: get_normal_input_shape = numInputVectors + [MW]),
+        # read off the Context directly by emit + the cadence closures.
         # F4: mlo_max_iter is a per-node iteration count, unbounded non-neg int.
         # The `64` in the old {0..64} domain was n_max_layers (a fabric-wide MLO
         # table size, hwcustomop.py:378) — a different entity that does not bound
@@ -205,16 +191,6 @@ def op_axes():
 # -- op-level SHARED derived — computed for every implementation ----------------
 
 
-def _wmem(p, ctx):
-    return p.MW * p.MH // (p.PE * p.SIMD)
-
-
-def _tmem(p, ctx):
-    # TMEM = threshold memory depth = MH/PE when the node HAS thresholds, else 0. Emergent:
-    # the presence of a threshold initializer, not the old declared noActivation flag.
-    return p.MH // p.PE if _has_thresholds(ctx) else 0
-
-
 def _acc_datatype(p, ctx):
     # base:469-527 — worst-case type bounds when weights may change, actual weight
     # VALUES when static. The canonical data-dependent Derived.
@@ -224,8 +200,9 @@ def _acc_datatype(p, ctx):
     if p.binaryXnorMode == 1 and weights is not None:
         weights = 2 * weights - 1
     if weights_may_change(p) or weights is None:
-        lower = wdt.min() * np.ones((p.MW, p.MH))
-        upper = wdt.max() * np.ones((p.MW, p.MH))
+        mw, mh = ctx.tensor_shape(WEIGHTS)
+        lower = wdt.min() * np.ones((mw, mh))
+        upper = wdt.max() * np.ones((mw, mh))
         lo_r = calculate_matvec_accumulator_range(lower, idt)
         hi_r = calculate_matvec_accumulator_range(upper, idt)
         acc_min = min(min(lo_r), min(hi_r))
@@ -288,22 +265,6 @@ def _threshold_dtype(p, ctx):
     return _threshold_datatype(p, ctx) if _has_thresholds(ctx) else None
 
 
-def _identity_geometry_derived():
-    """EMIT-MIGRATION ALIASES — MW/MH/numInputVectors/WMEM/TMEM. Emit-facing extents
-    sourced from the block/weight shapes (NOT named op axes), so Tier-4 emit_hls/emit_rtl
-    (which read point.MW/MH/WMEM/TMEM) is untouched. New code should read extents from the
-    interface block shapes directly; these retire when emit is reworked (NOT this task).
-    Order matters: MW/MH precede WMEM/TMEM, which read them (resolve computes deriveds in
-    list order)."""
-    return (
-        Derived("MW", _matrix_dim(0)),
-        Derived("MH", _matrix_dim(1)),
-        Derived("numInputVectors", _num_input_vectors),
-        Derived("WMEM", _wmem),
-        Derived("TMEM", _tmem),
-    )
-
-
 def _identity_dtype_derived():
     """THE REAL DATATYPE CONTRACT (base:469-549) — accDataType/weightDataType/outputDataType.
     Data-dependent derivations: they read the actual weight VALUES when static, worst-case
@@ -320,8 +281,9 @@ def _identity_dtype_derived():
 
 
 def op_derived():
-    # PURE IDENTITY. Two groups, concatenated (order load-bearing — geometry aliases precede
-    # the dtype contract; WMEM/TMEM read MW/MH). NOT here, by design:
+    # PURE IDENTITY — the datatype contract only. The geometry aliases (MW/MH/WMEM/TMEM/
+    # numInputVectors) are GONE: emit reads block extents + fold depth directly (the shared
+    # mvau_geometry accessor over Context + space/folding). NOT here, by design:
     #   * `stream_width.<iface>` — the tiling engine generates one per interface from each
     #     impl's `stream` folds (the `out` interface's dtype_source="outputDataType" gives it
     #     the accumulator type when the node has no activation).
@@ -331,7 +293,7 @@ def op_derived():
     #     generically by the Kernel from the declared `delivered_parameters` (space/delivery.py),
     #     between the compute pool and the delivery pool (it reads the compute pool's resolved
     #     `stream_width.<iface>`, only present AFTER compute tiling).
-    return _identity_geometry_derived() + _identity_dtype_derived()
+    return _identity_dtype_derived()
 
 
 # -- op-level SHARED predicates — one kind; provenance is what each reads --------
@@ -456,7 +418,7 @@ def _threshold_cadence(p, ctx) -> int:
     # vector. Sized from resolved geometry (numInputVectors is an op derived), same waterfall
     # stage as demand. In the fused core thresholds are constant (demand=None), so this does not
     # yet size a streamer — but it is the real quantity a decoupled/MLO threshold variant needs.
-    return int(np.prod(p.numInputVectors))
+    return int(np.prod(ctx.tensor_shape(INPUT)[:-1]))
 
 
 # The parameter interfaces this op delivers, as DeliveredParam declarations (WHAT + cadence);
@@ -546,7 +508,8 @@ class MvauKernelOp(KernelOp):
         """The folding dials this op exposes, each mapped to its resolved max value —
         the capability SetFolding queries instead of op_type prefix-matching
         (consumer-surface-model.md R1). SIMD folds the reduction dim MW, PE the output
-        dim MH; both are context-derived (from the weights shape), so we read them off a
-        resolved point rather than from a stored nodeattr."""
-        _, _, point = self._point()
-        return {"SIMD": int(point.MW), "PE": int(point.MH)}
+        dim MH; both are the weight block's extents, read straight off the Context
+        (``tensor_shape(weights) == (MW, MH)``), not a stored nodeattr."""
+        _, ctx, _ = self._point()
+        mw, mh = ctx.tensor_shape(WEIGHTS)
+        return {"SIMD": int(mw), "PE": int(mh)}

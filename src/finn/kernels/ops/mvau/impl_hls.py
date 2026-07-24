@@ -27,8 +27,9 @@ from .registry import register
 
 @predicate("HLS: SIMD >= MW/1024")
 def _hls_simd_lower_bound(p, ctx):
-    if p.SIMD < p.MW / 1024:
-        return f"HLS array-partition limit: SIMD={p.SIMD} < MW/1024={p.MW / 1024} (hls:216)"
+    mw = ctx.tensor_shape(WEIGHTS)[0]  # the weight block's reduction extent
+    if p.SIMD < mw / 1024:
+        return f"HLS array-partition limit: SIMD={p.SIMD} < MW/1024={mw / 1024} (hls:216)"
     return None
 
 

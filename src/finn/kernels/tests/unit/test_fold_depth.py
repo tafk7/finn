@@ -58,8 +58,10 @@ def test_weight_fold_depth_matches_wmem_decoupled():
         "implementation": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2,
         "resType": "dsp", TOPOLOGY: DECOUPLED,
     })
-    assert weight_fold_depth(p, ctx, WEIGHTS) == p.WMEM
+    # WMEM = MW*MH/(PE*SIMD) = 6*8/(2*2). The decoupled depth_key traces to the same math.
     assert weight_fold_depth(p, ctx, WEIGHTS) == 12
+    from finn.kernels.space.param_names import depth_key
+    assert weight_fold_depth(p, ctx, WEIGHTS) == p[depth_key(WEIGHTS)]
 
 
 def test_weight_fold_depth_matches_wmem_embedded():
@@ -68,8 +70,8 @@ def test_weight_fold_depth_matches_wmem_embedded():
         "implementation": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
-    # embedded HLS has no depth_key, but the geometry query still works
-    assert weight_fold_depth(p, ctx, WEIGHTS) == p.WMEM
+    # embedded HLS has no depth_key, but the topology-independent geometry query works
+    assert weight_fold_depth(p, ctx, WEIGHTS) == 12
 
 
 def test_threshold_fold_depth_matches_tmem_present():
@@ -78,7 +80,6 @@ def test_threshold_fold_depth_matches_tmem_present():
         "implementation": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
-    assert threshold_fold_depth(p, ctx, THRESHOLDS) == p.TMEM
     assert threshold_fold_depth(p, ctx, THRESHOLDS) == 4  # MH//PE = 8//2
 
 
@@ -88,4 +89,4 @@ def test_threshold_fold_depth_zero_when_absent():
         "implementation": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
-    assert threshold_fold_depth(p, ctx, THRESHOLDS) == p.TMEM == 0
+    assert threshold_fold_depth(p, ctx, THRESHOLDS) == 0
