@@ -23,8 +23,9 @@ ships two members:
     ``ram_style``/``runtime_writeable_weights``/``pumpedMemory`` + URAM/pumped gates.
 
 ``parameters_schema()`` builds the pool standalone (for unit-testing selection +
-guarding in isolation); an op composes the pool via the ``compose`` helper, which
-namespaces it and guards its root so a param-free op simply omits it.
+guarding in isolation); an op folds the pool in via a
+:class:`~finn.kernels.space.backend_interface.BackendInterface` per delivered interface,
+which namespaces its keys and guards its topology root to the backend's consumable modes.
 """
 
 from __future__ import annotations

@@ -166,8 +166,9 @@ def pool_schema(
     walks.
 
     ``sources_key`` is the point key under which the selected bundle's source list is
-    exposed (default ``"sources"``). A SECONDARY pool composed into the same op schema
-    (e.g. the ``parameters`` pool via :func:`compose`) passes a namespaced key
+    exposed (default ``"sources"``). A SECONDARY pool folded into the same op schema (e.g.
+    the ``parameters`` delivery pool via a
+    :class:`~finn.kernels.space.backend_interface.BackendInterface`) passes a namespaced key
     (``"parameters.sources"``) so the two pools' source lists never collide.
     """
     if not pool:
@@ -192,69 +193,6 @@ def pool_schema(
         derived=tuple(shared_derived) + tuple(merged_derived) + (sources_derived,),
         predicates=tuple(shared_predicates) + tuple(wrapped_predicates),
     )
-
-
-def compose(op_schema: Schema, sub_schema: Schema, *, guard=None) -> Schema:
-    """Merge a secondary (namespaced) pool schema into an op schema — the COMPOSITION
-    of two selection pools into one design space.
-
-    Both arguments are ``pool_schema`` results. ``sub_schema``'s axes/derived/
-    predicates are appended to ``op_schema``'s; because the sub-pool authored its keys
-    namespaced (``parameters.*``) and used a distinct ``sources_key``, there is no
-    name collision and ``resolve`` walks the union unchanged. This is the mechanism the
-    engine-mapping proofs validated (``tests/test_composition_mapping.py``): composition
-    (product) is a plain schema union of two selection pools — no new primitive.
-
-    ``guard`` (optional): a ``(point) -> bool`` existence predicate applied to the
-    sub-pool's ROOT axis, so a param-free op can compose the pool yet omit it entirely
-    (the MHA difference-in-kind). Omit for an always-present subsystem.
-
-    NOTE: cross-coordinate couplings (a derived/predicate that reads BOTH schemas'
-    fields — e.g. memstream depth = f(compute fold)) are NOT added here; the composing
-    op appends them to the op schema before calling ``compose``, where both coordinate
-    surfaces are in scope.
-    """
-    sub_axes = sub_schema.axes
-    sub_derived = sub_schema.derived
-    if guard is not None:
-        sub_axes = tuple(_guard_axis(a, guard) if _is_root(a, sub_schema) else a for a in sub_axes)
-        # When the pool is guarded out its root axis is absent, so its derived (which
-        # read the root) must not run — wrap them to no-op (None) when guarded out.
-        sub_derived = tuple(_guard_derived(d, guard) for d in sub_derived)
-    return Schema(
-        axes=tuple(op_schema.axes) + tuple(sub_axes),
-        derived=tuple(op_schema.derived) + tuple(sub_derived),
-        predicates=tuple(op_schema.predicates) + tuple(sub_schema.predicates),
-    )
-
-
-def _is_root(axis: Axis, schema: Schema) -> bool:
-    # The root selection axis is the first axis pool_schema emits.
-    return schema.axes and axis.name == schema.axes[0].name
-
-
-def _guard_axis(axis: Axis, guard) -> Axis:
-    """Wrap an axis with an additional existence guard (AND with its own)."""
-    from dataclasses import replace
-
-    own = axis.exists
-
-    def exists(point, _own=own, _guard=guard):
-        return _guard(point) and _own(point)
-
-    return replace(axis, exists=exists)
-
-
-def _guard_derived(derived: Derived, guard) -> Derived:
-    """Wrap a derived so it computes only when the pool is present (guard true); when
-    the pool is guarded out its axes are absent, so the derived would raise — return
-    None instead (the pool contributes nothing to the point)."""
-    own = derived.compute
-
-    def compute(point, context, _own=own, _guard=guard):
-        return _own(point, context) if _guard(point) else None
-
-    return Derived(derived.name, compute)
 
 
 def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:

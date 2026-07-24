@@ -6,44 +6,39 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Generic parameter-DELIVERY wiring — connecting a compute pool to a delivery pool.
+"""The op-facing parameter-DELIVERY declaration (:class:`DeliveredParam`) + the seam
+COMPUTATION bodies a :class:`~finn.kernels.space.backend_interface.BackendInterface`
+composes.
 
 A :class:`~finn.kernels.space.kernel.Kernel` that delivers parameters (weights,
-thresholds, …) declares a :class:`DeliveredParam` per interface; this module synthesizes
-the ``(DEMAND stage, guarded delivery sub-schema)`` pair that composes each interface's
-delivery pool into the op schema, in supply-waterfall order (COMPUTE → DEMAND → MEMORY).
+thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
+cadence + concrete delivery pool). The HOW — the ``(DEMAND stage, guarded delivery
+sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → MEMORY) — is OWNED by
+``BackendInterface`` (design pitch §2), which reuses the two seam computations kept here:
 
-This is MECHANISM, not op content — it used to live hand-wired in ``mvau/op.py`` because
-``compose`` refuses cross-pool couplings, so the only place with BOTH the compute pool's
-``implementation`` and a delivery pool's ``topology`` in scope was the composing op. It is
-interface-generic: it reads a compute backend's :attr:`Backend.consumes` and a delivery
-topology's :attr:`Backend.mode` — both plain ``Backend`` fields — with no knowledge of any
-op or any topology identity string. The op supplies only the per-interface CADENCE and the
-concrete delivery pool (built in ops, where the topology backends are authored).
-
-The two cross-pool couplings this owns:
-
-* **DEMAND** — a derived (:func:`demand_key`) the compute side publishes: a realization-
-  free :class:`~finn.kernels.space.demand.ParamDemand` sized from the RESOLVED interface
+* :func:`_demand_for` — the DEMAND closure: a realization-free
+  :class:`~finn.kernels.space.demand.ParamDemand` sized from the RESOLVED interface
   geometry (the tiling engine's ``stream_width.<iface>`` + block extents), read by the
   selected delivery topology to size its own memstream geometry. ``None`` in two emergent
   cases — no initializer (a live activation, not a stored parameter) or constant-mode
   consumption (baked into the core, nothing to stream).
-* **the topology-mode GUARD** — an override of the delivery pool's ``topology`` root-axis
-  domain, keeping only topologies whose :attr:`Backend.mode` the selected compute backend
-  ``consumes`` for this interface. Permissive when the backend declares nothing.
+* :func:`_topology_domain` / :func:`_topology_default` — the topology-mode GUARD: keeps
+  only topologies whose :attr:`Backend.mode` the selected compute backend ``consumes`` for
+  this interface. Permissive when the backend declares nothing.
+
+Both are interface-generic: they read a compute backend's :attr:`Backend.consumes` and a
+delivery topology's :attr:`Backend.mode` — both plain ``Backend`` fields — with no
+knowledge of any op or any topology identity string.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 from typing import Any, Callable
 
-from .backend import compose, pool_schema
+from dataclasses import dataclass
+
 from .demand import ParamDemand
-from .derived import Derived
-from .param_names import ALL_MODES, demand_key, sources_key, topology_key
-from .schema import Schema
+from .param_names import ALL_MODES, topology_key
 from .tiling import stream_width_key
 
 
@@ -51,7 +46,7 @@ from .tiling import stream_width_key
 class DeliveredParam:
     """One parameter interface an op delivers through a delivery (parameters) pool.
 
-    The op DECLARES the WHAT; the generic wiring in this module owns the HOW. Fields:
+    The op DECLARES the WHAT; the generic ``BackendInterface`` wiring owns the HOW. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
     * ``cadence`` — ``(point, context) -> int``: how often the core consumes one word (the
@@ -64,20 +59,6 @@ class DeliveredParam:
     iface: str
     cadence: Callable[[Any, Any], int]
     pool: tuple = ()
-
-
-def delivery_subschemas(compute_pool, delivered: tuple[DeliveredParam, ...]) -> tuple[Schema, ...]:
-    """The composed sub-schemas for every delivered parameter, in supply-waterfall order.
-
-    For each :class:`DeliveredParam`, a ``(demand_schema, guarded delivery sub-schema)``
-    pair — the demand stage publishes ``parameters.<iface>.demand`` from resolved compute
-    geometry; the guarded delivery pool then sizes its own realization from that demand,
-    its ``topology`` domain filtered to the modes the selected compute backend consumes.
-    ``compute_pool`` is the op's compute pool (its members' ``consumes`` drive the guard)."""
-    subs: tuple[Schema, ...] = ()
-    for dp in delivered:
-        subs += (_demand_schema(dp), _params_subschema(compute_pool, dp))
-    return subs
 
 
 # --- DEMAND stage -------------------------------------------------------------
@@ -115,32 +96,7 @@ def _demand_for(dp: DeliveredParam):
     return compute
 
 
-def _demand_schema(dp: DeliveredParam) -> Schema:
-    """The DEMAND stage as a derived-only schema, composed BETWEEN the compute pool and the
-    delivery pool. It reads the tiling engine's resolved ``stream_width.<iface>`` (only on
-    the point AFTER compute tiling), so encoding COMPUTE→DEMAND→MEMORY as compose order
-    makes the supply waterfall structural."""
-    return Schema(axes=(), derived=(Derived(demand_key(dp.iface), _demand_for(dp)),), predicates=())
-
-
 # --- topology-mode GUARD ------------------------------------------------------
-
-
-def _params_subschema(compute_pool, dp: DeliveredParam) -> Schema:
-    """The delivery pool for ``dp.iface`` with its ``topology`` root-axis domain overridden
-    to the consumption-mode guard: only topologies the selected compute backend can consume
-    for this interface remain selectable. Reads BOTH the compute ``implementation`` and the
-    delivery ``topology`` — the cross-pool coupling ``compose`` refuses — so it is applied
-    here, where both pools are in scope. Relies on compose-order: the topology axis is
-    appended after the compute pool's ``implementation`` axis, so resolve fixes the compute
-    backend first."""
-    schema = pool_schema(
-        topology_key(dp.iface), (), (), (), dp.pool, sources_key=sources_key(dp.iface)
-    )
-    root = schema.axes[0]  # pool_schema emits the root topology axis first
-    domain, legal = _topology_domain(compute_pool, dp)
-    guarded = replace(root, domain=domain, default=_topology_default(root.default, legal))
-    return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))
 
 
 def _topology_domain(compute_pool, dp: DeliveredParam):

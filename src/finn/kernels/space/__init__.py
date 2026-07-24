@@ -38,7 +38,6 @@ from .backend import (
     Backend,
     EmitError,
     PoolError,
-    compose,
     emit_point,
     pool_schema,
 )
@@ -55,7 +54,7 @@ from .resolve import resolve
 from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
 from .demand import ParamDemand
-from .delivery import DeliveredParam, delivery_subschemas
+from .delivery import DeliveredParam
 from .backend_interface import BackendInterface, backend_interface_for
 from .kernel import Interface, Kernel, KernelError, KernelSchema
 from .tiling import (
@@ -94,7 +93,6 @@ __all__ = [
     "predicate",
     "Backend",
     "pool_schema",
-    "compose",
     "PoolError",
     "emit_point",
     "EmitError",
@@ -125,7 +123,6 @@ __all__ = [
     "KernelError",
     "ParamDemand",
     "DeliveredParam",
-    "delivery_subschemas",
     "BackendInterface",
     "backend_interface_for",
     "TileExpr",

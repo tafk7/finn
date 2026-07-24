@@ -17,7 +17,7 @@ a real, directional data dependency.
 
 Historically that dependency was expressed three ways at once: a demand derived slotted
 between the pools BY LIST POSITION, a mode-compatibility gate as ``replace()``-surgery on
-the delivery root axis, and ``compose`` documenting the gap it refused to fill.
+the delivery root axis, and a ``compose`` union documenting the gap it refused to fill.
 ``BackendInterface`` collapses them into ONE per-interface object that owns the seam:
 
 * ``publishes`` — the compute→delivery DEMAND closure (a realization-free
@@ -33,10 +33,10 @@ It introduces NO new resolve mechanism: it reads only existing ``Backend`` field
 (``stream_width.<iface>``, ``topology.<iface>``, ``demand.<iface>``), and its two-root
 deps feed the topo-sort that already runs.
 
-This module ADDS the object and its assembly (:meth:`BackendInterface.to_subschemas`); it
-reuses the demand/guard COMPUTATION bodies from :mod:`~finn.kernels.space.delivery` so the
-produced schema fragments are provably identical to ``delivery_subschemas`` (a later pass
-relocates those bodies here and retires the split delivery path).
+This module OWNS the assembly (:meth:`BackendInterface.to_subschemas`), reusing the
+demand/guard COMPUTATION bodies (:func:`_demand_for`, :func:`_topology_domain`) kept in
+:mod:`~finn.kernels.space.delivery` beside the op-facing :class:`DeliveredParam`
+declaration.
 """
 
 from __future__ import annotations
@@ -93,8 +93,7 @@ class BackendInterface:
 
     def to_subschemas(self) -> tuple[Schema, Schema]:
         """The ``(demand_schema, guarded delivery sub-schema)`` pair this interface
-        contributes, in supply-waterfall order — identical to what
-        ``delivery.delivery_subschemas`` produces for this interface.
+        contributes, in supply-waterfall order.
 
         The demand stage publishes ``parameters.<iface>.demand`` from resolved compute
         geometry (``publishes``); the delivery pool then sizes its own realization from
@@ -129,9 +128,8 @@ class BackendInterface:
 def backend_interface_for(dp: DeliveredParam, compute_pool) -> BackendInterface:
     """Assemble the :class:`BackendInterface` for one delivered parameter from its
     :class:`~finn.kernels.space.delivery.DeliveredParam` declaration + the op's compute
-    pool. The single place the compute→delivery contract is built — collapsing the wiring
-    that ``delivery.delivery_subschemas`` split across a demand schema and a guarded
-    delivery sub-schema."""
+    pool. The single place the compute→delivery contract is built — the demand schema and
+    the guarded delivery sub-schema for this interface have one owner."""
     iface = dp.iface
     stream = {b.name: b.stream.get(iface, ()) for b in compute_pool}
     consumes = {b.name: b.consumes.get(iface) for b in compute_pool}

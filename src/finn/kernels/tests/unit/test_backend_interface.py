@@ -8,11 +8,10 @@
 
 """``BackendInterface`` — the realization-side per-port object (design pitch §2).
 
-These tests prove BEHAVIOR-INVARIANCE against the existing split delivery path: a
-``BackendInterface`` built for MVAU ``weights`` produces schema fragments structurally
-identical to ``delivery.delivery_subschemas`` for that interface, its demand closure
-returns the same :class:`ParamDemand`, and its mode guard filters the topology domain
-identically. They are the gate T4 relies on to swap the call site without behavior change.
+These tests prove the seam is correctly assembled: a ``BackendInterface`` built for MVAU
+``weights`` produces the (DEMAND stage, guarded delivery pool) pair, its demand closure
+returns the sized :class:`ParamDemand`, its mode guard filters the topology domain by the
+selected backend's ``consumes``, and a full resolve matches captured baseline literals.
 """
 
 import numpy as np
@@ -23,7 +22,6 @@ from finn.kernels.space import (
     backend_interface_for,
 )
 from finn.kernels.space.backend import Backend
-from finn.kernels.space.delivery import delivery_subschemas
 from finn.kernels.space.param_names import (
     ALL_MODES,
     CONSTANT,
@@ -58,7 +56,7 @@ def _mvau_ctx(part=VERSAL):
 
 
 # ---------------------------------------------------------------------------
-# to_subschemas() is structurally identical to delivery_subschemas() for weights.
+# to_subschemas() produces the (DEMAND stage, guarded delivery pool) pair for weights.
 # ---------------------------------------------------------------------------
 
 
@@ -70,16 +68,27 @@ def _names(schema):
     )
 
 
-def test_to_subschemas_matches_delivery_subschemas_for_weights():
+def test_to_subschemas_yields_demand_stage_and_guarded_delivery_pool():
     pool = mvau_pool()
     dp = _weights_dp()
 
     bi = backend_interface_for(dp, pool)
-    got_demand, got_delivery = bi.to_subschemas()
-    want_demand, want_delivery = delivery_subschemas(pool, (dp,))
+    demand, delivery = bi.to_subschemas()
 
-    assert _names(got_demand) == _names(want_demand)
-    assert _names(got_delivery) == _names(want_delivery)
+    # DEMAND stage: a single derived-only schema publishing parameters.weights.demand.
+    assert _names(demand) == ((), (demand_key(WEIGHTS),), ())
+
+    # Delivery pool: the topology root axis first, then the per-topology dials.
+    axes = tuple(a.name for a in delivery.axes)
+    assert axes[0] == topology_key(WEIGHTS)
+    assert f"{topology_key(WEIGHTS).rsplit('.', 1)[0]}.ram_style" in axes
+    # The pool's derived + guarded predicates are present (per-topology geometry + gates).
+    derived = tuple(d.name for d in delivery.derived)
+    assert f"parameters.{WEIGHTS}.width" in derived
+    assert f"parameters.{WEIGHTS}.depth" in derived
+    assert f"parameters.{WEIGHTS}.sources" in derived
+    preds = tuple(p.describe() for p in delivery.predicates)
+    assert any("feasibility" in d for d in preds)
 
 
 def test_backend_interface_declares_two_root_deps():

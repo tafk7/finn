@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .context import Context
-from .backend import Backend, compose, pool_schema
+from .backend import Backend, pool_schema
 from .backend_interface import backend_interface_for
 from .point import Illegal, Point
 from .ports import Direction
@@ -124,7 +124,7 @@ class KernelSchema:
     ``cost_model`` default. Every field is independently optional: a minimal op declares
     only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
 
-    EXCLUDES the realization half — the pool of Backends and the composed ``sub_schemas``
+    EXCLUDES the realization half — the pool of Backends and the delivered parameters
     (weight delivery, memory) are held by the :class:`Kernel` alongside this, never inside
     it. A ``KernelSchema`` compiles (with the pool) down to the flat resolve
     :class:`~finn.kernels.space.schema.Schema` via :meth:`Kernel.schema`."""
@@ -143,12 +143,14 @@ class KernelSchema:
 @dataclass(frozen=True)
 class Kernel:
     """A hardware kernel op: a :class:`KernelSchema` (identity) + a pool of Backends
-    (realizations) + composed ``sub_schemas`` (weight delivery, memory).
+    (realizations) + declared ``delivered_parameters`` (weight delivery, memory).
 
     ``identity`` is the ONNX-invariant half (name, interfaces, op-level axes/derived/
     predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
-    feasibility, sources, emit. ``sub_schemas`` are secondary pools composed via
-    ``compose``. :meth:`schema` assembles all three into the flat resolve ``Schema``;
+    feasibility, sources, emit. ``delivered_parameters`` are the op's per-interface
+    :class:`~finn.kernels.space.delivery.DeliveredParam` declarations, each lowered by a
+    :class:`~finn.kernels.space.backend_interface.BackendInterface` into the demand stage +
+    guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
     are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to
     ``identity``) so callers read them off the Kernel unchanged.
@@ -156,13 +158,11 @@ class Kernel:
 
     identity: KernelSchema
     pool: tuple[Backend, ...]
-    sub_schemas: tuple = ()  # secondary pools (e.g. parameters) composed via `compose`
     delivered_parameters: tuple = ()  # DeliveredParam per delivered interface; wired generically
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
-        object.__setattr__(self, "sub_schemas", tuple(self.sub_schemas))
         object.__setattr__(self, "delivered_parameters", tuple(self.delivered_parameters))
         object.__setattr__(self, "_tiling_cache", {})
 
@@ -229,11 +229,10 @@ class Kernel:
     def schema(self) -> Schema:
         """The full design space: the identity's op-level shared elements + the
         implementation pool (each impl augmented with its tiling-engine-derived fold dials
-        / divisibility / widths), plus any composed secondary pools (``sub_schemas`` — the
-        DEMAND stage + the parameters pool). ``op_derived``/``op_predicates`` are PURE
-        identity — the cross-coordinate memory couplings that once lived here relocated
-        into the parameters pool, and the compute→memory demand crosses the seam as its own
-        composed ``sub_schema`` (never appended to the op's identity)."""
+        / divisibility / widths), plus the delivered parameters' realization sub-schemas.
+        ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate memory
+        couplings that once lived here relocated into the parameters pool, and the
+        compute→memory demand crosses the seam owned by a ``BackendInterface``."""
         op = pool_schema(
             "implementation",
             tuple(self.op_axes),
@@ -241,18 +240,21 @@ class Kernel:
             tuple(self.op_predicates),
             self._augmented_pool(),
         )
-        # DELIVERED PARAMETERS: the generic compute→delivery wiring, now OWNED by a
+        # DELIVERED PARAMETERS: the generic compute→delivery wiring, OWNED by a
         # BackendInterface per delivered interface — the realization-side per-port object
         # that holds the DEMAND stage + guarded delivery sub-schema (design pitch §2). Its
         # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
         # one owner and the waterfall is structural (its declared two-root deps) rather than
         # list-position. Reads the compute pool's `consumes` + each topology's `mode` — no
-        # op-specific logic here.
-        subs = tuple(self.sub_schemas)
+        # op-specific logic here. Namespaced keys (`parameters.*`) + distinct sources_key
+        # mean the union never collides, so resolve walks it unchanged.
         for dp in self.delivered_parameters:
-            subs += backend_interface_for(dp, self.pool).to_subschemas()
-        for sub in subs:
-            op = compose(op, sub)
+            for sub in backend_interface_for(dp, self.pool).to_subschemas():
+                op = Schema(
+                    axes=tuple(op.axes) + tuple(sub.axes),
+                    derived=tuple(op.derived) + tuple(sub.derived),
+                    predicates=tuple(op.predicates) + tuple(sub.predicates),
+                )
         return op
 
     def configure(self, context: Context, assignment: Mapping | None = None):
