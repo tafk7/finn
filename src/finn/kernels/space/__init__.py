@@ -56,6 +56,7 @@ from .stitch import Cell, StitchError, stitch
 from .schema import Schema, SchemaError
 from .demand import ParamDemand
 from .delivery import DeliveredParam, delivery_subschemas
+from .backend_interface import BackendInterface, backend_interface_for
 from .kernel import Interface, Kernel, KernelError, KernelSchema
 from .tiling import (
     FULL,
@@ -125,6 +126,8 @@ __all__ = [
     "ParamDemand",
     "DeliveredParam",
     "delivery_subschemas",
+    "BackendInterface",
+    "backend_interface_for",
     "TileExpr",
     "TileError",
     "Ref",
