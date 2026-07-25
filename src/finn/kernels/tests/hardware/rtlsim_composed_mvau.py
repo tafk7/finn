@@ -195,10 +195,12 @@ def main():
 
     # The MVU output stream is PE accumulators of accDataType (noActivation =>
     # outputDataType := accDataType), NOT the graph's declared INT16 output. Unpack with
-    # the resolved accumulator dtype + its PE-folded stream width (point.outstream_width
+    # the resolved accumulator dtype + its PE-folded stream width (stream_width.out
     # = PE * acc_bits), else the per-element bit boundary is wrong.
     acc_dt = point.accDataType
-    o_stream_w = point.outstream_width  # PE * acc_dt.bitwidth()
+    o_stream_w = point["stream_width.out"]  # PE * acc_dt.bitwidth() — MVAU publishes the
+    # tiling-engine-namespaced key, not a bare `outstream_width` axis (that is a thresholding/
+    # layernorm resolved axis). Same key the emit reads, so it matches the simulated hardware.
     packed_out = io_dict["outputs"]["out0_V_0"]
     o_folded = rtlsim_output_to_npy(
         packed_out, None, acc_dt, (1, MH // PE, PE), o_stream_w, acc_dt.bitwidth()
