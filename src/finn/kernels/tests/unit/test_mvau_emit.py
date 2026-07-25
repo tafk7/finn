@@ -97,10 +97,18 @@ def test_rtl_softvec_wrapper_golden():
     assert not _UNFILLED.search(c)  # every slot filled
     # embedded RTL needs NO weight file (weights arrive via in1_V stream)
     assert arts.data_files == ()
-    # softvec ships mvu.sv (not the packed core)
+    # the top instantiates the softvec per-core wrapper (2c split)
+    assert "mvu_vvu_axi_softvec #(" in c
+    # softvec ships its per-core wrapper + mvu.sv + the shared base .svh, and NOT the
+    # packed core/wrapper or the retired fused wrapper
     static = [s.resource.split("/")[-1] for s in arts.static_files]
+    assert "mvu_vvu_axi_softvec.sv" in static
     assert "mvu.sv" in static
+    assert "mvu_vvu_axi_base_head.svh" in static
+    assert "mvu_vvu_axi_base_tail.svh" in static
     assert "mvu_vvu_8sx9_dsp58.sv" not in static
+    assert "mvu_vvu_axi_packed.sv" not in static
+    assert "mvu_vvu_axi.sv" not in static
 
 
 def test_rtl_packed_ships_packed_core():
@@ -108,19 +116,31 @@ def test_rtl_packed_ships_packed_core():
     ctx = make_context()
     p = dsp_point(schema, ctx, MVAU_DSP_PACKED)
     arts = emit_point(mvau_pool(), p, ctx)
+    # the top instantiates the packed per-core wrapper (2c split)
+    assert "mvu_vvu_axi_packed #(" in arts.generated[0].content()
     static = [s.resource.split("/")[-1] for s in arts.static_files]
+    assert "mvu_vvu_axi_packed.sv" in static
     assert "mvu_vvu_8sx9_dsp58.sv" in static
+    assert "mvu_vvu_axi_base_head.svh" in static
+    assert "mvu_vvu_axi_base_tail.svh" in static
     assert "mvu.sv" not in static
+    assert "mvu_vvu_axi_softvec.sv" not in static
+    assert "mvu_vvu_axi.sv" not in static
 
 
-def test_dsp_bundles_share_identical_wrapper():
-    # softvec and packed emit the SAME wrapper on the same context; they diverge only
-    # in the static .sv list (the documented 2c non-separation).
+def test_dsp_bundles_wrapper_differs_only_in_core_module():
+    # Post-2c-split, softvec and packed emit near-identical top wrappers that differ
+    # ONLY in the instantiated per-core module name; the static source sets differ on
+    # the core + per-core wrapper (they still share the base .svh plumbing).
     schema = mvau_schema()
     ctx = make_context()
     a_sv = emit_point(mvau_pool(), dsp_point(schema, ctx, MVAU_DSP_SOFTVEC), ctx)
     a_pk = emit_point(mvau_pool(), dsp_point(schema, ctx, MVAU_DSP_PACKED), ctx)
-    assert a_sv.generated[0].content() == a_pk.generated[0].content()
+    c_sv = a_sv.generated[0].content()
+    c_pk = a_pk.generated[0].content()
+    assert c_sv != c_pk
+    # the ONLY difference is the instantiated core module name
+    assert c_sv.replace("mvu_vvu_axi_softvec", "X") == c_pk.replace("mvu_vvu_axi_packed", "X")
     assert {s.resource for s in a_sv.static_files} != {s.resource for s in a_pk.static_files}
 
 

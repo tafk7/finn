@@ -32,29 +32,31 @@ Two structural relationships, kept distinct (model §1.2.2/§5):
     (the ``parameters`` pool, composed into the schema in ``op.py`` §5).
 
 ------------------------------------------------------------------------------------
-2c FORWARD REQUIREMENT — physical RTL split (codegen-phase work, NOT done here)
+2c — physical RTL split (DONE; ported from feature/mvu-wrapper-split, rtlsim-verified)
 ------------------------------------------------------------------------------------
-FINN today fuses softvec+packed in one wrapper (``mvu_vvu_axi.sv``) and forks between
-them with a ``generate`` block (mvu_vvu_axi.sv:313). That fork duplicates ``mvu.sv``'s
-NUM_LANES math (the source's own ``@todo``, axi:305-307) and caused audit finding F1 —
-the physical manifestation of the non-separation surfaced by the two DSP bundles'
-overlapping ``.sources`` (both list ``mvu_vvu_axi.sv``). Splitting the shared wrapper is
-synthesizable-RTL surgery needing Vivado; it belongs to the emit phase. No ``.sv`` is
-touched. Required end state, captured so that phase needs no re-derivation:
-  * Factor the shared plumbing (replay buffer, double-pump machinery axi:177-303, output
-    queue axi:344-396, AXI I/O, SEGMENTLEN/NARROW_WEIGHTS param plumbing) into a
-    core-agnostic ``mvu_vvu_axi_base.sv`` that instantiates the compute core as a
-    parameterized sub-module — i.e. op-level plumbing.
-  * ``mvu_vvu_axi_softvec.sv`` = base + ``mvu`` core only.
-  * ``mvu_vvu_axi_packed.sv``  = base + ``mvu_vvu_8sx9_dsp58`` core only.
-  * Delete the ``generate genINT8/genSoftVec`` fork and the duplicated NUM_LANES
-    interception. The NUM_LANES≤3 routing becomes purely the Python-side
-    ``mvau_dsp_packed`` feasibility (impl_rtl_packed.py) + preference (packed>softvec).
-  * Update ``MVAU_rtl.instantiate_ip``/``get_rtl_file_list`` (rtl:168-175, 365-372) to
-    emit the per-core file list selected by the resolved ``implementation``.
-  Acceptance: softvec and packed bundles have DISJOINT ``.sources``; Vivado elaboration of
-  each per-core wrapper matches pre-split behaviour; FINN RTL-MVU tests pass. Blocked on:
-  the codegen/emit phase + Vivado.
+FINN's fused wrapper (``mvu_vvu_axi.sv``) forked softvec/packed with a ``generate``
+block (mvu_vvu_axi.sv:313) that duplicated ``mvu.sv``'s NUM_LANES math (the source's own
+``@todo``, axi:305-307; audit finding F1). Because that one file references BOTH cores,
+any bundle shipping it had an incomplete/ambiguous transitive closure — the physical
+non-separation surfaced by the two DSP bundles' overlapping ``.sources``. The split
+resolves it at the source:
+  * Shared core-agnostic plumbing (params, AXI I/O, replay buffer, double-pump machinery,
+    input unflatten/VVU interleave, flow-control, output queue) lives in
+    ``mvu_vvu_axi_base_head.svh`` + ``mvu_vvu_axi_base_tail.svh`` — ``include`` fragments,
+    NO ``generate`` fork, NO NUM_LANES math (core selection is now purely Python-side).
+  * ``mvu_vvu_axi_softvec.sv`` = head + ``mvu`` core + tail.
+  * ``mvu_vvu_axi_packed.sv``  = head + ``mvu_vvu_8sx9_dsp58`` core + tail.
+  * NUM_LANES≤3 routing is purely ``mvau_dsp_packed`` feasibility (impl_rtl_packed.py) +
+    preference (packed>softvec). Emit selects the per-core wrapper via
+    ``point.rtl_core_module`` (emit_rtl.py ``$MODULE_NAME_COMPUTE_CORE$`` slot); each
+    bundle's ``.sources`` are now DISJOINT on the core/wrapper (share only the base
+    ``.svh``). The fused ``mvu_vvu_axi.sv`` is retired from our emit path (kept in-tree
+    only as the golden for the rtlsim bit-equivalence oracle).
+  Verified: ``rtlsim_split_equiv_mvau.py`` proves each per-core wrapper is BIT-IDENTICAL
+  to the fused wrapper's matching fork branch (softvec on DSP48E2, packed on DSP58/INT8);
+  ``elaborate_mvau_emit.py`` elaborates each bundle against its own disjoint source set.
+  Because this forks vendored HDL, the byte-``run_diff`` oracle no longer applies to the
+  instantiation line; the rtlsim-equivalence check is its behavioural replacement.
 ------------------------------------------------------------------------------------
 """
 

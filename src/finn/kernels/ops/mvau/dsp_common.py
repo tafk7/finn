@@ -71,12 +71,16 @@ def _rtl_mvu_feasible(p, ctx):
     return None
 
 
-# The AXI wrapper + shared plumbing both MVAU DSP cores compile against. Both DSP
-# bundles list `mvu_vvu_axi.sv` — the OVERLAP that surfaces the non-separation (2b)
-# and motivates the 2c split (documented in the package __init__).
+# The core-agnostic AXI wrapper body + shared plumbing both MVAU DSP cores compile
+# against. Post-2c-split, the fused `mvu_vvu_axi.sv` is retired from our source lists:
+# the shared body lives in the two `.svh` fragments (included by the per-core `.sv`
+# wrappers), so this set is genuinely shared — each bundle appends its OWN per-core
+# wrapper + core on top. This removes the internal genINT8/genSoftVec `generate` fork
+# whose two-core closure made the fused source list incomplete/ambiguous.
 SHARED_SOURCES = (
     "mvu_pkg.sv",
-    "mvu_vvu_axi.sv",
+    "mvu_vvu_axi_base_head.svh",
+    "mvu_vvu_axi_base_tail.svh",
     "replay_buffer.sv",
     "add_multi.sv",
 )

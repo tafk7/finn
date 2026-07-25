@@ -12,12 +12,16 @@
 
 """Hermetic RTL codegen for the MVAU compute core (internal_embedded mode).
 
-Both DSP bundles (softvec + packed) share THIS emit — they fill an IDENTICAL AXI-lite
-wrapper (``mvu_vvu_axi_wrapper.v``) and differ ONLY in which compute core ``.sv`` is
-in ``point.sources`` (the shared-wrapper 2c non-separation). The MVU core reads
+Both DSP bundles (softvec + packed) share THIS emit — they fill the SAME AXI-lite
+wrapper template (``mvu_vvu_axi_wrapper.v``) and differ in (a) which per-core wrapper
+the top instantiates (``point.rtl_core_module`` -> ``$MODULE_NAME_COMPUTE_CORE$``) and
+(b) which compute core ``.sv`` + per-core wrapper is in ``point.sources``. Post-2c-split
+the two source sets are genuinely disjoint on the core/wrapper (they share only the
+base ``.svh`` plumbing) — the fused ``mvu_vvu_axi.sv`` with its internal
+genINT8/genSoftVec ``generate`` fork is retired from our emit path. The MVU core reads
 weights over the AXI stream ``in1_V`` — there is no weight ROM — so embedded mode
 needs NO weight data file: the artifacts are just the generated wrapper ``.v`` plus
-the static ``.sv`` list read straight off ``point.sources``.
+the static ``.sv``/``.svh`` list read straight off ``point.sources``.
 
 SCOPE — compute half only. This is the faithful *wrapper* artifact for the compute
 core. Baseline FINN forces HLS for embedded RTL-MVAU (the RTL core has no embedded
@@ -97,7 +101,7 @@ module $MODULE_NAME_AXI_WRAPPER$ #(
 	input	out0_V_TREADY
 );
 
-mvu_vvu_axi #(
+$MODULE_NAME_COMPUTE_CORE$ #(
 `ifdef FINN_SIMULATION
 	.FORCE_BEHAVIORAL(1),
 `endif
@@ -132,6 +136,9 @@ _V_WRAPPER_SCHEMA = RtlModule(
     "mvu_vvu_axi_wrapper",
     {
         "MODULE_NAME_AXI_WRAPPER": Raw,
+        # the per-core wrapper the top instantiates — data, not silicon (2c split):
+        # mvu_vvu_axi_softvec / mvu_vvu_axi_packed, from point.rtl_core_module.
+        "MODULE_NAME_COMPUTE_CORE": Raw,
         "IS_MVU": Dim,
         "VERSION": Dim,
         "PUMPED_COMPUTE": Bool,
@@ -167,6 +174,7 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
         _V_WRAPPER_SCHEMA,
         {
             "MODULE_NAME_AXI_WRAPPER": Raw(module_name),
+            "MODULE_NAME_COMPUTE_CORE": Raw(point.rtl_core_module),
             "IS_MVU": Dim(1),
             "VERSION": Dim(point.dsp_version),  # forced from device (E1/E2/DSP58 -> 1/2/3)
             "PUMPED_COMPUTE": Bool(point.get("pumpedCompute", 0)),
@@ -184,9 +192,10 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     )
     top = GeneratedFile(f"{module_name}.v", _V_WRAPPER, bindings)
 
-    # Static .sv are read straight off point.sources — softvec ships mvu.sv, packed
-    # ships mvu_vvu_8sx9_dsp58.sv, both share the wrapper/plumbing files. This is the
-    # documented 2c overlap made explicit at the artifact boundary.
+    # Static .sv/.svh read straight off point.sources — softvec ships
+    # mvu_vvu_axi_softvec.sv + mvu.sv, packed ships mvu_vvu_axi_packed.sv +
+    # mvu_vvu_8sx9_dsp58.sv; both share only the base .svh plumbing. Post-2c-split the
+    # per-core source sets are disjoint on the core/wrapper.
     static = tuple(
         StaticFile("finn.data", f"finn-rtllib/mvu/{s}") for s in point.sources
     )

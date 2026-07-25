@@ -141,7 +141,11 @@ def diff_rtl():
     arts = emit_point(mvau_pool(), point, ctx)
     ours_v = arts.generated[0].content()
 
-    # Compare the parameter block (the semantic payload). Extract "parameter NAME = VAL"
+    # Compare the parameter block (the semantic payload) only. Post-2c-split our emit
+    # instantiates a per-core wrapper (mvu_vvu_axi_softvec/_packed) while baseline FINN
+    # still instantiates the fused mvu_vvu_axi — an INTENTIONAL divergence on the
+    # instantiated module name. params() extracts only "parameter" lines, so the module
+    # name (and the instantiation line) is not compared and this stays green.
     def params(text):
         d = {}
         for line in text.splitlines():
