@@ -21,7 +21,7 @@ from finn.kernels.space import Backend, Derived
 from finn.kernels.space.param_names import STREAM
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
-from .emit_rtl import emit_mvau_rtl
+from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
 from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, WEIGHTS
 from .registry import register
 
@@ -46,6 +46,10 @@ def softvec_bundle() -> Backend:
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_axi_softvec.sv", "mvu.sv"),
         emit=emit_mvau_rtl,
+        # The typed contract for the emitted top. softvec + packed share this ONE
+        # `_V_WRAPPER_SCHEMA` object (N:1 by reference) — the per-core wrapper difference
+        # rides the `rtl_core_module`/`MODULE_NAME_COMPUTE_CORE` slot, not a fork of the schema.
+        schema=_V_WRAPPER_SCHEMA,
         stream=COMPUTE_STREAM,
         # The RTL/DSP core is a streamed-weight core: it has NO embedded-weight path (base
         # FINN: internal_embedded is HLS-only), so it consumes weights in STREAM mode only —

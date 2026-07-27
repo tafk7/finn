@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from finn.kernels.space import Artifacts, Derived, Backend, Predicate
+from finn.kernels.space import Artifacts, Derived, Backend, Predicate, RtlModule
 from finn.kernels.space.axis import Axis
 
 
@@ -43,6 +43,7 @@ def storage_topology(
     predicates: tuple[Predicate, ...] = (),
     sources: tuple[str, ...] = (),
     emit: Callable[[Any, Any], "Artifacts"] | None = None,
+    schema: RtlModule | None = None,
 ) -> Backend:
     """Declare one storage topology as a parameters-pool member.
 
@@ -50,7 +51,9 @@ def storage_topology(
     root axis is ``topology`` (see :func:`parameters_schema`); ``name`` is the value that
     selects this topology. ``mode`` is the CONSUMPTION MODE this topology presents
     (``"constant"``/``"stream"``) — carried on the ``Backend`` so the generic delivery guard
-    reads it structurally (no string→mode side-table).
+    reads it structurally (no string→mode side-table). ``schema`` is the optional typed
+    template contract this topology emits (a streaming topology references its wrapper
+    schema; a constant topology with no template leaves it ``None``).
     """
     return Backend(
         name=name,
@@ -61,4 +64,5 @@ def storage_topology(
         predicates=predicates,
         sources=sources,
         emit=emit,
+        schema=schema,
     )

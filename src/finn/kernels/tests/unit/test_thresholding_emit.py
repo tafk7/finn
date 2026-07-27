@@ -177,12 +177,22 @@ def test_narrow_quant_adjusts_bias_and_steps():
 # --- dispatch --------------------------------------------------------------
 
 
-def test_emit_point_on_hls_raises_not_implemented():
+def test_emit_point_on_hls_produces_thresh_h_rom():
+    # The HLS backend now emits a baked thresh.h ThresholdsActivation ROM (the constant
+    # topology) via the shared parameter serializer — no longer a stub.
     schema = thresholding_schema()
-    ctx = make_context()
+    ctx = make_context(channels=4, steps=7, odt="UINT3")
     point = resolve(schema, ctx, {"implementation": THRESHOLDING_HLS, "PE": 2})
-    with pytest.raises(EmitError, match="emit not implemented"):
-        emit_point(thresholding_pool(), point, ctx)
+    arts = emit_point(thresholding_pool(), point, ctx)
+    assert arts.generated[0].filename == "top_thresholding_top.cpp"
+    names = {d.filename for d in arts.data_files}
+    assert names == {"thresh.h"}
+    body = arts.data_files[0].content
+    body = body() if callable(body) else body
+    assert body.startswith("static ThresholdsActivation<")
+    cpp = arts.generated[0].content()
+    assert "Thresholding_Batch" in cpp
+    assert not _UNFILLED.findall(cpp)
 
 
 def test_emit_point_unknown_impl_raises():

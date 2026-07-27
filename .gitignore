@@ -100,3 +100,5 @@ MANIFEST
 # Docker-run scratch output from design_space emit validation runners
 _diff_out.txt
 _elab_out.txt
+_diff_thresholding_out.txt
+_rtlsim_equiv_out.txt

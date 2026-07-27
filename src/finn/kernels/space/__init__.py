@@ -42,6 +42,7 @@ from .artifacts import (
 from .context import Context
 from .derived import Derived
 from .folding import threshold_fold_depth, weight_fold_depth
+from .manifest import ArtifactManifest, SourceFile, read_abc
 from .backend import (
     Backend,
     EmitError,
@@ -99,6 +100,9 @@ __all__ = [
     "Derived",
     "weight_fold_depth",
     "threshold_fold_depth",
+    "ArtifactManifest",
+    "SourceFile",
+    "read_abc",
     "Predicate",
     "predicate",
     "Backend",

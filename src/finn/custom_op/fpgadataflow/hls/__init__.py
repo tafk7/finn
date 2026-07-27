@@ -109,3 +109,7 @@ custom_op["OuterShuffle_hls"] = OuterShuffle_hls
 from finn.kernels.ops.mvau import MvauKernelOp
 
 custom_op["MVAUKernel_hls"] = MvauKernelOp
+
+from finn.kernels.ops.thresholding import ThresholdingKernelOp
+
+custom_op["ThresholdingKernel_hls"] = ThresholdingKernelOp

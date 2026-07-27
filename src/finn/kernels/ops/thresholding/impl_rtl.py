@@ -27,7 +27,7 @@ import numpy as np
 
 from finn.kernels.space import Derived, Backend, discrete_axis, predicate, predicate_axis
 
-from .emit_rtl import emit_thresholding_rtl
+from .emit_rtl import RTL_MANIFEST, emit_thresholding_rtl
 from .names import THRESHOLDING_RTL, THRESHOLDS
 from .registry import register
 
@@ -60,10 +60,7 @@ def rtl_bundle() -> Backend:
         ),
         derived=(Derived("language", lambda p, ctx: "rtl"),),
         predicates=(_thresholds_sorted,),
-        sources=(
-            "thresholding.sv",
-            "thresholding_axi.sv",
-            "axilite.sv",
-        ),
+        # One source-of-truth: the same manifest the emit copies into the build (F9).
+        sources=RTL_MANIFEST.filenames,
         emit=emit_thresholding_rtl,
     )

@@ -8,18 +8,21 @@
 
 """Backend bundle: ``thresholding_hls`` — the HLS backend.
 
-Universal (no device/dtype feasibility gate). Its delivery cluster (mem_mode /
-ram_style) is DEFERRED this task, so this bundle currently contributes only the
-``language`` marker — deliberately thin, to make the point that the HLS and RTL
-bundles carry DISJOINT impl-local axes (the RTL bundle carries depth-triggers etc.,
-this one would carry mem_mode when the delivery cluster is modeled).
+Universal (no device/dtype feasibility gate). Bakes thresholds into a ``thresh.h``
+``ThresholdsActivation`` ROM (the constant/embedded topology) via the shared parameter
+serializer — the SEPARABLE, static-schedule threshold memory. The decoupled
+threshold-stream cluster (mem_mode/ram_style) is DEFERRED, mirroring the MVAU HLS core's
+deferred weight-stream path; the HLS and RTL bundles carry DISJOINT impl-local axes (the
+RTL bundle carries depth-triggers etc.).
 """
 
 from __future__ import annotations
 
 from finn.kernels.space import Derived, Backend
+from finn.kernels.space.param_names import CONSTANT
 
-from .names import THRESHOLDING_HLS
+from .emit_hls import emit_thresholding_hls
+from .names import THRESHOLDING_HLS, THRESHOLDS
 from .registry import register
 
 
@@ -30,4 +33,8 @@ def hls_bundle() -> Backend:
         # HLS builds anywhere; no dtype gate (identical envelope to RTL).
         derived=(Derived("language", lambda p, ctx: "hls"),),
         sources=("thresholding_hls.py",),
+        emit=emit_thresholding_hls,
+        # The HLS core bakes thresholds into thresh.h — it consumes them in CONSTANT mode
+        # only (embedded ROM, no stream port). base FINN: internal_embedded is HLS-only.
+        consumes={THRESHOLDS: {CONSTANT}},
     )

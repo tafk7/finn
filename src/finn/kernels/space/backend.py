@@ -34,7 +34,7 @@ from typing import Any
 
 from .axis import Axis, discrete_axis
 from .derived import Derived
-from .artifacts import Artifacts
+from .artifacts import Artifacts, RtlModule
 from .predicate import Predicate
 from .schema import Schema
 
@@ -94,6 +94,17 @@ class Backend:
             ``Backend`` fields — with no string→mode side-table and no knowledge of the
             topology's identity string. ``None`` for a compute-pool member (it has no
             delivery mode; it CONSUMES modes via ``consumes``).
+        schema: an OPTIONAL reference to this bundle's typed template contract
+            (:class:`~finn.kernels.space.artifacts.RtlModule`). The schema is OWNED by the
+            template (defined next to it, 1:1); ``Backend`` only REFERENCES it, so N
+            backends emitting one template share one schema object (softvec + packed both
+            point at ``_V_WRAPPER_SCHEMA``) — expressing the N:1 by shared reference rather
+            than per-backend copies that could diverge. A backend *reader* (a validator,
+            build-manifest tool, or Arc-3 Integrator) reads ``backend.schema`` for the
+            typed contract without duplicating it. ``None`` for a backend with no
+            ``$SLOT$`` template — an HLS core (free-form ``#define`` text, not typed slots)
+            or a pure-wiring delivery cell. Does NOT change ``bind``/render: it is a
+            reference for readers, not a new render path.
     """
 
     name: str
@@ -106,6 +117,7 @@ class Backend:
     stream: Mapping[str, Any] = field(default_factory=dict)
     consumes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     mode: str | None = None
+    schema: RtlModule | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))

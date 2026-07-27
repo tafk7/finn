@@ -46,7 +46,7 @@ from finn.kernels.space.param_names import (
 )
 from finn.util.basic import is_versal
 
-from .emit_memstream import emit_memstream
+from .emit_memstream import _MEMSTREAM_WRAPPER_SCHEMA, MEMSTREAM_MANIFEST, emit_memstream
 from .names import DECOUPLED
 from .registry import register
 from .topology import storage_topology
@@ -190,6 +190,9 @@ def decoupled_topology(iface):
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface),
         predicates=(_uram_gate(iface), _pumped_gate(iface)),
-        sources=("memstream_axi.sv", "memstream.sv", "axilite.sv"),
+        # One source-of-truth: the same manifest the emit resolves for the build copy (F9).
+        sources=MEMSTREAM_MANIFEST.filenames,
         emit=emit_memstream,
+        # The typed contract for the emitted memstream wrapper (a streaming topology).
+        schema=_MEMSTREAM_WRAPPER_SCHEMA,
     )

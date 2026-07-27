@@ -28,20 +28,35 @@ from __future__ import annotations
 
 import numpy as np
 from qonnx.core.datatype import DataType
-from qonnx.util.basic import interleave_matrix_outer_dim_from_partitions
 
 from finn.kernels.space import (
     Artifacts,
+    ArtifactManifest,
     DataFile,
     Direction,
     GeneratedFile,
     Kind,
     Port,
     Role,
-    StaticFile,
+    SourceFile,
     Template,
 )
-from finn.util.data_packing import numpy_to_hls_code
+from finn.kernels.ops.parameters.serialize import (
+    CPP_HEADER,
+    layout,
+    threshold_constraint,
+    weight_constraint,
+)
+
+# The single source-of-truth for the HLS compute core's static finn-hlslib headers (F9).
+HLS_STATIC_MANIFEST = ArtifactManifest(
+    sources=(
+        SourceFile("weights.hpp", root="deps/finn-hlslib"),
+        SourceFile("activations.hpp", root="deps/finn-hlslib"),
+        SourceFile("mvau.hpp", root="deps/finn-hlslib"),
+        SourceFile("bnn-library.h", root="deps/finn-hlslib"),
+    ),
+)
 
 from .geometry import mvau_geometry
 from .op import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
@@ -165,12 +180,7 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
         generated=(top,),
         data_files=data_files,
         ports=ports,
-        static_files=(
-            StaticFile("finn.data", "deps/finn-hlslib/weights.hpp"),
-            StaticFile("finn.data", "deps/finn-hlslib/activations.hpp"),
-            StaticFile("finn.data", "deps/finn-hlslib/mvau.hpp"),
-            StaticFile("finn.data", "deps/finn-hlslib/bnn-library.h"),
-        ),
+        static_files=HLS_STATIC_MANIFEST.static_files(),
     )
 
 
@@ -185,28 +195,19 @@ def _ap_int_max_w(point, context) -> int:
 # ------------------------------------------------------------- pure helpers
 
 
-def _hw_weight_tensor(weights, mw, mh, pe, simd, wmem, wdt):
-    """get_hw_compatible_weight_tensor (matrixvectoractivation.py:602): transpose to
-    hlslib layout, bipolar->binary, interleave rows across PEs, reshape (1,PE,WMEM,
-    SIMD), reverse SIMD. Pure."""
-    ret = weights.T
-    if wdt == DataType["BIPOLAR"]:
-        ret = (ret + 1) / 2
-    ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
-    ret = ret.reshape(1, pe, wmem, simd)
-    ret = np.flip(ret, axis=-1)
-    return ret
-
-
 def _params_h(point, context, geo) -> str:
     """make_weight_file "hls_header" (matrixvectoractivation.py:659): pack the weight
-    tensor into a FixedPointWeights/BinaryWeights C++ initializer."""
+    tensor into a FixedPointWeights/BinaryWeights C++ initializer. The serialized body
+    comes from the shared ``layout`` (CPP_HEADER form) — the ONE Part-1 reshape both this
+    and the decoupled ``memblock.dat`` path call, so they cannot diverge."""
     weights = np.asarray(context.initializer(WEIGHTS))
     wdt = context.tensor_datatype(WEIGHTS)
     export_wdt = DataType["BINARY"] if wdt == DataType["BIPOLAR"] else wdt
 
-    tensor = _hw_weight_tensor(weights, geo.MW, geo.MH, point.PE, point.SIMD, geo.depth, wdt)
-    hls_code = numpy_to_hls_code(tensor, export_wdt, "weights", True, True)
+    constraint = weight_constraint(
+        point.PE, point.SIMD, geo.depth, wdt, export_wdt, form=CPP_HEADER
+    )
+    hls_code = layout(weights, constraint).text
 
     if export_wdt.bitwidth() != 1:
         head = "const FixedPointWeights<{},{},{},{}> weights = ".format(
@@ -219,29 +220,21 @@ def _params_h(point, context, geo) -> str:
     return head + hls_code
 
 
-def _hw_threshold_tensor(thresholds, mh, pe, tmem, n_steps):
-    """get_hw_compatible_threshold_tensor (matrixvectoractivation.py:584): tile a
-    per-tensor (1, n_steps) threshold matrix up to MH channels, interleave rows across
-    PEs, reshape (1, PE, TMEM, n_steps). Pure."""
-    ret = thresholds
-    if ret.shape[0] == 1:
-        ret = np.tile(ret, (mh, 1))
-    ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
-    return ret.reshape(1, pe, tmem, n_steps)
-
-
 def _thresh_h(point, context, geo) -> str:
     """Bake thresholds into a ThresholdsActivation C++ initializer (matrixvectoractivation.py:
     868-914), the constant-mode HLS threshold delivery. Pure over (point, context): reads the
-    threshold VALUES + the resolved threshold dtype (``thresholdDataType``), never the graph."""
+    threshold VALUES + the resolved threshold dtype (``thresholdDataType``), never the graph.
+    The serialized body comes from the shared ``layout`` (THRESHOLD traversal, CPP_HEADER form)
+    — the same separable-ROM serializer the standalone Thresholding-HLS op uses."""
     thresholds = np.asarray(context.initializer(THRESHOLDS))
     tdt = point.thresholdDataType
     odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
     export_odt = DataType["BINARY"] if odt == DataType["BIPOLAR"] else odt
 
     n_steps = thresholds.shape[-1]
-    tensor = _hw_threshold_tensor(thresholds, geo.MH, point.PE, geo.tdepth, n_steps)
-    hls_code = numpy_to_hls_code(tensor, tdt, "thresholds", False, True)
+    hls_code = layout(
+        thresholds, threshold_constraint(point.PE, geo.tdepth, n_steps, geo.MH, tdt)
+    ).text
 
     tdt_hls = tdt.get_hls_datatype_str()
     odt_hls = export_odt.get_hls_datatype_str()

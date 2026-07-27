@@ -34,15 +34,28 @@ from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.kernels.space import (
     Artifacts,
+    ArtifactManifest,
     DataFile,
     GeneratedFile,
     IPICommands,
-    StaticFile,
+    SourceFile,
     Template,
 )
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
 from .names import INPUT, OUTPUT, THRESHOLDS
+
+# The single source-of-truth for this backend's build sources (F9). Each file carries its
+# own in-tree resolved path — the two finn-rtllib subdirs (thresholding/hdl, axi/hdl) that
+# were previously scattered across inline StaticFile f-strings. Backend.sources reads
+# ``.filenames``; the emit reads ``.static_files()`` — one list, two readers.
+RTL_MANIFEST = ArtifactManifest(
+    sources=(
+        SourceFile("thresholding.sv", root="finn-rtllib/thresholding/hdl"),
+        SourceFile("thresholding_axi.sv", root="finn-rtllib/thresholding/hdl"),
+        SourceFile("axilite.sv", root="finn-rtllib/axi/hdl"),
+    ),
+)
 
 # The real finn-rtllib IP-packaging wrapper, as a typed template. Slots are
 # $UPPERCASE$; Verilog $clog2(...) is deliberately not a slot.
@@ -180,11 +193,7 @@ def emit_thresholding_rtl(point, context, module_name: str = "thresholding_top")
     return Artifacts(
         generated=(top,),
         data_files=tuple(dat_files),
-        static_files=(
-            StaticFile("finn.data", "finn-rtllib/thresholding/hdl/thresholding.sv"),
-            StaticFile("finn.data", "finn-rtllib/thresholding/hdl/thresholding_axi.sv"),
-            StaticFile("finn.data", "finn-rtllib/axi/hdl/axilite.sv"),
-        ),
+        static_files=RTL_MANIFEST.static_files(),
         ipi=IPICommands(
             (f"create_bd_cell -type module -reference {module_name} {module_name}",)
         ),
@@ -222,7 +231,17 @@ def _narrow_quant_adjust(thresholds, n_steps, o_bits, act_val, idt, odt, wdt):
 
 def _threshold_dat_files(thresholds, pe, num_channels, o_bits, n_steps, wdt):
     """Produce threshs_{pe}_{stage}.dat memory-init files in the binary-search layout
-    the core's $readmemh expects."""
+    the core's $readmemh expects.
+
+    DELIBERATELY NOT routed through the shared ``layout`` serializer: this is the FAR SIDE
+    of the static-vs-data-dependent boundary predicate. The ROM address here is the runtime
+    comparison outcome (which node the descending binary search visits at each stage —
+    ``(i << (o_bits-stage)) + 2**(o_bits-stage-1) - 1``), NOT a static loop counter. The
+    scatter across ``o_bits × PE`` files IS the binary-search decision tree; flattening it to
+    a single ``layout`` blob would delete the resource win that is this RTL backend's reason
+    to exist. So this threshold storage is FUSED to the compute core and stays here, by
+    principle — unlike the HLS threshold ROM (separable, static-schedule), which DOES route
+    through ``layout`` (``emit_hls.py``)."""
     t_expand = np.expand_dims(thresholds, axis=-1)
     bw_hexdigit = roundup_to_integer_multiple(wdt.bitwidth(), 4)
     t_packed = pack_innermost_dim_as_hex_string(t_expand, wdt, bw_hexdigit, prefix="")

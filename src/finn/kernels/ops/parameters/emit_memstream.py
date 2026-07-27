@@ -29,10 +29,10 @@ from __future__ import annotations
 
 import numpy as np
 from qonnx.core.datatype import DataType
-from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.kernels.space import (
     Artifacts,
+    ArtifactManifest,
     Bool,
     DataFile,
     Dim,
@@ -43,12 +43,13 @@ from finn.kernels.space import (
     Raw,
     Role,
     RtlModule,
-    StaticFile,
+    SourceFile,
     Template,
     bind,
     weight_fold_depth,
 )
-from finn.util.data_packing import pack_innermost_dim_as_hex_string
+
+from .serialize import DAT_HEX, layout, weight_constraint
 
 from finn.kernels.space.param_names import (
     depth_key,
@@ -63,9 +64,20 @@ from finn.kernels.space.param_names import (
 
 from .names import WEIGHTS
 
-# Real finn-rtllib subdir per static source (base:1170,1182-1184). Anything not listed
-# defaults to memstream/hdl (the memstream cores' home).
-_SOURCE_DIRS = {"axilite.sv": "finn-rtllib/axi/hdl"}
+# The single source-of-truth for the memstream cell's static finn-rtllib sources (F9). Each
+# carries its own real subdir (base:1170,1182-1184) — axilite.sv under axi/hdl, the memstream
+# cores under memstream/hdl — centralizing the per-file path resolution that was an inline
+# override dict. The decoupled bundle's `sources` reads ``.filenames``; the emit resolves each
+# resolved source name against this manifest's path table.
+MEMSTREAM_MANIFEST = ArtifactManifest(
+    sources=(
+        SourceFile("memstream_axi.sv", root="finn-rtllib/memstream/hdl"),
+        SourceFile("memstream.sv", root="finn-rtllib/memstream/hdl"),
+        SourceFile("axilite.sv", root="finn-rtllib/axi/hdl"),
+    ),
+)
+# filename -> resolved StaticFile, for the point-driven source list the emit reads.
+_MANIFEST_BY_NAME = {s.filename: s for s in MEMSTREAM_MANIFEST.sources}
 
 
 # The parameter tensor's fold-shape helper needs PE/SIMD (off the point) and WMEM (the
@@ -229,13 +241,12 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
     if init_file:
         data_files = (DataFile("memblock.dat", _memblock_dat(point, context, iface)),)
 
-    # Static memstream HDL — read straight off the selected topology's sources, each
-    # resolved to its real finn-rtllib subdir. axilite.sv lives under axi/hdl/, the
-    # memstream cores under memstream/hdl/ (matches FINN base:1182-1184); a bare
-    # single-dir prefix would mis-locate axilite.sv.
+    # Static memstream HDL — the selected topology's resolved source names, each mapped to
+    # its real finn-rtllib subdir via the ONE manifest (axilite.sv under axi/hdl, the
+    # memstream cores under memstream/hdl; base:1182-1184). One source-of-truth, so the
+    # bundle's `sources` and this build copy cannot drift.
     static = tuple(
-        StaticFile("finn.data", f"{_SOURCE_DIRS.get(s, 'finn-rtllib/memstream/hdl')}/{s}")
-        for s in point.get(sources_key(iface), ())
+        _MANIFEST_BY_NAME[s].as_static() for s in point.get(sources_key(iface), ())
     )
 
     # The delivery cell publishes a WEIGHT_SOURCE (m_axis_0) — the resolver binds it to
@@ -276,48 +287,25 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
 
 
 def _memblock_dat(point, context, iface: str = WEIGHTS) -> str:
-    """make_weight_file "decoupled_verilog_dat" (matrixvectoractivation.py:715-811):
-    transpose (1,PE,WMEM,SIMD) → PE-flip → reshape (1,-1,PE*SIMD) → hex-pack each group
-    to a 4-bit-padded hex word; pumpedMemory splits each word into two half-width
-    entries. Pure over (point, context)."""
-    from qonnx.util.basic import interleave_matrix_outer_dim_from_partitions
-
+    """make_weight_file "decoupled_verilog_dat" (matrixvectoractivation.py:715-811) via the
+    shared ``layout`` (DAT_HEX form + decoupled PE-flip + optional pumped split). The Part-1
+    reshape is the SAME one the embedded ``params.h`` path calls — one serializer, so the two
+    delivery forms cannot diverge. Pure over (point, context)."""
     weights = np.asarray(context.initializer(WEIGHTS))
     wdt = context.tensor_datatype(WEIGHTS)
     export_wdt = DataType["BINARY"] if wdt == DataType["BIPOLAR"] else wdt
     # WMEM from the topology-independent fold-depth query (F1) — the same geometry the
     # wrapper's DEPTH slot traces to via depth_key, no longer the op's point.WMEM alias.
-    pe, simd = point.PE, point.SIMD
     wmem = weight_fold_depth(point, context, iface)
 
-    # get_hw_compatible_weight_tensor → (1, PE, WMEM, SIMD).
-    ret = weights.T
-    if wdt == DataType["BIPOLAR"]:
-        ret = (ret + 1) / 2
-    ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
-    weight_tensor = ret.reshape(1, pe, wmem, simd)
-    weight_tensor = np.flip(weight_tensor, axis=-1)  # SIMD flip (hw layout)
-
-    # decoupled: transpose to (1, WMEM, PE, SIMD), then PE-flip, reshape (1,-1,PE*SIMD).
-    unflipped = np.transpose(weight_tensor, (0, 2, 1, 3))
-    pe_flipped = np.flip(unflipped, axis=-2)
-    pe_flipped = pe_flipped.reshape(1, -1, pe * simd).copy()
-    # TH=1: the TH-untile flip is a no-op, elided.
-
-    # hex-pack each PE*SIMD group at 4-bit-padded width (base:783-790).
-    weight_width = pe * simd * export_wdt.bitwidth()
-    weight_width_padded = roundup_to_integer_multiple(weight_width, 4)
-    packed = pack_innermost_dim_as_hex_string(
-        pe_flipped, export_wdt, weight_width_padded, prefix=""
+    constraint = weight_constraint(
+        point.PE,
+        point.SIMD,
+        wmem,
+        wdt,
+        export_wdt,
+        form=DAT_HEX,
+        decoupled_pe_flip=True,
+        pumped_split=bool(point.get(pumped_memory_key(iface), 0)),
     )
-    weight_stream = packed.flatten().copy()
-
-    if point.get(pumped_memory_key(iface), 0):
-        # split each hex word into two half-width entries (low half first). base:801-808.
-        split = []
-        for w in weight_stream:
-            split.append(w[len(w) // 2:])
-            split.append(w[: len(w) // 2])
-        weight_stream = split
-
-    return "".join(str(v) + "\n" for v in weight_stream)
+    return layout(weights, constraint).text

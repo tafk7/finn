@@ -29,13 +29,26 @@ from __future__ import annotations
 
 from finn.kernels.space import Schema, pool_schema
 
-from .names import THRESHOLDING_HLS, THRESHOLDING_RTL  # noqa: F401 (re-exported)
+from .names import (  # noqa: F401 (re-exported)
+    INPUT,
+    OUTPUT,
+    THRESHOLDING_HLS,
+    THRESHOLDING_RTL,
+    THRESHOLDS,
+)
 from .registry import build_pool
 from .shared import op_axes, op_derived, op_predicates
 
 # Import the built-in bundle modules for their registration side effect.
 from . import impl_hls  # noqa: E402,F401
 from . import impl_rtl  # noqa: E402,F401
+
+# The Kernel assembly + FINN wrapper (imported after the bundles register).
+from .op import (  # noqa: E402,F401 (re-exported public surface)
+    ThresholdingKernelOp,
+    thresholding_kernel,
+    thresholding_kernel_schema,
+)
 
 
 def thresholding_shared():
@@ -49,6 +62,23 @@ def thresholding_pool():
 
 
 def thresholding_schema() -> Schema:
-    """The full Thresholding design space as a resolve ``Schema``."""
+    """The full Thresholding design space as a bare resolve ``Schema`` (compute pool only,
+    no delivered parameters). The Kernel-composed schema (adding the ``parameters.*``
+    namespace) is :func:`thresholding_kernel_schema`."""
     axes, derived, predicates = thresholding_shared()
     return pool_schema("implementation", axes, derived, predicates, thresholding_pool())
+
+
+__all__ = [
+    "thresholding_shared",
+    "thresholding_pool",
+    "thresholding_schema",
+    "thresholding_kernel",
+    "thresholding_kernel_schema",
+    "ThresholdingKernelOp",
+    "THRESHOLDING_HLS",
+    "THRESHOLDING_RTL",
+    "THRESHOLDS",
+    "INPUT",
+    "OUTPUT",
+]
