@@ -32,7 +32,11 @@
 # `-u` is deliberately omitted: optional FINN_SKIP_BOARD_FILES flag may be unset.
 set -eo pipefail
 
-QONNX_COMMIT="f5c9819bd00f01f41e70639b8461c8e4b39432f7"
+# tafk7/qonnx feature/model-aware-customop: opt-in graph-context contract for
+# custom ops (wants_model / attach_model / get_customop_wrapper). Fork branch, not
+# yet upstreamed; carried here (QONNX_URL points at the fork) until PR'd at the
+# owner's discretion.
+QONNX_COMMIT="342dffbc949659aaef3fcec51895c9a4c3931038"
 FINN_EXP_COMMIT="0724be21111a21f0d81a072fccc1c446e053f851"
 BREVITAS_COMMIT="aad4d5a293db6f2ec622a92a5d3278e47072453e"
 HLSLIB_COMMIT="8d979e2bdced486dd25d26607d1ff5ae327ed6a8"
@@ -43,7 +47,9 @@ KV260_BDF_COMMIT="98e0d3efc901f0b974006bc4370c2a7ad8856c79"
 EXP_BOARD_FILES_MD5="226ca927a16ea4ce579f1332675e9e9a"
 AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
 
-QONNX_URL="https://github.com/fastmachinelearning/qonnx.git"
+# Fork carrying the model-aware custom-op contract (QONNX_COMMIT below); revert to
+# fastmachinelearning/qonnx once that change is upstream-merged.
+QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"
 BREVITAS_URL="https://github.com/Xilinx/brevitas.git"
 HLSLIB_URL="https://github.com/Xilinx/finn-hlslib.git"

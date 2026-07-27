@@ -84,8 +84,6 @@ class InferKernels(Transformation):
         self.pool = list(pool)
 
     def apply(self, model: ModelWrapper):
-        from finn.kernels.adapter import getHWCustomOp
-
         graph = model.graph
         graph_modified = False
 
@@ -108,7 +106,7 @@ class InferKernels(Transformation):
 
             # Model-aware validation guard (brainsmith infer_kernel.py:128-143): a kernel
             # node that cannot instantiate + publish its output dtype is not committed.
-            if not self._validate(result, model, getHWCustomOp, kernel_cls, node):
+            if not self._validate(result, model, kernel_cls, node):
                 continue
 
             for i, new_node in enumerate(result.nodes_to_insert):
@@ -139,7 +137,7 @@ class InferKernels(Transformation):
                 )
         return None
 
-    def _validate(self, result, model, getHWCustomOp, kernel_cls, src_node) -> bool:
+    def _validate(self, result, model, kernel_cls, src_node) -> bool:
         """Instantiate + validate each new kernel node before commit. Only kernel-domain
         nodes are validated (an infer might also emit layout/helper nodes). Returns False
         (skip this inference) if any kernel node fails to instantiate."""
@@ -147,7 +145,7 @@ class InferKernels(Transformation):
             if new_node.domain != KERNEL_DOMAIN:
                 continue
             try:
-                kernel_op = getHWCustomOp(new_node, model)
+                kernel_op = model.get_customop_wrapper(new_node)
                 kernel_op.infer_node_datatype(model)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

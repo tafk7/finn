@@ -15,9 +15,11 @@ Context from the **live model**, following the ONNX ownership rule: a node owns 
 own internals (the design axes ``implementation``/PE/SIMD/…), never graph-owned facts
 (tensor shapes, datatypes, weight values). Those come from the model at construction, not
 from baked ``<iface>_shape``/``<iface>_dtype`` nodeattrs (which would be a second, staling
-source of truth). The op is built model-bearing via :func:`getHWCustomOp` (mirroring the
-brainsmith ``_ensure_ready``/``invalidate`` pattern); the model-built Context is cached and
-regenerated when a new model is attached. Three jobs (kernelop-tensor-block-stream.md §7;
+source of truth). The op is built model-bearing via ``model.get_customop_wrapper(node)``
+(mirroring the brainsmith ``_ensure_ready``/``invalidate`` pattern) — it opts into the qonnx
+model-aware contract with ``wants_model = True``, so ``get_customop_wrapper`` attaches the
+model automatically; the model-built Context is cached and regenerated when a new model is
+attached. Three jobs (kernelop-tensor-block-stream.md §7;
 consumer-surface-model.md Tier 0-3):
 
   1. **Bridge** — ``_context()`` builds the Context from the ATTACHED model (shapes,
@@ -29,8 +31,9 @@ consumer-surface-model.md Tier 0-3):
 
 Because the Context carries REAL weight values, value-derived dtypes (MVAU's accumulator
 under ``noActivation``) are exact for the getters too — not correct-only-by-luck under a
-placeholder. FINN build-flow ``getCustomOp(node)`` integration (threading the model into
-every transient op) is deferred; tests construct via :func:`getHWCustomOp`.
+placeholder. Full-fleet ``getCustomOp(node)`` → ``get_customop_wrapper(node)`` migration
+(threading the model into every transient op) is deferred; the estimate-tier sites and tests
+construct via ``model.get_customop_wrapper(node)``.
 
 Specialization is by the ``implementation`` nodeattr (mapping onto the engine's
 ``implementation`` selection axis), NOT by FINN's domain mutation — one KernelOp class
@@ -79,6 +82,12 @@ class KernelOp(HWCustomOp):
     Context bridge, and all the HWCustomOp getters — is derived generically here.
     """
 
+    # Every KernelOp derives its shapes/dtypes/widths from live graph context, so it
+    # opts into the qonnx model-aware contract (CustomOp.wants_model). This makes
+    # ``model.get_customop_wrapper(node)`` attach the model automatically — the
+    # graph-derived getters below would otherwise raise (see ``_context``).
+    wants_model = True
+
     # -- subclass hooks -----------------------------------------------------
 
     @abstractmethod
@@ -110,8 +119,12 @@ class KernelOp(HWCustomOp):
     def attach_model(self, model) -> "KernelOp":
         """Attach the live model this op belongs to, so the getters can source their
         Context (shapes/dtypes/REAL values) from it. Caches the built Context; a later
-        attach with a different model regenerates it (``invalidate``). Returns ``self`` so
-        :func:`getHWCustomOp` can construct-and-attach in one expression."""
+        attach with a different model regenerates it (``invalidate``). Returns ``self``
+        so ``model.get_customop_wrapper(node)`` yields the attached op in one expression.
+
+        This overrides the qonnx :meth:`CustomOp.attach_model` hook — a KernelOp opts
+        into the model-aware contract via ``wants_model = True``, so this runs whenever
+        the op is built through ``get_customop_wrapper``."""
         self._model = model
         self._context_cache = None
         return self
@@ -130,7 +143,8 @@ class KernelOp(HWCustomOp):
         if model is None:
             raise ValueError(
                 f"{type(self).__name__}: no model attached — construct via "
-                f"getHWCustomOp(node, model) so the Context can be built from the live graph"
+                f"model.get_customop_wrapper(node) so the Context can be built from the "
+                f"live graph"
             )
         graph_ctx = Context.from_model(model, self._fpgapart_from(model))
         shapes: dict[str, tuple[int, ...]] = {}
@@ -281,18 +295,3 @@ class KernelOp(HWCustomOp):
             return None
         name = slot[port.index]
         return name if name else None
-
-
-def getHWCustomOp(node, model):
-    """Construct the :class:`KernelOp` for ``node`` and attach ``model`` — the
-    model-bearing analogue of QONNX ``getCustomOp(node)``. Because a ``KernelOp`` sources
-    its Context (shapes/dtypes/weight VALUES) from the live model rather than from baked
-    nodeattrs, it must be built WITH the model in hand. FINN build-flow integration (making
-    ``getCustomOp`` thread the model through automatically) is deferred; tests and local
-    callers use this helper.
-
-    Returns the attached op. ``model`` is a ``ModelWrapper`` owning ``node``.
-    """
-    from qonnx.custom_op.registry import getCustomOp
-
-    return getCustomOp(node).attach_model(model)

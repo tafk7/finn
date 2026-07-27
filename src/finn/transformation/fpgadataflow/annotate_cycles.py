@@ -27,7 +27,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import qonnx.custom_op.registry as registry
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -48,7 +47,10 @@ class AnnotateCycles(Transformation):
         # annotate node cycles
         for node in graph.node:
             if is_hls_node(node) or is_rtl_node(node):
-                op_inst = registry.getCustomOp(node)
+                # Model-aware instantiation: a kernel op (wants_model=True) needs the
+                # model so get_exp_cycles can source its Context from live graph facts;
+                # classic ops get an identical bare instance (safe superset).
+                op_inst = model.get_customop_wrapper(node)
                 cycles = op_inst.get_exp_cycles()
                 op_inst.set_nodeattr("cycles_estimate", int(cycles))
             elif node.op_type == "StreamingDataflowPartition":

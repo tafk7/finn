@@ -151,7 +151,10 @@ class SetFolding(Transformation):
             if not (is_hls_node(node) or is_rtl_node(node)):
                 continue
             op_type = node.op_type
-            node_inst = getCustomOp(node)
+            # Model-aware instantiation: a kernel-backed op (wants_model=True) is
+            # attached to the model so its get_folding_axes/get_exp_cycles getters can
+            # read live graph context; classic ops get an identical bare instance.
+            node_inst = model.get_customop_wrapper(node)
             # Capability query (R1 down-payment): a Kernel-engine-backed op advertises
             # its folding dials mapped to each dial's resolved max, so SetFolding folds
             # it without matching op_type strings. Each dial is swept low→high until the

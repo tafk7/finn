@@ -24,7 +24,6 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.kernels.space import Context
-from finn.kernels.adapter import getHWCustomOp
 from finn.kernels.ops.mvau import mvau_kernel
 
 MW, MH = 128, 64
@@ -38,7 +37,8 @@ NUM_STEPS = 7  # thresholds have 2^k-1 steps; a plain positive count is fine for
 
 def _build_model(simd=16, pe=4, thresholds=True, annotate_out=True):
     """A single-node MVAUKernel_hls graph. Geometry is NOT baked into nodeattrs — the op
-    sources shapes/dtypes/values from the live model (built via ``getHWCustomOp``); only
+    sources shapes/dtypes/values from the live model (built via
+    ``model.get_customop_wrapper``); only
     the design axes (implementation/PE/SIMD) live on the node.
 
     ``thresholds=True`` builds a 3-input HAS-activation node (a real ``thresholds`` tensor),
@@ -110,7 +110,7 @@ def _ctx(thresholds=True):
 
 
 def _inst(model):
-    return getHWCustomOp(model.graph.node[0], model)
+    return model.get_customop_wrapper(model.graph.node[0])
 
 
 # ---------------------------------------------------------------------------

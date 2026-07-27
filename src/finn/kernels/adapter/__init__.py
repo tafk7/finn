@@ -21,13 +21,12 @@ consumer surface this satisfies, and the design doc
 ``kernel-design/kernel-final-design/kernelop-tensor-block-stream.md`` for the model.
 """
 
-from .kernel_op import KernelOp, PortSpec, getHWCustomOp
+from .kernel_op import KernelOp, PortSpec
 from .infer import InferKernels, TransformationResult
 
 __all__ = [
     "KernelOp",
     "PortSpec",
-    "getHWCustomOp",
     "InferKernels",
     "TransformationResult",
 ]

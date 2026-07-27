@@ -12,13 +12,10 @@ match). Proves the dials round-trip through nodeattrs and drive ``get_exp_cycles
 """
 
 import numpy as np
-import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
-
-from finn.kernels.adapter import getHWCustomOp
 
 MW, MH = 128, 64
 OP_TYPE = "MVAUKernel_hls"
@@ -55,21 +52,17 @@ def _build_model():
     return model
 
 
-@pytest.mark.skip(
-    reason="SetFolding instantiates nodes via bare getCustomOp(node) (no model); "
-    "model-bearing KernelOp needs the deferred build-flow integration"
-)
 def test_set_folding_folds_kernel_backed_mvau():
     from finn.transformation.fpgadataflow.set_folding import SetFolding
 
     model = _build_model()
-    inst = getHWCustomOp(model.graph.node[0], model)
+    inst = model.get_customop_wrapper(model.graph.node[0])
     unfolded_cycles = inst.get_exp_cycles()  # PE=SIMD=1 -> MW*MH = 8192
 
     target = 512
     model = model.transform(SetFolding(target_cycles_per_frame=target))
 
-    inst = getHWCustomOp(model.graph.node[0], model)
+    inst = model.get_customop_wrapper(model.graph.node[0])
     pe = inst.get_nodeattr("PE")
     simd = inst.get_nodeattr("SIMD")
     folded_cycles = inst.get_exp_cycles()
@@ -85,7 +78,7 @@ def test_set_folding_folds_kernel_backed_mvau():
 
 def test_folding_is_monotone_in_dials():
     model = _build_model()
-    inst = getHWCustomOp(model.graph.node[0], model)
+    inst = model.get_customop_wrapper(model.graph.node[0])
     c_1_1 = inst.get_exp_cycles()
     inst.set_nodeattr("SIMD", 16)
     c_16_1 = inst.get_exp_cycles()
