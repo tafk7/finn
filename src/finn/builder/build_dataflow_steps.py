@@ -468,6 +468,16 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(transform)
         return model
 
+    # Kernel-substrate inference runs FIRST (handoff Seam A): the new kernel ops claim their
+    # frontend patterns (MatMul[+MultiThreshold] -> finn.kernels/MVAU, standalone
+    # MultiThreshold -> finn.kernels/Thresholding) before FINN's classic Infer* transforms,
+    # which then see only the remainder. This never touches FINN's classic MVAU path.
+    from finn.kernels.adapter import InferKernels
+    from finn.kernels.ops.mvau.op import MvauKernelOp
+    from finn.kernels.ops.thresholding.op import ThresholdingKernelOp
+
+    model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
+
     # Thresholding layers (standalone mode)
     if cfg.standalone_thresholds:
         # First: Convert high-bitwidth MultiThreshold and all Quant nodes to Requant

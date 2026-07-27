@@ -1,0 +1,162 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+# Portions of this content consist of AI generated content.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+############################################################################
+
+"""Seam A — the INFER seam: frontend graph pattern → unresolved kernel node.
+
+FINN converts frontend ONNX ops (MatMul, MultiThreshold, …) into hardware-layer nodes
+inside ``step_convert_to_hw``. The classic path bakes the kernel's design-space logic as
+hidden imperative asserts inside a 270-line god-method
+(``InferQuantizedMatrixVectorActivation``), and freezes graph-derived facts
+(MW/MH/actval/numInputVectors) onto the node. The kernel system claims its frontend
+pattern FIRST, at infer, and never touches FINN's classic MVAU path.
+
+This module carries the two generic pieces of that seam:
+
+  * :class:`TransformationResult` — the per-node return of a kernel's ``infer_from``
+    (which nodes to insert / remove). Mirror of brainsmith's
+    ``dataflow/transformation.py`` shape.
+  * :class:`InferKernels` — one generic qonnx ``Transformation`` driven by a POOL of
+    KernelOp classes. For each graph node, the first pool op whose ``can_infer_from``
+    returns True wins; its ``infer_from`` produces the replacement node(s). The concrete
+    match/build logic lives ON each KernelOp (``ops/mvau/op.py``,
+    ``ops/thresholding/op.py``) — this driver is oblivious to how the pool was assembled,
+    so a future registry-driven pool drops in with no change here.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+from onnx import NodeProto
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import Transformation
+from qonnx.transformation.infer_datatypes import InferDataTypes
+from qonnx.transformation.infer_shapes import InferShapes
+
+logger = logging.getLogger(__name__)
+
+# The taxonomy domain of every kernel node (handoff Seam C). The package IS the domain
+# module — ``finn.kernels`` imports directly, no alias.
+KERNEL_DOMAIN = "finn.kernels"
+
+
+@dataclass(frozen=True)
+class TransformationResult:
+    """The result of one kernel's ``infer_from`` — the graph edit to apply.
+
+    Attributes:
+        nodes_to_insert: kernel node(s) to insert into the graph.
+        nodes_to_remove: frontend node(s) the kernel absorbed and replaces.
+        metadata: optional, free-form transformation notes (unused by the driver).
+    """
+
+    nodes_to_insert: list[NodeProto]
+    nodes_to_remove: list[NodeProto]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class InferKernels(Transformation):
+    """Drive a POOL of KernelOp classes over the graph, claiming frontend patterns.
+
+    Constructed with an ordered pool (``list`` order == precedence): for each node, the
+    FIRST pool op whose ``can_infer_from`` returns True wins, its ``infer_from`` builds
+    the replacement, and the graph edit is applied. Before committing, each freshly-built
+    kernel node is instantiated model-aware and validated (``infer_node_datatype``) — so
+    the seam produces ONLY nodes that legally instantiate. InferShapes + InferDataTypes
+    re-run once at the end if anything changed (as every FINN infer does).
+
+    Args:
+        pool: ordered ``list[type[KernelOp]]``. For the vertical slice this is the
+            hardcoded ``[MvauKernelOp, ThresholdingKernelOp]`` supplied at the call site;
+            the future registry-driven version swaps that literal for ``registry.kernels()``
+            with no change to this driver.
+    """
+
+    def __init__(self, pool: list):
+        super().__init__()
+        self.pool = list(pool)
+
+    def apply(self, model: ModelWrapper):
+        from finn.kernels.adapter import getHWCustomOp
+
+        graph = model.graph
+        graph_modified = False
+
+        for node_ind, node in enumerate(list(graph.node)):
+            kernel_cls = self._match(node, model)
+            if kernel_cls is None:
+                continue
+
+            try:
+                result = kernel_cls.infer_from(node, model, node_ind + 1)
+            except Exception as exc:  # noqa: BLE001 — a failed build must not abort the pass
+                logger.warning(
+                    "InferKernels: %s.infer_from failed on %s node %s: %s",
+                    kernel_cls.__name__,
+                    node.op_type,
+                    node.name,
+                    exc,
+                )
+                continue
+
+            # Model-aware validation guard (brainsmith infer_kernel.py:128-143): a kernel
+            # node that cannot instantiate + publish its output dtype is not committed.
+            if not self._validate(result, model, getHWCustomOp, kernel_cls, node):
+                continue
+
+            for i, new_node in enumerate(result.nodes_to_insert):
+                graph.node.insert(node_ind + 1 + i, new_node)
+            for old_node in result.nodes_to_remove:
+                graph.node.remove(old_node)
+            graph_modified = True
+
+        if graph_modified:
+            model = model.transform(InferShapes())
+            model = model.transform(InferDataTypes())
+
+        return (model, graph_modified)
+
+    def _match(self, node: NodeProto, model: ModelWrapper):
+        """The first pool op that claims ``node``, or None. List order is precedence."""
+        for kernel_cls in self.pool:
+            try:
+                if kernel_cls.can_infer_from(node, model):
+                    return kernel_cls
+            except Exception as exc:  # noqa: BLE001 — a broken predicate must not abort
+                logger.warning(
+                    "InferKernels: %s.can_infer_from raised on %s node %s: %s",
+                    kernel_cls.__name__,
+                    node.op_type,
+                    node.name,
+                    exc,
+                )
+        return None
+
+    def _validate(self, result, model, getHWCustomOp, kernel_cls, src_node) -> bool:
+        """Instantiate + validate each new kernel node before commit. Only kernel-domain
+        nodes are validated (an infer might also emit layout/helper nodes). Returns False
+        (skip this inference) if any kernel node fails to instantiate."""
+        for new_node in result.nodes_to_insert:
+            if new_node.domain != KERNEL_DOMAIN:
+                continue
+            try:
+                kernel_op = getHWCustomOp(new_node, model)
+                kernel_op.infer_node_datatype(model)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "InferKernels: skipping %s inference from %s node %s — validation "
+                    "failed: %s",
+                    kernel_cls.__name__,
+                    src_node.op_type,
+                    src_node.name,
+                    exc,
+                )
+                return False
+        return True

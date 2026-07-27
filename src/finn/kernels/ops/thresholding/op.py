@@ -30,8 +30,11 @@ no memstream cell; the HLS/RTL difference is purely each compute emit's baked ar
 from __future__ import annotations
 
 import numpy as np
+from onnx import NodeProto, helper
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
 
-from finn.kernels.adapter import KernelOp, PortSpec
+from finn.kernels.adapter import KernelOp, PortSpec, TransformationResult
 from finn.kernels.space import (
     FULL,
     DeliveredParam,
@@ -145,6 +148,66 @@ _PORTS = (
 
 class ThresholdingKernelOp(KernelOp):
     """Thresholding (multi-threshold activation) as a Kernel-backed FINN op."""
+
+    # -- Seam A: frontend claim (mirror of InferThresholdingLayer) ---------------------
+
+    @classmethod
+    def can_infer_from(cls, node: NodeProto, model: ModelWrapper) -> bool:
+        """Whether ``node`` is a STANDALONE ``MultiThreshold`` this kernel can claim.
+        Mirrors ``InferThresholdingLayer`` (convert_to_hw_layers.py:159) as explicit
+        preconditions (return False, not assert).
+
+        Precedence: a ``MultiThreshold`` fed by a ``MatMul`` is the FUSED activation the
+        MVAU kernel absorbs — it must NOT be claimed standalone. Since MVAU precedes this op
+        in the pool and removes the consumer during its own inference, that node is normally
+        gone before we reach it; the explicit producer check makes the ordering robust even
+        against a stale node-list snapshot.
+        """
+        if node.op_type != "MultiThreshold":
+            return False
+        producer = model.find_producer(node.input[0])
+        if producer is not None and producer.op_type == "MatMul":
+            return False
+
+        idt = model.get_tensor_datatype(node.input[0])
+        tdt = model.get_tensor_datatype(node.input[1])
+        idt_ok = idt.is_integer() or idt.is_fixed_point() or idt in ["FLOAT32", "FLOAT16"]
+        tdt_ok = tdt.is_integer() or tdt.is_fixed_point() or tdt in ["FLOAT32", "FLOAT16"]
+        if not (idt_ok and tdt_ok):
+            return False
+
+        # The slice claims NHWC/2-D layouts only; NCHW would need a layout-conversion node
+        # (FINN's :194-206), deferred. A None layout (plain 2-D matmul activations) is fine.
+        from qonnx.core.data_layout import NCHW
+
+        if model.get_tensor_layout(node.input[0]) == NCHW:
+            return False
+
+        # out_scale must be 1 for HW conversion (FINN :215).
+        if getCustomOp(node).get_nodeattr("out_scale") != 1.0:
+            return False
+        return True
+
+    @classmethod
+    def infer_from(
+        cls, node: NodeProto, model: ModelWrapper, insert_index: int
+    ) -> TransformationResult:
+        """Build the unresolved ``finn.kernels`` Thresholding node replacing this
+        ``MultiThreshold``. Thin per F2′: it re-points the SAME input/threshold tensors and
+        bakes ONLY ``ActVal`` (the ``out_bias`` residual). NumChannels/numSteps/PE/
+        numInputVectors and all dtypes stay derived live from Context.
+        """
+        actval = int(getCustomOp(node).get_nodeattr("out_bias"))
+        kernel_node = helper.make_node(
+            "Thresholding",
+            [node.input[0], node.input[1]],
+            [node.output[0]],
+            domain="finn.kernels",
+            backend="fpgadataflow",
+            name="Thresholding_" + node.name,
+            ActVal=actval,
+        )
+        return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=[node])
 
     def kernel(self):
         return thresholding_kernel()

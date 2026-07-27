@@ -22,5 +22,12 @@ consumer surface this satisfies, and the design doc
 """
 
 from .kernel_op import KernelOp, PortSpec, getHWCustomOp
+from .infer import InferKernels, TransformationResult
 
-__all__ = ["KernelOp", "PortSpec", "getHWCustomOp"]
+__all__ = [
+    "KernelOp",
+    "PortSpec",
+    "getHWCustomOp",
+    "InferKernels",
+    "TransformationResult",
+]

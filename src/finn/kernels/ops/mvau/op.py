@@ -34,10 +34,13 @@ Tensor-name convention for the Context this schema resolves against:
 from __future__ import annotations
 
 import numpy as np
+from onnx import NodeProto, helper
 from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import calculate_matvec_accumulator_range
 
-from finn.kernels.adapter import KernelOp, PortSpec
+from finn.kernels.adapter import KernelOp, PortSpec, TransformationResult
 from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
     FULL,
@@ -488,6 +491,78 @@ _PORTS = (
 
 class MvauKernelOp(KernelOp):
     """MVAU (matrix-vector activation) as a Kernel-backed FINN op."""
+
+    # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
+
+    @classmethod
+    def can_infer_from(cls, node: NodeProto, model: ModelWrapper) -> bool:
+        """Whether ``node`` is a quantized ``MatMul`` this kernel can claim (optionally with
+        a following ``MultiThreshold``). FINN's asserts made EXPLICIT preconditions: a
+        pattern that cannot legally become an MVAU is REJECTED (return False), never
+        asserted-to-death mid-conversion. Mirrors ``InferQuantizedMatrixVectorActivation``'s
+        match (convert_to_hw_layers.py:1493) WITHOUT its bakes; the binary/sparse/dynamic
+        cases are out of the vertical slice.
+        """
+        if node.op_type != "MatMul":
+            return False
+        # Sparse weights route to VVAU in the classic flow — not our pattern.
+        if model.get_tensor_sparsity(node.input[1]) is not None:
+            return False
+        idt = model.get_tensor_datatype(node.input[0])
+        wdt = model.get_tensor_datatype(node.input[1])
+        if not (idt.is_integer() and wdt.is_integer()):
+            return False
+        # The slice claims the STATIC-weight case (a weight initializer must be present);
+        # the dynamic-weight branch is out of scope.
+        if model.get_initializer(node.input[1]) is None:
+            return False
+        return True
+
+    @classmethod
+    def infer_from(
+        cls, node: NodeProto, model: ModelWrapper, insert_index: int
+    ) -> TransformationResult:
+        """Build the unresolved ``finn.kernels`` MVAU node that replaces this ``MatMul``
+        (absorbing a following ``MultiThreshold`` when present). Thin per F2′: it re-points
+        the SAME input/weight/threshold tensors and bakes ONLY ``ActVal`` — the one residual
+        op-owned param with no graph home once the MultiThreshold is absorbed (its
+        ``out_bias``). MW/MH/SIMD/PE/mem_mode/numInputVectors and all dtypes stay derived
+        live from Context; the folding axes are unset until resolve (Seam B).
+        """
+        mm_input = node.input[0]
+        mm_weight = node.input[1]
+        mm_output = node.output[0]
+
+        consumer = model.find_consumer(mm_output)
+        has_activation = consumer is not None and consumer.op_type == "MultiThreshold"
+
+        if has_activation:
+            mt_thres = consumer.input[1]
+            mt_output = consumer.output[0]
+            actval = int(getCustomOp(consumer).get_nodeattr("out_bias"))
+            kernel_node = helper.make_node(
+                "MVAU",
+                [mm_input, mm_weight, mt_thres],
+                [mt_output],
+                domain="finn.kernels",
+                backend="fpgadataflow",
+                name="MVAU_" + node.name,
+                ActVal=actval,
+            )
+            return TransformationResult(
+                nodes_to_insert=[kernel_node], nodes_to_remove=[node, consumer]
+            )
+
+        kernel_node = helper.make_node(
+            "MVAU",
+            [mm_input, mm_weight],
+            [mm_output],
+            domain="finn.kernels",
+            backend="fpgadataflow",
+            name="MVAU_" + node.name,
+            ActVal=0,
+        )
+        return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=[node])
 
     def kernel(self):
         return mvau_kernel()
