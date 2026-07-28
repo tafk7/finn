@@ -39,7 +39,7 @@ from finn.kernels.space import (
     FULL,
     DeliveredParam,
     Direction,
-    Interface,
+    InterfaceSchema,
     Kernel,
     KernelSchema,
     Role,
@@ -62,9 +62,9 @@ def thresholding_interfaces():
     (``FULL``); ``thresholds`` is the whole ``(NumChannels, numSteps)`` matrix in one
     block. PE folds the channel dim (out position 1); the threshold block folds with it."""
     return (
-        Interface(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, NumChannels)
-        Interface(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
-        Interface(OUTPUT, Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
+        InterfaceSchema(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, NumChannels)
+        InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
+        InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
 

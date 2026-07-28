@@ -36,7 +36,7 @@ from finn.kernels.space import (
     Direction,
     Illegal,
     Backend,
-    Interface,
+    InterfaceSchema,
     Kernel,
     KernelSchema,
     discrete_axis,
@@ -76,9 +76,9 @@ def _elementwise_op() -> Kernel:
         identity=KernelSchema(
             name="ElementwiseBinary",
             interfaces=(
-                Interface("lhs", Direction.IN, block=list(channel_block)),
-                Interface("rhs", Direction.IN, block=list(channel_block)),
-                Interface("out", Direction.OUT, block=list(channel_block)),
+                InterfaceSchema("lhs", Direction.IN, block=list(channel_block)),
+                InterfaceSchema("rhs", Direction.IN, block=list(channel_block)),
+                InterfaceSchema("out", Direction.OUT, block=list(channel_block)),
             ),
             op_axes=(rhs_last, func, pattern),
         ),

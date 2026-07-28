@@ -34,7 +34,7 @@ from __future__ import annotations
 from finn.kernels.space import (
     FULL,
     Direction,
-    Interface,
+    InterfaceSchema,
     Kernel,
     KernelSchema,
     fixed_axis,
@@ -64,7 +64,7 @@ def _spatial(shape):
 # =============================================================================
 
 
-def pool_interfaces(*, has_indices: bool, rank: int) -> tuple[Interface, ...]:
+def pool_interfaces(*, has_indices: bool, rank: int) -> tuple[InterfaceSchema, ...]:
     """The port list. MaxPool may emit a second output (Indices, the argmax positions);
     it is present ONLY when the node wires it — the guarded/optional-interface shape.
 
@@ -73,11 +73,11 @@ def pool_interfaces(*, has_indices: bool, rank: int) -> tuple[Interface, ...]:
     spatial_dims + 2. The impl's PE stream folds the FULL channel dim."""
     channel_block = [1] * (rank - 1) + [FULL]
     interfaces = [
-        Interface(INPUT, Direction.IN, block=list(channel_block)),
-        Interface(OUTPUT, Direction.OUT, block=list(channel_block)),
+        InterfaceSchema(INPUT, Direction.IN, block=list(channel_block)),
+        InterfaceSchema(OUTPUT, Direction.OUT, block=list(channel_block)),
     ]
     if has_indices:
-        interfaces.append(Interface(INDICES, Direction.OUT, block=list(channel_block)))
+        interfaces.append(InterfaceSchema(INDICES, Direction.OUT, block=list(channel_block)))
     return tuple(interfaces)
 
 

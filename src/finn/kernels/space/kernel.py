@@ -50,7 +50,7 @@ class KernelError(ValueError):
 
 
 @dataclass(frozen=True)
-class Interface:
+class InterfaceSchema:
     """One op-side interface — identity + DIRECTION + BLOCK structure (the math), NOT stream.
 
     The op declares the arity, the direction (which node slot), and how the block segments
@@ -130,7 +130,7 @@ class KernelSchema:
     :class:`~finn.kernels.space.schema.Schema` via :meth:`Kernel.schema`."""
 
     name: str
-    interfaces: tuple[Interface, ...]
+    interfaces: tuple[InterfaceSchema, ...]
     op_axes: tuple = ()
     op_derived: tuple = ()
     op_predicates: tuple = ()
@@ -173,7 +173,7 @@ class Kernel:
         return self.identity.name
 
     @property
-    def interfaces(self) -> tuple[Interface, ...]:
+    def interfaces(self) -> tuple[InterfaceSchema, ...]:
         return self.identity.interfaces
 
     @property
@@ -308,7 +308,7 @@ class Kernel:
 
     # -- interface lookup ---------------------------------------------------
 
-    def present_interfaces(self, context: Context) -> tuple[Interface, ...]:
+    def present_interfaces(self, context: Context) -> tuple[InterfaceSchema, ...]:
         """The interfaces PRESENT for this node: all required ones, plus each optional one
         whose Context tensor exists. Presence is emergent (phase-3) — an ``optional=True``
         interface with no tensor in ``context`` is absent (the node did not wire that slot),
@@ -321,19 +321,19 @@ class Kernel:
             out.append(i)
         return tuple(out)
 
-    def inputs(self) -> tuple[Interface, ...]:
+    def inputs(self) -> tuple[InterfaceSchema, ...]:
         return tuple(i for i in self.interfaces if i.direction == Direction.IN)
 
-    def outputs(self) -> tuple[Interface, ...]:
+    def outputs(self) -> tuple[InterfaceSchema, ...]:
         return tuple(i for i in self.interfaces if i.direction == Direction.OUT)
 
-    def _input(self, ind: int) -> Interface:
+    def _input(self, ind: int) -> InterfaceSchema:
         ins = self.inputs()
         if ind < 0 or ind >= len(ins):
             raise KernelError(f"input index {ind} out of range (have {len(ins)})")
         return ins[ind]
 
-    def _output(self, ind: int) -> Interface:
+    def _output(self, ind: int) -> InterfaceSchema:
         outs = self.outputs()
         if ind < 0 or ind >= len(outs):
             raise KernelError(f"output index {ind} out of range (have {len(outs)})")
@@ -413,7 +413,7 @@ class Kernel:
             )
         return bundle
 
-    def _stream_elems(self, iface: Interface, point: Point) -> int:
+    def _stream_elems(self, iface: InterfaceSchema, point: Point) -> int:
         """Elements/cycle for this interface = the generated stream-width expression for
         the selected impl (1 if the impl declares no tiling for it)."""
         gen = self._generated(self._selected(point))
@@ -425,7 +425,7 @@ class Kernel:
         except TileError as exc:
             raise KernelError(f"interface {iface.name!r} tiling: {exc}") from exc
 
-    def _stream_width(self, iface: Interface, point: Point, context: Context) -> int:
+    def _stream_width(self, iface: InterfaceSchema, point: Point, context: Context) -> int:
         """Stream width in bits for this interface. Reads the per-interface
         ``stream_width.<iface>`` derived the tiling engine produced on the point — the
         SAME value emit reads, so the getter (FINN's contract) and emit share one produced
@@ -444,14 +444,14 @@ class Kernel:
             dt = context.tensor_datatype(iface.tensor)
         return elems * dt.bitwidth()
 
-    def _folds_reshape(self, iface: Interface, point: Point) -> bool:
+    def _folds_reshape(self, iface: InterfaceSchema, point: Point) -> bool:
         """Whether a folded SHAPE is a plain reshape for this interface under the selected
         impl. Derived from the stream folds (a fold whose width is a cross-interface expr
         ⇒ not a plain reshape). True when the impl declares no stream for the interface."""
         gen = self._generated(self._selected(point))
         return gen.reshapes.get(iface.name, True)
 
-    def _folded_shape(self, iface: Interface, point: Point, context: Context):
+    def _folded_shape(self, iface: InterfaceSchema, point: Point, context: Context):
         """Fold each dim the impl's stream map folds: for each position ``(dim_index,
         elems_expr)``, split that tensor dim into ``(extent // elems, elems)``. The engine's
         ``fold_map`` names WHICH dims fold (any dim, not just the last), so a 2-D weight

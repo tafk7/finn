@@ -51,7 +51,7 @@ from finn.kernels.space import (
     Derived,
     Direction,
     Illegal,  # noqa: F401  (kept available for callers/tests)
-    Interface,
+    InterfaceSchema,
     Kernel,
     KernelSchema,
     Role,
@@ -111,18 +111,18 @@ def mvau_interfaces():
     block; ``out`` iterates vectors and holds MH. ``weights`` is an ORDINARY interface — no
     WidthOnly, no special flag; its PE·SIMD stream is just a 2-D fold of a 2-D block."""
     return (
-        Interface("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
-        Interface("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
+        InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
+        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
         # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff
         # a threshold initializer is attached (a 3-input node); absent nodes skip it in every
         # Context-reading loop. ALWAYS constant in the fused core (baked into thresh.h — no
         # port, no stream), so no impl declares a `stream` fold for it: it carries only
         # identity (block + the Context tensor binding) for the threshold deriveds/predicates.
-        Interface("thresholds", Direction.IN, block=[FULL, FULL], optional=True),
+        InterfaceSchema("thresholds", Direction.IN, block=[FULL, FULL], optional=True),
         # dtype_source="outputDataType": the stream width uses the derived output type
         # (= accDataType under noActivation), not the raw graph dtype — so the generated
         # stream_width.out matches the emit-side value.
-        Interface("out", Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
 

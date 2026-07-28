@@ -32,7 +32,7 @@ from finn.kernels.space import (
     Context,
     DeliveredParam,
     Illegal,
-    Interface,
+    InterfaceSchema,
     Kernel,
     KernelSchema,
     Direction,
@@ -158,9 +158,9 @@ def _restricted_kernel(consumes):
     restriction is exercised through the real ``space/delivery.py`` guard + a real ``resolve``,
     not a hand-rolled copy. This is exactly the wiring MVAU now uses (no MVAU internals)."""
     ifaces = (
-        Interface("inp", Direction.IN, block=[1, FULL]),
-        Interface("weights", Direction.IN, block=[FULL, FULL]),
-        Interface("out", Direction.OUT, block=[1, FULL]),
+        InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
+        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
     backend = Backend(
         name="core",

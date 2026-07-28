@@ -66,7 +66,7 @@ from .schema import Schema, SchemaError
 from .demand import ParamDemand
 from .delivery import DeliveredParam
 from .backend_interface import BackendInterface, backend_interface_for
-from .kernel import Interface, Kernel, KernelError, KernelSchema
+from .kernel import InterfaceSchema, Kernel, KernelError, KernelSchema
 from .tiling import (
     FULL,
     BlockExtent,
@@ -142,7 +142,7 @@ __all__ = [
     "BACKEND_AXIS",
     "Kernel",
     "KernelSchema",
-    "Interface",
+    "InterfaceSchema",
     "KernelError",
     "ParamDemand",
     "DeliveredParam",

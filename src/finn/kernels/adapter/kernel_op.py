@@ -62,7 +62,7 @@ class PortSpec:
         index: the FINN port index within that direction (0=activation, 1=weights).
         role: the port-taxonomy Role (which ports are params vs dataflow edges).
         optional: whether the node may omit this input slot (an OPTIONAL operand, e.g. MVU
-            thresholds — the emergent-existence interface, ``Interface.optional``). When the
+            thresholds — the emergent-existence interface, ``InterfaceSchema.optional``). When the
             node does not wire the slot, the adapter SKIPS the port everywhere (no Context
             tensor), so the kernel sees the interface as absent.
     """

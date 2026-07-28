@@ -22,7 +22,7 @@ from finn.kernels.space import (
     Direction,
     Illegal,
     Backend,
-    Interface,
+    InterfaceSchema,
     Kernel,
     KernelSchema,
     derive,
@@ -36,9 +36,9 @@ from finn.kernels.space.tiling import TileError, generate_tiling
 # MVU-shaped interfaces: inp (1, MW), weights (MW, MH), out (1, MH). No semantic role —
 # direction only; weight-vs-activation is emergent from context.
 MVU_IFACES = (
-    Interface("inp", Direction.IN, block=[1, FULL]),
-    Interface("weights", Direction.IN, block=[FULL, FULL]),
-    Interface("out", Direction.OUT, block=[1, FULL]),
+    InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
+    InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),
+    InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
 )
 
 
@@ -112,8 +112,8 @@ def test_expr_fold_is_widthonly_no_range_source():
 
 def test_multi_fold_gcd_domain():
     ifaces = (
-        Interface("a", Direction.IN, block=[1, FULL]),
-        Interface("b", Direction.OUT, block=[1, FULL]),
+        InterfaceSchema("a", Direction.IN, block=[1, FULL]),
+        InterfaceSchema("b", Direction.OUT, block=[1, FULL]),
     )
     stream = {"a": [1, "PE"], "b": [1, "PE"]}
     ctx = Context(
@@ -178,9 +178,9 @@ def test_exp_cycles_is_reduction_product_from_floor(simd, pe):
 def test_direction_is_declared_not_role():
     # Direction is an explicit declared field (a node-slot fact), no longer derived from a
     # semantic role. An interface carries no role at all — weight-vs-activation is emergent.
-    assert Interface("a", Direction.IN).direction == Direction.IN
-    assert Interface("w", Direction.IN).direction == Direction.IN
-    assert Interface("o", Direction.OUT).direction == Direction.OUT
+    assert InterfaceSchema("a", Direction.IN).direction == Direction.IN
+    assert InterfaceSchema("w", Direction.IN).direction == Direction.IN
+    assert InterfaceSchema("o", Direction.OUT).direction == Direction.OUT
 
 
 def test_index_derived_from_position():
@@ -198,8 +198,8 @@ def test_index_derived_from_position():
 
 def test_width_uses_dtype_source():
     ifaces = (
-        Interface("inp", Direction.IN, block=[1, FULL]),
-        Interface("out", Direction.OUT, block=[1, FULL], dtype_source="acc"),
+        InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="acc"),
     )
     impl = Backend(name="k", stream={"inp": [1, "SIMD"], "out": [1, "PE"]})
     k = Kernel(
