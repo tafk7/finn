@@ -149,7 +149,7 @@ class Kernel:
     predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
     feasibility, sources, emit. ``delivered_parameters`` are the op's per-interface
     :class:`~finn.kernels.space.delivery.DeliveredParam` declarations, each lowered by a
-    :class:`~finn.kernels.space.backend_interface.BackendInterface` into the demand stage +
+    :class:`~finn.kernels.space.backend_interface.Interface` into the demand stage +
     guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
     are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to
@@ -232,7 +232,7 @@ class Kernel:
         / divisibility / widths), plus the delivered parameters' realization sub-schemas.
         ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate memory
         couplings that once lived here relocated into the parameters pool, and the
-        compute→memory demand crosses the seam owned by a ``BackendInterface``."""
+        compute→memory demand crosses the seam owned by a ``Interface``."""
         op = pool_schema(
             BACKEND_AXIS,
             tuple(self.op_axes),
@@ -242,7 +242,7 @@ class Kernel:
             unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
         )
         # DELIVERED PARAMETERS: the generic compute→delivery wiring, OWNED by a
-        # BackendInterface per delivered interface — the realization-side per-port object
+        # Interface per delivered interface — the realization-side per-port object
         # that holds the DEMAND stage + guarded delivery sub-schema (design pitch §2). Its
         # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
         # one owner and the waterfall is structural (its declared two-root deps) rather than

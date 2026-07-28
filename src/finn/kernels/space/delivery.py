@@ -7,14 +7,14 @@
 ############################################################################
 
 """The op-facing parameter-DELIVERY declaration (:class:`DeliveredParam`) + the seam
-COMPUTATION bodies a :class:`~finn.kernels.space.backend_interface.BackendInterface`
+COMPUTATION bodies a :class:`~finn.kernels.space.backend_interface.Interface`
 composes.
 
 A :class:`~finn.kernels.space.kernel.Kernel` that delivers parameters (weights,
 thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
 cadence + concrete delivery pool). The HOW — the ``(DEMAND stage, guarded delivery
 sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → MEMORY) — is OWNED by
-``BackendInterface`` (design pitch §2), which reuses the two seam computations kept here:
+``Interface`` (design pitch §2), which reuses the two seam computations kept here:
 
 * :func:`_demand_for` — the DEMAND closure: a realization-free
   :class:`~finn.kernels.space.demand.ParamDemand` sized from the RESOLVED interface
@@ -47,7 +47,7 @@ from .tiling import stream_width_key
 class DeliveredParam:
     """One parameter interface an op delivers through a delivery (parameters) pool.
 
-    The op DECLARES the WHAT; the generic ``BackendInterface`` wiring owns the HOW. Fields:
+    The op DECLARES the WHAT; the generic ``Interface`` wiring owns the HOW. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
     * ``cadence`` — ``(point, context) -> int``: how often the core consumes one word (the

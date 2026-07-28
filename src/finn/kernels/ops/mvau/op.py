@@ -189,10 +189,10 @@ def op_axes():
         # mem_mode/ram_style/runtime_writeable_weights/pumpedMemory/dynamic_input used
         # to live here as the "reserved composition seam". They are now the
         # `parameters` subsystem (ops/parameters/), folded into the MVAU schema via a
-        # `BackendInterface` per delivered interface under the `parameters.*` namespace.
+        # `Interface` per delivered interface under the `parameters.*` namespace.
         # mem_mode is gone: being the `decoupled` topology IS "internal_decoupled". The
         # cross-coordinate couplings (memstream geometry, the pumpedMemory/fold gate) are
-        # owned by that BackendInterface's guarded delivery sub-schema.
+        # owned by that Interface's guarded delivery sub-schema.
     )
 
 

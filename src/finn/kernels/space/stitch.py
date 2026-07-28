@@ -163,7 +163,7 @@ def _broadcast(cells, region_name) -> list[str]:
 
 def _export_unbound(cells, region_name, consumed) -> list[str]:
     """Export every port not bound to a sibling and not a broadcast pin as a region
-    boundary pin. InterfaceSchema kinds (AXIS/AXIMM/AXILITE) export as interface pins; a bare
+    boundary pin. Interface kinds (AXIS/AXIMM/AXILITE) export as interface pins; a bare
     SIGNAL exports as a net pin."""
     lines: list[str] = []
     for cell in cells:

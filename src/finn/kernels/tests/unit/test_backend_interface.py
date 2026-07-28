@@ -6,9 +6,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``BackendInterface`` — the realization-side per-port object (design pitch §2).
+"""``Interface`` — the realization-side per-port object (design pitch §2).
 
-These tests prove the seam is correctly assembled: a ``BackendInterface`` built for MVAU
+These tests prove the seam is correctly assembled: a ``Interface`` built for MVAU
 ``weights`` produces the (DEMAND stage, guarded delivery pool) pair, its demand closure
 returns the sized :class:`ParamDemand`, its mode guard filters the topology domain by the
 selected backend's ``consumes``, and a full resolve matches captured baseline literals.
@@ -187,7 +187,7 @@ def test_backend_interface_reads_backend_consumes_map():
 # ---------------------------------------------------------------------------
 # End-to-end: a full mvau_kernel().configure() for a decoupled-weights node resolves
 # to the SAME parameters.weights.{width,depth,demand} as the pre-T4 baseline (captured
-# as literals — the BackendInterface wiring is behavior-invariant vs the split path).
+# as literals — the Interface wiring is behavior-invariant vs the split path).
 # ---------------------------------------------------------------------------
 
 

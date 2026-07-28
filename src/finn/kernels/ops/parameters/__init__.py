@@ -24,7 +24,7 @@ ships two members:
 
 ``parameters_schema()`` builds the pool standalone (for unit-testing selection +
 guarding in isolation); an op folds the pool in via a
-:class:`~finn.kernels.space.backend_interface.BackendInterface` per delivered interface,
+:class:`~finn.kernels.space.backend_interface.Interface` per delivered interface,
 which namespaces its keys and guards its topology root to the backend's consumable modes.
 """
 
