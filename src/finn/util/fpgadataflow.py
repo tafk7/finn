@@ -87,6 +87,19 @@ def is_rtl_node(node):
     return is_node
 
 
+def is_specialized_node(node) -> bool:
+    """True iff ``node`` is a COMMITTED hardware node — one whose concrete
+    realization is pinned, regardless of WHICH realization. Spans both
+    populations: a classic HLS/RTL node (committed by its domain) and a
+    ``finn.kernels`` node whose backend is selected. This is the ONE
+    "committed?" predicate; call it instead of open-coding
+    ``is_hls_node(n) or is_rtl_node(n)`` — that spelling couples the site to the
+    language enumeration and hides whether the site truly needs the language.
+    Use ``is_hls_node``/``is_rtl_node`` ONLY when the LANGUAGE genuinely matters
+    (codegen/synth artifacts)."""
+    return is_hls_node(node) or is_rtl_node(node)
+
+
 def detect_hls_rtl_dsp_conflict(model, check_subgraphs=True):
     """
     Detect if model contains both floating-point HLS Elementwise ops and RTL LayerNorm.
