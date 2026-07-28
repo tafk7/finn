@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``storage_topology`` — the parameters-pool member abstraction.
+"""``memory_backend`` — the parameters-pool member abstraction.
 
 A **storage topology** is one way a kernel's parameters physically live and travel to
 the compute core: ``embedded`` (compiled in), ``decoupled`` (on-chip replay via
@@ -33,7 +33,7 @@ def _feasible_ok(_point, _context) -> None:
     return None
 
 
-def storage_topology(
+def memory_backend(
     name: str,
     *,
     mode: str,

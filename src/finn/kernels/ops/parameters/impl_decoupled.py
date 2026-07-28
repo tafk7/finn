@@ -49,7 +49,7 @@ from finn.util.basic import is_versal
 from .emit_memstream import _MEMSTREAM_WRAPPER_SCHEMA, MEMSTREAM_MANIFEST, emit_memstream
 from .names import DECOUPLED
 from .registry import register
-from .topology import storage_topology
+from .topology import memory_backend
 
 
 # =============================================================================
@@ -184,7 +184,7 @@ def _geometry_derived(iface):
 
 @register
 def decoupled_topology(iface):
-    return storage_topology(
+    return memory_backend(
         DECOUPLED,
         mode=STREAM,  # an AXIS port a memstream block feeds
         language="rtl",  # emits its own memstream Verilog streamer
