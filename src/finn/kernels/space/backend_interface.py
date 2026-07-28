@@ -123,10 +123,6 @@ class BackendInterface:
             (),
             self.pool,
             sources_key=sources_key(self.schema),
-            # Delivery topologies carry ``language`` for bare-node honesty, but don't
-            # re-project the identity fields under their plain keys — that would collide
-            # with the compute pool's projection in the composed op schema.
-            project_identity_fields=False,
         )
         root = schema.axes[0]  # pool_schema emits the root topology axis first
         domain, legal = self.constrains

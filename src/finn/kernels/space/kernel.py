@@ -349,6 +349,13 @@ class Kernel:
 
     # -- internals ----------------------------------------------------------
 
+    def selected_backend(self, point: Point) -> Backend:
+        """The :class:`Backend` pool member the resolved ``point`` selected. Public accessor
+        for reading a backend's STATIC identity fields (``language``/``rtl_core_module``) off
+        the selection — those fields live on the ``Backend``, not re-projected onto the point
+        (F5). Emit reads ``kernel.selected_backend(point).rtl_core_module``."""
+        return self._selected(point)
+
     def _selected(self, point: Point) -> Backend:
         """The pool member named by the resolved ``implementation`` axis."""
         impl_name = point["implementation"]

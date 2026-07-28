@@ -27,8 +27,16 @@ from finn.kernels.ops.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
+    mvau_pool,
     mvau_schema,
 )
+
+
+def _language_of(point, pool=None):
+    """The selected backend's static ``language`` field (F5: no longer projected onto the
+    point) — looked up in the pool by the resolved ``implementation`` name."""
+    by_name = {b.name: b for b in (pool if pool is not None else mvau_pool())}
+    return by_name[point["implementation"]].language
 from finn.kernels.ops.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
@@ -301,7 +309,7 @@ def test_legal_point_carries_derived(schema):
     assert isinstance(r, Point)
     # WMEM is no longer a point alias — the fold depth comes from the geometry query.
     assert weight_fold_depth(r, ctx, WEIGHTS) == 6 * 8 // (4 * 2)
-    assert r.language == "hls"
+    assert _language_of(r) == "hls"
     assert r["stream_width.out"] == r.outputDataType.bitwidth() * 4
 
 
@@ -469,7 +477,7 @@ def test_fourth_implementation_composes_additively():
         base_assignment(implementation="mvau_lut_rtl", mem_mode="internal_embedded"),
     )
     assert isinstance(legal, Point)
-    assert legal.language == "rtl"
+    assert _language_of(legal, kernel4.pool) == "rtl"
     assert legal.sources == ("mvu_lut.sv",)
 
     illegal = resolve(
@@ -484,7 +492,7 @@ def test_fourth_implementation_composes_additively():
     # pool -- adding the 4th did not perturb them.
     r_hls = resolve(schema4, make_context(SEVEN_SERIES), base_assignment(mem_mode="internal_embedded"))
     assert isinstance(r_hls, Point)
-    assert r_hls.language == "hls"
+    assert _language_of(r_hls, kernel4.pool) == "hls"
 
 
 def test_registry_makes_addition_structural():

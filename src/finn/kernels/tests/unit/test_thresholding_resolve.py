@@ -22,10 +22,18 @@ from finn.kernels.space import AbsentAxisError, Context, Illegal, Point, resolve
 from finn.kernels.ops.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
+    thresholding_pool,
     thresholding_schema,
 )
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
+
+
+def _language_of(point, pool=None):
+    """The selected backend's static ``language`` field (F5: no longer projected onto the
+    point) — looked up in the pool by the resolved ``implementation`` name."""
+    by_name = {b.name: b for b in (pool if pool is not None else thresholding_pool())}
+    return by_name[point["implementation"]].language
 
 
 @pytest.fixture
@@ -113,7 +121,7 @@ def test_rtl_local_axes_present_under_rtl(schema):
     assert r.depth_trigger_bram == 1024
     assert r.uniform_thres == 1
     assert r.deep_pipeline == 1  # default
-    assert r.language == "rtl"
+    assert _language_of(r) == "rtl"
 
 
 def test_assigning_rtl_axis_under_hls_is_illegal(schema):
@@ -191,10 +199,9 @@ def test_third_implementation_composes_additively():
         sources=("stub.sv",),
     )
     axes, derived, predicates = thresholding_shared()
-    schema3 = pool_schema(
-        "implementation", axes, derived, predicates, thresholding_pool() + (stub,)
-    )
+    pool3 = thresholding_pool() + (stub,)
+    schema3 = pool_schema("implementation", axes, derived, predicates, pool3)
     r = resolve(schema3, make_context(), base_assignment(implementation="thresholding_stub"))
     assert isinstance(r, Point)
-    assert r.language == "stub"
+    assert _language_of(r, pool3) == "stub"
     assert r.sources == ("stub.sv",)

@@ -14,8 +14,9 @@
 
 Both DSP bundles (softvec + packed) share THIS emit — they fill the SAME AXI-lite
 wrapper template (``mvu_vvu_axi_wrapper.v``) and differ in (a) which per-core wrapper
-the top instantiates (``point.rtl_core_module`` -> ``$MODULE_NAME_COMPUTE_CORE$``) and
-(b) which compute core ``.sv`` + per-core wrapper is in ``point.sources``. Post-2c-split
+the top instantiates (the selected backend's ``rtl_core_module`` field ->
+``$MODULE_NAME_COMPUTE_CORE$``) and (b) which compute core ``.sv`` + per-core wrapper is
+in ``point.sources``. Post-2c-split
 the two source sets are genuinely disjoint on the core/wrapper (they share only the
 base ``.svh`` plumbing) — the fused ``mvu_vvu_axi.sv`` with its internal
 genINT8/genSoftVec ``generate`` fork is retired from our emit path. The MVU core reads
@@ -137,7 +138,8 @@ _V_WRAPPER_SCHEMA = RtlModule(
     {
         "MODULE_NAME_AXI_WRAPPER": Raw,
         # the per-core wrapper the top instantiates — data, not silicon (2c split):
-        # mvu_vvu_axi_softvec / mvu_vvu_axi_packed, from point.rtl_core_module.
+        # mvu_vvu_axi_softvec / mvu_vvu_axi_packed, from the selected backend's
+        # rtl_core_module field.
         "MODULE_NAME_COMPUTE_CORE": Raw,
         "IS_MVU": Dim,
         "VERSION": Dim,
@@ -158,9 +160,14 @@ _V_WRAPPER_SCHEMA = RtlModule(
 
 def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     """Produce embedded-mode RTL MVAU compute-core artifacts from a resolved point."""
+    from .op import mvau_kernel
+
     idt = context.tensor_datatype(INPUT)
     wdt = context.tensor_datatype(WEIGHTS)
     geo = mvau_geometry(point, context)
+    # rtl_core_module is a STATIC Backend identity field (F5) — read off the selected
+    # bundle, not re-projected onto the point.
+    rtl_core_module = mvau_kernel().selected_backend(point).rtl_core_module
 
     # Padded weight-stream width: (PE*SIMD*WEIGHT_WIDTH + 7)//8 * 8 — matches the
     # wrapper's WEIGHT_STREAM_WIDTH_BA and the memstream m_axis_0 width the stitch
@@ -174,7 +181,7 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
         _V_WRAPPER_SCHEMA,
         {
             "MODULE_NAME_AXI_WRAPPER": Raw(module_name),
-            "MODULE_NAME_COMPUTE_CORE": Raw(point.rtl_core_module),
+            "MODULE_NAME_COMPUTE_CORE": Raw(rtl_core_module),
             "IS_MVU": Dim(1),
             "VERSION": Dim(point.dsp_version),  # forced from device (E1/E2/DSP58 -> 1/2/3)
             "PUMPED_COMPUTE": Bool(point.get("pumpedCompute", 0)),

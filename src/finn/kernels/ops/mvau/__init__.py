@@ -47,8 +47,8 @@ resolves it at the source:
   * ``mvu_vvu_axi_softvec.sv`` = head + ``mvu`` core + tail.
   * ``mvu_vvu_axi_packed.sv``  = head + ``mvu_vvu_8sx9_dsp58`` core + tail.
   * NUM_LANES≤3 routing is purely ``mvau_dsp_packed`` feasibility (impl_rtl_packed.py) +
-    preference (packed>softvec). Emit selects the per-core wrapper via
-    ``point.rtl_core_module`` (emit_rtl.py ``$MODULE_NAME_COMPUTE_CORE$`` slot); each
+    preference (packed>softvec). Emit selects the per-core wrapper via the selected
+    backend's ``rtl_core_module`` field (emit_rtl.py ``$MODULE_NAME_COMPUTE_CORE$`` slot); each
     bundle's ``.sources`` are now DISJOINT on the core/wrapper (share only the base
     ``.svh``). The fused ``mvu_vvu_axi.sv`` is retired from our emit path (kept in-tree
     only as the golden for the rtlsim bit-equivalence oracle).
