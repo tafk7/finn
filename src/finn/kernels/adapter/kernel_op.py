@@ -197,7 +197,21 @@ class KernelOp(HWCustomOp):
         return out
 
     def _point(self):
-        """Resolve the current node config into a Point, raising on Illegal."""
+        """Resolve the current node config into a Point, raising on Illegal.
+
+        Impl-DEPENDENT: requires a committed backend. An unspecialized node
+        (``implementation`` unset — the "" sentinel) has no legal full point, so raise a
+        LEGIBLE "unspecialized" error rather than a bare Illegal-ValueError (F1). Callers
+        needing only impl-INDEPENDENT facts (normal shape/dtype, output-dtype publication)
+        use the context-only getters or :meth:`_op_point`."""
+        from finn.kernels.routing import is_specialized
+
+        if not is_specialized(self.onnx_node):
+            raise ValueError(
+                f"{self.onnx_node.name}: impl-dependent getter needs a committed backend, "
+                f"but `implementation` is unset (node is unspecialized). Specialize it "
+                f"(Seam B) before folded-shape/width/cycle queries."
+            )
         kernel = self.kernel()
         ctx = self._context()
         result = kernel.configure(ctx, self._assignment())
@@ -208,15 +222,32 @@ class KernelOp(HWCustomOp):
             )
         return kernel, ctx, result
 
+    def _op_point(self):
+        """Resolve the op-level, impl-INDEPENDENT point (:meth:`Kernel.configure_op`) —
+        the datatype/geometry deriveds that do not depend on the selected backend. Succeeds
+        on an UNSPECIALIZED node, so output-dtype publication (``infer_node_datatype``)
+        works before Seam B commits a backend (F1)."""
+        kernel = self.kernel()
+        ctx = self._context()
+        op_axes = kernel.op_schema().axis_names
+        assignment = {k: v for k, v in self._assignment().items() if k in op_axes}
+        result = kernel.configure_op(ctx, assignment)
+        if isinstance(result, Illegal):
+            raise ValueError(
+                f"{self.onnx_node.name}: op-level configuration is illegal: "
+                f"{'; '.join(result.reasons)}"
+            )
+        return kernel, ctx, result
+
     # -- Tier-3 getters: shapes / widths / datatypes ------------------------
 
     def get_normal_input_shape(self, ind=0):
-        kernel, ctx, _ = self._point()
-        return kernel.get_normal_input_shape(ctx, ind)
+        # Normal (tensor) shape is impl-INDEPENDENT — a pure Context read; no committed
+        # backend needed, so an unspecialized node answers it (the Seam A verify gate).
+        return self.kernel().get_normal_input_shape(self._context(), ind)
 
     def get_normal_output_shape(self, ind=0):
-        kernel, ctx, _ = self._point()
-        return kernel.get_normal_output_shape(ctx, ind)
+        return self.kernel().get_normal_output_shape(self._context(), ind)
 
     def get_input_datatype(self, ind=0):
         # Datatype is a pure Context read; no resolved point needed.
@@ -261,7 +292,10 @@ class KernelOp(HWCustomOp):
         the weight-derived accumulator type under ``noActivation``. Annotates the node's
         output tensors; idempotent."""
         self.attach_model(model)
-        kernel, ctx, result = self._point()
+        # Output dtype is impl-INDEPENDENT (op_derived) — resolve over the op-level subschema
+        # so an UNSPECIALIZED node (no committed backend) still publishes its output types
+        # (the Seam A verify gate runs before Seam B specializes).
+        kernel, ctx, result = self._op_point()
         for port in self.ports():
             if port.direction == "out":
                 odt = self._output_datatype_from_point(kernel, ctx, result, port.index)

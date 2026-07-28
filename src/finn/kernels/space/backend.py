@@ -182,6 +182,7 @@ def pool_schema(
     pool: tuple[Backend, ...],
     *,
     sources_key: str = SOURCES_KEY,
+    unspecialized_sentinel: bool = False,
 ) -> Schema:
     """Assemble op-level shared elements + a pool of bundles into a ``Schema``.
 
@@ -201,6 +202,13 @@ def pool_schema(
     :class:`Backend` (read bare-node by routing, and off the selected bundle by emit via
     :meth:`~finn.kernels.space.kernel.Kernel.selected_backend`). They are deliberately NOT
     re-projected onto the point as deriveds — one fact, one home.
+
+    ``unspecialized_sentinel`` makes the root selection axis default to ``""`` — the
+    UNSPECIALIZED sentinel (no backend committed) — instead of the first pool member. True
+    ONLY for the COMPUTE ``implementation`` root, where "which backend" is an explicit
+    Selection act (Seam B) and an unpinned node must read as unspecialized (F1). False (the
+    default) for a DELIVERY ``topology`` pool, whose first-member default (``embedded``) is a
+    genuine, always-legal fallback that production resolution relies on.
     """
     if not pool:
         raise PoolError("pool must contain at least one Backend")
@@ -212,7 +220,14 @@ def pool_schema(
     _check_no_sibling_coupling(root_name, shared_axes, pool)
     _check_no_derived_shadowing(shared_derived, pool, sources_key)
 
-    root = discrete_axis(root_name, frozenset(names), names[0])
+    # The compute ``implementation`` root defaults to "" — the UNSPECIALIZED sentinel (no
+    # backend committed). "" is deliberately NOT in the domain frozenset, so an unpinned node
+    # that resolves through the impl-DEPENDENT path yields Illegal, which the kernel getters
+    # turn into a clean "unspecialized" raise. A node is SPECIALIZED once ``implementation``
+    # is a real pool member; the ONE predicate reading that is ``routing.is_specialized``. A
+    # delivery ``topology`` pool keeps the first-member default (a genuine legal fallback).
+    root_default = "" if unspecialized_sentinel else names[0]
+    root = discrete_axis(root_name, frozenset(names), root_default)
 
     merged_axes = _merge_axes(root_name, pool)
     merged_derived = _merge_derived(root_name, pool)

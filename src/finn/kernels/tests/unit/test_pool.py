@@ -21,6 +21,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.space import Context, Illegal
 from finn.kernels.ops.pool import pool_kernel
 from finn.kernels.ops.pool.geometry import pool_output_dim, pool_output_spatial
+from finn.kernels.ops.pool.names import POOL_HLS
 
 C = 32  # channels
 
@@ -72,14 +73,14 @@ def test_pool_output_spatial_flat_pads():
 def test_valid_geometry_resolves():
     # 2x2 stride-2 on 16x16 -> 8x8; graph declares 8x8 -> legal.
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2))
-    pt = op.configure(_ctx((16, 16), (8, 8)), {"PE": 8})
+    pt = op.configure(_ctx((16, 16), (8, 8)), {"implementation": POOL_HLS, "PE": 8})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
 
 
 def test_wrong_graph_output_shape_is_rejected():
     # Same pool, but the graph mislabels the output as 7x7 -> the geometry predicate fires.
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2))
-    result = op.configure(_ctx((16, 16), (7, 7)), {"PE": 8})
+    result = op.configure(_ctx((16, 16), (7, 7)), {"implementation": POOL_HLS, "PE": 8})
     assert isinstance(result, Illegal)
     assert any("derived pooling geometry" in r for r in result.reasons)
 
@@ -87,7 +88,7 @@ def test_wrong_graph_output_shape_is_rejected():
 def test_normal_and_folded_shapes():
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2))
     ctx = _ctx((16, 16), (8, 8))
-    pt = op.configure(ctx, {"PE": 8})
+    pt = op.configure(ctx, {"implementation": POOL_HLS, "PE": 8})
     assert op.get_normal_input_shape(ctx, 0) == (1, 16, 16, C)
     assert op.get_normal_output_shape(ctx, 0) == (1, 8, 8, C)
     # PE folds the channel (last) axis on both interfaces.
@@ -99,7 +100,7 @@ def test_normal_and_folded_shapes():
 def test_stream_widths(pe):
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2))
     ctx = _ctx((16, 16), (8, 8))
-    pt = op.configure(ctx, {"PE": pe})
+    pt = op.configure(ctx, {"implementation": POOL_HLS, "PE": pe})
     assert op.get_instream_width(pt, ctx, 0) == 8 * pe
     assert op.get_outstream_width(pt, ctx, 0) == 8 * pe
 
@@ -113,7 +114,7 @@ def test_stream_widths(pe):
 def test_exp_cycles(pe):
     op = pool_kernel(function="MaxPool", kernel_shape=(3, 3), strides=(1, 1))
     ctx = _ctx((16, 16), (14, 14))  # 3x3 stride-1 valid -> 14x14
-    pt = op.configure(ctx, {"PE": pe})
+    pt = op.configure(ctx, {"implementation": POOL_HLS, "PE": pe})
     expected = 1 * (14 * 14) * (C * 9) // pe
     assert op.get_exp_cycles(pt, ctx) == expected
 
@@ -131,7 +132,7 @@ def test_no_indices_by_default():
 def test_indices_output_present_when_requested():
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2), has_indices=True)
     ctx = _ctx((16, 16), (8, 8), indices=True)
-    pt = op.configure(ctx, {"PE": 8})
+    pt = op.configure(ctx, {"implementation": POOL_HLS, "PE": 8})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     assert len(op.outputs()) == 2
     # The Indices output (index 1) folds by PE and carries its own (int64) dtype.
@@ -146,20 +147,20 @@ def test_indices_output_present_when_requested():
 
 def test_maxpool_requires_equal_dtypes():
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2))
-    bad = op.configure(_ctx((16, 16), (8, 8), idt="INT8", odt="INT16"), {"PE": 8})
+    bad = op.configure(_ctx((16, 16), (8, 8), idt="INT8", odt="INT16"), {"implementation": POOL_HLS, "PE": 8})
     assert isinstance(bad, Illegal)
 
 
 def test_avgpool_signedness_rule():
     op = pool_kernel(function="AveragePool", kernel_shape=(2, 2), strides=(2, 2))
     # signed in / unsigned out -> Illegal
-    bad = op.configure(_ctx((16, 16), (8, 8), idt="INT8", odt="UINT8"), {"PE": 8})
+    bad = op.configure(_ctx((16, 16), (8, 8), idt="INT8", odt="UINT8"), {"implementation": POOL_HLS, "PE": 8})
     assert isinstance(bad, Illegal)
     # matching signedness, out may requantize narrower -> legal
-    ok = op.configure(_ctx((16, 16), (8, 8), idt="UINT8", odt="UINT4"), {"PE": 8})
+    ok = op.configure(_ctx((16, 16), (8, 8), idt="UINT8", odt="UINT4"), {"implementation": POOL_HLS, "PE": 8})
     assert not isinstance(ok, Illegal)
 
 
 def test_non_dividing_pe_illegal():
     op = pool_kernel(function="MaxPool", kernel_shape=(2, 2), strides=(2, 2))
-    assert isinstance(op.configure(_ctx((16, 16), (8, 8)), {"PE": 5}), Illegal)  # 5 ∤ 32
+    assert isinstance(op.configure(_ctx((16, 16), (8, 8)), {"implementation": POOL_HLS, "PE": 5}), Illegal)  # 5 ∤ 32

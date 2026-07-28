@@ -66,7 +66,14 @@ def thresholding_schema() -> Schema:
     no delivered parameters). The Kernel-composed schema (adding the ``parameters.*``
     namespace) is :func:`thresholding_kernel_schema`."""
     axes, derived, predicates = thresholding_shared()
-    return pool_schema("implementation", axes, derived, predicates, thresholding_pool())
+    return pool_schema(
+        "implementation",
+        axes,
+        derived,
+        predicates,
+        thresholding_pool(),
+        unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
+    )
 
 
 __all__ = [

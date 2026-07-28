@@ -239,6 +239,7 @@ class Kernel:
             tuple(self.op_derived),
             tuple(self.op_predicates),
             self._augmented_pool(),
+            unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
         )
         # DELIVERED PARAMETERS: the generic compute→delivery wiring, OWNED by a
         # BackendInterface per delivered interface — the realization-side per-port object
@@ -260,6 +261,25 @@ class Kernel:
     def configure(self, context: Context, assignment: Mapping | None = None):
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
         return resolve(self.schema(), context, assignment)
+
+    def op_schema(self) -> Schema:
+        """The op-level, impl-INDEPENDENT subschema: the identity's shared axes/derived/
+        predicates ONLY, with NO pool (no ``implementation`` root axis, no per-backend fold
+        dials). It resolves the folding-independent facts — the datatype contract
+        (``accDataType``/``weightDataType``/``outputDataType``) and geometry — with NO
+        committed backend. Used to publish output datatypes on an UNSPECIALIZED node, where
+        the full :meth:`schema` would fabricate/require a backend selection (F1)."""
+        return Schema(
+            axes=tuple(self.op_axes),
+            derived=tuple(self.op_derived),
+            predicates=tuple(self.op_predicates),
+        )
+
+    def configure_op(self, context: Context, assignment: Mapping | None = None):
+        """Resolve an op-level (impl-independent) point over :meth:`op_schema`. The
+        datatype/geometry deriveds do not depend on the selected backend, so this succeeds on
+        an unspecialized node."""
+        return resolve(self.op_schema(), context, assignment)
 
     # -- interface lookup ---------------------------------------------------
 

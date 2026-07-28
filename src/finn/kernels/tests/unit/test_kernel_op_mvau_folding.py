@@ -18,8 +18,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 MW, MH = 128, 64
-OP_TYPE = "MVAUKernel_hls"
-DOMAIN = "finn.custom_op.fpgadataflow.hls"
+OP_TYPE = "MVAU"
+DOMAIN = "finn.kernels"
 
 
 def _build_model():

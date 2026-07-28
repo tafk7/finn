@@ -46,6 +46,7 @@ from finn.kernels.space import (
 
 CHANNELS = 64
 IFM = (1, 56, CHANNELS)  # (batch, spatial, channels) — NHWC-ish, channels last
+HLS = "layernorm_hls"  # the impl to pin; there is no default backend (F1 sentinel)
 
 
 def _layernorm_op() -> Kernel:
@@ -93,10 +94,18 @@ def _ctx() -> Context:
 
 def test_configures_to_a_point():
     op = _layernorm_op()
-    pt = op.configure(_ctx(), {"SIMD": 16})
+    pt = op.configure(_ctx(), {"implementation": HLS, "SIMD": 16})
     assert not isinstance(pt, Illegal)
     assert pt["SIMD"] == 16
-    assert pt["implementation"] == "layernorm_hls"  # first registered = default
+    assert pt["implementation"] == "layernorm_hls"
+
+
+def test_unspecialized_impl_is_illegal_at_resolve():
+    # No default backend: an unpinned ``implementation`` resolves to the "" sentinel, which
+    # is not in the domain -> Illegal (F1). Selection is now an explicit act.
+    op = _layernorm_op()
+    result = op.configure(_ctx(), {"SIMD": 16})
+    assert isinstance(result, Illegal)
 
 
 def test_normal_shapes_and_dtypes_need_no_point():
@@ -115,7 +124,7 @@ def test_normal_shapes_and_dtypes_need_no_point():
 @pytest.mark.parametrize("simd", [1, 2, 8, 16, 32, 64])
 def test_folded_input_shape_matches_finn(simd):
     op, ctx = _layernorm_op(), _ctx()
-    pt = op.configure(ctx, {"SIMD": simd})
+    pt = op.configure(ctx, {"implementation": HLS, "SIMD": simd})
     # FINN: folded = ishape[:-1] + [n/simd, simd]
     expected = IFM[:-1] + (CHANNELS // simd, simd)
     assert op.get_folded_input_shape(pt, ctx, 0) == expected
@@ -125,7 +134,7 @@ def test_folded_input_shape_matches_finn(simd):
 @pytest.mark.parametrize("simd", [1, 8, 16, 64])
 def test_stream_widths_match_finn(simd):
     op, ctx = _layernorm_op(), _ctx()
-    pt = op.configure(ctx, {"SIMD": simd})
+    pt = op.configure(ctx, {"implementation": HLS, "SIMD": simd})
     assert op.get_instream_width(pt, ctx, 0) == 8 * simd  # INT8
     assert op.get_outstream_width(pt, ctx, 0) == 32 * simd  # FLOAT32
 
@@ -133,7 +142,7 @@ def test_stream_widths_match_finn(simd):
 @pytest.mark.parametrize("simd", [1, 8, 16, 64])
 def test_rough_exp_cycles_is_throughput_floor(simd):
     op, ctx = _layernorm_op(), _ctx()
-    pt = op.configure(ctx, {"SIMD": simd})
+    pt = op.configure(ctx, {"implementation": HLS, "SIMD": simd})
     # prod(ifm) // simd — the monotone throughput floor (FINN's leading term).
     expected = (1 * 56 * CHANNELS) // simd
     assert op.get_exp_cycles(pt, ctx) == expected
@@ -144,7 +153,7 @@ def test_exp_cycles_monotone_in_simd():
     op, ctx = _layernorm_op(), _ctx()
     prev = None
     for simd in [1, 2, 4, 8, 16, 32, 64]:
-        pt = op.configure(ctx, {"SIMD": simd})
+        pt = op.configure(ctx, {"implementation": HLS, "SIMD": simd})
         c = op.get_exp_cycles(pt, ctx)
         if prev is not None:
             assert c <= prev
@@ -158,7 +167,7 @@ def test_exp_cycles_monotone_in_simd():
 
 def test_bad_index_raises():
     op, ctx = _layernorm_op(), _ctx()
-    pt = op.configure(ctx, {"SIMD": 16})
+    pt = op.configure(ctx, {"implementation": HLS, "SIMD": 16})
     with pytest.raises(KernelError, match="input index 1 out of range"):
         op.get_folded_input_shape(pt, ctx, 1)
 
@@ -166,5 +175,5 @@ def test_bad_index_raises():
 def test_non_dividing_simd_is_illegal_at_resolve():
     # SIMD must be a divisor of channels — the divisor_axis domain rejects 5 at resolve.
     op = _layernorm_op()
-    result = op.configure(_ctx(), {"SIMD": 5})
+    result = op.configure(_ctx(), {"implementation": HLS, "SIMD": 5})
     assert isinstance(result, Illegal)

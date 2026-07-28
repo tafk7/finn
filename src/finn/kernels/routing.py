@@ -49,18 +49,33 @@ def _language_table() -> dict[str, dict[str, str | None]]:
     return _LANGUAGE_TABLE
 
 
+def is_specialized(node) -> bool:
+    """The ONE definition of specialization: a committed backend selection (a
+    :class:`~finn.kernels.space.backend.Backend` pool member pinned on the ``implementation``
+    nodeattr). Bare-node — reads only that nodeattr. Absent-or-empty => unspecialized.
+
+    Every consumer (routing, the impl-dependent kernel getters, future ResolveKernels) calls
+    this; none re-implements it. ``set_nodeattr("implementation", name)`` is the ONE write
+    that flips a node to specialized.
+
+    NOTE: distinct from ``is_fpgadataflow_node`` (family membership via the ``backend``
+    nodeattr, True even when unspecialized) and from :func:`kernel_hw_language` (the hls/rtl
+    language query — only the ~4 codegen sites need it)."""
+    if node is None or node.domain != KERNEL_DOMAIN:
+        return False
+    attr = get_by_name(node.attribute, "implementation")
+    return bool(attr is not None and attr.s.decode("UTF-8"))
+
+
 def kernel_hw_language(node) -> str | None:
     """The resolved backend's language (``"hls"``/``"rtl"``) for a ``finn.kernels`` node, or
-    ``None`` when the node is not a kernel node, is unresolved (``implementation`` empty or
+    ``None`` when the node is not a kernel node, is unspecialized (``implementation`` empty or
     absent — i.e. NOT yet HW-ready), or names an unknown implementation.
 
     Bare-node: reads only the ``implementation`` nodeattr + a static pool lookup. No model,
     no ``getCustomOp``, no op instantiation — safe to call from the hot routing predicates.
     """
-    if node is None or node.domain != KERNEL_DOMAIN:
-        return None  # domain alone uniquely identifies kernel nodes (Seam A co-stamps it)
-    impl_attr = get_by_name(node.attribute, "implementation")
-    impl = impl_attr.s.decode("UTF-8") if impl_attr is not None else ""
-    if not impl:
-        return None  # unresolved -> not HW-ready
+    if not is_specialized(node):
+        return None  # not a kernel node, or unspecialized -> not HW-ready
+    impl = get_by_name(node.attribute, "implementation").s.decode("UTF-8")
     return _language_table().get(node.op_type, {}).get(impl)

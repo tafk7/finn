@@ -191,10 +191,14 @@ def test_stream_only_backend_rejects_embedded_at_resolve():
     k = _restricted_kernel({WEIGHTS: {STREAM}})
     ctx = _mvu_ctx()
     # decoupled (stream) is in-domain and resolves.
-    ok = k.configure(ctx, {"SIMD": 16, "PE": 4, topology_key(WEIGHTS): DECOUPLED})
+    ok = k.configure(
+        ctx, {"implementation": "core", "SIMD": 16, "PE": 4, topology_key(WEIGHTS): DECOUPLED}
+    )
     assert not isinstance(ok, Illegal), getattr(ok, "reasons", None)
     # embedded (constant) is filtered out of the domain -> pinning it is illegal.
-    bad = k.configure(ctx, {"SIMD": 16, "PE": 4, topology_key(WEIGHTS): EMBEDDED})
+    bad = k.configure(
+        ctx, {"implementation": "core", "SIMD": 16, "PE": 4, topology_key(WEIGHTS): EMBEDDED}
+    )
     assert isinstance(bad, Illegal)
 
 
@@ -202,7 +206,7 @@ def test_permissive_backend_default_is_a_stream_topology_when_only_stream_offere
     # With a stream-only restriction the pool's first-registered default (embedded) is out
     # of domain; resolve must fall to a legal in-domain default (decoupled), not crash.
     k = _restricted_kernel({WEIGHTS: {STREAM}})
-    r = k.configure(_mvu_ctx(), {"SIMD": 16, "PE": 4})
+    r = k.configure(_mvu_ctx(), {"implementation": "core", "SIMD": 16, "PE": 4})
     assert not isinstance(r, Illegal), getattr(r, "reasons", None)
     assert r[topology_key(WEIGHTS)] == DECOUPLED
 

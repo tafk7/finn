@@ -27,8 +27,8 @@ from finn.kernels.space import Context
 from finn.kernels.ops.mvau import mvau_kernel
 
 MW, MH = 128, 64
-OP_TYPE = "MVAUKernel_hls"
-DOMAIN = "finn.custom_op.fpgadataflow.hls"
+OP_TYPE = "MVAU"
+DOMAIN = "finn.kernels"
 FPGAPART = "xcvc1902-vsva2197-2MP-e-S"
 
 
