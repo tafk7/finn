@@ -32,7 +32,7 @@ import xml.etree.ElementTree as ET
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 def _extract_from_vivado_report(model, root: ET.Element):
@@ -111,7 +111,7 @@ def _extract_from_vivado_report(model, root: ET.Element):
             sdp_model = ModelWrapper(getCustomOp(node).get_nodeattr("model"))
             sdp_res_dict = _extract_from_vivado_report(sdp_model, root)
             res_dict.update(sdp_res_dict)
-        elif is_hls_node(node) or is_rtl_node(node):
+        elif is_specialized_node(node):
             node_dict = get_instance_stats(node.name)
             if node_dict is not None:
                 res_dict[node.name] = node_dict
@@ -152,7 +152,7 @@ def _extract_from_slash_report(model, root: ET.Element):
 
         sdp_model = ModelWrapper(getCustomOp(kernel).get_nodeattr("model"))
         for layer in sdp_model.graph.node:
-            if not (is_hls_node(layer) or is_rtl_node(layer)):
+            if not is_specialized_node(layer):
                 continue
             if layer.name in layer_cell_stats:
                 res_dict[layer.name] = layer_cell_stats[layer.name]

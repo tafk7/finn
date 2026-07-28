@@ -31,7 +31,7 @@
 import qonnx.custom_op.registry as registry
 from qonnx.transformation.base import NodeLocalTransformation
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 def _assert_no_reconvergent_residuals(model):
@@ -86,7 +86,7 @@ class DeriveCharacteristic(NodeLocalTransformation):
 
     def applyNodeLocal(self, node):
         op_type = node.op_type
-        if is_hls_node(node) or is_rtl_node(node):
+        if is_specialized_node(node):
             try:
                 # lookup op_type in registry of CustomOps
                 inst = registry.getCustomOp(node)
@@ -113,7 +113,7 @@ class DeriveFIFOSizes(NodeLocalTransformation):
 
     def applyNodeLocal(self, node):
         op_type = node.op_type
-        if is_hls_node(node) or is_rtl_node(node):
+        if is_specialized_node(node):
             try:
                 # lookup op_type in registry of CustomOps
                 prod = registry.getCustomOp(node)

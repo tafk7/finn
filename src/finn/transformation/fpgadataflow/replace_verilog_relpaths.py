@@ -31,7 +31,7 @@ import os
 import qonnx.custom_op.registry as registry
 from qonnx.transformation.base import Transformation
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 class ReplaceVerilogRelPaths(Transformation):
@@ -42,7 +42,7 @@ class ReplaceVerilogRelPaths(Transformation):
 
     def apply(self, model):
         for node in model.graph.node:
-            if is_hls_node(node) or is_rtl_node(node):
+            if is_specialized_node(node):
                 try:
                     # lookup op_type in registry of CustomOps
                     inst = registry.getCustomOp(node)

@@ -29,7 +29,7 @@
 import qonnx.custom_op.registry as registry
 from itertools import product
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 RESOURCE_ATTR_VALUES = {
     "resType": ["dsp", "lut"],
@@ -47,7 +47,7 @@ def res_estimation(model, fpgapart):
 
     res_dict = {}
     for node in model.graph.node:
-        if is_hls_node(node) or is_rtl_node(node):
+        if is_specialized_node(node):
             inst = registry.getCustomOp(node)
             res_dict[node.name] = inst.node_res_estimation(fpgapart)
 
@@ -108,7 +108,7 @@ def res_estimation_complete(model, fpgapart):
 
     res_dict = {}
     for node in model.graph.node:
-        if is_hls_node(node) or is_rtl_node(node):
+        if is_specialized_node(node):
             inst = registry.getCustomOp(node)
             res_dict[node.name] = _estimate_all_resource_variants(inst, fpgapart)
 

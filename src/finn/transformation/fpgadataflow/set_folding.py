@@ -42,7 +42,7 @@ from qonnx.transformation.general import GiveUniqueNodeNames
 import finn.custom_op.fpgadataflow.hls.elementwise_binary_hls as elementwise_binary_hls
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 def divisors(num):
@@ -148,7 +148,7 @@ class SetFolding(Transformation):
         # as explained in the SetFolding docstring
         depthwise_op_exceptions = ["VVAU_hls", "VVAU_rtl", "Pool_hls"]
         for node in graph.node:
-            if not (is_hls_node(node) or is_rtl_node(node)):
+            if not is_specialized_node(node):
                 continue
             op_type = node.op_type
             # Model-aware instantiation: a kernel-backed op (wants_model=True) is

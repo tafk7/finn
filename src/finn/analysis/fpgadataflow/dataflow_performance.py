@@ -29,7 +29,7 @@
 
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 def dataflow_performance(model):
@@ -54,7 +54,7 @@ def dataflow_performance(model):
     max_node_name = ""
 
     for node in model.graph.node:
-        if is_hls_node(node) or is_rtl_node(node) or node.op_type == "Shuffle":
+        if is_specialized_node(node) or node.op_type == "Shuffle":
             inst = getCustomOp(node)
             node_cycles = int(inst.get_nodeattr("cycles_estimate"))
             if node_cycles > max_cycles:

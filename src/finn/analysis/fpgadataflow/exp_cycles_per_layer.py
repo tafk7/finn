@@ -29,7 +29,7 @@
 
 import qonnx.custom_op.registry as registry
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 def exp_cycles_per_layer(model):
@@ -42,7 +42,7 @@ def exp_cycles_per_layer(model):
 
     cycle_dict = {}
     for node in model.graph.node:
-        if is_hls_node(node) or is_rtl_node(node):
+        if is_specialized_node(node):
             inst = registry.getCustomOp(node)
             cycle_dict[node.name] = int(inst.get_exp_cycles())
 

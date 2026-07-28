@@ -33,7 +33,7 @@ import warnings
 from qonnx.transformation.base import Transformation
 
 from finn.util.basic import make_build_dir
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 def _codegen_single_node(node, model, fpgapart, clk):
@@ -90,6 +90,6 @@ class PrepareIP(Transformation):
 
     def apply(self, model):
         for node in model.graph.node:
-            if is_hls_node(node) or is_rtl_node(node):
+            if is_specialized_node(node):
                 _codegen_single_node(node, model, self.fpgapart, self.clk)
         return (model, False)

@@ -33,7 +33,7 @@ from qonnx.transformation.base import NodeLocalTransformation
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 class PrepareRTLSim(NodeLocalTransformation):
@@ -60,7 +60,7 @@ class PrepareRTLSim(NodeLocalTransformation):
 
     def applyNodeLocal(self, node):
         op_type = node.op_type
-        if is_hls_node(node) or is_rtl_node(node):
+        if is_specialized_node(node):
             try:
                 # lookup op_type in registry of CustomOps
                 inst = registry.getCustomOp(node)

@@ -31,7 +31,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.fpgadataflow import is_specialized_node
 
 
 class AnnotateCycles(Transformation):
@@ -46,7 +46,7 @@ class AnnotateCycles(Transformation):
         graph = model.graph
         # annotate node cycles
         for node in graph.node:
-            if is_hls_node(node) or is_rtl_node(node):
+            if is_specialized_node(node):
                 # Model-aware instantiation: a kernel op (wants_model=True) needs the
                 # model so get_exp_cycles can source its Context from live graph facts;
                 # classic ops get an identical bare instance (safe superset).
