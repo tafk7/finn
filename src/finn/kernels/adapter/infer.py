@@ -92,17 +92,13 @@ class InferKernels(Transformation):
             if kernel_cls is None:
                 continue
 
-            try:
-                result = kernel_cls.infer_from(node, model, node_ind + 1)
-            except Exception as exc:  # noqa: BLE001 — a failed build must not abort the pass
-                logger.warning(
-                    "InferKernels: %s.infer_from failed on %s node %s: %s",
-                    kernel_cls.__name__,
-                    node.op_type,
-                    node.name,
-                    exc,
-                )
-                continue
+            # infer_from is only reached AFTER can_infer_from returned True, so a raise here
+            # is a BUILD BUG (the claim promised a legal build the builder could not deliver),
+            # not a "no match". Let it PROPAGATE — a broken builder must fail loudly rather
+            # than silently leave a classic node on FINN's path (INV5). A future "I matched
+            # but on closer inspection decline" is an explicit return sentinel, not an
+            # exception.
+            result = kernel_cls.infer_from(node, model, node_ind + 1)
 
             # Model-aware validation guard (brainsmith infer_kernel.py:128-143): a kernel
             # node that cannot instantiate + publish its output dtype is not committed.
@@ -122,32 +118,34 @@ class InferKernels(Transformation):
         return (model, graph_modified)
 
     def _match(self, node: NodeProto, model: ModelWrapper):
-        """The first pool op that claims ``node``, or None. List order is precedence."""
+        """The first pool op that claims ``node``, or None. List order is precedence.
+
+        ``can_infer_from`` is a PREDICATE — it must be total. A raise here is a KERNEL BUG
+        (a broken claim check), not a "no match", so it PROPAGATES rather than being swallowed
+        into a silent skip (INV5)."""
         for kernel_cls in self.pool:
-            try:
-                if kernel_cls.can_infer_from(node, model):
-                    return kernel_cls
-            except Exception as exc:  # noqa: BLE001 — a broken predicate must not abort
-                logger.warning(
-                    "InferKernels: %s.can_infer_from raised on %s node %s: %s",
-                    kernel_cls.__name__,
-                    node.op_type,
-                    node.name,
-                    exc,
-                )
+            if kernel_cls.can_infer_from(node, model):
+                return kernel_cls
         return None
 
     def _validate(self, result, model, kernel_cls, src_node) -> bool:
         """Instantiate + validate each new kernel node before commit. Only kernel-domain
         nodes are validated (an infer might also emit layout/helper nodes). Returns False
-        (skip this inference) if any kernel node fails to instantiate."""
+        (skip this inference) if any kernel node fails to instantiate.
+
+        This IS a legitimate filter — its purpose is "only commit nodes that legally
+        instantiate". But the catch is NARROW: the expected failure is the
+        ``Illegal``→``ValueError`` (or ``KeyError``) surface of ``_point``/
+        ``infer_node_datatype`` — a node that cannot resolve. An UNEXPECTED error type (e.g.
+        an ``AttributeError`` from a typo in the kernel code) is a real bug and PROPAGATES
+        (INV5), rather than masquerading as a legitimate skip."""
         for new_node in result.nodes_to_insert:
             if new_node.domain != KERNEL_DOMAIN:
                 continue
             try:
                 kernel_op = model.get_customop_wrapper(new_node)
                 kernel_op.infer_node_datatype(model)
-            except Exception as exc:  # noqa: BLE001
+            except (ValueError, KeyError) as exc:
                 logger.warning(
                     "InferKernels: skipping %s inference from %s node %s — validation "
                     "failed: %s",
