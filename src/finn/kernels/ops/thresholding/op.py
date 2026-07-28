@@ -203,7 +203,6 @@ class ThresholdingKernelOp(KernelOp):
             [node.input[0], node.input[1]],
             [node.output[0]],
             domain="finn.kernels",
-            backend="fpgadataflow",
             name="Thresholding_" + node.name,
             ActVal=actval,
         )

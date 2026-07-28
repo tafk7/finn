@@ -594,7 +594,6 @@ class MvauKernelOp(KernelOp):
                 [mm_input, mm_weight, mt_thres],
                 [mt_output],
                 domain="finn.kernels",
-                backend="fpgadataflow",
                 name="MVAU_" + node.name,
                 ActVal=actval,
             )
@@ -607,7 +606,6 @@ class MvauKernelOp(KernelOp):
             [mm_input, mm_weight],
             [mm_output],
             domain="finn.kernels",
-            backend="fpgadataflow",
             name="MVAU_" + node.name,
             ActVal=0,
         )

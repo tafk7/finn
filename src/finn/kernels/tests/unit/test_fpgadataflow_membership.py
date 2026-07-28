@@ -13,10 +13,18 @@ stamp required), while a classic node still needs its ``backend=="fpgadataflow"`
 (INV-L). This is the precondition for dropping the redundant kernel stamp (FU-1b).
 """
 
-from onnx import helper
-from qonnx.util.basic import get_by_name
+import numpy as np
+from onnx import TensorProto, helper
+from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.util.basic import get_by_name, qonnx_make_model
 
+from finn.kernels.adapter import InferKernels
+from finn.kernels.ops.mvau.op import MvauKernelOp
+from finn.kernels.ops.thresholding.op import ThresholdingKernelOp
 from finn.util.fpgadataflow import is_fpgadataflow_node
+
+MW, MH = 128, 64
 
 
 def _kernel_node_no_stamp():
@@ -54,3 +62,24 @@ def test_classic_node_without_stamp_is_not_member():
 
 def test_plain_node_is_not_member():
     assert is_fpgadataflow_node(_plain_node()) is False
+
+
+def test_inferred_kernel_node_has_no_stamp_but_is_member():
+    """FU-1b end-state: a node straight out of Seam A's infer carries NO backend stamp,
+    yet still sweeps into a dataflow partition (is_fpgadataflow_node True via domain)."""
+    matmul = helper.make_node("MatMul", ["inp", "weights"], ["out"], name="mm0")
+    graph = helper.make_graph(
+        [matmul],
+        "mm_only",
+        [helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, MW])],
+        [helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, MH])],
+        value_info=[helper.make_tensor_value_info("weights", TensorProto.FLOAT, [MW, MH])],
+    )
+    model = ModelWrapper(qonnx_make_model(graph))
+    model.set_tensor_datatype("inp", DataType["INT8"])
+    model.set_tensor_datatype("weights", DataType["INT8"])
+    model.set_initializer("weights", np.ones((MW, MH), dtype=np.float32))
+    model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
+    kn = [n for n in model.graph.node if n.domain == "finn.kernels"][0]
+    assert get_by_name(kn.attribute, "backend") is None
+    assert is_fpgadataflow_node(kn) is True
