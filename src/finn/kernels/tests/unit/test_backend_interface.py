@@ -93,7 +93,7 @@ def test_to_subschemas_yields_demand_stage_and_guarded_delivery_pool():
 
 def test_backend_interface_declares_two_root_deps():
     bi = backend_interface_for(_weights_dp(), mvau_pool())
-    assert bi.deps == frozenset({"implementation", topology_key(WEIGHTS)})
+    assert bi.deps == frozenset({"backend", topology_key(WEIGHTS)})
     assert bi.schema == WEIGHTS
 
 
@@ -153,7 +153,7 @@ def test_constrains_filters_topology_domain_like_delivery():
     # For every compute backend the guard keeps EXACTLY the same topologies as the split
     # delivery path (whatever each backend's consumes declares — permissive or restricted).
     for b in pool:
-        p = {"implementation": b.name}
+        p = {"backend": b.name}
         assert set(got_legal(p)) == set(want_legal(p))
         assert got_legal(p)  # non-empty: at least one topology stays selectable
 
@@ -168,7 +168,7 @@ def test_constrains_excludes_embedded_for_stream_only_backend():
     dp = _weights_dp()
     bi = backend_interface_for(dp, (backend,))
     _, legal = bi.constrains
-    allowed = set(legal({"implementation": "stream_only"}))
+    allowed = set(legal({"backend": "stream_only"}))
     assert EMBEDDED not in allowed
     assert DECOUPLED in allowed
 
@@ -200,7 +200,7 @@ def test_decoupled_weights_resolve_matches_pre_t4_baseline():
     r = k.configure(
         ctx,
         {
-            "implementation": "mvau_hls",
+            "backend": "mvau_hls",
             "PE": 2,
             "SIMD": 2,
             "resType": "lut",

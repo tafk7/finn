@@ -49,8 +49,8 @@ def test_matrix_dims_are_not_axes():
     assert "MH" not in reg
 
 
-def test_implementation_is_the_string_selection_axis():
-    spec = _reg()["implementation"]
+def test_backend_is_the_string_selection_axis():
+    spec = _reg()["backend"]
     assert spec[0] == "s"
     assert spec[3] == frozenset({"mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"})
 

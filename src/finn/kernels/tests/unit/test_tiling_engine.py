@@ -142,7 +142,7 @@ def _mvu_kernel():
 
 def test_weight_2d_block_folds_and_width():
     k, ctx = _mvu_kernel(), _ctx(mw=128, mh=64)
-    pt = k.configure(ctx, {"implementation": "mvu", "SIMD": 16, "PE": 4})
+    pt = k.configure(ctx, {"backend": "mvu", "SIMD": 16, "PE": 4})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # weight stream WIDTH = SIMD*PE*wbits = 16*4*8 = 512.
     assert k.get_instream_width(pt, ctx, 1) == 16 * 4 * 8
@@ -152,7 +152,7 @@ def test_weight_2d_block_folds_and_width():
 
 def test_folded_shape_folds_the_named_dim():
     k, ctx = _mvu_kernel(), _ctx(mw=128, mh=64)
-    pt = k.configure(ctx, {"implementation": "mvu", "SIMD": 16, "PE": 4})
+    pt = k.configure(ctx, {"backend": "mvu", "SIMD": 16, "PE": 4})
     assert k.get_folded_input_shape(pt, ctx, 0) == (1, 8, 16)   # inp (1,128) folds MW by SIMD
     assert k.get_folded_output_shape(pt, ctx, 0) == (1, 16, 4)  # out (1,64) folds MH by PE
 
@@ -165,7 +165,7 @@ def test_folded_shape_folds_the_named_dim():
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64)])
 def test_exp_cycles_is_reduction_product_from_floor(simd, pe):
     k, ctx = _mvu_kernel(), _ctx(mw=128, mh=64)
-    pt = k.configure(ctx, {"implementation": "mvu", "SIMD": simd, "PE": pe})
+    pt = k.configure(ctx, {"backend": "mvu", "SIMD": simd, "PE": pe})
     # weights = MW*MH/(SIMD*PE) = sf*nf is the largest interface term; no override needed.
     assert k.get_exp_cycles(pt, ctx) == (128 // simd) * (64 // pe)
 
@@ -214,7 +214,7 @@ def test_width_uses_dtype_source():
         shapes={"inp": (1, 128), "out": (1, 64)},
         datatypes={"inp": DataType["INT8"], "out": DataType["INT32"]},
     )
-    pt = k.configure(ctx, {"implementation": "k", "SIMD": 16, "PE": 4})
+    pt = k.configure(ctx, {"backend": "k", "SIMD": 16, "PE": 4})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # PE=4 elements * INT16 (from dtype_source "acc"), NOT INT32 (the tensor dtype).
     assert k.get_outstream_width(pt, ctx, 0) == 4 * 16

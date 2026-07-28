@@ -62,7 +62,7 @@ def _ctx(mw=6, mh=8, wdt="INT8"):
 
 def _point(ctx, topo=DECOUPLED, impl=MVAU_DSP_SOFTVEC, **extra):
     a = {
-        "implementation": impl,
+        "backend": impl,
         "PE": 2,
         "SIMD": 2,
         "resType": "lut" if impl == MVAU_HLS else "dsp",
@@ -135,7 +135,7 @@ def test_resolver_reads_no_pin_op_or_memmode():
     # tested on actual CODE (mentions in prose/lineage notes are fine).
     code = _strip_comments_and_docstrings(inspect.getsource(stitch_module_ref))
     lower = code.lower()
-    for forbidden in ("in1_v", "m_axis_0", "mem_mode", "mvau", "implementation"):
+    for forbidden in ("in1_v", "m_axis_0", "mem_mode", "mvau", "backend"):
         assert forbidden not in lower, f"resolver leaks a hardcoded token: {forbidden}"
 
 

@@ -16,7 +16,7 @@ feasibility predicates, RTL sources, and emit — exactly the shape of an
 :class:`Backend`. We do not introduce a parallel type: ``pool_schema`` reads an
 ``Backend`` structurally, and the root axis name (``topology``) is what gives
 the pool its meaning. This factory is a semantic alias so a topology reads as a
-topology, not as a compute "implementation", while reusing the proven selection
+topology, not as a compute "backend", while reusing the proven selection
 machinery ([[impl-bundles]]).
 """
 

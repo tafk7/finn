@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .context import Context
-from .backend import Backend, pool_schema
+from .backend import BACKEND_AXIS, Backend, pool_schema
 from .backend_interface import backend_interface_for
 from .point import Illegal, Point
 from .ports import Direction
@@ -228,13 +228,13 @@ class Kernel:
 
     def schema(self) -> Schema:
         """The full design space: the identity's op-level shared elements + the
-        implementation pool (each impl augmented with its tiling-engine-derived fold dials
+        backend pool (each backend augmented with its tiling-engine-derived fold dials
         / divisibility / widths), plus the delivered parameters' realization sub-schemas.
         ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate memory
         couplings that once lived here relocated into the parameters pool, and the
         compute→memory demand crosses the seam owned by a ``BackendInterface``."""
         op = pool_schema(
-            "implementation",
+            BACKEND_AXIS,
             tuple(self.op_axes),
             tuple(self.op_derived),
             tuple(self.op_predicates),
@@ -276,7 +276,7 @@ class Kernel:
         schema = self.schema()
         for impl in self.pool:
             try:
-                result = resolve(schema, context, {"implementation": impl.name})
+                result = resolve(schema, context, {BACKEND_AXIS: impl.name})
             except Exception:  # noqa: BLE001
                 # A backend feasibility check that raises on THIS context (e.g. a
                 # device-family probe that needs an fpgapart the trial context omits) is not
@@ -402,8 +402,8 @@ class Kernel:
         return self._selected(point)
 
     def _selected(self, point: Point) -> Backend:
-        """The pool member named by the resolved ``implementation`` axis."""
-        impl_name = point["implementation"]
+        """The pool member named by the resolved ``backend`` axis."""
+        impl_name = point[BACKEND_AXIS]
         by_name = {b.name: b for b in self.pool}
         bundle = by_name.get(impl_name)
         if bundle is None:

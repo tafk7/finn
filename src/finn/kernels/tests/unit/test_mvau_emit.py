@@ -54,7 +54,7 @@ def dsp_point(schema, ctx, impl, **overrides):
     # emit (emit_point over the compute pool) is topology-independent — the memstream is the
     # separate delivery half — so these compute-core golden tests are unaffected by the mode.
     a = {
-        "implementation": impl,
+        "backend": impl,
         "PE": 2,
         "SIMD": 2,
         "resType": "dsp",
@@ -66,7 +66,7 @@ def dsp_point(schema, ctx, impl, **overrides):
 
 def hls_point(schema, ctx, **overrides):
     a = {
-        "implementation": MVAU_HLS,
+        "backend": MVAU_HLS,
         "PE": 2,
         "SIMD": 2,
         "resType": "lut",

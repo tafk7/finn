@@ -128,7 +128,7 @@ def diff_hls_thresh_h():
         finn_thresh = open(os.path.join(d, "thresh.h")).read()
 
     ctx = _our_ctx(T, idt, tdt, odt)
-    point = resolve(thresholding_kernel_schema(), ctx, {"implementation": THRESHOLDING_HLS, "PE": 2})
+    point = resolve(thresholding_kernel_schema(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
     from finn.kernels.ops.thresholding.emit_hls import _thresh_h
     ours_thresh = _thresh_h(point, ctx)
 
@@ -163,7 +163,7 @@ def diff_rtl_dat():
                 finn_dats[bare] = open(os.path.join(d, f)).read()
 
     ctx = _our_ctx(T, idt, tdt, odt)
-    point = resolve(thresholding_kernel_schema(), ctx, {"implementation": THRESHOLDING_RTL, "PE": 2})
+    point = resolve(thresholding_kernel_schema(), ctx, {"backend": THRESHOLDING_RTL, "PE": 2})
     arts = emit_point(thresholding_pool(), point, ctx)
     ours_dats = {}
     for f in arts.data_files:

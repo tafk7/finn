@@ -62,7 +62,7 @@ def _ctx(part=VERSAL, mw=6, mh=8, wdt="INT8"):
 
 def _decoupled_point(ctx, pe=2, simd=2, **extra):
     a = {
-        "implementation": MVAU_HLS,
+        "backend": MVAU_HLS,
         "PE": pe,
         "SIMD": simd,
         "resType": "lut",
@@ -91,7 +91,7 @@ def test_geometry_absent_for_embedded():
     r = resolve(
         mvau_schema(),
         ctx,
-        {"implementation": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut", TOPOLOGY: EMBEDDED},
+        {"backend": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut", TOPOLOGY: EMBEDDED},
     )
     # geometry derived are present-but-None under embedded (no streamer)
     assert r[PARAM_DEPTH] is None

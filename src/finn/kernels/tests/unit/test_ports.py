@@ -69,7 +69,7 @@ def _ctx(mw=6, mh=8, wdt="INT8"):
 
 def _decoupled_point(ctx, impl=MVAU_HLS, pe=2, simd=2, **extra):
     a = {
-        "implementation": impl,
+        "backend": impl,
         "PE": pe,
         "SIMD": simd,
         "resType": "lut" if impl == MVAU_HLS else "dsp",
@@ -82,7 +82,7 @@ def _decoupled_point(ctx, impl=MVAU_HLS, pe=2, simd=2, **extra):
 
 def _embedded_point(ctx, impl=MVAU_HLS, pe=2, simd=2, **extra):
     a = {
-        "implementation": impl,
+        "backend": impl,
         "PE": pe,
         "SIMD": simd,
         "resType": "lut" if impl == MVAU_HLS else "dsp",

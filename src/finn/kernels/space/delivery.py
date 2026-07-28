@@ -37,6 +37,7 @@ from typing import Any, Callable
 
 from dataclasses import dataclass
 
+from .backend import BACKEND_AXIS
 from .demand import ParamDemand
 from .param_names import ALL_MODES, topology_key
 from .tiling import stream_width_key
@@ -109,9 +110,9 @@ def _topology_domain(compute_pool, dp: DeliveredParam):
     topo_modes = {b.name: b.mode for b in dp.pool}  # topology identity -> its consumption mode
 
     def legal(p):
-        # Defensive read: during real resolve `implementation` is fixed before this axis;
+        # Defensive read: during real resolve `backend` is fixed before this axis;
         # under a bare probe point (nodeattr typing) it is absent → permissive (all modes).
-        impl = p.get("implementation") if hasattr(p, "get") else None
+        impl = p.get(BACKEND_AXIS) if hasattr(p, "get") else None
         backend = by_name.get(impl)
         modes = (backend.consumes.get(iface) if backend else None) or ALL_MODES
         return tuple(name for name, mode in topo_modes.items() if mode in modes)

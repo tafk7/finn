@@ -30,8 +30,7 @@ def _build_model():
         ["inp", "weights"],
         ["out"],
         domain=DOMAIN,
-        backend="fpgadataflow",
-        implementation="mvau_hls",
+        backend="mvau_hls",
         SIMD=1,
         PE=1,
     )

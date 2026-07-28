@@ -61,7 +61,7 @@ def _resolve_decoupled():
         fpgapart=FPGAPART, clk_ns=CLK_NS,
     )
     point = resolve(mvau_schema(), ctx, {
-        "implementation": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2, "resType": "dsp",
+        "backend": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2, "resType": "dsp",
         TOPOLOGY: DECOUPLED, RAM_STYLE: "block",
     })
     return ctx, point

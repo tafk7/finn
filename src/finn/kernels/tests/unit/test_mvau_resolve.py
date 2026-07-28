@@ -36,7 +36,7 @@ def _language_of(point, pool=None):
     """The selected backend's static ``language`` field (F5: no longer projected onto the
     point) — looked up in the pool by the resolved ``implementation`` name."""
     by_name = {b.name: b for b in (pool if pool is not None else mvau_pool())}
-    return by_name[point["implementation"]].language
+    return by_name[point["backend"]].language
 from finn.kernels.ops.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
@@ -96,7 +96,7 @@ def base_assignment(**overrides):
     namespaced ``parameters.*`` keys, keeping call sites terse. ``mem_mode`` maps to a
     storage topology: internal_embedded→embedded, internal_decoupled→decoupled."""
     a = {
-        "implementation": MVAU_HLS,
+        "backend": MVAU_HLS,
         "PE": 4,
         "SIMD": 2,
         "mem_mode": "internal_decoupled",
@@ -164,7 +164,7 @@ def test_packed_impl_illegal_on_seven_series(schema):
     r = resolve(
         schema,
         make_context(SEVEN_SERIES, weights=narrow_weights()),
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Illegal)
     assert any("DSP58" in reason for reason in r.reasons)
@@ -176,7 +176,7 @@ def test_other_impls_remain_on_seven_series(schema):
     r_sv = resolve(
         schema,
         make_context(SEVEN_SERIES, weights=narrow_weights()),
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r_sv, Point)
     r_hls = resolve(schema, make_context(SEVEN_SERIES), base_assignment(mem_mode="internal_embedded"))
@@ -189,7 +189,7 @@ def test_packed_impl_legal_on_versal(schema):
     r = resolve(
         schema,
         make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Point)
     assert r.dsp_primitive == "DSP58"
@@ -204,14 +204,14 @@ def test_packed_impl_illegal_on_versal_with_wide_weights(schema):
     r = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Illegal)
     assert any("weight_width<=8" in reason for reason in r.reasons)
     # softvec is still feasible on the same wide-weight Versal context
     r2 = resolve(
         schema, ctx,
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r2, Point)
 
@@ -228,7 +228,7 @@ def test_dsp_primitive_forced_from_fpgapart(schema):
         r = resolve(
             schema,
             make_context(part, weights=narrow_weights()),
-            base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
+            base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
         )
         assert isinstance(r, Point), r
         assert r.dsp_primitive == expected
@@ -326,7 +326,7 @@ def test_predicate_violation_illegal(schema):
         schema,
         make_context(),
         base_assignment(
-            implementation=MVAU_DSP_SOFTVEC, resType="dsp", SIMD=1, pumpedCompute=1
+            backend=MVAU_DSP_SOFTVEC, resType="dsp", SIMD=1, pumpedCompute=1
         ),
     )
     assert isinstance(r, Illegal)
@@ -386,7 +386,7 @@ def test_packed_num_lanes_gate(schema):
     r = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Illegal)
     assert any("NUM_LANES" in reason for reason in r.reasons)
@@ -394,7 +394,7 @@ def test_packed_num_lanes_gate(schema):
     r_sv = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r_sv, Point)
 
@@ -405,7 +405,7 @@ def test_packed_num_lanes_ok_for_int8(schema):
     r = resolve(
         schema,
         ctx,
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_decoupled"),
     )
     assert isinstance(r, Point)
 
@@ -419,7 +419,7 @@ def test_hls_rejects_binary_weights(schema):
     # F3: binary WEIGHTS (not just binary input) must be rejected on HLS when not in
     # binaryXnorMode. The old predicate checked only the input and under-rejected.
     ctx = make_context(weights=np.ones((6, 8), dtype=np.float32), wdt="BINARY", idt="INT4")
-    r = resolve(schema, ctx, base_assignment(implementation=MVAU_HLS, binaryXnorMode=0))
+    r = resolve(schema, ctx, base_assignment(backend=MVAU_HLS, binaryXnorMode=0))
     assert isinstance(r, Illegal)
     assert any("binary" in reason.lower() for reason in r.reasons)
 
@@ -427,7 +427,7 @@ def test_hls_rejects_binary_weights(schema):
 def test_hls_binary_ok_in_xnor_mode(schema):
     # F3 escape: binaryXnorMode reinterprets binary as bipolar -> allowed.
     ctx = make_context(weights=np.ones((6, 8), dtype=np.float32), wdt="BINARY", idt="BINARY")
-    r = resolve(schema, ctx, base_assignment(implementation=MVAU_HLS, binaryXnorMode=1))
+    r = resolve(schema, ctx, base_assignment(backend=MVAU_HLS, binaryXnorMode=1))
     assert isinstance(r, Point)
 
 
@@ -474,7 +474,7 @@ def test_fourth_implementation_composes_additively():
     legal = resolve(
         schema4,
         make_context(SEVEN_SERIES),  # non-Versal -> feasible
-        base_assignment(implementation="mvau_lut_rtl", mem_mode="internal_embedded"),
+        base_assignment(backend="mvau_lut_rtl", mem_mode="internal_embedded"),
     )
     assert isinstance(legal, Point)
     assert _language_of(legal, kernel4.pool) == "rtl"
@@ -483,7 +483,7 @@ def test_fourth_implementation_composes_additively():
     illegal = resolve(
         schema4,
         make_context(VERSAL),  # Versal -> its own feasible() rejects
-        base_assignment(implementation="mvau_lut_rtl", mem_mode="internal_embedded"),
+        base_assignment(backend="mvau_lut_rtl", mem_mode="internal_embedded"),
     )
     assert isinstance(illegal, Illegal)
     assert any("non-Versal" in reason for reason in illegal.reasons)
@@ -522,7 +522,7 @@ def test_registry_makes_addition_structural():
         r = resolve(
             mvau_schema(),
             make_context(SEVEN_SERIES),
-            base_assignment(implementation="mvau_stub_backend", mem_mode="internal_embedded"),
+            base_assignment(backend="mvau_stub_backend", mem_mode="internal_embedded"),
         )
         assert isinstance(r, Point)
         assert r.sources == ("stub.sv",)
@@ -635,7 +635,7 @@ def test_dsp_core_rejects_embedded_weights(schema):
     r = resolve(
         schema,
         make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp", mem_mode="internal_embedded"),
     )
     assert isinstance(r, Illegal)
     assert any("embedded" in reason for reason in r.reasons)
@@ -647,7 +647,7 @@ def test_dsp_core_default_weight_topology_is_decoupled(schema):
     r = resolve(
         schema,
         make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8"),
-        base_assignment(implementation=MVAU_DSP_PACKED, resType="dsp"),  # no mem_mode pin
+        base_assignment(backend=MVAU_DSP_PACKED, resType="dsp"),  # no mem_mode pin
     )
     assert isinstance(r, Point)
     assert r[PARAM_TOPOLOGY] == PARAM_DECOUPLED
@@ -659,7 +659,7 @@ def test_dsp_core_rejects_thresholded_node(schema):
     r = resolve(
         schema,
         make_thresh_context(VERSAL, weights=narrow_weights(wdt="INT8")),
-        base_assignment(implementation=MVAU_DSP_SOFTVEC, resType="dsp"),
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp"),
     )
     assert isinstance(r, Illegal)
     assert any("threshold" in reason.lower() for reason in r.reasons)

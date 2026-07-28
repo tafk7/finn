@@ -136,7 +136,7 @@ def _run_config(cfg):
     # DSP core is streamed-weight-only (embedded illegal); decoupled topology. The
     # compute-half emit under test is topology-independent.
     point = resolve(mvau_schema(), ctx, {
-        "implementation": impl, "PE": pe, "SIMD": simd, "resType": "dsp",
+        "backend": impl, "PE": pe, "SIMD": simd, "resType": "dsp",
         TOPOLOGY: DECOUPLED,
     })
 

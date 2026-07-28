@@ -33,7 +33,7 @@ def _language_of(point, pool=None):
     """The selected backend's static ``language`` field (F5: no longer projected onto the
     point) — looked up in the pool by the resolved ``implementation`` name."""
     by_name = {b.name: b for b in (pool if pool is not None else thresholding_pool())}
-    return by_name[point["implementation"]].language
+    return by_name[point["backend"]].language
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ def make_context(channels=8, steps=7, idt="UINT8", tdt="UINT8", odt="UINT3", thr
 
 
 def base_assignment(**overrides):
-    a = {"implementation": THRESHOLDING_HLS, "PE": 2}
+    a = {"backend": THRESHOLDING_HLS, "PE": 2}
     a.update(overrides)
     return a
 
@@ -103,7 +103,7 @@ def test_num_steps_must_match_threshold_shape(schema):
 
 
 def test_rtl_local_axes_absent_under_hls(schema):
-    r = resolve(schema, make_context(), base_assignment(implementation=THRESHOLDING_HLS))
+    r = resolve(schema, make_context(), base_assignment(backend=THRESHOLDING_HLS))
     assert isinstance(r, Point)
     for name in ("depth_trigger_bram", "depth_trigger_uram", "uniform_thres", "deep_pipeline"):
         assert name not in r, f"{name} must NOT exist under the HLS bundle"
@@ -115,7 +115,7 @@ def test_rtl_local_axes_present_under_rtl(schema):
     r = resolve(
         schema,
         make_context(),
-        base_assignment(implementation=THRESHOLDING_RTL, depth_trigger_bram=1024, uniform_thres=1),
+        base_assignment(backend=THRESHOLDING_RTL, depth_trigger_bram=1024, uniform_thres=1),
     )
     assert isinstance(r, Point)
     assert r.depth_trigger_bram == 1024
@@ -129,7 +129,7 @@ def test_assigning_rtl_axis_under_hls_is_illegal(schema):
     r = resolve(
         schema,
         make_context(),
-        base_assignment(implementation=THRESHOLDING_HLS, depth_trigger_bram=1024),
+        base_assignment(backend=THRESHOLDING_HLS, depth_trigger_bram=1024),
     )
     assert isinstance(r, Illegal)
     assert any("depth_trigger_bram" in reason for reason in r.reasons)
@@ -142,8 +142,8 @@ def test_same_integer_dtype_resolves_under_both_bundles(schema):
     # Both backends share the SAME integer dtype envelope: an identical context must
     # resolve to a Point under HLS AND under RTL (no per-bundle dtype feasibility gate).
     ctx = make_context(idt="INT8", tdt="INT8", odt="INT4", thresholds=sorted_thresholds(signed=True))
-    r_hls = resolve(schema, ctx, base_assignment(implementation=THRESHOLDING_HLS))
-    r_rtl = resolve(schema, ctx, base_assignment(implementation=THRESHOLDING_RTL))
+    r_hls = resolve(schema, ctx, base_assignment(backend=THRESHOLDING_HLS))
+    r_rtl = resolve(schema, ctx, base_assignment(backend=THRESHOLDING_RTL))
     assert isinstance(r_hls, Point)
     assert isinstance(r_rtl, Point)
 
@@ -157,7 +157,7 @@ def test_rtl_rejects_unsorted_thresholds(schema):
     r = resolve(
         schema,
         make_context(thresholds=thr),
-        base_assignment(implementation=THRESHOLDING_RTL),
+        base_assignment(backend=THRESHOLDING_RTL),
     )
     assert isinstance(r, Illegal)
     assert any("sorted" in reason for reason in r.reasons)
@@ -169,7 +169,7 @@ def test_hls_allows_unsorted_thresholds(schema):
     r = resolve(
         schema,
         make_context(thresholds=thr),
-        base_assignment(implementation=THRESHOLDING_HLS),
+        base_assignment(backend=THRESHOLDING_HLS),
     )
     assert isinstance(r, Point)
 
@@ -180,7 +180,7 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
     r = resolve(
         schema,
         make_context(idt="UINT8", thresholds=thr),
-        base_assignment(implementation=THRESHOLDING_HLS),
+        base_assignment(backend=THRESHOLDING_HLS),
     )
     assert isinstance(r, Illegal)
     assert any("thresholds >= 0" in reason or "non-negative" in reason.lower() for reason in r.reasons)
@@ -200,8 +200,8 @@ def test_third_implementation_composes_additively():
     )
     axes, derived, predicates = thresholding_shared()
     pool3 = thresholding_pool() + (stub,)
-    schema3 = pool_schema("implementation", axes, derived, predicates, pool3)
-    r = resolve(schema3, make_context(), base_assignment(implementation="thresholding_stub"))
+    schema3 = pool_schema("backend", axes, derived, predicates, pool3)
+    r = resolve(schema3, make_context(), base_assignment(backend="thresholding_stub"))
     assert isinstance(r, Point)
     assert _language_of(r, pool3) == "stub"
     assert r.sources == ("stub.sv",)

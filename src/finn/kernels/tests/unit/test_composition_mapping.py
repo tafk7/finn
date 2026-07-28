@@ -230,7 +230,7 @@ def _composed_op_schema() -> Schema:
     coordinates in a single flat Schema, no new primitive."""
     hls = Backend(name="mvau_hls", axes=(discrete_axis("resType", {"lut", "dsp"}, "lut"),))
     rtl = Backend(name="mvau_rtl", axes=(discrete_axis("pumpedCompute", {0, 1}, 0),))
-    compute = pool_schema("implementation", (), (), (), (hls, rtl))
+    compute = pool_schema("backend", (), (), (), (hls, rtl))
 
     emb = Backend(name="embedded")
     onc = Backend(name="onchip", axes=(discrete_axis("ram_style", {"block", "ultra"}, "block"),))
@@ -268,14 +268,14 @@ def test_compute_and_delivery_coordinates_multiply_independently():
         op,
         _ctx(),
         {
-            "implementation": "mvau_rtl",
+            "backend": "mvau_rtl",
             "storage": "onchip",
             "cardinality": "indexed",
             "ram_style": "ultra",
             "pumpedCompute": 1,
         },
     )
-    assert r.implementation == "mvau_rtl"
+    assert r.backend == "mvau_rtl"
     assert r.storage == "onchip"
     assert r.cardinality == "indexed"
     assert r.has_index_port is True
@@ -283,7 +283,7 @@ def test_compute_and_delivery_coordinates_multiply_independently():
     r2 = resolve(
         op,
         _ctx(),
-        {"implementation": "mvau_hls", "storage": "offchip", "cardinality": "single", "resType": "dsp"},
+        {"backend": "mvau_hls", "storage": "offchip", "cardinality": "single", "resType": "dsp"},
     )
     assert r2.has_index_port is False
 
@@ -292,7 +292,7 @@ def test_cross_coordinate_mlo_storage_gate_fires():
     """The one genuinely cross-coordinate rule (MLO needs addressable storage) is a
     plain Predicate over both coordinates — not an axis merge."""
     op = _composed_op_schema()
-    r = resolve(op, _ctx(), {"implementation": "mvau_hls", "storage": "embedded", "cardinality": "indexed"})
+    r = resolve(op, _ctx(), {"backend": "mvau_hls", "storage": "embedded", "cardinality": "indexed"})
     assert isinstance(r, Illegal)
 
 

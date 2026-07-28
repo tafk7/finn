@@ -11,7 +11,7 @@
 Proves the merge the hone delivers on the pre-resolution surface:
 
   * ``is_specialized(node)`` is the single definition of "a backend is committed"
-    (``implementation`` nodeattr non-empty). It agrees with ``kernel_hw_language`` on the
+    (``backend`` nodeattr non-empty). It agrees with ``kernel_hw_language`` on the
     same node in both states, and is DISTINCT from ``is_fpgadataflow_node`` (family
     membership — True even while unspecialized).
   * The getter contract's three states:
@@ -22,8 +22,8 @@ Proves the merge the hone delivers on the pre-resolution surface:
   * The F1 disagreement is GONE: an unspecialized node no longer answers
     ``get_folded_output_shape`` AS IF ``mvau_hls`` (the old schema-default backend).
 
-The ``implementation`` nodeattr default is now ``""`` (was ``mvau_hls``) — Seam B's
-``set_nodeattr("implementation", name)`` is the ONE write that specializes a node.
+The ``backend`` nodeattr default is now ``""`` (was ``mvau_hls``) — Seam B's
+``set_nodeattr("backend", name)`` is the ONE write that specializes a node.
 """
 
 import numpy as np
@@ -48,7 +48,6 @@ def _matmul_only_model():
         ["inp", "weights"],
         ["out"],
         domain="finn.kernels",
-        backend="fpgadataflow",
         ActVal=0,
         name="MVAU_0",
     )
@@ -78,7 +77,7 @@ def _inst(model):
 # ---------------------------------------------------------------------------
 
 
-def test_is_specialized_flips_only_on_implementation():
+def test_is_specialized_flips_only_on_backend():
     model = _matmul_only_model()
     node = model.graph.node[0]
 
@@ -87,8 +86,8 @@ def test_is_specialized_flips_only_on_implementation():
     assert kernel_hw_language(node) is None
     assert is_fpgadataflow_node(node) is True  # partition-sweep invariant (Seam C)
 
-    # Seam B's ONE write: set implementation -> specialized.
-    _inst(model).set_nodeattr("implementation", "mvau_hls")
+    # Seam B's ONE write: set the backend axis -> specialized.
+    _inst(model).set_nodeattr("backend", "mvau_hls")
     assert is_specialized(node) is True
     assert kernel_hw_language(node) == "hls"  # language agrees, only once specialized
     assert is_fpgadataflow_node(node) is True
@@ -96,8 +95,15 @@ def test_is_specialized_flips_only_on_implementation():
 
 def test_nodeattr_default_is_unspecialized_sentinel():
     attrs = _inst(_matmul_only_model()).get_nodeattr_types()
-    dtype, required, default = attrs["implementation"][:3]
+    dtype, required, default = attrs["backend"][:3]
     assert default == ""  # was "mvau_hls" (the removed second definition of resolved-ness)
+    # T5 shadow proof: the schema `backend` axis fully overrides the classic-inherited
+    # `backend` nodeattr (HWCustomOp default "fpgadataflow", required=True). On a kernel op
+    # the axis definition wins — non-required, "" sentinel — so the two never collide.
+    assert required is False
+    assert default != "fpgadataflow"
+    # The old axis name is fully gone: no `implementation` nodeattr survives the rename.
+    assert "implementation" not in attrs
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +163,7 @@ def test_the_f1_disagreement_is_gone():
 
     # Once specialized, the same getter answers (and language agrees).
     inst = _inst(model)
-    inst.set_nodeattr("implementation", "mvau_hls")
+    inst.set_nodeattr("backend", "mvau_hls")
     inst.set_nodeattr("SIMD", 8)
     inst.set_nodeattr("PE", 8)
     assert kernel_hw_language(node) == "hls"

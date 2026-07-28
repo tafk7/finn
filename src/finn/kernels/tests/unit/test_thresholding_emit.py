@@ -61,7 +61,7 @@ def make_context(channels=4, steps=7, idt="UINT8", tdt="UINT8", odt="UINT3", thr
 
 
 def rtl_point(schema, ctx, **overrides):
-    a = {"implementation": THRESHOLDING_RTL, "PE": 2}
+    a = {"backend": THRESHOLDING_RTL, "PE": 2}
     a.update(overrides)
     return resolve(schema, ctx, a)
 
@@ -182,7 +182,7 @@ def test_emit_point_on_hls_produces_thresh_h_rom():
     # topology) via the shared parameter serializer — no longer a stub.
     schema = thresholding_schema()
     ctx = make_context(channels=4, steps=7, odt="UINT3")
-    point = resolve(schema, ctx, {"implementation": THRESHOLDING_HLS, "PE": 2})
+    point = resolve(schema, ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
     arts = emit_point(thresholding_pool(), point, ctx)
     assert arts.generated[0].filename == "top_thresholding_top.cpp"
     names = {d.filename for d in arts.data_files}

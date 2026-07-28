@@ -55,13 +55,13 @@ def test_both_backends_resolve_thresholds_to_embedded_topology():
     sch = thresholding_kernel_schema()
     ctx = _ctx()
     for impl in (THRESHOLDING_HLS, THRESHOLDING_RTL):
-        p = resolve(sch, ctx, {"implementation": impl, "PE": 2})
+        p = resolve(sch, ctx, {"backend": impl, "PE": 2})
         assert p["parameters.thresholds.topology"] == "embedded"
 
 
 def test_hls_backend_emits_baked_thresh_h_rom():
     ctx = _ctx(channels=4, steps=7, odt="UINT3")
-    p = resolve(thresholding_kernel_schema(), ctx, {"implementation": THRESHOLDING_HLS, "PE": 2})
+    p = resolve(thresholding_kernel_schema(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
     arts = emit_point(thresholding_pool(), p, ctx)
     names = {d.filename for d in arts.data_files}
     assert names == {"thresh.h"}

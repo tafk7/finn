@@ -71,7 +71,7 @@ def _elaborate(impl_name, ctx):
     # The DSP core is streamed-weight-only (embedded illegal); use decoupled. The
     # compute-half emit is topology-independent, so this elaboration is unaffected.
     point = resolve(mvau_schema(), ctx, {
-        "implementation": impl_name, "PE": 2, "SIMD": 2, "resType": "dsp",
+        "backend": impl_name, "PE": 2, "SIMD": 2, "resType": "dsp",
         TOPOLOGY: DECOUPLED,
     })
     arts = emit_point(mvau_pool(), point, ctx)

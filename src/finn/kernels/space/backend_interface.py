@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
-from .backend import Backend, pool_schema
+from .backend import BACKEND_AXIS, Backend, pool_schema
 from .delivery import DeliveredParam, _demand_for, _topology_default, _topology_domain
 from .derived import Derived
 from .param_names import demand_key, sources_key, topology_key
@@ -79,7 +79,7 @@ class BackendInterface:
         constrains: the topology-mode guard as ``(domain_closure, legal)`` — ``domain_closure``
             ``(point, context) -> frozenset`` overrides the delivery root-axis domain;
             ``legal`` ``(point) -> tuple[str, ...]`` is reused to guard the axis default.
-        deps: the declared cross-pool dependencies ``{"implementation", topology.<iface>}``
+        deps: the declared cross-pool dependencies ``{"backend", topology.<iface>}``
             that make the supply waterfall structural for the topo-sort.
     """
 
@@ -145,5 +145,5 @@ def backend_interface_for(dp: DeliveredParam, compute_pool) -> BackendInterface:
         consumes=consumes,
         publishes=_demand_for(dp),
         constrains=_topology_domain(compute_pool, dp),
-        deps=frozenset({"implementation", topology_key(iface)}),
+        deps=frozenset({BACKEND_AXIS, topology_key(iface)}),
     )

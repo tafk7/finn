@@ -24,6 +24,7 @@ the "no delivery sibling" case handled structurally, with no branch here.
 from __future__ import annotations
 
 from finn.kernels.space import Artifacts
+from finn.kernels.space.backend import BACKEND_AXIS
 from finn.kernels.space.stitch import Cell, stitch
 from finn.kernels.space.param_names import topology_key
 
@@ -71,8 +72,8 @@ def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
 
 def _emit_compute(point, context, module_name):
     """Dispatch the selected compute bundle's emit, threading ``module_name`` into the
-    wrapper name. Looked up by the compute pool's root axis (``implementation``)."""
-    impl = point["implementation"]
+    wrapper name. Looked up by the compute pool's root axis (``backend``)."""
+    impl = point[BACKEND_AXIS]
     bundle = {b.name: b for b in mvau_pool()}[impl]
     return bundle.emit(point, context, module_name)
 

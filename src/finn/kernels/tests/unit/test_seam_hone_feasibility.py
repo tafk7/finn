@@ -72,12 +72,12 @@ def _matmul_model(idt="INT8", wdt="INT8"):
 @pytest.mark.parametrize("impl", ["mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"])
 def test_each_backend_rejects_float_iw(impl):
     k = mvau_kernel()
-    float_pt = resolve(k.schema(), _ctx(idt="FLOAT32", wdt="FLOAT32"), {"implementation": impl})
+    float_pt = resolve(k.schema(), _ctx(idt="FLOAT32", wdt="FLOAT32"), {"backend": impl})
     assert isinstance(float_pt, Illegal)
     # And the SAME backend accepts a quantized-integer point (feasibility is dtype-specific,
     # not a blanket reject). softvec is the always-buildable DSP core; packed needs w<=8/a<=9;
     # hls builds anywhere — INT8/INT8 satisfies all three.
-    int_pt = resolve(k.schema(), _ctx(idt="INT8", wdt="INT8"), {"implementation": impl})
+    int_pt = resolve(k.schema(), _ctx(idt="INT8", wdt="INT8"), {"backend": impl})
     assert isinstance(int_pt, Point)
 
 

@@ -157,10 +157,10 @@ def test_mvau_schema_carries_both_coordinates():
     r = resolve(
         mvau_schema(),
         _mvau_ctx(),
-        {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"},
+        {"backend": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"},
     )
     assert not isinstance(r, Illegal)
-    assert r.implementation == "mvau_hls"
+    assert r.backend == "mvau_hls"
     assert r[TOPOLOGY] == EMBEDDED  # pool default
     # the namespaced sources of BOTH pools coexist
     assert "sources" in r and SOURCES in r
@@ -174,7 +174,7 @@ def test_mvau_weight_stream_width_coupling():
     from finn.kernels.ops.mvau import mvau_schema
 
     swk = param_stream_width_key(WEIGHTS)
-    base = {"implementation": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
+    base = {"backend": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     r_emb = resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: EMBEDDED})
     assert r_emb[swk] == 0
     r_dec = resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: DECOUPLED})
@@ -190,7 +190,7 @@ def test_mvau_pumped_memory_fold_gate_fires():
         mvau_schema(),
         _mvau_ctx(),
         {
-            "implementation": "mvau_hls",
+            "backend": "mvau_hls",
             "PE": 1,
             "SIMD": 1,
             "resType": "lut",

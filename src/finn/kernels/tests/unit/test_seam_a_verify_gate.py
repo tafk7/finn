@@ -50,7 +50,6 @@ def _fused_model():
         ["inp", "weights", "thresholds"],
         ["out"],
         domain="finn.kernels",
-        backend="fpgadataflow",
         # The ONE residual op-owned param (absorbed MultiThreshold out_bias). Deliberately
         # nonzero to prove a signed-activation node carries it through the unresolved node.
         ActVal=-4,
@@ -90,7 +89,6 @@ def _matmul_only_model():
         ["inp", "weights"],
         ["out"],
         domain="finn.kernels",
-        backend="fpgadataflow",
         ActVal=0,
         name="MVAU_matmul_only",
     )
@@ -114,7 +112,7 @@ def _matmul_only_model():
 def _assert_no_folding_axes(node):
     """The unresolved node carries NONE of the resolve-time axes."""
     attr_names = {a.name for a in node.attribute}
-    for forbidden in ("implementation", "SIMD", "PE"):
+    for forbidden in ("backend", "SIMD", "PE"):
         assert forbidden not in attr_names, f"{forbidden} must be unset on an unresolved node"
 
 

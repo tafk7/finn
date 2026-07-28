@@ -46,7 +46,7 @@ def _ctx() -> Context:
 
 def _configure(simd, pe, impl="mvau_hls"):
     op, ctx = mvau_kernel(), _ctx()
-    pt = op.configure(ctx, {"implementation": impl, "SIMD": simd, "PE": pe})
+    pt = op.configure(ctx, {"backend": impl, "SIMD": simd, "PE": pe})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     return op, ctx, pt
 
@@ -87,7 +87,7 @@ def test_exp_cycles_placeholder_floor(simd, pe):
 def test_all_three_compute_impls_carry_tiling():
     op, ctx = mvau_kernel(), _ctx()
     for impl in ("mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"):
-        pt = op.configure(ctx, {"implementation": impl, "SIMD": 8, "PE": 8})
+        pt = op.configure(ctx, {"backend": impl, "SIMD": 8, "PE": 8})
         if isinstance(pt, Illegal):
             # a DSP impl may be infeasible on this part; skip — tiling is still declared.
             continue

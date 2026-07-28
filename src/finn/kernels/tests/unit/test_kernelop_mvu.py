@@ -132,7 +132,7 @@ def _ctx() -> Context:
 @pytest.mark.parametrize("simd,pe", [(8, 8), (16, 4), (128, 64), (1, 1)])
 def test_folded_data_shapes_match_finn(simd, pe):
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": simd, "PE": pe})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": simd, "PE": pe})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # act folds MW by SIMD; out folds MH by PE.
     assert op.get_folded_input_shape(pt, ctx, 0) == VECS + (MW // simd, simd)
@@ -142,7 +142,7 @@ def test_folded_data_shapes_match_finn(simd, pe):
 @pytest.mark.parametrize("simd,pe", [(8, 8), (16, 4), (128, 64)])
 def test_data_stream_widths_match_finn(simd, pe):
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": simd, "PE": pe})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": simd, "PE": pe})
     assert op.get_instream_width(pt, ctx, 0) == 8 * simd    # act: i_bits*SIMD
     assert op.get_outstream_width(pt, ctx, 0) == 32 * pe    # out: o_bits*PE
 
@@ -154,7 +154,7 @@ def test_data_stream_widths_match_finn(simd, pe):
 
 def test_untiled_weight_width_is_pe_simd():
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
     # WSIMD = PE*SIMD; width = WSIMD * w_bits.
     assert op.get_instream_width(pt, ctx, 1) == (4 * 16) * 8
 
@@ -162,7 +162,7 @@ def test_untiled_weight_width_is_pe_simd():
 @pytest.mark.parametrize("th", [1, 2, 4])
 def test_tiled_weight_width_is_wsimd_over_th(th):
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": th})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": th})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # WSIMD = (PE*SIMD)/TH; width = WSIMD * w_bits.
     assert op.get_instream_width(pt, ctx, 1) == ((4 * 16) // th) * 8
@@ -171,7 +171,7 @@ def test_tiled_weight_width_is_wsimd_over_th(th):
 def test_untiled_weight_folds_as_2d_block():
     # The untiled backend streams weights [SIMD, PE] — a proper 2-D block fold of (MW, MH).
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
     assert op.get_folded_input_shape(pt, ctx, 1) == (MW // 16, MH // 4, 16, 4)
 
 
@@ -179,7 +179,7 @@ def test_tiled_weight_folded_shape_raises_not_fakes():
     # The tiled backend delivers weights as ONE cross-interface expr (PE*SIMD/TH), not a
     # per-dim reshape — so its folded SHAPE raises (width still resolves).
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": 2})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": 2})
     with pytest.raises(KernelError, match="does not fold a tensor axis"):
         op.get_folded_input_shape(pt, ctx, 1)
 
@@ -187,12 +187,12 @@ def test_tiled_weight_folded_shape_raises_not_fakes():
 def test_TH_is_backend_local():
     # TH exists only on mvau_rtl_tiled; the untiled backend has no TH axis.
     op, ctx = _mvu_op(), _ctx()
-    tiled = op.configure(ctx, {"implementation": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": 2})
+    tiled = op.configure(ctx, {"backend": "mvau_rtl_tiled", "SIMD": 16, "PE": 4, "TH": 2})
     assert "TH" in tiled
-    untiled = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
+    untiled = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
     assert "TH" not in untiled
     # Assigning TH under the untiled impl is a caller error (absent axis).
-    bad = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4, "TH": 2})
+    bad = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": 16, "PE": 4, "TH": 2})
     assert isinstance(bad, Illegal)
 
 
@@ -204,7 +204,7 @@ def test_TH_is_backend_local():
 @pytest.mark.parametrize("simd,pe,th", [(16, 4, 1), (8, 8, 2), (128, 64, 4)])
 def test_exp_cycles_match_finn(simd, pe, th):
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_tiled", "SIMD": simd, "PE": pe, "TH": th})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_tiled", "SIMD": simd, "PE": pe, "TH": th})
     expected = (MH // pe) * (MW // simd) * 1 * th
     assert op.get_exp_cycles(pt, ctx) == expected
 
@@ -214,7 +214,7 @@ def test_cost_model_beats_generic_floor():
     # cost is the PRODUCT (MH/PE)*(MW/SIMD). Confirm the cost_model returns the product,
     # which is strictly larger — the reduction coupling the floor cannot see.
     op, ctx = _mvu_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
+    pt = op.configure(ctx, {"backend": "mvau_rtl_untiled", "SIMD": 16, "PE": 4})
     sf, nf = MW // 16, MH // 4  # 8, 16
     assert op.get_exp_cycles(pt, ctx) == sf * nf       # 128 (product)
     assert sf * nf > max(sf, nf)                        # strictly beats the floor

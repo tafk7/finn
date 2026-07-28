@@ -51,10 +51,10 @@ def _unresolved_mvau_node():
 
 def _set_impl(node, value):
     """Hand-stamp the ``implementation`` nodeattr (Seam B's job in production)."""
-    existing = get_by_name(node.attribute, "implementation")
+    existing = get_by_name(node.attribute, "backend")
     if existing is not None:
         node.attribute.remove(existing)
-    node.attribute.append(helper.make_attribute("implementation", value))
+    node.attribute.append(helper.make_attribute("backend", value))
 
 
 def _classic_hls_node():

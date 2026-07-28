@@ -43,6 +43,12 @@ from .schema import Schema
 # Reserved: a bundle may not declare a derived of this name.
 SOURCES_KEY = "sources"
 
+# The compute pool's selection axis: the root axis whose value names the selected
+# `Backend`. On a KERNEL node this is the realization axis (its nodeattr); on a
+# CLASSIC node the same-named `backend` nodeattr is the family-membership token —
+# distinct concepts that never coexist on one node.
+BACKEND_AXIS = "backend"
+
 
 def _feasible_ok(_point, _context) -> None:
     return None
@@ -149,11 +155,11 @@ class EmitError(ValueError):
     implementation is not in the pool."""
 
 
-def emit_point(pool, point, context, *, root: str = "implementation") -> Artifacts:
+def emit_point(pool, point, context, *, root: str = BACKEND_AXIS) -> Artifacts:
     """Dispatch codegen for a resolved ``point`` to its selected bundle's ``emit``.
 
     Looks up the pool member named by ``point[root]`` and calls its ``emit(point,
-    context)``. ``root`` is the pool's selection axis — ``"implementation"`` for a
+    context)``. ``root`` is the pool's selection axis — ``"backend"`` for a
     compute pool, ``"parameters.topology"`` for the composed parameters pool. Raises
     :class:`EmitError` if that bundle has no emit yet, or if the point's selection is
     not a pool member.

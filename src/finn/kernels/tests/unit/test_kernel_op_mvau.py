@@ -52,8 +52,7 @@ def _build_model(simd=16, pe=4, thresholds=True, annotate_out=True):
         inputs,
         ["out"],
         domain=DOMAIN,
-        backend="fpgadataflow",
-        implementation="mvau_hls",
+        backend="mvau_hls",
         SIMD=simd,
         PE=pe,
     )
@@ -125,7 +124,7 @@ def test_getcustomop_resolves_to_mvau_kernel_op():
 
 def test_nodeattr_types_include_axes_only():
     attrs = _inst(_build_model()).get_nodeattr_types()
-    for key in ("implementation", "PE", "SIMD", "ActVal"):
+    for key in ("backend", "PE", "SIMD", "ActVal"):
         assert key in attrs, f"design axis {key} missing from nodeattr schema"
     # noActivation is DISSOLVED — it is no longer a design axis (existence is emergent from
     # the thresholds initializer), so it is absent from the schema.
@@ -148,7 +147,7 @@ def test_nodeattr_types_include_axes_only():
 def test_getters_agree_with_engine(simd, pe):
     inst = _inst(_build_model(simd=simd, pe=pe))
     kernel, ctx = mvau_kernel(), _ctx()
-    point = kernel.configure(ctx, {"implementation": "mvau_hls", "SIMD": simd, "PE": pe})
+    point = kernel.configure(ctx, {"backend": "mvau_hls", "SIMD": simd, "PE": pe})
 
     assert inst.get_instream_width(0) == kernel.get_instream_width(point, ctx, 0)
     assert inst.get_instream_width(1) == kernel.get_instream_width(point, ctx, 1)
@@ -182,7 +181,7 @@ def test_noactivation_outstream_width_uses_real_weight_accumulator():
     inst = _inst(model)
 
     kernel, ctx = mvau_kernel(), _ctx(thresholds=False)
-    point = kernel.configure(ctx, {"implementation": "mvau_hls", "SIMD": 16, "PE": 4})
+    point = kernel.configure(ctx, {"backend": "mvau_hls", "SIMD": 16, "PE": 4})
     inst.set_nodeattr("SIMD", 16)
     inst.set_nodeattr("PE", 4)
 

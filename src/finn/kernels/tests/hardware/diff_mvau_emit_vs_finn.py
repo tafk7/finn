@@ -98,7 +98,7 @@ def _finn_context_point(W, pe, simd, wdt, idt, odt, impl, restype):
     # DSP is streamed-weight-only (embedded illegal), HLS supports both. decoupled is legal
     # for both, so use it uniformly here.
     point = resolve(mvau_schema(), ctx, {
-        "implementation": impl, "PE": pe, "SIMD": simd, "resType": restype,
+        "backend": impl, "PE": pe, "SIMD": simd, "resType": restype,
         TOPOLOGY: DECOUPLED,
     })
     return ctx, point
@@ -261,7 +261,7 @@ def diff_memstream():
         fpgapart=FPGAPART, clk_ns=CLK_NS,
     )
     point = resolve(mvau_schema(), ctx, {
-        "implementation": MVAU_HLS, "PE": pe, "SIMD": simd, "resType": "lut",
+        "backend": MVAU_HLS, "PE": pe, "SIMD": simd, "resType": "lut",
         PARAM_TOPOLOGY: PARAM_DECOUPLED, PARAM_RAM_STYLE: "block",
     })
     arts = emit_point(parameters_pool(), point, ctx, root=PARAM_TOPOLOGY)

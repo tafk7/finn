@@ -41,8 +41,7 @@ def _build_model():
         ["inp", "weights"],
         ["out"],
         domain=DOMAIN,
-        backend="fpgadataflow",
-        implementation="mvau_hls",
+        backend="mvau_hls",
         SIMD=16,
         PE=4,
     )
@@ -81,7 +80,7 @@ def test_group1_getter_answerable_without_model():
     context — a bare getCustomOp(node) answers it."""
     model = _build_model()
     bare = getCustomOp(model.graph.node[0])
-    assert bare.get_nodeattr("implementation") == "mvau_hls"
+    assert bare.get_nodeattr("backend") == "mvau_hls"
     assert bare.get_nodeattr("SIMD") == 16
     assert bare.get_nodeattr("PE") == 4
 
@@ -104,7 +103,7 @@ def test_model_aware_path_answers_both_groups():
     model = _build_model()
     aware = model.get_customop_wrapper(model.graph.node[0])
     # Group 1
-    assert aware.get_nodeattr("implementation") == "mvau_hls"
+    assert aware.get_nodeattr("backend") == "mvau_hls"
     # Group 2 — resolves against the live graph, no raise
     assert aware.get_normal_input_shape() == (1, MW)
     assert aware.get_normal_output_shape() == (1, MH)

@@ -117,7 +117,7 @@ def test_two_input_ports_indexed():
 @pytest.mark.parametrize("pe", [1, 4, 16, 128])
 def test_folded_shapes_and_widths_per_port(pe):
     op, ctx = _elementwise_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": HLS, "PE": pe})
+    pt = op.configure(ctx, {"backend": HLS, "PE": pe})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # Both inputs fold last dim by PE (rhs not broadcast here — full length N).
     assert op.get_folded_input_shape(pt, ctx, 0) == (1, 56, N // pe, pe)
@@ -137,7 +137,7 @@ def test_folded_shapes_and_widths_per_port(pe):
 def test_broadcast_rhs_does_not_fold():
     op = _elementwise_op()
     ctx = _ctx(rhs_shape=(1, 1, 1))  # rhs fully broadcast -> rhs_last == 1
-    pt = op.configure(ctx, {"implementation": HLS, "PE": 16})
+    pt = op.configure(ctx, {"backend": HLS, "PE": 16})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # lhs folds by PE=16; rhs (broadcast) streams 1 element/cycle, not folded by PE.
     assert op.get_folded_input_shape(pt, ctx, 0) == (1, 56, N // 16, 16)
@@ -148,7 +148,7 @@ def test_broadcast_rhs_does_not_fold():
 def test_non_broadcast_rhs_folds_normally():
     # Same op, rhs at full length -> folds by PE like lhs (regression vs broadcast path).
     op, ctx = _elementwise_op(), _ctx(rhs_shape=(1, 56, N))
-    pt = op.configure(ctx, {"implementation": HLS, "PE": 16})
+    pt = op.configure(ctx, {"backend": HLS, "PE": 16})
     assert op.get_instream_width(pt, ctx, 1) == 4 * 16
 
 
@@ -160,7 +160,7 @@ def test_non_broadcast_rhs_folds_normally():
 @pytest.mark.parametrize("pe", [1, 4, 16, 128])
 def test_exp_cycles_is_generic_floor(pe):
     op, ctx = _elementwise_op(), _ctx()
-    pt = op.configure(ctx, {"implementation": HLS, "PE": pe})
+    pt = op.configure(ctx, {"backend": HLS, "PE": pe})
     # FINN elementwise: prod(folded_output[:-1]) = prod(out)//pe.
     expected = (1 * 56 * N) // pe
     assert op.get_exp_cycles(pt, ctx) == expected
@@ -172,7 +172,7 @@ def test_exp_cycles_monotone():
     op, ctx = _elementwise_op(), _ctx()
     prev = None
     for pe in [1, 2, 4, 8, 16, 32, 64, 128]:
-        c = op.get_exp_cycles(op.configure(ctx, {"implementation": HLS, "PE": pe}), ctx)
+        c = op.get_exp_cycles(op.configure(ctx, {"backend": HLS, "PE": pe}), ctx)
         if prev is not None:
             assert c <= prev
         prev = c
@@ -186,7 +186,7 @@ def test_exp_cycles_monotone():
 def test_input_pattern_and_func_resolve():
     op, ctx = _elementwise_op(), _ctx()
     for pat in ("dynamic_dynamic", "dynamic_static"):
-        pt = op.configure(ctx, {"implementation": HLS, "PE": 16, "input_pattern": pat, "func": "Mul"})
+        pt = op.configure(ctx, {"backend": HLS, "PE": 16, "input_pattern": pat, "func": "Mul"})
         assert not isinstance(pt, Illegal)
         assert pt["input_pattern"] == pat
         # Tier-3 surface is identical regardless of pattern (role/delivery is Tier-4).

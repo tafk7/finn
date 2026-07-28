@@ -8,15 +8,15 @@
 
 """Seam C — taxonomy + HW-readiness routing (handoff §4 gate).
 
-Proves routing is a pure DERIVATION of the ``implementation`` nodeattr — nothing extra
+Proves routing is a pure DERIVATION of the ``backend`` nodeattr — nothing extra
 stored:
-  * an UNRESOLVED kernel node (no ``implementation``) routes NOWHERE (not HW-ready);
-  * ``implementation="mvau_hls"`` → ``is_hls_node`` True, ``is_rtl_node`` False;
-  * ``implementation="mvau_dsp_softvec"`` → ``is_rtl_node`` True, ``is_hls_node`` False;
+  * an UNRESOLVED kernel node (no ``backend``) routes NOWHERE (not HW-ready);
+  * ``backend="mvau_hls"`` → ``is_hls_node`` True, ``is_rtl_node`` False;
+  * ``backend="mvau_dsp_softvec"`` → ``is_rtl_node`` True, ``is_hls_node`` False;
   * a classic ``MVAU_hls`` node routes exactly as before (additive branch, no regression);
-  * an INVALID ``implementation`` string derives None gracefully (no crash).
+  * an INVALID ``backend`` string derives None gracefully (no crash).
 
-Synthetic by design: Seam C hand-stamps ``implementation`` (Seam B writes it in
+Synthetic by design: Seam C hand-stamps ``backend`` (Seam B writes it in
 production). The predicates are BARE-NODE — no model, no ``getCustomOp``.
 """
 
@@ -37,7 +37,7 @@ KERNEL_DOMAIN = "finn.kernels"
 
 
 def _unresolved_mvau_node():
-    """A ``finn.kernels`` MVAU node straight out of Seam A's infer (no ``implementation``)."""
+    """A ``finn.kernels`` MVAU node straight out of Seam A's infer (no ``backend``)."""
     matmul = helper.make_node("MatMul", ["inp", "weights"], ["out"], name="mm0")
     graph = helper.make_graph(
         [matmul],
@@ -56,16 +56,16 @@ def _unresolved_mvau_node():
 
 
 def _set_impl(node, value):
-    """Hand-stamp the ``implementation`` nodeattr (Seam B's job in production)."""
-    existing = get_by_name(node.attribute, "implementation")
+    """Hand-stamp the ``backend`` nodeattr (Seam B's job in production)."""
+    existing = get_by_name(node.attribute, "backend")
     if existing is not None:
         node.attribute.remove(existing)
-    node.attribute.append(helper.make_attribute("implementation", value))
+    node.attribute.append(helper.make_attribute("backend", value))
 
 
 def test_unresolved_kernel_node_routes_nowhere():
     kn = _unresolved_mvau_node()
-    impl = get_by_name(kn.attribute, "implementation")
+    impl = get_by_name(kn.attribute, "backend")
     # Seam A leaves implementation unset (or at its axis default ""); either way, not committed.
     assert impl is None or impl.s.decode("UTF-8") == ""
     assert kernel_hw_language(kn) is None

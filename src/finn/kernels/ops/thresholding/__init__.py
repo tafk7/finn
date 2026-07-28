@@ -27,7 +27,7 @@ NO per-bundle dtype feasibility gate (a fabricated one was falsified;
 
 from __future__ import annotations
 
-from finn.kernels.space import Schema, pool_schema
+from finn.kernels.space import BACKEND_AXIS, Schema, pool_schema
 
 from .names import (  # noqa: F401 (re-exported)
     INPUT,
@@ -67,7 +67,7 @@ def thresholding_schema() -> Schema:
     namespace) is :func:`thresholding_kernel_schema`."""
     axes, derived, predicates = thresholding_shared()
     return pool_schema(
-        "implementation",
+        BACKEND_AXIS,
         axes,
         derived,
         predicates,

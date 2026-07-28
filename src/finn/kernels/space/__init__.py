@@ -44,6 +44,7 @@ from .derived import Derived
 from .folding import threshold_fold_depth, weight_fold_depth
 from .manifest import ArtifactManifest, SourceFile, read_abc
 from .backend import (
+    BACKEND_AXIS,
     Backend,
     EmitError,
     PoolError,
@@ -138,6 +139,7 @@ __all__ = [
     "Schema",
     "SchemaError",
     "resolve",
+    "BACKEND_AXIS",
     "Kernel",
     "KernelSchema",
     "Interface",
