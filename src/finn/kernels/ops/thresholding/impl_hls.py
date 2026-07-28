@@ -18,7 +18,7 @@ RTL bundle carries depth-triggers etc.).
 
 from __future__ import annotations
 
-from finn.kernels.space import Derived, Backend
+from finn.kernels.space import Backend
 from finn.kernels.space.param_names import CONSTANT
 
 from .emit_hls import emit_thresholding_hls
@@ -30,8 +30,8 @@ from .registry import register
 def hls_bundle() -> Backend:
     return Backend(
         name=THRESHOLDING_HLS,
+        language="hls",
         # HLS builds anywhere; no dtype gate (identical envelope to RTL).
-        derived=(Derived("language", lambda p, ctx: "hls"),),
         sources=("thresholding_hls.py",),
         emit=emit_thresholding_hls,
         # The HLS core bakes thresholds into thresh.h — it consumes them in CONSTANT mode

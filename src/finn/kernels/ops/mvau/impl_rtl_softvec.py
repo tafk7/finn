@@ -17,7 +17,7 @@ bundle). Shares DSP-RTL declarations with the packed bundle via ``dsp_rtl_common
 
 from __future__ import annotations
 
-from finn.kernels.space import Backend, Derived
+from finn.kernels.space import Backend
 from finn.kernels.space.param_names import STREAM
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
@@ -38,11 +38,13 @@ def softvec_bundle() -> Backend:
     axes, derived, predicates = dsp_rtl_common()
     return Backend(
         name=MVAU_DSP_SOFTVEC,
-        feasible=_softvec_feasible,
-        axes=axes,
+        language="rtl",
         # rtl_core_module names the per-core wrapper the emitted top instantiates
         # (2c split): softvec owns mvu_vvu_axi_softvec.sv + mvu.sv, disjoint from packed.
-        derived=derived + (Derived("rtl_core_module", lambda p, ctx: "mvu_vvu_axi_softvec"),),
+        rtl_core_module="mvu_vvu_axi_softvec",
+        feasible=_softvec_feasible,
+        axes=axes,
+        derived=derived,
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_axi_softvec.sv", "mvu.sv"),
         emit=emit_mvau_rtl,

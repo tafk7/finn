@@ -182,12 +182,12 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
 
 
 def test_third_implementation_composes_additively():
-    from finn.kernels.space import Derived, Backend, pool_schema
+    from finn.kernels.space import Backend, pool_schema
     from finn.kernels.ops.thresholding import thresholding_pool, thresholding_shared
 
     stub = Backend(
         name="thresholding_stub",
-        derived=(Derived("language", lambda p, ctx: "stub"),),
+        language="stub",
         sources=("stub.sv",),
     )
     axes, derived, predicates = thresholding_shared()

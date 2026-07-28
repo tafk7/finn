@@ -187,6 +187,7 @@ def decoupled_topology(iface):
     return storage_topology(
         DECOUPLED,
         mode=STREAM,  # an AXIS port a memstream block feeds
+        language="rtl",  # emits its own memstream Verilog streamer
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface),
         predicates=(_uram_gate(iface), _pumped_gate(iface)),

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from finn.kernels.space import Derived, Backend, discrete_axis, predicate, predicate_axis
+from finn.kernels.space import Backend, discrete_axis, predicate, predicate_axis
 
 from .emit_rtl import RTL_MANIFEST, emit_thresholding_rtl
 from .names import THRESHOLDING_RTL, THRESHOLDS
@@ -50,6 +50,7 @@ def _thresholds_sorted(p, ctx):
 def rtl_bundle() -> Backend:
     return Backend(
         name=THRESHOLDING_RTL,
+        language="rtl",
         # No device gate — RTL is the default for Thresholding.
         axes=(
             # RTL-local resource/timing knobs (disjoint from any HLS delivery axes).
@@ -58,7 +59,6 @@ def rtl_bundle() -> Backend:
             discrete_axis("uniform_thres", {0, 1}, 0),
             discrete_axis("deep_pipeline", {0, 1}, 1),
         ),
-        derived=(Derived("language", lambda p, ctx: "rtl"),),
         predicates=(_thresholds_sorted,),
         # One source-of-truth: the same manifest the emit copies into the build (F9).
         sources=RTL_MANIFEST.filenames,

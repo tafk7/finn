@@ -17,7 +17,7 @@ replicating the shared wrapper's ``generate`` fork.
 
 from __future__ import annotations
 
-from finn.kernels.space import Backend, Derived
+from finn.kernels.space import Backend
 from finn.kernels.space.param_names import STREAM
 from finn.util.basic import get_dsp_block
 
@@ -59,12 +59,14 @@ def packed_bundle() -> Backend:
     axes, derived, predicates = dsp_rtl_common()
     return Backend(
         name=MVAU_DSP_PACKED,
-        feasible=_packed_feasible,
-        axes=axes,
+        language="rtl",
         # rtl_core_module names the per-core wrapper the emitted top instantiates
         # (2c split): packed owns mvu_vvu_axi_packed.sv + mvu_vvu_8sx9_dsp58.sv,
         # disjoint from softvec.
-        derived=derived + (Derived("rtl_core_module", lambda p, ctx: "mvu_vvu_axi_packed"),),
+        rtl_core_module="mvu_vvu_axi_packed",
+        feasible=_packed_feasible,
+        axes=axes,
+        derived=derived,
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_axi_packed.sv", "mvu_vvu_8sx9_dsp58.sv"),
         emit=emit_mvau_rtl,

@@ -43,6 +43,12 @@ from .schema import Schema
 # Reserved: a bundle may not declare a derived of this name.
 SOURCES_KEY = "sources"
 
+# Backend identity FIELDS that pool_schema projects onto the resolved point (like
+# ``sources``) so point readers keep working after the Derived→field correction. Reserved:
+# a bundle may not declare a derived of these names. ``language`` is also read BARE-NODE by
+# taxonomy routing (``kernel_hw_language``) straight off the field, without a point.
+IDENTITY_FIELD_KEYS = ("language", "rtl_core_module")
+
 
 def _feasible_ok(_point, _context) -> None:
     return None
@@ -55,6 +61,17 @@ class Backend:
     Attributes:
         name: the pool-member identity (the value of the root ``implementation``
             axis when this bundle is selected).
+        language: this bundle's realization language — ``"hls"`` or ``"rtl"`` — a static,
+            1:1-with-the-backend identity fact (a microarch is HLS or RTL by construction).
+            Read BARE-NODE by taxonomy routing (``is_hls_node``/``is_rtl_node`` via
+            ``kernel_hw_language``) to classify a resolved kernel node without a Point, and
+            projected onto the resolved Point (like ``sources``) for any point reader.
+            ``None`` only for a bundle that emits no HDL of its own (the ``embedded``
+            delivery topology — params baked into the compute core, ``emit=None``).
+        rtl_core_module: for an RTL compute bundle, the per-core wrapper module the emitted
+            top instantiates (``point.rtl_core_module`` → ``$MODULE_NAME_COMPUTE_CORE$``);
+            static backend identity, projected onto the Point for emit. ``None`` for a
+            non-RTL bundle (present-but-None on the point when a non-owner is selected).
         feasible: this bundle's OWN device/dtype gate, ``(point, context) ->
             reason | None``; None means feasible. Wrapped by ``pool_schema`` into a
             predicate that fires only when this bundle is selected.
@@ -108,6 +125,8 @@ class Backend:
     """
 
     name: str
+    language: str | None = None
+    rtl_core_module: str | None = None
     feasible: Callable[[Any, Any], str | None] = _feasible_ok
     axes: tuple[Axis, ...] = ()
     derived: tuple[Derived, ...] = ()
@@ -168,6 +187,7 @@ def pool_schema(
     pool: tuple[Backend, ...],
     *,
     sources_key: str = SOURCES_KEY,
+    project_identity_fields: bool = True,
 ) -> Schema:
     """Assemble op-level shared elements + a pool of bundles into a ``Schema``.
 
@@ -182,6 +202,14 @@ def pool_schema(
     the ``parameters`` delivery pool via a
     :class:`~finn.kernels.space.backend_interface.BackendInterface`) passes a namespaced key
     (``"parameters.sources"``) so the two pools' source lists never collide.
+
+    ``project_identity_fields`` projects the backend IDENTITY fields
+    (:data:`IDENTITY_FIELD_KEYS` — ``language``/``rtl_core_module``) onto the point under
+    their plain field names, so point readers keep working after the Derived→field
+    correction. It is True for the PRIMARY compute pool (where those keys are read) and
+    False for a secondary delivery pool folded into the same op schema — the delivery
+    topologies still CARRY the fields (bare-node honesty), but re-projecting them under the
+    same plain keys would collide with the compute pool's projection in the schema union.
     """
     if not pool:
         raise PoolError("pool must contain at least one Backend")
@@ -197,12 +225,22 @@ def pool_schema(
 
     merged_axes = _merge_axes(root_name, pool)
     merged_derived = _merge_derived(root_name, pool)
-    sources_derived = _sources_derived(root_name, pool, sources_key)
+    sources_derived = _field_derived(root_name, pool, "sources", key=sources_key)
+    identity_derived = (
+        tuple(_field_derived(root_name, pool, f) for f in IDENTITY_FIELD_KEYS)
+        if project_identity_fields
+        else ()
+    )
     wrapped_predicates = _wrap_predicates(root_name, pool)
 
     return Schema(
         axes=(root,) + tuple(shared_axes) + tuple(merged_axes),
-        derived=tuple(shared_derived) + tuple(merged_derived) + (sources_derived,),
+        derived=(
+            tuple(shared_derived)
+            + tuple(merged_derived)
+            + (sources_derived,)
+            + identity_derived
+        ),
         predicates=tuple(shared_predicates) + tuple(wrapped_predicates),
     )
 
@@ -235,18 +273,20 @@ def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:
 
 
 def _check_no_derived_shadowing(shared_derived, pool, sources_key=SOURCES_KEY) -> None:
-    """A bundle's derived must not shadow an op-level shared derived or the reserved
-    ``sources`` key. ``Schema`` only dedups *axis* names, so a colliding derived would
-    silently let one definition win with no diagnostic — breaking the "additive, can't
-    perturb others" guarantee. (Bundle derived sharing a name ACROSS bundles is fine
-    and intentional — that is the per-impl dispatch merge.)"""
+    """A bundle's derived must not shadow an op-level shared derived or a pool_schema
+    reserved key (the ``sources`` projection key + the identity-field projection keys
+    ``language``/``rtl_core_module``, now fields not derived). ``Schema`` only dedups *axis*
+    names, so a colliding derived would silently let one definition win with no diagnostic —
+    breaking the "additive, can't perturb others" guarantee. (Bundle derived sharing a name
+    ACROSS bundles is fine and intentional — that is the per-impl dispatch merge.)"""
     shared_names = {d.name for d in shared_derived}
+    reserved = {sources_key, *IDENTITY_FIELD_KEYS}
     for bundle in pool:
         for d in bundle.derived:
-            if d.name == sources_key:
+            if d.name in reserved:
                 raise PoolError(
                     f"implementation {bundle.name!r} declares a derived named "
-                    f"{sources_key!r}, which is reserved by pool_schema"
+                    f"{d.name!r}, which is reserved by pool_schema"
                 )
             if d.name in shared_names:
                 raise PoolError(
@@ -359,16 +399,21 @@ def _dispatch_compute(root_name, by_impl):
     return compute
 
 
-def _sources_derived(root_name, pool, sources_key=SOURCES_KEY) -> Derived:
-    """A derived exposing the selected bundle's source-file list on the point, so a
-    resolved Point carries ``r.sources`` (or the namespaced key for a secondary pool).
-    Overlaps between bundles are visible here (handoff §2b)."""
-    by_impl = {b.name: b.sources for b in pool}
+def _field_derived(root_name, pool, field_name, *, key=None) -> Derived:
+    """A derived projecting a selected bundle's static FIELD onto the point, so a resolved
+    Point carries it as a plain value. The original ``sources`` projection (a resolved Point
+    carries ``r.sources``, or the namespaced key for a secondary pool) plus the
+    Derived→field identity corrections (``language``/``rtl_core_module``) share this one
+    mechanism. A non-owning bundle whose field is its default (``None``) surfaces
+    present-but-None — matching the pre-restructure merged-Derived behaviour. ``key``
+    overrides the point key (used to namespace ``sources`` for a secondary pool); defaults
+    to ``field_name``."""
+    by_impl = {b.name: getattr(b, field_name) for b in pool}
 
     def compute(point, _context, _root=root_name, _by=by_impl):
         return _by[point[_root]]
 
-    return Derived(sources_key, compute)
+    return Derived(key or field_name, compute)
 
 
 def _wrap_predicates(root_name, pool) -> list[Predicate]:

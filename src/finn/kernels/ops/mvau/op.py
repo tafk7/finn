@@ -564,7 +564,8 @@ class MvauKernelOp(KernelOp):
         )
         return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=[node])
 
-    def kernel(self):
+    @classmethod
+    def kernel(cls):
         return mvau_kernel()
 
     def ports(self) -> tuple[PortSpec, ...]:

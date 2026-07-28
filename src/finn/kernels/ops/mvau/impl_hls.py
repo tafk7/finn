@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import Derived, Backend, discrete_axis, predicate
+from finn.kernels.space import Backend, discrete_axis, predicate
 from finn.kernels.space.param_names import CONSTANT, STREAM
 
 from .emit_hls import emit_mvau_hls
@@ -51,12 +51,12 @@ def _no_true_binary(p, ctx):
 def hls_bundle() -> Backend:
     return Backend(
         name=MVAU_HLS,
+        language="hls",
         # HLS has no device/dtype feasibility gate — it builds anywhere.
         axes=(
             # resType: a real HLS user lever (hls:58 default lut, dsp available).
             discrete_axis("resType", {"lut", "dsp"}, "lut"),
         ),
-        derived=(Derived("language", lambda p, ctx: "hls"),),
         predicates=(_hls_simd_lower_bound, _no_true_binary),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,

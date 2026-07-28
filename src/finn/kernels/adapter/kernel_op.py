@@ -90,11 +90,15 @@ class KernelOp(HWCustomOp):
 
     # -- subclass hooks -----------------------------------------------------
 
+    @classmethod
     @abstractmethod
-    def kernel(self):
+    def kernel(cls):
         """Return this op's :class:`Kernel` (the design space). Zero-arg factory
-        result, e.g. ``mvau_kernel()``."""
-        raise NotImplementedError(f"{type(self).__name__}.kernel()")
+        result, e.g. ``mvau_kernel()``. A ``classmethod`` — the Kernel is op-class
+        identity, independent of any node/model — so bare-node routing
+        (``kernel_hw_language``) can reach the pool via the op class without
+        instantiating the op."""
+        raise NotImplementedError(f"{cls.__name__}.kernel()")
 
     @abstractmethod
     def ports(self) -> tuple[PortSpec, ...]:

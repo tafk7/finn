@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import AbsentAxisError, Context, Derived, Illegal, Point, resolve
+from finn.kernels.space import AbsentAxisError, Context, Illegal, Point, resolve
 from finn.kernels.ops.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
@@ -445,9 +445,9 @@ def test_fourth_implementation_composes_additively():
 
     lut_rtl = Backend(
         name="mvau_lut_rtl",
+        language="rtl",
         feasible=lut_rtl_feasible,
         axes=(),  # inherits only op-level shared axes + engine-derived fold dials
-        derived=(Derived("language", lambda p, ctx: "rtl"),),
         predicates=(),
         sources=("mvu_lut.sv",),
         stream=COMPUTE_STREAM,

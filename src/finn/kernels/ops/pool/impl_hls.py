@@ -40,4 +40,4 @@ def pool_hls_impl(*, has_indices: bool, rank: int) -> Backend:
     stream = {INPUT: list(channel_fold), OUTPUT: list(channel_fold)}
     if has_indices:
         stream[INDICES] = list(channel_fold)
-    return Backend(name=POOL_HLS, stream=stream)
+    return Backend(name=POOL_HLS, language="hls", stream=stream)

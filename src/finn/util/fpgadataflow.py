@@ -57,6 +57,12 @@ def is_hls_node(node):
                 backend_value = n_backend.s.decode("UTF-8")
                 if backend_value == "fpgadataflow":
                     is_node = True
+        elif node.domain == "finn.kernels":
+            # A kernel node routes by its DERIVED language: hls iff the resolved backend's
+            # language is "hls". Unresolved (implementation unset) -> None -> not HW-ready.
+            from finn.kernels.routing import kernel_hw_language
+
+            is_node = kernel_hw_language(node) == "hls"
 
     return is_node
 
@@ -71,6 +77,12 @@ def is_rtl_node(node):
                 backend_value = n_backend.s.decode("UTF-8")
                 if backend_value == "fpgadataflow":
                     is_node = True
+        elif node.domain == "finn.kernels":
+            # A kernel node routes by its DERIVED language: rtl iff the resolved backend's
+            # language is "rtl". Unresolved (implementation unset) -> None -> not HW-ready.
+            from finn.kernels.routing import kernel_hw_language
+
+            is_node = kernel_hw_language(node) == "rtl"
 
     return is_node
 

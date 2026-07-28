@@ -37,6 +37,7 @@ def storage_topology(
     name: str,
     *,
     mode: str,
+    language: str | None = None,
     feasible: Callable[[Any, Any], str | None] = _feasible_ok,
     axes: tuple[Axis, ...] = (),
     derived: tuple[Derived, ...] = (),
@@ -51,12 +52,16 @@ def storage_topology(
     root axis is ``topology`` (see :func:`parameters_schema`); ``name`` is the value that
     selects this topology. ``mode`` is the CONSUMPTION MODE this topology presents
     (``"constant"``/``"stream"``) — carried on the ``Backend`` so the generic delivery guard
-    reads it structurally (no string→mode side-table). ``schema`` is the optional typed
-    template contract this topology emits (a streaming topology references its wrapper
-    schema; a constant topology with no template leaves it ``None``).
+    reads it structurally (no string→mode side-table). ``language`` is the topology's
+    realization language when it emits its own HDL (``"rtl"`` for the memstream streamer);
+    ``None`` when it emits nothing of its own (``embedded`` — baked into the compute core).
+    ``schema`` is the optional typed template contract this topology emits (a streaming
+    topology references its wrapper schema; a constant topology with no template leaves it
+    ``None``).
     """
     return Backend(
         name=name,
+        language=language,
         mode=mode,
         feasible=feasible,
         axes=axes,

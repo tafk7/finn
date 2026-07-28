@@ -95,7 +95,6 @@ def dsp_rtl_common():
         discrete_axis("resType", {"dsp"}, "dsp"),
     )
     derived = (
-        Derived("language", lambda p, ctx: "rtl"),
         Derived("dsp_primitive", dsp_primitive),
         Derived("dsp_version", dsp_version),
         Derived("SEGMENTLEN", segmentlen),
