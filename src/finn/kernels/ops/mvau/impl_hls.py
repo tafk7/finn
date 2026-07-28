@@ -33,6 +33,19 @@ def _hls_simd_lower_bound(p, ctx):
     return None
 
 
+@predicate("HLS-MVU requires integer input and weight datatypes")
+def _hls_integer_iw(p, ctx):
+    # The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no
+    # legal HLS realization. This is the backend-OWNED feasibility fact the frontend claim
+    # used to encode (op.py's is_integer literal) — pushed down so the pool is the SoT and
+    # can_infer_from can delegate to it (D-R5).
+    idt = ctx.tensor_datatype(INPUT)
+    wdt = ctx.tensor_datatype(WEIGHTS)
+    if not (idt.is_integer() and wdt.is_integer()):
+        return f"HLS-MVU requires integer input/weights (got idt={idt}, wdt={wdt})"
+    return None
+
+
 @predicate("true-binary (non-bipolar) inputs/weights unsupported")
 def _no_true_binary(p, ctx):
     # F3 — reject when (input binary OR weight binary) AND NOT binaryXnorMode
@@ -57,7 +70,7 @@ def hls_bundle() -> Backend:
             # resType: a real HLS user lever (hls:58 default lut, dsp available).
             discrete_axis("resType", {"lut", "dsp"}, "lut"),
         ),
-        predicates=(_hls_simd_lower_bound, _no_true_binary),
+        predicates=(_hls_integer_iw, _hls_simd_lower_bound, _no_true_binary),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
         stream=COMPUTE_STREAM,

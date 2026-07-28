@@ -262,6 +262,31 @@ class Kernel:
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
         return resolve(self.schema(), context, assignment)
 
+    def has_feasible_point(self, context: Context) -> bool:
+        """Whether ANY pool member yields a legal :class:`Point` for this Context — the
+        POOL-FEASIBILITY query (F2). Trials each backend with only its ``implementation``
+        pinned (unpinned folding axes take defaults — the specialized-at-default-fold
+        semantics); True if at least one resolves. Reuses the engine ``resolve`` unchanged.
+
+        This is the SAME query resolve's ``PerNodePolicy(first_feasible)`` selector will use,
+        so infer's claim check and resolve's selection converge. A node whose datatypes
+        disqualify it from EVERY backend (e.g. float32 where only integer is feasible) has no
+        feasible point, so ``can_infer_from`` can delegate to this rather than encoding a
+        backend fact in the frontend."""
+        schema = self.schema()
+        for impl in self.pool:
+            try:
+                result = resolve(schema, context, {"implementation": impl.name})
+            except Exception:  # noqa: BLE001
+                # A backend feasibility check that raises on THIS context (e.g. a
+                # device-family probe that needs an fpgapart the trial context omits) is not
+                # feasible here — treat it as "no point for this backend", not a hard error.
+                # A backend that IS feasible resolves cleanly; the pool needs only ONE.
+                continue
+            if isinstance(result, Point):
+                return True
+        return False
+
     def op_schema(self) -> Schema:
         """The op-level, impl-INDEPENDENT subschema: the identity's shared axes/derived/
         predicates ONLY, with NO pool (no ``implementation`` root axis, no per-backend fold

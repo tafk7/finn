@@ -60,6 +60,12 @@ def _rtl_mvu_feasible(p, ctx):
         return "RTL-MVU does not support binaryXnorMode"
     wdt = ctx.tensor_datatype(WEIGHTS)
     idt = ctx.tensor_datatype(INPUT)
+    # Integer i/w is the backend-OWNED feasibility fact (D-R5): a float32 tensor is "signed,
+    # 32-bit" and would slip through the signed+bitwidth>=2 checks below, so gate it FIRST
+    # and explicitly. This is the requirement op.py's is_integer literal used to compensate
+    # for; pushed down so the pool is the single source of truth.
+    if not (idt.is_integer() and wdt.is_integer()):
+        return f"RTL-MVU requires integer input/weights (got idt={idt}, wdt={wdt})"
     if not wdt.signed():
         return "RTL-MVU requires signed weights"
     if idt.bitwidth() < 2 or wdt.bitwidth() < 2:

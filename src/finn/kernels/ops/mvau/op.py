@@ -33,6 +33,8 @@ Tensor-name convention for the Context this schema resolves against:
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from onnx import NodeProto, helper
 from qonnx.core.datatype import DataType
@@ -44,6 +46,7 @@ from finn.kernels.adapter import KernelOp, PortSpec, TransformationResult
 from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
     FULL,
+    Context,
     DeliveredParam,
     Derived,
     Direction,
@@ -68,6 +71,8 @@ from finn.kernels.ops.thresholding.shared import (
 )
 
 from .registry import build_pool
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -494,27 +499,70 @@ class MvauKernelOp(KernelOp):
 
     # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
 
+    @staticmethod
+    def _operand_map(node: NodeProto) -> dict:
+        """The FRONTEND ``MatMul`` tensor → kernel interface-name mapping: ``input[0]`` is
+        the activation (``inp``), ``input[1]`` the weight (``weights``), ``output[0]`` the
+        result (``out``). The ONE place this mapping lives — both the feasibility trial
+        (:meth:`_trial_context`) and the build (:meth:`infer_from`) read it, so a mis-mapped
+        operand fails both identically instead of letting the claim and the build diverge."""
+        return {INPUT: node.input[0], WEIGHTS: node.input[1], OUTPUT: node.output[0]}
+
+    @classmethod
+    def _trial_context(cls, node: NodeProto, model: ModelWrapper) -> Context:
+        """The trial :class:`Context` for a FRONTEND ``MatMul`` node, mapping its operands to
+        this kernel's interface names via the shared :meth:`_operand_map`. Reads
+        shapes/dtypes/initializers off the model — the ``out`` shape is needed too (the tiling
+        fold-dial domains read every interface's block extent)."""
+        graph_ctx = Context.from_model(model, "")
+        operands = cls._operand_map(node)
+        shapes, datatypes, inits = {}, {}, {}
+        for iface, tname in operands.items():
+            if tname in graph_ctx.shapes:
+                shapes[iface] = graph_ctx.shapes[tname]
+            if tname in graph_ctx.datatypes:
+                datatypes[iface] = graph_ctx.datatypes[tname]
+            init = graph_ctx.initializer(tname)
+            if init is not None:
+                inits[iface] = init
+        return Context(
+            shapes=shapes, datatypes=datatypes, initializers=inits, fpgapart=graph_ctx.fpgapart
+        )
+
     @classmethod
     def can_infer_from(cls, node: NodeProto, model: ModelWrapper) -> bool:
-        """Whether ``node`` is a quantized ``MatMul`` this kernel can claim (optionally with
-        a following ``MultiThreshold``). FINN's asserts made EXPLICIT preconditions: a
-        pattern that cannot legally become an MVAU is REJECTED (return False), never
-        asserted-to-death mid-conversion. Mirrors ``InferQuantizedMatrixVectorActivation``'s
-        match (convert_to_hw_layers.py:1493) WITHOUT its bakes; the binary/sparse/dynamic
-        cases are out of the vertical slice.
+        """Whether ``node`` is a ``MatMul`` this kernel can claim (optionally with a following
+        ``MultiThreshold``). The claim is STRUCTURAL PATTERN (op-owned) ∧ ∃ a feasible backend
+        (pool-delegated): the op owns the shape of the pattern, but WHICH datatypes are
+        buildable is a backend fact, so it delegates to :meth:`Kernel.has_feasible_point`
+        rather than encoding an integer literal here (F2/D-R5). A future float backend widens
+        what infer accepts with ZERO edits here; today an all-integer pool rejects a float
+        MatMul FOR THE RIGHT REASON (no feasible backend). Mirrors
+        ``InferQuantizedMatrixVectorActivation``'s match (convert_to_hw_layers.py:1493) WITHOUT
+        its bakes; the binary/sparse/dynamic cases are out of the vertical slice.
         """
+        # --- structural pattern (op-owned) ---
         if node.op_type != "MatMul":
-            return False
+            return False  # a plain structural no-match — legitimately "not mine", stays silent
         # Sparse weights route to VVAU in the classic flow — not our pattern.
         if model.get_tensor_sparsity(node.input[1]) is not None:
-            return False
-        idt = model.get_tensor_datatype(node.input[0])
-        wdt = model.get_tensor_datatype(node.input[1])
-        if not (idt.is_integer() and wdt.is_integer()):
             return False
         # The slice claims the STATIC-weight case (a weight initializer must be present);
         # the dynamic-weight branch is out of scope.
         if model.get_initializer(node.input[1]) is None:
+            return False
+
+        # --- feasibility (pool-delegated): ∃ a backend with a legal point? ---
+        if not cls.kernel().has_feasible_point(cls._trial_context(node, model)):
+            # A node that MATCHES the structural pattern but has NO feasible backend is
+            # "should be a kernel, but unbuildable by the current pool" — it correctly rides
+            # FINN's classic path, but that is a SILENT loss of a structurally-valid kernel
+            # (INV5). Log it, distinct from the plain structural no-match above.
+            logger.info(
+                "MVAU: %s matches the MatMul pattern but no backend has a feasible point "
+                "(e.g. non-integer datatypes) — leaving it on FINN's classic path.",
+                node.name,
+            )
             return False
         return True
 
@@ -529,9 +577,10 @@ class MvauKernelOp(KernelOp):
         ``out_bias``). MW/MH/SIMD/PE/mem_mode/numInputVectors and all dtypes stay derived
         live from Context; the folding axes are unset until resolve (Seam B).
         """
-        mm_input = node.input[0]
-        mm_weight = node.input[1]
-        mm_output = node.output[0]
+        operands = cls._operand_map(node)
+        mm_input = operands[INPUT]
+        mm_weight = operands[WEIGHTS]
+        mm_output = operands[OUTPUT]
 
         consumer = model.find_consumer(mm_output)
         has_activation = consumer is not None and consumer.op_type == "MultiThreshold"
