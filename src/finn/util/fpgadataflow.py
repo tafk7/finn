@@ -35,16 +35,15 @@ from qonnx.util.basic import get_by_name
 
 def is_fpgadataflow_node(node):
     """Returns True if given node is fpgadataflow node. Otherwise False."""
-    is_node = False
-    if node is not None:
-        if is_custom_op(node.domain):
-            n_backend = get_by_name(node.attribute, "backend")
-            if n_backend is not None:
-                backend_value = n_backend.s.decode("UTF-8")
-                if backend_value == "fpgadataflow":
-                    is_node = True
-
-    return is_node
+    if node is None or not is_custom_op(node.domain):
+        return False
+    # A finn.kernels node IS a dataflow-family member by its DOMAIN alone — the
+    # `backend` nodeattr stamp is redundant for kernels (dropped, FU-1). Classic
+    # nodes keep the historical `backend=="fpgadataflow"` membership token (INV-L).
+    if node.domain == "finn.kernels":
+        return True
+    n_backend = get_by_name(node.attribute, "backend")
+    return n_backend is not None and n_backend.s.decode("UTF-8") == "fpgadataflow"
 
 
 def is_hls_node(node):

@@ -35,6 +35,8 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import SortGraph
 from qonnx.util.basic import get_by_name
 
+from finn.util.fpgadataflow import is_fpgadataflow_node
+
 
 class InsertIODMA(Transformation):
     """Insert DMA nodes on inputs and outputs, or as specified by filters in
@@ -97,10 +99,7 @@ class InsertIODMA(Transformation):
         modified = False
         # only makes sense for a pure fpgadataflow graph -- so we check!
         all_nodes = list(model.graph.node)
-        assert all(
-            get_by_name(x.attribute, "backend").s.decode("UTF-8") == "fpgadataflow"
-            for x in all_nodes
-        )
+        assert all(is_fpgadataflow_node(x) for x in all_nodes)
         # insert IODMAs for graph inputs
         if self.insert_input:
             graph_in_names = [x.name for x in model.graph.input]

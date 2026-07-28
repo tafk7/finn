@@ -30,11 +30,11 @@ import json
 import warnings
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
-from qonnx.util.basic import get_by_name
 
 from finn.analysis.fpgadataflow.floorplan_params import floorplan_params
 from finn.transformation.general import ApplyConfig
 from finn.util.basic import make_build_dir
+from finn.util.fpgadataflow import is_fpgadataflow_node
 
 
 class Floorplan(Transformation):
@@ -116,9 +116,7 @@ class Floorplan(Transformation):
 
         # Assign IODMAs to their own partitions
         all_nodes = list(model.graph.node)
-        df_nodes = list(
-            filter(lambda x: get_by_name(x.attribute, "backend") is not None, all_nodes)
-        )
+        df_nodes = list(filter(is_fpgadataflow_node, all_nodes))
         dma_nodes = list(filter(lambda x: x.op_type == "IODMA_hls", df_nodes))
         non_dma_nodes = list(filter(lambda x: x not in dma_nodes, df_nodes))
         dyn_tlastmarker_nodes = list(
