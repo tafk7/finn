@@ -27,7 +27,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.adapter import InferKernels
+from finn.transformation.fpgadataflow.infer_kernels import InferKernels
 from finn.kernels.compute.mvau.op import MvauKernelOp
 
 MW, MH = 128, 64

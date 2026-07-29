@@ -37,7 +37,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.adapter import InferKernels
+from finn.transformation.fpgadataflow.infer_kernels import InferKernels
 from finn.kernels.compute.mvau.op import MvauKernelOp
 from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 

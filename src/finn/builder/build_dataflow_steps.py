@@ -472,7 +472,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     # frontend patterns (MatMul[+MultiThreshold] -> finn.kernels/MVAU, standalone
     # MultiThreshold -> finn.kernels/Thresholding) before FINN's classic Infer* transforms,
     # which then see only the remainder. This never touches FINN's classic MVAU path.
-    from finn.kernels.adapter import InferKernels
+    from finn.transformation.fpgadataflow.infer_kernels import InferKernels
     from finn.kernels.compute.mvau.op import MvauKernelOp
     from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 
