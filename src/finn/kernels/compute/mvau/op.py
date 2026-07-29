@@ -54,6 +54,7 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     op_axes,
     op_derived,
     op_predicates,
+    requires_integer_iw,
     weights_may_change,
 )
 

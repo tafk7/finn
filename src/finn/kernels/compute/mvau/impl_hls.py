@@ -23,7 +23,7 @@ from finn.kernels.model.backend import Backend
 from finn.kernels.model.param_names import CONSTANT, STREAM
 
 from .emit_hls import emit_mvau_hls
-from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS
+from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS, requires_integer_iw
 from .registry import register
 
 
@@ -32,19 +32,6 @@ def _hls_simd_lower_bound(p, ctx):
     mw = ctx.tensor_shape(WEIGHTS)[0]  # the weight block's reduction extent
     if p.SIMD < mw / 1024:
         return f"HLS array-partition limit: SIMD={p.SIMD} < MW/1024={mw / 1024} (hls:216)"
-    return None
-
-
-@predicate("HLS-MVU requires integer input and weight datatypes")
-def _hls_integer_iw(p, ctx):
-    # The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no
-    # legal HLS realization. This is the backend-OWNED feasibility fact the frontend claim
-    # used to encode (op.py's is_integer literal) — pushed down so the pool is the SoT and
-    # can_infer_from can delegate to it (D-R5).
-    idt = ctx.tensor_datatype(INPUT)
-    wdt = ctx.tensor_datatype(WEIGHTS)
-    if not (idt.is_integer() and wdt.is_integer()):
-        return f"HLS-MVU requires integer input/weights (got idt={idt}, wdt={wdt})"
     return None
 
 
@@ -72,7 +59,11 @@ def hls_bundle() -> Backend:
             # resType: a real HLS user lever (hls:58 default lut, dsp available).
             discrete_axis("resType", {"lut", "dsp"}, "lut"),
         ),
-        predicates=(_hls_integer_iw, _hls_simd_lower_bound, _no_true_binary),
+        predicates=(
+            requires_integer_iw(INPUT, WEIGHTS),
+            _hls_simd_lower_bound,
+            _no_true_binary,
+        ),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
         stream=COMPUTE_STREAM,

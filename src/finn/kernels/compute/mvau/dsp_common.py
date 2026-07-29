@@ -34,7 +34,7 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
-from .op import INPUT, THRESHOLDS, WEIGHTS, weights_may_change
+from .op import INPUT, THRESHOLDS, WEIGHTS, requires_integer_iw, weights_may_change
 
 
 def _narrow_weights(p, ctx):
@@ -63,12 +63,9 @@ def _rtl_mvu_feasible(p, ctx):
         return "RTL-MVU does not support binaryXnorMode"
     wdt = ctx.tensor_datatype(WEIGHTS)
     idt = ctx.tensor_datatype(INPUT)
-    # Integer i/w is the backend-OWNED feasibility fact (D-R5): a float32 tensor is "signed,
-    # 32-bit" and would slip through the signed+bitwidth>=2 checks below, so gate it FIRST
-    # and explicitly. This is the requirement op.py's is_integer literal used to compensate
-    # for; pushed down so the pool is the single source of truth.
-    if not (idt.is_integer() and wdt.is_integer()):
-        return f"RTL-MVU requires integer input/weights (got idt={idt}, wdt={wdt})"
+    # Integer i/w is checked by the shared `requires_integer_iw` predicate (composed into
+    # dsp_rtl_common's predicates). It runs alongside this gate — the signed/bitwidth checks
+    # below assume integer types, which requires_integer_iw guarantees.
     if not wdt.signed():
         return "RTL-MVU requires signed weights"
     if idt.bitwidth() < 2 or wdt.bitwidth() < 2:
@@ -110,6 +107,7 @@ def dsp_rtl_common():
         Derived("narrow_weights", _narrow_weights),
     )
     predicates = (
+        requires_integer_iw(INPUT, WEIGHTS),
         rtl_no_lut,
         _rtl_mvu_feasible,
         segmentlen_feasible,
