@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Union
 
-from finn.kernels.primitives.ordered_parameter import OrderedParameter
+from .ordered_parameter import OrderedParameter
 
 
 class PredicateDomain:

@@ -32,11 +32,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from .axis import Axis, discrete_axis
-from .derived import Derived
+from ..engine.axis import Axis, discrete_axis
+from ..engine.derived import Derived
 from .artifacts import Artifacts, RtlModule
-from .predicate import Predicate
-from .schema import Schema
+from ..engine.predicate import Predicate
+from ..engine.schema import Schema
 
 
 # The point key under which pool_schema exposes the selected bundle's source list.

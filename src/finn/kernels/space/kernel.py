@@ -34,13 +34,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .context import Context
+from ..engine.context import Context
 from .backend import BACKEND_AXIS, Backend, pool_schema
 from .backend_interface import backend_interface_for
-from .point import Illegal, Point
+from ..engine.point import Illegal, Point
 from .ports import Direction
-from .resolve import resolve
-from .schema import Schema
+from ..engine.resolve import resolve
+from ..engine.schema import Schema
 from .tiling import TileError, generate_tiling, stream_width_key as _stream_width_key
 
 

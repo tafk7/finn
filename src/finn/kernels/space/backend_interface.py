@@ -46,9 +46,9 @@ from typing import Any, Callable, Mapping
 
 from .backend import BACKEND_AXIS, Backend, pool_schema
 from .delivery import DeliveredParam, _demand_for, _topology_default, _topology_domain
-from .derived import Derived
+from ..engine.derived import Derived
 from .param_names import demand_key, sources_key, topology_key
-from .schema import Schema
+from ..engine.schema import Schema
 
 
 @dataclass(frozen=True)

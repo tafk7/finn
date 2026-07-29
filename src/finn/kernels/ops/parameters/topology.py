@@ -26,7 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 from finn.kernels.space import Artifacts, Derived, Backend, Predicate, RtlModule
-from finn.kernels.space.axis import Axis
+from finn.kernels.engine.axis import Axis
 
 
 def _feasible_ok(_point, _context) -> None:

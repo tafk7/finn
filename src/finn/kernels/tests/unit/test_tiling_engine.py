@@ -29,7 +29,7 @@ from finn.kernels.space import (
     fixed_axis,
     param,
 )
-from finn.kernels.space.point import Point
+from finn.kernels.engine.point import Point
 from finn.kernels.space.tiling import TileError, generate_tiling
 
 

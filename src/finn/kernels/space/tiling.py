@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from math import gcd
 from typing import Any, Union
 
-from .point import Point
+from ..engine.point import Point
 
 # A stream-tiling entry: a bare axis name, a plain int, or a composed expression.
 TileEntry = Union[str, int, "TileExpr"]
@@ -432,8 +432,8 @@ def _fold_dial_axis(dial: str, binds, by_name):
     """A ``divisor_axis`` for ``dial``: domain = divisors of the GCD of every BLOCK extent
     it folds. Built directly so the domain closure reads the Context at resolve time; deps
     include ``implementation`` implicitly via the pool merge."""
-    from .axis import Axis
-    from finn.kernels.primitives.ordered_parameter import OrderedParameter
+    from ..engine.axis import Axis
+    from ..engine.ordered_parameter import OrderedParameter
 
     def _gcd_block(context) -> int:
         g = 0
@@ -455,7 +455,7 @@ def _fold_dial_axis(dial: str, binds, by_name):
 
 
 def _divisibility_predicate(dial: str, iface, dim_idx: int):
-    from .predicate import Predicate
+    from ..engine.predicate import Predicate
 
     def check(point, context, _dial=dial, _iface=iface, _idx=dim_idx):
         extent = _iface.block[_idx] if _iface.block else FULL
@@ -483,7 +483,7 @@ def _width_derived(iface, width_expr: TileExpr):
     """A per-interface stream-width ``Derived`` = fold_width * bitwidth(dtype_source), keyed
     ``stream_width.<iface>``. The dtype is the interface's declared ``dtype_source`` (a
     derived name, e.g. ``outputDataType``) when set, else the raw tensor dtype."""
-    from .derived import Derived
+    from ..engine.derived import Derived
 
     dtype_source = getattr(iface, "dtype_source", None)
 

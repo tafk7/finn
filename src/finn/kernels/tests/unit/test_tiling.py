@@ -31,7 +31,7 @@ from finn.kernels.space import (
     eval_entry,
     param,
 )
-from finn.kernels.space.point import Point
+from finn.kernels.engine.point import Point
 
 
 # ---------------------------------------------------------------------------

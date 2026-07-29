@@ -43,7 +43,7 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import calculate_matvec_accumulator_range
 
 from finn.kernels.adapter import KernelOp, PortSpec, TransformationResult
-from finn.kernels.primitives.spec_helpers import smallest_datatype_for_range
+from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
 from finn.kernels.space import (
     FULL,
     Context,

@@ -14,7 +14,7 @@ resolved against a :class:`Context` of givens into a :class:`Point` or an
 :class:`Illegal`. See ``kernel-design/kernel-final-design/design-space-model.md``.
 """
 
-from .axis import (
+from ..engine.axis import (
     Axis,
     Domain,
     PredicateDomain,
@@ -39,8 +39,8 @@ from .artifacts import (
     TemplateError,
     bind,
 )
-from .context import Context
-from .derived import Derived
+from ..engine.context import Context
+from ..engine.derived import Derived
 from .folding import threshold_fold_depth, weight_fold_depth
 from .manifest import ArtifactManifest, SourceFile, read_abc
 from .backend import (
@@ -51,7 +51,7 @@ from .backend import (
     emit_point,
     pool_schema,
 )
-from .point import AbsentAxisError, Illegal, Point
+from ..engine.point import AbsentAxisError, Illegal, Point
 from .ports import (
     Direction,
     Kind,
@@ -59,10 +59,10 @@ from .ports import (
     Role,
     STANDARD_BINDINGS,
 )
-from .predicate import Predicate, predicate
-from .resolve import resolve
+from ..engine.predicate import Predicate, predicate
+from ..engine.resolve import resolve
 from .stitch import Cell, StitchError, stitch
-from .schema import Schema, SchemaError
+from ..engine.schema import Schema, SchemaError
 from .demand import ParamDemand
 from .delivery import DeliveredParam
 from .backend_interface import Interface, backend_interface_for
