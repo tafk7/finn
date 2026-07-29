@@ -34,7 +34,7 @@ from typing import Any
 
 from ..engine.axis import Axis, discrete_axis
 from ..engine.derived import Derived
-from ..emit.artifacts import Artifacts, RtlModule
+from .artifacts import Artifacts, RtlModule
 from ..engine.predicate import Predicate
 from ..engine.schema import Schema
 
@@ -113,7 +113,7 @@ class Backend:
             topology's identity string. ``None`` for a compute-pool member (it has no
             delivery mode; it CONSUMES modes via ``consumes``).
         schema: an OPTIONAL reference to this bundle's typed template contract
-            (:class:`~finn.kernels.emit.artifacts.RtlModule`). The schema is OWNED by the
+            (:class:`~finn.kernels.model.artifacts.RtlModule`). The schema is OWNED by the
             template (defined next to it, 1:1); ``Backend`` only REFERENCES it, so N
             backends emitting one template share one schema object (softvec + packed both
             point at ``_V_WRAPPER_SCHEMA``) — expressing the N:1 by shared reference rather

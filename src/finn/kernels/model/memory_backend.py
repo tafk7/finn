@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from finn.kernels.emit.artifacts import Artifacts, RtlModule
+from finn.kernels.model.artifacts import Artifacts, RtlModule
 from finn.kernels.engine.axis import Axis
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import Predicate

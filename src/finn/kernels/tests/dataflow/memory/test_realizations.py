@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.kernels.emit.artifacts import Artifacts
+from finn.kernels.model.artifacts import Artifacts
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import AbsentAxisError, Illegal
 from finn.kernels.engine.resolve import resolve

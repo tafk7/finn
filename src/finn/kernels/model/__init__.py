@@ -11,5 +11,7 @@ Holds the :class:`~finn.kernels.model.kernel.Kernel` / :class:`~finn.kernels.mod
 / :class:`~finn.kernels.model.interface.Interface` vocabulary, the tiling/fold-depth
 projections, ``ports``, and the op-agnostic parameter-feed CONTRACT (``demand``,
 ``param_names``, ``param_contract``) plus the ``memory_backend`` abstraction (the
-realizations live in ``dataflow/memory/``).
+realizations live in ``dataflow/memory/``). Also holds ``registry`` (the op-agnostic
+implementation-registry factory) and ``artifacts`` (the typed emit-output vocabulary
+consumed by ``emit/``).
 """

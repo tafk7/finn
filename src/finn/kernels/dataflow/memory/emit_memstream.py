@@ -30,7 +30,7 @@ from __future__ import annotations
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.kernels.emit.artifacts import (
+from finn.kernels.model.artifacts import (
     Artifacts,
     Bool,
     DataFile,

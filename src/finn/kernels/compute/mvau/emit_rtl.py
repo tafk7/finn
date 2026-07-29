@@ -33,7 +33,7 @@ this embedded wrapper alone.
 
 from __future__ import annotations
 
-from finn.kernels.emit.artifacts import Artifacts, BitWidth, Bool, Dim, GeneratedFile, Raw, RtlModule, StaticFile, Template, bind
+from finn.kernels.model.artifacts import Artifacts, BitWidth, Bool, Dim, GeneratedFile, Raw, RtlModule, StaticFile, Template, bind
 from finn.kernels.model.ports import Direction, Kind, Port, Role
 
 from .geometry import mvau_geometry

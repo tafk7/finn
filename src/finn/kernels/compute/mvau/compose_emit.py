@@ -23,7 +23,7 @@ the "no delivery sibling" case handled structurally, with no branch here.
 
 from __future__ import annotations
 
-from finn.kernels.emit.artifacts import Artifacts
+from finn.kernels.model.artifacts import Artifacts
 from finn.kernels.model.backend import BACKEND_AXIS
 from finn.kernels.emit.stitch import Cell, stitch
 from finn.kernels.model.param_names import topology_key

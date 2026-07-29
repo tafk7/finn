@@ -5,9 +5,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
-"""The codegen vocabulary: the artifacts a resolved Point emits.
+"""The emit PROCESS: turning a resolved Point into concrete artifacts.
 
-``artifacts`` holds the typed bind/template primitives and generated-file kinds;
-``manifest`` the artifact manifest reader; ``stitch`` the block-design cell/stitch
-model. These consume a resolved design Point — downstream of the engine and model.
+``manifest`` is the artifact manifest reader; ``stitch`` the block-design cell/stitch
+model. These consume a resolved design Point — downstream of the engine and model. The
+typed artifact vocabulary itself lives in ``model/artifacts.py``.
 """

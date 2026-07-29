@@ -17,7 +17,7 @@ add a TYPE per slot; each TypedValue's ``.render()`` reproduces the exact legacy
 
 import pytest
 
-from finn.kernels.emit.artifacts import (
+from finn.kernels.model.artifacts import (
     BindError,
     BitWidth,
     Bool,

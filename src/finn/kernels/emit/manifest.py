@@ -19,7 +19,7 @@ override dicts.
 
 An ``ArtifactManifest`` is the ONE authoritative list: each :class:`SourceFile` carries its
 own resolved path, and the manifest optionally names the top module + references the typed
-:class:`~finn.kernels.emit.artifacts.RtlModule` schema. Both ``Backend.sources`` and emit's
+:class:`~finn.kernels.model.artifacts.RtlModule` schema. Both ``Backend.sources`` and emit's
 ``StaticFile`` list become READERS of the one manifest — the "three readers of one value"
 (build copy · pool bookkeeping · rtlsim/IPI source discovery) instead of three hand-lists.
 Converges with :attr:`Backend.schema` (2a): both express one authored value, many readers.
@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .artifacts import RtlModule, StaticFile
+from ..model.artifacts import RtlModule, StaticFile
 
 
 @dataclass(frozen=True)

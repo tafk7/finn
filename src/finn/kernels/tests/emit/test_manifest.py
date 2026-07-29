@@ -18,7 +18,7 @@ import textwrap
 
 import pytest
 
-from finn.kernels.emit.artifacts import StaticFile
+from finn.kernels.model.artifacts import StaticFile
 from finn.kernels.emit.manifest import ArtifactManifest, SourceFile, read_abc
 
 

@@ -20,7 +20,7 @@ import re
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.kernels.emit.artifacts import Artifacts
+from finn.kernels.model.artifacts import Artifacts
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.resolve import resolve
 from finn.kernels.model.backend import emit_point

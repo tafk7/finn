@@ -27,7 +27,7 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.point import Illegal, Point
 from finn.kernels.engine.predicate import Predicate
 from finn.kernels.engine.resolve import resolve
-from finn.kernels.emit.artifacts import Artifacts
+from finn.kernels.model.artifacts import Artifacts
 from finn.kernels.model.backend import (
     Backend,
     EmitError,

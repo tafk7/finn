@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from .artifacts import IPICommands
+from ..model.artifacts import IPICommands
 from ..model.ports import Kind, Port, Role, STANDARD_BINDINGS
 
 
