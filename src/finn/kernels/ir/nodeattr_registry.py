@@ -32,7 +32,7 @@ from __future__ import annotations
 from itertools import product
 from typing import Any
 
-from finn.kernels.space import PredicateDomain
+from finn.kernels.engine.axis import PredicateDomain
 
 # FINN AttributeProto member names (qonnx base.py): "i" int, "s" str, "ints" int list.
 _ZERO: dict[str, Any] = {"i": 0, "s": "", "ints": []}

@@ -59,7 +59,7 @@ def is_hls_node(node):
         elif node.domain == "finn.kernels":
             # A kernel node routes by its DERIVED language: hls iff the resolved backend's
             # language is "hls". Unresolved (implementation unset) -> None -> not HW-ready.
-            from finn.kernels.routing import kernel_hw_language
+            from finn.kernels.ir import kernel_hw_language
 
             is_node = kernel_hw_language(node) == "hls"
 
@@ -79,7 +79,7 @@ def is_rtl_node(node):
         elif node.domain == "finn.kernels":
             # A kernel node routes by its DERIVED language: rtl iff the resolved backend's
             # language is "rtl". Unresolved (implementation unset) -> None -> not HW-ready.
-            from finn.kernels.routing import kernel_hw_language
+            from finn.kernels.ir import kernel_hw_language
 
             is_node = kernel_hw_language(node) == "rtl"
 

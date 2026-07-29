@@ -21,8 +21,8 @@ consumer surface this satisfies, and the design doc
 ``kernel-design/kernel-final-design/kernelop-tensor-block-stream.md`` for the model.
 """
 
-from .kernel_op import KernelOp, PortSpec
-from .infer import InferKernels, TransformationResult
+from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
+from .infer import InferKernels
 
 __all__ = [
     "KernelOp",

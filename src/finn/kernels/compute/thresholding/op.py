@@ -34,7 +34,7 @@ from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.kernels.adapter import KernelOp, PortSpec, TransformationResult
+from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
 from finn.kernels.space import (
     FULL,
     DeliveredParam,

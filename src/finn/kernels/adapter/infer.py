@@ -15,26 +15,24 @@ hidden imperative asserts inside a 270-line god-method
 (MW/MH/actval/numInputVectors) onto the node. The kernel system claims its frontend
 pattern FIRST, at infer, and never touches FINN's classic MVAU path.
 
-This module carries the two generic pieces of that seam:
+This module carries the generic DRIVER of that seam:
 
-  * :class:`TransformationResult` — the per-node return of a kernel's ``infer_from``
-    (which nodes to insert / remove). Mirror of brainsmith's
-    ``dataflow/transformation.py`` shape.
   * :class:`InferKernels` — one generic qonnx ``Transformation`` driven by a POOL of
     KernelOp classes. For each graph node, the first pool op whose ``can_infer_from``
     returns True wins; its ``infer_from`` produces the replacement node(s). The concrete
-    match/build logic lives ON each KernelOp (``ops/mvau/op.py``,
-    ``ops/thresholding/op.py``) — this driver is oblivious to how the pool was assembled,
+    match/build logic lives ON each KernelOp (``compute/mvau/op.py``,
+    ``compute/thresholding/op.py``) — this driver is oblivious to how the pool was assembled,
     so a future registry-driven pool drops in with no change here.
+
+The per-node return of a kernel's ``infer_from`` — :class:`~finn.kernels.ir.kernel_op.TransformationResult`
+— is the kernel INFER CONTRACT, co-located with the ``KernelOp`` base in ``kernels/ir/``
+so a kernel op names its own return type without importing this transformation.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
 
-from onnx import NodeProto
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import InferDataTypes
@@ -45,21 +43,6 @@ logger = logging.getLogger(__name__)
 # The taxonomy domain of every kernel node (handoff Seam C). The package IS the domain
 # module — ``finn.kernels`` imports directly, no alias.
 KERNEL_DOMAIN = "finn.kernels"
-
-
-@dataclass(frozen=True)
-class TransformationResult:
-    """The result of one kernel's ``infer_from`` — the graph edit to apply.
-
-    Attributes:
-        nodes_to_insert: kernel node(s) to insert into the graph.
-        nodes_to_remove: frontend node(s) the kernel absorbed and replaces.
-        metadata: optional, free-form transformation notes (unused by the driver).
-    """
-
-    nodes_to_insert: list[NodeProto]
-    nodes_to_remove: list[NodeProto]
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class InferKernels(Transformation):

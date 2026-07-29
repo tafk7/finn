@@ -43,13 +43,35 @@ serves every compute impl (consumer-surface-model.md R11).
 from __future__ import annotations
 
 from abc import abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+from onnx import NodeProto
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
-from finn.kernels.space import Context, Illegal, Role
+from finn.kernels.engine.context import Context
+from finn.kernels.engine.point import Illegal
+from finn.kernels.model.ports import Role
 from .nodeattr_registry import axis_nodeattr_types
+
+
+@dataclass(frozen=True)
+class TransformationResult:
+    """The result of one kernel's ``infer_from`` — the graph edit to apply (the infer-seam
+    CONTRACT, co-located with the :class:`KernelOp` base that declares ``infer_from``, so a
+    kernel op never has to import the ``InferKernels`` transformation to name its own return
+    type).
+
+    Attributes:
+        nodes_to_insert: kernel node(s) to insert into the graph.
+        nodes_to_remove: frontend node(s) the kernel absorbed and replaces.
+        metadata: optional, free-form transformation notes (unused by the driver).
+    """
+
+    nodes_to_insert: list[NodeProto]
+    nodes_to_remove: list[NodeProto]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -204,7 +226,7 @@ class KernelOp(HWCustomOp):
         LEGIBLE "unspecialized" error rather than a bare Illegal-ValueError (F1). Callers
         needing only impl-INDEPENDENT facts (normal shape/dtype, output-dtype publication)
         use the context-only getters or :meth:`_op_point`."""
-        from finn.kernels.routing import is_specialized
+        from .routing import is_specialized
 
         if not is_specialized(self.onnx_node):
             raise ValueError(

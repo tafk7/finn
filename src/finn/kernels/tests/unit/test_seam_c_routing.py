@@ -29,7 +29,7 @@ from qonnx.util.basic import get_by_name, qonnx_make_model
 from finn.kernels.adapter import InferKernels
 from finn.kernels.compute.mvau.op import MvauKernelOp
 from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
-from finn.kernels.routing import kernel_hw_language
+from finn.kernels.ir.routing import kernel_hw_language
 from finn.util.fpgadataflow import is_fpgadataflow_node, is_hls_node, is_rtl_node
 
 MW, MH = 128, 64

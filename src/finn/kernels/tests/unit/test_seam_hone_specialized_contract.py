@@ -34,7 +34,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.kernels.compute.mvau.op import MvauKernelOp, mvau_kernel
-from finn.kernels.routing import is_specialized, kernel_hw_language
+from finn.kernels.ir.routing import is_specialized, kernel_hw_language
 from finn.util.fpgadataflow import is_fpgadataflow_node
 
 MW, MH = 128, 64
