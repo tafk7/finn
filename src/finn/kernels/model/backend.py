@@ -50,10 +50,6 @@ SOURCES_KEY = "sources"
 BACKEND_AXIS = "backend"
 
 
-def _feasible_ok(_point, _context) -> None:
-    return None
-
-
 @dataclass(frozen=True)
 class Backend:
     """One buildable realization of an op — a self-contained bundle.
@@ -73,9 +69,6 @@ class Backend:
             top instantiates (→ ``$MODULE_NAME_COMPUTE_CORE$``); static backend identity, read
             off the selected bundle by emit (``kernel.selected_backend(point).rtl_core_module``),
             NOT re-projected onto the point (F5). ``None`` for a non-RTL bundle.
-        feasible: this bundle's OWN device/dtype gate, ``(point, context) ->
-            reason | None``; None means feasible. Wrapped by ``pool_schema`` into a
-            predicate that fires only when this bundle is selected.
         axes: axes this bundle introduces (guarded on selection by the assembler).
         derived: quantities this bundle computes (present only when selected).
         predicates: this bundle's OWN legality checks (fire only when selected).
@@ -128,7 +121,6 @@ class Backend:
     name: str
     language: str | None = None
     rtl_core_module: str | None = None
-    feasible: Callable[[Any, Any], str | None] = _feasible_ok
     axes: tuple[Axis, ...] = ()
     derived: tuple[Derived, ...] = ()
     predicates: tuple[Predicate, ...] = ()
@@ -420,23 +412,14 @@ def _field_derived(root_name, pool, field_name, *, key=None) -> Derived:
 
 
 def _wrap_predicates(root_name, pool) -> list[Predicate]:
-    """Each bundle's predicates fire only when that bundle is selected; each
-    bundle's ``feasible`` becomes a predicate guarded on selection."""
+    """Each bundle's predicates fire only when that bundle is selected. Device/dtype
+    feasibility is just a predicate — there is no separate ``feasible`` mechanism (one
+    concept, one home)."""
     wrapped: list[Predicate] = []
     for bundle in pool:
-        wrapped.append(_feasible_predicate(root_name, bundle))
         for pred in bundle.predicates:
             wrapped.append(_guarded_predicate(root_name, bundle.name, pred))
     return wrapped
-
-
-def _feasible_predicate(root_name, bundle) -> Predicate:
-    def check(point, context, _root=root_name, _name=bundle.name, _fn=bundle.feasible):
-        if point.get(_root) != _name:
-            return None
-        return _fn(point, context)
-
-    return Predicate(check=check, description=f"{bundle.name} feasibility")
 
 
 def _guarded_predicate(root_name, impl_name, pred) -> Predicate:

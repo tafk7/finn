@@ -66,15 +66,17 @@ def test_only_selected_bundle_axes_and_derived_exist():
     assert r.r_only is None
 
 
-def test_only_selected_bundle_predicate_and_feasibility_fire():
+def test_only_selected_bundle_predicates_fire():
     ok = Backend(name="ok")
     bad = Backend(
         name="bad",
-        feasible=lambda p, c: "bad is never feasible",
-        predicates=(Predicate(lambda p, c: "bad pred", "p"),),
+        predicates=(
+            Predicate(lambda p, c: "bad is never feasible", "feasibility"),
+            Predicate(lambda p, c: "bad pred", "p"),
+        ),
     )
     schema = pool_schema("backend", (), (), (), (ok, bad))
-    # ok selected → bad's feasibility/predicate do NOT fire.
+    # ok selected → bad's predicates do NOT fire.
     assert isinstance(resolve(schema, _ctx(), {"backend": "ok"}), Point)
     # bad selected → both fire.
     r = resolve(schema, _ctx(), {"backend": "bad"})

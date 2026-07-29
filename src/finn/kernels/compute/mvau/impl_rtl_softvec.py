@@ -26,13 +26,9 @@ from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, WEIGHTS
 from .registry import register
 
 
-def _softvec_feasible(p, ctx):
-    # The soft-vectorized core builds on any DSP part; the RTL-MVU gate
-    # (_rtl_mvu_feasible, in dsp_rtl_common) carries the config/dtype requirements.
-    # get_dsp_block always returns a block for a real part, so no extra gate here.
-    return None
-
-
+# softvec has NO extra feasibility gate: the soft-vectorized core builds on any DSP part,
+# and the shared RTL-MVU gate (_rtl_mvu_feasible, in dsp_rtl_common) carries the
+# config/dtype requirements.
 @register
 def softvec_bundle() -> Backend:
     axes, derived, predicates = dsp_rtl_common()
@@ -42,7 +38,6 @@ def softvec_bundle() -> Backend:
         # rtl_core_module names the per-core wrapper the emitted top instantiates
         # (2c split): softvec owns mvu_vvu_axi_softvec.sv + mvu.sv, disjoint from packed.
         rtl_core_module="mvu_vvu_axi_softvec",
-        feasible=_softvec_feasible,
         axes=axes,
         derived=derived,
         predicates=predicates,

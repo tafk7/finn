@@ -17,6 +17,7 @@ replicating the shared wrapper's ``generate`` fork.
 
 from __future__ import annotations
 
+from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.backend import Backend
 from finn.kernels.model.param_names import STREAM
 from finn.util.basic import get_dsp_block
@@ -27,6 +28,7 @@ from .op import COMPUTE_STREAM, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
 from .registry import register
 
 
+@predicate("mvau_dsp_packed feasibility (DSP58 ∧ w<=8 ∧ a<=9 ∧ NUM_LANES<=3)")
 def _packed_feasible(p, ctx):
     # F1 — the DSP58 INT8-packed core (mvu_vvu_8sx9_dsp58.sv) is feasible only under
     # the FULL generate condition (mvu_vvu_axi.sv:313): DSP58 AND w<=8 AND a<=9 AND
@@ -64,10 +66,10 @@ def packed_bundle() -> Backend:
         # (2c split): packed owns mvu_vvu_axi_packed.sv + mvu_vvu_8sx9_dsp58.sv,
         # disjoint from softvec.
         rtl_core_module="mvu_vvu_axi_packed",
-        feasible=_packed_feasible,
         axes=axes,
         derived=derived,
-        predicates=predicates,
+        # packed's OWN feasibility gate, appended to the shared RTL predicates.
+        predicates=predicates + (_packed_feasible,),
         sources=SHARED_SOURCES + ("mvu_vvu_axi_packed.sv", "mvu_vvu_8sx9_dsp58.sv"),
         emit=emit_mvau_rtl,
         # Shares the ONE `_V_WRAPPER_SCHEMA` with softvec (N:1 by reference); see softvec.

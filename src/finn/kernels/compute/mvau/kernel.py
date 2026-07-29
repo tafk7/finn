@@ -90,20 +90,16 @@ def mvau_interfaces():
 
     The block reads as the matmul: ``inp`` iterates its vector count (``1``) and holds the
     reduction dim MW in-block (``FULL``); ``weights`` is the whole matrix ``(MW, MH)`` in one
-    block; ``out`` iterates vectors and holds MH. ``weights`` is an ORDINARY interface — no
-    WidthOnly, no special flag; its PE·SIMD stream is just a 2-D fold of a 2-D block."""
+    block; ``out`` iterates vectors and holds MH."""
     return (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
         InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
-        # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff
-        # a threshold initializer is attached (a 3-input node); absent nodes skip it in every
-        # Context-reading loop. ALWAYS constant in the fused core (baked into thresh.h — no
-        # port, no stream), so no impl declares a `stream` fold for it: it carries only
-        # identity (block + the Context tensor binding) for the threshold deriveds/predicates.
+        # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff a
+        # threshold initializer is attached (a 3-input node); absent nodes skip it in every
+        # Context-reading loop. Constant-only in the fused core, so no impl folds it.
         InterfaceSchema("thresholds", Direction.IN, block=[FULL, FULL], optional=True),
-        # dtype_source="outputDataType": the stream width uses the derived output type
-        # (= accDataType under noActivation), not the raw graph dtype — so the generated
-        # stream_width.out matches the emit-side value.
+        # dtype_source: the out stream width uses the derived output type (= accDataType with
+        # no activation), not the raw graph dtype — so stream_width.out matches emit.
         InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
@@ -118,21 +114,10 @@ def mvau_interfaces():
 
 
 def weights_may_change(p) -> bool:
-    """Weights are not statically known — accDataType/weightDataType must use
-    worst-case bounds rather than actual values (base:482-498). This is the one
-    CROSS-COORDINATE coupling from the parameters subsystem back into the compute
-    dtype derivations: staticness (coordinate C) is decided by the composed
-    ``parameters.*`` fields. Reads with ``.get`` so it is safe on a point where the
-    parameters pool is absent (a future param-free op) — absent ⇒ statically known.
-
-    This is a FORK, not a cycle (interface-supply-waterfall.md §3): one given fact
-    (staticness) fans out to two consumers — compute dtype (up) and the memory reload port
-    (down). A future M2 increment relocates staticness to the requirement tier both READ,
-    at which point this helper reads that given instead of the parameters axis.
-
-    Increment-1 topologies are ``embedded`` (static) and ``decoupled`` (static unless
-    runtime-writable). The external / dynamic / MLO staticness sources return when
-    those topologies land (each will be its own ``parameters.<iface>.topology`` value)."""
+    """Whether weights are not statically known — accDataType/weightDataType then use
+    worst-case bounds rather than actual values (base:482-498). The staticness fact is
+    decided by the composed ``parameters.*`` fields; read with ``.get`` so it is safe on a
+    point where the parameters pool is absent (a param-free op) — absent ⇒ static."""
     return bool(p.get(runtime_writeable_key(WEIGHTS), 0))
 
 
@@ -144,37 +129,16 @@ def _is_nonneg_int(v) -> bool:
 
 
 def op_axes():
+    # MW/MH/numInputVectors are NOT axes — they are BLOCK extents / the input's leading dims,
+    # read off the Context by emit + the cadence closures. Whether the MVU has an activation is
+    # EMERGENT (``ctx.initializer(THRESHOLDS) is not None``), not a declared flag. Weight
+    # delivery (mem_mode/ram_style/pumpedMemory/…) lives in the composed ``parameters`` pool.
     return (
-        # MW/MH are NOT axes and NO LONGER point aliases — they are BLOCK extents (the
-        # matmul's reduction + output dims) declared on the interfaces' `block`, read
-        # straight off the Context by emit (the shared mvau_geometry accessor). The PE/SIMD
-        # fold DIALS the engine derives from each impl's `stream`.
-        # --- activation / threshold cluster ----------------------------------
-        # noActivation is GONE: whether the fused MVU has an activation is EMERGENT —
-        # ``ctx.initializer(THRESHOLDS) is not None`` (a 3-input node). The old declared flag
-        # + its guards dissolve into that Context read (the same declared-slot / emergent-
-        # existence motion as role emergence). ActVal is now an always-present bias axis (as
-        # in the standalone Thresholding op); it is simply unused on a no-threshold node.
-        # ram_style_thresholds is dropped: thresholds are constant-only in the fused core
-        # (baked into thresh.h, no threshold RAM), so there is no ram-style choice to make.
+        # ActVal — activation bias; unused on a no-threshold node.
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
         discrete_axis("binaryXnorMode", {0, 1}, 0),
-        # numInputVectors is NOT an axis and NOT a point alias — it IS the input tensor's
-        # leading (non-reduction) dims (FINN: get_normal_input_shape = numInputVectors + [MW]),
-        # read off the Context directly by emit + the cadence closures.
-        # F4: mlo_max_iter is a per-node iteration count, unbounded non-neg int.
-        # The `64` in the old {0..64} domain was n_max_layers (a fabric-wide MLO
-        # table size, hwcustomop.py:378) — a different entity that does not bound
-        # this axis (hwcustomop.py:317-319, mlo_max_iter unbounded).
+        # mlo_max_iter — per-node iteration count, unbounded non-neg (hwcustomop.py:317-319).
         predicate_axis("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
-        # --- weight-delivery cluster: MOVED OUT to the `parameters` pool ------
-        # mem_mode/ram_style/runtime_writeable_weights/pumpedMemory/dynamic_input used
-        # to live here as the "reserved composition seam". They are now the
-        # `parameters` subsystem (dataflow/memory/), folded into the MVAU schema via a
-        # `Interface` per delivered interface under the `parameters.*` namespace.
-        # mem_mode is gone: being the `decoupled` topology IS "internal_decoupled". The
-        # cross-coordinate couplings (memstream geometry, the pumpedMemory/fold gate) are
-        # owned by that Interface's guarded delivery sub-schema.
     )
 
 
@@ -224,13 +188,8 @@ def _output_datatype(p, ctx):
     return ctx.tensor_datatype(OUTPUT)
 
 
-# -- threshold identity — present iff a threshold initializer is attached ---------
-#
-# The fused MVU's thresholds operand is OPTIONAL (a 3-input node). Existence is emergent:
-# ``ctx.initializer(THRESHOLDS) is not None``. These reuse the STANDALONE Thresholding op's
-# helpers (imported), wrapped so they no-op (return None / pass) on a no-threshold node
-# rather than KeyError-ing on the absent tensor — the identity carries a live value only
-# when the operand is present.
+# -- threshold identity — live values iff a threshold initializer is attached. Reuse the
+#    standalone Thresholding op's helpers, wrapped to no-op on a no-threshold node.
 
 
 def _has_thresholds(ctx) -> bool:
@@ -271,53 +230,27 @@ def _identity_dtype_derived():
 
 
 def op_derived():
-    # PURE IDENTITY — the datatype contract only. The geometry aliases (MW/MH/WMEM/TMEM/
-    # numInputVectors) are GONE: emit reads block extents + fold depth directly (the shared
-    # mvau_geometry accessor over Context + model/fold_depth). NOT here, by design:
-    #   * `stream_width.<iface>` — the tiling engine generates one per interface from each
-    #     impl's `stream` folds (the `out` interface's dtype_source="outputDataType" gives it
-    #     the accumulator type when the node has no activation).
-    #   * `parameters.<iface>.stream_width` — a per-TOPOLOGY fact (0 embedded / demand
-    #     bit_rate decoupled) owned by the delivery pool, namespaced per interface.
-    #   * `parameters.<iface>.demand` — the DEMAND stage of the supply waterfall, synthesized
-    #     generically by the Kernel from the declared `delivered_parameters`
-    #     (model/param_contract.py), between the compute pool and the delivery pool (it reads
-    #     the compute pool's resolved `stream_width.<iface>`, only present AFTER compute tiling).
+    # PURE IDENTITY — the datatype contract only. Stream widths (per-interface + per-topology)
+    # and the demand stage are generated by the tiling engine / param_contract, not declared
+    # here; geometry (MW/MH/fold depth) is read off Context by emit.
     return _identity_dtype_derived()
 
 
-# -- op-level SHARED predicates — one kind; provenance is what each reads --------
-
-
-# The divisibility predicates (MH%PE==0, MW%SIMD==0) are NOT hand-written here — the
-# tiling engine generates one per Fold spec from COMPUTE_TILING. The op declares only
-# the block-structural math facts below.
-
-
-# The `pumpedMemory => not(PE==SIMD==1)` gate and the `ram_style=ultra & not versal
-# => runtime_writeable=1` URAM gate live in the parameters subsystem: the URAM gate
-# is self-contained in the decoupled topology bundle; the pumpedMemory/fold gate is
-# cross-coordinate (reads the compute fold) and is contributed in section 5.
+# -- op-level SHARED predicates. Divisibility (MH%PE, MW%SIMD) is engine-generated from the
+#    tiling, not here; the pumpedMemory / URAM gates live in the parameters subsystem.
 
 
 @predicate("weight initializer must exist unless params are not statically known")
 def _weights_present(p, ctx):
-    # Weights must exist as an initializer unless the parameters subsystem says they
-    # are not statically known (runtime-writable / external / dynamic / MLO). Reads
-    # the composed staticness via weights_may_change (parameters.*), with .get safety
-    # for a future param-free op (no parameters pool ⇒ still requires an initializer).
     if ctx.initializer(WEIGHTS) is None:
         if not weights_may_change(p):
             return "weight initializer required unless params are not static (base:782)"
     return None
 
 
-# Threshold legality — reinstated now that thresholds ARE a first-class Context tensor
-# (the F2 drop-note below was explicit: "Reinstate when thresholds become a Context tensor").
-# Both reuse the standalone Thresholding op's predicates, wrapped to no-op on a no-threshold
-# node (the operand is optional). FINN's assertion is over the THRESHOLD TENSOR VALUES
-# (`orig_thres_matrix >= 0`, base:578) / the 2-D (NumChannels, numSteps) shape — exactly what
-# the standalone predicates check, now that the tensor exists.
+# Threshold legality — reuse the standalone Thresholding op's predicates (2-D shape with
+# shape[1]==numSteps; unsigned input ⇒ thresholds >= 0, base:578), wrapped to no-op when the
+# optional operand is absent.
 
 
 @predicate("threshold tensor is 2D with shape[1] == numSteps (when present)")
@@ -339,16 +272,13 @@ def op_predicates():
 
 
 # =============================================================================
-# 4. COMPUTE TILING — the BLOCK->STREAM lowering shared by all three compute impls.
+# 4. COMPUTE TILING — the default BLOCK->STREAM lowering (an op-level default the pool
+#    members adopt; a tiled backend overrides the weights entry). Positional over each
+#    interface's `block`: SIMD folds the reduction dim MW (inp pos 1, weights pos 0), PE
+#    folds the output dim MH (out pos 1, weights pos 1). The engine derives the SIMD/PE
+#    dials, divisibility, and widths from this — none hand-written.
 # =============================================================================
 
-# They fold identically — SIMD folds the reduction dim MW on the activation (last axis),
-# The STREAM folding shared by all three compute impls: SIMD folds the reduction dim MW
-# (inp position 1, weights position 0), PE folds the output dim MH (out position 1, weights
-# position 1). weights is a 2-D fold of its 2-D block → PE·SIMD tile/cycle. Positional over
-# each interface's `block`. Declared once here; a tiled backend overrides only the weights
-# entry (deliver PE/TH along MH). The engine DERIVES the SIMD/PE dials (divisor domains),
-# divisibility, and widths from these — none hand-written.
 COMPUTE_STREAM = {
     INPUT: [1, "SIMD"],
     OUTPUT: [1, "PE"],
@@ -357,25 +287,13 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# 5. DELIVERY — the compute→memory supply waterfall is now GENERIC
-#    (model/param_contract.py). The op no longer hand-wires the DEMAND stage or the
-#    topology-mode guard: it DECLARES which interfaces it delivers + each one's CADENCE (see
-#    mvau_kernel's delivered_parameters), and the Kernel synthesizes the (demand, guarded
-#    delivery sub-schema) pair generically — reading each compute backend's `consumes` and
-#    each topology's `mode`. The memory backend still owns its own realization (memstream
-#    width/depth/sets/init_file + the pumped/URAM gates), sized from the published demand.
+# 5. DELIVERY / 6. COST — both generic, no op-level authoring.
+#    Delivery: the op DECLARES which interfaces it delivers + each one's cadence (see
+#    _delivered_parameters); the Kernel synthesizes the COMPUTE→DEMAND→MEMORY waterfall
+#    generically (model/param_contract.py). Cost: MVAU's nf·sf·n_vecs falls out of the
+#    generic max-over-interfaces floor now that weights is a 2-D block streamed SIMD·PE,
+#    so it declares NO cost_model.
 # =============================================================================
-
-
-# =============================================================================
-# 6. COST — no op-level override needed.
-# =============================================================================
-#
-# MVAU's cost IS the reduction product nf·sf·n_vecs, and it falls out of the generic
-# max-over-interfaces floor for FREE now that `weights` is a proper 2-D block streamed
-# SIMD·PE: its stream-cycle count is MW·MH/(SIMD·PE) = sf·nf — the largest interface term,
-# times the input's n_vecs leading dims. So MVAU declares NO cost_model (the old override
-# only existed because weights was modelled as a width-only port skipped by the floor).
 
 
 # =============================================================================
@@ -401,20 +319,13 @@ def _weight_cadence(p, ctx) -> int:
 
 
 def _threshold_cadence(p, ctx) -> int:
-    # Thresholds are consumed once per ACTIVATION output beat: cadence = prod(folded_in[:-1])
-    # = prod(numInputVectors) — the TAP_REP (param-delivery-design-space.md §3.1). folded_in is
-    # numInputVectors + [MW/SIMD]; its leading dims [:-1] are exactly numInputVectors (the input
-    # tensor's non-reduction dims), so the threshold memory is re-traversed once per output
-    # vector. Sized from resolved geometry (numInputVectors is an op derived), same waterfall
-    # stage as demand. In the fused core thresholds are constant (demand=None), so this does not
-    # yet size a streamer — but it is the real quantity a decoupled/MLO threshold variant needs.
+    # Thresholds are re-traversed once per output vector: cadence = prod(numInputVectors) =
+    # the input tensor's non-reduction dims (param-delivery-design-space.md §3.1).
     return int(np.prod(ctx.tensor_shape(INPUT)[:-1]))
 
 
-# The parameter interfaces this op delivers, as DeliveredParam declarations (WHAT + cadence);
-# the generic Kernel wiring (model/param_contract.py) owns the HOW. ``weights`` is always live;
-# ``thresholds`` is the optional activation operand (present iff its initializer is attached,
-# always constant-mode in the fused core → demand None → baked into thresh.h).
+# The parameter interfaces this op delivers (WHAT + cadence); the generic Kernel wiring
+# (model/param_contract.py) owns the HOW.
 def _delivered_parameters():
     return (
         DeliveredParam("weights", _weight_cadence, pool=parameters_pool(WEIGHTS)),
@@ -425,14 +336,11 @@ def _delivered_parameters():
 def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
-    The compute pool (``implementation``: HLS / DSP-softvec / DSP-packed) with impl-owned
-    tiling, plus DECLARED delivered parameters (weights + thresholds). The Kernel synthesizes
-    the supply waterfall COMPUTE→DEMAND→MEMORY per interface generically
-    (model/param_contract.py): the demand stage reads the compute pool's resolved
-    ``stream_width.<iface>`` and publishes ``parameters.<iface>.demand``; the selected delivery
-    topology (its domain guarded to the backend's consumable modes) then sizes its own memstream
-    geometry from that demand — the op no longer brokers memstream realization or the topology
-    guard. The getters project from a resolved point via the impl ``stream``."""
+    The compute pool (HLS / DSP-softvec / DSP-packed) with impl-owned tiling, plus declared
+    delivered parameters (weights + thresholds). The Kernel synthesizes the
+    COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
+    (model/param_contract.py); the getters project from a resolved point via the impl
+    ``stream``."""
     return Kernel(
         identity=KernelSchema(
             name="MVAU",

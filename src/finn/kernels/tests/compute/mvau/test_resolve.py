@@ -360,18 +360,20 @@ def test_hls_binary_ok_in_xnor_mode(schema):
 
 
 def test_fourth_implementation_composes_additively():
+    from finn.kernels.engine.predicate import predicate
     from finn.kernels.model.backend import Backend
     from finn.kernels.compute.mvau import mvau_kernel, mvau_pool
     from finn.kernels.compute.mvau.op import COMPUTE_STREAM
 
+    @predicate("mvau_lut_rtl targets non-Versal parts only (hypothetical)")
     def lut_rtl_feasible(p, ctx):
         if is_versal(ctx.fpgapart):
             return "mvau_lut_rtl targets non-Versal parts only (hypothetical)"
         return None
 
     lut_rtl = Backend(
-        name="mvau_lut_rtl", language="rtl", feasible=lut_rtl_feasible,
-        axes=(), predicates=(), sources=("mvu_lut.sv",), stream=COMPUTE_STREAM,
+        name="mvau_lut_rtl", language="rtl",
+        axes=(), predicates=(lut_rtl_feasible,), sources=("mvu_lut.sv",), stream=COMPUTE_STREAM,
     )
     from dataclasses import replace
 

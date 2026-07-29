@@ -32,16 +32,11 @@ from finn.kernels.engine.predicate import Predicate
 from finn.kernels.model.backend import Backend
 
 
-def _feasible_ok(_point, _context) -> None:
-    return None
-
-
 def memory_backend(
     name: str,
     *,
     mode: str,
     language: str | None = None,
-    feasible: Callable[[Any, Any], str | None] = _feasible_ok,
     axes: tuple[Axis, ...] = (),
     derived: tuple[Derived, ...] = (),
     predicates: tuple[Predicate, ...] = (),
@@ -66,7 +61,6 @@ def memory_backend(
         name=name,
         language=language,
         mode=mode,
-        feasible=feasible,
         axes=axes,
         derived=derived,
         predicates=predicates,
