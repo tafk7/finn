@@ -26,7 +26,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import Illegal
 from finn.kernels.engine.resolve import resolve
-from finn.kernels.model.backend import Backend, pool_schema
+from finn.kernels.model.backend import Backend, pool_schema, ports_from
 from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
 from finn.kernels.model.param_contract import DeliveredParam
@@ -113,8 +113,10 @@ def test_permissive_backend_keeps_both_topologies():
 def test_consumes_stream_only_domain_excludes_embedded():
     backend = Backend(
         name="stream_only",
-        stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
-        consumes={WEIGHTS: {STREAM}},
+        ports=ports_from(
+            stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
+            consumes={WEIGHTS: {STREAM}},
+        ),
     )
     legal = {
         b.name for b in parameters_pool(WEIGHTS) if b.mode in backend.consumes[WEIGHTS]
@@ -131,8 +133,10 @@ def _restricted_kernel(consumes):
     )
     backend = Backend(
         name="core",
-        stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
-        consumes=consumes,
+        ports=ports_from(
+            stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
+            consumes=consumes,
+        ),
     )
     return Kernel(
         identity=KernelSchema(name="MVU", interfaces=ifaces),
@@ -175,7 +179,7 @@ def test_default_falls_to_legal_topology_when_embedded_out_of_domain():
 
 
 def test_backend_consumes_coerced_to_frozenset():
-    b = Backend(name="x", consumes={WEIGHTS: {STREAM, CONSTANT}})
+    b = Backend(name="x", ports=ports_from(consumes={WEIGHTS: {STREAM, CONSTANT}}))
     assert isinstance(b.consumes[WEIGHTS], frozenset)
     assert Backend(name="y").consumes == {}  # declares nothing → permissive
 

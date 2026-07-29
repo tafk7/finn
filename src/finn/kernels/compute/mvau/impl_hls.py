@@ -19,7 +19,7 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.engine.axis import discrete_axis
 from finn.kernels.engine.predicate import predicate
-from finn.kernels.model.backend import Backend
+from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import CONSTANT, STREAM
 
 from .emit_hls import emit_mvau_hls
@@ -66,10 +66,12 @@ def hls_bundle() -> Backend:
         ),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
-        stream=COMPUTE_STREAM,
         # The HLS core takes weights either baked (params.h) or streamed (memstream), and
         # bakes thresholds into thresh.h — so it consumes weights in BOTH modes, thresholds
         # constant-only. (base FINN: internal_embedded is HLS-only; the fused HLS core is the
         # only MVU that supports embedded thresholds.)
-        consumes={WEIGHTS: {CONSTANT, STREAM}, THRESHOLDS: {CONSTANT}},
+        ports=ports_from(
+            stream=COMPUTE_STREAM,
+            consumes={WEIGHTS: {CONSTANT, STREAM}, THRESHOLDS: {CONSTANT}},
+        ),
     )

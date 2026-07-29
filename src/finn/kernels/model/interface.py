@@ -136,8 +136,8 @@ def delivery_seam_for(dp: DeliveredParam, compute_pool) -> DeliverySeam:
     pool. The single place the compute→delivery contract is built — the demand schema and
     the guarded delivery sub-schema for this interface have one owner."""
     iface = dp.iface
-    stream = {b.name: b.stream.get(iface, ()) for b in compute_pool}
-    consumes = {b.name: b.consumes.get(iface) for b in compute_pool}
+    stream = {b.name: b.stream_of(iface) for b in compute_pool}
+    consumes = {b.name: b.consumes_of(iface) for b in compute_pool}
     return DeliverySeam(
         schema=iface,
         pool=tuple(dp.pool),

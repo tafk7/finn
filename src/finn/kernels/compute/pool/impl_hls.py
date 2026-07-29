@@ -21,7 +21,7 @@ bundle declares how one realization folds it. That is the whole op/backend split
 
 from __future__ import annotations
 
-from finn.kernels.model.backend import Backend
+from finn.kernels.model.backend import Backend, ports_from
 
 from .names import INDICES, INPUT, OUTPUT, POOL_HLS
 
@@ -40,4 +40,4 @@ def pool_hls_impl(*, has_indices: bool, rank: int) -> Backend:
     stream = {INPUT: list(channel_fold), OUTPUT: list(channel_fold)}
     if has_indices:
         stream[INDICES] = list(channel_fold)
-    return Backend(name=POOL_HLS, language="hls", stream=stream)
+    return Backend(name=POOL_HLS, language="hls", ports=ports_from(stream=stream))

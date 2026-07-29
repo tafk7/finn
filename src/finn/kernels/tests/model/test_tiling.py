@@ -23,7 +23,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.point import Illegal, Point
-from finn.kernels.model.backend import Backend
+from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import (
@@ -203,7 +203,7 @@ def test_stream_names_unknown_interface_raises():
 
 def _mvu_kernel():
     stream = {"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}
-    impl = Backend(name="mvu", stream=stream)
+    impl = Backend(name="mvu", ports=ports_from(stream=stream))
     return Kernel(
         identity=KernelSchema(name="MVU", interfaces=MVU_IFACES, op_axes=()),
         pool=(impl,),
@@ -252,7 +252,7 @@ def test_width_uses_dtype_source():
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
         InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="acc"),
     )
-    impl = Backend(name="k", stream={"inp": [1, "SIMD"], "out": [1, "PE"]})
+    impl = Backend(name="k", ports=ports_from(stream={"inp": [1, "SIMD"], "out": [1, "PE"]}))
     k = Kernel(
         identity=KernelSchema(
             name="K",

@@ -18,7 +18,7 @@ RTL bundle carries depth-triggers etc.).
 
 from __future__ import annotations
 
-from finn.kernels.model.backend import Backend
+from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import CONSTANT
 
 from .emit_hls import emit_thresholding_hls
@@ -36,5 +36,5 @@ def hls_bundle() -> Backend:
         emit=emit_thresholding_hls,
         # The HLS core bakes thresholds into thresh.h — it consumes them in CONSTANT mode
         # only (embedded ROM, no stream port). base FINN: internal_embedded is HLS-only.
-        consumes={THRESHOLDS: {CONSTANT}},
+        ports=ports_from(consumes={THRESHOLDS: {CONSTANT}}),
     )

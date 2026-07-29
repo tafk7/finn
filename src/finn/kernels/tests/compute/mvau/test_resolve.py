@@ -361,7 +361,7 @@ def test_hls_binary_ok_in_xnor_mode(schema):
 
 def test_fourth_implementation_composes_additively():
     from finn.kernels.engine.predicate import predicate
-    from finn.kernels.model.backend import Backend
+    from finn.kernels.model.backend import Backend, ports_from
     from finn.kernels.compute.mvau import mvau_kernel, mvau_pool
     from finn.kernels.compute.mvau.op import COMPUTE_STREAM
 
@@ -373,7 +373,8 @@ def test_fourth_implementation_composes_additively():
 
     lut_rtl = Backend(
         name="mvau_lut_rtl", language="rtl",
-        axes=(), predicates=(lut_rtl_feasible,), sources=("mvu_lut.sv",), stream=COMPUTE_STREAM,
+        axes=(), predicates=(lut_rtl_feasible,), sources=("mvu_lut.sv",),
+        ports=ports_from(stream=COMPUTE_STREAM),
     )
     from dataclasses import replace
 
@@ -402,7 +403,7 @@ def test_fourth_implementation_composes_additively():
 
 
 def test_registry_makes_addition_structural():
-    from finn.kernels.model.backend import Backend
+    from finn.kernels.model.backend import Backend, ports_from
     from finn.kernels.compute.mvau import mvau_pool, mvau_schema
     from finn.kernels.compute.mvau.op import COMPUTE_STREAM
     from finn.kernels.compute.mvau.registry import register, unregister
@@ -412,7 +413,8 @@ def test_registry_makes_addition_structural():
 
     @register
     def _stub_bundle():
-        return Backend(name="mvau_stub_backend", sources=("stub.sv",), stream=COMPUTE_STREAM)
+        return Backend(name="mvau_stub_backend", sources=("stub.sv",),
+                       ports=ports_from(stream=COMPUTE_STREAM))
 
     try:
         after = {b.name for b in mvau_pool()}

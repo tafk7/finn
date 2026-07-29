@@ -115,7 +115,7 @@ def _topology_domain(compute_pool, dp: DeliveredParam):
         # under a bare probe point (nodeattr typing) it is absent → permissive (all modes).
         impl = p.get(BACKEND_AXIS) if hasattr(p, "get") else None
         backend = by_name.get(impl)
-        modes = (backend.consumes.get(iface) if backend else None) or ALL_MODES
+        modes = (backend.consumes_of(iface) if backend else None) or ALL_MODES
         return tuple(name for name, mode in topo_modes.items() if mode in modes)
 
     return lambda p, ctx: frozenset(legal(p)), legal

@@ -18,7 +18,7 @@ replicating the shared wrapper's ``generate`` fork.
 from __future__ import annotations
 
 from finn.kernels.engine.predicate import predicate
-from finn.kernels.model.backend import Backend
+from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import STREAM
 from finn.util.basic import get_dsp_block
 
@@ -74,8 +74,7 @@ def packed_bundle() -> Backend:
         emit=emit_mvau_rtl,
         # Shares the ONE `_V_WRAPPER_SCHEMA` with softvec (N:1 by reference); see softvec.
         schema=_V_WRAPPER_SCHEMA,
-        stream=COMPUTE_STREAM,
         # Streamed-weight DSP core (see softvec) — weights STREAM-only (embedded illegal),
         # thresholds rejected by the _rtl_mvu_feasible gate, so no thresholds consumes entry.
-        consumes={WEIGHTS: {STREAM}},
+        ports=ports_from(stream=COMPUTE_STREAM, consumes={WEIGHTS: {STREAM}}),
     )
