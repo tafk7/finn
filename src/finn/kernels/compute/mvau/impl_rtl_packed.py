@@ -24,7 +24,7 @@ from finn.util.basic import get_dsp_block
 
 from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common, num_lanes
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
-from .op import COMPUTE_STREAM, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
+from .op import COMPUTE_STREAM, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS, mvau_dtype_backend
 from .registry import register
 
 
@@ -67,7 +67,8 @@ def packed_bundle() -> Backend:
         # disjoint from softvec.
         rtl_core_module="mvu_vvu_axi_packed",
         axes=axes,
-        derived=derived,
+        # dsp_rtl_common's derived + the backend-scoped datatype contract (acc/weight/output).
+        derived=derived + mvau_dtype_backend(),
         # packed's OWN feasibility gate, appended to the shared RTL predicates.
         predicates=predicates + (_packed_feasible,),
         sources=SHARED_SOURCES + ("mvu_vvu_axi_packed.sv", "mvu_vvu_8sx9_dsp58.sv"),

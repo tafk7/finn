@@ -482,16 +482,18 @@ def stream_width_key(iface_name: str) -> str:
 def _width_derived(iface, width_expr: TileExpr):
     """A per-interface stream-width ``Derived`` = fold_width * bitwidth(dtype_source), keyed
     ``stream_width.<iface>``. The dtype is the interface's declared ``dtype_source`` (a
-    derived name, e.g. ``outputDataType``) when set, else the raw tensor dtype."""
+    derived name, e.g. ``outputDataType``) when set AND published by the selected backend,
+    else the raw tensor dtype. The fallback matters now that ``outputDataType`` is
+    backend-scoped: a backend that does not publish a realized output dtype (absent or None
+    on the point) folds the raw graph dtype rather than crashing."""
     from ..engine.derived import Derived
 
     dtype_source = getattr(iface, "dtype_source", None)
 
     def compute(point, context, _expr=width_expr, _iface=iface, _src=dtype_source):
         elems = _expr.eval(point)
-        if _src is not None:
-            dt = point[_src]
-        else:
+        dt = point.get(_src) if _src is not None else None
+        if dt is None:
             dt = context.tensor_datatype(_iface.tensor)
         return int(elems) * dt.bitwidth()
 

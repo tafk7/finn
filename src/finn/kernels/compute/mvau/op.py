@@ -46,6 +46,7 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     _delivered_parameters,
     _threshold_cadence,
     _weight_cadence,
+    mvau_dtype_backend,
     mvau_interfaces,
     mvau_kernel,
     mvau_pool,

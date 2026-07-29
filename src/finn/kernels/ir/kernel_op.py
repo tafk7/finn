@@ -309,21 +309,37 @@ class KernelOp(HWCustomOp):
 
     def infer_node_datatype(self, model):
         """Derive and propagate output datatypes into the graph. Attaches ``model`` (so the
-        Context carries real weight VALUES) and resolves a Point, making the
-        ``outputDataType`` derived exact — the graph dtype when the op just forwards it, or
-        the weight-derived accumulator type under ``noActivation``. Annotates the node's
-        output tensors; idempotent."""
+        Context carries real weight VALUES) and annotates the node's output tensors;
+        idempotent.
+
+        The realized output dtype is BACKEND-SCOPED (which datatypes exist / how they are
+        value-optimized is a realization fact), so it is DEFERRED until a backend is
+        committed: an UNSPECIALIZED node publishes the raw graph output dtype (a pure Context
+        read); a SPECIALIZED node resolves the full schema and publishes the backend-derived
+        ``outputDataType`` (e.g. the weight-derived accumulator under ``noActivation``)."""
+        from .routing import is_specialized
+
         self.attach_model(model)
-        # Output dtype is impl-INDEPENDENT (op_derived) — resolve over the op-level subschema
-        # so an UNSPECIALIZED node (no committed backend) still publishes its output types
-        # (the Seam A verify gate runs before Seam B specializes).
-        kernel, ctx, result = self._op_point()
-        for port in self.ports():
-            if port.direction == "out":
-                odt = self._output_datatype_from_point(kernel, ctx, result, port.index)
-                out_name = self.onnx_node.output[port.index]
-                if out_name:
-                    model.set_tensor_datatype(out_name, odt)
+        if is_specialized(self.onnx_node):
+            kernel, ctx, result = self._point()
+            for port in self.ports():
+                if port.direction == "out":
+                    odt = self._output_datatype_from_point(kernel, ctx, result, port.index)
+                    out_name = self.onnx_node.output[port.index]
+                    if out_name:
+                        model.set_tensor_datatype(out_name, odt)
+        else:
+            # Unspecialized: no committed backend ⇒ no realized output dtype yet. Publish the
+            # raw graph dtype (pure Context read) so downstream shape/dtype inference has a
+            # value; specialization later refines it.
+            kernel = self.kernel()
+            ctx = self._context()
+            for port in self.ports():
+                if port.direction == "out":
+                    odt = kernel.get_output_datatype(ctx, port.index)
+                    out_name = self.onnx_node.output[port.index]
+                    if out_name:
+                        model.set_tensor_datatype(out_name, odt)
 
     def _output_datatype_from_point(self, kernel, ctx, point, index):
         """The datatype to annotate on output port ``index`` after resolving against the

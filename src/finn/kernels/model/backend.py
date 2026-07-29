@@ -77,17 +77,17 @@ class Interface:
             backend is selected). ``None`` = unconstrained. The union of the pool's declared
             support is what ``can_infer_from`` accepts — a new backend widens it with no op
             edit.
-        datatype: this backend's datatype DERIVATION for the port — a
-            ``(point, context) -> DataType`` closure projected onto the point as the port's
-            derived output dtype (e.g. value-optimized narrowing, accumulator-as-output).
-            ``None`` = the port carries its raw/declared dtype. Backend-scoped: a future
-            backend may narrow differently, or not at all, by declaring a different closure.
+
+    Datatype DERIVATIONS (value-optimized narrowing, accumulator-as-output) are ALSO
+    backend-scoped, but ride the existing ``Backend.derived`` field: they publish
+    NAME-keyed point values (``outputDataType``/``weightDataType``/``accDataType``) that the
+    rest of the system references by name (``dtype_source``, emit), so a name-keyed derived
+    is their natural home — not a port slot.
     """
 
     stream: tuple = ()
     consumes: frozenset[str] | None = None
     supports: Any | None = None
-    datatype: Callable[[Any, Any], Any] | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "stream", tuple(self.stream))
@@ -100,7 +100,6 @@ def ports_from(
     stream: Mapping[str, Any] | None = None,
     consumes: Mapping[str, Any] | None = None,
     supports: Mapping[str, Any] | None = None,
-    datatype: Mapping[str, Any] | None = None,
 ) -> dict[str, Interface]:
     """Assemble a ``{iface -> Interface}`` ports map from per-facet maps. An ergonomic
     constructor that keeps SHARED facts (e.g. the pool-wide ``COMPUTE_STREAM`` fold map)
@@ -109,14 +108,12 @@ def ports_from(
     stream = stream or {}
     consumes = consumes or {}
     supports = supports or {}
-    datatype = datatype or {}
-    names = set(stream) | set(consumes) | set(supports) | set(datatype)
+    names = set(stream) | set(consumes) | set(supports)
     return {
         n: Interface(
             stream=stream.get(n, ()),
             consumes=consumes.get(n),
             supports=supports.get(n),
-            datatype=datatype.get(n),
         )
         for n in names
     }

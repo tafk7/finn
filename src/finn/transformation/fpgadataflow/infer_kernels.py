@@ -70,7 +70,13 @@ class InferKernels(Transformation):
         graph = model.graph
         graph_modified = False
 
+        consumed: set[int] = set()
         for node_ind, node in enumerate(list(graph.node)):
+            # A node an earlier iteration already CONSUMED (e.g. a MultiThreshold absorbed by
+            # a fused MVAU claim) is stale — skip it rather than re-claiming a node no longer
+            # in the graph (which would fail at the remove() below).
+            if id(node) in consumed:
+                continue
             kernel_cls = self._match(node, model)
             if kernel_cls is None:
                 continue
@@ -92,6 +98,7 @@ class InferKernels(Transformation):
                 graph.node.insert(node_ind + 1 + i, new_node)
             for old_node in result.nodes_to_remove:
                 graph.node.remove(old_node)
+                consumed.add(id(old_node))  # don't re-claim a node this pass already removed
             graph_modified = True
 
         if graph_modified:

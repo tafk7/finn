@@ -254,9 +254,11 @@ def test_unspecialized_answers_impl_independent_getters():
     assert inst.get_input_datatype(0) == DataType["INT8"]
     assert inst.get_output_datatype(0) is not None
     assert inst.make_shape_compatible_op(model) is not None
-    # infer_node_datatype resolves the impl-independent accumulator and publishes a real int.
+    # The realized output dtype is BACKEND-SCOPED, so infer_node_datatype DEFERS on an
+    # unspecialized node: it publishes the raw graph output dtype (here FLOAT32), not the
+    # accumulator — that is refined once a backend is committed (Seam B).
     inst.infer_node_datatype(model)
-    assert model.get_tensor_datatype("out").is_integer()
+    assert model.get_tensor_datatype("out") == DataType["FLOAT32"]
 
 
 @pytest.mark.parametrize(

@@ -100,11 +100,13 @@ def test_matmul_only_grand_path_self_consistent():
     assert kernel_hw_language(node) is None
     assert is_fpgadataflow_node(node) is True
 
-    # INSTANTIATE + impl-independent publication (no backend committed yet).
+    # INSTANTIATE: output dtype is BACKEND-SCOPED, so it is DEFERRED on an unspecialized
+    # node — infer_node_datatype publishes the raw graph output dtype (no committed backend
+    # ⇒ no realized accumulator type yet).
     inst = model.get_customop_wrapper(node)
     inst.infer_node_datatype(model)
     odt_unspec = model.get_tensor_datatype(node.output[0])
-    assert odt_unspec.is_integer()  # weight-derived accumulator (no thresholds)
+    assert odt_unspec == DataType["FLOAT32"]  # the graph's declared out dtype, unrefined
 
     # RESOLVE: commit an HLS backend + fold dials.
     inst.set_nodeattr("backend", "mvau_hls")
@@ -123,9 +125,12 @@ def test_matmul_only_grand_path_self_consistent():
     assert inst.get_instream_width(0) > 0
     assert inst.get_outstream_width(0) > 0
     assert inst.get_exp_cycles() == (MW // 8) * (MH // 8)
-    # RESOLVE didn't perturb the published output dtype (impl-independent).
+    # RESOLVE refines the published output dtype: now the backend-derived weight/accumulator
+    # type (integer, no thresholds), replacing the deferred raw graph dtype.
     inst.infer_node_datatype(model)
-    assert model.get_tensor_datatype(node.output[0]) == odt_unspec
+    odt_spec = model.get_tensor_datatype(node.output[0])
+    assert odt_spec.is_integer()
+    assert odt_spec != odt_unspec
 
 
 def test_fused_grand_path_publishes_graph_output_dtype():

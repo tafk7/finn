@@ -195,9 +195,19 @@ def test_infer_shapes_and_datatypes_survive():
     assert model.get_tensor_datatype(kn.output[0]) == DataType["INT4"]
 
 
-def test_matmul_only_publishes_accumulator_dtype():
+def test_matmul_only_defers_output_dtype_until_specialized():
+    # The realized output dtype (weight-derived accumulator) is BACKEND-SCOPED, so an
+    # unspecialized MatMul-only node publishes the raw graph output dtype; specializing to a
+    # backend refines it to the integer accumulator.
     model = _matmul_only_model().transform(_pool())
     kn = _node_by_domain(model, KERNEL_DOMAIN)[0]
+    assert model.get_tensor_datatype(kn.output[0]) == DataType["FLOAT32"]  # deferred, raw graph
+
+    inst = model.get_customop_wrapper(kn)
+    inst.set_nodeattr("backend", "mvau_hls")
+    inst.set_nodeattr("SIMD", 8)
+    inst.set_nodeattr("PE", 8)
+    inst.infer_node_datatype(model)
     odt = model.get_tensor_datatype(kn.output[0])
     assert odt.is_integer() and odt != DataType["FLOAT32"]
 

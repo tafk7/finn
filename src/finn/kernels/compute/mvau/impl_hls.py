@@ -24,7 +24,7 @@ from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import CONSTANT, STREAM
 
 from .emit_hls import emit_mvau_hls
-from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS
+from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS, mvau_dtype_backend
 from .registry import register
 
 # The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no legal
@@ -67,6 +67,9 @@ def hls_bundle() -> Backend:
             discrete_axis("resType", {"lut", "dsp"}, "lut"),
         ),
         predicates=(_hls_simd_lower_bound, _no_true_binary),
+        # Backend-scoped datatype contract (acc/weight/output). All MVAU cores narrow
+        # identically today; a future core diverges by composing a different helper.
+        derived=mvau_dtype_backend(),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
         # The HLS core takes weights either baked (params.h) or streamed (memstream), and
