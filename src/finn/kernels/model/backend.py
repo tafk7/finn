@@ -193,7 +193,7 @@ def pool_schema(
     ``sources_key`` is the point key under which the selected bundle's source list is
     exposed (default ``"sources"``). A SECONDARY pool folded into the same op schema (e.g.
     the ``parameters`` delivery pool via a
-    :class:`~finn.kernels.model.interface.Interface`) passes a namespaced key
+    :class:`~finn.kernels.model.interface.DeliverySeam`) passes a namespaced key
     (``"parameters.sources"``) so the two pools' source lists never collide.
 
     The backend IDENTITY fields ``language``/``rtl_core_module`` are STATIC FIELDS on the

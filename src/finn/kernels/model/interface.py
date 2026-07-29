@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``Interface`` — the realization-side per-port object (design pitch §2).
+"""``DeliverySeam`` — the compute→delivery seam for one delivered parameter (design pitch §2).
 
 The design space has two independent selection pools that must nonetheless talk: the
 **compute pool** (``implementation``) fixes PE·SIMD hence the parameter stream width; the
@@ -18,7 +18,7 @@ a real, directional data dependency.
 Historically that dependency was expressed three ways at once: a demand derived slotted
 between the pools BY LIST POSITION, a mode-compatibility gate as ``replace()``-surgery on
 the delivery root axis, and a ``compose`` union documenting the gap it refused to fill.
-``Interface`` collapses them into ONE per-interface object that owns the seam:
+``DeliverySeam`` collapses them into ONE per-delivered-parameter object that owns the seam:
 
 * ``publishes`` — the compute→delivery DEMAND closure (a realization-free
   :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface
@@ -33,7 +33,7 @@ It introduces NO new resolve mechanism: it reads only existing ``Backend`` field
 (``stream_width.<iface>``, ``topology.<iface>``, ``demand.<iface>``), and its two-root
 deps feed the topo-sort that already runs.
 
-This module OWNS the assembly (:meth:`Interface.to_subschemas`), reusing the
+This module OWNS the assembly (:meth:`DeliverySeam.to_subschemas`), reusing the
 demand/guard COMPUTATION bodies (:func:`_demand_for`, :func:`_topology_domain`) kept in
 :mod:`~finn.kernels.model.param_contract` beside the op-facing :class:`DeliveredParam`
 declaration.
@@ -52,9 +52,9 @@ from ..engine.schema import Schema
 
 
 @dataclass(frozen=True)
-class Interface:
-    """A Kernel's realization of one declared parameter interface — the home of the
-    compute→delivery seam for that port. Built by :func:`backend_interface_for` from a
+class DeliverySeam:
+    """The compute→delivery seam for one declared parameter interface. Built by
+    :func:`delivery_seam_for` from a
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (the op's WHAT) plus the compute
     pool (whose members' ``consumes`` drive the guard).
 
@@ -130,15 +130,15 @@ class Interface:
         return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))
 
 
-def backend_interface_for(dp: DeliveredParam, compute_pool) -> Interface:
-    """Assemble the :class:`Interface` for one delivered parameter from its
+def delivery_seam_for(dp: DeliveredParam, compute_pool) -> DeliverySeam:
+    """Assemble the :class:`DeliverySeam` for one delivered parameter from its
     :class:`~finn.kernels.model.param_contract.DeliveredParam` declaration + the op's compute
     pool. The single place the compute→delivery contract is built — the demand schema and
     the guarded delivery sub-schema for this interface have one owner."""
     iface = dp.iface
     stream = {b.name: b.stream.get(iface, ()) for b in compute_pool}
     consumes = {b.name: b.consumes.get(iface) for b in compute_pool}
-    return Interface(
+    return DeliverySeam(
         schema=iface,
         pool=tuple(dp.pool),
         stream=stream,

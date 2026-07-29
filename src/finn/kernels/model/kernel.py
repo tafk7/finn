@@ -37,7 +37,7 @@ from typing import Any, Mapping
 from ..engine.context import Context
 from ._util import prod
 from .backend import BACKEND_AXIS, Backend, pool_schema
-from .interface import backend_interface_for
+from .interface import delivery_seam_for
 from ..engine.point import Illegal, Point
 from .ports import Direction
 from ..engine.resolve import resolve
@@ -150,7 +150,7 @@ class Kernel:
     predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
     feasibility, sources, emit. ``delivered_parameters`` are the op's per-interface
     :class:`~finn.kernels.model.param_contract.DeliveredParam` declarations, each lowered by a
-    :class:`~finn.kernels.model.interface.Interface` into the demand stage +
+    :class:`~finn.kernels.model.interface.DeliverySeam` into the demand stage +
     guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
     are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to
@@ -233,7 +233,7 @@ class Kernel:
         / divisibility / widths), plus the delivered parameters' realization sub-schemas.
         ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate memory
         couplings that once lived here relocated into the parameters pool, and the
-        compute→memory demand crosses the seam owned by a ``Interface``."""
+        compute→memory demand crosses the seam owned by a ``DeliverySeam``."""
         op = pool_schema(
             BACKEND_AXIS,
             tuple(self.op_axes),
@@ -243,7 +243,7 @@ class Kernel:
             unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
         )
         # DELIVERED PARAMETERS: the generic compute→delivery wiring, OWNED by a
-        # Interface per delivered interface — the realization-side per-port object
+        # DeliverySeam per delivered interface — the seam object
         # that holds the DEMAND stage + guarded delivery sub-schema (design pitch §2). Its
         # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
         # one owner and the waterfall is structural (its declared two-root deps) rather than
@@ -251,7 +251,7 @@ class Kernel:
         # op-specific logic here. Namespaced keys (`parameters.*`) + distinct sources_key
         # mean the union never collides, so resolve walks it unchanged.
         for dp in self.delivered_parameters:
-            for sub in backend_interface_for(dp, self.pool).to_subschemas():
+            for sub in delivery_seam_for(dp, self.pool).to_subschemas():
                 op = Schema(
                     axes=tuple(op.axes) + tuple(sub.axes),
                     derived=tuple(op.derived) + tuple(sub.derived),
