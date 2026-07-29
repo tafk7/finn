@@ -5,12 +5,17 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
-"""Session guard: pin qonnx to the finn-vendored checkout.
+"""Session guard: pin qonnx to the finn-vendored checkout, plus tier markers.
 
 The kernel suite must import qonnx from FINN's pinned ``deps/qonnx`` — not a drifted
 sibling checkout that happens to be on ``PYTHONPATH``. A mismatch silently changes
 datatype/accumulator behaviour under the resolve engine, so we fail loudly at collection
 time rather than debug a wrong-qonnx test failure later.
+
+Tiering: three markers select which environment a test needs. ``integration`` needs a
+qonnx ``ModelWrapper`` but no Vivado; ``finn_codegen`` imports the FINN classic op
+backends to diff against them; ``slow_hw`` needs Vivado/XSI/Docker. The hw tier is
+skipped unless ``--runslow`` is passed, so a plain run stays laptop/CI-friendly.
 """
 
 import os
@@ -24,7 +29,24 @@ _REPO_ROOT = os.path.abspath(
 _PINNED_QONNX = os.path.join(_REPO_ROOT, "deps", "qonnx")
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--runslow",
+        action="store_true",
+        default=False,
+        help="run the slow hardware tier (Vivado/XSI/Docker)",
+    )
+
+
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "integration: needs a qonnx ModelWrapper, no Vivado"
+    )
+    config.addinivalue_line(
+        "markers", "finn_codegen: imports FINN classic op backends, no Vivado"
+    )
+    config.addinivalue_line("markers", "slow_hw: needs Vivado/XSI/Docker")
+
     # The adapter tests import FINN's custom_op tree, whose hwcustomop module reads
     # FINN_ROOT to probe for an optional XSI simulator. That probe never fires in the
     # venv-pure unit suite (no xsi.so present), so default FINN_ROOT to the repo root
@@ -48,3 +70,12 @@ def pytest_configure(config):
             f"  got:            {qonnx_path}\n"
             'Run with PYTHONPATH="deps/qonnx/src:src" so the pinned qonnx wins.'
         )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--runslow"):
+        return
+    skip_hw = pytest.mark.skip(reason="hw tier: pass --runslow")
+    for item in items:
+        if "slow_hw" in item.keywords:
+            item.add_marker(skip_hw)
