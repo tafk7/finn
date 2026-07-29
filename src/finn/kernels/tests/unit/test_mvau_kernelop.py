@@ -26,7 +26,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, Illegal
-from finn.kernels.ops.mvau import mvau_kernel
+from finn.kernels.compute.mvau import mvau_kernel
 
 MW, MH = 128, 64
 
@@ -97,6 +97,6 @@ def test_all_three_compute_impls_carry_tiling():
 def test_mvau_schema_delegates_to_kernel():
     # mvau_schema() must be exactly the Kernel's schema (same axis set), so all the
     # existing emit/composition tests exercise the refactored assembly.
-    from finn.kernels.ops.mvau import mvau_schema
+    from finn.kernels.compute.mvau import mvau_schema
 
     assert mvau_schema().axis_names == mvau_kernel().schema().axis_names

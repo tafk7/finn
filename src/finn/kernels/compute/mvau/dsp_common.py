@@ -11,7 +11,7 @@
 softvec and packed are flat PEERS in the pool; they merely share declarations, which
 we dedup by CODE here rather than by introducing a "substrate" node in the engine.
 The op-agnostic DSP-RTL helpers (dsp_primitive/dsp_version/segmentlen/num_lanes and
-the generic RTL predicates) live in ``fixtures/_dsp_rtl.py`` and are reused across
+the generic RTL predicates) live in ``compute/_shared/_dsp_rtl.py`` and are reused across
 ops; this module holds only the MVAU-SPECIFIC pieces (``narrow_weights``, the
 ``_rtl_mvu_feasible`` gate, the MVAU source-file list).
 """
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from finn.kernels.ops._dsp_rtl import (
+from finn.kernels.compute._shared._dsp_rtl import (
     dsp_primitive,
     dsp_version,
     num_lanes,  # noqa: F401  (re-exported for impl_rtl_packed)

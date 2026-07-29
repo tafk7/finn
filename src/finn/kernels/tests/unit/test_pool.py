@@ -19,9 +19,9 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, Illegal
-from finn.kernels.ops.pool import pool_kernel
-from finn.kernels.ops.pool.geometry import pool_output_dim, pool_output_spatial
-from finn.kernels.ops.pool.names import POOL_HLS
+from finn.kernels.compute.pool import pool_kernel
+from finn.kernels.compute.pool.geometry import pool_output_dim, pool_output_spatial
+from finn.kernels.compute.pool.names import POOL_HLS
 
 C = 32  # channels
 

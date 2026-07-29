@@ -35,7 +35,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.ops.mvau.op import MvauKernelOp
+from finn.kernels.compute.mvau.op import MvauKernelOp
 
 MW, MH = 128, 64
 NUM_STEPS = 7

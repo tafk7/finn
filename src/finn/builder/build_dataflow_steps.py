@@ -473,8 +473,8 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     # MultiThreshold -> finn.kernels/Thresholding) before FINN's classic Infer* transforms,
     # which then see only the remainder. This never touches FINN's classic MVAU path.
     from finn.kernels.adapter import InferKernels
-    from finn.kernels.ops.mvau.op import MvauKernelOp
-    from finn.kernels.ops.thresholding.op import ThresholdingKernelOp
+    from finn.kernels.compute.mvau.op import MvauKernelOp
+    from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 
     model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
 

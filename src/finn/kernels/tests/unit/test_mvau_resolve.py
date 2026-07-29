@@ -23,7 +23,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import AbsentAxisError, Context, Illegal, Point, resolve
-from finn.kernels.ops.mvau import (
+from finn.kernels.compute.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
@@ -302,7 +302,7 @@ def test_uram_ok_on_versal_without_runtime_writeable(schema):
 
 def test_legal_point_carries_derived(schema):
     from finn.kernels.space import weight_fold_depth
-    from finn.kernels.ops.mvau.op import WEIGHTS
+    from finn.kernels.compute.mvau.op import WEIGHTS
 
     ctx = make_context()
     r = resolve(schema, ctx, base_assignment(PE=4, SIMD=2))
@@ -439,8 +439,8 @@ def test_hls_binary_ok_in_xnor_mode(schema):
 
 def test_fourth_implementation_composes_additively():
     from finn.kernels.space import Backend
-    from finn.kernels.ops.mvau import mvau_kernel, mvau_pool
-    from finn.kernels.ops.mvau.op import COMPUTE_STREAM
+    from finn.kernels.compute.mvau import mvau_kernel, mvau_pool
+    from finn.kernels.compute.mvau.op import COMPUTE_STREAM
 
     # A hypothetical LUT-based RTL MVU, declared as ONE new bundle. It carries its
     # OWN feasibility (say: only legal on non-Versal parts) and its own axes/sources.
@@ -500,9 +500,9 @@ def test_registry_makes_addition_structural():
     # appears in mvau_pool() with ZERO edits to the package, shared.py, or a sibling.
     # This simulates a third-party `impl_*.py` that self-registers on import.
     from finn.kernels.space import Backend
-    from finn.kernels.ops.mvau import mvau_pool, mvau_schema
-    from finn.kernels.ops.mvau.op import COMPUTE_STREAM
-    from finn.kernels.ops.mvau.registry import register, unregister
+    from finn.kernels.compute.mvau import mvau_pool, mvau_schema
+    from finn.kernels.compute.mvau.op import COMPUTE_STREAM
+    from finn.kernels.compute.mvau.registry import register, unregister
 
     before = {b.name for b in mvau_pool()}
     assert "mvau_stub_backend" not in before
@@ -675,7 +675,7 @@ def test_cadence_differs_by_interface(schema):
     # threshold cadence (per-activation-beat = prod(numInputVectors)) differs from the weight
     # cadence (per-layer = 1). Exercised on the resolve closures directly (the fused core is
     # constant-mode for thresholds, so cadence does not size a live streamer yet).
-    from finn.kernels.ops.mvau.op import _weight_cadence, _threshold_cadence
+    from finn.kernels.compute.mvau.op import _weight_cadence, _threshold_cadence
 
     # inp shape (1, H=4, MW=6) -> numInputVectors = [1, 4] -> prod = 4.
     weights = np.random.RandomState(0).randint(-8, 8, size=(6, 8)).astype(np.float32)

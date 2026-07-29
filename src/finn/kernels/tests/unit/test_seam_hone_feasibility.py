@@ -31,8 +31,8 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-import finn.kernels.ops.mvau.op as mvau_op
-from finn.kernels.ops.mvau.op import MvauKernelOp, mvau_kernel
+import finn.kernels.compute.mvau.op as mvau_op
+from finn.kernels.compute.mvau.op import MvauKernelOp, mvau_kernel
 from finn.kernels.space import Context, Illegal, Point, resolve
 
 MW, MH = 128, 64

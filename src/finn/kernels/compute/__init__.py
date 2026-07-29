@@ -6,7 +6,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Executable design-space fixtures — schemas that prove the resolve engine.
+"""The compute kernels — the per-op bounded contexts (``mvau``, ``thresholding``,
+``pool``), each a folder owning its Kernel/Schema definition, backends, and emit.
 
-``mvau`` encodes the MVAU decision tree (design-space-model.md §8) as a Schema.
+``_shared/`` holds the op-authoring infrastructure (registry factory, DSP RTL
+constants) reused across them.
 """

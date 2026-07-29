@@ -14,7 +14,7 @@ the pool-dispatched string axes (``resType``/``ram_style``) whose valid set vari
 selected implementation.
 """
 
-from finn.kernels.ops.mvau import mvau_kernel
+from finn.kernels.compute.mvau import mvau_kernel
 from finn.kernels.dataflow.memory.names import WEIGHTS
 from finn.kernels.model.param_names import ram_style_key
 from finn.kernels.adapter.nodeattr_registry import axis_nodeattr_types

@@ -38,8 +38,8 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.kernels.adapter import InferKernels
-from finn.kernels.ops.mvau.op import MvauKernelOp
-from finn.kernels.ops.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauKernelOp
+from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 
 MW, MH = 128, 64
 NUM_STEPS = 7

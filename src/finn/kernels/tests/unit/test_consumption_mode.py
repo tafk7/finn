@@ -73,7 +73,7 @@ def _mvau_ctx(part=VERSAL):
 
 
 def _resolve_mvau(assignment):
-    from finn.kernels.ops.mvau import mvau_schema
+    from finn.kernels.compute.mvau import mvau_schema
 
     base = {"backend": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     base.update(assignment)

@@ -37,8 +37,8 @@ from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.basic import get_liveness_threshold_cycles, make_build_dir
 
 from finn.kernels.space import Context, resolve
-from finn.kernels.ops.mvau import mvau_schema, MVAU_DSP_SOFTVEC
-from finn.kernels.ops.mvau.compose_emit import emit_composed
+from finn.kernels.compute.mvau import mvau_schema, MVAU_DSP_SOFTVEC
+from finn.kernels.compute.mvau.compose_emit import emit_composed
 from finn.kernels.dataflow.memory.names import DECOUPLED, WEIGHTS
 from finn.kernels.model.param_names import ram_style_key, topology_key
 

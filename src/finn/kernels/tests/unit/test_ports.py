@@ -32,7 +32,7 @@ from finn.kernels.space import (
     emit_point,
     resolve,
 )
-from finn.kernels.ops.mvau import (
+from finn.kernels.compute.mvau import (
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
     mvau_pool,

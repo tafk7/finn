@@ -29,7 +29,7 @@ from finn.kernels.space import (
     emit_point,
     resolve,
 )
-from finn.kernels.ops.thresholding import (
+from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
     thresholding_pool,

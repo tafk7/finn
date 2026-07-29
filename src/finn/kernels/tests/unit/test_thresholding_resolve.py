@@ -19,7 +19,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import AbsentAxisError, Context, Illegal, Point, resolve
-from finn.kernels.ops.thresholding import (
+from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
     thresholding_pool,
@@ -70,7 +70,7 @@ def base_assignment(**overrides):
 
 
 def test_pool_is_hls_and_rtl(schema):
-    from finn.kernels.ops.thresholding import thresholding_pool
+    from finn.kernels.compute.thresholding import thresholding_pool
 
     assert [b.name for b in thresholding_pool()] == [THRESHOLDING_HLS, THRESHOLDING_RTL]
 
@@ -191,7 +191,7 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
 
 def test_third_implementation_composes_additively():
     from finn.kernels.space import Backend, pool_schema
-    from finn.kernels.ops.thresholding import thresholding_pool, thresholding_shared
+    from finn.kernels.compute.thresholding import thresholding_pool, thresholding_shared
 
     stub = Backend(
         name="thresholding_stub",

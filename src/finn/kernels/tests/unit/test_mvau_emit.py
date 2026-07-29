@@ -19,7 +19,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Artifacts, Context, GeneratedFile, emit_point, resolve
-from finn.kernels.ops.mvau import (
+from finn.kernels.compute.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,

@@ -152,7 +152,7 @@ def _mvau_ctx(part=VERSAL):
 def test_mvau_schema_carries_both_coordinates():
     """The composed MVAU schema has BOTH the compute pool (implementation) and the
     parameters pool (parameters.topology) — two selection surfaces, one point."""
-    from finn.kernels.ops.mvau import mvau_schema
+    from finn.kernels.compute.mvau import mvau_schema
 
     r = resolve(
         mvau_schema(),
@@ -171,7 +171,7 @@ def test_mvau_weight_stream_width_coupling():
     in), PE*SIMD*wbits for decoupled — reads BOTH topology and the compute fold. Namespaced
     per interface (``parameters.weights.stream_width``), replacing the old un-namespaced
     ``weight_stream_width`` global."""
-    from finn.kernels.ops.mvau import mvau_schema
+    from finn.kernels.compute.mvau import mvau_schema
 
     swk = param_stream_width_key(WEIGHTS)
     base = {"backend": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
@@ -184,7 +184,7 @@ def test_mvau_weight_stream_width_coupling():
 def test_mvau_pumped_memory_fold_gate_fires():
     """The cross-coordinate pumpedMemory gate: PE==SIMD==1 with pumpedMemory is
     illegal (contributed at compose time, reads parameters axis + compute fold)."""
-    from finn.kernels.ops.mvau import mvau_schema
+    from finn.kernels.compute.mvau import mvau_schema
 
     r = resolve(
         mvau_schema(),

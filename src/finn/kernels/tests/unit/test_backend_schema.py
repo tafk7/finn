@@ -35,9 +35,9 @@ def test_schema_defaults_to_none():
 def test_mvau_rtl_backends_share_one_schema_by_reference():
     # softvec + packed emit the ONE mvu_vvu_axi_wrapper template → one schema object.
     # The N:1 is expressed by shared reference, not per-backend copies.
-    from finn.kernels.ops.mvau.emit_rtl import _V_WRAPPER_SCHEMA
-    from finn.kernels.ops.mvau.impl_rtl_packed import packed_bundle
-    from finn.kernels.ops.mvau.impl_rtl_softvec import softvec_bundle
+    from finn.kernels.compute.mvau.emit_rtl import _V_WRAPPER_SCHEMA
+    from finn.kernels.compute.mvau.impl_rtl_packed import packed_bundle
+    from finn.kernels.compute.mvau.impl_rtl_softvec import softvec_bundle
 
     sv, pk = softvec_bundle(), packed_bundle()
     assert sv.schema is _V_WRAPPER_SCHEMA
@@ -47,7 +47,7 @@ def test_mvau_rtl_backends_share_one_schema_by_reference():
 
 def test_mvau_hls_backend_has_no_schema():
     # HLS geometry lands in free-form #define text, not typed slots → no RtlModule.
-    from finn.kernels.ops.mvau.impl_hls import hls_bundle
+    from finn.kernels.compute.mvau.impl_hls import hls_bundle
 
     assert hls_bundle().schema is None
 

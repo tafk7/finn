@@ -39,7 +39,7 @@ from finn.transformation.fpgadataflow.minimize_accumulator_width import (
 
 # our side
 from finn.kernels.space import Context, resolve, emit_point
-from finn.kernels.ops.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
+from finn.kernels.compute.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
 from finn.kernels.dataflow.memory import parameters_pool
 from finn.kernels.dataflow.memory.names import (
     DECOUPLED,
@@ -195,8 +195,8 @@ def diff_hls_params_h():
         finn_params = open(os.path.join(d, "params.h")).read()
 
     ctx, point = _finn_context_point(W, 2, 2, wdt, idt, odt, MVAU_HLS, "lut")
-    from finn.kernels.ops.mvau.emit_hls import _params_h
-    from finn.kernels.ops.mvau.geometry import mvau_geometry
+    from finn.kernels.compute.mvau.emit_hls import _params_h
+    from finn.kernels.compute.mvau.geometry import mvau_geometry
     ours_params = _params_h(point, ctx, mvau_geometry(point, ctx))
 
     ok = _norm(finn_params) == _norm(ours_params)

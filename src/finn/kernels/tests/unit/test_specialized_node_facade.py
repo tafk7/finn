@@ -22,8 +22,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import get_by_name, qonnx_make_model
 
 from finn.kernels.adapter import InferKernels
-from finn.kernels.ops.mvau.op import MvauKernelOp
-from finn.kernels.ops.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauKernelOp
+from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node, is_specialized_node
 
 MW, MH = 128, 64

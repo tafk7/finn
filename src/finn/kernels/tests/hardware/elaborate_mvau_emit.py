@@ -33,7 +33,7 @@ import numpy as np
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, resolve, emit_point
-from finn.kernels.ops.mvau import (
+from finn.kernels.compute.mvau import (
     mvau_schema,
     mvau_pool,
     MVAU_DSP_SOFTVEC,

@@ -54,8 +54,8 @@ def test_manifest_reader_views_are_consistent():
 
 
 def test_thresholding_rtl_bundle_sources_come_from_manifest():
-    from finn.kernels.ops.thresholding.emit_rtl import RTL_MANIFEST
-    from finn.kernels.ops.thresholding.impl_rtl import rtl_bundle
+    from finn.kernels.compute.thresholding.emit_rtl import RTL_MANIFEST
+    from finn.kernels.compute.thresholding.impl_rtl import rtl_bundle
 
     # Backend.sources IS the manifest's filenames — one list, not two.
     assert rtl_bundle().sources == RTL_MANIFEST.filenames

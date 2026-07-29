@@ -61,9 +61,9 @@ from finn.kernels.space import (
     predicate_axis,
 )
 from finn.kernels.model.param_names import runtime_writeable_key
-from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
+from finn.kernels.compute._shared._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
 from finn.kernels.dataflow.memory import parameters_pool
-from finn.kernels.ops.thresholding.shared import (
+from finn.kernels.compute.thresholding.shared import (
     _num_steps_default,
     _threshold_datatype,
     _threshold_shape_matches_steps,

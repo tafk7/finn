@@ -44,13 +44,13 @@ from qonnx.core.datatype import DataType
 
 from finn import xsi
 from finn.kernels.space import Context, resolve
-from finn.kernels.ops.mvau import (
+from finn.kernels.compute.mvau import (
     mvau_kernel,
     mvau_schema,
     MVAU_DSP_SOFTVEC,
     MVAU_DSP_PACKED,
 )
-from finn.kernels.ops.mvau.emit_rtl import emit_mvau_rtl
+from finn.kernels.compute.mvau.emit_rtl import emit_mvau_rtl
 from finn.kernels.dataflow.memory.names import DECOUPLED, WEIGHTS
 from finn.kernels.model.param_names import topology_key
 

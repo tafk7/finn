@@ -24,7 +24,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.kernels.space import Context
-from finn.kernels.ops.mvau import mvau_kernel
+from finn.kernels.compute.mvau import mvau_kernel
 
 MW, MH = 128, 64
 OP_TYPE = "MVAU"

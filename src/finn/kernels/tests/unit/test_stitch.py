@@ -37,8 +37,8 @@ from finn.kernels.space import (
     stitch,
 )
 from finn.kernels.space import stitch as stitch_module_ref  # for the guard grep
-from finn.kernels.ops.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
-from finn.kernels.ops.mvau.compose_emit import emit_composed
+from finn.kernels.compute.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
+from finn.kernels.compute.mvau.compose_emit import emit_composed
 from finn.kernels.dataflow.memory import DECOUPLED, EMBEDDED, WEIGHTS
 from finn.kernels.model.param_names import ram_style_key, topology_key
 

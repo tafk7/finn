@@ -29,7 +29,7 @@ from finn.kernels.model.param_names import (
     demand_key,
     topology_key,
 )
-from finn.kernels.ops.mvau.op import _delivered_parameters, mvau_pool
+from finn.kernels.compute.mvau.op import _delivered_parameters, mvau_pool
 from finn.kernels.dataflow.memory import WEIGHTS, parameters_pool
 from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED
 
@@ -192,7 +192,7 @@ def test_backend_interface_reads_backend_consumes_map():
 
 
 def test_decoupled_weights_resolve_matches_pre_t4_baseline():
-    from finn.kernels.ops.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import mvau_kernel
     from finn.kernels.model.param_names import depth_key, width_key
 
     k = mvau_kernel()

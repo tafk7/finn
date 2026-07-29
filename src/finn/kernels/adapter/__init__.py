@@ -13,7 +13,7 @@ model-free ``Kernel`` back a real ONNX node and answer FINN's build-flow contrac
 ``nodeattr_registry.py`` schema-axes → FINN nodeattr types (the R12 dissolution).
 
 Concrete per-op wrappers live WITH their kernel definition (e.g.
-``finn.kernels.ops.mvau.MvauKernelOp``), not here — this package is the shared
+``finn.kernels.compute.mvau.MvauKernelOp``), not here — this package is the shared
 infrastructure only.
 
 See ``kernel-design/finn-hw-backend-analysis/consumer-surface-model.md`` for the

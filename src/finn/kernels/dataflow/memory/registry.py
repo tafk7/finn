@@ -7,7 +7,7 @@
 ############################################################################
 
 """The ``parameters`` pool registry — a thin binding of the op-agnostic
-:func:`finn.kernels.ops._registry.make_registry` factory to the
+:func:`finn.kernels.compute._shared._registry.make_registry` factory to the
 ``parameters`` subsystem. Topology bundle modules import ``register`` from here; the
 package ``__init__`` uses ``build_pool``. Adding a storage topology = add one
 self-registering ``impl_*.py``, edit nothing else.
@@ -21,7 +21,7 @@ registry probes with ``WEIGHTS`` (the default/only live interface) to read ``.na
 
 from __future__ import annotations
 
-from finn.kernels.ops._registry import make_registry
+from finn.kernels.compute._shared._registry import make_registry
 
 from .names import WEIGHTS
 

@@ -26,8 +26,8 @@ custom_op: dict = {}
 
 
 def _register_kernel_ops() -> None:
-    from finn.kernels.ops.mvau.op import MvauKernelOp
-    from finn.kernels.ops.thresholding.op import ThresholdingKernelOp
+    from finn.kernels.compute.mvau.op import MvauKernelOp
+    from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 
     custom_op["MVAU"] = MvauKernelOp
     custom_op["Thresholding"] = ThresholdingKernelOp

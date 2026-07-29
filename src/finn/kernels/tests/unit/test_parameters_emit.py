@@ -22,7 +22,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Artifacts, Context, emit_point, resolve
-from finn.kernels.ops.mvau import MVAU_HLS, mvau_schema
+from finn.kernels.compute.mvau import MVAU_HLS, mvau_schema
 from finn.kernels.dataflow.memory import DECOUPLED, WEIGHTS, parameters_pool
 from finn.kernels.dataflow.memory.emit_memstream import emit_memstream
 from finn.kernels.model.param_names import (

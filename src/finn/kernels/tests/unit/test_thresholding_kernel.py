@@ -20,7 +20,7 @@ import numpy as np
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, emit_point, resolve
-from finn.kernels.ops.thresholding import (
+from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
     thresholding_kernel,
@@ -74,13 +74,13 @@ def test_rtl_threshold_dat_path_is_fused_not_routed_through_layout():
     # The boundary demonstration: the RTL binary-search .dat serializer is data-dependent
     # (self-addressed) → it must NOT depend on the shared static-schedule `layout` serializer.
     # Check the module's actual imported names, not doc-comment mentions.
-    from finn.kernels.ops.thresholding import emit_rtl
+    from finn.kernels.compute.thresholding import emit_rtl
 
     imported = set(vars(emit_rtl))
     assert "layout" not in imported, "RTL threshold emit must not import the layout serializer"
     assert "weight_constraint" not in imported
     assert "threshold_constraint" not in imported
     # The HLS threshold emit, by contrast, DOES route through layout (the separable ROM).
-    from finn.kernels.ops.thresholding import emit_hls
+    from finn.kernels.compute.thresholding import emit_hls
 
     assert "layout" in set(vars(emit_hls))

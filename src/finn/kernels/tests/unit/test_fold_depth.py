@@ -16,7 +16,7 @@ import numpy as np
 from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Context, resolve, weight_fold_depth, threshold_fold_depth
-from finn.kernels.ops.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
+from finn.kernels.compute.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
 from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED, WEIGHTS
 from finn.kernels.model.param_names import topology_key
 

@@ -35,7 +35,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 
 from finn.kernels.space import Context, emit_point, resolve
-from finn.kernels.ops.thresholding import (
+from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
     thresholding_kernel_schema,
@@ -129,7 +129,7 @@ def diff_hls_thresh_h():
 
     ctx = _our_ctx(T, idt, tdt, odt)
     point = resolve(thresholding_kernel_schema(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
-    from finn.kernels.ops.thresholding.emit_hls import _thresh_h
+    from finn.kernels.compute.thresholding.emit_hls import _thresh_h
     ours_thresh = _thresh_h(point, ctx)
 
     ok = _norm_header_ws(finn_thresh) == _norm_header_ws(ours_thresh)
