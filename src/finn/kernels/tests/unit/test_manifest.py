@@ -20,7 +20,7 @@ import textwrap
 import pytest
 
 from finn.kernels.space import ArtifactManifest, SourceFile, read_abc
-from finn.kernels.space.artifacts import StaticFile
+from finn.kernels.emit.artifacts import StaticFile
 
 
 def test_source_file_resolves_its_path():

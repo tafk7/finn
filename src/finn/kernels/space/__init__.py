@@ -23,7 +23,7 @@ from ..engine.axis import (
     fixed_axis,
     predicate_axis,
 )
-from .artifacts import (
+from ..emit.artifacts import (
     Artifacts,
     BindError,
     BitWidth,
@@ -42,7 +42,7 @@ from .artifacts import (
 from ..engine.context import Context
 from ..engine.derived import Derived
 from .folding import threshold_fold_depth, weight_fold_depth
-from .manifest import ArtifactManifest, SourceFile, read_abc
+from ..emit.manifest import ArtifactManifest, SourceFile, read_abc
 from .backend import (
     BACKEND_AXIS,
     Backend,
@@ -61,7 +61,7 @@ from .ports import (
 )
 from ..engine.predicate import Predicate, predicate
 from ..engine.resolve import resolve
-from .stitch import Cell, StitchError, stitch
+from ..emit.stitch import Cell, StitchError, stitch
 from ..engine.schema import Schema, SchemaError
 from .demand import ParamDemand
 from .delivery import DeliveredParam

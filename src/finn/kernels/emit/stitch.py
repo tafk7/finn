@@ -31,7 +31,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from .artifacts import IPICommands
-from .ports import Kind, Port, Role, STANDARD_BINDINGS
+from ..space.ports import Kind, Port, Role, STANDARD_BINDINGS
 
 
 class StitchError(ValueError):

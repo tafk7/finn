@@ -34,7 +34,7 @@ from typing import Any
 
 from ..engine.axis import Axis, discrete_axis
 from ..engine.derived import Derived
-from .artifacts import Artifacts, RtlModule
+from ..emit.artifacts import Artifacts, RtlModule
 from ..engine.predicate import Predicate
 from ..engine.schema import Schema
 

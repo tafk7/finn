@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .ports import Port
+from ..space.ports import Port
 
 _TOKEN_RE = re.compile(r"\$([A-Z][A-Z0-9_]*)\$")
 
