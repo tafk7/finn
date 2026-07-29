@@ -31,18 +31,9 @@ from __future__ import annotations
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import (
-    Artifacts,
-    ArtifactManifest,
-    DataFile,
-    Direction,
-    GeneratedFile,
-    Kind,
-    Port,
-    Role,
-    SourceFile,
-    Template,
-)
+from finn.kernels.emit.artifacts import Artifacts, DataFile, GeneratedFile, Template
+from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
+from finn.kernels.model.ports import Direction, Kind, Port, Role
 from finn.kernels.dataflow.memory.serialize import layout, threshold_constraint
 
 from .names import INPUT, OUTPUT, THRESHOLDS

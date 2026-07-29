@@ -27,7 +27,8 @@ NO per-bundle dtype feasibility gate (a fabricated one was falsified;
 
 from __future__ import annotations
 
-from finn.kernels.space import BACKEND_AXIS, Schema, pool_schema
+from finn.kernels.engine.schema import Schema
+from finn.kernels.model.backend import BACKEND_AXIS, pool_schema
 
 from .names import (  # noqa: F401 (re-exported)
     INPUT,

@@ -35,15 +35,10 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
-from finn.kernels.space import (
-    FULL,
-    DeliveredParam,
-    Direction,
-    InterfaceSchema,
-    Kernel,
-    KernelSchema,
-    Role,
-)
+from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.param_contract import DeliveredParam
+from finn.kernels.model.ports import Direction, Role
+from finn.kernels.model.tiling import FULL
 from finn.kernels.dataflow.memory import parameters_pool
 
 from .names import INPUT, OUTPUT, THRESHOLDING_HLS, THRESHOLDING_RTL, THRESHOLDS  # noqa: F401

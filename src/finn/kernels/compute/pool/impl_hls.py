@@ -21,7 +21,7 @@ bundle declares how one realization folds it. That is the whole op/backend split
 
 from __future__ import annotations
 
-from finn.kernels.space import Backend
+from finn.kernels.model.backend import Backend
 
 from .names import INDICES, INPUT, OUTPUT, POOL_HLS
 

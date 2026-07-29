@@ -29,7 +29,9 @@ from finn.kernels.compute._shared._dsp_rtl import (
     segmentlen,
     segmentlen_feasible,
 )
-from finn.kernels.space import Derived, discrete_axis, predicate
+from finn.kernels.engine.axis import discrete_axis
+from finn.kernels.engine.derived import Derived
+from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
 from .op import INPUT, THRESHOLDS, WEIGHTS

@@ -26,13 +26,9 @@ from __future__ import annotations
 
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import (
-    Derived,
-    divisor_axis,
-    fixed_axis,
-    predicate,
-    predicate_axis,
-)
+from finn.kernels.engine.axis import divisor_axis, fixed_axis, predicate_axis
+from finn.kernels.engine.derived import Derived
+from finn.kernels.engine.predicate import predicate
 
 from .names import INPUT, OUTPUT, THRESHOLDS
 

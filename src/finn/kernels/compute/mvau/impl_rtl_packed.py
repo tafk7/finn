@@ -17,7 +17,7 @@ replicating the shared wrapper's ``generate`` fork.
 
 from __future__ import annotations
 
-from finn.kernels.space import Backend
+from finn.kernels.model.backend import Backend
 from finn.kernels.model.param_names import STREAM
 from finn.util.basic import get_dsp_block
 

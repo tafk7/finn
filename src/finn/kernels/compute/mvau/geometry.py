@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from finn.kernels.space import threshold_fold_depth, weight_fold_depth
+from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
 
 from .op import INPUT, THRESHOLDS, WEIGHTS
 

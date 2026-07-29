@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import Backend, discrete_axis, predicate
+from finn.kernels.engine.axis import discrete_axis
+from finn.kernels.engine.predicate import predicate
+from finn.kernels.model.backend import Backend
 from finn.kernels.model.param_names import CONSTANT, STREAM
 
 from .emit_hls import emit_mvau_hls

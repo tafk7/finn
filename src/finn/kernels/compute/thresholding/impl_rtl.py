@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from finn.kernels.space import Backend, discrete_axis, predicate, predicate_axis
+from finn.kernels.engine.axis import discrete_axis, predicate_axis
+from finn.kernels.engine.predicate import predicate
+from finn.kernels.model.backend import Backend
 
 from .emit_rtl import RTL_MANIFEST, emit_thresholding_rtl
 from .names import THRESHOLDING_RTL, THRESHOLDS

@@ -31,15 +31,11 @@ pooling is NCHW, so a layout transform precedes; the windowing math is layout-in
 
 from __future__ import annotations
 
-from finn.kernels.space import (
-    FULL,
-    Direction,
-    InterfaceSchema,
-    Kernel,
-    KernelSchema,
-    fixed_axis,
-    predicate,
-)
+from finn.kernels.engine.axis import fixed_axis
+from finn.kernels.engine.predicate import predicate
+from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.ports import Direction
+from finn.kernels.model.tiling import FULL
 
 from .geometry import PoolGeometry
 from .impl_hls import pool_hls_impl

@@ -32,15 +32,8 @@ import numpy as np
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
 
-from finn.kernels.space import (
-    Artifacts,
-    ArtifactManifest,
-    DataFile,
-    GeneratedFile,
-    IPICommands,
-    SourceFile,
-    Template,
-)
+from finn.kernels.emit.artifacts import Artifacts, DataFile, GeneratedFile, IPICommands, Template
+from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
 from finn.util.data_packing import pack_innermost_dim_as_hex_string
 
 from .names import INPUT, OUTPUT, THRESHOLDS

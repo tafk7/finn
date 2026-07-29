@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 
-from finn.kernels.space import predicate
+from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
 # DSP block -> $VERSION$ (silicon consequence, FORCED from fpgapart; §1.2.2).

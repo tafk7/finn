@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from finn.kernels.space import Backend
+from finn.kernels.model.backend import Backend
 
 
 def make_registry(op_name: str, *, probe_arg=None):
