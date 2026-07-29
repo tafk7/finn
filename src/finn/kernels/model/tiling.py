@@ -13,11 +13,11 @@ A stream-tiling entry is either a plain axis name (``"SIMD"``) or a composed
 :class:`TileExpr`. An expr is a small typed AST — ``Ref`` (an axis/derived/kernel_param
 value on the point), ``Const``, ``Mul``/``Div`` (integer folding arithmetic), and
 ``BroadcastAware`` (the size-1 replicate exception) — evaluated against a resolved
-:class:`~finn.kernels.space.point.Point`.
+:class:`~finn.kernels.engine.point.Point`.
 
 Why an AST and not an opaque closure: the engine orders resolution by *declared*
 dependencies because "closures cannot be introspected reliably" (the exact reason
-:class:`~finn.kernels.space.axis.Axis` carries an explicit ``deps`` frozenset). A
+:class:`~finn.kernels.engine.axis.Axis` carries an explicit ``deps`` frozenset). A
 stream-tiling entry that reads ``PE``, ``SIMD`` and ``TH`` must expose those names so
 the schema can order it and so an evaluator can check they are in scope. ``.deps()``
 walks the tree and returns exactly the point keys the expr reads — never a guess.

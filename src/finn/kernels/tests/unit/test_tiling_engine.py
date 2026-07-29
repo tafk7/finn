@@ -30,7 +30,7 @@ from finn.kernels.space import (
     param,
 )
 from finn.kernels.engine.point import Point
-from finn.kernels.space.tiling import TileError, generate_tiling
+from finn.kernels.model.tiling import TileError, generate_tiling
 
 
 # MVU-shaped interfaces: inp (1, MW), weights (MW, MH), out (1, MH). No semantic role —

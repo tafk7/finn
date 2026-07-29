@@ -42,7 +42,7 @@ from finn.kernels.ops.parameters.names import (
     EMBEDDED as PARAM_EMBEDDED,
     WEIGHTS as PARAM_WEIGHTS,
 )
-from finn.kernels.space.param_names import (
+from finn.kernels.model.param_names import (
     pumped_memory_key,
     ram_style_key,
     runtime_writeable_key,

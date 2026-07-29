@@ -46,7 +46,7 @@ from finn.kernels.ops.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     WEIGHTS,
 )
-from finn.kernels.space.param_names import ram_style_key, topology_key
+from finn.kernels.model.param_names import ram_style_key, topology_key
 
 # The delivery pool is composed per parameter interface; MVAU's live one is ``weights``.
 PARAM_TOPOLOGY = TOPOLOGY = topology_key(WEIGHTS)

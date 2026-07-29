@@ -51,7 +51,7 @@ from finn.kernels.space import (
 
 from .serialize import DAT_HEX, layout, weight_constraint
 
-from finn.kernels.space.param_names import (
+from finn.kernels.model.param_names import (
     depth_key,
     init_file_key,
     pumped_memory_key,

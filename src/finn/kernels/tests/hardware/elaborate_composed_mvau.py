@@ -37,7 +37,7 @@ from finn.kernels.space import Context, resolve
 from finn.kernels.ops.mvau import mvau_schema, MVAU_DSP_SOFTVEC
 from finn.kernels.ops.mvau.compose_emit import emit_composed
 from finn.kernels.ops.parameters.names import DECOUPLED, WEIGHTS
-from finn.kernels.space.param_names import ram_style_key, topology_key
+from finn.kernels.model.param_names import ram_style_key, topology_key
 
 RAM_STYLE = ram_style_key(WEIGHTS)
 TOPOLOGY = topology_key(WEIGHTS)

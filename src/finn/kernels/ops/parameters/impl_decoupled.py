@@ -32,7 +32,7 @@ from __future__ import annotations
 from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.kernels.space import Derived, discrete_axis, predicate
-from finn.kernels.space.param_names import (
+from finn.kernels.model.param_names import (
     STREAM,
     param_stream_width_key,
     demand_key,
@@ -49,7 +49,7 @@ from finn.util.basic import is_versal
 from .emit_memstream import _MEMSTREAM_WRAPPER_SCHEMA, MEMSTREAM_MANIFEST, emit_memstream
 from .names import DECOUPLED
 from .registry import register
-from .topology import memory_backend
+from finn.kernels.model.memory_backend import memory_backend
 
 
 # =============================================================================

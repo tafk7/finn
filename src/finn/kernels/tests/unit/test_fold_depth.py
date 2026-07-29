@@ -18,7 +18,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.space import Context, resolve, weight_fold_depth, threshold_fold_depth
 from finn.kernels.ops.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
 from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
-from finn.kernels.space.param_names import topology_key
+from finn.kernels.model.param_names import topology_key
 
 THRESHOLDS = "thresholds"
 TOPOLOGY = topology_key(WEIGHTS)
@@ -60,7 +60,7 @@ def test_weight_fold_depth_matches_wmem_decoupled():
     })
     # WMEM = MW*MH/(PE*SIMD) = 6*8/(2*2). The decoupled depth_key traces to the same math.
     assert weight_fold_depth(p, ctx, WEIGHTS) == 12
-    from finn.kernels.space.param_names import depth_key
+    from finn.kernels.model.param_names import depth_key
     assert weight_fold_depth(p, ctx, WEIGHTS) == p[depth_key(WEIGHTS)]
 
 

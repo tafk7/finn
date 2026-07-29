@@ -18,7 +18,7 @@ bundle). Shares DSP-RTL declarations with the packed bundle via ``dsp_rtl_common
 from __future__ import annotations
 
 from finn.kernels.space import Backend
-from finn.kernels.space.param_names import STREAM
+from finn.kernels.model.param_names import STREAM
 
 from .dsp_common import SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl

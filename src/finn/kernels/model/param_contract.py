@@ -7,17 +7,17 @@
 ############################################################################
 
 """The op-facing parameter-DELIVERY declaration (:class:`DeliveredParam`) + the seam
-COMPUTATION bodies a :class:`~finn.kernels.space.backend_interface.Interface`
+COMPUTATION bodies a :class:`~finn.kernels.model.interface.Interface`
 composes.
 
-A :class:`~finn.kernels.space.kernel.Kernel` that delivers parameters (weights,
+A :class:`~finn.kernels.model.kernel.Kernel` that delivers parameters (weights,
 thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
 cadence + concrete delivery pool). The HOW — the ``(DEMAND stage, guarded delivery
 sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → MEMORY) — is OWNED by
 ``Interface`` (design pitch §2), which reuses the two seam computations kept here:
 
 * :func:`_demand_for` — the DEMAND closure: a realization-free
-  :class:`~finn.kernels.space.demand.ParamDemand` sized from the RESOLVED interface
+  :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface
   geometry (the tiling engine's ``stream_width.<iface>`` + block extents), read by the
   selected delivery topology to size its own memstream geometry. ``None`` in two emergent
   cases — no initializer (a live activation, not a stored parameter) or constant-mode

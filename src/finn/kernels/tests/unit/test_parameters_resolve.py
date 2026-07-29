@@ -26,7 +26,7 @@ from finn.kernels.ops.parameters import (
     parameters_pool,
     parameters_schema,
 )
-from finn.kernels.space.param_names import (
+from finn.kernels.model.param_names import (
     param_stream_width_key,
     pumped_memory_key,
     ram_style_key,

@@ -6,12 +6,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""The resolve engine: Context, Axis, Derived, Predicate, Schema, and resolve.
+"""TEMPORARY back-compat shim (Phase 1 restructure).
 
-A design space is data — a :class:`Schema` of guarded :class:`Axis` choices,
-computed :class:`Derived` quantities, and :class:`Predicate` legality checks —
-resolved against a :class:`Context` of givens into a :class:`Point` or an
-:class:`Illegal`. See ``kernel-design/kernel-final-design/design-space-model.md``.
+The design-space model was exploded out of this single ``space/`` package into
+``engine/`` (resolve core), ``model/`` (op-model + param contract), and ``emit/``
+(codegen vocabulary). This module re-exports every public name from its new home so
+the existing barrel importers keep working unchanged. Delete when the test suite is
+rewritten against the new layout (Phase 2); its removal is Phase 2's completion
+criterion.
 """
 
 from ..engine.axis import (
@@ -41,9 +43,9 @@ from ..emit.artifacts import (
 )
 from ..engine.context import Context
 from ..engine.derived import Derived
-from .folding import threshold_fold_depth, weight_fold_depth
+from ..model.fold_depth import threshold_fold_depth, weight_fold_depth
 from ..emit.manifest import ArtifactManifest, SourceFile, read_abc
-from .backend import (
+from ..model.backend import (
     BACKEND_AXIS,
     Backend,
     EmitError,
@@ -52,7 +54,7 @@ from .backend import (
     pool_schema,
 )
 from ..engine.point import AbsentAxisError, Illegal, Point
-from .ports import (
+from ..model.ports import (
     Direction,
     Kind,
     Port,
@@ -63,11 +65,11 @@ from ..engine.predicate import Predicate, predicate
 from ..engine.resolve import resolve
 from ..emit.stitch import Cell, StitchError, stitch
 from ..engine.schema import Schema, SchemaError
-from .demand import ParamDemand
-from .delivery import DeliveredParam
-from .backend_interface import Interface, backend_interface_for
-from .kernel import InterfaceSchema, Kernel, KernelError, KernelSchema
-from .tiling import (
+from ..model.demand import ParamDemand
+from ..model.param_contract import DeliveredParam
+from ..model.interface import Interface, backend_interface_for
+from ..model.kernel import InterfaceSchema, Kernel, KernelError, KernelSchema
+from ..model.tiling import (
     FULL,
     BlockExtent,
     BroadcastAware,

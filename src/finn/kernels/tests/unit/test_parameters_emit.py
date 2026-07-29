@@ -25,7 +25,7 @@ from finn.kernels.space import Artifacts, Context, emit_point, resolve
 from finn.kernels.ops.mvau import MVAU_HLS, mvau_schema
 from finn.kernels.ops.parameters import DECOUPLED, WEIGHTS, parameters_pool
 from finn.kernels.ops.parameters.emit_memstream import emit_memstream
-from finn.kernels.space.param_names import (
+from finn.kernels.model.param_names import (
     depth_key,
     pumped_memory_key,
     ram_style_key,

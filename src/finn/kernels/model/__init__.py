@@ -1,0 +1,15 @@
+############################################################################
+# Copyright (C) 2025, Advanced Micro Devices, Inc.
+# All rights reserved.
+# Portions of this content consist of AI generated content.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+############################################################################
+"""The op-model: how a hardware kernel is modeled on top of the resolve engine.
+
+Holds the :class:`~finn.kernels.model.kernel.Kernel` / :class:`~finn.kernels.model.backend.Backend`
+/ :class:`~finn.kernels.model.interface.Interface` vocabulary, the tiling/fold-depth
+projections, ``ports``, and the op-agnostic parameter-feed CONTRACT (``demand``,
+``param_names``, ``param_contract``) plus the ``memory_backend`` abstraction (the
+realizations live in ``dataflow/memory/``).
+"""

@@ -19,7 +19,7 @@ RTL bundle carries depth-triggers etc.).
 from __future__ import annotations
 
 from finn.kernels.space import Backend
-from finn.kernels.space.param_names import CONSTANT
+from finn.kernels.model.param_names import CONSTANT
 
 from .emit_hls import emit_thresholding_hls
 from .names import THRESHOLDING_HLS, THRESHOLDS

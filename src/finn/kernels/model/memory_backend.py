@@ -25,8 +25,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from finn.kernels.space import Artifacts, Derived, Backend, Predicate, RtlModule
+from finn.kernels.emit.artifacts import Artifacts, RtlModule
 from finn.kernels.engine.axis import Axis
+from finn.kernels.engine.derived import Derived
+from finn.kernels.engine.predicate import Predicate
+from finn.kernels.model.backend import Backend
 
 
 def _feasible_ok(_point, _context) -> None:

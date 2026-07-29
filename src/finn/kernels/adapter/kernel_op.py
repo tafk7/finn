@@ -75,7 +75,7 @@ class PortSpec:
 
 
 class KernelOp(HWCustomOp):
-    """Base FINN adapter over a :class:`~finn.kernels.space.kernel.Kernel`.
+    """Base FINN adapter over a :class:`~finn.kernels.model.kernel.Kernel`.
 
     Subclasses implement :meth:`kernel` (the design-space object) and :meth:`ports`
     (the interface↔port binding). Everything else — the nodeattr registry, the

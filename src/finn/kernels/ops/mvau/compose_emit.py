@@ -24,9 +24,9 @@ the "no delivery sibling" case handled structurally, with no branch here.
 from __future__ import annotations
 
 from finn.kernels.space import Artifacts
-from finn.kernels.space.backend import BACKEND_AXIS
+from finn.kernels.model.backend import BACKEND_AXIS
 from finn.kernels.emit.stitch import Cell, stitch
-from finn.kernels.space.param_names import topology_key
+from finn.kernels.model.param_names import topology_key
 
 from . import mvau_pool
 from .op import mvau_kernel

@@ -40,7 +40,7 @@ from finn.kernels.space import stitch as stitch_module_ref  # for the guard grep
 from finn.kernels.ops.mvau import MVAU_DSP_SOFTVEC, MVAU_HLS, mvau_schema
 from finn.kernels.ops.mvau.compose_emit import emit_composed
 from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, WEIGHTS
-from finn.kernels.space.param_names import ram_style_key, topology_key
+from finn.kernels.model.param_names import ram_style_key, topology_key
 
 # Composed for the ``weights`` interface -> ``parameters.weights.*`` point keys.
 RAM_STYLE = ram_style_key(WEIGHTS)

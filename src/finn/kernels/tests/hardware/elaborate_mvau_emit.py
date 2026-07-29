@@ -40,7 +40,7 @@ from finn.kernels.ops.mvau import (
     MVAU_DSP_PACKED,
 )
 from finn.kernels.ops.parameters.names import DECOUPLED, WEIGHTS
-from finn.kernels.space.param_names import topology_key
+from finn.kernels.model.param_names import topology_key
 
 TOPOLOGY = topology_key(WEIGHTS)
 

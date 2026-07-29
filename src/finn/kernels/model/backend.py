@@ -89,7 +89,7 @@ class Backend:
             a list positional over the op interface's ``block`` dims: ``stream[iface][i]``
             folds ``block[iface][i]``. Each entry is ``1`` (unfolded), a bare axis name
             (``"SIMD"`` — the string IS the dial declaration), or a
-            :class:`~finn.kernels.space.tiling.TileExpr`
+            :class:`~finn.kernels.model.tiling.TileExpr`
             (``derive("PE")/param("TH")``). Impl-owned by construction: STREAM folding IS
             the RTL realization of the op's block structure — there is NO block field here,
             so an impl cannot change the math (kernelop-tensor-block-stream.md §5). An
@@ -113,7 +113,7 @@ class Backend:
             topology's identity string. ``None`` for a compute-pool member (it has no
             delivery mode; it CONSUMES modes via ``consumes``).
         schema: an OPTIONAL reference to this bundle's typed template contract
-            (:class:`~finn.kernels.space.artifacts.RtlModule`). The schema is OWNED by the
+            (:class:`~finn.kernels.emit.artifacts.RtlModule`). The schema is OWNED by the
             template (defined next to it, 1:1); ``Backend`` only REFERENCES it, so N
             backends emitting one template share one schema object (softvec + packed both
             point at ``_V_WRAPPER_SCHEMA``) — expressing the N:1 by shared reference rather
@@ -201,12 +201,12 @@ def pool_schema(
     ``sources_key`` is the point key under which the selected bundle's source list is
     exposed (default ``"sources"``). A SECONDARY pool folded into the same op schema (e.g.
     the ``parameters`` delivery pool via a
-    :class:`~finn.kernels.space.backend_interface.Interface`) passes a namespaced key
+    :class:`~finn.kernels.model.interface.Interface`) passes a namespaced key
     (``"parameters.sources"``) so the two pools' source lists never collide.
 
     The backend IDENTITY fields ``language``/``rtl_core_module`` are STATIC FIELDS on the
     :class:`Backend` (read bare-node by routing, and off the selected bundle by emit via
-    :meth:`~finn.kernels.space.kernel.Kernel.selected_backend`). They are deliberately NOT
+    :meth:`~finn.kernels.model.kernel.Kernel.selected_backend`). They are deliberately NOT
     re-projected onto the point as deriveds — one fact, one home.
 
     ``unspecialized_sentinel`` makes the root selection axis default to ``""`` — the

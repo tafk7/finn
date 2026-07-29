@@ -11,7 +11,7 @@
 This is the piece FINN implements as the ~270-line imperative ``code_generation_ipi``
 Tcl god-method (hardcoded pin names, branches on ``mem_mode``, knows its sub-blocks).
 Here it is a trivial, declarative resolver: given a set of CELLS (each a block with a
-declared :class:`~finn.kernels.space.ports.Port` surface), bind complementary
+declared :class:`~finn.kernels.model.ports.Port` surface), bind complementary
 ROLE pairs into nets, broadcast clock/reset, and export whatever is left as region
 boundary pins.
 
@@ -31,7 +31,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from .artifacts import IPICommands
-from ..space.ports import Kind, Port, Role, STANDARD_BINDINGS
+from ..model.ports import Kind, Port, Role, STANDARD_BINDINGS
 
 
 class StitchError(ValueError):

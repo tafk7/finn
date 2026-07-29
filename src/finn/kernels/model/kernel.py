@@ -7,7 +7,7 @@
 ############################################################################
 
 """``Kernel`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
-it projects from a resolved :class:`~finn.kernels.space.point.Point`
+it projects from a resolved :class:`~finn.kernels.engine.point.Point`
 (kernelop-tensor-block-stream.md §3, §7; consumer-surface-model.md Tier 0-3).
 
 The op declares its **interfaces** (identity + role — the ONNX-facing arity, the
@@ -36,7 +36,7 @@ from typing import Any, Mapping
 
 from ..engine.context import Context
 from .backend import BACKEND_AXIS, Backend, pool_schema
-from .backend_interface import backend_interface_for
+from .interface import backend_interface_for
 from ..engine.point import Illegal, Point
 from .ports import Direction
 from ..engine.resolve import resolve
@@ -127,7 +127,7 @@ class KernelSchema:
     EXCLUDES the realization half — the pool of Backends and the delivered parameters
     (weight delivery, memory) are held by the :class:`Kernel` alongside this, never inside
     it. A ``KernelSchema`` compiles (with the pool) down to the flat resolve
-    :class:`~finn.kernels.space.schema.Schema` via :meth:`Kernel.schema`."""
+    :class:`~finn.kernels.engine.schema.Schema` via :meth:`Kernel.schema`."""
 
     name: str
     interfaces: tuple[InterfaceSchema, ...]
@@ -148,8 +148,8 @@ class Kernel:
     ``identity`` is the ONNX-invariant half (name, interfaces, op-level axes/derived/
     predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
     feasibility, sources, emit. ``delivered_parameters`` are the op's per-interface
-    :class:`~finn.kernels.space.delivery.DeliveredParam` declarations, each lowered by a
-    :class:`~finn.kernels.space.backend_interface.Interface` into the demand stage +
+    :class:`~finn.kernels.model.param_contract.DeliveredParam` declarations, each lowered by a
+    :class:`~finn.kernels.model.interface.Interface` into the demand stage +
     guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
     are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to

@@ -12,11 +12,11 @@ FINN's flow routes on ``is_hls_node``/``is_rtl_node`` (``finn.util.fpgadataflow`
 classify a node as an HLS or RTL hardware node. For a kernel node BOTH facts those
 predicates need — is it HW-ready, and in which language — are pure functions of the ONE
 genuine stored value, the ``backend`` nodeattr (resolve's committed backend selection —
-the realization axis, named after the :class:`~finn.kernels.space.backend.Backend` it
+the realization axis, named after the :class:`~finn.kernels.model.backend.Backend` it
 selects):
 
 - HW-ready  = ``backend`` is set (resolve committed a backend).
-- language  = the selected :class:`~finn.kernels.space.backend.Backend`'s ``language`` field.
+- language  = the selected :class:`~finn.kernels.model.backend.Backend`'s ``language`` field.
 
 Nothing extra is stored (no ``codegen_ready``/``language`` nodeattr that could go stale on
 re-resolve); routing is a QUERY on committed state. :func:`kernel_hw_language` is the
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from qonnx.util.basic import get_by_name
 
-from finn.kernels.space.backend import BACKEND_AXIS
+from finn.kernels.model.backend import BACKEND_AXIS
 
 KERNEL_DOMAIN = "finn.kernels"
 
@@ -54,7 +54,7 @@ def _language_table() -> dict[str, dict[str, str | None]]:
 
 def is_specialized(node) -> bool:
     """The ONE definition of specialization: a committed backend selection (a
-    :class:`~finn.kernels.space.backend.Backend` pool member pinned on the ``backend``
+    :class:`~finn.kernels.model.backend.Backend` pool member pinned on the ``backend``
     nodeattr). Bare-node — reads only that nodeattr. Absent-or-empty => unspecialized.
 
     Every consumer (routing, the impl-dependent kernel getters, future ResolveKernels) calls

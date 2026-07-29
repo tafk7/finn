@@ -10,7 +10,7 @@
 
 "embedded" is not a delivery topology — it is the consumption MODE ``constant``: the
 compute core bakes the parameter in, so there is no stream to deliver and no demand. A
-compute :class:`~finn.kernels.space.backend.Backend` declares, per parameter interface,
+compute :class:`~finn.kernels.model.backend.Backend` declares, per parameter interface,
 which modes it can consume (``consumes``); the per-interface delivery-topology domain is
 filtered to matching modes. These tests exercise that spine on the live ``weights``
 interface, plus the per-interface namespacing that makes a SECOND parameter interface
@@ -40,7 +40,7 @@ from finn.kernels.space import (
     pool_schema,
     resolve,
 )
-from finn.kernels.space.param_names import (
+from finn.kernels.model.param_names import (
     CONSTANT,
     STREAM,
     demand_key,

@@ -21,7 +21,7 @@ the delivery root axis, and a ``compose`` union documenting the gap it refused t
 ``Interface`` collapses them into ONE per-interface object that owns the seam:
 
 * ``publishes`` — the compute→delivery DEMAND closure (a realization-free
-  :class:`~finn.kernels.space.demand.ParamDemand` sized from the RESOLVED interface
+  :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface
   geometry). ``None`` for a live activation or a constant-mode consumption.
 * ``constrains`` — the topology-mode GUARD: the delivery pool's ``topology`` domain kept
   to just the modes the selected compute backend consumes for this interface.
@@ -35,7 +35,7 @@ deps feed the topo-sort that already runs.
 
 This module OWNS the assembly (:meth:`Interface.to_subschemas`), reusing the
 demand/guard COMPUTATION bodies (:func:`_demand_for`, :func:`_topology_domain`) kept in
-:mod:`~finn.kernels.space.delivery` beside the op-facing :class:`DeliveredParam`
+:mod:`~finn.kernels.model.param_contract` beside the op-facing :class:`DeliveredParam`
 declaration.
 """
 
@@ -45,7 +45,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
 from .backend import BACKEND_AXIS, Backend, pool_schema
-from .delivery import DeliveredParam, _demand_for, _topology_default, _topology_domain
+from .param_contract import DeliveredParam, _demand_for, _topology_default, _topology_domain
 from ..engine.derived import Derived
 from .param_names import demand_key, sources_key, topology_key
 from ..engine.schema import Schema
@@ -55,7 +55,7 @@ from ..engine.schema import Schema
 class Interface:
     """A Kernel's realization of one declared parameter interface — the home of the
     compute→delivery seam for that port. Built by :func:`backend_interface_for` from a
-    :class:`~finn.kernels.space.delivery.DeliveredParam` (the op's WHAT) plus the compute
+    :class:`~finn.kernels.model.param_contract.DeliveredParam` (the op's WHAT) plus the compute
     pool (whose members' ``consumes`` drive the guard).
 
     Attributes:
@@ -132,7 +132,7 @@ class Interface:
 
 def backend_interface_for(dp: DeliveredParam, compute_pool) -> Interface:
     """Assemble the :class:`Interface` for one delivered parameter from its
-    :class:`~finn.kernels.space.delivery.DeliveredParam` declaration + the op's compute
+    :class:`~finn.kernels.model.param_contract.DeliveredParam` declaration + the op's compute
     pool. The single place the compute→delivery contract is built — the demand schema and
     the guarded delivery sub-schema for this interface have one owner."""
     iface = dp.iface

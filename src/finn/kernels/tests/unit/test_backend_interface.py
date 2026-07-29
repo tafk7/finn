@@ -21,8 +21,8 @@ from finn.kernels.space import (
     Context,
     backend_interface_for,
 )
-from finn.kernels.space.backend import Backend
-from finn.kernels.space.param_names import (
+from finn.kernels.model.backend import Backend
+from finn.kernels.model.param_names import (
     ALL_MODES,
     CONSTANT,
     STREAM,
@@ -105,13 +105,13 @@ def test_backend_interface_declares_two_root_deps():
 def _probe_point(width_bits, topo=DECOUPLED):
     """A resolved-enough probe: a plain dict standing in for the point, carrying the
     resolved stream width + topology the demand closure reads."""
-    from finn.kernels.space.tiling import stream_width_key
+    from finn.kernels.model.tiling import stream_width_key
 
     return {stream_width_key(WEIGHTS): width_bits, topology_key(WEIGHTS): topo}
 
 
 def test_publishes_matches_delivery_demand_for():
-    from finn.kernels.space.delivery import _demand_for
+    from finn.kernels.model.param_contract import _demand_for
 
     pool = mvau_pool()
     dp = _weights_dp()
@@ -141,7 +141,7 @@ def test_publishes_matches_delivery_demand_for():
 
 
 def test_constrains_filters_topology_domain_like_delivery():
-    from finn.kernels.space.delivery import _topology_domain
+    from finn.kernels.model.param_contract import _topology_domain
 
     pool = mvau_pool()
     dp = _weights_dp()
@@ -193,7 +193,7 @@ def test_backend_interface_reads_backend_consumes_map():
 
 def test_decoupled_weights_resolve_matches_pre_t4_baseline():
     from finn.kernels.ops.mvau.op import mvau_kernel
-    from finn.kernels.space.param_names import depth_key, width_key
+    from finn.kernels.model.param_names import depth_key, width_key
 
     k = mvau_kernel()
     ctx = _mvau_ctx()

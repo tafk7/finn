@@ -24,15 +24,15 @@ ships two members:
 
 ``parameters_schema()`` builds the pool standalone (for unit-testing selection +
 guarding in isolation); an op folds the pool in via a
-:class:`~finn.kernels.space.backend_interface.Interface` per delivered interface,
+:class:`~finn.kernels.model.interface.Interface` per delivered interface,
 which namespaces its keys and guards its topology root to the backend's consumable modes.
 """
 
 from __future__ import annotations
 
 from finn.kernels.space import Schema, pool_schema
-from finn.kernels.space.demand import ParamDemand  # noqa: F401 (re-exported)
-from finn.kernels.space.param_names import (  # noqa: F401 (re-exported)
+from finn.kernels.model.demand import ParamDemand  # noqa: F401 (re-exported)
+from finn.kernels.model.param_names import (  # noqa: F401 (re-exported)
     demand_key,
     sources_key,
     topology_key,

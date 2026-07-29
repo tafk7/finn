@@ -27,7 +27,7 @@ from finn.kernels.ops.mvau import (
     mvau_schema,
 )
 from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
-from finn.kernels.space.param_names import topology_key
+from finn.kernels.model.param_names import topology_key
 
 # Composed for the ``weights`` interface -> ``parameters.weights.topology``.
 TOPOLOGY = topology_key(WEIGHTS)

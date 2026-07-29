@@ -18,7 +18,7 @@ compute fold (``PE``/``SIMD``/``WMEM``). That put memory-backend knowledge (roun
 
 The demand contract inverts it: the compute side publishes a small, realization-free
 :class:`ParamDemand` under the pool-declared per-interface
-:func:`~finn.kernels.space.param_names.demand_key` key (pure facts about what the core
+:func:`~finn.kernels.model.param_names.demand_key` key (pure facts about what the core
 consumes), and the delivery Backend reads THAT and computes its own geometry inside its
 bundle. The op stops knowing how memstream is built.
 

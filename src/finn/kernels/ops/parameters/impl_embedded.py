@@ -21,11 +21,11 @@ legal parameters point.
 from __future__ import annotations
 
 from finn.kernels.space import Derived
-from finn.kernels.space.param_names import CONSTANT, param_stream_width_key
+from finn.kernels.model.param_names import CONSTANT, param_stream_width_key
 
 from .names import EMBEDDED
 from .registry import register
-from .topology import memory_backend
+from finn.kernels.model.memory_backend import memory_backend
 
 
 def _no_stream_width(p, ctx):

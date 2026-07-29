@@ -60,7 +60,7 @@ from finn.kernels.space import (
     predicate,
     predicate_axis,
 )
-from finn.kernels.space.param_names import runtime_writeable_key
+from finn.kernels.model.param_names import runtime_writeable_key
 from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
 from finn.kernels.ops.parameters import parameters_pool
 from finn.kernels.ops.thresholding.shared import (

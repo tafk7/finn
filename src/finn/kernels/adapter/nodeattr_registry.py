@@ -12,7 +12,7 @@ FINN's ``get_nodeattr_types()`` must declare *every* attribute any pass might re
 write (``set_nodeattr`` asserts declared membership — the R12 obligation in
 ``consumer-surface-model.md``). Rather than hand-maintain that union with its
 inconsistent FINN conventions, we derive it from the
-:class:`~finn.kernels.space.schema.Schema`: each free :class:`Axis` becomes one
+:class:`~finn.kernels.engine.schema.Schema`: each free :class:`Axis` becomes one
 nodeattr, typed and value-constrained by inspecting its domain. The kernel is the
 source of truth — FINN's declared type/allowed-set/default all *flow from* the axis,
 never hardcoded here.
