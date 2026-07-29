@@ -23,6 +23,9 @@ re-resolve); routing is a QUERY on committed state. :func:`kernel_hw_language` i
 derivation, and it is BARE-NODE by construction — a single nodeattr read plus a static
 pool lookup, NO model, NO ``getCustomOp``, NO op instantiation — because the predicates it
 feeds are called hot across the whole flow.
+
+This module is THE kernel-side host-routing seam: every ``finn.util.fpgadataflow`` kernel
+branch delegates here — do not open-code ``domain=="finn.kernels"`` routing elsewhere.
 """
 
 from __future__ import annotations
