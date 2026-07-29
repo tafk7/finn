@@ -23,8 +23,8 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.space import Artifacts, Context, emit_point, resolve
 from finn.kernels.ops.mvau import MVAU_HLS, mvau_schema
-from finn.kernels.ops.parameters import DECOUPLED, WEIGHTS, parameters_pool
-from finn.kernels.ops.parameters.emit_memstream import emit_memstream
+from finn.kernels.dataflow.memory import DECOUPLED, WEIGHTS, parameters_pool
+from finn.kernels.dataflow.memory.emit_memstream import emit_memstream
 from finn.kernels.model.param_names import (
     depth_key,
     pumped_memory_key,
@@ -85,7 +85,7 @@ def test_memstream_geometry_derives_from_fold():
 
 
 def test_geometry_absent_for_embedded():
-    from finn.kernels.ops.parameters import EMBEDDED
+    from finn.kernels.dataflow.memory import EMBEDDED
 
     ctx = _ctx()
     r = resolve(

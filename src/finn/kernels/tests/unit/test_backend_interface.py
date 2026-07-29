@@ -30,8 +30,8 @@ from finn.kernels.model.param_names import (
     topology_key,
 )
 from finn.kernels.ops.mvau.op import _delivered_parameters, mvau_pool
-from finn.kernels.ops.parameters import WEIGHTS, parameters_pool
-from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED
+from finn.kernels.dataflow.memory import WEIGHTS, parameters_pool
+from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 

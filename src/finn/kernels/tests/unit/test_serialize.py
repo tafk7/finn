@@ -25,7 +25,7 @@ from qonnx.util.basic import (
 
 from finn.util.data_packing import numpy_to_hls_code, pack_innermost_dim_as_hex_string
 
-from finn.kernels.ops.parameters.serialize import (
+from finn.kernels.dataflow.memory.serialize import (
     CPP_HEADER,
     DAT_HEX,
     SerializedParam,

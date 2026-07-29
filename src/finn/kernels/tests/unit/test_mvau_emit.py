@@ -26,7 +26,7 @@ from finn.kernels.ops.mvau import (
     mvau_pool,
     mvau_schema,
 )
-from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
+from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED, WEIGHTS
 from finn.kernels.model.param_names import topology_key
 
 # Composed for the ``weights`` interface -> ``parameters.weights.topology``.

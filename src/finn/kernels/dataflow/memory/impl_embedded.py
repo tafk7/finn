@@ -20,7 +20,7 @@ legal parameters point.
 
 from __future__ import annotations
 
-from finn.kernels.space import Derived
+from finn.kernels.engine.derived import Derived
 from finn.kernels.model.param_names import CONSTANT, param_stream_width_key
 
 from .names import EMBEDDED

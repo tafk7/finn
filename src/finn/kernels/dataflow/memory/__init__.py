@@ -30,7 +30,8 @@ which namespaces its keys and guards its topology root to the backend's consumab
 
 from __future__ import annotations
 
-from finn.kernels.space import Schema, pool_schema
+from finn.kernels.engine.schema import Schema
+from finn.kernels.model.backend import pool_schema
 from finn.kernels.model.demand import ParamDemand  # noqa: F401 (re-exported)
 from finn.kernels.model.param_names import (  # noqa: F401 (re-exported)
     demand_key,

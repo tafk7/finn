@@ -40,8 +40,8 @@ from finn.transformation.fpgadataflow.minimize_accumulator_width import (
 # our side
 from finn.kernels.space import Context, resolve, emit_point
 from finn.kernels.ops.mvau import mvau_schema, mvau_pool, MVAU_DSP_SOFTVEC, MVAU_HLS
-from finn.kernels.ops.parameters import parameters_pool
-from finn.kernels.ops.parameters.names import (
+from finn.kernels.dataflow.memory import parameters_pool
+from finn.kernels.dataflow.memory.names import (
     DECOUPLED,
     DECOUPLED as PARAM_DECOUPLED,
     WEIGHTS,

@@ -41,7 +41,7 @@ from finn.kernels.space import (
     SourceFile,
     Template,
 )
-from finn.kernels.ops.parameters.serialize import (
+from finn.kernels.dataflow.memory.serialize import (
     CPP_HEADER,
     layout,
     threshold_constraint,

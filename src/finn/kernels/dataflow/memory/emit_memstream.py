@@ -30,24 +30,20 @@ from __future__ import annotations
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import (
+from finn.kernels.emit.artifacts import (
     Artifacts,
-    ArtifactManifest,
     Bool,
     DataFile,
     Dim,
-    Direction,
     GeneratedFile,
-    Kind,
-    Port,
     Raw,
-    Role,
     RtlModule,
-    SourceFile,
     Template,
     bind,
-    weight_fold_depth,
 )
+from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
+from finn.kernels.model.fold_depth import weight_fold_depth
+from finn.kernels.model.ports import Direction, Kind, Port, Role
 
 from .serialize import DAT_HEX, layout, weight_constraint
 

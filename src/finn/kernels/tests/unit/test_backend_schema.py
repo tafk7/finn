@@ -53,15 +53,15 @@ def test_mvau_hls_backend_has_no_schema():
 
 
 def test_decoupled_topology_references_memstream_schema():
-    from finn.kernels.ops.parameters.emit_memstream import _MEMSTREAM_WRAPPER_SCHEMA
-    from finn.kernels.ops.parameters.impl_decoupled import decoupled_topology
+    from finn.kernels.dataflow.memory.emit_memstream import _MEMSTREAM_WRAPPER_SCHEMA
+    from finn.kernels.dataflow.memory.impl_decoupled import decoupled_topology
 
     assert decoupled_topology("weights").schema is _MEMSTREAM_WRAPPER_SCHEMA
 
 
 def test_embedded_topology_has_no_schema():
     # The constant (baked) topology emits no template → no schema.
-    from finn.kernels.ops.parameters.impl_embedded import embedded_topology
+    from finn.kernels.dataflow.memory.impl_embedded import embedded_topology
 
     assert embedded_topology("weights").schema is None
 

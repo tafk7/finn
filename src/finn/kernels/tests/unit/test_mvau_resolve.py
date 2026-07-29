@@ -37,7 +37,7 @@ def _language_of(point, pool=None):
     point) — looked up in the pool by the resolved ``implementation`` name."""
     by_name = {b.name: b for b in (pool if pool is not None else mvau_pool())}
     return by_name[point["backend"]].language
-from finn.kernels.ops.parameters.names import (
+from finn.kernels.dataflow.memory.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
     WEIGHTS as PARAM_WEIGHTS,

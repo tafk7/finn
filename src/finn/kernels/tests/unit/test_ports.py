@@ -38,8 +38,8 @@ from finn.kernels.ops.mvau import (
     mvau_pool,
     mvau_schema,
 )
-from finn.kernels.ops.parameters import DECOUPLED, EMBEDDED, WEIGHTS, parameters_pool
-from finn.kernels.ops.parameters.emit_memstream import emit_memstream
+from finn.kernels.dataflow.memory import DECOUPLED, EMBEDDED, WEIGHTS, parameters_pool
+from finn.kernels.dataflow.memory.emit_memstream import emit_memstream
 from finn.kernels.model.param_names import (
     ram_style_key,
     runtime_writeable_key,

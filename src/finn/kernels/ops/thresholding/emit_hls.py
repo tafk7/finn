@@ -43,7 +43,7 @@ from finn.kernels.space import (
     SourceFile,
     Template,
 )
-from finn.kernels.ops.parameters.serialize import layout, threshold_constraint
+from finn.kernels.dataflow.memory.serialize import layout, threshold_constraint
 
 from .names import INPUT, OUTPUT, THRESHOLDS
 

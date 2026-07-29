@@ -14,7 +14,7 @@ optionally reloadable via AXI-lite). This bundle owns the SELECTION axes of that
 topology (``ram_style``, ``runtime_writeable_weights``, ``pumpedMemory``), its
 self-contained feasibility gates, AND its memstream GEOMETRY (``depth``/``width``/
 ``sets``/``init_file``) — which it now derives ITSELF from the compute→memory
-:class:`~finn.kernels.ops.parameters.demand.ParamDemand` the composing op publishes
+:class:`~finn.kernels.dataflow.memory.demand.ParamDemand` the composing op publishes
 under the ``parameters.demand`` key (rather than the op reaching in to compute the
 memstream realization). When the demand is absent (standalone resolve, no compute
 core), the geometry derived return ``None`` — so this bundle still resolves alone.
@@ -31,7 +31,9 @@ from __future__ import annotations
 
 from qonnx.util.basic import roundup_to_integer_multiple
 
-from finn.kernels.space import Derived, discrete_axis, predicate
+from finn.kernels.engine.derived import Derived
+from finn.kernels.engine.axis import discrete_axis
+from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.param_names import (
     STREAM,
     param_stream_width_key,

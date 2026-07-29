@@ -48,8 +48,8 @@ from finn.kernels.model.param_names import (
     topology_key,
     width_key,
 )
-from finn.kernels.ops.parameters import WEIGHTS, parameters_pool
-from finn.kernels.ops.parameters.names import DECOUPLED, EMBEDDED
+from finn.kernels.dataflow.memory import WEIGHTS, parameters_pool
+from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED
 
 
 def _topo_mode(name, iface=WEIGHTS):

@@ -62,7 +62,7 @@ from finn.kernels.space import (
 )
 from finn.kernels.model.param_names import runtime_writeable_key
 from finn.kernels.ops._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
-from finn.kernels.ops.parameters import parameters_pool
+from finn.kernels.dataflow.memory import parameters_pool
 from finn.kernels.ops.thresholding.shared import (
     _num_steps_default,
     _threshold_datatype,
@@ -188,7 +188,7 @@ def op_axes():
         # --- weight-delivery cluster: MOVED OUT to the `parameters` pool ------
         # mem_mode/ram_style/runtime_writeable_weights/pumpedMemory/dynamic_input used
         # to live here as the "reserved composition seam". They are now the
-        # `parameters` subsystem (ops/parameters/), folded into the MVAU schema via a
+        # `parameters` subsystem (dataflow/memory/), folded into the MVAU schema via a
         # `Interface` per delivered interface under the `parameters.*` namespace.
         # mem_mode is gone: being the `decoupled` topology IS "internal_decoupled". The
         # cross-coordinate couplings (memstream geometry, the pumpedMemory/fold gate) are

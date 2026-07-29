@@ -19,7 +19,7 @@ context, which is itself the property under test (a param-free / fold-free resol
 import pytest
 
 from finn.kernels.space import AbsentAxisError, Context, Illegal, resolve
-from finn.kernels.ops.parameters import (
+from finn.kernels.dataflow.memory import (
     DECOUPLED,
     EMBEDDED,
     WEIGHTS,

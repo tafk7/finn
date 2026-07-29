@@ -44,7 +44,7 @@ from finn.kernels.space import (
     KernelSchema,
     Role,
 )
-from finn.kernels.ops.parameters import parameters_pool
+from finn.kernels.dataflow.memory import parameters_pool
 
 from .names import INPUT, OUTPUT, THRESHOLDING_HLS, THRESHOLDING_RTL, THRESHOLDS  # noqa: F401
 from .registry import build_pool
