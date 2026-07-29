@@ -45,6 +45,7 @@ from qonnx.core.datatype import DataType
 from finn import xsi
 from finn.kernels.space import Context, resolve
 from finn.kernels.ops.mvau import (
+    mvau_kernel,
     mvau_schema,
     MVAU_DSP_SOFTVEC,
     MVAU_DSP_PACKED,
@@ -143,7 +144,9 @@ def _run_config(cfg):
     # SPLIT top: our real emit (instantiates the per-core wrapper).
     split_arts = emit_mvau_rtl(point, ctx, module_name="mvau_split")
     split_top = split_arts.generated[0].content()
-    core = point.rtl_core_module  # mvu_vvu_axi_softvec / mvu_vvu_axi_packed
+    # rtl_core_module is a STATIC Backend identity field (F5) — read off the selected
+    # bundle, not the point (which no longer projects it). Mirrors emit_rtl.py.
+    core = mvau_kernel().selected_backend(point).rtl_core_module  # mvu_vvu_axi_softvec / _packed
     assert f"{core} #(" in split_top, f"emit did not instantiate {core}"
 
     # GOLDEN top: same wrapper, instantiated core string-replaced back to the fused
