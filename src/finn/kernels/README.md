@@ -8,60 +8,57 @@ point to typed artifacts. This module is the proven foundation for replacing FIN
 `HWCustomOp` + `HLSBackend`/`RTLBackend` subsystem.
 
 For the *why* and the multi-stage plan, see
-[`MOTIVATION.md`](../../../kernel-design/kernel-final-design/MOTIVATION.md) and
-[`KERNEL_REFACTOR_PLAN.md`](../../../kernel-design/kernel-final-design/KERNEL_REFACTOR_PLAN.md).
+[`MOTIVATION.md`](../../../../scratchpad/kernel-final-design/MOTIVATION.md) and
+[`KERNEL_REFACTOR_PLAN.md`](../../../../scratchpad/kernel-final-design/KERNEL_REFACTOR_PLAN.md).
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `space/` | **The engine.** The four resolve primitives (Context, Axis, Derived, Predicate) → `resolve` → a `Point`; plus composition/codegen: `implementation` (pool + emit dispatch), `artifacts` (typed emit outputs), `ports` (role-tagged port taxonomy), `stitch` (op-agnostic block-design wiring). |
-| `primitives/` | Reused domain value objects — ordered parameters, datatype range-builders, template resolution, interface shape/width. **Vendored from `microsoft/brainsmith` (MIT); see Provenance.** |
-| `ops/` | The op library: `mvau`, `thresholding`, `parameters` (weight/threshold delivery). Each declares its design space as data over the engine; `mvau` is expressed through the `KernelOp` façade (`space/kernel_op.py`) with impl-owned tiling. |
-| `tests/unit/` | The venv-pure test suite (126 tests, no Vivado/Docker). |
-| `tests/hardware/` | Docker/Vivado validation harnesses (elaborate, rtlsim, byte-diff vs FINN). See [`tests/hardware/README.md`](tests/hardware/README.md). |
+| `engine/` | **The pure resolve core.** The four resolve primitives (Context, Axis, Derived, Predicate) → `resolve` → a `Point`; plus the folded-in brainsmith value objects (`ordered_parameter`, `spec_helpers`). No dependency on any other kernel package. |
+| `model/` | **The op-model framework.** `Kernel`/`Backend`/`Interface`, the tiling/fold-depth projections, `ports` (role-tagged port taxonomy), the parameter-feed CONTRACT (`param_contract`), `memory_backend`, and — folded in here — `registry` (the op-agnostic implementation-registry factory) and `artifacts` (the typed emit-output vocabulary). |
+| `emit/` | **The emit PROCESS.** `manifest` (artifact manifest reader) + `stitch` (op-agnostic block-design wiring). Consumes a resolved Point → produces artifacts. |
+| `ir/` | **The host-facing seam.** The `KernelOp` bridge to FINN's node model, the nodeattr registry, and `routing` (the single kernel-side host-routing seam). |
+| `compute/` | Per-op bounded contexts — `mvau`, `thresholding`, `pool` — each a folder owning its Kernel/Schema definition, backends, and emit. |
+| `dataflow/` | Infrastructure kernels. Today `memory/` (weight/threshold delivery); `fifo`/`dwc`/`iodma` to come. |
+| `tests/` | The mirror test tree: `tests/{engine,model,emit,ir,compute,dataflow,integration,hw}/`. |
 
-Dependency direction is one-way: `ops → space → primitives`.
+Dependency spine (acyclic, no cycles): `engine` (leaf) ← `model` ← {`ir`, `emit`,
+`compute`, `dataflow`}. The only cross-kind edge is `compute → dataflow` (one-way —
+compute composes infra). `ir` is the host-facing seam.
 
 ## Running the tests
 
-The unit suite runs in the lightweight kernel venv against FINN's pinned qonnx
-(`deps/qonnx`), no FINN Docker image required:
+The suite runs inside the FINN Docker env against FINN's pinned qonnx (`deps/qonnx`), via
+a committed runner:
 
 ```bash
-PYTHONPATH="deps/qonnx/src:src" .kernel-venv/bin/python -m pytest \
-  src/finn/kernels/tests/unit/ -q          # expect 126 passed
+./run-docker.sh bash .agents/tmp/run_kernel_tests.sh   # fast + integration + finn_codegen
 ```
 
-A `conftest.py` guards that `qonnx` resolves to the finn-pinned `deps/qonnx` and fails
-loudly on a drifted sibling checkout.
-
-The hardware harnesses require the FINN Docker container (Vivado / `xsi.so`) and are run
-explicitly — see [`tests/hardware/README.md`](tests/hardware/README.md).
+This covers `tests/{engine,model,emit,ir,compute,dataflow,integration}/` (`-m "not
+slow_hw"`). The `slow_hw` hardware tier (`tests/hw/`, requiring Vivado / `xsi.so`) is
+gated and run separately via `.agents/tmp/run_kernel_hw.sh`.
 
 ## Provenance & licensing
 
-- This module is **BSD-3-Clause** (FINN's license), except `primitives/`.
-- The seven `primitives/` files are **MIT**, inlined from
+- This module is **BSD-3-Clause** (FINN's license), except the vendored value objects
+  below.
+- `engine/ordered_parameter.py` and `engine/spec_helpers.py` are **MIT**, inlined from
   [`microsoft/brainsmith`](https://github.com/microsoft/brainsmith)
-  (`brainsmith/dataflow/`) @ `38faaf9`. `ordered_parameter.py`, `template_resolution.py`,
-  `schemas.py`, and `dse_models.py` are byte-identical; `spec_helpers.py` retargets three
-  docstring import examples to the `finn.kernels.primitives` home; `types.py` adds a local
-  `TilingSpec` alias; `interface.py` is a distilled variant. `schemas.py` (the
-  `KernelSchema`/`InputSchema`/`OutputSchema` interface-list declaration) and `dse_models.py`
-  (the TENSOR→BLOCK→STREAM shape resolution) back the KernelOp folding model — see
-  [`kernel-design/kernel-final-design/kernelop-tensor-block-stream.md`](../../../kernel-design/kernel-final-design/kernelop-tensor-block-stream.md).
-  Each file carries a provenance header. These are a **temporary vendored copy** —
-  de-vendoring is Stage 3 (the source model) of the refactor plan.
+  (`brainsmith/dataflow/`) @ `38faaf9`. Each file carries a provenance header. These are a
+  **temporary vendored copy** — de-vendoring is Stage 3 (the source model) of the refactor
+  plan. Other kernel files reference brainsmith *concepts* (the 3-category port model, the
+  TENSOR→BLOCK→STREAM folding model) but are original BSD-3-Clause code.
 
 ## Design docs
 
-Under [`kernel-design/kernel-final-design/`](../../../kernel-design/kernel-final-design/):
-[`design-space-model.md`](../../../kernel-design/kernel-final-design/design-space-model.md)
+Under [`../../../../scratchpad/kernel-final-design/`](../../../../scratchpad/kernel-final-design/):
+[`design-space-model.md`](../../../../scratchpad/kernel-final-design/design-space-model.md)
 (the engine primitives),
-[`port-taxonomy.md`](../../../kernel-design/kernel-final-design/port-taxonomy.md) (kind vs
+[`port-taxonomy.md`](../../../../scratchpad/kernel-final-design/port-taxonomy.md) (kind vs
 role, the stitch),
-[`param-delivery-design-space.md`](../../../kernel-design/kernel-final-design/param-delivery-design-space.md)
+[`param-delivery-design-space.md`](../../../../scratchpad/kernel-final-design/param-delivery-design-space.md)
 (composition), and
-[`generality-gaps.md`](../../../kernel-design/kernel-final-design/generality-gaps.md)
+[`generality-gaps.md`](../../../../scratchpad/kernel-final-design/generality-gaps.md)
 (op-zoo coverage).
