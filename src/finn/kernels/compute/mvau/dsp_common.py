@@ -30,11 +30,20 @@ from finn.kernels.compute.mvau._dsp_rtl import (
     segmentlen_feasible,
 )
 from finn.kernels.engine.axis import discrete_axis
+from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
-from .op import INPUT, THRESHOLDS, WEIGHTS, requires_integer_iw, weights_may_change
+from .op import INPUT, THRESHOLDS, WEIGHTS, weights_may_change
+
+# The RTL/DSP MVU cores are integer matmuls (the signed/bitwidth gates in _rtl_mvu_feasible
+# assume it). Declared as datatype support per port and shared by both DSP bundles, so the
+# integer requirement has one home the pool unions for the frontend claim.
+RTL_MVU_SUPPORT = {
+    INPUT: DatatypeSupport(kind=DatatypeKind.INTEGER),
+    WEIGHTS: DatatypeSupport(kind=DatatypeKind.INTEGER),
+}
 
 
 def _narrow_weights(p, ctx):
@@ -63,9 +72,9 @@ def _rtl_mvu_feasible(p, ctx):
         return "RTL-MVU does not support binaryXnorMode"
     wdt = ctx.tensor_datatype(WEIGHTS)
     idt = ctx.tensor_datatype(INPUT)
-    # Integer i/w is checked by the shared `requires_integer_iw` predicate (composed into
-    # dsp_rtl_common's predicates). It runs alongside this gate — the signed/bitwidth checks
-    # below assume integer types, which requires_integer_iw guarantees.
+    # Integer i/w is declared as datatype support (RTL_MVU_SUPPORT, compiled by pool_schema
+    # into a guarded predicate). It runs alongside this gate — the signed/bitwidth checks
+    # below assume integer types, which the support gate guarantees.
     if not wdt.signed():
         return "RTL-MVU requires signed weights"
     if idt.bitwidth() < 2 or wdt.bitwidth() < 2:
@@ -107,7 +116,6 @@ def dsp_rtl_common():
         Derived("narrow_weights", _narrow_weights),
     )
     predicates = (
-        requires_integer_iw(INPUT, WEIGHTS),
         rtl_no_lut,
         _rtl_mvu_feasible,
         segmentlen_feasible,

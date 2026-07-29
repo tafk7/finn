@@ -125,25 +125,6 @@ def _is_nonneg_int(v) -> bool:
     return isinstance(v, int) and v >= 0
 
 
-def requires_integer_iw(inp_iface: str, weight_iface: str):
-    """A per-backend feasibility predicate: this backend requires integer input AND weight
-    datatypes. Kept per-backend (a future float backend simply does not compose it) but
-    declared ONCE here so the integer gate is not hand-copied across bundles (F3/D-R5). A
-    float32 tensor reads as "signed, 32-bit" and would slip through signed/bitwidth checks,
-    so this gates FIRST and explicitly; the pool is then the single source of truth
-    ``can_infer_from``'s ``has_feasible_point`` delegates to."""
-
-    @predicate("requires integer input and weight datatypes")
-    def _check(p, ctx):
-        idt = ctx.tensor_datatype(inp_iface)
-        wdt = ctx.tensor_datatype(weight_iface)
-        if not (idt.is_integer() and wdt.is_integer()):
-            return f"requires integer input/weights (got idt={idt}, wdt={wdt})"
-        return None
-
-    return _check
-
-
 # -- op-level SHARED axes — present under every implementation ------------------
 
 

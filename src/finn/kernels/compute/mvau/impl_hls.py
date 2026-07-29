@@ -18,13 +18,20 @@ from __future__ import annotations
 from qonnx.core.datatype import DataType
 
 from finn.kernels.engine.axis import discrete_axis
+from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import CONSTANT, STREAM
 
 from .emit_hls import emit_mvau_hls
-from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS, requires_integer_iw
+from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS
 from .registry import register
+
+# The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no legal
+# HLS realization. Declared per port so the pool's UNION of supported datatypes is the single
+# source of truth can_infer_from delegates to (a float MatMul is rejected FOR THE RIGHT
+# REASON — no backend supports it); a future float backend widens the claim with no op edit.
+_INTEGER = DatatypeSupport(kind=DatatypeKind.INTEGER)
 
 
 @predicate("HLS: SIMD >= MW/1024")
@@ -59,19 +66,16 @@ def hls_bundle() -> Backend:
             # resType: a real HLS user lever (hls:58 default lut, dsp available).
             discrete_axis("resType", {"lut", "dsp"}, "lut"),
         ),
-        predicates=(
-            requires_integer_iw(INPUT, WEIGHTS),
-            _hls_simd_lower_bound,
-            _no_true_binary,
-        ),
+        predicates=(_hls_simd_lower_bound, _no_true_binary),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
         # The HLS core takes weights either baked (params.h) or streamed (memstream), and
         # bakes thresholds into thresh.h — so it consumes weights in BOTH modes, thresholds
         # constant-only. (base FINN: internal_embedded is HLS-only; the fused HLS core is the
-        # only MVU that supports embedded thresholds.)
+        # only MVU that supports embedded thresholds.) Integer i/w declared as datatype support.
         ports=ports_from(
             stream=COMPUTE_STREAM,
             consumes={WEIGHTS: {CONSTANT, STREAM}, THRESHOLDS: {CONSTANT}},
+            supports={INPUT: _INTEGER, WEIGHTS: _INTEGER},
         ),
     )

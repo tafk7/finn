@@ -606,6 +606,31 @@ def test_can_infer_from_claims_integer_matmul():
     assert MvauKernelOp.can_infer_from(model.graph.node[0], model) is True
 
 
+def test_float_backend_widens_the_accepted_datatypes_union():
+    # The viability the frontend claim reads is the UNION of the pool's declared datatype
+    # support. Adding a float-supporting backend must make a float MatMul feasible with ZERO
+    # edits to the op / can_infer_from — the whole point of declarative per-backend support.
+    from dataclasses import replace
+    from finn.kernels.model.backend import Backend, ports_from
+    from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
+    from finn.kernels.compute.mvau import mvau_kernel, mvau_pool
+    from finn.kernels.compute.mvau.op import COMPUTE_STREAM, INPUT, WEIGHTS
+
+    base = mvau_kernel()
+    # Baseline: the all-integer pool has no feasible point for a float node.
+    assert base.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is False
+
+    fp = DatatypeSupport(kind=DatatypeKind.FLOAT)
+    float_backend = Backend(
+        name="mvau_fp16", language="hls", sources=("mvu_fp.sv",),
+        ports=ports_from(stream=COMPUTE_STREAM, supports={INPUT: fp, WEIGHTS: fp}),
+    )
+    widened = replace(base, pool=mvau_pool() + (float_backend,))
+    assert widened.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is True
+    # integer nodes still feasible (the union only grew).
+    assert widened.has_feasible_point(_feas_ctx(idt="INT8", wdt="INT8")) is True
+
+
 def test_operand_map_shared_by_claim_and_build():
     model = _matmul_model()
     node = model.graph.node[0]

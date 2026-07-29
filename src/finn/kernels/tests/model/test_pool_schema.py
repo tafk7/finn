@@ -217,6 +217,52 @@ def test_sources_is_projected_onto_point():
     assert r.sources == ("core.sv", "pkg.sv")
 
 
+# --- S8: per-port datatype support compiled into guarded feasibility ----------
+
+
+def _dtype_ctx(dt):
+    return Context(shapes={"inp": (1, 8)}, datatypes={"inp": dt}, fpgapart="xc7z020clg400-1")
+
+
+def test_declared_support_gates_only_when_selected():
+    from qonnx.core.datatype import DataType
+    from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
+    from finn.kernels.model.backend import ports_from
+
+    int_only = Backend(
+        name="int_only",
+        ports=ports_from(supports={"inp": DatatypeSupport(kind=DatatypeKind.INTEGER)}),
+    )
+    permissive = Backend(name="permissive")  # declares no support → accepts anything
+    schema = pool_schema("backend", (), (), (), (int_only, permissive))
+
+    # int_only selected: integer accepted, float rejected by the compiled support predicate.
+    assert isinstance(resolve(schema, _dtype_ctx(DataType["INT8"]), {"backend": "int_only"}), Point)
+    bad = resolve(schema, _dtype_ctx(DataType["FLOAT32"]), {"backend": "int_only"})
+    assert isinstance(bad, Illegal)
+    assert any("datatype" in r for r in bad.reasons)
+
+    # permissive selected: float accepted (int_only's gate does NOT fire off-backend).
+    assert isinstance(
+        resolve(schema, _dtype_ctx(DataType["FLOAT32"]), {"backend": "permissive"}), Point
+    )
+
+
+def test_custom_support_callable_is_compiled():
+    from qonnx.core.datatype import DataType
+    from finn.kernels.model.backend import ports_from
+
+    def only_int8(dt):
+        return None if dt == DataType["INT8"] else f"need INT8, got {dt}"
+
+    a = Backend(name="a", ports=ports_from(supports={"inp": only_int8}))
+    schema = pool_schema("backend", (), (), (), (a,))
+    assert isinstance(resolve(schema, _dtype_ctx(DataType["INT8"]), {"backend": "a"}), Point)
+    r = resolve(schema, _dtype_ctx(DataType["INT4"]), {"backend": "a"})
+    assert isinstance(r, Illegal)
+    assert any("need INT8" in reason for reason in r.reasons)
+
+
 # --- Backend.schema: optional typed-contract reference (the N:1 by reference) ---
 
 

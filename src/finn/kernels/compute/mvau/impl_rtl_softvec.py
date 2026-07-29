@@ -20,7 +20,7 @@ from __future__ import annotations
 from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import STREAM
 
-from .dsp_common import SHARED_SOURCES, dsp_rtl_common
+from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
 from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, WEIGHTS
 from .registry import register
@@ -53,5 +53,7 @@ def softvec_bundle() -> Backend:
         # restriction). It also has no activation logic; the _rtl_mvu_feasible gate rejects
         # any node WITH thresholds, so thresholds never reaches delivery here (no consumes
         # entry needed — an absent interface is permissive, and the gate is the real rejecter).
-        ports=ports_from(stream=COMPUTE_STREAM, consumes={WEIGHTS: {STREAM}}),
+        ports=ports_from(
+            stream=COMPUTE_STREAM, consumes={WEIGHTS: {STREAM}}, supports=RTL_MVU_SUPPORT
+        ),
     )

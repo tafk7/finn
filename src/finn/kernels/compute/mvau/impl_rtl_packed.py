@@ -22,7 +22,7 @@ from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import STREAM
 from finn.util.basic import get_dsp_block
 
-from .dsp_common import SHARED_SOURCES, dsp_rtl_common, num_lanes
+from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common, num_lanes
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
 from .op import COMPUTE_STREAM, INPUT, MVAU_DSP_PACKED, VERSION, WEIGHTS
 from .registry import register
@@ -76,5 +76,7 @@ def packed_bundle() -> Backend:
         schema=_V_WRAPPER_SCHEMA,
         # Streamed-weight DSP core (see softvec) — weights STREAM-only (embedded illegal),
         # thresholds rejected by the _rtl_mvu_feasible gate, so no thresholds consumes entry.
-        ports=ports_from(stream=COMPUTE_STREAM, consumes={WEIGHTS: {STREAM}}),
+        ports=ports_from(
+            stream=COMPUTE_STREAM, consumes={WEIGHTS: {STREAM}}, supports=RTL_MVU_SUPPORT
+        ),
     )
