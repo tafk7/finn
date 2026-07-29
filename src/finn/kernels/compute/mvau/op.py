@@ -30,7 +30,7 @@ from qonnx.custom_op.registry import getCustomOp
 from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
 from finn.kernels.engine.point import Illegal  # noqa: F401  (kept available for callers/tests)
 from finn.kernels.model.ports import Role
-from finn.kernels.compute._shared._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
+from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
 
 # The kernel DEFINITION — re-exported so `from .op import X` keeps working for the impl
 # bundles, the composition helper, and the tests that resolve against this module.
