@@ -34,17 +34,18 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
-from .op import INPUT, THRESHOLDS, WEIGHTS
+from .op import INPUT, THRESHOLDS, WEIGHTS, weights_may_change
 
 
 def _narrow_weights(p, ctx):
     # rtl:279-288 — data-dependent packing eligibility (MVAU-specific: reads MVAU's
-    # weight tensor + dynamic_input/mlo axes).
+    # weight tensor + mlo axis). Runtime-writable weights cannot be value-narrow-packed
+    # (weights_may_change): you cannot value-narrow weights you cannot see statically.
     weights = ctx.initializer(WEIGHTS)
     if weights is None:
         return 0
     wdt = ctx.tensor_datatype(WEIGHTS)
-    if np.min(weights) == wdt.min() or p.get("dynamic_input", 0) or p.get("mlo_max_iter", 0) > 1:
+    if np.min(weights) == wdt.min() or weights_may_change(p) or p.get("mlo_max_iter", 0) > 1:
         return 0
     return 1
 

@@ -37,6 +37,7 @@ from typing import Any, Callable
 
 from dataclasses import dataclass
 
+from ._util import prod
 from .backend import BACKEND_AXIS
 from .demand import ParamDemand
 from .param_names import ALL_MODES, topology_key
@@ -86,7 +87,7 @@ def _demand_for(dp: DeliveredParam):
         elem_bits = ctx.tensor_datatype(iface).bitwidth()
         parallelism = width_bits // elem_bits  # elements/cycle, in the backend's own fold
         block = ctx.tensor_shape(iface)  # the block extents (MW, MH for weights)
-        depth = _prod(block) // parallelism  # words/set = WMEM, from geometry not p.WMEM
+        depth = prod(block) // parallelism  # words/set = WMEM, from geometry not p.WMEM
         return ParamDemand(
             parallelism=parallelism,
             elem_bits=elem_bits,
@@ -135,10 +136,3 @@ def _topology_default(base_default, legal):
 
 
 # --- helpers ------------------------------------------------------------------
-
-
-def _prod(shape) -> int:
-    out = 1
-    for d in shape:
-        out *= int(d)
-    return out

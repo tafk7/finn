@@ -21,12 +21,7 @@ folding engine, not in any op file."""
 
 from __future__ import annotations
 
-
-def _prod(shape) -> int:
-    out = 1
-    for d in shape:
-        out *= int(d)
-    return out
+from ._util import prod
 
 
 def weight_fold_depth(point, context, iface, pe_key: str = "PE", simd_key: str = "SIMD") -> int:
@@ -36,7 +31,7 @@ def weight_fold_depth(point, context, iface, pe_key: str = "PE", simd_key: str =
     fold dials off the point, so it holds embedded AND decoupled. Reproduces the old
     ``_wmem`` (``p.MW * p.MH // (p.PE * p.SIMD)``) and ``delivery.py:88`` exactly."""
     block = context.tensor_shape(iface)
-    return _prod(block) // (point[pe_key] * point[simd_key])
+    return prod(block) // (point[pe_key] * point[simd_key])
 
 
 def threshold_fold_depth(point, context, iface: str = "thresholds", pe_key: str = "PE") -> int:

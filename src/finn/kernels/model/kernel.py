@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from ..engine.context import Context
+from ._util import prod
 from .backend import BACKEND_AXIS, Backend, pool_schema
 from .interface import backend_interface_for
 from ..engine.point import Illegal, Point
@@ -383,7 +384,7 @@ class Kernel:
             return int(self.cost_model(point, context))
         cycles = 1
         for iface in self.present_interfaces(context):
-            n = _prod(context.tensor_shape(iface.tensor))
+            n = prod(context.tensor_shape(iface.tensor))
             elems = self._stream_elems(iface, point)
             if elems <= 0 or n % elems != 0:
                 # A partial last stream is a real cycle; round up.
@@ -486,10 +487,3 @@ class Kernel:
                 )
             out.extend((extent // elems, elems))
         return tuple(out)
-
-
-def _prod(shape) -> int:
-    out = 1
-    for d in shape:
-        out *= int(d)
-    return out
