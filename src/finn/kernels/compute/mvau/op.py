@@ -35,7 +35,6 @@ from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-export
 # The kernel DEFINITION — re-exported so `from .op import X` keeps working for the impl
 # bundles, the composition helper, and the tests that resolve against this module.
 from .kernel import (  # noqa: F401  (re-exported public surface)
-    COMPUTE_STREAM,
     INPUT,
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
@@ -46,7 +45,6 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     _delivered_parameters,
     _threshold_cadence,
     _weight_cadence,
-    mvau_dtype_backend,
     mvau_interfaces,
     mvau_kernel,
     mvau_pool,
@@ -56,6 +54,13 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     op_derived,
     op_predicates,
     weights_may_change,
+)
+
+# The BACKEND-SCOPED shared contract (fold map + datatype derivations) — re-exported so the
+# impl bundles read `from .op import COMPUTE_STREAM, mvau_dtype_backend` unchanged.
+from .backends import (  # noqa: F401  (re-exported public surface)
+    COMPUTE_STREAM,
+    mvau_dtype_backend,
 )
 
 logger = logging.getLogger(__name__)
