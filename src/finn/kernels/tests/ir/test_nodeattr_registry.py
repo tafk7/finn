@@ -67,11 +67,5 @@ def test_ram_style_unions_across_topologies():
     assert {"block", "distributed", "ultra"} <= set(spec[3])
 
 
-def test_binary_flag_axis_is_int_with_membership():
-    spec = _reg()["binaryXnorMode"]
-    assert spec[0] == "i"
-    assert spec[3] == frozenset({0, 1})
-
-
 def test_num_input_vectors_is_not_an_axis():
     assert "numInputVectors" not in _reg()

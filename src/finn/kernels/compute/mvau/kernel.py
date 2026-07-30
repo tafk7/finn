@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from finn.kernels.engine.axis import discrete_axis, predicate_axis
+from finn.kernels.engine.axis import predicate_axis
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
@@ -131,7 +131,6 @@ def op_axes():
     return (
         # ActVal — activation bias; unused on a no-threshold node.
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
-        discrete_axis("binaryXnorMode", {0, 1}, 0),
         # mlo_max_iter — per-node iteration count, unbounded non-neg (hwcustomop.py:317-319).
         predicate_axis("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
     )

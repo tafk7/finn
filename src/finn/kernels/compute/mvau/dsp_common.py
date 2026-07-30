@@ -68,8 +68,6 @@ def _rtl_mvu_feasible(p, ctx):
     # and equivalently "the DSP core cannot consume thresholds" (there is no threshold port).
     if ctx.has_tensor(THRESHOLDS):
         return "RTL-MVU cannot consume thresholds (embedded thresholding unsupported; specialize_layers:241)"
-    if p.binaryXnorMode != 0:
-        return "RTL-MVU does not support binaryXnorMode"
     wdt = ctx.tensor_datatype(WEIGHTS)
     idt = ctx.tensor_datatype(INPUT)
     # Integer i/w is declared as datatype support (RTL_MVU_SUPPORT, compiled by pool_schema

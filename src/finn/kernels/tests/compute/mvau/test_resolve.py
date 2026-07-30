@@ -345,15 +345,9 @@ def test_packed_num_lanes_ok_for_int8(schema):
 
 def test_hls_rejects_binary_weights(schema):
     ctx = make_context(weights=np.ones((6, 8), dtype=np.float32), wdt="BINARY", idt="INT4")
-    r = resolve(schema, ctx, base_assignment(backend=MVAU_HLS, binaryXnorMode=0))
+    r = resolve(schema, ctx, base_assignment(backend=MVAU_HLS))
     assert isinstance(r, Illegal)
     assert any("binary" in reason.lower() for reason in r.reasons)
-
-
-def test_hls_binary_ok_in_xnor_mode(schema):
-    ctx = make_context(weights=np.ones((6, 8), dtype=np.float32), wdt="BINARY", idt="BINARY")
-    r = resolve(schema, ctx, base_assignment(backend=MVAU_HLS, binaryXnorMode=1))
-    assert isinstance(r, Point)
 
 
 # --- composability: a 4th bundle adds with zero edits ----------------------

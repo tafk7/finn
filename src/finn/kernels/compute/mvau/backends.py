@@ -64,8 +64,6 @@ def _acc_datatype(p, ctx):
     idt = ctx.tensor_datatype(INPUT)
     wdt = ctx.tensor_datatype(WEIGHTS)
     weights = ctx.initializer(WEIGHTS)
-    if p.binaryXnorMode == 1 and weights is not None:
-        weights = 2 * weights - 1
     if weights_may_change(p) or weights is None:
         mw, mh = ctx.tensor_shape(WEIGHTS)
         lower = wdt.min() * np.ones((mw, mh))

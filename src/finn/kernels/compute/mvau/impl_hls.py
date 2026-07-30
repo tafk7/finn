@@ -44,14 +44,15 @@ def _hls_simd_lower_bound(p, ctx):
 
 @predicate("true-binary (non-bipolar) inputs/weights unsupported")
 def _no_true_binary(p, ctx):
-    # F3 — reject when (input binary OR weight binary) AND NOT binaryXnorMode
-    # (matrixvectoractivation_hls.py:167). The old fixture checked only the input and
-    # ignored both the xnor escape and binary weights.
+    # F3 — reject when input binary OR weight binary (matrixvectoractivation_hls.py:167).
+    # HLS's only binary gate: without a dtype-support gate, removing this would let a BINARY
+    # node resolve and emit wrong hardware. BIPOLAR {-1,+1} operands (the old binaryXnorMode=1
+    # escape) re-enter as backend datatype support, not a resurrected flag.
     idt = ctx.tensor_datatype(INPUT)
     wdt = ctx.tensor_datatype(WEIGHTS)
     inp_binary = idt == DataType["BINARY"]
     wt_binary = wdt == DataType["BINARY"]
-    if (inp_binary or wt_binary) and p.binaryXnorMode != 1:
+    if inp_binary or wt_binary:
         return "true binary (non-bipolar) inputs/weights are not supported (hls:167)"
     return None
 
