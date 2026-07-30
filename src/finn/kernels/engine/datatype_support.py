@@ -18,7 +18,7 @@ Support is a category (:class:`DatatypeKind`) + a bitwidth range, mirroring brai
 ``DatatypeInRange`` (``../brainsmith/brainsmith/dataflow/constraints.py``). It is DATA, not a
 closure — introspectable by a validator or a build-manifest tool. A backend that needs a
 gate this vocabulary cannot express declares a custom callable on the port instead (see
-``Interface.supports``); this class is the common case.
+``Interface.dtypes``); this class is the common case.
 """
 
 from __future__ import annotations

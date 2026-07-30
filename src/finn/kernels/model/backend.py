@@ -71,7 +71,7 @@ class Interface:
             legal (a topology carries a mode; the delivery guard keeps only topologies whose
             mode this backend accepts). ``None`` = PERMISSIVE (both modes) — a port that
             declares nothing regresses nothing. Meaningful only for a delivered-parameter port.
-        supports: this backend's declared datatype SUPPORT for the port — either a
+        dtypes: this backend's declared datatype SUPPORT for the port — either a
             :class:`~finn.kernels.engine.datatype_support.DatatypeSupport` (category +
             bitwidth range) or a custom callable ``(dt) -> reason | None``. Compiled by
             ``pool_schema`` into a guarded feasibility predicate (fires only when this
@@ -88,7 +88,7 @@ class Interface:
 
     stream: tuple = ()
     mem_modes: frozenset[str] | None = None
-    supports: Any | None = None
+    dtypes: Any | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "stream", tuple(self.stream))
@@ -100,7 +100,7 @@ def ports_from(
     *,
     stream: Mapping[str, Any] | None = None,
     mem_modes: Mapping[str, Any] | None = None,
-    supports: Mapping[str, Any] | None = None,
+    dtypes: Mapping[str, Any] | None = None,
 ) -> dict[str, Interface]:
     """Assemble a ``{iface -> Interface}`` ports map from per-facet maps. An ergonomic
     constructor that keeps SHARED facts (e.g. the pool-wide ``COMPUTE_STREAM`` fold map)
@@ -108,13 +108,13 @@ def ports_from(
     for an interface takes the :class:`Interface` default."""
     stream = stream or {}
     mem_modes = mem_modes or {}
-    supports = supports or {}
-    names = set(stream) | set(mem_modes) | set(supports)
+    dtypes = dtypes or {}
+    names = set(stream) | set(mem_modes) | set(dtypes)
     return {
         n: Interface(
             stream=stream.get(n, ()),
             mem_modes=mem_modes.get(n),
-            supports=supports.get(n),
+            dtypes=dtypes.get(n),
         )
         for n in names
     }
@@ -489,7 +489,7 @@ def _field_derived(root_name, pool, field_name, *, key=None) -> Derived:
 def _wrap_predicates(root_name, pool) -> list[Predicate]:
     """Each bundle's predicates fire only when that bundle is selected. Device/dtype
     feasibility is just a predicate — there is no separate ``feasible`` mechanism (one
-    concept, one home). Each port's declared datatype ``supports`` compiles through the SAME
+    concept, one home). Each port's declared datatype ``dtypes`` compiles through the SAME
     :func:`~finn.kernels.engine.constraints.compile_constraint` path as every other
     constraint (as a :class:`~finn.kernels.engine.constraints.DatatypeConstraint`), gaining
     the optional-port skip, then wraps in the selection guard — so the pool's UNION of
@@ -502,8 +502,8 @@ def _wrap_predicates(root_name, pool) -> list[Predicate]:
         for pred in bundle.predicates:
             wrapped.append(_guarded_predicate(root_name, bundle.name, pred))
         for iface, port in bundle.ports.items():
-            if port.supports is not None:
-                support_pred = compile_constraint(DatatypeConstraint(iface, port.supports))
+            if port.dtypes is not None:
+                support_pred = compile_constraint(DatatypeConstraint(iface, port.dtypes))
                 wrapped.append(_guarded_predicate(root_name, bundle.name, support_pred))
     return wrapped
 

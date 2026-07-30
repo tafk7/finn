@@ -80,6 +80,6 @@ def hls_bundle() -> Backend:
         ports=ports_from(
             stream=COMPUTE_STREAM,
             mem_modes={WEIGHTS: {EMBEDDED, DECOUPLED}, THRESHOLDS: {EMBEDDED}},
-            supports={INPUT: _INTEGER, WEIGHTS: _INTEGER},
+            dtypes={INPUT: _INTEGER, WEIGHTS: _INTEGER},
         ),
     )
