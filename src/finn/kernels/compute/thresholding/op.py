@@ -29,17 +29,14 @@ no memstream cell; the HLS/RTL difference is purely each compute emit's baked ar
 
 from __future__ import annotations
 
-import numpy as np
 from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
-from finn.kernels.model.param_contract import DeliveredParam
 from finn.kernels.model.ports import Direction, Role
 from finn.kernels.model.tiling import FULL
-from finn.kernels.dataflow.memory import parameters_pool
 
 from .names import INPUT, OUTPUT, THRESHOLDING_HLS, THRESHOLDING_RTL, THRESHOLDS  # noqa: F401
 from .registry import build_pool
@@ -58,7 +55,7 @@ def thresholding_interfaces():
     block. PE folds the channel dim (out position 1); the threshold block folds with it."""
     return (
         InterfaceSchema(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, NumChannels)
-        InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
+        InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL], delivered=True),  # (NumChannels, numSteps)
         InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
@@ -77,23 +74,6 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# DELIVERY — the threshold parameter interface + its cadence.
-# =============================================================================
-
-
-def _threshold_cadence(p, ctx) -> int:
-    # Thresholds are re-traversed once per output beat: cadence = prod(numInputVectors)
-    # = the input's non-channel leading dims (the TAP_REP). In the baked ROM the thresholds
-    # are constant (demand=None), so this does not size a streamer yet — but it is the real
-    # quantity a decoupled/MLO threshold variant would need.
-    return int(np.prod(ctx.tensor_shape(INPUT)[:-1]))
-
-
-def _delivered_parameters():
-    return (DeliveredParam(THRESHOLDS, _threshold_cadence, pool=parameters_pool(THRESHOLDS)),)
-
-
-# =============================================================================
 # ASSEMBLY — the full Thresholding design space as a Kernel (and as a Schema).
 # =============================================================================
 
@@ -106,10 +86,10 @@ def thresholding_pool():
 def thresholding_kernel() -> Kernel:
     """The full Thresholding design space as a :class:`Kernel` — the WHAT-owning op node.
 
-    The compute pool (``implementation``: HLS / RTL) with impl-owned tiling, plus the
-    DECLARED delivered threshold parameter. The Kernel synthesizes the supply waterfall
-    generically; both backends consume thresholds in constant mode → the delivery resolves
-    to the ``embedded`` topology (no memstream cell)."""
+    The compute pool (``implementation``: HLS / RTL) with impl-owned tiling. The threshold
+    interface is marked ``delivered=True``; the Kernel builds its DeliveredParam and
+    synthesizes the supply waterfall generically; both backends consume thresholds in
+    constant mode → the delivery resolves to the ``embedded`` topology (no memstream cell)."""
     return Kernel(
         identity=KernelSchema(
             name="Thresholding",
@@ -119,7 +99,6 @@ def thresholding_kernel() -> Kernel:
             op_predicates=op_predicates(),
         ),
         pool=thresholding_pool(),
-        delivered_parameters=_delivered_parameters(),
     )
 
 

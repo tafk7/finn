@@ -22,10 +22,10 @@ The demand contract inverts it: the compute side publishes a small, realization-
 consumes), and the delivery Backend reads THAT and computes its own geometry inside its
 bundle. The op stops knowing how memstream is built.
 
-The spec is **per-parameter-interface**: ``cadence`` is the field that varies by operand
-(weights are consumed once per layer → ``cadence=1``; thresholds once per activation beat
-→ ``cadence=prod(folded_in[:-1])``). Only weights populate it today; a second interface
-(thresholds) slots in additively once thresholds are a first-class Context tensor.
+The spec is sized purely from the resolved interface geometry (parallelism, elem_bits,
+depth). Consumption *cadence* — how often the core re-traverses a word — is a
+cross-interface fact deferred to coordinate B (MLO/cardinality), where it drives the
+index stream-tap; it is not a per-port field here.
 """
 
 from __future__ import annotations
@@ -48,16 +48,11 @@ class ParamDemand:
             ``parallelism`` gives the bit-rate ``parallelism*elem_bits``.
         depth: number of parameter words the core consumes per set (``WMEM*TH`` for
             MVAU) — the delivery memory must hold at least this many.
-        cadence: how often the core consumes one word/set — the per-interface field.
-            ``1`` = once per layer (weights); ``prod(folded_in[:-1])`` = once per
-            activation beat (thresholds). Drives the index stream-tap TAP_REP when
-            cardinality/MLO becomes first-class (coordinate B — not this increment).
     """
 
     parallelism: int
     elem_bits: int
     depth: int
-    cadence: int = 1
 
     @property
     def bit_rate(self) -> int:

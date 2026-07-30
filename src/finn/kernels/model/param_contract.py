@@ -33,8 +33,6 @@ knowledge of any op or any topology identity string.
 
 from __future__ import annotations
 
-from typing import Any, Callable
-
 from dataclasses import dataclass
 
 from ._util import prod
@@ -48,18 +46,17 @@ from .tiling import stream_width_key
 class DeliveredParam:
     """One parameter interface an op delivers through a delivery (parameters) pool.
 
-    The op DECLARES the WHAT; the generic ``DeliverySeam`` wiring owns the HOW. Fields:
+    An INTERNAL assembly struct: an op no longer constructs this — it marks the delivered
+    interface with ``InterfaceSchema(delivered=True)`` and ``Kernel.schema()`` builds the
+    ``DeliveredParam`` list itself. The generic ``DeliverySeam`` wiring consumes it. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
-    * ``cadence`` — ``(point, context) -> int``: how often the core consumes one word (the
-      one op-specific residue — weights ``->1``; thresholds ``->prod(folded_in[:-1])``).
     * ``pool`` — the CONCRETE delivery pool (a tuple of storage-topology ``Backend``\\ s),
-      built in ops for this interface. Handed to the Kernel so the wiring reads it directly
-      instead of hardcoding a lookup.
+      built by ``Kernel.schema()`` from ``parameters_pool(iface)``. Handed to the wiring so
+      it reads the pool directly instead of hardcoding a lookup.
     """
 
     iface: str
-    cadence: Callable[[Any, Any], int]
     pool: tuple = ()
 
 
@@ -92,7 +89,6 @@ def _demand_for(dp: DeliveredParam):
             parallelism=parallelism,
             elem_bits=elem_bits,
             depth=depth,
-            cadence=int(dp.cadence(p, ctx)),
         )
 
     return compute

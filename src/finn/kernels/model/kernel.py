@@ -93,6 +93,12 @@ class InterfaceSchema:
             present. (Variadic 0-to-N is a later additive generalization of the same rule:
             present interfaces come from Context, not the declared list.)
 
+        delivered: whether this interface is a DELIVERED parameter — the op supplies it
+            through the ``parameters`` (delivery) pool rather than as a dataflow edge
+            (MVU weights/thresholds). A pure marker: :meth:`Kernel.schema` builds the
+            ``DeliveredParam`` (interface + ``parameters_pool(name)``) for each interface
+            with this set and wires the generic supply waterfall. Default ``False``.
+
     ``index`` is DERIVED, not stored: position among same-direction peers in the kernel's
     interface list (0=first, 1=…).
     """
@@ -102,6 +108,7 @@ class InterfaceSchema:
     block: tuple = ()
     dtype_source: str | None = None
     optional: bool = False
+    delivered: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, "block", tuple(self.block))
@@ -144,12 +151,15 @@ class KernelSchema:
 @dataclass(frozen=True)
 class Kernel:
     """A hardware kernel op: a :class:`KernelSchema` (identity) + a pool of Backends
-    (realizations) + declared ``delivered_parameters`` (weight delivery, memory).
+    (realizations). Delivered parameters (weight/threshold delivery, memory) are DERIVED
+    from the identity's interface markers, not passed in.
 
     ``identity`` is the ONNX-invariant half (name, interfaces, op-level axes/derived/
     predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
-    feasibility, sources, emit. ``delivered_parameters`` are the op's per-interface
-    :class:`~finn.kernels.model.param_contract.DeliveredParam` declarations, each lowered by a
+    feasibility, sources, emit. ``delivered_parameters`` is BUILT in ``__post_init__`` from
+    each ``InterfaceSchema`` marked ``delivered=True`` — one
+    :class:`~finn.kernels.model.param_contract.DeliveredParam` (interface +
+    ``parameters_pool(name)``) per marker, each lowered by a
     :class:`~finn.kernels.model.interface.DeliverySeam` into the demand stage +
     guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
@@ -159,13 +169,26 @@ class Kernel:
 
     identity: KernelSchema
     pool: tuple[Backend, ...]
-    delivered_parameters: tuple = ()  # DeliveredParam per delivered interface; wired generically
+    delivered_parameters: tuple = field(default=(), init=False)  # built from interface markers
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
-        object.__setattr__(self, "delivered_parameters", tuple(self.delivered_parameters))
+        object.__setattr__(self, "delivered_parameters", self._build_delivered())
         object.__setattr__(self, "_tiling_cache", {})
+
+    def _build_delivered(self) -> tuple:
+        """The delivered-parameter list, built from each ``delivered=True`` interface. Each
+        marker yields one :class:`DeliveredParam` bound to ``parameters_pool(name)`` — the
+        op declares delivery with a marker, the pool wiring is generic here."""
+        from finn.kernels.dataflow.memory import parameters_pool
+        from .param_contract import DeliveredParam
+
+        return tuple(
+            DeliveredParam(i.name, pool=parameters_pool(i.name))
+            for i in self.identity.interfaces
+            if i.delivered
+        )
 
     # -- identity passthroughs: read the KernelSchema fields off the Kernel ---
 

@@ -29,7 +29,6 @@ from finn.kernels.engine.resolve import resolve
 from finn.kernels.model.backend import Backend, pool_schema, ports_from
 from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
-from finn.kernels.model.param_contract import DeliveredParam
 from finn.kernels.model.param_names import (
     CONSTANT,
     STREAM,
@@ -128,7 +127,7 @@ def test_consumes_stream_only_domain_excludes_embedded():
 def _restricted_kernel(consumes):
     ifaces = (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
-        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),
+        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL], delivered=True),
         InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
     backend = Backend(
@@ -141,9 +140,6 @@ def _restricted_kernel(consumes):
     return Kernel(
         identity=KernelSchema(name="MVU", interfaces=ifaces),
         pool=(backend,),
-        delivered_parameters=(
-            DeliveredParam(WEIGHTS, lambda p, ctx: 1, pool=parameters_pool(WEIGHTS)),
-        ),
     )
 
 

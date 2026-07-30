@@ -33,17 +33,13 @@ Tensor-name convention for the Context this schema resolves against:
 
 from __future__ import annotations
 
-import numpy as np
-
 from finn.kernels.engine.axis import predicate_axis
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
-from finn.kernels.model.param_contract import DeliveredParam
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 from finn.kernels.model.param_names import runtime_writeable_key
-from finn.kernels.dataflow.memory import parameters_pool
 from finn.kernels.compute.thresholding.shared import (
     _threshold_datatype,
     _unsigned_input_nonneg_thresholds,
@@ -88,11 +84,13 @@ def mvau_interfaces():
     block; ``out`` iterates vectors and holds MH."""
     return (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
-        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
+        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL], delivered=True),  # (MW, MH)
         # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff a
         # threshold initializer is attached (a 3-input node); absent nodes skip it in every
         # Context-reading loop. Constant-only in the fused core, so no impl folds it.
-        InterfaceSchema("thresholds", Direction.IN, block=[FULL, FULL], optional=True),
+        InterfaceSchema(
+            "thresholds", Direction.IN, block=[FULL, FULL], optional=True, delivered=True
+        ),
         # dtype_source: the out stream width uses the derived output type (= accDataType with
         # no activation), not the raw graph dtype — so stream_width.out matches emit.
         InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
@@ -214,11 +212,11 @@ def op_predicates():
 
 # =============================================================================
 # 5. DELIVERY / 6. COST — both generic, no op-level authoring.
-#    Delivery: the op DECLARES which interfaces it delivers + each one's cadence (see
-#    _delivered_parameters); the Kernel synthesizes the COMPUTE→DEMAND→MEMORY waterfall
-#    generically (model/param_contract.py). Cost: MVAU's nf·sf·n_vecs falls out of the
-#    generic max-over-interfaces floor now that weights is a 2-D block streamed SIMD·PE,
-#    so it declares NO cost_model.
+#    Delivery: the op MARKS which interfaces it delivers (``InterfaceSchema(delivered=True)``
+#    on weights + thresholds); the Kernel builds the DeliveredParam list and synthesizes the
+#    COMPUTE→DEMAND→MEMORY waterfall generically (model/param_contract.py). Cost: MVAU's
+#    nf·sf·n_vecs falls out of the generic max-over-interfaces floor now that weights is a
+#    2-D block streamed SIMD·PE, so it declares NO cost_model.
 # =============================================================================
 
 
@@ -239,34 +237,14 @@ def mvau_pool():
     return build_pool()
 
 
-def _weight_cadence(p, ctx) -> int:
-    # Weights are consumed once per layer.
-    return 1
-
-
-def _threshold_cadence(p, ctx) -> int:
-    # Thresholds are re-traversed once per output vector: cadence = prod(numInputVectors) =
-    # the input tensor's non-reduction dims (param-delivery-design-space.md §3.1).
-    return int(np.prod(ctx.tensor_shape(INPUT)[:-1]))
-
-
-# The parameter interfaces this op delivers (WHAT + cadence); the generic Kernel wiring
-# (model/param_contract.py) owns the HOW.
-def _delivered_parameters():
-    return (
-        DeliveredParam("weights", _weight_cadence, pool=parameters_pool(WEIGHTS)),
-        DeliveredParam(THRESHOLDS, _threshold_cadence, pool=parameters_pool(THRESHOLDS)),
-    )
-
-
 def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
-    The compute pool (HLS / DSP-softvec / DSP-packed) with impl-owned tiling, plus declared
-    delivered parameters (weights + thresholds). The Kernel synthesizes the
-    COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
-    (model/param_contract.py); the getters project from a resolved point via the impl
-    ``stream``."""
+    The compute pool (HLS / DSP-softvec / DSP-packed) with impl-owned tiling. Weights +
+    thresholds are marked ``delivered=True`` on the interfaces; the Kernel builds their
+    DeliveredParam list and synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per
+    interface generically (model/param_contract.py); the getters project from a resolved
+    point via the impl ``stream``."""
     return Kernel(
         identity=KernelSchema(
             name="MVAU",
@@ -276,7 +254,6 @@ def mvau_kernel() -> Kernel:
             op_predicates=op_predicates(),
         ),
         pool=mvau_pool(),
-        delivered_parameters=_delivered_parameters(),
     )
 
 

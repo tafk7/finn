@@ -516,25 +516,6 @@ def test_dsp_core_rejects_thresholded_node(schema):
     assert any("threshold" in reason.lower() for reason in r.reasons)
 
 
-# --- cadence differs by interface ------------------------------------------
-
-
-def test_cadence_differs_by_interface(schema):
-    from finn.kernels.compute.mvau.op import _weight_cadence, _threshold_cadence
-
-    weights = np.random.RandomState(0).randint(-8, 8, size=(6, 8)).astype(np.float32)
-    ctx = Context(
-        shapes={"weights": (6, 8), "inp": (1, 4, 6), "out": (1, 4, 8)},
-        datatypes={"weights": DataType["INT4"], "inp": DataType["INT4"], "out": DataType["INT16"]},
-        initializers={"weights": weights},
-        fpgapart=SEVEN_SERIES, clk_ns=5.0,
-    )
-    r = resolve(schema, ctx, base_assignment())
-    assert isinstance(r, Point)
-    assert _weight_cadence(r, ctx) == 1
-    assert _threshold_cadence(r, ctx) == 4  # prod([1, 4])
-
-
 # ===========================================================================
 # F2 / D-R5 — backend feasibility is the single source of truth (claim time).
 # The old op.py source-grep guard is intentionally dropped (build-discipline,
