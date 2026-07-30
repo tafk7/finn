@@ -63,13 +63,14 @@ class Interface:
             declaration), or a :class:`~finn.kernels.model.tiling.TileExpr`. Empty = the
             port is unfolded (1 element/cycle). Impl-owned: there is no block field here, so
             an impl cannot change the op math (kernelop-tensor-block-stream.md §5).
-        consumes: the CONSUMPTION MODES this backend accepts for a parameter port, a
-            ``frozenset`` over ``{"constant", "stream"}``. ``constant`` = baked into the core
-            (an HLS ROM/``params.h``, no port); ``stream`` = an AXIS port a delivery block
-            feeds. Restricts which delivery topologies are legal (a topology carries a mode;
-            the delivery guard keeps only topologies whose mode this backend consumes).
-            ``None`` = PERMISSIVE (both modes) — a port that declares nothing regresses
-            nothing. Meaningful only for a delivered-parameter port.
+        mem_modes: the SET of memory-realization modes this backend accepts for a parameter
+            port, a ``frozenset`` over ``{"embedded", "decoupled"}``. ``embedded`` = baked
+            into the core (an HLS ROM/``params.h``, no port); ``decoupled`` = an AXIS port a
+            separate memory backend feeds. Presence of an iface here is the authoritative
+            "param port" signal for this backend. Restricts which delivery topologies are
+            legal (a topology carries a mode; the delivery guard keeps only topologies whose
+            mode this backend accepts). ``None`` = PERMISSIVE (both modes) — a port that
+            declares nothing regresses nothing. Meaningful only for a delivered-parameter port.
         supports: this backend's declared datatype SUPPORT for the port — either a
             :class:`~finn.kernels.engine.datatype_support.DatatypeSupport` (category +
             bitwidth range) or a custom callable ``(dt) -> reason | None``. Compiled by
@@ -86,19 +87,19 @@ class Interface:
     """
 
     stream: tuple = ()
-    consumes: frozenset[str] | None = None
+    mem_modes: frozenset[str] | None = None
     supports: Any | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "stream", tuple(self.stream))
-        if self.consumes is not None:
-            object.__setattr__(self, "consumes", frozenset(self.consumes))
+        if self.mem_modes is not None:
+            object.__setattr__(self, "mem_modes", frozenset(self.mem_modes))
 
 
 def ports_from(
     *,
     stream: Mapping[str, Any] | None = None,
-    consumes: Mapping[str, Any] | None = None,
+    mem_modes: Mapping[str, Any] | None = None,
     supports: Mapping[str, Any] | None = None,
 ) -> dict[str, Interface]:
     """Assemble a ``{iface -> Interface}`` ports map from per-facet maps. An ergonomic
@@ -106,13 +107,13 @@ def ports_from(
     expressible once while the storage stays one :class:`Interface` per port. A fact absent
     for an interface takes the :class:`Interface` default."""
     stream = stream or {}
-    consumes = consumes or {}
+    mem_modes = mem_modes or {}
     supports = supports or {}
-    names = set(stream) | set(consumes) | set(supports)
+    names = set(stream) | set(mem_modes) | set(supports)
     return {
         n: Interface(
             stream=stream.get(n, ()),
-            consumes=consumes.get(n),
+            mem_modes=mem_modes.get(n),
             supports=supports.get(n),
         )
         for n in names
@@ -149,18 +150,18 @@ class Backend:
             (which carries initializer VALUES) — never the graph.
         ports: this bundle's per-op-port realization facts, ``{interface_name ->
             Interface}``. Each :class:`Interface` bundles what this backend declares about
-            one port — its STREAM fold, delivery CONSUMPTION modes, datatype SUPPORT, and
+            one port — its STREAM fold, memory-realization modes, datatype SUPPORT, and
             datatype DERIVATION — in one object rather than parallel ``{iface -> …}`` maps.
             An interface absent from ``ports`` takes every :class:`Interface` default
             (unfolded, permissive, unconstrained). Build ergonomically with
             :func:`ports_from` when a fact (e.g. a pool-wide fold map) is shared.
-        mode: for a DELIVERY-pool member (a storage topology), the CONSUMPTION MODE it
-            presents — ``"constant"`` (baked into the core, no port) or ``"stream"`` (an
-            AXIS port). A topology CARRIES its own mode here, so the generic delivery guard
-            reads ``topology.mode`` vs a compute backend's ``consumes[iface]`` — both
-            ``Backend`` fields — with no string→mode side-table and no knowledge of the
-            topology's identity string. ``None`` for a compute-pool member (it has no
-            delivery mode; it CONSUMES modes via ``consumes``).
+        mem_mode: for a DELIVERY-pool member (a storage topology), the single memory-
+            realization mode it PRESENTS — ``"embedded"`` (baked into the core, no port) or
+            ``"decoupled"`` (an AXIS port). A topology CARRIES its own mode here, so the
+            generic delivery guard reads ``topology.mem_mode`` vs a compute backend's
+            ``mem_modes[iface]`` — both ``Backend`` fields — with no string→mode side-table
+            and no knowledge of the topology's identity string. ``None`` for a compute-pool
+            member (it has no delivery mode; it ACCEPTS modes via ``mem_modes``).
         schema: an OPTIONAL reference to this bundle's typed template contract
             (:class:`~finn.kernels.model.artifacts.RtlModule`). The schema is OWNED by the
             template (defined next to it, 1:1); ``Backend`` only REFERENCES it, so N
@@ -183,7 +184,7 @@ class Backend:
     sources: tuple[str, ...] = ()
     emit: Callable[[Any, Any], "Artifacts"] | None = None
     ports: Mapping[str, Interface] = field(default_factory=dict)
-    mode: str | None = None
+    mem_mode: str | None = None
     schema: RtlModule | None = None
 
     def __post_init__(self):
@@ -198,10 +199,10 @@ class Backend:
         port = self.ports.get(iface)
         return port.stream if port is not None else ()
 
-    def consumes_of(self, iface: str) -> frozenset[str] | None:
-        """The consumption modes this backend accepts for ``iface`` (``None`` = permissive)."""
+    def mem_modes_of(self, iface: str) -> frozenset[str] | None:
+        """The memory-realization modes this backend accepts for ``iface`` (``None`` = permissive)."""
         port = self.ports.get(iface)
-        return port.consumes if port is not None else None
+        return port.mem_modes if port is not None else None
 
     @property
     def stream(self) -> dict[str, tuple]:
@@ -210,10 +211,10 @@ class Backend:
         return {n: p.stream for n, p in self.ports.items() if p.stream}
 
     @property
-    def consumes(self) -> dict[str, frozenset[str]]:
-        """The per-interface consumption-mode map, projected from ``ports`` (the delivery
+    def mem_modes(self) -> dict[str, frozenset[str]]:
+        """The per-interface memory-realization-mode map, projected from ``ports`` (the delivery
         guard reads this). Only interfaces that declare a mode appear; absent ⇒ permissive."""
-        return {n: p.consumes for n, p in self.ports.items() if p.consumes is not None}
+        return {n: p.mem_modes for n, p in self.ports.items() if p.mem_modes is not None}
 
 
 class EmitError(ValueError):

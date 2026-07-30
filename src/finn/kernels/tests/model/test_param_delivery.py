@@ -8,13 +8,13 @@
 
 """Parameter-feed contract: consumption-mode delivery + fold depth (D1-D7).
 
-The behavioral anchor for the supply spine. "embedded" is not a topology — it is the
-``constant`` consumption mode: the compute core bakes the parameter in, so there is no
-stream and no demand. A compute Backend declares which modes it ``consumes`` per
-interface; the delivery-topology domain is filtered to matching modes. Demand is sized
-from resolved geometry (parallelism/elem_bits/depth) under stream mode, None under
-constant mode. ``weight_fold_depth``/``threshold_fold_depth`` are one topology-independent
-quantity, equal embedded and decoupled.
+The behavioral anchor for the supply spine. "embedded" is the ``embedded`` mem_mode: the
+compute core bakes the parameter in, so there is no stream and no demand. A compute
+Backend declares which modes it accepts (``mem_modes``) per interface; the
+delivery-topology domain is filtered to matching modes. Demand is sized from resolved
+geometry (parallelism/elem_bits/depth) under decoupled mode, None under embedded mode.
+``weight_fold_depth``/``threshold_fold_depth`` are one topology-independent quantity,
+equal embedded and decoupled.
 
 D1 waterfall order · D2 demand sizing/None · D3 topology-mode guard + re-guarded default ·
 D4 memory geometry · D5 namespacing · D6 embedded constant fallback · D7 fold_depth.
@@ -48,7 +48,7 @@ TOPOLOGY = topology_key(WEIGHTS)
 
 
 def _topo_mode(name, iface=WEIGHTS):
-    return {b.name: b.mode for b in parameters_pool(iface)}[name]
+    return {b.name: b.mem_mode for b in parameters_pool(iface)}[name]
 
 
 def _mvau_ctx(part=VERSAL):
@@ -114,17 +114,17 @@ def test_consumes_stream_only_domain_excludes_embedded():
         name="stream_only",
         ports=ports_from(
             stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
-            consumes={WEIGHTS: {DECOUPLED_MODE}},
+            mem_modes={WEIGHTS: {DECOUPLED_MODE}},
         ),
     )
     legal = {
-        b.name for b in parameters_pool(WEIGHTS) if b.mode in backend.consumes[WEIGHTS]
+        b.name for b in parameters_pool(WEIGHTS) if b.mem_mode in backend.mem_modes[WEIGHTS]
     }
     assert EMBEDDED not in legal
     assert DECOUPLED in legal
 
 
-def _restricted_kernel(consumes):
+def _restricted_kernel(mem_modes):
     ifaces = (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
         InterfaceSchema("weights", Direction.IN, block=[FULL, FULL], delivered=True),
@@ -134,7 +134,7 @@ def _restricted_kernel(consumes):
         name="core",
         ports=ports_from(
             stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
-            consumes=consumes,
+            mem_modes=mem_modes,
         ),
     )
     return Kernel(
@@ -174,10 +174,10 @@ def test_default_falls_to_legal_topology_when_embedded_out_of_domain():
     assert r[topology_key(WEIGHTS)] == DECOUPLED
 
 
-def test_backend_consumes_coerced_to_frozenset():
-    b = Backend(name="x", ports=ports_from(consumes={WEIGHTS: {DECOUPLED_MODE, EMBEDDED_MODE}}))
-    assert isinstance(b.consumes[WEIGHTS], frozenset)
-    assert Backend(name="y").consumes == {}  # declares nothing → permissive
+def test_backend_mem_modes_coerced_to_frozenset():
+    b = Backend(name="x", ports=ports_from(mem_modes={WEIGHTS: {DECOUPLED_MODE, EMBEDDED_MODE}}))
+    assert isinstance(b.mem_modes[WEIGHTS], frozenset)
+    assert Backend(name="y").mem_modes == {}  # declares nothing → permissive
 
 
 # --- D5: per-interface namespacing ------------------------------------------

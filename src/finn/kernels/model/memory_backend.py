@@ -35,7 +35,7 @@ from finn.kernels.model.backend import Backend
 def memory_backend(
     name: str,
     *,
-    mode: str,
+    mem_mode: str,
     language: str | None = None,
     axes: tuple[Axis, ...] = (),
     derived: tuple[Derived, ...] = (),
@@ -48,19 +48,19 @@ def memory_backend(
 
     Thin wrapper over :class:`Backend` — same fields, topology-flavoured name. The pool's
     root axis is ``topology`` (see :func:`parameters_schema`); ``name`` is the value that
-    selects this topology. ``mode`` is the CONSUMPTION MODE this topology presents
-    (``"constant"``/``"stream"``) — carried on the ``Backend`` so the generic delivery guard
-    reads it structurally (no string→mode side-table). ``language`` is the topology's
+    selects this topology. ``mem_mode`` is the memory-realization mode this topology presents
+    (``"embedded"``/``"decoupled"``) — carried on the ``Backend`` so the generic delivery
+    guard reads it structurally (no string→mode side-table). ``language`` is the topology's
     realization language when it emits its own HDL (``"rtl"`` for the memstream streamer);
     ``None`` when it emits nothing of its own (``embedded`` — baked into the compute core).
     ``schema`` is the optional typed template contract this topology emits (a streaming
-    topology references its wrapper schema; a constant topology with no template leaves it
+    topology references its wrapper schema; an embedded topology with no template leaves it
     ``None``).
     """
     return Backend(
         name=name,
         language=language,
-        mode=mode,
+        mem_mode=mem_mode,
         axes=axes,
         derived=derived,
         predicates=predicates,

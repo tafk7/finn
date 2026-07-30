@@ -23,11 +23,11 @@ sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → MEMORY) �
   cases — no initializer (a live activation, not a stored parameter) or constant-mode
   consumption (baked into the core, nothing to stream).
 * :func:`_topology_domain` / :func:`_topology_default` — the topology-mode GUARD: keeps
-  only topologies whose :attr:`Backend.mode` the selected compute backend ``consumes`` for
+  only topologies whose :attr:`Backend.mem_mode` the selected compute backend accepts for
   this interface. Permissive when the backend declares nothing.
 
-Both are interface-generic: they read a compute backend's :attr:`Backend.consumes` and a
-delivery topology's :attr:`Backend.mode` — both plain ``Backend`` fields — with no
+Both are interface-generic: they read a compute backend's :attr:`Backend.mem_modes` and a
+delivery topology's :attr:`Backend.mem_mode` — both plain ``Backend`` fields — with no
 knowledge of any op or any topology identity string.
 """
 
@@ -73,7 +73,7 @@ def _demand_for(dp: DeliveredParam):
     iface = dp.iface
     width_key = stream_width_key(iface)
     topo_key = topology_key(iface)
-    topo_modes = {b.name: b.mode for b in dp.pool}  # topology value -> its consumption mode
+    topo_modes = {b.name: b.mem_mode for b in dp.pool}  # topology value -> its mem_mode
 
     def compute(p, ctx):
         if ctx.initializer(iface) is None:
@@ -99,19 +99,19 @@ def _demand_for(dp: DeliveredParam):
 
 def _topology_domain(compute_pool, dp: DeliveredParam):
     """A domain override for ``parameters.<iface>.topology`` keeping only topologies whose
-    ``mode`` the selected compute backend consumes for this interface. The compute backend
+    ``mem_mode`` the selected compute backend accepts for this interface. The compute backend
     is master: an interface it says nothing about is PERMISSIVE (both modes), so nothing
     regresses. Returns ``(domain_closure, legal)`` — ``legal(p) -> tuple[str, ...]``."""
     iface = dp.iface
     by_name = {b.name: b for b in compute_pool}
-    topo_modes = {b.name: b.mode for b in dp.pool}  # topology identity -> its consumption mode
+    topo_modes = {b.name: b.mem_mode for b in dp.pool}  # topology identity -> its mem_mode
 
     def legal(p):
         # Defensive read: during real resolve `backend` is fixed before this axis;
         # under a bare probe point (nodeattr typing) it is absent → permissive (all modes).
         impl = p.get(BACKEND_AXIS) if hasattr(p, "get") else None
         backend = by_name.get(impl)
-        modes = (backend.consumes_of(iface) if backend else None) or ALL_MODES
+        modes = (backend.mem_modes_of(iface) if backend else None) or ALL_MODES
         return tuple(name for name, mode in topo_modes.items() if mode in modes)
 
     return lambda p, ctx: frozenset(legal(p)), legal

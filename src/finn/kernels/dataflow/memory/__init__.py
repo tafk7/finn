@@ -62,7 +62,7 @@ def parameters_schema(iface: str = WEIGHTS) -> Schema:
     topology's axes are present, the others absent. Has no op-level shared axes of its own
     — topology selection IS the surface. Cross-coordinate couplings (memstream
     depth/width, which read the compute fold; the topology-domain guard, which reads the
-    selected compute backend's ``consumes``) are contributed by the composing op, not
+    selected compute backend's ``mem_modes``) are contributed by the composing op, not
     here, so this standalone schema resolves without a compute context. Composing the pool
     for a second interface is just a second ``parameters_schema(other)`` — the keys never
     collide.

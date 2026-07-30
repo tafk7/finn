@@ -188,7 +188,7 @@ def _geometry_derived(iface):
 def decoupled_topology(iface):
     return memory_backend(
         DECOUPLED,
-        mode=DECOUPLED_MODE,  # an AXIS port a memstream block feeds
+        mem_mode=DECOUPLED_MODE,  # an AXIS port a memstream block feeds
         language="rtl",  # emits its own memstream Verilog streamer
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface),

@@ -79,7 +79,7 @@ def hls_bundle() -> Backend:
         # only MVU that supports embedded thresholds.) Integer i/w declared as datatype support.
         ports=ports_from(
             stream=COMPUTE_STREAM,
-            consumes={WEIGHTS: {EMBEDDED, DECOUPLED}, THRESHOLDS: {EMBEDDED}},
+            mem_modes={WEIGHTS: {EMBEDDED, DECOUPLED}, THRESHOLDS: {EMBEDDED}},
             supports={INPUT: _INTEGER, WEIGHTS: _INTEGER},
         ),
     )

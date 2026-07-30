@@ -22,14 +22,14 @@ the delivery root axis, and a ``compose`` union documenting the gap it refused t
 
 * ``publishes`` — the compute→delivery DEMAND closure (a realization-free
   :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface
-  geometry). ``None`` for a live activation or a constant-mode consumption.
+  geometry). ``None`` for a live activation or an embedded-mode consumption.
 * ``constrains`` — the topology-mode GUARD: the delivery pool's ``topology`` domain kept
-  to just the modes the selected compute backend consumes for this interface.
+  to just the modes the selected compute backend accepts for this interface.
 * declared ``deps`` ``{implementation, topology.<iface>}`` — so the existing topo-sort
   orders COMPUTE → DEMAND → MEMORY structurally, not by list position.
 
 It introduces NO new resolve mechanism: it reads only existing ``Backend`` fields
-(``stream``, ``consumes``, topology ``mode``) and existing point keys
+(``stream``, ``mem_modes``, topology ``mem_mode``) and existing point keys
 (``stream_width.<iface>``, ``topology.<iface>``, ``demand.<iface>``), and its two-root
 deps feed the topo-sort that already runs.
 
@@ -56,7 +56,7 @@ class DeliverySeam:
     """The compute→delivery seam for one declared parameter interface. Built by
     :func:`delivery_seam_for` from a
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (the op's WHAT) plus the compute
-    pool (whose members' ``consumes`` drive the guard).
+    pool (whose members' ``mem_modes`` drive the guard).
 
     Attributes:
         schema: the op-side interface name this realizes (the ``DeliveredParam.iface`` —
@@ -68,7 +68,7 @@ class DeliverySeam:
             not a copy of the fold math). Carried so the seam data lives in one object; the
             demand reads the RESOLVED ``stream_width.<iface>`` the tiling engine derives from
             it, so this map is not itself consumed by :meth:`to_subschemas`.
-        consumes: ``{compute_backend_name -> frozenset[str] | None}`` — the modes each
+        mem_modes: ``{compute_backend_name -> frozenset[str] | None}`` — the modes each
             compute backend accepts for this port (``None`` = permissive, both modes). The
             per-backend variation is dispatched on the selected ``implementation`` inside
             ``constrains``; this map exposes the same facts declaratively.
@@ -86,7 +86,7 @@ class DeliverySeam:
     schema: str
     pool: tuple[Backend, ...]
     stream: Mapping[str, Any]
-    consumes: Mapping[str, Any]
+    mem_modes: Mapping[str, Any]
     publishes: Callable[[Any, Any], Any]
     constrains: tuple[Callable[[Any, Any], Any], Callable[[Any], Any]]
     deps: frozenset[str]
@@ -98,7 +98,7 @@ class DeliverySeam:
         The demand stage publishes ``parameters.<iface>.demand`` from resolved compute
         geometry (``publishes``); the delivery pool then sizes its own realization from
         that demand, its ``topology`` domain filtered by ``constrains`` to the modes the
-        selected compute backend consumes."""
+        selected compute backend accepts."""
         return (self._demand_schema(), self._delivery_subschema())
 
     def _demand_schema(self) -> Schema:
@@ -113,8 +113,8 @@ class DeliverySeam:
 
     def _delivery_subschema(self) -> Schema:
         """The delivery pool for this interface with its ``topology`` root-axis domain
-        overridden by the consumption-mode guard, so only topologies the selected compute
-        backend can consume remain selectable. The default is likewise guarded so an
+        overridden by the mem-mode guard, so only topologies the selected compute
+        backend can accept remain selectable. The default is likewise guarded so an
         out-of-domain default never makes an unpinned topology illegal."""
         schema = pool_schema(
             topology_key(self.schema),
@@ -137,12 +137,12 @@ def delivery_seam_for(dp: DeliveredParam, compute_pool) -> DeliverySeam:
     the guarded delivery sub-schema for this interface have one owner."""
     iface = dp.iface
     stream = {b.name: b.stream_of(iface) for b in compute_pool}
-    consumes = {b.name: b.consumes_of(iface) for b in compute_pool}
+    mem_modes = {b.name: b.mem_modes_of(iface) for b in compute_pool}
     return DeliverySeam(
         schema=iface,
         pool=tuple(dp.pool),
         stream=stream,
-        consumes=consumes,
+        mem_modes=mem_modes,
         publishes=_demand_for(dp),
         constrains=_topology_domain(compute_pool, dp),
         deps=frozenset({BACKEND_AXIS, topology_key(iface)}),

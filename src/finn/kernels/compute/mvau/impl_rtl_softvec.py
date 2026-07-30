@@ -55,6 +55,6 @@ def softvec_bundle() -> Backend:
         # any node WITH thresholds, so thresholds never reaches delivery here (no consumes
         # entry needed — an absent interface is permissive, and the gate is the real rejecter).
         ports=ports_from(
-            stream=COMPUTE_STREAM, consumes={WEIGHTS: {DECOUPLED}}, supports=RTL_MVU_SUPPORT
+            stream=COMPUTE_STREAM, mem_modes={WEIGHTS: {DECOUPLED}}, supports=RTL_MVU_SUPPORT
         ),
     )

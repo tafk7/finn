@@ -325,7 +325,7 @@ class Kernel:
         # that holds the DEMAND stage + guarded delivery sub-schema (design pitch §2). Its
         # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
         # one owner and the waterfall is structural (its declared two-root deps) rather than
-        # list-position. Reads the compute pool's `consumes` + each topology's `mode` — no
+        # list-position. Reads the compute pool's `mem_modes` + each topology's `mem_mode` — no
         # op-specific logic here. Namespaced keys (`parameters.*`) + distinct sources_key
         # mean the union never collides, so resolve walks it unchanged.
         for dp in self.delivered_parameters:

@@ -36,5 +36,5 @@ def hls_bundle() -> Backend:
         emit=emit_thresholding_hls,
         # The HLS core bakes thresholds into thresh.h — it consumes them in EMBEDDED mode
         # only (embedded ROM, no stream port). base FINN: internal_embedded is HLS-only.
-        ports=ports_from(consumes={THRESHOLDS: {EMBEDDED}}),
+        ports=ports_from(mem_modes={THRESHOLDS: {EMBEDDED}}),
     )

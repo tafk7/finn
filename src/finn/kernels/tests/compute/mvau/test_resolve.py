@@ -497,7 +497,7 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
     assert any("thresholds >= 0" in reason or "non-negative" in reason.lower() for reason in r.reasons)
 
 
-# --- consumes: DSP cores are stream-weight-only, no thresholds -------------
+# --- mem_modes: DSP cores are decoupled-weight-only, no thresholds -------------
 
 
 def test_dsp_core_rejects_embedded_weights(schema):
