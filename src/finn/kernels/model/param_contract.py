@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from ._util import prod
 from .backend import BACKEND_AXIS
 from .demand import ParamDemand
-from .param_names import ALL_MODES, topology_key
+from .param_names import ALL_MODES, EMBEDDED, topology_key
 from .tiling import stream_width_key
 
 
@@ -69,7 +69,7 @@ def _demand_for(dp: DeliveredParam):
     named backend dials — so a tiled/packed backend that folds the interface in its own
     terms works automatically. Returns ``None`` (nothing to deliver) when the interface has
     no initializer (a live activation, streams like any dataflow edge) or is consumed in
-    ``constant`` mode (baked into the core)."""
+    ``embedded`` mode (baked into the core)."""
     iface = dp.iface
     width_key = stream_width_key(iface)
     topo_key = topology_key(iface)
@@ -78,7 +78,7 @@ def _demand_for(dp: DeliveredParam):
     def compute(p, ctx):
         if ctx.initializer(iface) is None:
             return None
-        if topo_modes.get(p[topo_key]) == "constant":
+        if topo_modes.get(p[topo_key]) == EMBEDDED:
             return None
         width_bits = int(p[width_key])  # resolved stream width (PE*SIMD*wbits)
         elem_bits = ctx.tensor_datatype(iface).bitwidth()

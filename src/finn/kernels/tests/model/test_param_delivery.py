@@ -30,8 +30,8 @@ from finn.kernels.model.backend import Backend, pool_schema, ports_from
 from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
 from finn.kernels.model.param_names import (
-    CONSTANT,
-    STREAM,
+    EMBEDDED as EMBEDDED_MODE,
+    DECOUPLED as DECOUPLED_MODE,
     demand_key,
     depth_key,
     topology_key,
@@ -74,8 +74,8 @@ def _resolve_mvau(assignment):
 
 
 def test_embedded_is_constant_decoupled_is_stream():
-    assert _topo_mode(EMBEDDED) == CONSTANT
-    assert _topo_mode(DECOUPLED) == STREAM
+    assert _topo_mode(EMBEDDED) == EMBEDDED_MODE
+    assert _topo_mode(DECOUPLED) == DECOUPLED_MODE
 
 
 # --- D2: demand sizing / None ----------------------------------------------
@@ -114,7 +114,7 @@ def test_consumes_stream_only_domain_excludes_embedded():
         name="stream_only",
         ports=ports_from(
             stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]},
-            consumes={WEIGHTS: {STREAM}},
+            consumes={WEIGHTS: {DECOUPLED_MODE}},
         ),
     )
     legal = {
@@ -153,7 +153,7 @@ def _mvu_ctx():
 
 
 def test_stream_only_backend_rejects_embedded_at_resolve():
-    k = _restricted_kernel({WEIGHTS: {STREAM}})
+    k = _restricted_kernel({WEIGHTS: {DECOUPLED_MODE}})
     ctx = _mvu_ctx()
     ok = k.configure(
         ctx, {"backend": "core", "SIMD": 16, "PE": 4, topology_key(WEIGHTS): DECOUPLED}
@@ -168,14 +168,14 @@ def test_stream_only_backend_rejects_embedded_at_resolve():
 def test_default_falls_to_legal_topology_when_embedded_out_of_domain():
     # With a stream-only restriction embedded is out of domain; resolve must fall to a
     # legal in-domain default (decoupled), not crash.
-    k = _restricted_kernel({WEIGHTS: {STREAM}})
+    k = _restricted_kernel({WEIGHTS: {DECOUPLED_MODE}})
     r = k.configure(_mvu_ctx(), {"backend": "core", "SIMD": 16, "PE": 4})
     assert not isinstance(r, Illegal), getattr(r, "reasons", None)
     assert r[topology_key(WEIGHTS)] == DECOUPLED
 
 
 def test_backend_consumes_coerced_to_frozenset():
-    b = Backend(name="x", ports=ports_from(consumes={WEIGHTS: {STREAM, CONSTANT}}))
+    b = Backend(name="x", ports=ports_from(consumes={WEIGHTS: {DECOUPLED_MODE, EMBEDDED_MODE}}))
     assert isinstance(b.consumes[WEIGHTS], frozenset)
     assert Backend(name="y").consumes == {}  # declares nothing → permissive
 

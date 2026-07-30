@@ -87,8 +87,8 @@ def init_file_key(iface: str) -> str:
 
 def param_stream_width_key(iface: str) -> str:
     # The parameter-delivery stream WIDTH in bits, dispatched per topology (a per-topology
-    # fact, NOT an op-level branch): 0 for a constant-mode topology (embedded — no port),
-    # demand.bit_rate for a stream-mode topology (decoupled). The COMPUTE side reads it.
+    # fact, NOT an op-level branch): 0 for an embedded-mode topology (no port),
+    # demand.bit_rate for a decoupled-mode topology. The COMPUTE side reads it.
     # Namespaced per interface (``parameters.<iface>.stream_width``) so a second streamed
     # parameter interface never collides — the uniform ``parameters.<iface>.*`` rule. (The
     # tiling engine's ``stream_width.<iface>`` is a DIFFERENT key — the compute-fold width;
@@ -96,15 +96,19 @@ def param_stream_width_key(iface: str) -> str:
     return _key(iface, "stream_width")
 
 
-# --- Consumption modes (the tag OVER coordinate A) ---------------------------
-# The CONSUMPTION MODE a topology presents to the compute core (consumption-mode-
-# delivery.md): a tag OVER coordinate A, not a new coordinate. ``constant`` = baked into the
-# core (no port); ``stream`` = an AXIS port a delivery block feeds. A delivery topology
-# CARRIES its mode in ``Backend.mode``; a compute backend's ``consumes`` (per interface)
-# filters the topology domain to matching modes.
-CONSTANT = "constant"
-STREAM = "stream"
+# --- Memory-realization modes (mem_mode — the narrowed realization axis) ------
+# The MEMORY-REALIZATION MODE a topology presents to the compute core (consumption-mode-
+# delivery.md): a tag OVER coordinate A, not a new coordinate. ``embedded`` = baked into the
+# core's fabric (no port); ``decoupled`` = an AXIS port a separate memory backend feeds. A
+# delivery topology CARRIES its mode in ``Backend.mem_mode``; a compute backend's
+# ``mem_modes`` (per interface) filters the topology domain to matching modes.
+#
+# De-fusion note: mem_mode is the narrowed realization axis — ``{embedded, decoupled}`` ONLY.
+# Staticness (coordinate C), storage location (on/off-chip), and cardinality/MLO (coordinate
+# B) are SEPARATE axes, not values here.
+EMBEDDED = "embedded"
+DECOUPLED = "decoupled"
 
 # Default: an interface a backend says nothing about accepts BOTH modes (permissive — no
 # regression vs today, where every backend could take embedded or decoupled weights).
-ALL_MODES = frozenset({CONSTANT, STREAM})
+ALL_MODES = frozenset({EMBEDDED, DECOUPLED})

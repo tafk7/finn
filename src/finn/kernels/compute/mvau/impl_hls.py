@@ -21,7 +21,7 @@ from finn.kernels.engine.axis import discrete_axis
 from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.param_names import CONSTANT, STREAM
+from finn.kernels.model.param_names import DECOUPLED, EMBEDDED
 
 from .emit_hls import emit_mvau_hls
 from .op import COMPUTE_STREAM, INPUT, MVAU_HLS, THRESHOLDS, WEIGHTS, mvau_dtype_backend
@@ -79,7 +79,7 @@ def hls_bundle() -> Backend:
         # only MVU that supports embedded thresholds.) Integer i/w declared as datatype support.
         ports=ports_from(
             stream=COMPUTE_STREAM,
-            consumes={WEIGHTS: {CONSTANT, STREAM}, THRESHOLDS: {CONSTANT}},
+            consumes={WEIGHTS: {EMBEDDED, DECOUPLED}, THRESHOLDS: {EMBEDDED}},
             supports={INPUT: _INTEGER, WEIGHTS: _INTEGER},
         ),
     )

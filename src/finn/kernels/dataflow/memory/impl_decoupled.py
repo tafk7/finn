@@ -35,7 +35,7 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.axis import discrete_axis
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.param_names import (
-    STREAM,
+    DECOUPLED as DECOUPLED_MODE,
     param_stream_width_key,
     demand_key,
     depth_key,
@@ -188,7 +188,7 @@ def _geometry_derived(iface):
 def decoupled_topology(iface):
     return memory_backend(
         DECOUPLED,
-        mode=STREAM,  # an AXIS port a memstream block feeds
+        mode=DECOUPLED_MODE,  # an AXIS port a memstream block feeds
         language="rtl",  # emits its own memstream Verilog streamer
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface),

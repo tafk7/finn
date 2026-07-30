@@ -21,7 +21,8 @@ legal parameters point.
 from __future__ import annotations
 
 from finn.kernels.engine.derived import Derived
-from finn.kernels.model.param_names import CONSTANT, param_stream_width_key
+from finn.kernels.model.param_names import EMBEDDED as EMBEDDED_MODE
+from finn.kernels.model.param_names import param_stream_width_key
 
 from .names import EMBEDDED
 from .registry import register
@@ -42,6 +43,6 @@ def embedded_topology(iface):
     # it is emitted unconditionally for every delivered interface with no collision.
     return memory_backend(
         EMBEDDED,
-        mode=CONSTANT,  # baked into the compute core — no streamer, no port
+        mode=EMBEDDED_MODE,  # baked into the compute core — no streamer, no port
         derived=(Derived(param_stream_width_key(iface), _no_stream_width),),
     )
