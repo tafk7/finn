@@ -46,9 +46,9 @@ from .tiling import stream_width_key
 class DeliveredParam:
     """One parameter interface an op delivers through a delivery (parameters) pool.
 
-    An INTERNAL assembly struct: an op no longer constructs this — it marks the delivered
-    interface with ``InterfaceSchema(delivered=True)`` and ``Kernel.schema()`` builds the
-    ``DeliveredParam`` list itself. The generic ``DeliverySeam`` wiring consumes it. Fields:
+    An INTERNAL assembly struct: an op no longer constructs this — ``Kernel`` DERIVES the
+    ``DeliveredParam`` list from the pool (an interface some backend declares in its
+    ``mem_modes``). The generic ``DeliverySeam`` wiring consumes it. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
     * ``pool`` — the CONCRETE delivery pool (a tuple of storage-topology ``Backend``\\ s),

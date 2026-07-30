@@ -27,7 +27,8 @@ import numpy as np
 
 from finn.kernels.engine.axis import discrete_axis, predicate_axis
 from finn.kernels.engine.predicate import predicate
-from finn.kernels.model.backend import Backend
+from finn.kernels.model.backend import Backend, ports_from
+from finn.kernels.model.param_names import EMBEDDED
 
 from .emit_rtl import RTL_MANIFEST, emit_thresholding_rtl
 from .names import THRESHOLDING_RTL, THRESHOLDS
@@ -62,6 +63,9 @@ def rtl_bundle() -> Backend:
             discrete_axis("deep_pipeline", {0, 1}, 1),
         ),
         predicates=(_thresholds_sorted,),
+        # The RTL core bakes thresholds into its parameter memory — embedded mode only (no
+        # stream port), same as the HLS core. Explicit membership is the "param port" signal.
+        ports=ports_from(mem_modes={THRESHOLDS: {EMBEDDED}}),
         # One source-of-truth: the same manifest the emit copies into the build (F9).
         sources=RTL_MANIFEST.filenames,
         emit=emit_thresholding_rtl,

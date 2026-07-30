@@ -127,7 +127,7 @@ def test_consumes_stream_only_domain_excludes_embedded():
 def _restricted_kernel(mem_modes):
     ifaces = (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
-        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL], delivered=True),
+        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),
         InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
     backend = Backend(

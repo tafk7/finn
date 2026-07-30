@@ -55,7 +55,7 @@ def thresholding_interfaces():
     block. PE folds the channel dim (out position 1); the threshold block folds with it."""
     return (
         InterfaceSchema(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, NumChannels)
-        InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL], delivered=True),  # (NumChannels, numSteps)
+        InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
         InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
     )
 
@@ -87,9 +87,10 @@ def thresholding_kernel() -> Kernel:
     """The full Thresholding design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / RTL) with impl-owned tiling. The threshold
-    interface is marked ``delivered=True``; the Kernel builds its DeliveredParam and
-    synthesizes the supply waterfall generically; both backends consume thresholds in
-    constant mode → the delivery resolves to the ``embedded`` topology (no memstream cell)."""
+    interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the Kernel
+    builds its DeliveredParam and synthesizes the supply waterfall generically; both backends
+    consume thresholds in embedded mode → the delivery resolves to the ``embedded`` topology
+    (no memstream cell)."""
     return Kernel(
         identity=KernelSchema(
             name="Thresholding",

@@ -93,12 +93,6 @@ class InterfaceSchema:
             present. (Variadic 0-to-N is a later additive generalization of the same rule:
             present interfaces come from Context, not the declared list.)
 
-        delivered: whether this interface is a DELIVERED parameter — the op supplies it
-            through the ``parameters`` (delivery) pool rather than as a dataflow edge
-            (MVU weights/thresholds). A pure marker: :meth:`Kernel.schema` builds the
-            ``DeliveredParam`` (interface + ``parameters_pool(name)``) for each interface
-            with this set and wires the generic supply waterfall. Default ``False``.
-
         constraints: per-port structural-legality
             :mod:`~finn.kernels.engine.constraints` for THIS port — identity rules a
             backend cannot override (a rank check, a static-initializer requirement). Each
@@ -115,7 +109,6 @@ class InterfaceSchema:
     block: tuple = ()
     dtype_source: str | None = None
     optional: bool = False
-    delivered: bool = False
     constraints: tuple = ()
 
     def __post_init__(self):
@@ -184,14 +177,15 @@ class KernelSchema:
 class Kernel:
     """A hardware kernel op: a :class:`KernelSchema` (identity) + a pool of Backends
     (realizations). Delivered parameters (weight/threshold delivery, memory) are DERIVED
-    from the identity's interface markers, not passed in.
+    from the pool's ``mem_modes`` declarations, not passed in.
 
     ``identity`` is the ONNX-invariant half (name, interfaces, op-level axes/derived/
     predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
-    feasibility, sources, emit. ``delivered_parameters`` is BUILT in ``__post_init__`` from
-    each ``InterfaceSchema`` marked ``delivered=True`` — one
+    feasibility, sources, emit. ``delivered_parameters`` is BUILT in ``__post_init__`` by
+    DERIVING from the pool — one
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (interface +
-    ``parameters_pool(name)``) per marker, each lowered by a
+    ``parameters_pool(name)``) per interface some backend declares in its ``mem_modes``,
+    each lowered by a
     :class:`~finn.kernels.model.interface.DeliverySeam` into the demand stage +
     guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
@@ -201,7 +195,7 @@ class Kernel:
 
     identity: KernelSchema
     pool: tuple[Backend, ...]
-    delivered_parameters: tuple = field(default=(), init=False)  # built from interface markers
+    delivered_parameters: tuple = field(default=(), init=False)  # derived from pool mem_modes
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
@@ -210,16 +204,21 @@ class Kernel:
         object.__setattr__(self, "_tiling_cache", {})
 
     def _build_delivered(self) -> tuple:
-        """The delivered-parameter list, built from each ``delivered=True`` interface. Each
-        marker yields one :class:`DeliveredParam` bound to ``parameters_pool(name)`` — the
-        op declares delivery with a marker, the pool wiring is generic here."""
+        """The delivered-parameter list, DERIVED from the pool: an interface is a delivered
+        parameter iff SOME backend declares it in its ``mem_modes`` (the authoritative
+        "param port" signal). Each such interface yields one :class:`DeliveredParam` bound to
+        ``parameters_pool(name)``. This is the union move — a new core that consumes a new
+        param interface gets delivery machinery with zero op edits; delivery-ness is no longer
+        re-declared on the op (F1/F2). Iterated over the identity interfaces for deterministic
+        order."""
         from finn.kernels.dataflow.memory import parameters_pool
         from .param_contract import DeliveredParam
 
+        declared = {iface for b in self.pool for iface in b.mem_modes}
         return tuple(
             DeliveredParam(i.name, pool=parameters_pool(i.name))
             for i in self.identity.interfaces
-            if i.delivered
+            if i.name in declared
         )
 
     # -- identity passthroughs: read the KernelSchema fields off the Kernel ---

@@ -83,7 +83,7 @@ def mvau_interfaces():
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
         # weights — required-static unless runtime-writable (base:782); an IsStatic constraint.
         InterfaceSchema(
-            "weights", Direction.IN, block=[FULL, FULL], delivered=True,  # (MW, MH)
+            "weights", Direction.IN, block=[FULL, FULL],  # (MW, MH)
             constraints=(IsStatic(WEIGHTS, unless=weights_may_change),),
         ),
         # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff a
@@ -92,7 +92,7 @@ def mvau_interfaces():
         # (the step count is the tensor's own shape[1] — no independent numSteps axis, unlike
         # standalone Thresholding); the ShapeRank constraint auto-skips when the port is absent.
         InterfaceSchema(
-            "thresholds", Direction.IN, block=[FULL, FULL], optional=True, delivered=True,
+            "thresholds", Direction.IN, block=[FULL, FULL], optional=True,
             constraints=(ShapeRank(THRESHOLDS, 2),),
         ),
         # dtype_source: the out stream width uses the derived output type (= accDataType with
@@ -214,9 +214,10 @@ def op_predicates():
 
 # =============================================================================
 # 5. DELIVERY / 6. COST — both generic, no op-level authoring.
-#    Delivery: the op MARKS which interfaces it delivers (``InterfaceSchema(delivered=True)``
-#    on weights + thresholds); the Kernel builds the DeliveredParam list and synthesizes the
-#    COMPUTE→DEMAND→MEMORY waterfall generically (model/param_contract.py). Cost: MVAU's
+#    Delivery: delivery-ness is DERIVED from the pool — an interface some backend declares in
+#    its ``mem_modes`` (weights + thresholds here). The Kernel builds the DeliveredParam list
+#    and synthesizes the COMPUTE→DEMAND→MEMORY waterfall generically (model/param_contract.py).
+#    Cost: MVAU's
 #    nf·sf·n_vecs falls out of the generic max-over-interfaces floor now that weights is a
 #    2-D block streamed SIMD·PE, so it declares NO cost_model.
 # =============================================================================
@@ -243,10 +244,11 @@ def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
     The compute pool (HLS / DSP-softvec / DSP-packed) with impl-owned tiling. Weights +
-    thresholds are marked ``delivered=True`` on the interfaces; the Kernel builds their
-    DeliveredParam list and synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per
-    interface generically (model/param_contract.py); the getters project from a resolved
-    point via the impl ``stream``."""
+    thresholds are DERIVED as delivered parameters from the pool's ``mem_modes`` (a backend
+    declares which param ports it consumes); the Kernel builds their DeliveredParam list and
+    synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
+    (model/param_contract.py); the getters project from a resolved point via the impl
+    ``stream``."""
     return Kernel(
         identity=KernelSchema(
             name="MVAU",
