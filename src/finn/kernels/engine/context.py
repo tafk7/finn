@@ -56,6 +56,16 @@ class Context:
     def initializer(self, name: str) -> np.ndarray | None:
         return self.initializers.get(name)
 
+    def has_tensor(self, name: str) -> bool:
+        """Whether a tensor is WIRED for this node — the ARITY primitive an op reads to
+        answer "is this OPTIONAL operand present?". Keyed on the shape map (every wired tensor
+        has a shape), so it is uniform whether the operand is a live activation or a baked
+        constant — unlike ``initializer(name) is not None``, which only sees constants. The
+        schema declares a slot MAY exist (``InterfaceSchema.optional``); this answers whether
+        it DOES on the instantiated node's Context. Same presence rule as
+        :meth:`Kernel.present_interfaces`."""
+        return name in self.shapes
+
     @property
     def clk(self) -> float | None:
         return self.clk_ns

@@ -48,9 +48,7 @@ from finn.kernels.model.tiling import FULL
 from finn.kernels.model.param_names import runtime_writeable_key
 from finn.kernels.dataflow.memory import parameters_pool
 from finn.kernels.compute.thresholding.shared import (
-    _num_steps_default,
     _threshold_datatype,
-    _threshold_shape_matches_steps,
     _unsigned_input_nonneg_thresholds,
 )
 
@@ -182,36 +180,20 @@ def _weight_datatype(p, ctx):
 def _output_datatype(p, ctx):
     # base:517 — outputDataType = accDataType when there is NO activation (output IS the
     # accumulator), else the graph output dtype (the thresholds map the accumulator down).
-    # Emergent: no threshold initializer ⇒ no activation.
-    if not _has_thresholds(ctx):
+    # Emergent: no threshold operand ⇒ no activation.
+    if not ctx.has_tensor(THRESHOLDS):
         return _acc_datatype(p, ctx)
     return ctx.tensor_datatype(OUTPUT)
 
 
-# -- threshold identity — live values iff a threshold initializer is attached. Reuse the
-#    standalone Thresholding op's helpers, wrapped to no-op on a no-threshold node.
-
-
-def _has_thresholds(ctx) -> bool:
-    return ctx.initializer(THRESHOLDS) is not None
-
-
-def _num_steps(p, ctx):
-    # numSteps = the threshold tensor's step dim (standalone _num_steps_default), or None
-    # when the node has no thresholds. Defensive on a malformed (non-2-D) tensor: return
-    # None so the shape PREDICATE emits the clean legality error rather than this derived
-    # crashing first (deriveds run before predicates).
-    if not _has_thresholds(ctx):
-        return None
-    if len(ctx.tensor_shape(THRESHOLDS)) != 2:
-        return None
-    return _num_steps_default(p, ctx)
+# -- threshold identity — live values iff the threshold operand is present. Reuse the
+#    standalone Thresholding op's helper, wrapped to no-op on a no-threshold node.
 
 
 def _threshold_dtype(p, ctx):
     # thresholdDataType = value-narrowed threshold dtype (standalone _threshold_datatype),
     # or None when absent. Mirrors the weight-dtype derive.
-    return _threshold_datatype(p, ctx) if _has_thresholds(ctx) else None
+    return _threshold_datatype(p, ctx) if ctx.has_tensor(THRESHOLDS) else None
 
 
 def mvau_dtype_backend():
@@ -232,13 +214,12 @@ def mvau_dtype_backend():
 
 
 def _identity_dtype_derived():
-    """The op-identity datatype facts: the THRESHOLD operand's structural derivations, which
-    are realization-invariant (present iff a threshold initializer is attached, independent of
-    the compute core). The accumulator/weight/output datatypes are backend-scoped — see
+    """The op-identity datatype facts: the THRESHOLD operand's value-narrowed dtype, which is
+    realization-invariant (present iff the threshold operand is wired, independent of the
+    compute core). The accumulator/weight/output datatypes are backend-scoped — see
     :func:`mvau_dtype_backend`."""
     return (
-        # threshold identity — live values iff the operand is present, else None.
-        Derived("numSteps", _num_steps),
+        # threshold identity — live value iff the operand is present, else None.
         Derived("thresholdDataType", _threshold_dtype),
     )
 
@@ -263,21 +244,24 @@ def _weights_present(p, ctx):
     return None
 
 
-# Threshold legality — reuse the standalone Thresholding op's predicates (2-D shape with
-# shape[1]==numSteps; unsigned input ⇒ thresholds >= 0, base:578), wrapped to no-op when the
-# optional operand is absent.
+# Threshold legality — a 2-D shape check (the step count is the tensor's own shape[1], with
+# no independent numSteps axis to validate against — unlike standalone Thresholding), plus
+# the shared unsigned-input ⇒ thresholds >= 0 rule. Both no-op when the operand is absent.
 
 
-@predicate("threshold tensor is 2D with shape[1] == numSteps (when present)")
+@predicate("threshold tensor is 2D (NumChannels, numSteps) when present")
 def _mvau_threshold_shape(p, ctx):
-    if not _has_thresholds(ctx):
+    if not ctx.has_tensor(THRESHOLDS):
         return None
-    return _threshold_shape_matches_steps.check(p, ctx)
+    shp = ctx.tensor_shape(THRESHOLDS)
+    if len(shp) != 2:
+        return f"threshold tensor must be 2D (got shape {shp})"
+    return None
 
 
 @predicate("unsigned input => thresholds >= 0 (when present)")
 def _mvau_threshold_nonneg(p, ctx):
-    if not _has_thresholds(ctx):
+    if not ctx.has_tensor(THRESHOLDS):
         return None
     return _unsigned_input_nonneg_thresholds.check(p, ctx)
 

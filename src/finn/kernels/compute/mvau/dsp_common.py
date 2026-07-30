@@ -66,7 +66,7 @@ def _rtl_mvu_feasible(p, ctx):
     # Emergent: the RTL/DSP core has no activation/threshold logic, so it is feasible only
     # on a node WITHOUT thresholds — the emergent form of the old `noActivation==1` gate,
     # and equivalently "the DSP core cannot consume thresholds" (there is no threshold port).
-    if ctx.initializer(THRESHOLDS) is not None:
+    if ctx.has_tensor(THRESHOLDS):
         return "RTL-MVU cannot consume thresholds (embedded thresholding unsupported; specialize_layers:241)"
     if p.binaryXnorMode != 0:
         return "RTL-MVU does not support binaryXnorMode"

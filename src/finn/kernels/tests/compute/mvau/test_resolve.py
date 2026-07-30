@@ -452,14 +452,12 @@ def make_thresh_context(fpgapart=SEVEN_SERIES, weights=None, steps=7, tdt="INT16
 def test_no_threshold_node_leaves_threshold_identity_none(schema):
     r = resolve(schema, make_context(), base_assignment())
     assert isinstance(r, Point)
-    assert r["numSteps"] is None
     assert r["thresholdDataType"] is None
 
 
 def test_thresholded_node_populates_threshold_identity(schema):
     r = resolve(schema, make_thresh_context(steps=7), base_assignment())
     assert isinstance(r, Point)
-    assert r["numSteps"] == 7
     assert r["thresholdDataType"] is not None
 
 
@@ -486,7 +484,7 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
         initializers={**ctx.initializers, "thresholds": neg},
         fpgapart=ctx.fpgapart, clk_ns=5.0,
     )
-    r = resolve(schema, ctx, base_assignment(numSteps=4))
+    r = resolve(schema, ctx, base_assignment())
     assert isinstance(r, Illegal)
     assert any("thresholds >= 0" in reason or "non-negative" in reason.lower() for reason in r.reasons)
 
