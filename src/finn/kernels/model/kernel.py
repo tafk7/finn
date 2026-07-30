@@ -127,10 +127,22 @@ class KernelSchema:
 
     Holds only what is true regardless of HOW the op is built: its ``name``, its
     ``interfaces`` (the inter-node communication contract — direction + BLOCK structure),
-    and the op-level shared design space (``op_axes``/``op_derived``/``op_predicates`` —
-    folding-independent geometry, datatype rules, legality), plus a rough op-level
-    ``cost_model`` default. Every field is independently optional: a minimal op declares
-    only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
+    the op-level shared design space (``op_axes``/``op_derived``/``op_predicates`` —
+    folding-independent geometry, datatype rules, legality), and the ``kernel_attrs``
+    (frontend-fixed structural constants), plus a rough op-level ``cost_model`` default.
+    Every field is independently optional: a minimal op declares only ``name`` +
+    ``interfaces`` (the whole space then comes from the pool's tiling).
+
+    ``kernel_attrs`` is a THIRD schema-level category, distinct from ``op_axes`` (the DSE
+    dials — SIMD/PE, tiling-engine-generated) and from delivered parameters: a
+    ``kernel_attr`` is a nodeattr-backed scalar that reaches the Point (backends read it)
+    but is FRONTEND-FIXED — set once at conversion, never a search dial (MVU's ActVal
+    activation bias, mlo_max_iter iteration count). Structurally each entry is an ``Axis``
+    (built with ``predicate_axis``/``discrete_axis``); resolve carries it onto the Point at
+    its assignment/default with nothing exploring it. We call it ``kernel_attrs`` (not
+    brainsmith's ``kernel_params``) deliberately: the ``parameters`` namespace here is
+    claimed by the weight/threshold DELIVERY subsystem, so "attribute" names what these are
+    (node-owned scalars) rather than what they aren't (delivered tensors).
 
     EXCLUDES the realization half — the pool of Backends and the delivered parameters
     (weight delivery, memory) are held by the :class:`Kernel` alongside this, never inside
@@ -142,10 +154,12 @@ class KernelSchema:
     op_axes: tuple = ()
     op_derived: tuple = ()
     op_predicates: tuple = ()
+    kernel_attrs: tuple = ()  # frontend-fixed nodeattr scalars — in the Point, never explored
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
 
     def __post_init__(self):
         object.__setattr__(self, "interfaces", tuple(self.interfaces))
+        object.__setattr__(self, "kernel_attrs", tuple(self.kernel_attrs))
 
 
 @dataclass(frozen=True)
@@ -213,6 +227,10 @@ class Kernel:
         return self.identity.op_predicates
 
     @property
+    def kernel_attrs(self) -> tuple:
+        return self.identity.kernel_attrs
+
+    @property
     def cost_model(self):
         return self.identity.cost_model
 
@@ -259,7 +277,10 @@ class Kernel:
         compute→memory demand crosses the seam owned by a ``DeliverySeam``."""
         op = pool_schema(
             BACKEND_AXIS,
-            tuple(self.op_axes),
+            # kernel_attrs join the op-level shared axes: each is an Axis carried onto the
+            # Point at its assignment/default, reaching backends + the nodeattr bridge, with
+            # nothing exploring it (resolve is pure assignment-or-default — no DSE engine).
+            tuple(self.op_axes) + tuple(self.kernel_attrs),
             tuple(self.op_derived),
             tuple(self.op_predicates),
             self._augmented_pool(),
@@ -319,7 +340,7 @@ class Kernel:
         committed backend. Used to publish output datatypes on an UNSPECIALIZED node, where
         the full :meth:`schema` would fabricate/require a backend selection (F1)."""
         return Schema(
-            axes=tuple(self.op_axes),
+            axes=tuple(self.op_axes) + tuple(self.kernel_attrs),
             derived=tuple(self.op_derived),
             predicates=tuple(self.op_predicates),
         )

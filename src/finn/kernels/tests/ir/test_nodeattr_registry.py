@@ -69,3 +69,11 @@ def test_ram_style_unions_across_topologies():
 
 def test_num_input_vectors_is_not_an_axis():
     assert "numInputVectors" not in _reg()
+
+
+def test_kernel_attrs_flow_through_the_nodeattr_bridge():
+    # ActVal/mlo_max_iter are kernel_attrs (frontend-fixed), not DSE axes — but they must
+    # still reach the nodeattr registry (the frontend sets them, backends read them).
+    reg = _reg()
+    assert reg["ActVal"][0] == "i"
+    assert reg["mlo_max_iter"][0] == "i"

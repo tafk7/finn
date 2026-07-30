@@ -275,6 +275,20 @@ def test_legal_point_carries_derived(schema):
     assert r["stream_width.out"] == r.outputDataType.bitwidth() * 4
 
 
+def test_kernel_attrs_pinned_onto_point_never_explored(schema):
+    # A kernel_attr reaches the Point at its assigned value (backends read it), but resolve
+    # never treats it as an explorable dial — it is pinned to the assignment/default.
+    ctx = make_context()
+    r = resolve(schema, ctx, base_assignment(ActVal=7, mlo_max_iter=3))
+    assert isinstance(r, Point)
+    assert r["ActVal"] == 7
+    assert r["mlo_max_iter"] == 3
+    # Unassigned ⇒ the declared default (0), not a swept value.
+    r0 = resolve(schema, ctx, base_assignment())
+    assert r0["ActVal"] == 0
+    assert r0["mlo_max_iter"] == 0
+
+
 def test_domain_violation_illegal(schema):
     r = resolve(schema, make_context(), base_assignment(PE=5))  # 5 ∤ MH=8
     assert isinstance(r, Illegal)

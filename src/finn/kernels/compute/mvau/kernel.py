@@ -122,10 +122,19 @@ def _is_nonneg_int(v) -> bool:
 
 
 def op_axes():
-    # MW/MH/numInputVectors are NOT axes — they are BLOCK extents / the input's leading dims,
-    # read off the Context by emit + the cadence closures. Whether the MVU has an activation is
-    # EMERGENT (``ctx.initializer(THRESHOLDS) is not None``), not a declared flag. Weight
-    # delivery (mem_mode/ram_style/pumpedMemory/…) lives in the composed ``parameters`` pool.
+    # EMPTY for MVAU: there are zero hand-authored DSE dials. The real dials (SIMD/PE) are
+    # tiling-engine-generated from the interface BLOCKs; delivery dials (ram_style/…) are
+    # parameters-pool-generated. MW/MH/numInputVectors are BLOCK extents / leading dims read
+    # off the Context, not axes. Whether the MVU has an activation is EMERGENT
+    # (``ctx.initializer(THRESHOLDS) is not None``), not a declared flag.
+    return ()
+
+
+def kernel_attrs():
+    # Frontend-fixed structural constants: nodeattr-backed scalars that reach the Point (a
+    # backend closure reads them at resolve) but are NEVER explored — set once at conversion.
+    # Distinct from op_axes (DSE dials) and from delivered parameters (weight/threshold
+    # tensors). See KernelSchema.kernel_attrs for the naming rationale (vs kernel_params).
     return (
         # ActVal — activation bias; unused on a no-threshold node.
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
@@ -252,6 +261,7 @@ def mvau_kernel() -> Kernel:
             op_axes=op_axes(),
             op_derived=op_derived(),
             op_predicates=op_predicates(),
+            kernel_attrs=kernel_attrs(),
         ),
         pool=mvau_pool(),
     )
