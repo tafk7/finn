@@ -37,7 +37,7 @@ from typing import Any, Mapping
 from ..engine.context import Context
 from ._util import prod
 from .backend import BACKEND_AXIS, Backend, pool_schema
-from .interface import delivery_seam_for
+from .seam import delivery_seam_for
 from ..engine.point import Illegal, Point
 from .ports import Direction
 from ..engine.resolve import resolve
@@ -186,7 +186,7 @@ class Kernel:
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (interface +
     ``parameters_pool(name)``) per interface some backend declares in its ``mem_modes``,
     each lowered by a
-    :class:`~finn.kernels.model.interface.DeliverySeam` into the demand stage +
+    :class:`~finn.kernels.model.seam.DeliverySeam` into the demand stage +
     guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
     are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to

@@ -7,7 +7,7 @@
 ############################################################################
 
 """The op-facing parameter-DELIVERY declaration (:class:`DeliveredParam`) + the seam
-COMPUTATION bodies a :class:`~finn.kernels.model.interface.DeliverySeam`
+COMPUTATION bodies a :class:`~finn.kernels.model.seam.DeliverySeam`
 composes.
 
 A :class:`~finn.kernels.model.kernel.Kernel` that delivers parameters (weights,
