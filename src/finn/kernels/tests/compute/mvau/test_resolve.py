@@ -480,7 +480,7 @@ def test_malformed_threshold_tensor_is_illegal(schema):
     )
     r = resolve(schema, bad, base_assignment())
     assert isinstance(r, Illegal)
-    assert any("2D" in reason or "2-d" in reason.lower() for reason in r.reasons)
+    assert any("rank 2" in reason or "2d" in reason.lower() for reason in r.reasons)
 
 
 def test_unsigned_input_requires_nonneg_thresholds(schema):

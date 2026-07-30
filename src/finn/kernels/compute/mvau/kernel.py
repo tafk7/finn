@@ -34,16 +34,13 @@ Tensor-name convention for the Context this schema resolves against:
 from __future__ import annotations
 
 from finn.kernels.engine.axis import predicate_axis
+from finn.kernels.engine.constraints import IsStatic, ShapeRank, ValueNonNeg
 from finn.kernels.engine.derived import Derived
-from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 from finn.kernels.model.param_names import runtime_writeable_key
-from finn.kernels.compute.thresholding.shared import (
-    _threshold_datatype,
-    _unsigned_input_nonneg_thresholds,
-)
+from finn.kernels.compute.thresholding.shared import _threshold_datatype
 
 from .registry import build_pool
 
@@ -84,12 +81,19 @@ def mvau_interfaces():
     block; ``out`` iterates vectors and holds MH."""
     return (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
-        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL], delivered=True),  # (MW, MH)
+        # weights — required-static unless runtime-writable (base:782); an IsStatic constraint.
+        InterfaceSchema(
+            "weights", Direction.IN, block=[FULL, FULL], delivered=True,  # (MW, MH)
+            constraints=(IsStatic(WEIGHTS, unless=weights_may_change),),
+        ),
         # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff a
         # threshold initializer is attached (a 3-input node); absent nodes skip it in every
-        # Context-reading loop. Constant-only in the fused core, so no impl folds it.
+        # Context-reading loop. Constant-only in the fused core, so no impl folds it. Rank-2
+        # (the step count is the tensor's own shape[1] — no independent numSteps axis, unlike
+        # standalone Thresholding); the ShapeRank constraint auto-skips when the port is absent.
         InterfaceSchema(
-            "thresholds", Direction.IN, block=[FULL, FULL], optional=True, delivered=True
+            "thresholds", Direction.IN, block=[FULL, FULL], optional=True, delivered=True,
+            constraints=(ShapeRank(THRESHOLDS, 2),),
         ),
         # dtype_source: the out stream width uses the derived output type (= accDataType with
         # no activation), not the raw graph dtype — so stream_width.out matches emit.
@@ -173,42 +177,31 @@ def op_derived():
     return _identity_dtype_derived()
 
 
-# -- op-level SHARED predicates. Divisibility (MH%PE, MW%SIMD) is engine-generated from the
-#    tiling, not here; the pumpedMemory / URAM gates live in the parameters subsystem.
+# -- op-level SHARED legality. Divisibility (MH%PE, MW%SIMD) is engine-generated from the
+#    tiling; pumpedMemory / URAM gates live in the parameters subsystem. The structural rules
+#    below are declarative CONSTRAINTS (engine/constraints.py), NOT hand-written predicates:
+#    per-port rules ride the owning InterfaceSchema.constraints (compiled with an automatic
+#    optional-port skip); the relational unsigned-input ⇒ thresholds>=0 rule is kernel-level.
 
 
-@predicate("weight initializer must exist unless params are not statically known")
-def _weights_present(p, ctx):
-    if ctx.initializer(WEIGHTS) is None:
-        if not weights_may_change(p):
-            return "weight initializer required unless params are not static (base:782)"
-    return None
+def _unsigned_input(p, ctx) -> bool:
+    """The gate for the nonneg-thresholds rule: True when the activation input is unsigned.
+    A cross-tensor read (INPUT dtype) that constrains a DIFFERENT port (THRESHOLDS) — why the
+    rule is kernel-level, not per-port."""
+    return not ctx.tensor_datatype(INPUT).signed()
 
 
-# Threshold legality — a 2-D shape check (the step count is the tensor's own shape[1], with
-# no independent numSteps axis to validate against — unlike standalone Thresholding), plus
-# the shared unsigned-input ⇒ thresholds >= 0 rule. Both no-op when the operand is absent.
-
-
-@predicate("threshold tensor is 2D (NumChannels, numSteps) when present")
-def _mvau_threshold_shape(p, ctx):
-    if not ctx.has_tensor(THRESHOLDS):
-        return None
-    shp = ctx.tensor_shape(THRESHOLDS)
-    if len(shp) != 2:
-        return f"threshold tensor must be 2D (got shape {shp})"
-    return None
-
-
-@predicate("unsigned input => thresholds >= 0 (when present)")
-def _mvau_threshold_nonneg(p, ctx):
-    if not ctx.has_tensor(THRESHOLDS):
-        return None
-    return _unsigned_input_nonneg_thresholds.check(p, ctx)
+def _mvau_constraints():
+    """The kernel-level (relational) constraints: unsigned input ⇒ all thresholds >= 0
+    (thresholding.py:243). Reads INPUT to gate a rule on THRESHOLDS, so it cannot live on one
+    port. The optional-port skip fires on THRESHOLDS (the constrained port)."""
+    return (ValueNonNeg(THRESHOLDS, when=_unsigned_input),)
 
 
 def op_predicates():
-    return (_weights_present, _mvau_threshold_shape, _mvau_threshold_nonneg)
+    # EMPTY: the former hand-written predicates are now declarative constraints — weight-
+    # present + threshold-rank on the ports, unsigned-nonneg at kernel level.
+    return ()
 
 
 # =============================================================================
@@ -262,6 +255,7 @@ def mvau_kernel() -> Kernel:
             op_derived=op_derived(),
             op_predicates=op_predicates(),
             kernel_attrs=kernel_attrs(),
+            constraints=_mvau_constraints(),
         ),
         pool=mvau_pool(),
     )

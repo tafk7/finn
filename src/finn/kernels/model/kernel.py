@@ -99,6 +99,13 @@ class InterfaceSchema:
             ``DeliveredParam`` (interface + ``parameters_pool(name)``) for each interface
             with this set and wires the generic supply waterfall. Default ``False``.
 
+        constraints: per-port structural-legality
+            :mod:`~finn.kernels.engine.constraints` for THIS port — identity rules a
+            backend cannot override (a rank check, a static-initializer requirement). Each
+            compiles to a predicate that auto-skips when the port's tensor is absent
+            (so an optional port needs no ``has_tensor`` guard). Relational rules that read
+            ANOTHER tensor live on :attr:`KernelSchema.constraints` instead.
+
     ``index`` is DERIVED, not stored: position among same-direction peers in the kernel's
     interface list (0=first, 1=…).
     """
@@ -109,9 +116,11 @@ class InterfaceSchema:
     dtype_source: str | None = None
     optional: bool = False
     delivered: bool = False
+    constraints: tuple = ()
 
     def __post_init__(self):
         object.__setattr__(self, "block", tuple(self.block))
+        object.__setattr__(self, "constraints", tuple(self.constraints))
 
     @property
     def tensor(self) -> str:
@@ -144,6 +153,13 @@ class KernelSchema:
     claimed by the weight/threshold DELIVERY subsystem, so "attribute" names what these are
     (node-owned scalars) rather than what they aren't (delivered tensors).
 
+    ``constraints`` is the KERNEL-LEVEL constraint list: structural-legality
+    :mod:`~finn.kernels.engine.constraints` that cannot live on a single port — RELATIONAL
+    or value rules that read more than one tensor (unsigned INPUT ⇒ THRESHOLDS >= 0). Per-
+    port rules (rank, static-initializer) live on the owning ``InterfaceSchema.constraints``
+    instead; the two homes mirror the identity/backend split (design pitch, Finding 3c).
+    Both compile to predicates via :func:`~finn.kernels.engine.constraints.compile_constraint`.
+
     EXCLUDES the realization half — the pool of Backends and the delivered parameters
     (weight delivery, memory) are held by the :class:`Kernel` alongside this, never inside
     it. A ``KernelSchema`` compiles (with the pool) down to the flat resolve
@@ -155,11 +171,13 @@ class KernelSchema:
     op_derived: tuple = ()
     op_predicates: tuple = ()
     kernel_attrs: tuple = ()  # frontend-fixed nodeattr scalars — in the Point, never explored
+    constraints: tuple = ()  # kernel-level structural constraints (relational/value rules)
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
 
     def __post_init__(self):
         object.__setattr__(self, "interfaces", tuple(self.interfaces))
         object.__setattr__(self, "kernel_attrs", tuple(self.kernel_attrs))
+        object.__setattr__(self, "constraints", tuple(self.constraints))
 
 
 @dataclass(frozen=True)
@@ -231,8 +249,24 @@ class Kernel:
         return self.identity.kernel_attrs
 
     @property
+    def constraints(self) -> tuple:
+        return self.identity.constraints
+
+    @property
     def cost_model(self):
         return self.identity.cost_model
+
+    def _constraint_predicates(self) -> tuple:
+        """Every declared constraint compiled to a guard-skipping predicate: the kernel-level
+        relational/value rules plus each interface's per-port rules. Each predicate auto-
+        noops when its constrained port's tensor is absent (optional-port skip baked in by
+        :func:`~finn.kernels.engine.constraints.compile_constraint`)."""
+        from ..engine.constraints import compile_constraint
+
+        out = [compile_constraint(c) for c in self.constraints]
+        for iface in self.interfaces:
+            out.extend(compile_constraint(c) for c in iface.constraints)
+        return tuple(out)
 
     # -- schema / resolve ---------------------------------------------------
 
@@ -282,7 +316,7 @@ class Kernel:
             # nothing exploring it (resolve is pure assignment-or-default — no DSE engine).
             tuple(self.op_axes) + tuple(self.kernel_attrs),
             tuple(self.op_derived),
-            tuple(self.op_predicates),
+            tuple(self.op_predicates) + self._constraint_predicates(),
             self._augmented_pool(),
             unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
         )
@@ -342,7 +376,7 @@ class Kernel:
         return Schema(
             axes=tuple(self.op_axes) + tuple(self.kernel_attrs),
             derived=tuple(self.op_derived),
-            predicates=tuple(self.op_predicates),
+            predicates=tuple(self.op_predicates) + self._constraint_predicates(),
         )
 
     def configure_op(self, context: Context, assignment: Mapping | None = None):

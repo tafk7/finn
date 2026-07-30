@@ -488,16 +488,22 @@ def _field_derived(root_name, pool, field_name, *, key=None) -> Derived:
 def _wrap_predicates(root_name, pool) -> list[Predicate]:
     """Each bundle's predicates fire only when that bundle is selected. Device/dtype
     feasibility is just a predicate — there is no separate ``feasible`` mechanism (one
-    concept, one home). Each port's declared datatype ``supports`` is compiled here into an
-    equivalent guarded predicate, so the pool's UNION of supported datatypes is what a
-    frontend claim accepts with no per-op logic."""
+    concept, one home). Each port's declared datatype ``supports`` compiles through the SAME
+    :func:`~finn.kernels.engine.constraints.compile_constraint` path as every other
+    constraint (as a :class:`~finn.kernels.engine.constraints.DatatypeConstraint`), gaining
+    the optional-port skip, then wraps in the selection guard — so the pool's UNION of
+    supported datatypes is what a frontend claim accepts with no per-op logic and no
+    special-cased branch."""
+    from ..engine.constraints import DatatypeConstraint, compile_constraint
+
     wrapped: list[Predicate] = []
     for bundle in pool:
         for pred in bundle.predicates:
             wrapped.append(_guarded_predicate(root_name, bundle.name, pred))
         for iface, port in bundle.ports.items():
             if port.supports is not None:
-                wrapped.append(_support_predicate(root_name, bundle.name, iface, port.supports))
+                support_pred = compile_constraint(DatatypeConstraint(iface, port.supports))
+                wrapped.append(_guarded_predicate(root_name, bundle.name, support_pred))
     return wrapped
 
 
@@ -508,18 +514,3 @@ def _guarded_predicate(root_name, impl_name, pred) -> Predicate:
         return _p.check(point, context)
 
     return Predicate(check=check, description=pred.describe())
-
-
-def _support_predicate(root_name, impl_name, iface, supports) -> Predicate:
-    """Compile a port's datatype ``supports`` (a :class:`DatatypeSupport` or a custom
-    ``(dt) -> reason | None`` callable) into a predicate guarded on selection: it reads the
-    port's tensor datatype off the Context and returns the support gate's reason. Fires only
-    when this bundle is the selected one, like every other bundle-owned predicate."""
-    accepts = supports.accepts if hasattr(supports, "accepts") else supports
-
-    def check(point, context, _root=root_name, _name=impl_name, _iface=iface, _accepts=accepts):
-        if point.get(_root) != _name:
-            return None
-        return _accepts(context.tensor_datatype(_iface))
-
-    return Predicate(check=check, description=f"{impl_name}.{iface} datatype support")
