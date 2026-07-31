@@ -274,10 +274,25 @@ StreamFold = Union[str, int, TileExpr]
 
 def _block_extent(extent: BlockExtent, iface, dim_idx: int, context) -> int:
     """Resolve a block extent to a concrete int against the Context. FULL → the tensor
-    dim; an int → itself; a TileExpr → evaluated (rare, cross-interface block)."""
+    dim; an int → itself; a TileExpr → evaluated (rare, cross-interface block).
+
+    A FULL/expr extent needs the Context; a context-less probe (the nodeattr registry
+    enumerating static axes with ``context=None``) legitimately cannot resolve it — raise a
+    NARROW ``ValueError`` (the "can't resolve for this probe" signal) rather than letting
+    ``None.tensor_shape`` surface as an ``AttributeError`` that reads as a kernel bug (T0.1)."""
     if extent is FULL:
+        if context is None:
+            raise ValueError(
+                f"block extent FULL for {iface.tensor!r} dim {dim_idx} needs a Context "
+                f"(this axis is context-dependent; a context-less probe cannot resolve it)"
+            )
         return int(tuple(context.tensor_shape(iface.tensor))[dim_idx])
     if isinstance(extent, TileExpr):
+        if context is None:
+            raise ValueError(
+                f"block extent expr for {iface.tensor!r} dim {dim_idx} needs a Context "
+                f"(context-dependent; a context-less probe cannot resolve it)"
+            )
         return int(extent.eval_ctx(context)) if hasattr(extent, "eval_ctx") else int(extent.eval(context))
     return int(extent)
 

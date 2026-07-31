@@ -38,7 +38,7 @@ from ..engine.context import Context
 from ._util import prod
 from .backend import BACKEND_AXIS, Backend, pool_schema
 from .parameter_source import parameter_source_for
-from ..engine.point import Illegal, Point
+from ..engine.point import AbsentAxisError, Illegal, Point
 from .ports import Direction
 from ..engine.resolve import resolve
 from ..engine.schema import Schema
@@ -383,10 +383,13 @@ class Kernel:
         for impl in self.pool:
             try:
                 result = resolve(schema, context, {BACKEND_AXIS: impl.name})
-            except Exception:  # noqa: BLE001
+            except (ValueError, KeyError, AbsentAxisError):
                 # A backend feasibility check that raises on THIS context (e.g. a
                 # device-family probe that needs an fpgapart the trial context omits) is not
                 # feasible here — treat it as "no point for this backend", not a hard error.
+                # These three are the legitimate "can't resolve for this probe" signals
+                # (AbsentAxisError is a KeyError subclass); any OTHER exception is a kernel bug
+                # that must PROPAGATE (INV5 — the silent-skip class the migration eliminates).
                 # A backend that IS feasible resolves cleanly; the pool needs only ONE.
                 continue
             if isinstance(result, Point):

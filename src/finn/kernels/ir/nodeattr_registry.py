@@ -33,6 +33,7 @@ from itertools import product
 from typing import Any
 
 from finn.kernels.engine.axis import PredicateDomain
+from finn.kernels.engine.point import AbsentAxisError
 
 # FINN AttributeProto member names (qonnx base.py): "i" int, "s" str, "ints" int list.
 _ZERO: dict[str, Any] = {"i": 0, "s": "", "ints": []}
@@ -65,7 +66,10 @@ def _resolve_domain(axis, point):
     (reads a dim/context the probe doesn't supply, or dispatches to a non-owner)."""
     try:
         return axis.domain(point, None)
-    except Exception:
+    except (ValueError, KeyError, AbsentAxisError):
+        # The legitimate "this axis can't resolve for this probe" signals (a dim/context the
+        # probe omits, a dispatch to a non-owner). Any OTHER exception is a kernel bug that
+        # must propagate (INV5), not read as an unprobeable axis.
         return None
 
 
@@ -139,7 +143,9 @@ def _safe_default(axis, dtype: str, probes):
     for point in probes:
         try:
             d = axis.default(point, None)
-        except Exception:
+        except (ValueError, KeyError, AbsentAxisError):
+            # A context-derived default (matrix dim, fold) needs a point this probe lacks —
+            # skip it. Any OTHER exception is a kernel bug that must propagate (INV5).
             continue
         if d is not None:
             return d

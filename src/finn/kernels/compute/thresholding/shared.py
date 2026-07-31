@@ -33,14 +33,24 @@ from finn.kernels.engine.predicate import predicate
 from .names import INPUT, OUTPUT, THRESHOLDS
 
 
+def _require_ctx(ctx, what):
+    # A context-fixed axis needs the Context. A context-less probe (the nodeattr registry
+    # enumerating static axes with ``context=None``) legitimately cannot resolve it — raise a
+    # NARROW ``ValueError`` (the "unprobeable for this probe" signal T0.1 narrowed on) rather
+    # than letting ``None.tensor_shape`` surface as an ``AttributeError`` read as a kernel bug.
+    if ctx is None:
+        raise ValueError(f"{what} needs a Context (context-dependent axis; probe gave none)")
+    return ctx
+
+
 def _num_channels(p, ctx):
     # thresholds shape (NumChannels, numSteps) -> NumChannels.
-    return ctx.tensor_shape(THRESHOLDS)[0]
+    return _require_ctx(ctx, "NumChannels").tensor_shape(THRESHOLDS)[0]
 
 
 def _num_steps_default(p, ctx):
     # numSteps matches the threshold tensor's step dimension.
-    return int(ctx.tensor_shape(THRESHOLDS)[1])
+    return int(_require_ctx(ctx, "numSteps").tensor_shape(THRESHOLDS)[1])
 
 
 def _is_int_list(v) -> bool:

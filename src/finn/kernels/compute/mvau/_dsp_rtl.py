@@ -26,14 +26,23 @@ from finn.util.basic import get_dsp_block
 VERSION = {"DSP48E1": 1, "DSP48E2": 2, "DSP58": 3}
 
 
-def dsp_primitive(p, ctx):
-    # FORCED from the device: the part physically has exactly one DSP block
-    # (util:391). No alternative design ⇒ Derived, never a pool axis (§1.2.2).
+def _dsp_block(ctx):
+    # FORCED from the device (util:391). A part-less trial/probe context (``fpgapart == ""``)
+    # cannot resolve a DSP block — raise a NARROW ``ValueError`` (the "unresolvable for this
+    # probe" signal T0.1 narrowed on) rather than letting ``get_dsp_block("")`` surface an
+    # IndexError read as a kernel bug. A real device probe resolves cleanly.
+    if not ctx.fpgapart:
+        raise ValueError("DSP block needs a non-empty fpgapart (part-less probe context)")
     return get_dsp_block(ctx.fpgapart)
 
 
+def dsp_primitive(p, ctx):
+    # No alternative design ⇒ Derived, never a pool axis (§1.2.2).
+    return _dsp_block(ctx)
+
+
 def dsp_version(p, ctx):
-    return VERSION[get_dsp_block(ctx.fpgapart)]
+    return VERSION[_dsp_block(ctx)]
 
 
 def segmentlen(p, ctx):
