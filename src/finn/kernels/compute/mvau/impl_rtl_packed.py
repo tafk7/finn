@@ -31,8 +31,8 @@ from .op import (
     OUTPUT,
     VERSION,
     WEIGHTS,
-    mvau_dtype_backend,
     mvau_out_dtype,
+    mvau_register_dtypes,
 )
 from .registry import register
 
@@ -76,8 +76,10 @@ def packed_bundle() -> Backend:
         # disjoint from softvec.
         rtl_core_module="mvu_vvu_axi_packed",
         axes=axes,
-        # dsp_rtl_common's derived + the backend-scoped datatype contract (acc/weight/output).
-        derived=derived + mvau_dtype_backend(),
+        derived=derived,
+        # Backend-scoped internal-register dtypes (acc/weight); out port dtype rides
+        # derived_dtype below.
+        derived_dtypes=mvau_register_dtypes(),
         # packed's OWN feasibility gate, appended to the shared RTL predicates.
         predicates=predicates + (_packed_feasible,),
         sources=SHARED_SOURCES + ("mvu_vvu_axi_packed.sv", "mvu_vvu_8sx9_dsp58.sv"),

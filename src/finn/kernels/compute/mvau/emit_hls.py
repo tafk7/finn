@@ -50,7 +50,7 @@ HLS_STATIC_MANIFEST = ArtifactManifest(
 )
 
 from .geometry import mvau_geometry
-from .op import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
+from .op import INPUT, THRESHOLDS, WEIGHTS, mvau_out_dtype
 
 _MULT_STYLE = {"auto": "ap_resource_dflt()", "lut": "ap_resource_lut()", "dsp": "ap_resource_dsp()"}
 
@@ -84,7 +84,7 @@ $DOCOMPUTE$
 def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     """Produce embedded-mode HLS MVAU compute-core artifacts from a resolved point."""
     idt = context.tensor_datatype(INPUT)
-    odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    odt = mvau_out_dtype()(point, context)
     geo = mvau_geometry(point, context)
 
     idt_hls = idt.get_hls_datatype_str()
@@ -219,7 +219,7 @@ def _thresh_h(point, context, geo) -> str:
     — the same separable-ROM serializer the standalone Thresholding-HLS op uses."""
     thresholds = np.asarray(context.initializer(THRESHOLDS))
     tdt = point.thresholdDataType
-    odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    odt = mvau_out_dtype()(point, context)
     export_odt = DataType["BINARY"] if odt == DataType["BIPOLAR"] else odt
 
     n_steps = thresholds.shape[-1]

@@ -22,7 +22,7 @@ from finn.kernels.model.param_names import DECOUPLED
 
 from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
-from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, OUTPUT, WEIGHTS, mvau_dtype_backend, mvau_out_dtype
+from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, OUTPUT, WEIGHTS, mvau_out_dtype, mvau_register_dtypes
 from .registry import register
 
 
@@ -39,8 +39,10 @@ def softvec_bundle() -> Backend:
         # (2c split): softvec owns mvu_vvu_axi_softvec.sv + mvu.sv, disjoint from packed.
         rtl_core_module="mvu_vvu_axi_softvec",
         axes=axes,
-        # dsp_rtl_common's derived + the backend-scoped datatype contract (acc/weight/output).
-        derived=derived + mvau_dtype_backend(),
+        derived=derived,
+        # Backend-scoped internal-register dtypes (acc/weight); the out port's produced dtype
+        # rides its derived_dtype below.
+        derived_dtypes=mvau_register_dtypes(),
         predicates=predicates,
         sources=SHARED_SOURCES + ("mvu_vvu_axi_softvec.sv", "mvu.sv"),
         emit=emit_mvau_rtl,

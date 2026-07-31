@@ -16,11 +16,13 @@ identity — parked here rather than in ``kernel.py`` so the identity file stays
   backend-owned by construction (``Backend.ports[iface].stream``); the identity only declares
   the BLOCK. The three built-in cores fold identically, so the map lives once here; a core
   that tiled differently would compose its own.
-- ``mvau_dtype_backend`` — the value-dependent datatype derivations
-  (accDataType/weightDataType/outputDataType). Which datatypes exist and how they are
-  value-optimized is a realization fact (design-space-model §6 / MOTIVATION §2.2), so each
-  core composes these into its own ``derived`` rather than the op declaring them. Identical
-  across the three cores today; a future float core diverges by composing a different helper.
+- ``mvau_out_dtype`` / ``mvau_register_dtypes`` — the value-dependent datatype derivations
+  (outputDataType on the out PORT; accDataType/weightDataType as internal REGISTERS). Which
+  datatypes exist and how they are value-optimized is a realization fact (design-space-model
+  §6 / MOTIVATION §2.2), so each core declares these on its port ``derived_dtype`` +
+  ``derived_dtypes`` rather than the op declaring them — all one ``DatatypeSpec`` vocabulary.
+  Identical across the three cores today; a future float core diverges by supplying different
+  specs.
 
 Depends only on the identity's tensor-name constants + ``weights_may_change`` (imported from
 ``kernel.py``) — a one-directional edge, no cycle. The impl bundles import these via ``op.py``.
@@ -32,7 +34,6 @@ import numpy as np
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import calculate_matvec_accumulator_range
 
-from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
 
 from .kernel import INPUT, OUTPUT, THRESHOLDS, WEIGHTS, weights_may_change
@@ -108,14 +109,16 @@ def mvau_out_dtype():
     return _output_datatype
 
 
-def mvau_dtype_backend():
-    """The BACKEND-SCOPED datatype derivations (base:469-549) —
-    accDataType/weightDataType/outputDataType. Composed by each backend rather than declared
-    on the op identity: all three MVAU cores narrow IDENTICALLY today, but a future backend
-    (e.g. a float core) diverges by composing a different helper — or none. ``outputDataType``
-    reads ``accDataType`` as a plain function call, so the tuple order here is irrelevant."""
-    return (
-        Derived("accDataType", _acc_datatype),
-        Derived("weightDataType", _weight_datatype),
-        Derived("outputDataType", _output_datatype),
-    )
+def mvau_register_dtypes():
+    """The BACKEND-SCOPED internal-register dtype specs (base:469-549) —
+    ``{accDataType, weightDataType}``, each a
+    :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` callable. Declared on each
+    compute backend's :attr:`~finn.kernels.model.backend.Backend.derived_dtypes` (no port —
+    these are internal registers), so ``pool_schema`` merges them onto the point under their
+    names (emit reads ``point.accDataType`` unchanged). All three MVAU cores narrow
+    IDENTICALLY today; a future core diverges by supplying different specs. The out-port's
+    ``outputDataType`` is the sibling ``derived_dtype`` on the port (:func:`mvau_out_dtype`)."""
+    return {
+        "accDataType": _acc_datatype,
+        "weightDataType": _weight_datatype,
+    }

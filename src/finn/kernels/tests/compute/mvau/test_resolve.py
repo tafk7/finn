@@ -272,7 +272,9 @@ def test_legal_point_carries_derived(schema):
     assert isinstance(r, Point)
     assert weight_fold_depth(r, ctx, WEIGHTS) == 6 * 8 // (4 * 2)
     assert _language_of(r) == "hls"
-    assert r["stream_width.out"] == r.outputDataType.bitwidth() * 4
+    from finn.kernels.compute.mvau.op import mvau_out_dtype
+
+    assert r["stream_width.out"] == mvau_out_dtype()(r, ctx).bitwidth() * 4
 
 
 def test_kernel_attrs_pinned_onto_point_never_explored(schema):

@@ -185,6 +185,15 @@ class Backend:
             ``$SLOT$`` template — an HLS core (free-form ``#define`` text, not typed slots)
             or a pure-wiring delivery cell. Does NOT change ``bind``/render: it is a
             reference for readers, not a new render path.
+        derived_dtypes: this backend's INTERNAL-REGISTER datatype derivations —
+            ``{register_name -> DatatypeSpec}`` for a produced dtype that has NO port
+            (accumulator ``accDataType``, narrowed weight ``weightDataType``). ``pool_schema``
+            merges each into the resolved point under its register name (dispatched on
+            selection, exactly like the generic ``derived``), so emit reads
+            ``point.accDataType`` unchanged. The endogenous mirror of ``Interface.derived_dtype``
+            for a quantity with no interface — the OUTPUT port's produced dtype lives on the
+            port, an internal register's here. Both speak one
+            :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` vocabulary.
     """
 
     name: str
@@ -198,6 +207,7 @@ class Backend:
     ports: Mapping[str, Interface] = field(default_factory=dict)
     mem_mode: str | None = None
     schema: RtlModule | None = None
+    derived_dtypes: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))
@@ -205,6 +215,7 @@ class Backend:
         object.__setattr__(self, "predicates", tuple(self.predicates))
         object.__setattr__(self, "sources", tuple(self.sources))
         object.__setattr__(self, "ports", dict(self.ports))
+        object.__setattr__(self, "derived_dtypes", dict(self.derived_dtypes))
 
     def stream_of(self, iface: str) -> tuple:
         """The BLOCK→STREAM fold this backend declares for ``iface`` (``()`` if absent)."""
@@ -316,6 +327,7 @@ def pool_schema(
 
     merged_axes = _merge_axes(root_name, pool)
     merged_derived = _merge_derived(root_name, pool)
+    dtype_register_derived = _merge_derived_dtypes(root_name, pool)
     sources_derived = _field_derived(root_name, pool, "sources", key=sources_key)
     wrapped_predicates = _wrap_predicates(root_name, pool)
 
@@ -324,6 +336,7 @@ def pool_schema(
         derived=(
             tuple(shared_derived)
             + tuple(merged_derived)
+            + tuple(dtype_register_derived)
             + (sources_derived,)
         ),
         predicates=tuple(shared_predicates) + tuple(wrapped_predicates),
@@ -466,6 +479,40 @@ def _merge_derived(root_name, pool) -> list[Derived]:
         by_impl = {b.name: _derived_of(b, name) for b in owning}
         merged.append(Derived(name, _dispatch_compute(root_name, by_impl)))
     return merged
+
+
+def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
+    """Merge each backend's INTERNAL-REGISTER dtype specs (``Backend.derived_dtypes``) into
+    name-keyed :class:`Derived`\\ s that resolve the owning bundle's
+    :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` when its impl is selected, else
+    ``None`` (present-but-None, matching the generic ``derived`` merge). The register name is
+    the fallback tensor for a ``None``/``VALUE_OPTIMIZED`` spec — an internal register has no
+    port, so the resolver only reads Context through it when the spec asks."""
+    owners: dict[str, list[Backend]] = {}
+    for bundle in pool:
+        for name in bundle.derived_dtypes:
+            owners.setdefault(name, []).append(bundle)
+
+    merged: list[Derived] = []
+    for name, owning in owners.items():
+        by_impl = {b.name: b.derived_dtypes[name] for b in owning}
+        merged.append(Derived(name, _dispatch_dtype_compute(root_name, name, by_impl)))
+    return merged
+
+
+def _dispatch_dtype_compute(root_name, register_name, by_impl):
+    from ..engine.datatype_spec import resolve_datatype_spec
+
+    def compute(point, context, _root=root_name, _name=register_name, _by=by_impl):
+        spec = _by.get(point[_root], _MISSING)
+        if spec is _MISSING:
+            return None
+        return resolve_datatype_spec(spec, iface=_name, point=point, context=context)
+
+    return compute
+
+
+_MISSING = object()
 
 
 def _derived_of(bundle, name) -> Derived:

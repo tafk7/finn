@@ -55,7 +55,7 @@ def value_optimized(iface: str) -> Callable[[Any, Any], Any]:
     """A ``DatatypeSpec`` callable that narrows ``iface``'s dtype from its static initializer
     VALUES, falling back to the graph dtype when the tensor is dynamic (no initializer).
 
-    The narrowing body is the acc/weight pattern already in ``mvau_dtype_backend`` (base
+    The narrowing body is the acc/weight pattern in MVAU's ``mvau_register_dtypes`` (base
     FINN matrixvectoractivation.py:529-549): a signed range uses the more-negative extreme,
     an unsigned range the max — then ``DataType.get_smallest_possible``. :data:`VALUE_OPTIMIZED`
     is sugar for ``value_optimized(<the port's own interface>)``; this factory is used

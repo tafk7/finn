@@ -55,11 +55,11 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
 )
 
 # The BACKEND-SCOPED shared contract (fold map + datatype derivations) — re-exported so the
-# impl bundles read `from .op import COMPUTE_STREAM, mvau_dtype_backend` unchanged.
+# impl bundles read `from .op import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes`.
 from .backends import (  # noqa: F401  (re-exported public surface)
     COMPUTE_STREAM,
-    mvau_dtype_backend,
     mvau_out_dtype,
+    mvau_register_dtypes,
 )
 
 logger = logging.getLogger(__name__)
@@ -213,12 +213,12 @@ class MvauKernelOp(KernelOp):
         return _PORTS
 
     def _output_datatype_from_point(self, kernel, ctx, point, index):
-        # MVAU's outputDataType is a resolved derived: the graph dtype when the node has
-        # thresholds (they map the accumulator down), or the weight-derived accumulator type
-        # when it has none. Read it off the point so infer propagates the exact (possibly
-        # narrowed) type.
-        if index == 0 and "outputDataType" in point:
-            return point["outputDataType"]
+        # MVAU's output dtype is the out port's derived_dtype spec: the graph dtype when the
+        # node has thresholds (they map the accumulator down), or the weight-derived
+        # accumulator type when it has none. Resolve it so infer propagates the exact
+        # (possibly narrowed) type — the SAME rule the stream-width fold and emit read.
+        if index == 0:
+            return mvau_out_dtype()(point, ctx)
         return super()._output_datatype_from_point(kernel, ctx, point, index)
 
     def get_folding_axes(self):

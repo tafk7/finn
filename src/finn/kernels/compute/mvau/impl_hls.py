@@ -31,8 +31,8 @@ from .op import (
     OUTPUT,
     THRESHOLDS,
     WEIGHTS,
-    mvau_dtype_backend,
     mvau_out_dtype,
+    mvau_register_dtypes,
 )
 from .registry import register
 
@@ -77,15 +77,16 @@ def hls_bundle() -> Backend:
             discrete_axis("resType", {"lut", "dsp"}, "lut"),
         ),
         predicates=(_hls_simd_lower_bound, _no_true_binary),
-        # Backend-scoped datatype contract (acc/weight/output). All MVAU cores narrow
-        # identically today; a future core diverges by composing a different helper.
-        derived=mvau_dtype_backend(),
         sources=("matrixvectoractivation_hls.py",),  # HLS codegen owns its template
         emit=emit_mvau_hls,
+        # Backend-scoped internal-register dtypes (acc/weight). All MVAU cores narrow
+        # identically today; a future core diverges by supplying different specs.
+        derived_dtypes=mvau_register_dtypes(),
         # The HLS core takes weights either baked (params.h) or streamed (memstream), and
         # bakes thresholds into thresh.h — so it consumes weights in BOTH modes, thresholds
         # constant-only. (base FINN: internal_embedded is HLS-only; the fused HLS core is the
-        # only MVU that supports embedded thresholds.) Integer i/w declared as datatype support.
+        # only MVU that supports embedded thresholds.) Integer i/w declared as datatype support;
+        # the out port's produced dtype rides derived_dtype (acc-or-graph rule).
         ports=ports_from(
             stream=COMPUTE_STREAM,
             mem_modes={WEIGHTS: {EMBEDDED, DECOUPLED}, THRESHOLDS: {EMBEDDED}},
