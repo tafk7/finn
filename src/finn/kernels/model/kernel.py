@@ -39,7 +39,7 @@ from ._util import prod
 from .backend import BACKEND_AXIS, Backend, pool_space
 from .parameter_source import parameter_source_for
 from ..engine.point import AbsentAxisError, Illegal, Point
-from .ports import Direction
+from .ports import Direction, Fixed, Multiplicity, Protocol, Variadic
 from ..engine.resolve import resolve
 from ..engine.design_space import DesignSpace
 from .tiling import TileError, generate_tiling, stream_width_key as _stream_width_key
@@ -48,6 +48,11 @@ from .tiling import TileError, generate_tiling, stream_width_key as _stream_widt
 class KernelError(ValueError):
     """Raised for an ill-formed Kernel query (unknown interface index, a folded-shape
     request on a non-last-axis PARAM port, or a stream dial that does not divide)."""
+
+
+# The three DATAFLOW protocols an InterfaceSchema may declare (pitch §7.0); Sideband/
+# Clock/Reset are emit-only pins, not phase-1 interfaces.
+_DATAFLOW_PROTOCOLS = frozenset({Protocol.Stream, Protocol.MemoryMapped, Protocol.Config})
 
 
 def _resolve_interface_indices(interfaces):
@@ -120,6 +125,23 @@ class InterfaceSchema:
             with a non-declaration-order wiring (an operand at a shifted slot) sets it
             explicitly. Replaces the old ``PortSpec.index`` — one interface object now carries
             name/direction/index/optional, so the op no longer restates the binding.
+
+        protocol: the PHYSICAL dataflow protocol this interface speaks — one of the three
+            DATAFLOW :class:`~finn.kernels.model.ports.Protocol` members ``Stream`` (default),
+            ``MemoryMapped`` (an IODMA off-chip master), or ``Config`` (a runtime-writable
+            register surface). ``Sideband``/``Clock``/``Reset`` are emit-only PINS, not
+            phase-1 interfaces, so they are rejected here (pitch §7.0). Default ``Stream`` —
+            an author sets it only when the op's PURPOSE is that protocol (the fact-placement
+            rule). The folded-shape/stream-width projections apply ONLY to ``Stream``
+            interfaces (T1.4).
+
+        multiplicity: how many concrete node slots this interface expands to —
+            :class:`~finn.kernels.model.ports.Fixed` ``(n)`` (default ``Fixed(1)``, the exact
+            common case) or :class:`~finn.kernels.model.ports.Variadic` ``(count_from)`` (N
+            homogeneous repeats, N read from Context via ``ctx.arity(count_from)`` — Concat).
+            Distinct from ``optional`` (ONNX ``Optional``, a heterogeneous 0-or-1 operand):
+            ``Variadic`` is ONNX ``Variadic``, a homogeneous repeat. :meth:`Kernel.interfaces`
+            expands ``Variadic`` to N concrete peers.
     """
 
     name: str
@@ -128,10 +150,19 @@ class InterfaceSchema:
     optional: bool = False
     constraints: tuple = ()
     index: int = -1
+    protocol: "Protocol" = Protocol.Stream
+    multiplicity: "Multiplicity" = field(default_factory=Fixed)
 
     def __post_init__(self):
         object.__setattr__(self, "block", tuple(self.block))
         object.__setattr__(self, "constraints", tuple(self.constraints))
+        if self.protocol not in _DATAFLOW_PROTOCOLS:
+            raise ValueError(
+                f"interface {self.name!r}: protocol {self.protocol} is not a dataflow "
+                f"protocol; an InterfaceSchema may only declare "
+                f"{sorted(p.name for p in _DATAFLOW_PROTOCOLS)} "
+                f"(Sideband/Clock/Reset are emit-only pins, not phase-1 interfaces)"
+            )
 
     @property
     def tensor(self) -> str:
@@ -387,6 +418,42 @@ class Kernel:
         return resolve(self.op_space(), context, assignment)
 
     # -- interface lookup ---------------------------------------------------
+
+    def expanded_interfaces(self, context: Context) -> tuple[InterfaceSchema, ...]:
+        """The declared ``interfaces`` with every :class:`~finn.kernels.model.ports.Variadic`
+        interface expanded to N concrete peers (N = ``context.arity(count_from)``), each a
+        ``Fixed(1)`` at consecutive slot indices ``[base, base+1, …]`` within its direction.
+        A ``Fixed`` interface passes through unchanged. This is the context-aware
+        generalization of :meth:`present_interfaces`' emergent-presence rule: the concrete
+        node-slot interfaces come from Context, not the declared list.
+
+        The all-fixed-arity common case (MVAU/Thresholding) returns the declared list verbatim
+        — the field ``interfaces`` is authoritative and no ctx read happens. Only a variadic
+        op pays the expansion."""
+        if all(isinstance(i.multiplicity, Fixed) and i.multiplicity.n == 1 for i in self.interfaces):
+            return self.interfaces
+        from dataclasses import replace
+
+        out: list[InterfaceSchema] = []
+        counters: dict = {}
+        for i in self.interfaces:
+            base = counters.get(i.direction, 0)
+            if isinstance(i.multiplicity, Variadic):
+                count = context.arity(i.multiplicity.count_from)
+            else:
+                count = i.multiplicity.n
+            for k in range(count):
+                suffix = f"_{k}" if count > 1 else ""
+                out.append(
+                    replace(
+                        i,
+                        name=f"{i.name}{suffix}",
+                        index=base + k,
+                        multiplicity=Fixed(1),
+                    )
+                )
+            counters[i.direction] = base + count
+        return tuple(out)
 
     def present_interfaces(self, context: Context) -> tuple[InterfaceSchema, ...]:
         """The interfaces PRESENT for this node: all required ones, plus each optional one

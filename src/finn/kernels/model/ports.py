@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 
 class Direction(Enum):
@@ -39,6 +39,32 @@ class Direction(Enum):
 
     IN = "in"
     OUT = "out"
+
+
+@dataclass(frozen=True)
+class Fixed:
+    """A FIXED-arity interface: exactly ``n`` concrete node slots (the common case,
+    default ``Fixed(1)``). An op declares ``Fixed(1)`` implicitly — one slot per
+    declared interface. Distinct from ``optional`` (a heterogeneous 0-or-1 operand);
+    this is a homogeneous exact count."""
+
+    n: int = 1
+
+
+@dataclass(frozen=True)
+class Variadic:
+    """A VARIADIC interface: N homogeneous repeats of one interface, N read from the
+    node at resolve time via ``ctx.arity(count_from)`` (Concat's inputs, a fused-add's
+    addends). Distinct from ``optional`` (ONNX ``Optional`` — a heterogeneous may-be-
+    absent slot); ``Variadic`` is ONNX ``Variadic`` — a homogeneous repeat.
+    :meth:`Kernel.interfaces` expands it to N concrete ``InterfaceSchema`` at the slot
+    indices ``[base, base+1, …]``."""
+
+    count_from: str
+
+
+# One interface's multiplicity: a fixed exact count, or a variadic repeat.
+Multiplicity = Union[Fixed, Variadic]
 
 
 class Protocol(Enum):

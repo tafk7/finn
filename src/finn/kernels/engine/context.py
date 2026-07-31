@@ -38,6 +38,8 @@ class Context:
         fpgapart: target device string (e.g. "xc7z020clg400-1", "xcvc1902-...").
         toolchain_version: toolchain version string, or None.
         clk_ns: target clock period in ns (toolchain global; drives SEGMENTLEN).
+        arities: variadic-group name -> concrete slot count for this node (read by
+            :meth:`arity`). Empty for the all-fixed-arity common case (MVAU/Thresholding).
     """
 
     shapes: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
@@ -46,6 +48,7 @@ class Context:
     fpgapart: str = ""
     toolchain_version: str | None = None
     clk_ns: float | None = None
+    arities: Mapping[str, int] = field(default_factory=dict)
 
     def tensor_shape(self, name: str) -> tuple[int, ...]:
         return self.shapes[name]
@@ -55,6 +58,16 @@ class Context:
 
     def initializer(self, name: str) -> np.ndarray | None:
         return self.initializers.get(name)
+
+    def arity(self, group: str) -> int:
+        """How many concrete node slots a VARIADIC interface group expands to for this node —
+        the count :meth:`Kernel.expanded_interfaces` reads to expand a
+        :class:`~finn.kernels.model.ports.Variadic` ``(count_from=group)``. Sourced from the
+        instantiated node's wired slots (the ONNX variadic slot count), so it is a Context
+        given, not a design choice. The adapter builds a Context that records each variadic
+        group's count under ``group``; the default plain-dict Context reads it from
+        ``self.arities``."""
+        return self.arities[group]
 
     def has_tensor(self, name: str) -> bool:
         """Whether a tensor is WIRED for this node — the ARITY primitive an op reads to
