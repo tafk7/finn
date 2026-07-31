@@ -37,7 +37,7 @@ from finn.kernels.compute.mvau import (
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
     mvau_pool,
-    mvau_schema,
+    mvau_space,
 )
 from finn.kernels.compute.mvau.op import MvauKernelOp, mvau_kernel
 from finn.kernels.dataflow.parameters.names import (
@@ -72,7 +72,7 @@ VERSAL = "xcvc1902-vsva2197-2MP-e-S"  # Versal, DSP58
 
 @pytest.fixture
 def schema():
-    return mvau_schema()
+    return mvau_space()
 
 
 def narrow_weights(shape=(6, 8), wdt="INT4"):
@@ -390,7 +390,7 @@ def test_fourth_implementation_composes_additively():
 
     base = mvau_kernel()
     kernel4 = replace(base, pool=mvau_pool() + (lut_rtl,))
-    schema4 = kernel4.schema()
+    schema4 = kernel4.compile()
 
     legal = resolve(
         schema4, make_context(SEVEN_SERIES),
@@ -414,7 +414,7 @@ def test_fourth_implementation_composes_additively():
 
 def test_registry_makes_addition_structural():
     from finn.kernels.model.backend import Backend, ports_from
-    from finn.kernels.compute.mvau import mvau_pool, mvau_schema
+    from finn.kernels.compute.mvau import mvau_pool, mvau_space
     from finn.kernels.compute.mvau.op import COMPUTE_STREAM
     from finn.kernels.compute.mvau.registry import register, unregister
 
@@ -430,7 +430,7 @@ def test_registry_makes_addition_structural():
         after = {b.name for b in mvau_pool()}
         assert after == before | {"mvau_stub_backend"}
         r = resolve(
-            mvau_schema(), make_context(SEVEN_SERIES),
+            mvau_space(), make_context(SEVEN_SERIES),
             base_assignment(backend="mvau_stub_backend", mem_mode="internal_embedded"),
         )
         assert isinstance(r, Point)
@@ -568,9 +568,9 @@ def _matmul_model(idt="INT8", wdt="INT8"):
 @pytest.mark.parametrize("impl", ["mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"])
 def test_each_backend_rejects_float_iw(impl):
     k = mvau_kernel()
-    float_pt = resolve(k.schema(), _feas_ctx(idt="FLOAT32", wdt="FLOAT32"), {"backend": impl})
+    float_pt = resolve(k.compile(), _feas_ctx(idt="FLOAT32", wdt="FLOAT32"), {"backend": impl})
     assert isinstance(float_pt, Illegal)
-    int_pt = resolve(k.schema(), _feas_ctx(idt="INT8", wdt="INT8"), {"backend": impl})
+    int_pt = resolve(k.compile(), _feas_ctx(idt="INT8", wdt="INT8"), {"backend": impl})
     assert isinstance(int_pt, Point)
 
 

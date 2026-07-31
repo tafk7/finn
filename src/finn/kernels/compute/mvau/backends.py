@@ -114,7 +114,7 @@ def mvau_register_dtypes():
     ``{accDataType, weightDataType}``, each a
     :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` callable. Declared on each
     compute backend's :attr:`~finn.kernels.model.backend.Backend.derived_dtypes` (no port —
-    these are internal registers), so ``pool_schema`` merges them onto the point under their
+    these are internal registers), so ``pool_space`` merges them onto the point under their
     names (emit reads ``point.accDataType`` unchanged). All three MVAU cores narrow
     IDENTICALLY today; a future core diverges by supplying different specs. The out-port's
     ``outputDataType`` is the sibling ``derived_dtype`` on the port (:func:`mvau_out_dtype`)."""

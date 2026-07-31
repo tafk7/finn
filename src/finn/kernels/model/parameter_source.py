@@ -38,7 +38,7 @@ It introduces NO new resolve mechanism: it reads only existing ``Backend`` field
 (``stream_width.<iface>``, ``topology.<iface>``, ``demand.<iface>``), and its two-root
 deps feed the topo-sort that already runs.
 
-This module OWNS the assembly (:meth:`ParameterSource.to_subschemas`), reusing the
+This module OWNS the assembly (:meth:`ParameterSource.to_subspaces`), reusing the
 demand/guard COMPUTATION bodies (:func:`_demand_for`, :func:`_topology_domain`) kept in
 :mod:`~finn.kernels.model.param_contract` beside the op-facing :class:`DeliveredParam`
 declaration.
@@ -49,11 +49,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
-from .backend import BACKEND_AXIS, Backend, pool_schema
+from .backend import BACKEND_AXIS, Backend, pool_space
 from .param_contract import DeliveredParam, _demand_for, _topology_default, _topology_domain
 from ..engine.derived import Derived
 from .param_names import demand_key, sources_key, topology_key
-from ..engine.schema import Schema
+from ..engine.design_space import DesignSpace
 
 
 @dataclass(frozen=True)
@@ -69,12 +69,12 @@ class ParameterSource:
         schema: the op-side interface name this realizes (the ``DeliveredParam.iface`` —
             also the Context tensor key).
         pool: the CONCRETE source pool (storage-topology ``Backend``\\ s) for this
-            interface. The selection space :meth:`to_subschemas` lowers to a ``Schema``.
+            interface. The selection space :meth:`to_subspaces` lowers to a ``DesignSpace``.
         stream: ``{compute_backend_name -> fold list}`` — the BLOCK→STREAM fold each
             compute backend declares for this port (a reference to ``Backend.stream[iface]``,
             not a copy of the fold math). Carried so the seam data lives in one object; the
             demand reads the RESOLVED ``stream_width.<iface>`` the tiling engine derives from
-            it, so this map is not itself consumed by :meth:`to_subschemas`.
+            it, so this map is not itself consumed by :meth:`to_subspaces`.
         mem_modes: ``{compute_backend_name -> frozenset[str] | None}`` — the modes each
             compute backend accepts for this port (``None`` = permissive, both modes). The
             per-backend variation is dispatched on the selected ``implementation`` inside
@@ -98,7 +98,7 @@ class ParameterSource:
     constrains: tuple[Callable[[Any, Any], Any], Callable[[Any], Any]]
     deps: frozenset[str]
 
-    def to_subschemas(self) -> tuple[Schema, Schema]:
+    def to_subspaces(self) -> tuple[DesignSpace, DesignSpace]:
         """The ``(demand_schema, guarded source sub-schema)`` pair this interface
         contributes, in supply-waterfall order.
 
@@ -106,24 +106,24 @@ class ParameterSource:
         geometry (``publishes``); the source pool then sizes its own realization from
         that demand, its ``topology`` domain filtered by ``constrains`` to the modes the
         selected compute backend accepts."""
-        return (self._demand_schema(), self._source_subschema())
+        return (self._demand_space(), self._source_subspace())
 
-    def _demand_schema(self) -> Schema:
+    def _demand_space(self) -> DesignSpace:
         """The DEMAND stage as a derived-only schema, ordered BETWEEN the compute pool and
         the source pool by its ``demand_key`` reading the tiling engine's resolved
         ``stream_width.<iface>`` (present only after compute tiling)."""
-        return Schema(
+        return DesignSpace(
             axes=(),
             derived=(Derived(demand_key(self.schema), self.publishes),),
             predicates=(),
         )
 
-    def _source_subschema(self) -> Schema:
+    def _source_subspace(self) -> DesignSpace:
         """The source pool for this interface with its ``topology`` root-axis domain
         overridden by the mem-mode guard, so only topologies the selected compute
         backend can accept remain selectable. The default is likewise guarded so an
         out-of-domain default never makes an unpinned topology illegal."""
-        schema = pool_schema(
+        schema = pool_space(
             topology_key(self.schema),
             (),
             (),
@@ -131,7 +131,7 @@ class ParameterSource:
             self.pool,
             sources_key=sources_key(self.schema),
         )
-        root = schema.axes[0]  # pool_schema emits the root topology axis first
+        root = schema.axes[0]  # pool_space emits the root topology axis first
         domain, legal = self.constrains
         guarded = replace(root, domain=domain, default=_topology_default(root.default, legal))
         return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))

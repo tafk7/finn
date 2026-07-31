@@ -27,8 +27,8 @@ NO per-bundle dtype feasibility gate (a fabricated one was falsified;
 
 from __future__ import annotations
 
-from finn.kernels.engine.schema import Schema
-from finn.kernels.model.backend import BACKEND_AXIS, pool_schema
+from finn.kernels.engine.design_space import DesignSpace
+from finn.kernels.model.backend import BACKEND_AXIS, pool_space
 
 from .names import (  # noqa: F401 (re-exported)
     INPUT,
@@ -48,7 +48,7 @@ from . import impl_rtl  # noqa: E402,F401
 from .op import (  # noqa: E402,F401 (re-exported public surface)
     ThresholdingKernelOp,
     thresholding_kernel,
-    thresholding_kernel_schema,
+    thresholding_kernel_space,
 )
 
 
@@ -62,12 +62,12 @@ def thresholding_pool():
     return build_pool()
 
 
-def thresholding_schema() -> Schema:
-    """The full Thresholding design space as a bare resolve ``Schema`` (compute pool only,
+def thresholding_space() -> DesignSpace:
+    """The full Thresholding design space as a bare resolve ``DesignSpace`` (compute pool only,
     no delivered parameters). The Kernel-composed schema (adding the ``parameters.*``
-    namespace) is :func:`thresholding_kernel_schema`."""
+    namespace) is :func:`thresholding_kernel_space`."""
     axes, derived, predicates = thresholding_shared()
-    return pool_schema(
+    return pool_space(
         BACKEND_AXIS,
         axes,
         derived,
@@ -80,9 +80,9 @@ def thresholding_schema() -> Schema:
 __all__ = [
     "thresholding_shared",
     "thresholding_pool",
-    "thresholding_schema",
+    "thresholding_space",
     "thresholding_kernel",
-    "thresholding_kernel_schema",
+    "thresholding_kernel_space",
     "ThresholdingKernelOp",
     "THRESHOLDING_HLS",
     "THRESHOLDING_RTL",

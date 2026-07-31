@@ -6,12 +6,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``Schema`` — a design space as data: axes + derived + predicates.
+"""``DesignSpace`` — a design space as data: axes + derived + predicates.
 
-The schema computes the axis dependency order once at construction: a topological
+The design space computes the axis dependency order once at construction: a topological
 sort over "axis A's guard/domain reads axis B" (declared via each axis's ``deps``,
-since closures cannot be introspected reliably). A cycle is a schema-authoring
-error, caught here once (design-space-model.md §2).
+since closures cannot be introspected reliably). A cycle is an authoring error, caught
+here once (design-space-model.md §2).
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ from .derived import Derived
 from .predicate import Predicate
 
 
-class SchemaError(ValueError):
+class DesignSpaceError(ValueError):
     """Raised for a malformed schema (dependency cycle, unknown dep, dup name)."""
 
 
 @dataclass(frozen=True)
-class Schema:
+class DesignSpace:
     axes: tuple[Axis, ...]
     derived: tuple[Derived, ...] = ()
     predicates: tuple[Predicate, ...] = ()
@@ -53,13 +53,13 @@ def _topo_sort(axes) -> list[Axis]:
     by_name: dict[str, Axis] = {}
     for a in axes:
         if a.name in by_name:
-            raise SchemaError(f"Duplicate axis name: {a.name!r}")
+            raise DesignSpaceError(f"Duplicate axis name: {a.name!r}")
         by_name[a.name] = a
 
     for a in axes:
         for dep in a.deps:
             if dep not in by_name:
-                raise SchemaError(
+                raise DesignSpaceError(
                     f"Axis {a.name!r} declares dependency on unknown axis {dep!r}"
                 )
 
@@ -75,7 +75,7 @@ def _topo_sort(axes) -> list[Axis]:
         for dep in sorted(by_name[name].deps):
             if color[dep] == GREY:
                 cycle = " -> ".join(stack[stack.index(dep):] + [dep])
-                raise SchemaError(f"Dependency cycle among axes: {cycle}")
+                raise DesignSpaceError(f"Dependency cycle among axes: {cycle}")
             if color[dep] == WHITE:
                 visit(dep, stack)
         stack.pop()

@@ -33,7 +33,7 @@ from finn.kernels.engine.ordered_parameter import OrderedParameter
 from finn.kernels.engine.point import Illegal, Point
 from finn.kernels.engine.predicate import Predicate
 from finn.kernels.engine.resolve import resolve
-from finn.kernels.engine.schema import Schema
+from finn.kernels.engine.design_space import DesignSpace
 
 
 def _ctx():
@@ -47,7 +47,7 @@ def test_dependency_order_is_topological():
     # b depends on a; a must be fixed first regardless of declaration order.
     a = discrete_axis("a", {4}, 4)
     b = divisor_axis("b", "a", 1, deps={"a"})
-    schema = Schema(axes=(b, a))  # declared out of order on purpose
+    schema = DesignSpace(axes=(b, a))  # declared out of order on purpose
     order = [ax.name for ax in schema.ordered_axes()]
     assert order.index("a") < order.index("b")
     r = resolve(schema, _ctx(), {"b": 2})
@@ -59,7 +59,7 @@ def test_guard_reads_already_fixed_dep():
     # A guard reading an upstream axis always sees it fixed (E1 guarantee).
     root = discrete_axis("root", {0, 1}, 0)
     child = discrete_axis("child", {5, 6}, 5, guard=lambda p: p.root == 1, deps={"root"})
-    schema = Schema(axes=(child, root))  # child declared before its dep
+    schema = DesignSpace(axes=(child, root))  # child declared before its dep
     r = resolve(schema, _ctx(), {"root": 1, "child": 6})
     assert isinstance(r, Point)
     assert r.child == 6
@@ -73,7 +73,7 @@ def test_guarded_out_axis_is_absent_not_defaulted():
     guarded = discrete_axis(
         "child", {5, 6}, 5, guard=lambda p: p.root == 1, deps={"root"}
     )
-    schema = Schema(axes=(root, guarded))
+    schema = DesignSpace(axes=(root, guarded))
     r = resolve(schema, _ctx(), {"root": 0})
     assert isinstance(r, Point)
     assert "child" not in r
@@ -82,7 +82,7 @@ def test_guarded_out_axis_is_absent_not_defaulted():
 
 
 def test_default_used_when_present_and_unassigned():
-    schema = Schema(axes=(discrete_axis("x", {1, 2, 3}, 2),))
+    schema = DesignSpace(axes=(discrete_axis("x", {1, 2, 3}, 2),))
     r = resolve(schema, _ctx(), {})
     assert isinstance(r, Point)
     assert r.x == 2
@@ -96,7 +96,7 @@ def test_assigning_absent_axis_is_illegal():
     guarded = discrete_axis(
         "child", {5, 6}, 5, guard=lambda p: p.root == 1, deps={"root"}
     )
-    schema = Schema(axes=(root, guarded))
+    schema = DesignSpace(axes=(root, guarded))
     r = resolve(schema, _ctx(), {"root": 0, "child": 6})
     assert isinstance(r, Illegal)
     assert "absent" in r.reasons[0]
@@ -106,7 +106,7 @@ def test_assigning_absent_axis_is_illegal():
 
 
 def test_frozenset_domain_rejection():
-    schema = Schema(axes=(discrete_axis("x", {1, 2, 3}, 1),))
+    schema = DesignSpace(axes=(discrete_axis("x", {1, 2, 3}, 1),))
     r = resolve(schema, _ctx(), {"x": 9})
     assert isinstance(r, Illegal)
     assert "x" in r.reasons[0]
@@ -117,7 +117,7 @@ def test_ordered_parameter_domain_rejection():
     # divisor_axis builds an OrderedParameter domain (divisors of the dep dim).
     a = discrete_axis("a", {8}, 8)
     b = divisor_axis("b", "a", 1, deps={"a"})
-    schema = Schema(axes=(a, b))
+    schema = DesignSpace(axes=(a, b))
     # 3 is not a divisor of 8 → outside the ordered domain.
     r = resolve(schema, _ctx(), {"b": 3})
     assert isinstance(r, Illegal)
@@ -129,7 +129,7 @@ def test_ordered_parameter_domain_rejection():
 
 def test_predicate_domain_rejection():
     even = predicate_axis("n", "even", lambda v: v % 2 == 0, 2)
-    schema = Schema(axes=(even,))
+    schema = DesignSpace(axes=(even,))
     assert isinstance(resolve(schema, _ctx(), {"n": 3}), Illegal)
     assert resolve(schema, _ctx(), {"n": 4}).n == 4
 
@@ -146,7 +146,7 @@ def test_membership_is_uniform_across_domain_kinds():
 
 
 def test_derived_computed_after_axes():
-    schema = Schema(
+    schema = DesignSpace(
         axes=(discrete_axis("x", {3}, 3),),
         derived=(Derived("double", lambda p, c: p.x * 2),),
     )
@@ -156,7 +156,7 @@ def test_derived_computed_after_axes():
 
 
 def test_derived_share_point_namespace_with_axes():
-    schema = Schema(
+    schema = DesignSpace(
         axes=(discrete_axis("x", {3}, 3),),
         derived=(Derived("y", lambda p, c: p.x + 1),),
     )
@@ -167,7 +167,7 @@ def test_derived_share_point_namespace_with_axes():
 
 
 def test_derived_reads_context():
-    schema = Schema(
+    schema = DesignSpace(
         axes=(),
         derived=(Derived("part", lambda p, c: c.fpgapart),),
     )
@@ -179,7 +179,7 @@ def test_derived_reads_context():
 
 
 def test_predicates_collect_all_reasons():
-    schema = Schema(
+    schema = DesignSpace(
         axes=(discrete_axis("x", {1}, 1),),
         predicates=(
             Predicate(lambda p, c: "reason one", "p1"),
@@ -193,7 +193,7 @@ def test_predicates_collect_all_reasons():
 
 
 def test_all_none_predicates_is_legal():
-    schema = Schema(
+    schema = DesignSpace(
         axes=(discrete_axis("x", {1}, 1),),
         predicates=(Predicate(lambda p, c: None, "p"),),
     )
@@ -205,8 +205,8 @@ def test_all_none_predicates_is_legal():
 # stay to prevent re-adopting the refuted "Derived-returns-sub-Point" framing.
 
 
-def _delivery_subspace() -> Schema:
-    return Schema(
+def _delivery_subspace() -> DesignSpace:
+    return DesignSpace(
         axes=(
             discrete_axis("storage", {"onchip", "offchip"}, "onchip"),
             discrete_axis(
@@ -231,7 +231,7 @@ def test_naive_derived_cannot_reach_nondefault_subpoint():
     def weight_delivery_naive(p, ctx):
         return resolve(sub, _ctx())
 
-    parent = Schema(
+    parent = DesignSpace(
         axes=(discrete_axis("PE", {1, 2, 4}, 1),),
         derived=(Derived("weight_delivery", weight_delivery_naive),),
     )
@@ -244,8 +244,8 @@ def test_naive_derived_cannot_reach_nondefault_subpoint():
 
 def test_derived_returns_subpoint_ok_only_when_subkernel_is_parameter_free():
     """The Derived-returns-sub-Point idiom IS valid for a sub-kernel with no free axes."""
-    param_free = Schema(axes=(), derived=(Derived("depth", lambda p, c: 64),))
-    parent = Schema(
+    param_free = DesignSpace(axes=(), derived=(Derived("depth", lambda p, c: 64),))
+    parent = DesignSpace(
         axes=(discrete_axis("PE", {1, 2}, 1),),
         derived=(Derived("delivery", lambda p, c: resolve(param_free, c)),),
     )
@@ -258,7 +258,7 @@ def test_lifted_delivery_axes_are_explorable_and_guarded():
     """CORRECT mapping: the sub-space's FREE axes lift into the parent (namespaced),
     couplings become parent Derived, cross gates become parent Predicate — one flat
     schema, no new primitive."""
-    parent = Schema(
+    parent = DesignSpace(
         axes=(
             discrete_axis("PE", {1, 2, 4}, 1),
             discrete_axis("wd.storage", {"onchip", "offchip"}, "onchip"),

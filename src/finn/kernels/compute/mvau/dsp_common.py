@@ -70,7 +70,7 @@ def _rtl_mvu_feasible(p, ctx):
         return "RTL-MVU cannot consume thresholds (embedded thresholding unsupported; specialize_layers:241)"
     wdt = ctx.tensor_datatype(WEIGHTS)
     idt = ctx.tensor_datatype(INPUT)
-    # Integer i/w is declared as datatype support (RTL_MVU_SUPPORT, compiled by pool_schema
+    # Integer i/w is declared as datatype support (RTL_MVU_SUPPORT, compiled by pool_space
     # into a guarded predicate). It runs alongside this gate — the signed/bitwidth checks
     # below assume integer types, which the support gate guarantees.
     if not wdt.signed():

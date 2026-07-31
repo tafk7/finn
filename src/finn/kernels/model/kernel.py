@@ -36,12 +36,12 @@ from typing import Any, Mapping
 
 from ..engine.context import Context
 from ._util import prod
-from .backend import BACKEND_AXIS, Backend, pool_schema
+from .backend import BACKEND_AXIS, Backend, pool_space
 from .parameter_source import parameter_source_for
 from ..engine.point import AbsentAxisError, Illegal, Point
 from .ports import Direction
 from ..engine.resolve import resolve
-from ..engine.schema import Schema
+from ..engine.design_space import DesignSpace
 from .tiling import TileError, generate_tiling, stream_width_key as _stream_width_key
 
 
@@ -281,7 +281,7 @@ class Kernel:
 
     def _augmented_pool(self) -> tuple[Backend, ...]:
         """Each Backend with the tiling-engine-generated axes/divisibility
-        predicates appended to its OWN axes/predicates (so ``pool_schema`` dispatches
+        predicates appended to its OWN axes/predicates (so ``pool_space`` dispatches
         them on selection), and the generated stream-width deriveds. The impl's declared
         tiling map is the single source; the fold dials, their ranges, the divisibility,
         and the widths are all derived here — not hand-written on the op."""
@@ -300,14 +300,14 @@ class Kernel:
             )
         return tuple(out)
 
-    def schema(self) -> Schema:
+    def compile(self) -> DesignSpace:
         """The full design space: the identity's op-level shared elements + the
         backend pool (each backend augmented with its tiling-engine-derived fold dials
         / divisibility / widths), plus the delivered parameters' realization sub-schemas.
         ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate source
         couplings that once lived here relocated into the parameters pool, and the
         compute→source demand crosses the seam owned by a ``ParameterSource``."""
-        op = pool_schema(
+        op = pool_space(
             BACKEND_AXIS,
             # kernel_attrs join the op-level shared axes: each is an Axis carried onto the
             # Point at its assignment/default, reaching backends + the nodeattr bridge, with
@@ -321,14 +321,14 @@ class Kernel:
         # DELIVERED PARAMETERS: the generic compute→source wiring, OWNED by a
         # ParameterSource per delivered interface — the seam object
         # that holds the DEMAND stage + guarded source sub-schema (design pitch §2). Its
-        # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
+        # to_subspaces() folds into the op schema in supply-waterfall order; the seam has
         # one owner and the waterfall is structural (its declared two-root deps) rather than
         # list-position. Reads the compute pool's `mem_modes` + each topology's `mem_mode` — no
         # op-specific logic here. Namespaced keys (`parameters.*`) + distinct sources_key
         # mean the union never collides, so resolve walks it unchanged.
         for dp in self.delivered_parameters:
-            for sub in parameter_source_for(dp, self.pool).to_subschemas():
-                op = Schema(
+            for sub in parameter_source_for(dp, self.pool).to_subspaces():
+                op = DesignSpace(
                     axes=tuple(op.axes) + tuple(sub.axes),
                     derived=tuple(op.derived) + tuple(sub.derived),
                     predicates=tuple(op.predicates) + tuple(sub.predicates),
@@ -337,7 +337,7 @@ class Kernel:
 
     def configure(self, context: Context, assignment: Mapping | None = None):
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
-        return resolve(self.schema(), context, assignment)
+        return resolve(self.compile(), context, assignment)
 
     def has_feasible_point(self, context: Context) -> bool:
         """Whether ANY pool member yields a legal :class:`Point` for this Context — the
@@ -350,7 +350,7 @@ class Kernel:
         disqualify it from EVERY backend (e.g. float32 where only integer is feasible) has no
         feasible point, so ``can_infer_from`` can delegate to this rather than encoding a
         backend fact in the frontend."""
-        schema = self.schema()
+        schema = self.compile()
         for impl in self.pool:
             try:
                 result = resolve(schema, context, {BACKEND_AXIS: impl.name})
@@ -367,24 +367,24 @@ class Kernel:
                 return True
         return False
 
-    def op_schema(self) -> Schema:
+    def op_space(self) -> DesignSpace:
         """The op-level, impl-INDEPENDENT subschema: the identity's shared axes/derived/
         predicates ONLY, with NO pool (no ``implementation`` root axis, no per-backend fold
         dials). It resolves the folding-independent facts — the datatype contract
         (``accDataType``/``weightDataType``/``outputDataType``) and geometry — with NO
         committed backend. Used to publish output datatypes on an UNSPECIALIZED node, where
         the full :meth:`schema` would fabricate/require a backend selection (F1)."""
-        return Schema(
+        return DesignSpace(
             axes=tuple(self.op_axes) + tuple(self.kernel_attrs),
             derived=tuple(self.op_derived),
             predicates=tuple(self.op_predicates) + self._constraint_predicates(),
         )
 
     def configure_op(self, context: Context, assignment: Mapping | None = None):
-        """Resolve an op-level (impl-independent) point over :meth:`op_schema`. The
+        """Resolve an op-level (impl-independent) point over :meth:`op_space`. The
         datatype/geometry deriveds do not depend on the selected backend, so this succeeds on
         an unspecialized node."""
-        return resolve(self.op_schema(), context, assignment)
+        return resolve(self.op_space(), context, assignment)
 
     # -- interface lookup ---------------------------------------------------
 

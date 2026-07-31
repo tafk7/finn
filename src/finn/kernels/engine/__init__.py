@@ -7,7 +7,7 @@
 ############################################################################
 """The resolve engine: the generic design-space core.
 
-A design space is data — a :class:`~finn.kernels.engine.schema.Schema` of guarded
+A design space is data — a :class:`~finn.kernels.engine.design_space.DesignSpace` of guarded
 :class:`~finn.kernels.engine.axis.Axis` choices, computed
 :class:`~finn.kernels.engine.derived.Derived` quantities, and
 :class:`~finn.kernels.engine.predicate.Predicate` legality checks — resolved against a

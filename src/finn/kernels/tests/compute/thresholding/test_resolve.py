@@ -26,7 +26,7 @@ from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
     thresholding_pool,
-    thresholding_schema,
+    thresholding_space,
 )
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
@@ -39,7 +39,7 @@ def _language_of(point, pool=None):
 
 @pytest.fixture
 def schema():
-    return thresholding_schema()
+    return thresholding_space()
 
 
 def sorted_thresholds(channels=8, steps=7, signed=False):
@@ -158,13 +158,13 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
 
 
 def test_third_implementation_composes_additively():
-    from finn.kernels.model.backend import Backend, pool_schema
+    from finn.kernels.model.backend import Backend, pool_space
     from finn.kernels.compute.thresholding import thresholding_pool, thresholding_shared
 
     stub = Backend(name="thresholding_stub", language="stub", sources=("stub.sv",))
     axes, derived, predicates = thresholding_shared()
     pool3 = thresholding_pool() + (stub,)
-    schema3 = pool_schema("backend", axes, derived, predicates, pool3)
+    schema3 = pool_space("backend", axes, derived, predicates, pool3)
     r = resolve(schema3, make_context(), base_assignment(backend="thresholding_stub"))
     assert isinstance(r, Point)
     assert _language_of(r, pool3) == "stub"

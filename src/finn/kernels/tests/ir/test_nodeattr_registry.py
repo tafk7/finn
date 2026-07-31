@@ -22,12 +22,12 @@ from finn.kernels.model.param_names import ram_style_key
 
 
 def _reg():
-    return axis_nodeattr_types(mvau_kernel().schema())
+    return axis_nodeattr_types(mvau_kernel().compile())
 
 
 def test_every_axis_has_a_spec():
     reg = _reg()
-    schema = mvau_kernel().schema()
+    schema = mvau_kernel().compile()
     assert set(reg) == set(schema.axis_names)
     for spec in reg.values():
         assert spec[0] in ("i", "s", "ints")

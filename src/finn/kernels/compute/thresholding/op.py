@@ -74,7 +74,7 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# ASSEMBLY — the full Thresholding design space as a Kernel (and as a Schema).
+# ASSEMBLY — the full Thresholding design space as a Kernel (and as a DesignSpace).
 # =============================================================================
 
 
@@ -101,10 +101,10 @@ def thresholding_kernel() -> Kernel:
     )
 
 
-def thresholding_kernel_schema():
-    """The full Thresholding design space as a resolve ``Schema`` — delegates to
+def thresholding_kernel_space():
+    """The full Thresholding design space as a resolve ``DesignSpace`` — delegates to
     :func:`thresholding_kernel`."""
-    return thresholding_kernel().schema()
+    return thresholding_kernel().compile()
 
 
 # =============================================================================

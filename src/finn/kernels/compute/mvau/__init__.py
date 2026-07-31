@@ -72,7 +72,7 @@ from .op import (  # noqa: F401  (re-exported public surface)
     MvauKernelOp,
     mvau_kernel,
     mvau_pool,
-    mvau_schema,
+    mvau_space,
     mvau_shared,
 )
 
@@ -84,7 +84,7 @@ from . import impl_rtl_packed  # noqa: E402,F401
 
 __all__ = [
     "mvau_kernel",
-    "mvau_schema",
+    "mvau_space",
     "mvau_pool",
     "mvau_shared",
     "MvauKernelOp",

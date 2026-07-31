@@ -23,7 +23,7 @@ Two wins over the raw predicate closures these replace (design pitch, Finding 3)
   input ⇒ thresholds ≥ 0) still skips on its own port (thresholds), not the gate's read
   port (input).
 * **One vocabulary, one compile path.** ``DatatypeSupport`` (the per-port datatype gate) is
-  just another member via :class:`DatatypeConstraint`; ``pool_schema`` compiles it and every
+  just another member via :class:`DatatypeConstraint`; ``pool_space`` compiles it and every
   other per-port/kernel-level constraint through this one function instead of a special-cased
   branch.
 
@@ -107,7 +107,7 @@ class DatatypeConstraint:
     """Adapts a per-port datatype gate — a
     :class:`~finn.kernels.engine.datatype_support.DatatypeSupport` (its ``accepts``) or a raw
     ``(dt) -> reason | None`` callable — to the constraint protocol, binding the ``iface``
-    whose Context dtype it reads. Lets ``pool_schema`` compile datatype support through the
+    whose Context dtype it reads. Lets ``pool_space`` compile datatype support through the
     SAME path as every other constraint (Finding 3b)."""
 
     iface: str

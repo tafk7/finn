@@ -14,7 +14,7 @@ wrapper: the Seam-A frontend claim (``can_infer_from``/``infer_from``, mirror of
 ``InferQuantizedMatrixVectorActivation``) and the port binding that maps the graph's tensor
 slots to the kernel's inp/weights/thresholds/out interfaces.
 
-The kernel's public surface (constants, ``mvau_kernel``/``mvau_schema``/``mvau_pool``/…) is
+The kernel's public surface (constants, ``mvau_kernel``/``mvau_space``/``mvau_pool``/…) is
 re-exported here so ``from finn.kernels.compute.mvau.op import X`` keeps resolving — the impl
 bundles and tests read constants/assembly through this module.
 """
@@ -44,7 +44,7 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     mvau_interfaces,
     mvau_kernel,
     mvau_pool,
-    mvau_schema,
+    mvau_space,
     kernel_attrs,
     mvau_shared,
     op_axes,

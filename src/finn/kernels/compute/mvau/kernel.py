@@ -23,7 +23,7 @@ Sections (what each replaces in the classic FINN MVAU):
     4. COMPUTE TILING    the BLOCK->STREAM lowering shared by the pool
     5. DEMAND            the compute->memory demand stage of the supply waterfall
     6. COST              rough op-level get_exp_cycles  (FINN: get_exp_cycles)
-    7. ASSEMBLY          mvau_kernel() / mvau_schema()  (FINN: the class itself)
+    7. ASSEMBLY          mvau_kernel() / mvau_space()  (FINN: the class itself)
 
 Tensor-name convention for the Context this schema resolves against:
     "inp"      the activation input tensor   (inputDataType, dynamic)
@@ -226,14 +226,14 @@ def op_predicates():
 
 
 # =============================================================================
-# 7. ASSEMBLY — the full MVAU design space as a Kernel (and as a bare Schema).
+# 7. ASSEMBLY — the full MVAU design space as a Kernel (and as a bare DesignSpace).
 # =============================================================================
 
 
 def mvau_shared():
     """The op-level shared (axes, derived, predicates) — everything every MVU has,
     independent of the composed parameters couplings. Used by tests that assemble a
-    bare ``pool_schema`` directly."""
+    bare ``pool_space`` directly."""
     return op_axes(), op_derived(), op_predicates()
 
 
@@ -263,8 +263,8 @@ def mvau_kernel() -> Kernel:
     )
 
 
-def mvau_schema():
-    """The full MVAU design space as a resolve ``Schema`` — delegates to
+def mvau_space():
+    """The full MVAU design space as a resolve ``DesignSpace`` — delegates to
     :func:`mvau_kernel` (identical assembly). Kept as the name emit/composition tests
     resolve against."""
-    return mvau_kernel().schema()
+    return mvau_kernel().compile()

@@ -7,7 +7,7 @@
 ############################################################################
 
 """The compute kernels — the per-op bounded contexts (``mvau``, ``thresholding``,
-``pool``), each a folder owning its Kernel/Schema definition, backends, and emit.
+``pool``), each a folder owning its Kernel/DesignSpace definition, backends, and emit.
 
 The op-agnostic registry factory lives in ``model/registry.py``; MVAU's DSP RTL
 constants live in ``mvau/_dsp_rtl.py``.

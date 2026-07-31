@@ -28,12 +28,12 @@ from typing import Union
 
 from .context import Context
 from .point import Illegal, Point
-from .schema import Schema
+from .design_space import DesignSpace
 
 Result = Union[Point, Illegal]
 
 
-def resolve(schema: Schema, context: Context, assignment: Mapping | None = None) -> Result:
+def resolve(schema: DesignSpace, context: Context, assignment: Mapping | None = None) -> Result:
     assignment = dict(assignment or {})
     point: dict = {}
 

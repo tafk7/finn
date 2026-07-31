@@ -15,7 +15,7 @@ one way a kernel's parameters physically live and travel to the compute core: ``
 ``off-chip-DMA`` / ``dynamic``. Each topology is a self-contained bundle — its own
 storage/transport/selection axes, coupling derived, feasibility predicates, RTL sources, and
 emit — exactly the shape of a :class:`Backend`. We do not introduce a parallel type:
-``pool_schema`` reads a ``Backend`` structurally, and the root axis name (``topology``) is
+``pool_space`` reads a ``Backend`` structurally, and the root axis name (``topology``) is
 what gives the pool its meaning. This factory is a semantic alias so a source backend reads
 as a source, not as a compute "backend", while reusing the proven selection
 machinery ([[impl-bundles]]).

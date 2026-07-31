@@ -6,19 +6,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Schema-axis → FINN-nodeattr-type mapping — the schema *is* the nodeattr registry.
+"""DesignSpace-axis → FINN-nodeattr-type mapping — the schema *is* the nodeattr registry.
 
 FINN's ``get_nodeattr_types()`` must declare *every* attribute any pass might read or
 write (``set_nodeattr`` asserts declared membership — the R12 obligation in
 ``consumer-surface-model.md``). Rather than hand-maintain that union with its
 inconsistent FINN conventions, we derive it from the
-:class:`~finn.kernels.engine.schema.Schema`: each free :class:`Axis` becomes one
+:class:`~finn.kernels.engine.design_space.DesignSpace`: each free :class:`Axis` becomes one
 nodeattr, typed and value-constrained by inspecting its domain. The kernel is the
 source of truth — FINN's declared type/allowed-set/default all *flow from* the axis,
 never hardcoded here.
 
 The one wrinkle is **pool dispatch.** A pool member's axis (``resType``, ``ram_style``,
-``pumpedCompute``) has its domain rewritten by ``pool_schema`` to dispatch on the
+``pumpedCompute``) has its domain rewritten by ``pool_space`` to dispatch on the
 selected implementation (``space/implementation.py:_dispatch_domain``), so evaluating
 it needs a point that pins the selection. We therefore probe each axis's domain across
 the cartesian product of the *statically-resolvable* discrete axes (the selection roots

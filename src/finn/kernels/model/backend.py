@@ -7,14 +7,14 @@
 ############################################################################
 
 """``Backend`` — a self-contained backend realization bundle, and
-``pool_schema`` — the assembler that lowers a pool of bundles + op-level shared
-elements into the flat :class:`Schema` the existing ``resolve`` consumes.
+``pool_space`` — the assembler that lowers a pool of bundles + op-level shared
+elements into the flat :class:`DesignSpace` the existing ``resolve`` consumes.
 
 This is the SELECTION half of the composability thesis (design-space-model.md
 §1.2.1/§1.2.2): the op has one root ``implementation`` axis whose domain is the
 pool of buildable designs (HLS, RTL soft-vec, RTL DSP58-packed for MVAU). Each
 :class:`Backend` owns its axes/derived/predicates/feasibility/sources in one
-place; ``pool_schema`` merges them so that ONLY the selected bundle's contributions
+place; ``pool_space`` merges them so that ONLY the selected bundle's contributions
 are active for a given point. Adding a backend is then purely additive — declare
 one bundle, pass it in the pool, edit nothing else.
 
@@ -36,10 +36,10 @@ from ..engine.axis import Axis, discrete_axis
 from ..engine.derived import Derived
 from .artifacts import Artifacts, RtlModule
 from ..engine.predicate import Predicate
-from ..engine.schema import Schema
+from ..engine.design_space import DesignSpace
 
 
-# The point key under which pool_schema exposes the selected bundle's source list.
+# The point key under which pool_space exposes the selected bundle's source list.
 # Reserved: a bundle may not declare a derived of this name.
 SOURCES_KEY = "sources"
 
@@ -76,7 +76,7 @@ class Interface:
             declared datatype SUPPORT for an INPUT port, either a
             :class:`~finn.kernels.engine.datatype_support.DatatypeSupport` (category +
             bitwidth range) or a custom callable ``(dt) -> reason | None``. Compiled by
-            ``pool_schema`` into a guarded feasibility predicate (fires only when this
+            ``pool_space`` into a guarded feasibility predicate (fires only when this
             backend is selected). ``None`` = unconstrained. The union of the pool's declared
             support is what ``can_infer_from`` accepts — a new backend widens it with no op
             edit. INPUT-only.
@@ -187,7 +187,7 @@ class Backend:
             reference for readers, not a new render path.
         derived_dtypes: this backend's INTERNAL-REGISTER datatype derivations —
             ``{register_name -> DatatypeSpec}`` for a produced dtype that has NO port
-            (accumulator ``accDataType``, narrowed weight ``weightDataType``). ``pool_schema``
+            (accumulator ``accDataType``, narrowed weight ``weightDataType``). ``pool_space``
             merges each into the resolved point under its register name (dispatched on
             selection, exactly like the generic ``derived``), so emit reads
             ``point.accDataType`` unchanged. The endogenous mirror of ``Interface.derived_dtype``
@@ -270,7 +270,7 @@ class PoolError(ValueError):
     """Raised for a malformed pool (empty, duplicate names, sibling coupling)."""
 
 
-def pool_schema(
+def pool_space(
     root_name: str,
     shared_axes: tuple[Axis, ...],
     shared_derived: tuple[Derived, ...],
@@ -279,8 +279,8 @@ def pool_schema(
     *,
     sources_key: str = SOURCES_KEY,
     unspecialized_sentinel: bool = False,
-) -> Schema:
-    """Assemble op-level shared elements + a pool of bundles into a ``Schema``.
+) -> DesignSpace:
+    """Assemble op-level shared elements + a pool of bundles into a ``DesignSpace``.
 
     The root ``implementation`` axis selects one bundle. Bundle contributions are
     merged by name and dispatched on the selected impl, so a resolved point carries
@@ -331,7 +331,7 @@ def pool_schema(
     sources_derived = _field_derived(root_name, pool, "sources", key=sources_key)
     wrapped_predicates = _wrap_predicates(root_name, pool)
 
-    return Schema(
+    return DesignSpace(
         axes=(root,) + tuple(shared_axes) + tuple(merged_axes),
         derived=(
             tuple(shared_derived)
@@ -371,8 +371,8 @@ def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:
 
 
 def _check_no_derived_shadowing(shared_derived, pool, sources_key=SOURCES_KEY) -> None:
-    """A bundle's derived must not shadow an op-level shared derived or the pool_schema
-    reserved ``sources`` projection key. ``Schema`` only dedups *axis* names, so a colliding
+    """A bundle's derived must not shadow an op-level shared derived or the pool_space
+    reserved ``sources`` projection key. ``DesignSpace`` only dedups *axis* names, so a colliding
     derived would silently let one definition win with no diagnostic — breaking the
     "additive, can't perturb others" guarantee. (Bundle derived sharing a name ACROSS
     bundles is fine and intentional — that is the per-impl dispatch merge.)"""
@@ -383,7 +383,7 @@ def _check_no_derived_shadowing(shared_derived, pool, sources_key=SOURCES_KEY) -
             if d.name in reserved:
                 raise PoolError(
                     f"implementation {bundle.name!r} declares a derived named "
-                    f"{d.name!r}, which is reserved by pool_schema"
+                    f"{d.name!r}, which is reserved by pool_space"
                 )
             if d.name in shared_names:
                 raise PoolError(

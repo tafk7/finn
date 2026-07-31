@@ -52,7 +52,7 @@ MW, MH, PE, SIMD = 6, 8, 2, 2
 def _composed_setup():
     from finn.kernels.engine.context import Context
     from finn.kernels.engine.resolve import resolve
-    from finn.kernels.compute.mvau import mvau_schema, MVAU_DSP_SOFTVEC
+    from finn.kernels.compute.mvau import mvau_space, MVAU_DSP_SOFTVEC
     from finn.kernels.dataflow.parameters.names import DECOUPLED, WEIGHTS
     from finn.kernels.model.param_names import ram_style_key, topology_key
 
@@ -67,7 +67,7 @@ def _composed_setup():
         initializers={"weights": W},
         fpgapart=FPGAPART, clk_ns=CLK_NS,
     )
-    point = resolve(mvau_schema(), ctx, {
+    point = resolve(mvau_space(), ctx, {
         "backend": MVAU_DSP_SOFTVEC, "PE": PE, "SIMD": SIMD, "resType": "dsp",
         topology_key(WEIGHTS): DECOUPLED, ram_style_key(WEIGHTS): "block",
     })
@@ -213,7 +213,7 @@ def test_split_wrappers_bit_identical_to_fused(cfg):
     xsi = _xsi_or_skip()
     from finn.kernels.engine.context import Context
     from finn.kernels.engine.resolve import resolve
-    from finn.kernels.compute.mvau import mvau_kernel, mvau_schema
+    from finn.kernels.compute.mvau import mvau_kernel, mvau_space
     from finn.kernels.compute.mvau.emit_rtl import emit_mvau_rtl
     from finn.kernels.dataflow.parameters.names import DECOUPLED, WEIGHTS
     from finn.kernels.model.param_names import topology_key
@@ -227,7 +227,7 @@ def test_split_wrappers_bit_identical_to_fused(cfg):
         datatypes={"weights": wdt, "inp": idt, "out": odt},
         initializers={"weights": W}, fpgapart=fpgapart, clk_ns=5.0,
     )
-    point = resolve(mvau_schema(), ctx, {
+    point = resolve(mvau_space(), ctx, {
         "backend": impl, "PE": pe, "SIMD": simd, "resType": "dsp", topology_key(WEIGHTS): DECOUPLED,
     })
 

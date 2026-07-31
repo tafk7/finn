@@ -8,7 +8,7 @@
 
 """Pool selection / composition assembler (S1-S7).
 
-``pool_schema`` lowers a pool of self-contained ``Backend`` bundles into the flat Schema
+``pool_space`` lowers a pool of self-contained ``Backend`` bundles into the flat DesignSpace
 resolve consumes. This tests the ASSEMBLER with tiny synthetic pools — durable because it
 tests the mechanism, not any op. The additivity guarantee (a bundle axis may depend on
 root/shared/own/derived, never a sibling's axis) is what makes "add a backend, edit
@@ -33,7 +33,7 @@ from finn.kernels.model.backend import (
     EmitError,
     PoolError,
     emit_point,
-    pool_schema,
+    pool_space,
 )
 
 
@@ -55,7 +55,7 @@ def test_only_selected_bundle_axes_and_derived_exist():
         axes=(discrete_axis("pumped", {0, 1}, 0),),
         derived=(Derived("r_only", lambda p, c: 2),),
     )
-    schema = pool_schema("backend", (), (), (), (hls, rtl))
+    schema = pool_space("backend", (), (), (), (hls, rtl))
 
     r = resolve(schema, _ctx(), {"backend": "hls", "resType": "dsp"})
     assert r.backend == "hls"
@@ -75,7 +75,7 @@ def test_only_selected_bundle_predicates_fire():
             Predicate(lambda p, c: "bad pred", "p"),
         ),
     )
-    schema = pool_schema("backend", (), (), (), (ok, bad))
+    schema = pool_space("backend", (), (), (), (ok, bad))
     # ok selected → bad's predicates do NOT fire.
     assert isinstance(resolve(schema, _ctx(), {"backend": "ok"}), Point)
     # bad selected → both fire.
@@ -96,7 +96,7 @@ def test_sibling_coupling_rejected_at_assembly():
         axes=(discrete_axis("b_axis", {1, 2}, 1, deps={"a_axis"}),),
     )
     with pytest.raises(PoolError, match="sibling"):
-        pool_schema("backend", (), (), (), (a, b))
+        pool_space("backend", (), (), (), (a, b))
 
 
 def test_axis_may_depend_on_root_shared_and_own():
@@ -109,7 +109,7 @@ def test_axis_may_depend_on_root_shared_and_own():
             discrete_axis("dependent", {1, 2}, 1, deps={"backend", "shared", "own"}),
         ),
     )
-    schema = pool_schema("backend", (shared,), (), (), (a,))
+    schema = pool_space("backend", (shared,), (), (), (a,))
     assert isinstance(resolve(schema, _ctx(), {"backend": "a"}), Point)
 
 
@@ -120,20 +120,20 @@ def test_bundle_derived_shadowing_shared_rejected():
     shared_d = (Derived("dup", lambda p, c: 0),)
     a = Backend(name="a", derived=(Derived("dup", lambda p, c: 1),))
     with pytest.raises(PoolError, match="shadow"):
-        pool_schema("backend", (), shared_d, (), (a,))
+        pool_space("backend", (), shared_d, (), (a,))
 
 
 def test_bundle_derived_named_sources_rejected():
     a = Backend(name="a", derived=(Derived("sources", lambda p, c: 1),))
     with pytest.raises(PoolError, match="reserved"):
-        pool_schema("backend", (), (), (), (a,))
+        pool_space("backend", (), (), (), (a,))
 
 
 def test_same_name_derived_across_bundles_is_the_merge():
     # Same-name derived ACROSS bundles is the intended per-impl dispatch merge, not shadow.
     a = Backend(name="a", derived=(Derived("v", lambda p, c: 1),))
     b = Backend(name="b", derived=(Derived("v", lambda p, c: 2),))
-    schema = pool_schema("backend", (), (), (), (a, b))
+    schema = pool_space("backend", (), (), (), (a, b))
     assert resolve(schema, _ctx(), {"backend": "a"}).v == 1
     assert resolve(schema, _ctx(), {"backend": "b"}).v == 2
 
@@ -143,7 +143,7 @@ def test_same_name_derived_across_bundles_is_the_merge():
 
 def test_unspecialized_sentinel_defaults_to_empty_string():
     a = Backend(name="a")
-    schema = pool_schema("backend", (), (), (), (a,), unspecialized_sentinel=True)
+    schema = pool_space("backend", (), (), (), (a,), unspecialized_sentinel=True)
     r = resolve(schema, _ctx(), {})
     # "" is not in the domain frozenset → resolving the root default is Illegal.
     assert isinstance(r, Illegal)
@@ -152,7 +152,7 @@ def test_unspecialized_sentinel_defaults_to_empty_string():
 def test_delivery_pool_keeps_first_member_default():
     emb = Backend(name="embedded")
     dec = Backend(name="decoupled")
-    schema = pool_schema("topology", (), (), (), (emb, dec))  # sentinel False (default)
+    schema = pool_space("topology", (), (), (), (emb, dec))  # sentinel False (default)
     r = resolve(schema, _ctx(), {})
     assert isinstance(r, Point)
     assert r.topology == "embedded"  # genuine first-member fallback
@@ -163,12 +163,12 @@ def test_delivery_pool_keeps_first_member_default():
 
 def test_empty_pool_rejected():
     with pytest.raises(PoolError, match="at least one"):
-        pool_schema("backend", (), (), (), ())
+        pool_space("backend", (), (), (), ())
 
 
 def test_duplicate_names_rejected():
     with pytest.raises(PoolError, match="duplicate"):
-        pool_schema("backend", (), (), (), (Backend(name="x"), Backend(name="x")))
+        pool_space("backend", (), (), (), (Backend(name="x"), Backend(name="x")))
 
 
 # --- S6: emit_point dispatch + errors ---------------------------------------
@@ -177,7 +177,7 @@ def test_duplicate_names_rejected():
 def test_emit_point_dispatches_to_selected_bundle():
     art = Artifacts()
     a = Backend(name="a", emit=lambda p, c: art)
-    schema = pool_schema("backend", (), (), (), (a,))
+    schema = pool_space("backend", (), (), (), (a,))
     r = resolve(schema, _ctx(), {"backend": "a"})
     assert emit_point((a,), r, _ctx()) is art
 
@@ -190,7 +190,7 @@ def test_emit_point_raises_for_unknown_selection():
 
 def test_emit_point_raises_when_bundle_has_no_emit():
     a = Backend(name="a")  # emit=None
-    schema = pool_schema("backend", (), (), (), (a,))
+    schema = pool_space("backend", (), (), (), (a,))
     r = resolve(schema, _ctx(), {"backend": "a"})
     with pytest.raises(EmitError, match="not implemented"):
         emit_point((a,), r, _ctx())
@@ -201,7 +201,7 @@ def test_emit_point_raises_when_bundle_has_no_emit():
 
 def test_language_and_core_module_are_backend_fields_not_point_keys():
     rtl = Backend(name="rtl", language="rtl", rtl_core_module="my_core")
-    schema = pool_schema("backend", (), (), (), (rtl,))
+    schema = pool_space("backend", (), (), (), (rtl,))
     r = resolve(schema, _ctx(), {"backend": "rtl"})
     # static identity is read off the Backend, never re-projected as a point derived (F5).
     assert "language" not in r
@@ -212,7 +212,7 @@ def test_language_and_core_module_are_backend_fields_not_point_keys():
 
 def test_sources_is_projected_onto_point():
     a = Backend(name="a", sources=("core.sv", "pkg.sv"))
-    schema = pool_schema("backend", (), (), (), (a,))
+    schema = pool_space("backend", (), (), (), (a,))
     r = resolve(schema, _ctx(), {"backend": "a"})
     assert r.sources == ("core.sv", "pkg.sv")
 
@@ -234,7 +234,7 @@ def test_declared_support_gates_only_when_selected():
         ports=ports_from(accepted_dtypes={"inp": DatatypeSupport(kind=DatatypeKind.INTEGER)}),
     )
     permissive = Backend(name="permissive")  # declares no support → accepts anything
-    schema = pool_schema("backend", (), (), (), (int_only, permissive))
+    schema = pool_space("backend", (), (), (), (int_only, permissive))
 
     # int_only selected: integer accepted, float rejected by the compiled support predicate.
     assert isinstance(resolve(schema, _dtype_ctx(DataType["INT8"]), {"backend": "int_only"}), Point)
@@ -256,7 +256,7 @@ def test_custom_support_callable_is_compiled():
         return None if dt == DataType["INT8"] else f"need INT8, got {dt}"
 
     a = Backend(name="a", ports=ports_from(accepted_dtypes={"inp": only_int8}))
-    schema = pool_schema("backend", (), (), (), (a,))
+    schema = pool_space("backend", (), (), (), (a,))
     assert isinstance(resolve(schema, _dtype_ctx(DataType["INT8"]), {"backend": "a"}), Point)
     r = resolve(schema, _dtype_ctx(DataType["INT4"]), {"backend": "a"})
     assert isinstance(r, Illegal)

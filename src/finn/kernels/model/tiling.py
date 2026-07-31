@@ -322,7 +322,7 @@ class GeneratedTiling:
 
     Attributes:
         axes/derived/predicates: fragments to append to the Backend's own before
-            ``pool_schema`` merges them (so they dispatch on the selected impl).
+            ``pool_space`` merges them (so they dispatch on the selected impl).
         width_exprs: ``{interface_name: TileExpr}`` — the elements/cycle width, used by
             the Kernel getters (``_stream_elems``).
         fold_map: ``{interface_name: [(dim_index, elems_expr | None)]}`` — the folded

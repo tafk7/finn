@@ -40,7 +40,7 @@ class DatatypeKind(Enum):
 @dataclass(frozen=True)
 class DatatypeSupport:
     """A backend's declared datatype support for one port: a :class:`DatatypeKind` plus an
-    inclusive bitwidth range. :meth:`accepts` is the gate ``pool_schema`` compiles into a
+    inclusive bitwidth range. :meth:`accepts` is the gate ``pool_space`` compiles into a
     guarded feasibility predicate (fires only when this backend is selected)."""
 
     kind: DatatypeKind = DatatypeKind.ANY

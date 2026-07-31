@@ -29,7 +29,7 @@ from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
     thresholding_pool,
-    thresholding_schema,
+    thresholding_space,
 )
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
@@ -62,7 +62,7 @@ def rtl_point(schema, ctx, **overrides):
 
 
 def test_emit_produces_expected_artifacts():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     ctx = make_context(channels=4, steps=7, odt="UINT3")  # o_bits=3 -> 7 steps
     arts = emit_point(thresholding_pool(), rtl_point(schema, ctx, PE=2, depth_trigger_bram=1024), ctx)
     assert isinstance(arts, Artifacts)
@@ -80,7 +80,7 @@ def test_emit_produces_expected_artifacts():
 
 
 def test_rendered_top_has_bound_values_and_no_unfilled_slots():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     ctx = make_context(channels=4, steps=7, idt="UINT8", odt="UINT3")
     content = emit_point(
         thresholding_pool(), rtl_point(schema, ctx, PE=2, depth_trigger_bram=1024, depth_trigger_uram=0), ctx
@@ -95,7 +95,7 @@ def test_rendered_top_has_bound_values_and_no_unfilled_slots():
 
 
 def test_dat_content_is_valid_hex():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     thr = np.array([[2, 5, 9]], dtype=np.float32)  # 1 channel, 3 sorted steps
     ctx = make_context(channels=1, steps=3, idt="UINT8", tdt="UINT8", odt="UINT2", thresholds=thr)
     arts = emit_point(thresholding_pool(), rtl_point(schema, ctx, PE=1), ctx)
@@ -106,7 +106,7 @@ def test_dat_content_is_valid_hex():
 
 
 def test_narrow_quant_adjusts_steps():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     thr = np.sort(np.random.RandomState(1).randint(0, 50, size=(4, 6)).astype(np.float32), axis=-1)
     ctx = make_context(channels=4, steps=6, idt="UINT8", tdt="UINT8", odt="UINT3", thresholds=thr)
     content = emit_point(
@@ -119,7 +119,7 @@ def test_narrow_quant_adjusts_steps():
 
 
 def test_hls_bakes_thresholds_activation_rom():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     ctx = make_context(channels=4, steps=7, odt="UINT3")
     arts = emit_point(thresholding_pool(), resolve(schema, ctx, {"backend": THRESHOLDING_HLS, "PE": 2}), ctx)
     assert arts.generated[0].filename == "top_thresholding_top.cpp"
@@ -133,7 +133,7 @@ def test_hls_bakes_thresholds_activation_rom():
 
 
 def test_emit_point_unknown_impl_raises():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     ctx = make_context()
     with pytest.raises(EmitError, match="not in the pool"):
         emit_point((), rtl_point(schema, ctx, PE=2), ctx)
@@ -143,7 +143,7 @@ def test_emit_point_unknown_impl_raises():
 
 
 def test_emit_needs_only_point_and_dict_context():
-    schema = thresholding_schema()
+    schema = thresholding_space()
     ctx = make_context()
     arts = emit_point(thresholding_pool(), rtl_point(schema, ctx, PE=2), ctx)
     assert arts.generated[0].content()

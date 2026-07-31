@@ -52,7 +52,7 @@ class DeliveredParam:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
     * ``pool`` — the CONCRETE source pool (a tuple of storage-topology ``Backend``\\ s),
-      built by ``Kernel.schema()`` from ``parameters_pool(iface)``. Handed to the wiring so
+      built by ``Kernel.compile()`` from ``parameters_pool(iface)``. Handed to the wiring so
       it reads the pool directly instead of hardcoding a lookup.
     """
 

@@ -26,7 +26,7 @@ from finn.kernels.model.artifacts import Artifacts
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import AbsentAxisError, Illegal
 from finn.kernels.engine.resolve import resolve
-from finn.kernels.compute.mvau import MVAU_HLS, mvau_schema
+from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
 from finn.kernels.dataflow.parameters import (
     DECOUPLED,
     EMBEDDED,
@@ -165,7 +165,7 @@ def _decoupled_point(ctx, pe=2, simd=2, **extra):
     a = {"backend": MVAU_HLS, "PE": pe, "SIMD": simd, "resType": "lut",
          TOPOLOGY: DECOUPLED, RAM_STYLE: "block"}
     a.update(extra)
-    return resolve(mvau_schema(), ctx, a)
+    return resolve(mvau_space(), ctx, a)
 
 
 def test_memstream_geometry_derives_from_fold():
@@ -177,7 +177,7 @@ def test_memstream_geometry_derives_from_fold():
 
 def test_geometry_absent_for_embedded():
     r = resolve(
-        mvau_schema(), _mvau_ctx(),
+        mvau_space(), _mvau_ctx(),
         {"backend": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut", TOPOLOGY: EMBEDDED},
     )
     assert r[PARAM_DEPTH] is None
@@ -187,13 +187,13 @@ def test_geometry_absent_for_embedded():
 def test_stream_width_coupling_zero_embedded_sized_decoupled():
     swk = param_stream_width_key(WEIGHTS)
     base = {"backend": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut"}
-    assert resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: EMBEDDED})[swk] == 0
-    assert resolve(mvau_schema(), _mvau_ctx(), {**base, TOPOLOGY: DECOUPLED})[swk] == 2 * 2 * 8
+    assert resolve(mvau_space(), _mvau_ctx(), {**base, TOPOLOGY: EMBEDDED})[swk] == 0
+    assert resolve(mvau_space(), _mvau_ctx(), {**base, TOPOLOGY: DECOUPLED})[swk] == 2 * 2 * 8
 
 
 def test_pumped_memory_fold_gate_fires():
     r = resolve(
-        mvau_schema(), _mvau_ctx(),
+        mvau_space(), _mvau_ctx(),
         {"backend": MVAU_HLS, "PE": 1, "SIMD": 1, "resType": "lut",
          TOPOLOGY: DECOUPLED, PUMPED_MEMORY: 1},
     )

@@ -26,7 +26,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import Illegal
 from finn.kernels.engine.resolve import resolve
-from finn.kernels.model.backend import Backend, pool_schema, ports_from
+from finn.kernels.model.backend import Backend, pool_space, ports_from
 from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.param_names import (
@@ -63,11 +63,11 @@ def _mvau_ctx(part=VERSAL):
 
 
 def _resolve_mvau(assignment):
-    from finn.kernels.compute.mvau import mvau_schema
+    from finn.kernels.compute.mvau import mvau_space
 
     base = {"backend": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     base.update(assignment)
-    return resolve(mvau_schema(), _mvau_ctx(), base)
+    return resolve(mvau_space(), _mvau_ctx(), base)
 
 
 # --- D6: embedded is constant mode; decoupled is stream ---------------------
@@ -185,8 +185,8 @@ def test_backend_mem_modes_coerced_to_frozenset():
 
 
 def test_two_interfaces_do_not_collide():
-    ws = pool_schema(topology_key("weights"), (), (), (), parameters_pool("weights"))
-    ts = pool_schema(topology_key("thresholds"), (), (), (), parameters_pool("thresholds"))
+    ws = pool_space(topology_key("weights"), (), (), (), parameters_pool("weights"))
+    ts = pool_space(topology_key("thresholds"), (), (), (), parameters_pool("thresholds"))
     w_keys = set(ws.axis_names)
     t_keys = set(ts.axis_names)
     assert topology_key("weights") in w_keys
@@ -225,10 +225,10 @@ def _thresh_ctx(mw=6, mh=8, steps=7):
 
 
 def test_weight_fold_depth_matches_wmem_decoupled():
-    from finn.kernels.compute.mvau import MVAU_DSP_SOFTVEC, mvau_schema
+    from finn.kernels.compute.mvau import MVAU_DSP_SOFTVEC, mvau_space
 
     ctx = _fd_ctx()
-    p = resolve(mvau_schema(), ctx, {
+    p = resolve(mvau_space(), ctx, {
         "backend": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2,
         "resType": "dsp", TOPOLOGY: DECOUPLED,
     })
@@ -238,10 +238,10 @@ def test_weight_fold_depth_matches_wmem_decoupled():
 
 
 def test_weight_fold_depth_matches_wmem_embedded():
-    from finn.kernels.compute.mvau import MVAU_HLS, mvau_schema
+    from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
 
     ctx = _fd_ctx()
-    p = resolve(mvau_schema(), ctx, {
+    p = resolve(mvau_space(), ctx, {
         "backend": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
@@ -251,10 +251,10 @@ def test_weight_fold_depth_matches_wmem_embedded():
 
 
 def test_threshold_fold_depth_matches_tmem_present():
-    from finn.kernels.compute.mvau import MVAU_HLS, mvau_schema
+    from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
 
     ctx = _thresh_ctx()
-    p = resolve(mvau_schema(), ctx, {
+    p = resolve(mvau_space(), ctx, {
         "backend": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
@@ -262,10 +262,10 @@ def test_threshold_fold_depth_matches_tmem_present():
 
 
 def test_threshold_fold_depth_zero_when_absent():
-    from finn.kernels.compute.mvau import MVAU_HLS, mvau_schema
+    from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
 
     ctx = _fd_ctx()  # no thresholds
-    p = resolve(mvau_schema(), ctx, {
+    p = resolve(mvau_space(), ctx, {
         "backend": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })

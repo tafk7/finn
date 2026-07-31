@@ -30,8 +30,8 @@ which namespaces its keys and guards its topology root to the backend's consumab
 
 from __future__ import annotations
 
-from finn.kernels.engine.schema import Schema
-from finn.kernels.model.backend import pool_schema
+from finn.kernels.engine.design_space import DesignSpace
+from finn.kernels.model.backend import pool_space
 from finn.kernels.model.demand import ParamDemand  # noqa: F401 (re-exported)
 from finn.kernels.model.param_names import (  # noqa: F401 (re-exported)
     demand_key,
@@ -54,9 +54,9 @@ def parameters_pool(iface: str = WEIGHTS):
     return build_pool(iface)
 
 
-def parameters_schema(iface: str = WEIGHTS) -> Schema:
+def parameters_schema(iface: str = WEIGHTS) -> DesignSpace:
     """The parameters subsystem for one parameter interface as a standalone resolve
-    ``Schema``.
+    ``DesignSpace``.
 
     Root axis ``parameters.<iface>.topology`` selects one storage topology; the selected
     topology's axes are present, the others absent. Has no op-level shared axes of its own
@@ -67,6 +67,6 @@ def parameters_schema(iface: str = WEIGHTS) -> Schema:
     for a second interface is just a second ``parameters_schema(other)`` — the keys never
     collide.
     """
-    return pool_schema(
+    return pool_space(
         topology_key(iface), (), (), (), parameters_pool(iface), sources_key=sources_key(iface)
     )

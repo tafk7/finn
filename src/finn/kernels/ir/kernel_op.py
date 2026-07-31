@@ -114,7 +114,7 @@ class KernelOp(HWCustomOp):
         NOT baked onto the node — it is sourced from the live model at construction, per
         ONNX ownership. So there are no ``<iface>_shape``/``<iface>_dtype`` nodeattrs."""
         attrs = super().get_nodeattr_types()
-        attrs.update(axis_nodeattr_types(self.kernel().schema()))
+        attrs.update(axis_nodeattr_types(self.kernel().compile()))
         return attrs
 
     # -- model attach + Context cache (brainsmith _ensure_ready pattern) ----
@@ -190,7 +190,7 @@ class KernelOp(HWCustomOp):
         from qonnx.util.basic import get_by_name
 
         out: dict = {}
-        for name in self.kernel().schema().axis_names:
+        for name in self.kernel().compile().axis_names:
             if get_by_name(self.onnx_node.attribute, name) is not None:
                 out[name] = self.get_nodeattr(name)
         return out
@@ -228,7 +228,7 @@ class KernelOp(HWCustomOp):
         works before Seam B commits a backend (F1)."""
         kernel = self.kernel()
         ctx = self._context()
-        op_axes = kernel.op_schema().axis_names
+        op_axes = kernel.op_space().axis_names
         assignment = {k: v for k, v in self._assignment().items() if k in op_axes}
         result = kernel.configure_op(ctx, assignment)
         if isinstance(result, Illegal):
