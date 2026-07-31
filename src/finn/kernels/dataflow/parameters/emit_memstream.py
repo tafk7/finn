@@ -43,7 +43,7 @@ from finn.kernels.model.artifacts import (
 )
 from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
 from finn.kernels.model.fold_depth import weight_fold_depth
-from finn.kernels.model.ports import Direction, Kind, Port, Role
+from finn.kernels.model.ports import Direction, Port, Protocol, Role
 
 from .serialize import DAT_HEX, layout, weight_constraint
 
@@ -253,18 +253,18 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
     # is inert for SETS=1 (single-cardinality) — declared documented, not bound here.
     width = point[width_key(iface)]
     ports = [
-        Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m_axis_0", index=0,
+        Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m_axis_0", index=0,
              width=width),
-        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
+        Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk"),
         # ap_clk2x: non-pumped memory ties it to ap_clk (fans from the region ap_clk in
         # the broadcast); a pumped-memory design binds it to a distinct 2x-clock port
         # (documented extension — the built path is non-pumped).
-        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk2x"),
-        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+        Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk2x"),
+        Port(Direction.IN, Protocol.Reset, Role.RESET, "ap_rst_n"),
     ]
     if point.get(runtime_writeable_key(iface), 0):
         ports.append(
-            Port(Direction.IN, Kind.AXILITE, Role.CONFIG, "s_axilite", index=0,
+            Port(Direction.IN, Protocol.Config, Role.CONFIG, "s_axilite", index=0,
                  boundary=True)
         )
 

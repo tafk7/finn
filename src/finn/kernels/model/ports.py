@@ -14,13 +14,17 @@ block exposes, so an op-agnostic resolver (``space/stitch.py``) can wire complem
 roles into nets without knowing pin names, op types, or ``mem_mode``.
 
 The one idea that makes the resolver trivial: separate the PHYSICAL protocol
-(:class:`Kind` — how the wires talk) from the SEMANTIC binding key (:class:`Role` —
-what the port is FOR). Brainsmith's port model is kind-only (3 categories); the
+(:class:`Protocol` — how the wires talk) from the SEMANTIC binding key (:class:`Role` —
+what the port is FOR). Brainsmith's port model is protocol-only (3 categories); the
 finn-proto prototype keyed by protocol (``s_axis``/``m_axis``/…), so activations and
 weights — both plain AXI-streams — collapsed together and were recovered only by a
 hardcoded ``in1_V`` string. Keying by role is the move past both: a weight stream and
-a data stream are the same Kind (AXIS) but different Role, and the resolver binds on
-Role. See ``kernel-design/kernel-final-design/port-taxonomy.md``.
+a data stream are the same Protocol (Stream) but different Role, and the resolver binds
+on Role. See ``kernel-design/kernel-final-design/port-taxonomy.md``.
+
+This module is the SHARED port vocabulary read by every phase: ``Protocol``/``Role``/
+``Direction`` are leaf types both phase-1 :class:`~finn.kernels.model.kernel.InterfaceSchema`
+and phase-4 :class:`Port` import — so it has NO dependency on ``engine``/``ir`` (F1).
 """
 
 from __future__ import annotations
@@ -37,18 +41,20 @@ class Direction(Enum):
     OUT = "out"
 
 
-class Kind(Enum):
+class Protocol(Enum):
     """The PHYSICAL protocol — how the wires talk. Distinct from :class:`Role`
     (what the port is for). Drawn from brainsmith's three interface categories
     (AXI-Stream / AXI-Lite / Control) + the prototype's ``aximm`` + generality-gap
-    G1 additions (a memory-mapped master, a bare sideband signal)."""
+    G1 additions (a memory-mapped master, a bare sideband signal). The three DATAFLOW
+    protocols an ``InterfaceSchema`` may declare are ``Stream``/``MemoryMapped``/
+    ``Config``; ``Sideband``/``Clock``/``Reset`` are emit-only pins (pitch §7.0)."""
 
-    AXIS = "axis"  # AXI4-Stream (TDATA/TVALID/TREADY) — the dataflow + weight fabric
-    AXIMM = "aximm"  # AXI4 memory-mapped master (address/burst to a mem controller)
-    AXILITE = "axilite"  # AXI4-Lite slave (control/config registers)
-    CLOCK = "clock"  # a clock pin
-    RESET = "reset"  # a reset pin
-    SIGNAL = "signal"  # a bare sideband wire (the prototype's ap_none, now typed)
+    Stream = "axis"  # AXI4-Stream (TDATA/TVALID/TREADY) — the dataflow + weight fabric
+    MemoryMapped = "aximm"  # AXI4 memory-mapped master (address/burst to a mem controller)
+    Config = "axilite"  # AXI4-Lite slave (control/config registers) — the CONFIG surface
+    Clock = "clock"  # a clock pin
+    Reset = "reset"  # a reset pin
+    Sideband = "signal"  # a bare sideband wire (the prototype's ap_none, now typed)
 
 
 class Role(Enum):
@@ -101,7 +107,7 @@ def role_direction(role: Role) -> Direction:
 
 @dataclass(frozen=True)
 class Port:
-    """One port a block exposes: ``(direction, kind, role, index, shape|width,
+    """One port a block exposes: ``(direction, protocol, role, index, shape|width,
     boundary)``. Frozen data — an emit declares a tuple of these; the resolver reads
     ONLY these fields (never a pin name / op type / mem_mode).
 
@@ -119,7 +125,7 @@ class Port:
     """
 
     direction: Direction
-    kind: Kind
+    protocol: Protocol
     role: Role
     pin: str
     index: int = 0

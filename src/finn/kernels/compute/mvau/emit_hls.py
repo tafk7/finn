@@ -31,7 +31,7 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.model.artifacts import Artifacts, DataFile, GeneratedFile, Template
 from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
-from finn.kernels.model.ports import Direction, Kind, Port, Role
+from finn.kernels.model.ports import Direction, Port, Protocol, Role
 from finn.kernels.dataflow.parameters.serialize import (
     CPP_HEADER,
     layout,
@@ -159,12 +159,12 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
     # boundary edges) + clk/rst. The absence of a WEIGHT_SINK IS the embedded topology:
     # the stitch finds nothing to bind, which is correct.
     ports = (
-        Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0,
+        Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", index=0,
              width=point["stream_width.inp"], boundary=True),
-        Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0,
+        Port(Direction.OUT, Protocol.Stream, Role.DATA_OUT, "out0_V", index=0,
              width=point["stream_width.out"], boundary=True),
-        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
-        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+        Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk"),
+        Port(Direction.IN, Protocol.Reset, Role.RESET, "ap_rst_n"),
     )
 
     return Artifacts(

@@ -24,7 +24,7 @@ from finn.kernels.emit import stitch as stitch_module
 from finn.kernels.emit.stitch import Cell, StitchError, stitch
 from finn.kernels.model.ports import (
     Direction,
-    Kind,
+    Protocol,
     Port,
     Role,
     STANDARD_BINDINGS,
@@ -34,8 +34,8 @@ from finn.kernels.model.ports import (
 
 def _clk_rst(_inst):
     return (
-        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
-        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+        Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk"),
+        Port(Direction.IN, Protocol.Reset, Role.RESET, "ap_rst_n"),
     )
 
 
@@ -49,19 +49,19 @@ def test_two_weights_bind_by_index():
     compute = Cell(
         "compute", "compute_mod",
         (
-            Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "w_in", index=0, width=32),
-            Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "t_in", index=1, width=16),
+            Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "w_in", index=0, width=32),
+            Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "t_in", index=1, width=16),
             *_clk_rst("compute"),
         ),
     )
     w_src = Cell(
         "wstrm", "memstream",
-        (Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m_axis_0", index=0, width=32),
+        (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m_axis_0", index=0, width=32),
          *_clk_rst("wstrm")),
     )
     t_src = Cell(
         "tstrm", "threshstream",
-        (Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m_axis_0", index=1, width=16),
+        (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m_axis_0", index=1, width=16),
          *_clk_rst("tstrm")),
     )
     cmds = stitch((compute, w_src, t_src), "region").commands
@@ -76,14 +76,14 @@ def test_two_compute_zero_memory_stitches():
     # memory cell at all. Proves the resolver handles the 0-memory / N-compute shape.
     a = Cell(
         "inner", "inner_mod",
-        (Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0, width=8, boundary=True),
-         Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0, width=8),
+        (Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", index=0, width=8, boundary=True),
+         Port(Direction.OUT, Protocol.Stream, Role.DATA_OUT, "out0_V", index=0, width=8),
          *_clk_rst("inner")),
     )
     b = Cell(
         "outer", "outer_mod",
-        (Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0, width=8),
-         Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0, width=8, boundary=True),
+        (Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", index=0, width=8),
+         Port(Direction.OUT, Protocol.Stream, Role.DATA_OUT, "out0_V", index=0, width=8, boundary=True),
          *_clk_rst("outer")),
     )
     cmds = stitch((a, b), "region").commands
@@ -96,9 +96,9 @@ def test_two_compute_zero_memory_stitches():
 
 
 def test_clock_and_reset_broadcast():
-    a = Cell("a", "m", (Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", width=8, boundary=True),
+    a = Cell("a", "m", (Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", width=8, boundary=True),
                         *_clk_rst("a")))
-    b = Cell("b", "m", (Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", width=8, boundary=True),
+    b = Cell("b", "m", (Port(Direction.OUT, Protocol.Stream, Role.DATA_OUT, "out0_V", width=8, boundary=True),
                         *_clk_rst("b")))
     cmds = stitch((a, b), "region").commands
     clk = [c for c in cmds if "connect_bd_net" in c and "ap_clk" in c]
@@ -110,16 +110,16 @@ def test_clock_and_reset_broadcast():
 
 
 def test_ambiguous_binding_raises():
-    a = Cell("a", "m", (Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m", index=0, width=8),))
-    b = Cell("b", "m", (Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m", index=0, width=8),))
-    sink = Cell("c", "m", (Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "s", index=0, width=8),))
+    a = Cell("a", "m", (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m", index=0, width=8),))
+    b = Cell("b", "m", (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m", index=0, width=8),))
+    sink = Cell("c", "m", (Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "s", index=0, width=8),))
     with pytest.raises(StitchError, match="ambiguous"):
         stitch((a, b, sink), "region")
 
 
 def test_width_mismatch_raises():
-    src = Cell("a", "m", (Port(Direction.OUT, Kind.AXIS, Role.WEIGHT_SOURCE, "m", index=0, width=32),))
-    sink = Cell("b", "m", (Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "s", index=0, width=16),))
+    src = Cell("a", "m", (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m", index=0, width=32),))
+    sink = Cell("b", "m", (Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "s", index=0, width=16),))
     with pytest.raises(StitchError, match="width mismatch"):
         stitch((src, sink), "region")
 
@@ -170,12 +170,12 @@ def test_role_implies_direction():
 
 def test_shaped_role_requires_shape_or_width():
     with pytest.raises(ValueError, match="shape or width"):
-        Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V")  # neither shape nor width
+        Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V")  # neither shape nor width
 
 
 def test_non_shaped_role_rejects_folded_shape():
     with pytest.raises(ValueError, match="must not carry a folded shape"):
-        Port(Direction.IN, Kind.AXILITE, Role.CONFIG, "cfg", shape=(1, 8))
+        Port(Direction.IN, Protocol.Config, Role.CONFIG, "cfg", shape=(1, 8))
 
 
 def test_standard_bindings_are_complementary_source_sink_pairs():

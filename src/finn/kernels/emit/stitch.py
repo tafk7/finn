@@ -31,7 +31,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ..model.artifacts import IPICommands
-from ..model.ports import Kind, Port, Role, STANDARD_BINDINGS
+from ..model.ports import Port, Protocol, Role, STANDARD_BINDINGS
 
 
 class StitchError(ValueError):
@@ -132,10 +132,10 @@ def _bind_pair(cells, src_role, sink_role, consumed) -> list[str]:
 
 
 def _check_compatible(src_role, sink_role, sc, sp, kc, kp) -> None:
-    if sp.kind != kp.kind:
+    if sp.protocol != kp.protocol:
         raise StitchError(
-            f"kind mismatch binding {sc.instance}/{sp.pin} ({sp.kind.value}) to "
-            f"{kc.instance}/{kp.pin} ({kp.kind.value})"
+            f"protocol mismatch binding {sc.instance}/{sp.pin} ({sp.protocol.value}) to "
+            f"{kc.instance}/{kp.pin} ({kp.protocol.value})"
         )
     if sp.width != kp.width:
         raise StitchError(
@@ -163,8 +163,8 @@ def _broadcast(cells, region_name) -> list[str]:
 
 def _export_unbound(cells, region_name, consumed) -> list[str]:
     """Export every port not bound to a sibling and not a broadcast pin as a region
-    boundary pin. Interface kinds (AXIS/AXIMM/AXILITE) export as interface pins; a bare
-    SIGNAL exports as a net pin."""
+    boundary pin. Interface protocols (Stream/MemoryMapped/Config) export as interface
+    pins; a bare Sideband exports as a net pin."""
     lines: list[str] = []
     for cell in cells:
         for port in cell.ports:
@@ -172,7 +172,7 @@ def _export_unbound(cells, region_name, consumed) -> list[str]:
                 continue
             if (cell.instance, port.pin) in consumed:
                 continue
-            if port.kind in (Kind.AXIS, Kind.AXIMM, Kind.AXILITE):
+            if port.protocol in (Protocol.Stream, Protocol.MemoryMapped, Protocol.Config):
                 lines.append(
                     f"make_bd_intf_pins_external "
                     f"[get_bd_intf_pins {cell.instance}/{port.pin}]"

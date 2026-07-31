@@ -34,7 +34,7 @@ this embedded wrapper alone.
 from __future__ import annotations
 
 from finn.kernels.model.artifacts import Artifacts, BitWidth, Bool, Dim, GeneratedFile, Raw, RtlModule, StaticFile, Template, bind
-from finn.kernels.model.ports import Direction, Kind, Port, Role
+from finn.kernels.model.ports import Direction, Port, Protocol, Role
 
 from .geometry import mvau_geometry
 from .op import INPUT, WEIGHTS
@@ -201,20 +201,20 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     # exports up as a boundary weight port — the topology-driven role behaviour, decided
     # by the resolver at compose time, not hardcoded here.
     ports = (
-        Port(Direction.IN, Kind.AXIS, Role.DATA_IN, "in0_V", index=0,
+        Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", index=0,
              width=point["stream_width.inp"], boundary=True),
-        Port(Direction.OUT, Kind.AXIS, Role.DATA_OUT, "out0_V", index=0,
+        Port(Direction.OUT, Protocol.Stream, Role.DATA_OUT, "out0_V", index=0,
              width=point["stream_width.out"], boundary=True),
-        Port(Direction.IN, Kind.AXIS, Role.WEIGHT_SINK, "in1_V", index=0,
+        Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "in1_V", index=0,
              width=weight_width),
-        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk"),
+        Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk"),
         # ap_clk2x is a real port on the wrapper. For a non-pumped compute it must be
         # driven by the same clock as ap_clk (FINN ties them, emit_rtl's own IPI did the
         # self-tie); as a CLOCK-role port it fans out from the region ap_clk port in the
         # stitch broadcast — the non-pumped tie, done structurally. (A pumped design
         # would bind it to a distinct region 2x-clock port — a documented extension.)
-        Port(Direction.IN, Kind.CLOCK, Role.CLOCK, "ap_clk2x"),
-        Port(Direction.IN, Kind.RESET, Role.RESET, "ap_rst_n"),
+        Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk2x"),
+        Port(Direction.IN, Protocol.Reset, Role.RESET, "ap_rst_n"),
     )
 
     # No per-emit IPICommands: emit_composed builds the authoritative IPI from stitch
