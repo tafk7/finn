@@ -486,6 +486,28 @@ class Kernel:
             raise KernelError(f"output index {ind} out of range (have {len(outs)})")
         return outs[ind]
 
+    def _stream_inputs(self) -> tuple[InterfaceSchema, ...]:
+        return tuple(i for i in self.inputs() if i.protocol == Protocol.Stream)
+
+    def _stream_outputs(self) -> tuple[InterfaceSchema, ...]:
+        return tuple(i for i in self.outputs() if i.protocol == Protocol.Stream)
+
+    def _stream_input(self, ind: int) -> InterfaceSchema:
+        """The ``ind``-th STREAM input — the domain of the folded-shape / stream-width
+        projections (T1.4). A ``MemoryMapped``/``Config`` input is outside this projection,
+        so it is simply not counted here: a query for its index raises a clean "no stream
+        port at index N" rather than a tiling error (IODMA's forcing function)."""
+        ins = self._stream_inputs()
+        if ind < 0 or ind >= len(ins):
+            raise KernelError(f"no stream input port at index {ind} (have {len(ins)})")
+        return ins[ind]
+
+    def _stream_output(self, ind: int) -> InterfaceSchema:
+        outs = self._stream_outputs()
+        if ind < 0 or ind >= len(outs):
+            raise KernelError(f"no stream output port at index {ind} (have {len(outs)})")
+        return outs[ind]
+
     # -- Tier-3 getters: normal (TENSOR) shapes — no backend needed ---------
 
     def get_normal_input_shape(self, context: Context, ind: int = 0) -> tuple[int, ...]:
@@ -503,16 +525,16 @@ class Kernel:
     # -- Tier-3 getters: folded (STREAM) shapes — need a resolved point -----
 
     def get_folded_input_shape(self, point: Point, context: Context, ind: int = 0):
-        return self._folded_shape(self._input(ind), point, context)
+        return self._folded_shape(self._stream_input(ind), point, context)
 
     def get_folded_output_shape(self, point: Point, context: Context, ind: int = 0):
-        return self._folded_shape(self._output(ind), point, context)
+        return self._folded_shape(self._stream_output(ind), point, context)
 
     def get_instream_width(self, point: Point, context: Context, ind: int = 0) -> int:
-        return self._stream_width(self._input(ind), point, context)
+        return self._stream_width(self._stream_input(ind), point, context)
 
     def get_outstream_width(self, point: Point, context: Context, ind: int = 0) -> int:
-        return self._stream_width(self._output(ind), point, context)
+        return self._stream_width(self._stream_output(ind), point, context)
 
     # -- rough cost: prod(stream_cycles) over the interfaces ----------------
 
@@ -530,6 +552,9 @@ class Kernel:
             return int(self.cost_model(point, context))
         cycles = 1
         for iface in self.present_interfaces(context):
+            if iface.protocol != Protocol.Stream:
+                continue  # only Stream ports contribute a stream-cycle count (T1.4); an
+                # MM/Config port has no tensor-axis stream, so it would give a bogus count.
             n = prod(context.tensor_shape(iface.tensor))
             elems = self._stream_elems(iface, point)
             if elems <= 0 or n % elems != 0:
