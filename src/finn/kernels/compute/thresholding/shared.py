@@ -84,10 +84,6 @@ def _tmem(p, ctx):
     return p.NumChannels // p.PE
 
 
-def _output_datatype(p, ctx):
-    return ctx.tensor_datatype(OUTPUT)
-
-
 def _threshold_datatype(p, ctx):
     # Threshold (weight) dtype narrowed from actual values when statically known,
     # else the graph dtype. Mirrors the mvau weight-dtype derive.
@@ -113,7 +109,9 @@ def _outstream_width(p, ctx):
 def op_derived():
     return (
         Derived("TMEM", _tmem),
-        Derived("outputDataType", _output_datatype),
+        # No outputDataType derived: the output dtype IS the graph output dtype (the trivial
+        # DatatypeSpec — None → graph fallback), resolved uniformly like every other output's
+        # derived_dtype. The out port declares no derived_dtype; no second mechanism here.
         Derived("thresholdDataType", _threshold_datatype),
         Derived("instream_width", _instream_width),
         Derived("outstream_width", _outstream_width),

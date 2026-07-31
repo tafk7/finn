@@ -72,7 +72,7 @@ $DOCOMPUTE$
 def emit_thresholding_hls(point, context, module_name: str = "thresholding_top") -> Artifacts:
     """Produce embedded-mode HLS Thresholding compute-core artifacts from a resolved point."""
     idt = context.tensor_datatype(INPUT)
-    odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    odt = context.tensor_datatype(OUTPUT)
     export_odt = DataType["BINARY"] if odt == DataType["BIPOLAR"] else odt
 
     idt_hls = idt.get_hls_datatype_str()
@@ -156,7 +156,7 @@ def _thresh_h(point, context) -> str:
     ``layout`` (THRESHOLD traversal, CPP_HEADER form) — the SEPARABLE static-schedule ROM."""
     thresholds = np.asarray(context.initializer(THRESHOLDS))
     tdt = point.thresholdDataType
-    odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    odt = context.tensor_datatype(OUTPUT)
     export_odt = DataType["BINARY"] if odt == DataType["BIPOLAR"] else odt
 
     n_steps = thresholds.shape[-1]

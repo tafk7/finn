@@ -17,7 +17,7 @@ parameters) and the FINN ``KernelOp`` wrapper.
 Tensor-name convention for the Context this schema resolves against:
     "inp"         the activation input tensor   (inputDataType, dynamic)
     "thresholds"  the threshold tensor          (thresholdDataType + initializer VALUES)
-    "out"         the output tensor             (outputDataType)
+    "out"         the output tensor             (graph output dtype)
 
 The ``thresholds`` interface is the op's ONE parameter interface. It is a SEPARABLE,
 static-schedule memory in the HLS backend (a baked ``thresh.h`` ROM read by the
@@ -189,11 +189,6 @@ class ThresholdingKernelOp(KernelOp):
 
     def ports(self) -> tuple[PortSpec, ...]:
         return _PORTS
-
-    def _output_datatype_from_point(self, kernel, ctx, point, index):
-        if index == 0 and "outputDataType" in point:
-            return point["outputDataType"]
-        return super()._output_datatype_from_point(kernel, ctx, point, index)
 
     def get_folding_axes(self):
         """PE folds the channel dim NumChannels (the threshold tensor's leading extent),

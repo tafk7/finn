@@ -138,7 +138,7 @@ def emit_thresholding_rtl(point, context, module_name: str = "thresholding_top")
 
     idt = context.tensor_datatype(INPUT)
     wdt = context.tensor_datatype(THRESHOLDS)
-    odt = point.outputDataType if "outputDataType" in point else context.tensor_datatype(OUTPUT)
+    odt = context.tensor_datatype(OUTPUT)
     o_bits = odt.bitwidth()
     i_bits = idt.bitwidth()
 
