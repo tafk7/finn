@@ -8,7 +8,7 @@
 
 """``source_backend`` — a pool member of a :class:`~finn.kernels.model.parameter_source.ParameterSource`.
 
-A ``source_backend`` is one pool member of a ``ParameterSource`` — the ``WEIGHT_SOURCE``
+A ``source_backend`` is one pool member of a ``ParameterSource`` — the ``PARAM_SOURCE``
 mirror of a compute :class:`~finn.kernels.model.backend.Backend`. A **storage topology** is
 one way a kernel's parameters physically live and travel to the compute core: ``embedded``
 (compiled in), ``decoupled`` (on-chip replay via memstream), and later ``external`` /

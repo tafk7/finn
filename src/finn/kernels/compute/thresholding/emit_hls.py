@@ -128,7 +128,7 @@ def emit_thresholding_hls(point, context, module_name: str = "thresholding_top")
 
     # HLS embedded: thresholds are compiled into thresh.h (a baked ThresholdsActivation), so
     # there is NO threshold-stream port — the blackbox exposes only in0_V/out0_V (dataflow
-    # boundary edges) + clk/rst. The absence of a WEIGHT_SINK IS the constant (embedded)
+    # boundary edges) + clk/rst. The absence of a PARAM_SINK IS the constant (embedded)
     # topology: the stitch finds nothing to bind, which is correct.
     ports = (
         Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", index=0,

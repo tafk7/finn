@@ -34,7 +34,7 @@ assumption), keeping ``layout`` indifferent to iteration mechanism.
 
 Serializer-vs-transport orthogonality: ``layout`` ALWAYS runs (embedded bakes the bytes
 into ``params.h``, decoupled writes them to ``memblock.dat``). WHICH port the bytes reach
-the core through — an AXI-Stream ``WEIGHT_SOURCE`` (decoupled), no port (embedded/baked),
+the core through — an AXI-Stream ``PARAM_SOURCE`` (decoupled), no port (embedded/baked),
 or an AXI-Lite reload sideband — is the separate delivery decision, not the serializer's.
 """
 

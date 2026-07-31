@@ -49,19 +49,19 @@ def test_two_weights_bind_by_index():
     compute = Cell(
         "compute", "compute_mod",
         (
-            Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "w_in", index=0, width=32),
-            Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "t_in", index=1, width=16),
+            Port(Direction.IN, Protocol.Stream, Role.PARAM_SINK, "w_in", index=0, width=32),
+            Port(Direction.IN, Protocol.Stream, Role.PARAM_SINK, "t_in", index=1, width=16),
             *_clk_rst("compute"),
         ),
     )
     w_src = Cell(
         "wstrm", "memstream",
-        (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m_axis_0", index=0, width=32),
+        (Port(Direction.OUT, Protocol.Stream, Role.PARAM_SOURCE, "m_axis_0", index=0, width=32),
          *_clk_rst("wstrm")),
     )
     t_src = Cell(
         "tstrm", "threshstream",
-        (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m_axis_0", index=1, width=16),
+        (Port(Direction.OUT, Protocol.Stream, Role.PARAM_SOURCE, "m_axis_0", index=1, width=16),
          *_clk_rst("tstrm")),
     )
     cmds = stitch((compute, w_src, t_src), "region").commands
@@ -110,16 +110,16 @@ def test_clock_and_reset_broadcast():
 
 
 def test_ambiguous_binding_raises():
-    a = Cell("a", "m", (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m", index=0, width=8),))
-    b = Cell("b", "m", (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m", index=0, width=8),))
-    sink = Cell("c", "m", (Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "s", index=0, width=8),))
+    a = Cell("a", "m", (Port(Direction.OUT, Protocol.Stream, Role.PARAM_SOURCE, "m", index=0, width=8),))
+    b = Cell("b", "m", (Port(Direction.OUT, Protocol.Stream, Role.PARAM_SOURCE, "m", index=0, width=8),))
+    sink = Cell("c", "m", (Port(Direction.IN, Protocol.Stream, Role.PARAM_SINK, "s", index=0, width=8),))
     with pytest.raises(StitchError, match="ambiguous"):
         stitch((a, b, sink), "region")
 
 
 def test_width_mismatch_raises():
-    src = Cell("a", "m", (Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m", index=0, width=32),))
-    sink = Cell("b", "m", (Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "s", index=0, width=16),))
+    src = Cell("a", "m", (Port(Direction.OUT, Protocol.Stream, Role.PARAM_SOURCE, "m", index=0, width=32),))
+    sink = Cell("b", "m", (Port(Direction.IN, Protocol.Stream, Role.PARAM_SINK, "s", index=0, width=16),))
     with pytest.raises(StitchError, match="width mismatch"):
         stitch((src, sink), "region")
 
@@ -161,9 +161,9 @@ def _strip_comments_and_docstrings(src: str) -> str:
 
 
 def test_role_implies_direction():
-    assert role_direction(Role.WEIGHT_SOURCE) == Direction.OUT
+    assert role_direction(Role.PARAM_SOURCE) == Direction.OUT
     assert role_direction(Role.DATA_OUT) == Direction.OUT
-    assert role_direction(Role.WEIGHT_SINK) == Direction.IN
+    assert role_direction(Role.PARAM_SINK) == Direction.IN
     assert role_direction(Role.DATA_IN) == Direction.IN
     assert role_direction(Role.CONFIG) == Direction.IN
 

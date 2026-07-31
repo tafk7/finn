@@ -156,7 +156,7 @@ def emit_mvau_hls(point, context, module_name: str = "mvau_top") -> Artifacts:
 
     # HLS embedded: weights are compiled into params.h (FixedPointWeights), so there
     # is NO weight-stream port — the blackbox exposes only in0_V/out0_V (both dataflow
-    # boundary edges) + clk/rst. The absence of a WEIGHT_SINK IS the embedded topology:
+    # boundary edges) + clk/rst. The absence of a PARAM_SINK IS the embedded topology:
     # the stitch finds nothing to bind, which is correct.
     ports = (
         Port(Direction.IN, Protocol.Stream, Role.DATA_IN, "in0_V", index=0,

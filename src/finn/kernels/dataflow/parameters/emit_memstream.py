@@ -245,15 +245,15 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
         _MANIFEST_BY_NAME[s].as_static() for s in point.get(sources_key(iface), ())
     )
 
-    # The delivery cell publishes a WEIGHT_SOURCE (m_axis_0) — the resolver binds it to
-    # the compute cell's WEIGHT_SINK (in1_V) by role, matching width. Its width is the
+    # The delivery cell publishes a PARAM_SOURCE (m_axis_0) — the resolver binds it to
+    # the compute cell's PARAM_SINK (in1_V) by role, matching width. Its width is the
     # same padded PE*SIMD*wbits geometry (parameters.width). CONFIG (s_axilite) is
     # present only when weights are runtime-writable; it exports up as a boundary
     # register surface. The set-selector stream (s_axis_0, INDEX_SINK) exists in RTL but
     # is inert for SETS=1 (single-cardinality) — declared documented, not bound here.
     width = point[width_key(iface)]
     ports = [
-        Port(Direction.OUT, Protocol.Stream, Role.WEIGHT_SOURCE, "m_axis_0", index=0,
+        Port(Direction.OUT, Protocol.Stream, Role.PARAM_SOURCE, "m_axis_0", index=0,
              width=width),
         Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk"),
         # ap_clk2x: non-pumped memory ties it to ap_clk (fans from the region ap_clk in

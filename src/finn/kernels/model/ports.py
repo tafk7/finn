@@ -60,11 +60,11 @@ class Protocol(Enum):
 class Role(Enum):
     """The SEMANTIC binding key — what the port is FOR — and the vocabulary the
     resolver binds against. A role can be REASSIGNED by topology (external mem_mode
-    turns a WEIGHT_SINK into a DATA_IN boundary port — clarification #1 in the
+    turns a PARAM_SINK into a DATA_IN boundary port — clarification #1 in the
     taxonomy): the role names the binding, not the pin.
 
     BUILT roles (exercised by the shipped MVAU + memstream emits):
-    DATA_IN/DATA_OUT, WEIGHT_SINK/WEIGHT_SOURCE, CONFIG, CLOCK, RESET.
+    DATA_IN/DATA_OUT, PARAM_SINK/PARAM_SOURCE, CONFIG, CLOCK, RESET.
 
     DOCUMENTED/INERT roles (the full target vocabulary — a single enum entry each,
     so adding one later is trivial): INDEX_SINK/INDEX_SOURCE (MLO set selection),
@@ -75,8 +75,8 @@ class Role(Enum):
     # --- built ---
     DATA_IN = "data_in"  # activation stream in, along the dataflow graph edge
     DATA_OUT = "data_out"  # activation stream out, along the dataflow graph edge
-    WEIGHT_SINK = "weight_sink"  # a param stream a kernel CONSUMES (owned internally)
-    WEIGHT_SOURCE = "weight_source"  # a param stream a delivery sub-kernel PRODUCES
+    PARAM_SINK = "param_sink"  # a param stream a kernel CONSUMES (owned internally)
+    PARAM_SOURCE = "param_source"  # a param stream a delivery sub-kernel PRODUCES
     CONFIG = "config"  # an AXI-lite control/config surface (runtime-writable params)
     CLOCK = "clock"
     RESET = "reset"
@@ -87,15 +87,15 @@ class Role(Enum):
     STATUS = "status"  # a sideband status signal (e.g. loop done)
 
 
-# The DATA/WEIGHT roles carry a folded tensor SHAPE; everything else carries a plain
+# The DATA/PARAM roles carry a folded tensor SHAPE; everything else carries a plain
 # bit WIDTH or nothing. Enforced by Port.__post_init__ so iodma's "folded-shape getter
 # raises on the AXI-MM side" is a category error the TYPE forbids, not a runtime bug.
-_SHAPED_ROLES = frozenset({Role.DATA_IN, Role.DATA_OUT, Role.WEIGHT_SINK, Role.WEIGHT_SOURCE})
+_SHAPED_ROLES = frozenset({Role.DATA_IN, Role.DATA_OUT, Role.PARAM_SINK, Role.PARAM_SOURCE})
 
 # A role IMPLIES its direction — a SINK/IN-role consumes (IN), a SOURCE/OUT-role produces
 # (OUT). So an Interface declares only its role; the direction is derived, never restated.
 _OUT_ROLES = frozenset(
-    {Role.DATA_OUT, Role.WEIGHT_SOURCE, Role.INDEX_SOURCE, Role.STATUS, Role.MEMORY_MASTER}
+    {Role.DATA_OUT, Role.PARAM_SOURCE, Role.INDEX_SOURCE, Role.STATUS, Role.MEMORY_MASTER}
 )
 
 
@@ -114,7 +114,7 @@ class Port:
     * ``index`` disambiguates same-role ports (weights=0, thresholds=1; DATA_OUT
       0/1/… for a multi-output op) — this is what answers the cardinality question
       structurally, without a special case.
-    * ``shape`` is the folded tensor shape for DATA/WEIGHT ports; ``width`` is the
+    * ``shape`` is the folded tensor shape for DATA/PARAM ports; ``width`` is the
       bit width for CONFIG/AXIMM/etc. Exactly one applies per role (see
       ``_SHAPED_ROLES``); the other is ``None``.
     * ``boundary`` True = this port exports to the ENCLOSING region (a dataflow edge
@@ -153,7 +153,7 @@ class Port:
 # (INDEX_*) are listed now so wiring an MLO controller later is one table row, not
 # resolver surgery.
 STANDARD_BINDINGS: tuple[tuple[Role, Role], ...] = (
-    (Role.WEIGHT_SOURCE, Role.WEIGHT_SINK),
+    (Role.PARAM_SOURCE, Role.PARAM_SINK),
     (Role.DATA_OUT, Role.DATA_IN),
     (Role.INDEX_SOURCE, Role.INDEX_SINK),
 )

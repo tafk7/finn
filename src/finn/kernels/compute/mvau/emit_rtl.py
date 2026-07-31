@@ -195,8 +195,8 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
 
     # The compute core exposes: activation in (in0_V), activation out (out0_V), a
     # weight-stream input (in1_V), clock, reset. in0_V/out0_V are dataflow-graph edges
-    # (boundary — they export to the enclosing region). in1_V is a WEIGHT_SINK: the
-    # stitch binds it to a delivery cell's WEIGHT_SOURCE. When there is no delivery
+    # (boundary — they export to the enclosing region). in1_V is a PARAM_SINK: the
+    # stitch binds it to a delivery cell's PARAM_SOURCE. When there is no delivery
     # cell (embedded compilation), the stitch finds no complementary source and in1_V
     # exports up as a boundary weight port — the topology-driven role behaviour, decided
     # by the resolver at compose time, not hardcoded here.
@@ -205,7 +205,7 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
              width=point["stream_width.inp"], boundary=True),
         Port(Direction.OUT, Protocol.Stream, Role.DATA_OUT, "out0_V", index=0,
              width=point["stream_width.out"], boundary=True),
-        Port(Direction.IN, Protocol.Stream, Role.WEIGHT_SINK, "in1_V", index=0,
+        Port(Direction.IN, Protocol.Stream, Role.PARAM_SINK, "in1_V", index=0,
              width=weight_width),
         Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk"),
         # ap_clk2x is a real port on the wrapper. For a non-pumped compute it must be
