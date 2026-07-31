@@ -27,15 +27,15 @@ from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import AbsentAxisError, Illegal
 from finn.kernels.engine.resolve import resolve
 from finn.kernels.compute.mvau import MVAU_HLS, mvau_schema
-from finn.kernels.dataflow.memory import (
+from finn.kernels.dataflow.parameters import (
     DECOUPLED,
     EMBEDDED,
     WEIGHTS,
     parameters_pool,
     parameters_schema,
 )
-from finn.kernels.dataflow.memory.emit_memstream import emit_memstream
-from finn.kernels.dataflow.memory.serialize import (
+from finn.kernels.dataflow.parameters.emit_memstream import emit_memstream
+from finn.kernels.dataflow.parameters.serialize import (
     CPP_HEADER,
     DAT_HEX,
     SerializedParam,

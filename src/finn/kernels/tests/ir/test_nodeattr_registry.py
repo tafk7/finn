@@ -16,7 +16,7 @@ bakes — geometry lives on the ONNX tensors.
 """
 
 from finn.kernels.compute.mvau import mvau_kernel
-from finn.kernels.dataflow.memory.names import WEIGHTS
+from finn.kernels.dataflow.parameters.names import WEIGHTS
 from finn.kernels.ir.nodeattr_registry import axis_nodeattr_types
 from finn.kernels.model.param_names import ram_style_key
 

@@ -39,8 +39,8 @@ from finn.kernels.model.param_names import (
 )
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
-from finn.kernels.dataflow.memory import WEIGHTS, parameters_pool
-from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED
+from finn.kernels.dataflow.parameters import WEIGHTS, parameters_pool
+from finn.kernels.dataflow.parameters.names import DECOUPLED, EMBEDDED
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 THRESHOLDS = "thresholds"

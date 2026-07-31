@@ -6,34 +6,39 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``DeliverySeam`` — the compute→delivery seam for one delivered parameter (design pitch §2).
+"""``ParameterSource`` — the compute→source seam for one delivered parameter (design pitch §2).
+
+A ``ParameterSource`` HOLDS the source backends for one parameter interface (a pool → one
+is selected); it is the parameter-side MIRROR of a compute :class:`~finn.kernels.model.kernel.Kernel`,
+NOT itself a source backend (that is a pool member — see
+:func:`~finn.kernels.model.source_backend.source_backend`).
 
 The design space has two independent selection pools that must nonetheless talk: the
 **compute pool** (``implementation``) fixes PE·SIMD hence the parameter stream width; the
-**delivery pool** (``parameters.<iface>.topology``) fixes how the parameter is stored and
+**source pool** (``parameters.<iface>.topology``) fixes how the parameter is stored and
 must size its memory to match that width. The compute side produces a fact (how fast it
-consumes a parameter); the delivery side consumes it (sizes memory to feed at that rate) —
+consumes a parameter); the source side consumes it (sizes memory to feed at that rate) —
 a real, directional data dependency.
 
 Historically that dependency was expressed three ways at once: a demand derived slotted
 between the pools BY LIST POSITION, a mode-compatibility gate as ``replace()``-surgery on
-the delivery root axis, and a ``compose`` union documenting the gap it refused to fill.
-``DeliverySeam`` collapses them into ONE per-delivered-parameter object that owns the seam:
+the source root axis, and a ``compose`` union documenting the gap it refused to fill.
+``ParameterSource`` collapses them into ONE per-parameter object that owns the seam:
 
-* ``publishes`` — the compute→delivery DEMAND closure (a realization-free
+* ``publishes`` — the compute→source DEMAND closure (a realization-free
   :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface
   geometry). ``None`` for a live activation or an embedded-mode consumption.
-* ``constrains`` — the topology-mode GUARD: the delivery pool's ``topology`` domain kept
+* ``constrains`` — the topology-mode GUARD: the source pool's ``topology`` domain kept
   to just the modes the selected compute backend accepts for this interface.
 * declared ``deps`` ``{implementation, topology.<iface>}`` — so the existing topo-sort
-  orders COMPUTE → DEMAND → MEMORY structurally, not by list position.
+  orders COMPUTE → DEMAND → SOURCE structurally, not by list position.
 
 It introduces NO new resolve mechanism: it reads only existing ``Backend`` fields
 (``stream``, ``mem_modes``, topology ``mem_mode``) and existing point keys
 (``stream_width.<iface>``, ``topology.<iface>``, ``demand.<iface>``), and its two-root
 deps feed the topo-sort that already runs.
 
-This module OWNS the assembly (:meth:`DeliverySeam.to_subschemas`), reusing the
+This module OWNS the assembly (:meth:`ParameterSource.to_subschemas`), reusing the
 demand/guard COMPUTATION bodies (:func:`_demand_for`, :func:`_topology_domain`) kept in
 :mod:`~finn.kernels.model.param_contract` beside the op-facing :class:`DeliveredParam`
 declaration.
@@ -52,16 +57,18 @@ from ..engine.schema import Schema
 
 
 @dataclass(frozen=True)
-class DeliverySeam:
-    """The compute→delivery seam for one declared parameter interface. Built by
-    :func:`delivery_seam_for` from a
+class ParameterSource:
+    """The compute→source seam for one declared parameter interface. Built by
+    :func:`parameter_source_for` from a
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (the op's WHAT) plus the compute
-    pool (whose members' ``mem_modes`` drive the guard).
+    pool (whose members' ``mem_modes`` drive the guard). A ``ParameterSource`` HOLDS the pool
+    of source backends (one is selected); it is the parameter-side mirror of a compute
+    ``Kernel``, NOT itself a source backend.
 
     Attributes:
         schema: the op-side interface name this realizes (the ``DeliveredParam.iface`` —
             also the Context tensor key).
-        pool: the CONCRETE delivery pool (storage-topology ``Backend``\\ s) for this
+        pool: the CONCRETE source pool (storage-topology ``Backend``\\ s) for this
             interface. The selection space :meth:`to_subschemas` lowers to a ``Schema``.
         stream: ``{compute_backend_name -> fold list}`` — the BLOCK→STREAM fold each
             compute backend declares for this port (a reference to ``Backend.stream[iface]``,
@@ -92,18 +99,18 @@ class DeliverySeam:
     deps: frozenset[str]
 
     def to_subschemas(self) -> tuple[Schema, Schema]:
-        """The ``(demand_schema, guarded delivery sub-schema)`` pair this interface
+        """The ``(demand_schema, guarded source sub-schema)`` pair this interface
         contributes, in supply-waterfall order.
 
         The demand stage publishes ``parameters.<iface>.demand`` from resolved compute
-        geometry (``publishes``); the delivery pool then sizes its own realization from
+        geometry (``publishes``); the source pool then sizes its own realization from
         that demand, its ``topology`` domain filtered by ``constrains`` to the modes the
         selected compute backend accepts."""
-        return (self._demand_schema(), self._delivery_subschema())
+        return (self._demand_schema(), self._source_subschema())
 
     def _demand_schema(self) -> Schema:
         """The DEMAND stage as a derived-only schema, ordered BETWEEN the compute pool and
-        the delivery pool by its ``demand_key`` reading the tiling engine's resolved
+        the source pool by its ``demand_key`` reading the tiling engine's resolved
         ``stream_width.<iface>`` (present only after compute tiling)."""
         return Schema(
             axes=(),
@@ -111,8 +118,8 @@ class DeliverySeam:
             predicates=(),
         )
 
-    def _delivery_subschema(self) -> Schema:
-        """The delivery pool for this interface with its ``topology`` root-axis domain
+    def _source_subschema(self) -> Schema:
+        """The source pool for this interface with its ``topology`` root-axis domain
         overridden by the mem-mode guard, so only topologies the selected compute
         backend can accept remain selectable. The default is likewise guarded so an
         out-of-domain default never makes an unpinned topology illegal."""
@@ -130,15 +137,15 @@ class DeliverySeam:
         return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))
 
 
-def delivery_seam_for(dp: DeliveredParam, compute_pool) -> DeliverySeam:
-    """Assemble the :class:`DeliverySeam` for one delivered parameter from its
+def parameter_source_for(dp: DeliveredParam, compute_pool) -> ParameterSource:
+    """Assemble the :class:`ParameterSource` for one delivered parameter from its
     :class:`~finn.kernels.model.param_contract.DeliveredParam` declaration + the op's compute
-    pool. The single place the compute→delivery contract is built — the demand schema and
-    the guarded delivery sub-schema for this interface have one owner."""
+    pool. The single place the compute→source contract is built — the demand schema and
+    the guarded source sub-schema for this interface have one owner."""
     iface = dp.iface
     stream = {b.name: b.stream_of(iface) for b in compute_pool}
     mem_modes = {b.name: b.mem_modes_of(iface) for b in compute_pool}
-    return DeliverySeam(
+    return ParameterSource(
         schema=iface,
         pool=tuple(dp.pool),
         stream=stream,

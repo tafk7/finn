@@ -37,7 +37,7 @@ from typing import Any, Mapping
 from ..engine.context import Context
 from ._util import prod
 from .backend import BACKEND_AXIS, Backend, pool_schema
-from .seam import delivery_seam_for
+from .parameter_source import parameter_source_for
 from ..engine.point import Illegal, Point
 from .ports import Direction
 from ..engine.resolve import resolve
@@ -180,8 +180,8 @@ class Kernel:
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (interface +
     ``parameters_pool(name)``) per interface some backend declares in its ``mem_modes``,
     each lowered by a
-    :class:`~finn.kernels.model.seam.DeliverySeam` into the demand stage +
-    guarded delivery pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
+    :class:`~finn.kernels.model.parameter_source.ParameterSource` into the demand stage +
+    guarded source pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
     :meth:`configure` resolves a point; the getters project from it. The identity fields
     are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to
     ``identity``) so callers read them off the Kernel unchanged.
@@ -238,7 +238,7 @@ class Kernel:
         param interface gets delivery machinery with zero op edits; delivery-ness is no longer
         re-declared on the op (F1/F2). Iterated over the identity interfaces for deterministic
         order."""
-        from finn.kernels.dataflow.memory import parameters_pool
+        from finn.kernels.dataflow.parameters import parameters_pool
         from .param_contract import DeliveredParam
 
         declared = {iface for b in self.pool for iface in b.mem_modes}
@@ -333,9 +333,9 @@ class Kernel:
         """The full design space: the identity's op-level shared elements + the
         backend pool (each backend augmented with its tiling-engine-derived fold dials
         / divisibility / widths), plus the delivered parameters' realization sub-schemas.
-        ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate memory
+        ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate source
         couplings that once lived here relocated into the parameters pool, and the
-        compute→memory demand crosses the seam owned by a ``DeliverySeam``."""
+        compute→source demand crosses the seam owned by a ``ParameterSource``."""
         op = pool_schema(
             BACKEND_AXIS,
             # kernel_attrs join the op-level shared axes: each is an Axis carried onto the
@@ -347,16 +347,16 @@ class Kernel:
             self._augmented_pool(),
             unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
         )
-        # DELIVERED PARAMETERS: the generic compute→delivery wiring, OWNED by a
-        # DeliverySeam per delivered interface — the seam object
-        # that holds the DEMAND stage + guarded delivery sub-schema (design pitch §2). Its
+        # DELIVERED PARAMETERS: the generic compute→source wiring, OWNED by a
+        # ParameterSource per delivered interface — the seam object
+        # that holds the DEMAND stage + guarded source sub-schema (design pitch §2). Its
         # to_subschemas() folds into the op schema in supply-waterfall order; the seam has
         # one owner and the waterfall is structural (its declared two-root deps) rather than
         # list-position. Reads the compute pool's `mem_modes` + each topology's `mem_mode` — no
         # op-specific logic here. Namespaced keys (`parameters.*`) + distinct sources_key
         # mean the union never collides, so resolve walks it unchanged.
         for dp in self.delivered_parameters:
-            for sub in delivery_seam_for(dp, self.pool).to_subschemas():
+            for sub in parameter_source_for(dp, self.pool).to_subschemas():
                 op = Schema(
                     axes=tuple(op.axes) + tuple(sub.axes),
                     derived=tuple(op.derived) + tuple(sub.derived),

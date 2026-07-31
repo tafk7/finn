@@ -14,7 +14,7 @@ optionally reloadable via AXI-lite). This bundle owns the SELECTION axes of that
 topology (``ram_style``, ``runtime_writeable_weights``, ``pumpedMemory``), its
 self-contained feasibility gates, AND its memstream GEOMETRY (``depth``/``width``/
 ``sets``/``init_file``) — which it now derives ITSELF from the compute→memory
-:class:`~finn.kernels.dataflow.memory.demand.ParamDemand` the composing op publishes
+:class:`~finn.kernels.model.demand.ParamDemand` the composing op publishes
 under the ``parameters.demand`` key (rather than the op reaching in to compute the
 memstream realization). When the demand is absent (standalone resolve, no compute
 core), the geometry derived return ``None`` — so this bundle still resolves alone.
@@ -51,7 +51,7 @@ from finn.util.basic import is_versal
 from .emit_memstream import _MEMSTREAM_WRAPPER_SCHEMA, MEMSTREAM_MANIFEST, emit_memstream
 from .names import DECOUPLED
 from .registry import register
-from finn.kernels.model.memory_backend import memory_backend
+from finn.kernels.model.source_backend import source_backend
 
 
 # =============================================================================
@@ -186,7 +186,7 @@ def _geometry_derived(iface):
 
 @register
 def decoupled_topology(iface):
-    return memory_backend(
+    return source_backend(
         DECOUPLED,
         mem_mode=DECOUPLED_MODE,  # an AXIS port a memstream block feeds
         language="rtl",  # emits its own memstream Verilog streamer

@@ -40,7 +40,7 @@ from finn.kernels.compute.mvau import (
     mvau_schema,
 )
 from finn.kernels.compute.mvau.op import MvauKernelOp, mvau_kernel
-from finn.kernels.dataflow.memory.names import (
+from finn.kernels.dataflow.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
     WEIGHTS as PARAM_WEIGHTS,

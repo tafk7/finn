@@ -42,7 +42,7 @@ def _norm(s):
 # MVAU
 # ===========================================================================
 
-from finn.kernels.dataflow.memory.names import WEIGHTS
+from finn.kernels.dataflow.parameters.names import WEIGHTS
 from finn.kernels.model.param_names import ram_style_key, topology_key
 
 MVAU_TOPOLOGY = topology_key(WEIGHTS)
@@ -76,7 +76,7 @@ def _mvau_context_point(W, pe, simd, wdt, idt, odt, impl, restype):
     from finn.kernels.engine.context import Context
     from finn.kernels.engine.resolve import resolve
     from finn.kernels.compute.mvau import mvau_schema
-    from finn.kernels.dataflow.memory.names import DECOUPLED
+    from finn.kernels.dataflow.parameters.names import DECOUPLED
 
     mw, mh = W.shape
     ctx = Context(
@@ -193,8 +193,8 @@ def test_mvau_memstream_wrapper_and_dat_match_finn():
     from finn.kernels.engine.resolve import resolve
     from finn.kernels.model.backend import emit_point
     from finn.kernels.compute.mvau import mvau_schema, MVAU_HLS
-    from finn.kernels.dataflow.memory import parameters_pool
-    from finn.kernels.dataflow.memory.names import DECOUPLED
+    from finn.kernels.dataflow.parameters import parameters_pool
+    from finn.kernels.dataflow.parameters.names import DECOUPLED
 
     rng = np.random.RandomState(0)
     W = rng.randint(int(DataType["INT8"].min()) + 1, int(DataType["INT8"].max()) + 1,

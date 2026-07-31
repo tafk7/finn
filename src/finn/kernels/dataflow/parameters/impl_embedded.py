@@ -26,7 +26,7 @@ from finn.kernels.model.param_names import param_stream_width_key
 
 from .names import EMBEDDED
 from .registry import register
-from finn.kernels.model.memory_backend import memory_backend
+from finn.kernels.model.source_backend import source_backend
 
 
 def _no_stream_width(p, ctx):
@@ -41,7 +41,7 @@ def embedded_topology(iface):
     # nothing is delivered). The one thing it contributes is the per-interface compute-facing
     # stream-width (0 — no port), which the COMPUTE side reads; namespaced per interface, so
     # it is emitted unconditionally for every delivered interface with no collision.
-    return memory_backend(
+    return source_backend(
         EMBEDDED,
         mem_mode=EMBEDDED_MODE,  # baked into the compute core — no streamer, no port
         derived=(Derived(param_stream_width_key(iface), _no_stream_width),),

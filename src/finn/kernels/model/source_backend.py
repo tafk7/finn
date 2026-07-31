@@ -6,17 +6,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``memory_backend`` — the parameters-pool member abstraction.
+"""``source_backend`` — a pool member of a :class:`~finn.kernels.model.parameter_source.ParameterSource`.
 
-A **storage topology** is one way a kernel's parameters physically live and travel to
-the compute core: ``embedded`` (compiled in), ``decoupled`` (on-chip replay via
-memstream), and later ``external`` / ``off-chip-DMA`` / ``dynamic``. Each topology is
-a self-contained bundle — its own storage/transport/selection axes, coupling derived,
-feasibility predicates, RTL sources, and emit — exactly the shape of an
-:class:`Backend`. We do not introduce a parallel type: ``pool_schema`` reads an
-``Backend`` structurally, and the root axis name (``topology``) is what gives
-the pool its meaning. This factory is a semantic alias so a topology reads as a
-topology, not as a compute "backend", while reusing the proven selection
+A ``source_backend`` is one pool member of a ``ParameterSource`` — the ``WEIGHT_SOURCE``
+mirror of a compute :class:`~finn.kernels.model.backend.Backend`. A **storage topology** is
+one way a kernel's parameters physically live and travel to the compute core: ``embedded``
+(compiled in), ``decoupled`` (on-chip replay via memstream), and later ``external`` /
+``off-chip-DMA`` / ``dynamic``. Each topology is a self-contained bundle — its own
+storage/transport/selection axes, coupling derived, feasibility predicates, RTL sources, and
+emit — exactly the shape of a :class:`Backend`. We do not introduce a parallel type:
+``pool_schema`` reads a ``Backend`` structurally, and the root axis name (``topology``) is
+what gives the pool its meaning. This factory is a semantic alias so a source backend reads
+as a source, not as a compute "backend", while reusing the proven selection
 machinery ([[impl-bundles]]).
 """
 
@@ -32,7 +33,7 @@ from finn.kernels.engine.predicate import Predicate
 from finn.kernels.model.backend import Backend
 
 
-def memory_backend(
+def source_backend(
     name: str,
     *,
     mem_mode: str,
@@ -44,7 +45,7 @@ def memory_backend(
     emit: Callable[[Any, Any], "Artifacts"] | None = None,
     schema: RtlModule | None = None,
 ) -> Backend:
-    """Declare one storage topology as a parameters-pool member.
+    """Declare one storage topology as a source-pool member (a ``ParameterSource`` member).
 
     Thin wrapper over :class:`Backend` — same fields, topology-flavoured name. The pool's
     root axis is ``topology`` (see :func:`parameters_schema`); ``name`` is the value that

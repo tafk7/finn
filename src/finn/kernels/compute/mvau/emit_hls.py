@@ -32,7 +32,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.model.artifacts import Artifacts, DataFile, GeneratedFile, Template
 from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
 from finn.kernels.model.ports import Direction, Kind, Port, Role
-from finn.kernels.dataflow.memory.serialize import (
+from finn.kernels.dataflow.parameters.serialize import (
     CPP_HEADER,
     layout,
     threshold_constraint,

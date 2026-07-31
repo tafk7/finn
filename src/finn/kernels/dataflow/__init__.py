@@ -7,8 +7,8 @@
 ############################################################################
 """Non-compute (dataflow-infrastructure) kernels.
 
-Holds the parameter-feed subsystem under ``memory/`` (the storage-topology
+Holds the parameter-source subsystem under ``parameters/`` (the storage-topology
 REALIZATIONS — ``embedded``/``decoupled`` and their memstream emit; the abstraction
-lives in ``model/memory_backend.py``). As the classic ``custom_op/fpgadataflow/``
-infra ops migrate, ``fifo/``/``dwc/``/``iodma/`` join as siblings of ``memory/``.
+lives in ``model/source_backend.py``). As the classic ``custom_op/fpgadataflow/``
+infra ops migrate, ``fifo/``/``dwc/``/``iodma/`` join as siblings of ``parameters/``.
 """

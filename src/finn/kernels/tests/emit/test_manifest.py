@@ -64,8 +64,8 @@ def test_thresholding_rtl_bundle_sources_come_from_manifest():
 
 
 def test_decoupled_bundle_sources_come_from_manifest():
-    from finn.kernels.dataflow.memory.emit_memstream import MEMSTREAM_MANIFEST
-    from finn.kernels.dataflow.memory.impl_decoupled import decoupled_topology
+    from finn.kernels.dataflow.parameters.emit_memstream import MEMSTREAM_MANIFEST
+    from finn.kernels.dataflow.parameters.impl_decoupled import decoupled_topology
 
     assert decoupled_topology("weights").sources == MEMSTREAM_MANIFEST.filenames
 

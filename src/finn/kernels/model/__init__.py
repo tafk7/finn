@@ -8,10 +8,10 @@
 """The op-model: how a hardware kernel is modeled on top of the resolve engine.
 
 Holds the :class:`~finn.kernels.model.kernel.Kernel` / :class:`~finn.kernels.model.backend.Backend`
-/ :class:`~finn.kernels.model.seam.DeliverySeam` vocabulary, the tiling/fold-depth
-projections, ``ports``, and the op-agnostic parameter-feed CONTRACT (``demand``,
-``param_names``, ``param_contract``) plus the ``memory_backend`` abstraction (the
-realizations live in ``dataflow/memory/``). Also holds ``registry`` (the op-agnostic
+/ :class:`~finn.kernels.model.parameter_source.ParameterSource` vocabulary, the tiling/fold-depth
+projections, ``ports``, and the op-agnostic parameter-source CONTRACT (``demand``,
+``param_names``, ``param_contract``) plus the ``source_backend`` abstraction (the
+realizations live in ``dataflow/parameters/``). Also holds ``registry`` (the op-agnostic
 implementation-registry factory) and ``artifacts`` (the typed emit-output vocabulary
 consumed by ``emit/``).
 """

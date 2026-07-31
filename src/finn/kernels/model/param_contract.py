@@ -6,15 +6,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""The op-facing parameter-DELIVERY declaration (:class:`DeliveredParam`) + the seam
-COMPUTATION bodies a :class:`~finn.kernels.model.seam.DeliverySeam`
+"""The op-facing parameter-source declaration (:class:`DeliveredParam`) + the seam
+COMPUTATION bodies a :class:`~finn.kernels.model.parameter_source.ParameterSource`
 composes.
 
 A :class:`~finn.kernels.model.kernel.Kernel` that delivers parameters (weights,
 thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
-cadence + concrete delivery pool). The HOW — the ``(DEMAND stage, guarded delivery
-sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → MEMORY) — is OWNED by
-``DeliverySeam`` (design pitch §2), which reuses the two seam computations kept here:
+cadence + concrete source pool). The HOW — the ``(DEMAND stage, guarded source
+sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → SOURCE) — is OWNED by
+``ParameterSource`` (design pitch §2), which reuses the two seam computations kept here:
 
 * :func:`_demand_for` — the DEMAND closure: a realization-free
   :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface
@@ -44,14 +44,14 @@ from .tiling import stream_width_key
 
 @dataclass(frozen=True)
 class DeliveredParam:
-    """One parameter interface an op delivers through a delivery (parameters) pool.
+    """One parameter interface an op delivers through a source (parameters) pool.
 
     An INTERNAL assembly struct: an op no longer constructs this — ``Kernel`` DERIVES the
     ``DeliveredParam`` list from the pool (an interface some backend declares in its
-    ``mem_modes``). The generic ``DeliverySeam`` wiring consumes it. Fields:
+    ``mem_modes``). The generic ``ParameterSource`` wiring consumes it. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
-    * ``pool`` — the CONCRETE delivery pool (a tuple of storage-topology ``Backend``\\ s),
+    * ``pool`` — the CONCRETE source pool (a tuple of storage-topology ``Backend``\\ s),
       built by ``Kernel.schema()`` from ``parameters_pool(iface)``. Handed to the wiring so
       it reads the pool directly instead of hardcoding a lookup.
     """

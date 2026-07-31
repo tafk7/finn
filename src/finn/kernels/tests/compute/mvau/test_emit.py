@@ -31,7 +31,7 @@ from finn.kernels.compute.mvau import (
     mvau_pool,
     mvau_schema,
 )
-from finn.kernels.dataflow.memory.names import DECOUPLED, EMBEDDED, WEIGHTS
+from finn.kernels.dataflow.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
 from finn.kernels.model.param_names import topology_key
 
 TOPOLOGY = topology_key(WEIGHTS)
