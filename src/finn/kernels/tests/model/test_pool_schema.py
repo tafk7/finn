@@ -231,7 +231,7 @@ def test_declared_support_gates_only_when_selected():
 
     int_only = Backend(
         name="int_only",
-        ports=ports_from(dtypes={"inp": DatatypeSupport(kind=DatatypeKind.INTEGER)}),
+        ports=ports_from(accepted_dtypes={"inp": DatatypeSupport(kind=DatatypeKind.INTEGER)}),
     )
     permissive = Backend(name="permissive")  # declares no support → accepts anything
     schema = pool_schema("backend", (), (), (), (int_only, permissive))
@@ -255,7 +255,7 @@ def test_custom_support_callable_is_compiled():
     def only_int8(dt):
         return None if dt == DataType["INT8"] else f"need INT8, got {dt}"
 
-    a = Backend(name="a", ports=ports_from(dtypes={"inp": only_int8}))
+    a = Backend(name="a", ports=ports_from(accepted_dtypes={"inp": only_int8}))
     schema = pool_schema("backend", (), (), (), (a,))
     assert isinstance(resolve(schema, _dtype_ctx(DataType["INT8"]), {"backend": "a"}), Point)
     r = resolve(schema, _dtype_ctx(DataType["INT4"]), {"backend": "a"})

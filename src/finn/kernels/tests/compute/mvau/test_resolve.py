@@ -610,7 +610,7 @@ def test_float_backend_widens_the_accepted_datatypes_union():
     fp = DatatypeSupport(kind=DatatypeKind.FLOAT)
     float_backend = Backend(
         name="mvau_fp16", language="hls", sources=("mvu_fp.sv",),
-        ports=ports_from(stream=COMPUTE_STREAM, dtypes={INPUT: fp, WEIGHTS: fp}),
+        ports=ports_from(stream=COMPUTE_STREAM, accepted_dtypes={INPUT: fp, WEIGHTS: fp}),
     )
     widened = replace(base, pool=mvau_pool() + (float_backend,))
     assert widened.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is True

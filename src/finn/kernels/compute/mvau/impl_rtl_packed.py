@@ -78,6 +78,6 @@ def packed_bundle() -> Backend:
         # Streamed-weight DSP core (see softvec) — weights DECOUPLED-only (embedded illegal),
         # thresholds rejected by the _rtl_mvu_feasible gate, so no thresholds consumes entry.
         ports=ports_from(
-            stream=COMPUTE_STREAM, mem_modes={WEIGHTS: {DECOUPLED}}, dtypes=RTL_MVU_SUPPORT
+            stream=COMPUTE_STREAM, mem_modes={WEIGHTS: {DECOUPLED}}, accepted_dtypes=RTL_MVU_SUPPORT
         ),
     )

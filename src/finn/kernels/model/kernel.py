@@ -200,8 +200,41 @@ class Kernel:
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
+        self._check_port_direction()
         object.__setattr__(self, "delivered_parameters", self._build_delivered())
         object.__setattr__(self, "_tiling_cache", {})
+
+    def _check_port_direction(self) -> None:
+        """Enforce the datatype/memory direction-exclusivity of each backend's
+        :class:`~finn.kernels.model.backend.Interface` against the op schema's declared
+        direction — the ONE place both are in hand (an ``Interface`` has no local direction).
+
+        A GATE fact (``accepted_dtypes``) or a memory-realization fact (``mem_modes``) is
+        exogenous and INPUT-only; a DERIVATION fact (``derived_dtype``) is endogenous and
+        OUTPUT-only. Declaring one on the wrong-direction port is a construction error caught
+        here, not a silent no-op at resolve."""
+        by_name = {i.name: i for i in self.interfaces}
+        for backend in self.pool:
+            for iface, port in backend.ports.items():
+                schema = by_name.get(iface)
+                if schema is None:
+                    continue  # a port with no op interface — nothing to check direction on
+                is_input = schema.direction == Direction.IN
+                if is_input and port.derived_dtype is not None:
+                    raise KernelError(
+                        f"backend {backend.name!r}: derived_dtype set on INPUT port "
+                        f"{iface!r} (a derivation is OUTPUT-only)"
+                    )
+                if not is_input and port.accepted_dtypes is not None:
+                    raise KernelError(
+                        f"backend {backend.name!r}: accepted_dtypes set on OUTPUT port "
+                        f"{iface!r} (a dtype gate is INPUT-only)"
+                    )
+                if not is_input and port.mem_modes is not None:
+                    raise KernelError(
+                        f"backend {backend.name!r}: mem_modes set on OUTPUT port "
+                        f"{iface!r} (memory realization is INPUT-only)"
+                    )
 
     def _build_delivered(self) -> tuple:
         """The delivered-parameter list, DERIVED from the pool: an interface is a delivered

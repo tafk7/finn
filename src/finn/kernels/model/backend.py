@@ -71,24 +71,33 @@ class Interface:
             legal (a topology carries a mode; the delivery guard keeps only topologies whose
             mode this backend accepts). ``None`` = PERMISSIVE (both modes) — a port that
             declares nothing regresses nothing. Meaningful only for a delivered-parameter port.
-        dtypes: this backend's declared datatype SUPPORT for the port — either a
+            INPUT-only (an OUTPUT port has no exogenous memory realization).
+        accepted_dtypes: the GATE (exogenous) half of the datatype model — this backend's
+            declared datatype SUPPORT for an INPUT port, either a
             :class:`~finn.kernels.engine.datatype_support.DatatypeSupport` (category +
             bitwidth range) or a custom callable ``(dt) -> reason | None``. Compiled by
             ``pool_schema`` into a guarded feasibility predicate (fires only when this
             backend is selected). ``None`` = unconstrained. The union of the pool's declared
             support is what ``can_infer_from`` accepts — a new backend widens it with no op
-            edit.
+            edit. INPUT-only.
+        derived_dtype: the DERIVATION (endogenous) half — a
+            :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` declaring the dtype this
+            backend PRODUCES for an OUTPUT port (the stream-width bitwidth, when it differs
+            from the raw graph dtype — e.g. MVAU's accumulator-as-output under
+            ``noActivation``). Resolved by ``resolve_datatype_spec`` against the point. ``None``
+            = the port carries its graph tensor dtype. OUTPUT-only.
 
-    Datatype DERIVATIONS (value-optimized narrowing, accumulator-as-output) are ALSO
-    backend-scoped, but ride the existing ``Backend.derived`` field: they publish
-    NAME-keyed point values (``outputDataType``/``weightDataType``/``accDataType``) that the
-    rest of the system references by name (``dtype_source``, emit), so a name-keyed derived
-    is their natural home — not a port slot.
+    Direction-exclusivity (``accepted_dtypes``/``mem_modes`` on INPUT only, ``derived_dtype``
+    on OUTPUT only) is enforced at pool assembly by
+    :meth:`~finn.kernels.model.kernel.Kernel._check_port_direction`, where the op schema
+    supplies each port's direction. Internal-register derivations (accumulator, narrowed
+    weight — no port) live on :attr:`Backend.derived_dtypes`, not here.
     """
 
     stream: tuple = ()
     mem_modes: frozenset[str] | None = None
-    dtypes: Any | None = None
+    accepted_dtypes: Any | None = None
+    derived_dtype: Any | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "stream", tuple(self.stream))
@@ -100,7 +109,8 @@ def ports_from(
     *,
     stream: Mapping[str, Any] | None = None,
     mem_modes: Mapping[str, Any] | None = None,
-    dtypes: Mapping[str, Any] | None = None,
+    accepted_dtypes: Mapping[str, Any] | None = None,
+    derived_dtype: Mapping[str, Any] | None = None,
 ) -> dict[str, Interface]:
     """Assemble a ``{iface -> Interface}`` ports map from per-facet maps. An ergonomic
     constructor that keeps SHARED facts (e.g. the pool-wide ``COMPUTE_STREAM`` fold map)
@@ -108,13 +118,15 @@ def ports_from(
     for an interface takes the :class:`Interface` default."""
     stream = stream or {}
     mem_modes = mem_modes or {}
-    dtypes = dtypes or {}
-    names = set(stream) | set(mem_modes) | set(dtypes)
+    accepted_dtypes = accepted_dtypes or {}
+    derived_dtype = derived_dtype or {}
+    names = set(stream) | set(mem_modes) | set(accepted_dtypes) | set(derived_dtype)
     return {
         n: Interface(
             stream=stream.get(n, ()),
             mem_modes=mem_modes.get(n),
-            dtypes=dtypes.get(n),
+            accepted_dtypes=accepted_dtypes.get(n),
+            derived_dtype=derived_dtype.get(n),
         )
         for n in names
     }
@@ -502,8 +514,8 @@ def _wrap_predicates(root_name, pool) -> list[Predicate]:
         for pred in bundle.predicates:
             wrapped.append(_guarded_predicate(root_name, bundle.name, pred))
         for iface, port in bundle.ports.items():
-            if port.dtypes is not None:
-                support_pred = compile_constraint(DatatypeConstraint(iface, port.dtypes))
+            if port.accepted_dtypes is not None:
+                support_pred = compile_constraint(DatatypeConstraint(iface, port.accepted_dtypes))
                 wrapped.append(_guarded_predicate(root_name, bundle.name, support_pred))
     return wrapped
 

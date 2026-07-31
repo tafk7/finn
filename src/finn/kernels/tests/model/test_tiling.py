@@ -270,3 +270,66 @@ def test_width_uses_dtype_source():
     # PE=4 elements * INT16 (from dtype_source "acc"), NOT INT32 (the tensor dtype).
     assert k.get_outstream_width(pt, ctx, 0) == 4 * 16
     assert pt["stream_width.out"] == 4 * 16
+
+
+# ===========================================================================
+# Interface dtype/memory fields — direction-exclusivity enforced at assembly.
+# ===========================================================================
+
+
+def _kernel_with_port(iface_name, direction, **port_kwargs):
+    from finn.kernels.model.backend import Interface
+    from finn.kernels.model.kernel import KernelError
+
+    ifaces = (
+        InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
+    )
+    impl = Backend(
+        name="k",
+        ports={iface_name: Interface(**port_kwargs)},
+    )
+    return Kernel(identity=KernelSchema(name="K", interfaces=ifaces), pool=(impl,))
+
+
+def test_derived_dtype_on_input_port_rejected():
+    from finn.kernels.model.kernel import KernelError
+
+    with pytest.raises(KernelError, match="derived_dtype set on INPUT"):
+        _kernel_with_port("inp", Direction.IN, derived_dtype=DataType["INT8"])
+
+
+def test_accepted_dtypes_on_output_port_rejected():
+    from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
+    from finn.kernels.model.kernel import KernelError
+
+    with pytest.raises(KernelError, match="accepted_dtypes set on OUTPUT"):
+        _kernel_with_port(
+            "out", Direction.OUT, accepted_dtypes=DatatypeSupport(kind=DatatypeKind.INTEGER)
+        )
+
+
+def test_mem_modes_on_output_port_rejected():
+    from finn.kernels.model.kernel import KernelError
+
+    with pytest.raises(KernelError, match="mem_modes set on OUTPUT"):
+        _kernel_with_port("out", Direction.OUT, mem_modes={"embedded"})
+
+
+def test_derived_dtype_on_output_and_accepted_on_input_ok():
+    from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
+    from finn.kernels.model.backend import Interface
+
+    ifaces = (
+        InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
+    )
+    impl = Backend(
+        name="k",
+        ports={
+            "inp": Interface(accepted_dtypes=DatatypeSupport(kind=DatatypeKind.INTEGER)),
+            "out": Interface(derived_dtype=DataType["INT16"]),
+        },
+    )
+    # Constructs without raising — correct-direction facts are legal.
+    Kernel(identity=KernelSchema(name="K", interfaces=ifaces), pool=(impl,))
