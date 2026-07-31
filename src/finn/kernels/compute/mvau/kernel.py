@@ -36,7 +36,7 @@ from __future__ import annotations
 from finn.kernels.engine.axis import predicate_axis
 from finn.kernels.engine.constraints import IsStatic, ShapeRank, ValueNonNeg
 from finn.kernels.engine.derived import Derived
-from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 from finn.kernels.model.param_names import runtime_writeable_key
@@ -140,7 +140,7 @@ def kernel_attrs():
     # Frontend-fixed structural constants: nodeattr-backed scalars that reach the Point (a
     # backend closure reads them at resolve) but are NEVER explored — set once at conversion.
     # Distinct from op_axes (DSE dials) and from delivered parameters (weight/threshold
-    # tensors). See KernelSchema.kernel_attrs for the naming rationale (vs kernel_params).
+    # tensors). See Kernel.kernel_attrs for the naming rationale (vs kernel_params).
     return (
         # ActVal — activation bias; unused on a no-threshold node.
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
@@ -252,15 +252,13 @@ def mvau_kernel() -> Kernel:
     (model/param_contract.py); the getters project from a resolved point via the impl
     ``stream``."""
     return Kernel(
-        identity=KernelSchema(
-            name="MVAU",
-            interfaces=mvau_interfaces(),
-            op_axes=op_axes(),
-            op_derived=op_derived(),
-            op_predicates=op_predicates(),
-            kernel_attrs=kernel_attrs(),
-            constraints=_mvau_constraints(),
-        ),
+        name="MVAU",
+        interfaces=mvau_interfaces(),
+        op_axes=op_axes(),
+        op_derived=op_derived(),
+        op_predicates=op_predicates(),
+        kernel_attrs=kernel_attrs(),
+        constraints=_mvau_constraints(),
         pool=mvau_pool(),
     )
 

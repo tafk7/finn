@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from finn.kernels.engine.axis import fixed_axis
 from finn.kernels.engine.predicate import predicate
-from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -182,12 +182,10 @@ def pool_kernel(
     # the channel (last) axis; the engine derives its dial/range/divisibility/width.
     rank = len(geom.kernel_shape) + 2
     return Kernel(
-        identity=KernelSchema(
-            name="Pool",
-            interfaces=pool_interfaces(has_indices=has_indices, rank=rank),
-            op_axes=pool_design_space(function),
-            op_predicates=pool_predicates(function, geom),
-            cost_model=pool_cost(geom),
-        ),
+        name="Pool",
+        interfaces=pool_interfaces(has_indices=has_indices, rank=rank),
+        op_axes=pool_design_space(function),
+        op_predicates=pool_predicates(function, geom),
+        cost_model=pool_cost(geom),
         pool=(pool_hls_impl(has_indices=has_indices, rank=rank),),
     )

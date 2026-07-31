@@ -109,7 +109,7 @@ class InterfaceSchema:
             backend cannot override (a rank check, a static-initializer requirement). Each
             compiles to a predicate that auto-skips when the port's tensor is absent
             (so an optional port needs no ``has_tensor`` guard). Relational rules that read
-            ANOTHER tensor live on :attr:`KernelSchema.constraints` instead.
+            ANOTHER tensor live on :attr:`Kernel.constraints` instead.
 
         index: the node-slot index WITHIN this interface's direction (0=first input/output).
             The adapter reads ``node.input[index]``/``node.output[index]`` to resolve this
@@ -140,20 +140,18 @@ class InterfaceSchema:
 
 
 @dataclass(frozen=True)
-class KernelSchema:
-    """The Kernel's immutable, ONNX-invariant IDENTITY half — grouped into one named
-    object so the identity ⊥ realization spine is structural in the code, not just
-    conceptual (kernel-layers.md §2).
+class Kernel:
+    """A hardware kernel op: its immutable, ONNX-invariant IDENTITY (name, interfaces,
+    op-level design space, frontend-fixed attrs, rough cost) + a ``pool`` of Backends
+    (realizations). Delivered parameters (weight/threshold delivery, memory) are DERIVED
+    from the pool's ``mem_modes`` declarations, not passed in.
 
-    Holds only what is true regardless of HOW the op is built: its ``name``, its
-    ``interfaces`` (the inter-node communication contract — direction + BLOCK structure),
-    the op-level shared design space (``op_axes``/``op_derived``/``op_predicates`` —
-    folding-independent geometry, datatype rules, legality), and the ``kernel_attrs``
-    (frontend-fixed structural constants), plus a rough op-level ``cost_model`` default.
-    Every field is independently optional: a minimal op declares only ``name`` +
-    ``interfaces`` (the whole space then comes from the pool's tiling).
+    The identity fields are held directly (the identity ⊥ realization split is the
+    field grouping, not a nested wrapper — F10.1 collapsed the former ``KernelSchema``
+    onto ``Kernel``). Every identity field is independently optional: a minimal op declares
+    only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
 
-    ``kernel_attrs`` is a THIRD schema-level category, distinct from ``op_axes`` (the DSE
+    ``kernel_attrs`` is a THIRD design-space category, distinct from ``op_axes`` (the DSE
     dials — SIMD/PE, tiling-engine-generated) and from delivered parameters: a
     ``kernel_attr`` is a nodeattr-backed scalar that reaches the Point (backends read it)
     but is FRONTEND-FIXED — set once at conversion, never a search dial (MVU's ActVal
@@ -171,58 +169,36 @@ class KernelSchema:
     instead; the two homes mirror the identity/backend split (design pitch, Finding 3c).
     Both compile to predicates via :func:`~finn.kernels.engine.constraints.compile_constraint`.
 
-    EXCLUDES the realization half — the pool of Backends and the delivered parameters
-    (weight delivery, memory) are held by the :class:`Kernel` alongside this, never inside
-    it. A ``KernelSchema`` compiles (with the pool) down to the flat resolve
-    :class:`~finn.kernels.engine.schema.Schema` via :meth:`Kernel.schema`."""
+    ``pool`` is the flat list of Backends; each owns its tiling, feasibility, sources, emit.
+    ``delivered_parameters`` is BUILT in ``__post_init__`` by DERIVING from the pool — one
+    :class:`~finn.kernels.model.param_contract.DeliveredParam` (interface +
+    ``parameters_pool(name)``) per interface some backend declares in its ``mem_modes``,
+    each lowered by a
+    :class:`~finn.kernels.model.parameter_source.ParameterSource` into the demand stage +
+    guarded source pool. :meth:`compile` assembles all into the flat resolve
+    :class:`~finn.kernels.engine.design_space.DesignSpace`; :meth:`configure` resolves a
+    point; the getters project from it.
+    """
 
     name: str
     interfaces: tuple[InterfaceSchema, ...]
+    pool: tuple[Backend, ...]
     op_axes: tuple = ()
     op_derived: tuple = ()
     op_predicates: tuple = ()
     kernel_attrs: tuple = ()  # frontend-fixed nodeattr scalars — in the Point, never explored
     constraints: tuple = ()  # kernel-level structural constraints (relational/value rules)
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
-
-    def __post_init__(self):
-        object.__setattr__(self, "interfaces", tuple(self.interfaces))
-        object.__setattr__(self, "kernel_attrs", tuple(self.kernel_attrs))
-        object.__setattr__(self, "constraints", tuple(self.constraints))
-
-
-@dataclass(frozen=True)
-class Kernel:
-    """A hardware kernel op: a :class:`KernelSchema` (identity) + a pool of Backends
-    (realizations). Delivered parameters (weight/threshold delivery, memory) are DERIVED
-    from the pool's ``mem_modes`` declarations, not passed in.
-
-    ``identity`` is the ONNX-invariant half (name, interfaces, op-level axes/derived/
-    predicates, rough cost). ``pool`` is the flat list of Backends; each owns its tiling,
-    feasibility, sources, emit. ``delivered_parameters`` is BUILT in ``__post_init__`` by
-    DERIVING from the pool — one
-    :class:`~finn.kernels.model.param_contract.DeliveredParam` (interface +
-    ``parameters_pool(name)``) per interface some backend declares in its ``mem_modes``,
-    each lowered by a
-    :class:`~finn.kernels.model.parameter_source.ParameterSource` into the demand stage +
-    guarded source pool. :meth:`schema` assembles all into the flat resolve ``Schema``;
-    :meth:`configure` resolves a point; the getters project from it. The identity fields
-    are exposed as read-only properties (``name``/``interfaces``/``op_axes``/… delegate to
-    ``identity``) so callers read them off the Kernel unchanged.
-    """
-
-    identity: KernelSchema
-    pool: tuple[Backend, ...]
     delivered_parameters: tuple = field(default=(), init=False)  # derived from pool mem_modes
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
         object.__setattr__(
-            self.identity,
-            "interfaces",
-            _resolve_interface_indices(self.identity.interfaces),
+            self, "interfaces", _resolve_interface_indices(self.interfaces)
         )
+        object.__setattr__(self, "kernel_attrs", tuple(self.kernel_attrs))
+        object.__setattr__(self, "constraints", tuple(self.constraints))
         self._check_port_direction()
         object.__setattr__(self, "delivered_parameters", self._build_delivered())
         object.__setattr__(self, "_tiling_cache", {})
@@ -273,43 +249,9 @@ class Kernel:
         declared = {iface for b in self.pool for iface in b.mem_modes}
         return tuple(
             DeliveredParam(i.name, pool=parameters_pool(i.name))
-            for i in self.identity.interfaces
+            for i in self.interfaces
             if i.name in declared
         )
-
-    # -- identity passthroughs: read the KernelSchema fields off the Kernel ---
-
-    @property
-    def name(self) -> str:
-        return self.identity.name
-
-    @property
-    def interfaces(self) -> tuple[InterfaceSchema, ...]:
-        return self.identity.interfaces
-
-    @property
-    def op_axes(self) -> tuple:
-        return self.identity.op_axes
-
-    @property
-    def op_derived(self) -> tuple:
-        return self.identity.op_derived
-
-    @property
-    def op_predicates(self) -> tuple:
-        return self.identity.op_predicates
-
-    @property
-    def kernel_attrs(self) -> tuple:
-        return self.identity.kernel_attrs
-
-    @property
-    def constraints(self) -> tuple:
-        return self.identity.constraints
-
-    @property
-    def cost_model(self):
-        return self.identity.cost_model
 
     def _constraint_predicates(self) -> tuple:
         """Every declared constraint compiled to a guard-skipping predicate: the kernel-level

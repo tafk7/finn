@@ -34,7 +34,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import KernelOp, TransformationResult
-from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -92,13 +92,11 @@ def thresholding_kernel() -> Kernel:
     consume thresholds in embedded mode → the delivery resolves to the ``embedded`` topology
     (no memstream cell)."""
     return Kernel(
-        identity=KernelSchema(
-            name="Thresholding",
-            interfaces=thresholding_interfaces(),
-            op_axes=op_axes(),
-            op_derived=op_derived(),
-            op_predicates=op_predicates(),
-        ),
+        name="Thresholding",
+        interfaces=thresholding_interfaces(),
+        op_axes=op_axes(),
+        op_derived=op_derived(),
+        op_predicates=op_predicates(),
         pool=thresholding_pool(),
     )
 

@@ -28,7 +28,7 @@ from finn.kernels.engine.point import Illegal
 from finn.kernels.engine.resolve import resolve
 from finn.kernels.model.backend import Backend, pool_schema, ports_from
 from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
-from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.param_names import (
     EMBEDDED as EMBEDDED_MODE,
     DECOUPLED as DECOUPLED_MODE,
@@ -138,7 +138,8 @@ def _restricted_kernel(mem_modes):
         ),
     )
     return Kernel(
-        identity=KernelSchema(name="MVU", interfaces=ifaces),
+        name="MVU",
+        interfaces=ifaces,
         pool=(backend,),
     )
 

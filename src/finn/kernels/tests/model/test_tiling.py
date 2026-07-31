@@ -24,7 +24,7 @@ from finn.kernels.engine.context import Context
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.point import Illegal, Point
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
+from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import (
     FULL,
@@ -205,7 +205,7 @@ def _mvu_kernel():
     stream = {"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}
     impl = Backend(name="mvu", ports=ports_from(stream=stream))
     return Kernel(
-        identity=KernelSchema(name="MVU", interfaces=MVU_IFACES, op_axes=()),
+        name="MVU", interfaces=MVU_IFACES, op_axes=(),
         pool=(impl,),
     )
 
@@ -261,7 +261,7 @@ def test_width_uses_derived_dtype():
             derived_dtype={"out": DataType["INT16"]},
         ),
     )
-    k = Kernel(identity=KernelSchema(name="K", interfaces=ifaces), pool=(impl,))
+    k = Kernel(name="K", interfaces=ifaces, pool=(impl,))
     ctx = Context(
         shapes={"inp": (1, 128), "out": (1, 64)},
         datatypes={"inp": DataType["INT8"], "out": DataType["INT32"]},
@@ -290,7 +290,7 @@ def _kernel_with_port(iface_name, direction, **port_kwargs):
         name="k",
         ports={iface_name: Interface(**port_kwargs)},
     )
-    return Kernel(identity=KernelSchema(name="K", interfaces=ifaces), pool=(impl,))
+    return Kernel(name="K", interfaces=ifaces, pool=(impl,))
 
 
 def test_derived_dtype_on_input_port_rejected():
@@ -333,4 +333,4 @@ def test_derived_dtype_on_output_and_accepted_on_input_ok():
         },
     )
     # Constructs without raising — correct-direction facts are legal.
-    Kernel(identity=KernelSchema(name="K", interfaces=ifaces), pool=(impl,))
+    Kernel(name="K", interfaces=ifaces, pool=(impl,))
