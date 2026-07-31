@@ -59,6 +59,7 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
 from .backends import (  # noqa: F401  (re-exported public surface)
     COMPUTE_STREAM,
     mvau_dtype_backend,
+    mvau_out_dtype,
 )
 
 logger = logging.getLogger(__name__)

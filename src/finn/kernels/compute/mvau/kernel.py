@@ -95,9 +95,11 @@ def mvau_interfaces():
             "thresholds", Direction.IN, block=[FULL, FULL], optional=True,
             constraints=(ShapeRank(THRESHOLDS, 2),),
         ),
-        # dtype_source: the out stream width uses the derived output type (= accDataType with
-        # no activation), not the raw graph dtype — so stream_width.out matches emit.
-        InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
+        # The out stream width uses the backend-derived output type (= accDataType with no
+        # activation), not the raw graph dtype — declared per-backend as the out port's
+        # ``derived_dtype`` (see ``mvau_out_dtype`` in backends.py), so stream_width.out
+        # matches emit. The op identity declares only the arity/block here.
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
 
 

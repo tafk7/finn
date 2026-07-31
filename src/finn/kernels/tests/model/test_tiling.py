@@ -247,27 +247,28 @@ def test_index_derived_from_position():
     assert k.get_input_datatype(_ctx(), 1) == DataType["INT8"]   # weights
 
 
-def test_width_uses_dtype_source():
+def test_width_uses_derived_dtype():
+    # The out port declares a backend derived_dtype (a fixed INT16 spec); the stream-width
+    # fold reads THAT realized type, not the raw graph out dtype (INT32).
     ifaces = (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
-        InterfaceSchema("out", Direction.OUT, block=[1, FULL], dtype_source="acc"),
+        InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
-    impl = Backend(name="k", ports=ports_from(stream={"inp": [1, "SIMD"], "out": [1, "PE"]}))
-    k = Kernel(
-        identity=KernelSchema(
-            name="K",
-            interfaces=ifaces,
-            op_derived=(Derived("acc", lambda p, ctx: DataType["INT16"]),),
+    impl = Backend(
+        name="k",
+        ports=ports_from(
+            stream={"inp": [1, "SIMD"], "out": [1, "PE"]},
+            derived_dtype={"out": DataType["INT16"]},
         ),
-        pool=(impl,),
     )
+    k = Kernel(identity=KernelSchema(name="K", interfaces=ifaces), pool=(impl,))
     ctx = Context(
         shapes={"inp": (1, 128), "out": (1, 64)},
         datatypes={"inp": DataType["INT8"], "out": DataType["INT32"]},
     )
     pt = k.configure(ctx, {"backend": "k", "SIMD": 16, "PE": 4})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
-    # PE=4 elements * INT16 (from dtype_source "acc"), NOT INT32 (the tensor dtype).
+    # PE=4 elements * INT16 (from derived_dtype), NOT INT32 (the tensor dtype).
     assert k.get_outstream_width(pt, ctx, 0) == 4 * 16
     assert pt["stream_width.out"] == 4 * 16
 

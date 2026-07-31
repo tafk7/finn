@@ -22,7 +22,7 @@ from finn.kernels.model.param_names import DECOUPLED
 
 from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
-from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, WEIGHTS, mvau_dtype_backend
+from .op import COMPUTE_STREAM, MVAU_DSP_SOFTVEC, OUTPUT, WEIGHTS, mvau_dtype_backend, mvau_out_dtype
 from .registry import register
 
 
@@ -55,6 +55,9 @@ def softvec_bundle() -> Backend:
         # any node WITH thresholds, so thresholds never reaches delivery here (no consumes
         # entry needed — an absent interface is permissive, and the gate is the real rejecter).
         ports=ports_from(
-            stream=COMPUTE_STREAM, mem_modes={WEIGHTS: {DECOUPLED}}, accepted_dtypes=RTL_MVU_SUPPORT
+            stream=COMPUTE_STREAM,
+            mem_modes={WEIGHTS: {DECOUPLED}},
+            accepted_dtypes=RTL_MVU_SUPPORT,
+            derived_dtype={OUTPUT: mvau_out_dtype()},
         ),
     )

@@ -56,7 +56,7 @@ def thresholding_interfaces():
     return (
         InterfaceSchema(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, NumChannels)
         InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
-        InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL], dtype_source="outputDataType"),
+        InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL]),
     )
 
 

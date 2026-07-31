@@ -99,6 +99,15 @@ def _output_datatype(p, ctx):
     return ctx.tensor_datatype(OUTPUT)
 
 
+def mvau_out_dtype():
+    """The out port's produced-dtype :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec`
+    — the ``_output_datatype`` callable (accumulator under ``noActivation``, else the graph
+    output dtype). Declared on each backend's ``out`` port ``derived_dtype`` so the stream-
+    width fold reads the realized output type. Backend-scoped: a future float core supplies a
+    different rule."""
+    return _output_datatype
+
+
 def mvau_dtype_backend():
     """The BACKEND-SCOPED datatype derivations (base:469-549) —
     accDataType/weightDataType/outputDataType. Composed by each backend rather than declared

@@ -79,11 +79,6 @@ class InterfaceSchema:
             conv window). NO reduce/free tag — reduction is emergent from the math, not
             declared (matches brainsmith's block_tiling). The impl's ``stream[name][i]``
             folds ``block[i]``, positionally.
-        dtype_source: the point key whose DataType supplies this interface's stream-width
-            bitwidth, when it differs from the raw tensor dtype. MVAU's ``out`` sets
-            ``"outputDataType"`` (= the accumulator type under ``noActivation``). None ⇒
-            the tensor dtype.
-
         optional: whether this is an OPTIONAL node input (0-or-1). An ONNX-invariant
             identity fact (like ``direction``) — the opset says the slot may be absent (MVU
             thresholds, a bias, MaxPool indices). Its PRESENCE for a given node is EMERGENT
@@ -107,7 +102,6 @@ class InterfaceSchema:
     name: str
     direction: "Direction"
     block: tuple = ()
-    dtype_source: str | None = None
     optional: bool = False
     constraints: tuple = ()
 
@@ -309,7 +303,8 @@ class Kernel:
         cache = self._tiling_cache
         got = cache.get(impl.name)
         if got is None:
-            got = generate_tiling(self.interfaces, dict(impl.stream))
+            dtypes = {n: p.derived_dtype for n, p in impl.ports.items()}
+            got = generate_tiling(self.interfaces, dict(impl.stream), dtypes)
             cache[impl.name] = got
         return got
 
@@ -547,12 +542,18 @@ class Kernel:
         if key in point:
             return int(point[key])
         # No generated width derived (impl declares no stream for this interface): the
-        # stream is one element/cycle at the interface's dtype.
+        # stream is one element/cycle at the interface's realized dtype — the selected
+        # backend's declared derived_dtype spec (absent ⇒ the raw graph tensor dtype).
+        from ..engine.datatype_spec import resolve_datatype_spec
+
         elems = self._stream_elems(iface, point)
-        if iface.dtype_source is not None:
-            dt = point[iface.dtype_source]
-        else:
-            dt = context.tensor_datatype(iface.tensor)
+        spec = self._selected(point).ports.get(iface.name)
+        dt = resolve_datatype_spec(
+            spec.derived_dtype if spec is not None else None,
+            iface=iface.tensor,
+            point=point,
+            context=context,
+        )
         return elems * dt.bitwidth()
 
     def _folds_reshape(self, iface: InterfaceSchema, point: Point) -> bool:

@@ -326,14 +326,16 @@ class GeneratedTiling:
     reshapes: dict[str, bool]
 
 
-def generate_tiling(interfaces, stream: dict) -> GeneratedTiling:
+def generate_tiling(interfaces, stream: dict, derived_dtypes: dict | None = None) -> GeneratedTiling:
     """Derive design-space fragments + the fold map from one Backend's ``stream``
     map joined against the op ``interfaces`` block structure.
 
     ``interfaces`` is the Kernel's interface tuple — each carries the op-owned ``block``
     (extents per tensor dim). ``stream`` is ``{interface_name: [StreamFold, ...]}`` —
     positional over the SAME dims: ``stream[iface][i]`` folds ``block[iface][i]``.
-    Generates, for insertion into the schema:
+    ``derived_dtypes`` is ``{interface_name: DatatypeSpec}`` — the selected backend's
+    per-OUTPUT-port produced dtype (:attr:`Backend.Interface.derived_dtype`); an interface
+    absent (or ``None``) folds its raw graph dtype. Generates, for insertion into the schema:
 
       * a ``divisor_axis`` per fold DIAL — domain = divisors(GCD of every BLOCK extent the
         dial folds, across interfaces). Only bare-dial folds source a range; an int width
@@ -413,10 +415,17 @@ def generate_tiling(interfaces, stream: dict) -> GeneratedTiling:
     # There is no "which one is THE instream/outstream" decision — the singular-stream
     # assumption (and its role filter + ``len==1`` guard) is dissolved, not relocated
     # (resolution-phases.md §4). Emit and the getter both read the per-interface key.
+    derived_dtypes = derived_dtypes or {}
     derived: list = []
     for iface_name in stream:
         if iface_name in width_exprs:
-            derived.append(_width_derived(by_name[iface_name], width_exprs[iface_name]))
+            derived.append(
+                _width_derived(
+                    by_name[iface_name],
+                    width_exprs[iface_name],
+                    derived_dtypes.get(iface_name),
+                )
+            )
 
     return GeneratedTiling(
         axes=tuple(axes),
@@ -479,22 +488,21 @@ def stream_width_key(iface_name: str) -> str:
     return f"stream_width.{iface_name}"
 
 
-def _width_derived(iface, width_expr: TileExpr):
-    """A per-interface stream-width ``Derived`` = fold_width * bitwidth(dtype_source), keyed
-    ``stream_width.<iface>``. The dtype is the interface's declared ``dtype_source`` (a
-    derived name, e.g. ``outputDataType``) when set AND published by the selected backend,
-    else the raw tensor dtype. The fallback matters now that ``outputDataType`` is
-    backend-scoped: a backend that does not publish a realized output dtype (absent or None
-    on the point) folds the raw graph dtype rather than crashing."""
+def _width_derived(iface, width_expr: TileExpr, derived_dtype=None):
+    """A per-interface stream-width ``Derived`` = fold_width * bitwidth(dtype), keyed
+    ``stream_width.<iface>``. The dtype is the selected backend's declared ``derived_dtype``
+    :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` for this port (resolved against
+    the point), or the raw graph tensor dtype when the backend declares none (``None``). The
+    spec resolves independently of any other point key, so the width derived no longer
+    couples to resolve ordering vs a ``dtype_source`` derived's presence."""
     from ..engine.derived import Derived
+    from ..engine.datatype_spec import resolve_datatype_spec
 
-    dtype_source = getattr(iface, "dtype_source", None)
-
-    def compute(point, context, _expr=width_expr, _iface=iface, _src=dtype_source):
+    def compute(point, context, _expr=width_expr, _iface=iface, _spec=derived_dtype):
         elems = _expr.eval(point)
-        dt = point.get(_src) if _src is not None else None
-        if dt is None:
-            dt = context.tensor_datatype(_iface.tensor)
+        dt = resolve_datatype_spec(
+            _spec, iface=_iface.tensor, point=point, context=context
+        )
         return int(elems) * dt.bitwidth()
 
     return Derived(stream_width_key(iface.name), compute)
