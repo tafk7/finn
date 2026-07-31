@@ -27,9 +27,8 @@ from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
+from finn.kernels.ir import KernelOp, TransformationResult
 from finn.kernels.engine.point import Illegal  # noqa: F401  (kept available for callers/tests)
-from finn.kernels.model.ports import Role
 from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
 
 # The kernel DEFINITION — re-exported so `from .op import X` keeps working for the impl
@@ -69,21 +68,9 @@ logger = logging.getLogger(__name__)
 # FINN WRAPPER — MvauKernelOp(KernelOp): how FINN's build flow sees this kernel.
 # =============================================================================
 #
-# Binds the kernel to a FINN node: ports mapping the graph's tensor slots (activation in,
-# weights in, optional thresholds in, activation out) to the kernel's interfaces. The real
-# compute impl is chosen by the ``backend`` nodeattr, not the domain
-# (consumer-surface-model.md R11).
-
-_PORTS = (
-    PortSpec(iface="inp", direction="in", index=0, role=Role.DATA_IN),
-    PortSpec(iface="weights", direction="in", index=1, role=Role.WEIGHT_SINK),
-    # thresholds — the OPTIONAL 3rd input (a 3-input fused MVU). WEIGHT_SINK: a parameter the
-    # kernel consumes internally (always baked/constant here). Skipped by the adapter when the
-    # node omits the slot (a 2-input node), so its Context tensor is absent — the emergent
-    # existence that supersedes noActivation.
-    PortSpec(iface="thresholds", direction="in", index=2, role=Role.WEIGHT_SINK, optional=True),
-    PortSpec(iface="out", direction="out", index=0, role=Role.DATA_OUT),
-)
+# The interface↔node-slot binding is the kernel's own interface list (inp=0, weights=1,
+# optional thresholds=2, out=0 — declaration order). The real compute impl is chosen by the
+# ``backend`` nodeattr, not the domain (consumer-surface-model.md R11).
 
 
 class MvauKernelOp(KernelOp):
@@ -208,9 +195,6 @@ class MvauKernelOp(KernelOp):
     @classmethod
     def kernel(cls):
         return mvau_kernel()
-
-    def ports(self) -> tuple[PortSpec, ...]:
-        return _PORTS
 
     def _output_datatype_from_point(self, kernel, ctx, point, index):
         # MVAU's output dtype is the out port's derived_dtype spec: the graph dtype when the

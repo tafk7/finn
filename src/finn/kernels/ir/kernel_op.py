@@ -52,7 +52,8 @@ from onnx import NodeProto
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import Illegal
-from finn.kernels.model.ports import Role
+from finn.kernels.model.kernel import InterfaceSchema
+from finn.kernels.model.ports import Direction
 from .nodeattr_registry import axis_nodeattr_types
 
 
@@ -74,33 +75,14 @@ class TransformationResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class PortSpec:
-    """Binds one of the kernel's interfaces to a FINN port index + node tensor slot.
-
-    Attributes:
-        iface: the Kernel interface name (== its Context tensor key, e.g. "inp").
-        direction: "in" or "out" — which side of the node this port is on.
-        index: the FINN port index within that direction (0=activation, 1=weights).
-        role: the port-taxonomy Role (which ports are params vs dataflow edges).
-        optional: whether the node may omit this input slot (an OPTIONAL operand, e.g. MVU
-            thresholds — the emergent-existence interface, ``InterfaceSchema.optional``). When the
-            node does not wire the slot, the adapter SKIPS the port everywhere (no Context
-            tensor), so the kernel sees the interface as absent.
-    """
-
-    iface: str
-    direction: str
-    index: int
-    role: Role
-    optional: bool = False
-
-
 class KernelOp(HWCustomOp):
     """Base FINN adapter over a :class:`~finn.kernels.model.kernel.Kernel`.
 
-    Subclasses implement :meth:`kernel` (the design-space object) and :meth:`ports`
-    (the interface↔port binding). Everything else — the nodeattr registry, the
+    Subclasses implement only :meth:`kernel` (the design-space object). The
+    interface↔node-slot binding is the kernel's own
+    :class:`~finn.kernels.model.kernel.InterfaceSchema` list (name + direction + index +
+    optional) — the adapter iterates ``self.kernel().interfaces`` directly, so there is no
+    second binding object to keep in sync (F9). Everything else — the nodeattr registry, the
     Context bridge, and all the HWCustomOp getters — is derived generically here.
     """
 
@@ -121,11 +103,6 @@ class KernelOp(HWCustomOp):
         (``kernel_hw_language``) can reach the pool via the op class without
         instantiating the op."""
         raise NotImplementedError(f"{cls.__name__}.kernel()")
-
-    @abstractmethod
-    def ports(self) -> tuple[PortSpec, ...]:
-        """The interface↔FINN-port binding for this op."""
-        raise NotImplementedError(f"{type(self).__name__}.ports()")
 
     # -- nodeattr schema ----------------------------------------------------
 
@@ -176,17 +153,17 @@ class KernelOp(HWCustomOp):
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict = {}
         initializers: dict[str, np.ndarray] = {}
-        for port in self.ports():
-            tname = self._tensor_name(port)
+        for iface in self.kernel().interfaces:
+            tname = self._tensor_name(iface)
             if tname is None:
                 continue  # optional operand not wired on this node
             if tname in graph_ctx.shapes:
-                shapes[port.iface] = graph_ctx.shapes[tname]
+                shapes[iface.name] = graph_ctx.shapes[tname]
             if tname in graph_ctx.datatypes:
-                datatypes[port.iface] = graph_ctx.datatypes[tname]
+                datatypes[iface.name] = graph_ctx.datatypes[tname]
             init = graph_ctx.initializer(tname)
             if init is not None:
-                initializers[port.iface] = init
+                initializers[iface.name] = init
         ctx = Context(
             shapes=shapes,
             datatypes=datatypes,
@@ -322,10 +299,10 @@ class KernelOp(HWCustomOp):
         self.attach_model(model)
         if is_specialized(self.onnx_node):
             kernel, ctx, result = self._point()
-            for port in self.ports():
-                if port.direction == "out":
-                    odt = self._output_datatype_from_point(kernel, ctx, result, port.index)
-                    out_name = self.onnx_node.output[port.index]
+            for iface in kernel.interfaces:
+                if iface.direction == Direction.OUT:
+                    odt = self._output_datatype_from_point(kernel, ctx, result, iface.index)
+                    out_name = self.onnx_node.output[iface.index]
                     if out_name:
                         model.set_tensor_datatype(out_name, odt)
         else:
@@ -334,10 +311,10 @@ class KernelOp(HWCustomOp):
             # value; specialization later refines it.
             kernel = self.kernel()
             ctx = self._context()
-            for port in self.ports():
-                if port.direction == "out":
-                    odt = kernel.get_output_datatype(ctx, port.index)
-                    out_name = self.onnx_node.output[port.index]
+            for iface in kernel.interfaces:
+                if iface.direction == Direction.OUT:
+                    odt = kernel.get_output_datatype(ctx, iface.index)
+                    out_name = self.onnx_node.output[iface.index]
                     if out_name:
                         model.set_tensor_datatype(out_name, odt)
 
@@ -362,12 +339,14 @@ class KernelOp(HWCustomOp):
 
     # -- helpers ------------------------------------------------------------
 
-    def _tensor_name(self, port: PortSpec) -> str | None:
-        """The node tensor name bound to ``port``, or None when the slot is not wired — an
+    def _tensor_name(self, iface: InterfaceSchema) -> str | None:
+        """The node tensor name bound to ``iface``, or None when the slot is not wired — an
         OPTIONAL operand the node omitted (a shorter input list, or an empty-string slot).
-        Callers skip a None-tensor port so an absent optional operand contributes nothing."""
-        slot = self.onnx_node.input if port.direction == "in" else self.onnx_node.output
-        if port.index >= len(slot):
+        Callers skip a None-tensor interface so an absent optional operand contributes nothing.
+        Reads ``node.input[index]``/``node.output[index]`` — the interface's own direction +
+        index (F9: the binding lives on the interface, not a separate PortSpec)."""
+        slot = self.onnx_node.input if iface.direction == Direction.IN else self.onnx_node.output
+        if iface.index >= len(slot):
             return None
-        name = slot[port.index]
+        name = slot[iface.index]
         return name if name else None

@@ -9,7 +9,7 @@
 machinery.
 
 ``kernel_op.py``          the base op — the nodeattr↔Context bridge + HWCustomOp getters,
-                          plus ``PortSpec`` and the ``TransformationResult`` infer contract.
+                          plus the ``TransformationResult`` infer contract.
 ``nodeattr_registry.py``  schema-axes → FINN nodeattr types (the R12 dissolution).
 ``routing.py``            taxonomy routing (``is_specialized``/``kernel_hw_language``) — a
                           FINN-integration classifier that stays IN the kernel package.
@@ -18,12 +18,11 @@ The concrete per-op wrappers (``MvauKernelOp`` …) live WITH their kernel defin
 ``compute/``; this package is the shared IR infrastructure only.
 """
 
-from .kernel_op import KernelOp, PortSpec, TransformationResult
+from .kernel_op import KernelOp, TransformationResult
 from .routing import is_specialized, kernel_hw_language
 
 __all__ = [
     "KernelOp",
-    "PortSpec",
     "TransformationResult",
     "is_specialized",
     "kernel_hw_language",

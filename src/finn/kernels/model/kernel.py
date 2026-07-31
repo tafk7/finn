@@ -50,6 +50,22 @@ class KernelError(ValueError):
     request on a non-last-axis PARAM port, or a stream dial that does not divide)."""
 
 
+def _resolve_interface_indices(interfaces):
+    """Resolve each interface's ``index`` sentinel (``-1``) to its declaration-order position
+    among same-direction peers, leaving any explicitly-set index untouched. Called once at
+    ``Kernel`` construction so ``iface.index`` is always a concrete node-slot index the
+    adapter can read (the index-authoritative-at-the-ONNX-boundary rule, F9)."""
+    from dataclasses import replace
+
+    counters: dict = {}
+    out = []
+    for iface in interfaces:
+        pos = counters.get(iface.direction, 0)
+        counters[iface.direction] = pos + 1
+        out.append(iface if iface.index >= 0 else replace(iface, index=pos))
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class InterfaceSchema:
     """One op-side interface — identity + DIRECTION + BLOCK structure (the math), NOT stream.
@@ -95,8 +111,15 @@ class InterfaceSchema:
             (so an optional port needs no ``has_tensor`` guard). Relational rules that read
             ANOTHER tensor live on :attr:`KernelSchema.constraints` instead.
 
-    ``index`` is DERIVED, not stored: position among same-direction peers in the kernel's
-    interface list (0=first, 1=…).
+        index: the node-slot index WITHIN this interface's direction (0=first input/output).
+            The adapter reads ``node.input[index]``/``node.output[index]`` to resolve this
+            interface's Context tensor — the index-authoritative-at-the-ONNX-boundary fact
+            (F9). Defaults to the sentinel ``-1`` = "declaration order among same-direction
+            peers", resolved to a concrete positional index at ``Kernel`` construction
+            (:func:`_resolve_interface_indices`). An op
+            with a non-declaration-order wiring (an operand at a shifted slot) sets it
+            explicitly. Replaces the old ``PortSpec.index`` — one interface object now carries
+            name/direction/index/optional, so the op no longer restates the binding.
     """
 
     name: str
@@ -104,6 +127,7 @@ class InterfaceSchema:
     block: tuple = ()
     optional: bool = False
     constraints: tuple = ()
+    index: int = -1
 
     def __post_init__(self):
         object.__setattr__(self, "block", tuple(self.block))
@@ -194,6 +218,11 @@ class Kernel:
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
+        object.__setattr__(
+            self.identity,
+            "interfaces",
+            _resolve_interface_indices(self.identity.interfaces),
+        )
         self._check_port_direction()
         object.__setattr__(self, "delivered_parameters", self._build_delivered())
         object.__setattr__(self, "_tiling_cache", {})

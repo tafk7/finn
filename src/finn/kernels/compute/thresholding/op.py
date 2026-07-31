@@ -33,9 +33,9 @@ from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.kernels.ir import KernelOp, PortSpec, TransformationResult
+from finn.kernels.ir import KernelOp, TransformationResult
 from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelSchema
-from finn.kernels.model.ports import Direction, Role
+from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
 from .names import INPUT, OUTPUT, THRESHOLDING_HLS, THRESHOLDING_RTL, THRESHOLDS  # noqa: F401
@@ -112,13 +112,9 @@ def thresholding_kernel_schema():
 # =============================================================================
 # FINN WRAPPER — ThresholdingKernelOp(KernelOp): how FINN's build flow sees this kernel.
 # =============================================================================
-
-_PORTS = (
-    PortSpec(iface=INPUT, direction="in", index=0, role=Role.DATA_IN),
-    # thresholds — the parameter the kernel consumes internally (baked/constant here).
-    PortSpec(iface=THRESHOLDS, direction="in", index=1, role=Role.WEIGHT_SINK),
-    PortSpec(iface=OUTPUT, direction="out", index=0, role=Role.DATA_OUT),
-)
+#
+# The interface↔node-slot binding is the kernel's own interface list (inp=0, thresholds=1,
+# out=0 — declaration order); no separate PortSpec (F9).
 
 
 class ThresholdingKernelOp(KernelOp):
@@ -186,9 +182,6 @@ class ThresholdingKernelOp(KernelOp):
     @classmethod
     def kernel(cls):
         return thresholding_kernel()
-
-    def ports(self) -> tuple[PortSpec, ...]:
-        return _PORTS
 
     def get_folding_axes(self):
         """PE folds the channel dim NumChannels (the threshold tensor's leading extent),
