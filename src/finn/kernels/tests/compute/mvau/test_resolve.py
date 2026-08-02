@@ -580,6 +580,15 @@ def test_has_feasible_point_true_for_int_false_for_float():
     assert k.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is False
 
 
+def test_first_feasible_backend_names_first_pool_member_or_none():
+    # The SELECTION query behind PerNodePolicy(first_feasible): pool order is precedence, so
+    # the integer node selects the first member (mvau_hls); a float node has no feasible
+    # backend and returns None. has_feasible_point is the boolean over this same query.
+    k = mvau_kernel()
+    assert k.first_feasible_backend(_feas_ctx(idt="INT8", wdt="INT8")) == "mvau_hls"
+    assert k.first_feasible_backend(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is None
+
+
 def test_can_infer_from_rejects_float_matmul_for_no_feasible_backend(caplog):
     with caplog.at_level(logging.INFO):
         claimed = MvauKernelOp.can_infer_from(

@@ -370,17 +370,18 @@ class Kernel:
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
         return resolve(self.compile(), context, assignment)
 
-    def has_feasible_point(self, context: Context) -> bool:
-        """Whether ANY pool member yields a legal :class:`Point` for this Context — the
-        POOL-FEASIBILITY query (F2). Trials each backend with only its ``implementation``
-        pinned (unpinned folding axes take defaults — the specialized-at-default-fold
-        semantics); True if at least one resolves. Reuses the engine ``resolve`` unchanged.
+    def first_feasible_backend(self, context: Context) -> str | None:
+        """The NAME of the first pool member (declaration order) that yields a legal
+        :class:`Point` for this Context, or ``None`` if none does — the SELECTION query behind
+        ``PerNodePolicy(first_feasible)`` (Seam B). Trials each backend with only its
+        ``backend`` axis pinned (unpinned folding axes take defaults — the
+        specialized-at-default-fold semantics), returning the first that resolves. Reuses the
+        engine ``resolve`` unchanged.
 
-        This is the SAME query resolve's ``PerNodePolicy(first_feasible)`` selector will use,
-        so infer's claim check and resolve's selection converge. A node whose datatypes
-        disqualify it from EVERY backend (e.g. float32 where only integer is feasible) has no
-        feasible point, so ``can_infer_from`` can delegate to this rather than encoding a
-        backend fact in the frontend."""
+        This is the SAME per-backend trial :meth:`has_feasible_point` runs, so infer's claim
+        check (the boolean) and resolve's selection (the name) converge on ONE query — pool
+        order IS selection precedence. A node whose datatypes disqualify it from EVERY backend
+        (e.g. float32 where only integer is feasible) returns ``None``."""
         schema = self.compile()
         for impl in self.pool:
             try:
@@ -395,8 +396,17 @@ class Kernel:
                 # A backend that IS feasible resolves cleanly; the pool needs only ONE.
                 continue
             if isinstance(result, Point):
-                return True
-        return False
+                return impl.name
+        return None
+
+    def has_feasible_point(self, context: Context) -> bool:
+        """Whether ANY pool member yields a legal :class:`Point` for this Context — the
+        POOL-FEASIBILITY query (F2). A thin boolean over
+        :meth:`first_feasible_backend` (same trial loop; ``can_infer_from`` wants only the
+        yes/no, Seam B's selector wants the name). A node whose datatypes disqualify it from
+        EVERY backend has no feasible point, so ``can_infer_from`` can delegate to this rather
+        than encoding a backend fact in the frontend."""
+        return self.first_feasible_backend(context) is not None
 
     def op_space(self) -> DesignSpace:
         """The op-level, impl-INDEPENDENT subschema: the identity's shared axes/derived/

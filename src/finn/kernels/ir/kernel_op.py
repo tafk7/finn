@@ -12,7 +12,7 @@ answer FINN's ``HWCustomOp`` contract.
 The engine (``space/``) is pure and graph-free: its getters take a :class:`Context`
 (shapes/datatypes/VALUES as data) and a resolved :class:`Point`. This adapter sources that
 Context from the **live model**, following the ONNX ownership rule: a node owns ONLY its
-own internals (the design axes ``implementation``/PE/SIMD/…), never graph-owned facts
+own internals (the design axes ``backend``/PE/SIMD/…), never graph-owned facts
 (tensor shapes, datatypes, weight values). Those come from the model at construction, not
 from baked ``<iface>_shape``/``<iface>_dtype`` nodeattrs (which would be a second, staling
 source of truth). The op is built model-bearing via ``model.get_customop_wrapper(node)``
@@ -35,9 +35,10 @@ placeholder. Full-fleet ``getCustomOp(node)`` → ``get_customop_wrapper(node)``
 (threading the model into every transient op) is deferred; the estimate-tier sites and tests
 construct via ``model.get_customop_wrapper(node)``.
 
-Specialization is by the ``implementation`` nodeattr (mapping onto the engine's
-``implementation`` selection axis), NOT by FINN's domain mutation — one KernelOp class
-serves every compute impl (consumer-surface-model.md R11).
+Specialization is by the ``backend`` nodeattr (mapping onto the engine's ``backend``
+selection axis — the root axis whose value names the selected :class:`Backend` pool member),
+NOT by FINN's domain mutation — one KernelOp class serves every compute impl
+(consumer-surface-model.md R11).
 """
 
 from __future__ import annotations
@@ -199,7 +200,7 @@ class KernelOp(HWCustomOp):
         """Resolve the current node config into a Point, raising on Illegal.
 
         Impl-DEPENDENT: requires a committed backend. An unspecialized node
-        (``implementation`` unset — the "" sentinel) has no legal full point, so raise a
+        (``backend`` unset — the "" sentinel) has no legal full point, so raise a
         LEGIBLE "unspecialized" error rather than a bare Illegal-ValueError (F1). Callers
         needing only impl-INDEPENDENT facts (normal shape/dtype, output-dtype publication)
         use the context-only getters or :meth:`_op_point`."""
@@ -208,7 +209,7 @@ class KernelOp(HWCustomOp):
         if not is_specialized(self.onnx_node):
             raise ValueError(
                 f"{self.onnx_node.name}: impl-dependent getter needs a committed backend, "
-                f"but `implementation` is unset (node is unspecialized). Specialize it "
+                f"but `backend` is unset (node is unspecialized). Specialize it "
                 f"(Seam B) before folded-shape/width/cycle queries."
             )
         kernel = self.kernel()
@@ -237,6 +238,17 @@ class KernelOp(HWCustomOp):
                 f"{'; '.join(result.reasons)}"
             )
         return kernel, ctx, result
+
+    def first_feasible_backend(self) -> str | None:
+        """The name of the first pool member feasible for this node's live Context, or ``None``
+        — the model-aware bridge behind ``SpecializeKernels``' ``PerNodePolicy(first_feasible)``
+        (Seam B). Sources the live Context (real weight VALUES, so value-derived feasibility is
+        exact) and delegates to :meth:`Kernel.first_feasible_backend`.
+
+        The resolve-time counterpart to infer-time ``can_infer_from`` (``compute/mvau/op.py``),
+        which trials a bare-node ``_trial_context`` because the node is still a frontend op;
+        here the node IS a kernel node, so the model-attached ``_context()`` is in hand."""
+        return self.kernel().first_feasible_backend(self._context())
 
     # -- Tier-3 getters: shapes / widths / datatypes ------------------------
 

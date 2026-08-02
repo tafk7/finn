@@ -671,6 +671,18 @@ def step_specialize_layers(model: ModelWrapper, cfg: DataflowBuildConfig):
     which contains the desired setting. If the user preference cannot be fulfilled,
     a warning will be printed and the implementation style will be set to a default."""
 
+    # Kernel-substrate specialization runs FIRST (handoff Seam B): SpecializeKernels commits
+    # the `backend` axis on finn.kernels nodes (selection as data, via a Policy) before FINN's
+    # classic SpecializeLayers, which is domain-gated to finn.custom_op.fpgadataflow and so
+    # sees only the classic remainder. Mirrors the InferKernels injection in step_convert_to_hw.
+    from finn.transformation.fpgadataflow.specialize_kernels import (
+        PerNodePolicy,
+        SpecializeKernels,
+        first_feasible,
+    )
+
+    model = model.transform(SpecializeKernels(PerNodePolicy(first_feasible)))
+
     if cfg.specialize_layers_config_file is not None:
         model = model.transform(GiveUniqueNodeNames())
         model = model.transform(ApplyConfig(cfg.specialize_layers_config_file))
