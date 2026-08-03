@@ -17,12 +17,13 @@ identity — parked here rather than in ``kernel.py`` so the identity file stays
   the BLOCK. The three built-in cores fold identically, so the map lives once here; a core
   that tiled differently would compose its own.
 - ``mvau_out_dtype`` / ``mvau_register_dtypes`` — the value-dependent datatype derivations
-  (outputDataType on the out PORT; accDataType/weightDataType as internal REGISTERS). Which
-  datatypes exist and how they are value-optimized is a realization fact (design-space-model
-  §6 / MOTIVATION §2.2), so each core declares these on its port ``derived_dtype`` +
+  (outputDataType on the out PORT; accDataType as an internal REGISTER). Which datatypes
+  exist and how they are value-optimized is a realization fact (design-space-model §6 /
+  MOTIVATION §2.2), so each core declares these on its port ``derived_dtype`` +
   ``derived_dtypes`` rather than the op declaring them — all one ``DatatypeSpec`` vocabulary.
   Identical across the three cores today; a future float core diverges by supplying different
-  specs.
+  specs. The narrowed WEIGHT dtype is NOT here: it belongs to the storage OWNER, which
+  publishes it as ``parameters.<iface>.storageDataType`` (a ``StorageDescriptor``).
 
 Depends only on the identity's tensor-name constants + ``weights_may_change`` (imported from
 ``kernel.py``) — a one-directional edge, no cycle. The impl bundles import these via ``op.py``.
@@ -31,7 +32,6 @@ Depends only on the identity's tensor-name constants + ``weights_may_change`` (i
 from __future__ import annotations
 
 import numpy as np
-from qonnx.core.datatype import DataType
 from qonnx.util.basic import calculate_matvec_accumulator_range
 
 from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
@@ -54,7 +54,7 @@ COMPUTE_STREAM = {
 
 
 # =============================================================================
-# DATATYPE CONTRACT — accDataType/weightDataType/outputDataType (base:469-549). Data-dependent:
+# DATATYPE CONTRACT — accDataType/outputDataType (base:469-527). Data-dependent:
 # actual weight VALUES when static, worst-case bounds otherwise, gated by weights_may_change.
 # =============================================================================
 
@@ -78,19 +78,6 @@ def _acc_datatype(p, ctx):
     return smallest_datatype_for_range(float(acc_min), float(acc_max))
 
 
-def _weight_datatype(p, ctx):
-    # base:529-549 — VALUE_OPTIMIZED narrow, only when weights are statically known.
-    weights = ctx.initializer(WEIGHTS)
-    if weights is None or weights_may_change(p):
-        return ctx.tensor_datatype(WEIGHTS)
-    w_min = float(weights.min())
-    w_max = float(weights.max())
-    if w_min < 0:
-        extreme = w_min if abs(w_min) > w_max else -w_max - 1
-        return DataType.get_smallest_possible(extreme)
-    return DataType.get_smallest_possible(w_max)
-
-
 def _output_datatype(p, ctx):
     # base:517 — outputDataType = accDataType when there is NO activation (output IS the
     # accumulator), else the graph output dtype (the thresholds map the accumulator down).
@@ -110,15 +97,19 @@ def mvau_out_dtype():
 
 
 def mvau_register_dtypes():
-    """The BACKEND-SCOPED internal-register dtype specs (base:469-549) —
-    ``{accDataType, weightDataType}``, each a
+    """The BACKEND-SCOPED internal-register dtype specs (base:469-527) — ``{accDataType}``, a
     :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` callable. Declared on each
     compute backend's :attr:`~finn.kernels.model.backend.Backend.derived_dtypes` (no port —
-    these are internal registers), so ``pool_space`` merges them onto the point under their
-    names (emit reads ``point.accDataType`` unchanged). All three MVAU cores narrow
-    IDENTICALLY today; a future core diverges by supplying different specs. The out-port's
-    ``outputDataType`` is the sibling ``derived_dtype`` on the port (:func:`mvau_out_dtype`)."""
+    an internal register), so ``pool_space`` merges it onto the point under its name (emit
+    reads ``point.accDataType`` unchanged). All three MVAU cores narrow IDENTICALLY today; a
+    future core diverges by supplying different specs. The out-port's ``outputDataType`` is
+    the sibling ``derived_dtype`` on the port (:func:`mvau_out_dtype`).
+
+    The narrowed WEIGHT dtype is no longer a compute register: the storage OWNER publishes it
+    as ``parameters.<iface>.storageDataType`` (:class:`~finn.kernels.engine.storage_descriptor.StorageDescriptor`),
+    since datatype authority belongs to whoever owns the values at rest. Weight serialization
+    reads the graph dtype directly (HLS ``context.tensor_datatype(WEIGHTS)``, RTL
+    ``point.narrow_weights``), so there was never a runtime reader of the old register."""
     return {
         "accDataType": _acc_datatype,
-        "weightDataType": _weight_datatype,
     }

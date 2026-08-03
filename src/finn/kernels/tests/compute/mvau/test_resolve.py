@@ -210,7 +210,7 @@ def test_dsp_primitive_forced_from_fpgapart(schema):
 
 def test_forced_and_derived_names_are_not_axes(schema):
     axis_names = schema.axis_names
-    for name in ("dsp_primitive", "accDataType", "weightDataType", "language", "SEGMENTLEN"):
+    for name in ("dsp_primitive", "accDataType", "language", "SEGMENTLEN"):
         assert name not in axis_names, f"{name} must be Derived, not an Axis"
 
 
