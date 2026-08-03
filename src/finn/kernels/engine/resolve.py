@@ -63,8 +63,8 @@ def resolve(schema: DesignSpace, context: Context, assignment: Mapping | None = 
 
         point[axis.name] = val
 
-    # 2. Derived, computed after every axis is fixed.
-    for d in schema.derived:
+    # 2. Derived, in dependency order (a derived may read another derived).
+    for d in schema.ordered_derived():
         point[d.name] = d.compute(_view(point), context)
 
     # 3. Predicates: collect every reason (None == legal).

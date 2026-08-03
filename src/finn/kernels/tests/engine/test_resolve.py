@@ -175,6 +175,36 @@ def test_derived_reads_context():
     assert r.part == "xcvc1902"
 
 
+def test_derived_depends_on_derived_resolves_in_order():
+    """A1: a derived declaring a dep on another derived resolves AFTER it, even when
+    list order is reversed — the topo-sort, not list order, drives resolution."""
+    schema = DesignSpace(
+        axes=(discrete_axis("x", {3}, 3),),
+        derived=(
+            # B listed first, but depends on A → must resolve after A.
+            Derived("b", lambda p, c: p.a + 1, deps={"a"}),
+            Derived("a", lambda p, c: p.x * 2, deps={"x"}),
+        ),
+    )
+    r = resolve(schema, _ctx(), {})
+    assert isinstance(r, Point)
+    assert r.a == 6 and r.b == 7
+
+
+def test_derived_chain_reads_axis_and_prior_derived():
+    """A chain axis→A→B→C all resolves; each reads the one before it."""
+    schema = DesignSpace(
+        axes=(discrete_axis("x", {2}, 2),),
+        derived=(
+            Derived("c", lambda p, c: p.b * 10, deps={"b"}),
+            Derived("a", lambda p, c: p.x + 1, deps={"x"}),
+            Derived("b", lambda p, c: p.a + 1, deps={"a"}),
+        ),
+    )
+    r = resolve(schema, _ctx(), {})
+    assert (r.a, r.b, r.c) == (3, 4, 40)
+
+
 # --- E6: predicates collect ALL reasons ------------------------------------
 
 
