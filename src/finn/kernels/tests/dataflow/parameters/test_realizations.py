@@ -42,6 +42,7 @@ from finn.kernels.dataflow.parameters.serialize import (
     layout,
     weight_constraint,
 )
+from finn.kernels.engine.storage_descriptor import StorageDescriptor
 from finn.kernels.model.param_names import (
     depth_key,
     param_stream_width_key,
@@ -50,6 +51,7 @@ from finn.kernels.model.param_names import (
     runtime_writeable_key,
     sets_key,
     sources_key,
+    storage_datatype_key,
     topology_key,
     width_key,
 )
@@ -62,6 +64,7 @@ SOURCES = sources_key(WEIGHTS)
 PARAM_DEPTH = depth_key(WEIGHTS)
 PARAM_SETS = sets_key(WEIGHTS)
 PARAM_WIDTH = width_key(WEIGHTS)
+STORAGE_DTYPE = storage_datatype_key(WEIGHTS)
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 ULTRASCALE = "xcku040-ffva1156-2-e"  # not Versal
@@ -199,6 +202,52 @@ def test_pumped_memory_fold_gate_fires():
     )
     assert isinstance(r, Illegal)
     assert any("pumpedMemory" in reason for reason in r.reasons)
+
+
+# ===========================================================================
+# Storage-datatype AUTHORITY — the descriptor the storage OWNER publishes (B1).
+# The owner publishes (value-optimized dtype, values_trusted) — authority, not data.
+# Trusted iff it has build-time value visibility: embedded always; decoupled iff static.
+# ===========================================================================
+
+
+def test_embedded_publishes_trusted_narrowed_descriptor():
+    # Fixture weights are in -7..6 -> narrow to INT4 (graph dtype is INT8). Embedded always
+    # sees its values, so it narrows AND authorizes narrowing.
+    r = resolve(
+        mvau_space(), _mvau_ctx(),
+        {"backend": MVAU_HLS, "PE": 2, "SIMD": 2, "resType": "lut", TOPOLOGY: EMBEDDED},
+    )
+    desc = r[STORAGE_DTYPE]
+    assert isinstance(desc, StorageDescriptor)
+    assert desc.values_trusted is True
+    assert desc.dtype == DataType["INT4"]
+
+
+def test_decoupled_static_publishes_trusted_narrowed_descriptor():
+    # runtime_writeable=0 (default): owner has build-time visibility -> narrows, trusted.
+    desc = _decoupled_point(_mvau_ctx(), pe=2, simd=2)[STORAGE_DTYPE]
+    assert isinstance(desc, StorageDescriptor)
+    assert desc.values_trusted is True
+    assert desc.dtype == DataType["INT4"]
+
+
+def test_decoupled_runtime_writeable_publishes_untrusted_envelope_descriptor():
+    # runtime_writeable=1: the host may overwrite cells post-build -> owner BLIND. It must
+    # NOT narrow; it publishes the declared graph dtype (envelope) and withholds trust.
+    desc = _decoupled_point(_mvau_ctx(wdt="INT8"), **{RUNTIME_WRITEABLE: 1})[STORAGE_DTYPE]
+    assert isinstance(desc, StorageDescriptor)
+    assert desc.values_trusted is False
+    assert desc.dtype == DataType["INT8"]  # graph dtype, NOT the INT4 narrowing
+
+
+def test_descriptor_none_on_standalone_resolve_without_tensor():
+    # No compute context (bare Context, unwired interface): the descriptor is present-but-None,
+    # exactly like the geometry deriveds — the pool still resolves standalone.
+    r_emb = resolve(parameters_schema(), _ctx(), {TOPOLOGY: EMBEDDED})
+    assert r_emb[STORAGE_DTYPE] is None
+    r_dec = resolve(parameters_schema(), _ctx(), {TOPOLOGY: DECOUPLED})
+    assert r_dec[STORAGE_DTYPE] is None
 
 
 # ===========================================================================

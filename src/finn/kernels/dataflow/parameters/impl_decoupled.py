@@ -31,7 +31,9 @@ from __future__ import annotations
 
 from qonnx.util.basic import roundup_to_integer_multiple
 
+from finn.kernels.engine.datatype_spec import value_optimized
 from finn.kernels.engine.derived import Derived
+from finn.kernels.engine.storage_descriptor import StorageDescriptor
 from finn.kernels.engine.axis import discrete_axis
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.param_names import (
@@ -44,6 +46,7 @@ from finn.kernels.model.param_names import (
     ram_style_key,
     runtime_writeable_key,
     sets_key,
+    storage_datatype_key,
     width_key,
 )
 from finn.util.basic import is_versal
@@ -133,6 +136,33 @@ def _demand(p, iface):
     return p.get(demand_key(iface), None)
 
 
+# =============================================================================
+# Storage-datatype AUTHORITY — the descriptor this topology publishes as the storage OWNER.
+#
+# decoupled sees its params at build time UNLESS they are runtime-writable: the host may
+# overwrite a runtime-writable weight cell after build, so the owner is BLIND and must not
+# narrow (it publishes the declared graph dtype = the envelope). When static
+# (runtime_writeable==0) the owner has visibility and narrows via value_optimized — the same
+# static-vs-worst-case split baseline FINN gates by hand (matrixvectoractivation.py:517),
+# here owned by the storage topology and read by the compute core off the published bit.
+# Branching on its OWN runtime_writeable knob is legitimate (the owner reading its own axis).
+# =============================================================================
+
+
+def _storage_descriptor(iface):
+    def _descriptor(p, ctx):
+        if not ctx.has_tensor(iface):
+            return None  # unwired interface (standalone resolve) — mirrors the geometry deriveds
+        trusted = p.get(runtime_writeable_key(iface), 0) == 0
+        if trusted:
+            dtype = value_optimized(iface)(p, ctx)  # owner sees values -> narrow
+        else:
+            dtype = ctx.tensor_datatype(iface)  # owner blind -> declared graph dtype (envelope)
+        return StorageDescriptor(dtype=dtype, values_trusted=trusted)
+
+    return _descriptor
+
+
 def _geometry_derived(iface):
     def _mem_width(p, ctx):
         # WIDTH = roundup(bit_rate, 8) = roundup(PE*SIMD*wbits, 8) (base:326).
@@ -191,7 +221,8 @@ def decoupled_topology(iface):
         mem_mode=DECOUPLED_MODE,  # an AXIS port a memstream block feeds
         language="rtl",  # emits its own memstream Verilog streamer
         axes=_decoupled_axes(iface),
-        derived=_geometry_derived(iface),
+        derived=_geometry_derived(iface)
+        + (Derived(storage_datatype_key(iface), _storage_descriptor(iface)),),
         predicates=(_uram_gate(iface), _pumped_gate(iface)),
         # One source-of-truth: the same manifest the emit resolves for the build copy (F9).
         sources=MEMSTREAM_MANIFEST.filenames,
