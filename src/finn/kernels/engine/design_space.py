@@ -18,7 +18,7 @@ unknown/duplicate name is an authoring error (design-space-model.md §2).
 **Validation is a whole-space property, run on the FINALIZED design space — never on an
 assembly fragment.** ``compile`` builds the full space in stages (the compute pool first, then
 each parameters sub-schema folded in); a compute derived may legitimately declare a dep on a
-name a *later* fragment introduces (e.g. ``accDataType`` → ``parameters.weights.storageDataType``).
+name a *later* fragment introduces (e.g. ``accDataType`` → ``parameters.weights.datatype``).
 At fragment-construction time that dep is indistinguishable from a typo — both are "unknown
 name" — so validating a fragment cannot be both strict (catch typos) and composition-tolerant
 (allow cross-pool forward refs). We therefore relocate *when* validation fires, not *whether*:

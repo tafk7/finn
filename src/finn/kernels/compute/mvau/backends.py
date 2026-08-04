@@ -23,7 +23,7 @@ identity — parked here rather than in ``kernel.py`` so the identity file stays
   ``derived_dtypes`` rather than the op declaring them — all one ``DatatypeSpec`` vocabulary.
   Identical across the three cores today; a future float core diverges by supplying different
   specs. The narrowed WEIGHT dtype is NOT here: it belongs to the storage OWNER, which
-  publishes it as ``parameters.<iface>.storageDataType`` (a ``StorageDescriptor``).
+  publishes it as ``parameters.<iface>.datatype`` (a ``ParamDatatype``).
 
 Depends only on the identity's tensor-name constants (imported from ``kernel.py``) — a
 one-directional edge, no cycle. The impl bundles import these via ``op.py``.
@@ -36,7 +36,7 @@ from qonnx.util.basic import calculate_matvec_accumulator_range
 
 from finn.kernels.engine.datatype_spec import RegisterSpec
 from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
-from finn.kernels.model.param_names import storage_datatype_key
+from finn.kernels.model.param_names import param_datatype_key
 
 from .kernel import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
 
@@ -59,9 +59,9 @@ COMPUTE_STREAM = {
 # DATATYPE CONTRACT — accDataType/outputDataType (base:469-527). Data-dependent: actual weight
 # VALUES when the storage owner has visibility, worst-case dtype envelope otherwise. The
 # static-vs-worst-case CHOICE is no longer re-derived here — it is READ off the storage owner's
-# published descriptor (parameters.<iface>.storageDataType.values_trusted). The accumulator is
+# published pd (parameters.<iface>.datatype.values_visible). The accumulator is
 # compute-core-owned storage; it depends on delivery only THROUGH that published bit, never by
-# peeking at storage it does not own (design-space-model §2). storageDataType is a parameters-
+# peeking at storage it does not own (design-space-model §2). The ParamDatatype is a parameters-
 # pool derived, so accDataType declares a dep on it (RegisterSpec below) — the unified topo-sort
 # orders acc after storage.
 # =============================================================================
@@ -70,16 +70,16 @@ COMPUTE_STREAM = {
 def _acc_datatype(p, ctx):
     # base:469-527. The two algorithms are TODAY'S two branches, now selected by the owner's
     # published authority instead of a re-derived op-side predicate:
-    #   trusted (owner sees values) -> per-column value-eval over the real matrix (FINN-tight)
+    #   visible (owner sees values) -> per-column value-eval over the real matrix (FINN-tight)
     #   blind   (runtime-writable/…) -> worst-case dtype envelope over an (MW,MH) bounds matrix
-    # values_trusted mirrors the pre-seam static-vs-runtime-writable gate on the composed point
+    # values_visible mirrors the pre-seam static-vs-runtime-writable gate on the composed point
     # by construction, so this is bit-identical to the old sizing; the HW golden is the guard.
     idt = ctx.tensor_datatype(INPUT)
-    descriptor = p[storage_datatype_key(WEIGHTS)]
+    pd = p[param_datatype_key(WEIGHTS)]
     weights = ctx.initializer(WEIGHTS)
-    # values_trusted authorizes narrowing; weights-present is the orthogonal value-availability
-    # safety check (a trusted owner with no materialized initializer still falls to envelope).
-    if descriptor is not None and descriptor.values_trusted and weights is not None:
+    # values_visible authorizes narrowing; weights-present is the orthogonal value-availability
+    # safety check (a visible owner with no materialized initializer still falls to envelope).
+    if pd is not None and pd.values_visible and weights is not None:
         acc_min, acc_max = calculate_matvec_accumulator_range(weights, idt)
     else:
         wdt = ctx.tensor_datatype(WEIGHTS)
@@ -111,9 +111,9 @@ def mvau_out_dtype():
 
     Wrapped in a :class:`~finn.kernels.engine.datatype_spec.RegisterSpec` with the WEIGHTS
     storage dep: under ``noActivation`` the output IS the accumulator, so the out-port stream
-    width transitively reads ``storageDataType`` and must order after it. The tiling engine's
+    width transitively reads the ParamDatatype and must order after it. The tiling engine's
     ``stream_width.out`` derived inherits these deps (:func:`~finn.kernels.model.tiling._width_derived`)."""
-    return RegisterSpec(_output_datatype, deps={storage_datatype_key(WEIGHTS)})
+    return RegisterSpec(_output_datatype, deps={param_datatype_key(WEIGHTS)})
 
 
 def mvau_register_dtypes():
@@ -125,16 +125,16 @@ def mvau_register_dtypes():
     future core diverges by supplying different specs. The out-port's ``outputDataType`` is
     the sibling ``derived_dtype`` on the port (:func:`mvau_out_dtype`).
 
-    ``accDataType`` reads the WEIGHTS storage owner's published descriptor, a parameters-pool
+    ``accDataType`` reads the WEIGHTS storage owner's published pd, a parameters-pool
     derived — so it is wrapped in a :class:`~finn.kernels.engine.datatype_spec.RegisterSpec`
-    declaring a dep on ``storage_datatype_key(WEIGHTS)``. The unified topo-sort (R2) orders the
-    accumulator after that descriptor, across the compute/parameters pool boundary.
+    declaring a dep on ``param_datatype_key(WEIGHTS)``. The unified topo-sort (R2) orders the
+    accumulator after that pd, across the compute/parameters pool boundary.
 
     The narrowed WEIGHT dtype is no longer a compute register: the storage OWNER publishes it
-    as ``parameters.<iface>.storageDataType`` (:class:`~finn.kernels.engine.storage_descriptor.StorageDescriptor`),
+    as ``parameters.<iface>.datatype`` (:class:`~finn.kernels.engine.param_datatype.ParamDatatype`),
     since datatype authority belongs to whoever owns the values at rest. Weight serialization
     reads the graph dtype directly (HLS ``context.tensor_datatype(WEIGHTS)``, RTL
     ``point.narrow_weights``), so there was never a runtime reader of the old register."""
     return {
-        "accDataType": RegisterSpec(_acc_datatype, deps={storage_datatype_key(WEIGHTS)}),
+        "accDataType": RegisterSpec(_acc_datatype, deps={param_datatype_key(WEIGHTS)}),
     }

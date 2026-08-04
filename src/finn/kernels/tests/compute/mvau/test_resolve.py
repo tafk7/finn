@@ -49,7 +49,7 @@ from finn.kernels.model.param_names import (
     pumped_memory_key,
     ram_style_key,
     runtime_writeable_key,
-    storage_datatype_key,
+    param_datatype_key,
     topology_key,
 )
 from finn.util.basic import is_versal
@@ -65,7 +65,7 @@ PARAM_TOPOLOGY = topology_key(PARAM_WEIGHTS)
 PARAM_RAM_STYLE = ram_style_key(PARAM_WEIGHTS)
 PARAM_RUNTIME_WRITEABLE = runtime_writeable_key(PARAM_WEIGHTS)
 PARAM_PUMPED_MEMORY = pumped_memory_key(PARAM_WEIGHTS)
-PARAM_STORAGE_DTYPE = storage_datatype_key(PARAM_WEIGHTS)
+PARAM_DTYPE = param_datatype_key(PARAM_WEIGHTS)
 
 SEVEN_SERIES = "xc7z020clg400-1"  # Zynq-7000, DSP48E1, not Versal
 ULTRASCALE = "xcku040-ffva1156-2-e"  # Kintex UltraScale, DSP48E2, not Versal
@@ -218,20 +218,20 @@ def test_forced_and_derived_names_are_not_axes(schema):
 
 def test_acc_datatype_data_dependent_static(schema):
     # accDataType sizes from the storage owner's PUBLISHED range: static weights -> the owner
-    # is trusted -> per-value narrowing, so a smaller matrix yields a smaller accumulator.
+    # is visible -> per-value narrowing, so a smaller matrix yields a smaller accumulator.
     small = np.ones((6, 8), dtype=np.float32)
     r_small = resolve(schema, make_context(weights=small), base_assignment())
     big = np.full((6, 8), -8.0, dtype=np.float32)
     r_big = resolve(schema, make_context(weights=big), base_assignment())
     assert isinstance(r_small, Point) and isinstance(r_big, Point)
-    # The mechanism: the owner published a trusted descriptor; acc read it, not raw weights.
-    assert r_small[PARAM_STORAGE_DTYPE].values_trusted is True
+    # The mechanism: the owner published a visible ParamDatatype; acc read it, not raw weights.
+    assert r_small[PARAM_DTYPE].values_visible is True
     assert r_small.accDataType.bitwidth() < r_big.accDataType.bitwidth()
 
 
 def test_acc_datatype_worst_case_when_runtime_writeable(schema):
     # Runtime-writable -> the storage owner is BLIND -> it publishes the dtype envelope
-    # (values_trusted=False), so acc sizes worst-case, never tighter than the static case.
+    # (values_visible=False), so acc sizes worst-case, never tighter than the static case.
     small = np.ones((6, 8), dtype=np.float32)
     r_static = resolve(schema, make_context(weights=small), base_assignment(noActivation=1))
     r_rtw = resolve(
@@ -241,19 +241,19 @@ def test_acc_datatype_worst_case_when_runtime_writeable(schema):
     )
     assert isinstance(r_static, Point) and isinstance(r_rtw, Point)
     # The mechanism: the runtime-writable owner withheld trust, flipping acc to the envelope.
-    assert r_static[PARAM_STORAGE_DTYPE].values_trusted is True
-    assert r_rtw[PARAM_STORAGE_DTYPE].values_trusted is False
+    assert r_static[PARAM_DTYPE].values_visible is True
+    assert r_rtw[PARAM_DTYPE].values_visible is False
     assert r_rtw.accDataType.bitwidth() >= r_static.accDataType.bitwidth()
 
 
-def test_acc_datatype_resolves_after_storage_descriptor(schema):
-    # R-order guard: accDataType reads a parameters-pool derived (storageDataType), so the
-    # unified topo-sort MUST order it after that descriptor on the composed MVAU point. Without
+def test_acc_datatype_resolves_after_param_datatype(schema):
+    # R-order guard: accDataType reads a parameters-pool derived (the param datatype), so the
+    # unified topo-sort MUST order it after that ParamDatatype on the composed MVAU point. Without
     # A1's derived deps this would resolve in list order (acc before storage) and crash.
     names = [d.name for d in schema.ordered_derived()]
-    assert names.index("accDataType") > names.index(PARAM_STORAGE_DTYPE)
+    assert names.index("accDataType") > names.index(PARAM_DTYPE)
     # And the out-port stream width, which transitively reads acc under noActivation, likewise.
-    assert names.index("stream_width.out") > names.index(PARAM_STORAGE_DTYPE)
+    assert names.index("stream_width.out") > names.index(PARAM_DTYPE)
 
 
 # --- #4 the combination predicate (config + device) fires ------------------

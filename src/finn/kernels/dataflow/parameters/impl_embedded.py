@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from finn.kernels.engine.datatype_spec import value_optimized
 from finn.kernels.engine.derived import Derived
-from finn.kernels.engine.storage_descriptor import StorageDescriptor
+from finn.kernels.engine.param_datatype import ParamDatatype
 from finn.kernels.model.param_names import EMBEDDED as EMBEDDED_MODE
-from finn.kernels.model.param_names import param_stream_width_key, storage_datatype_key
+from finn.kernels.model.param_names import param_stream_width_key, param_datatype_key
 
 from .names import EMBEDDED
 from .registry import register
@@ -37,18 +37,18 @@ def _no_stream_width(p, ctx):
     return 0
 
 
-def _storage_descriptor(iface):
-    def _descriptor(p, ctx):
+def _param_datatype(iface):
+    def _compute(p, ctx):
         # embedded is ALWAYS value-visible (params baked into the core), so the owner
-        # narrows and authorizes narrowing (values_trusted=True). value_optimized falls
+        # narrows and authorizes narrowing (values_visible=True). value_optimized falls
         # back to the graph dtype when the tensor is dynamic. None when the interface is
         # unwired (standalone resolve, no compute context) — mirrors the geometry deriveds.
         if not ctx.has_tensor(iface):
             return None
         dtype = value_optimized(iface)(p, ctx)
-        return StorageDescriptor(dtype=dtype, values_trusted=True)
+        return ParamDatatype(dtype=dtype, values_visible=True)
 
-    return _descriptor
+    return _compute
 
 
 @register
@@ -56,13 +56,13 @@ def embedded_topology(iface):
     # embedded owns no interface-namespaced axes/geometry (it is the ``constant`` mode —
     # nothing is delivered). It contributes the per-interface compute-facing stream-width
     # (0 — no port) and, as the storage OWNER, the published storage-datatype authority
-    # (always trusted — baked-in params are always value-visible). Both namespaced per
+    # (always visible — baked-in params are always value-visible). Both namespaced per
     # interface, so emitted unconditionally for every delivered interface with no collision.
     return source_backend(
         EMBEDDED,
         mem_mode=EMBEDDED_MODE,  # baked into the compute core — no streamer, no port
         derived=(
             Derived(param_stream_width_key(iface), _no_stream_width),
-            Derived(storage_datatype_key(iface), _storage_descriptor(iface)),
+            Derived(param_datatype_key(iface), _param_datatype(iface)),
         ),
     )

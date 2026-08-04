@@ -85,16 +85,15 @@ def init_file_key(iface: str) -> str:
     return _key(iface, "init_file")  # memblock.dat basename, or "" for URAM-non-Versal
 
 
-def storage_datatype_key(iface: str) -> str:
+def param_datatype_key(iface: str) -> str:
     # The storage owner's published datatype AUTHORITY — a
-    # :class:`~finn.kernels.engine.storage_descriptor.StorageDescriptor` (value-optimized
-    # dtype + a ``values_trusted`` permission bit), NOT a bare dtype. The COMPUTE side reads
-    # it to size parameter-dependent derivations (e.g. the MVAU accumulator) without
-    # re-deriving authority or peeking at storage it does not own. Dispatched per topology
-    # (embedded/decoupled) exactly like the stream width; present-but-None when the interface
-    # is unwired (standalone resolve). Namespaced per interface so a second parameter
-    # interface never collides.
-    return _key(iface, "storageDataType")
+    # :class:`~finn.kernels.engine.param_datatype.ParamDatatype` (value-optimized dtype + a
+    # ``values_visible`` permission bit), NOT a bare dtype. The COMPUTE side reads it to size
+    # parameter-dependent derivations (e.g. the MVAU accumulator) without re-deriving authority
+    # or peeking at storage it does not own. Dispatched per topology (embedded/decoupled)
+    # exactly like the stream width; present-but-None when the interface is unwired (standalone
+    # resolve). Namespaced per interface so a second parameter interface never collides.
+    return _key(iface, "datatype")
 
 
 def param_stream_width_key(iface: str) -> str:

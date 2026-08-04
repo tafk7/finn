@@ -365,7 +365,7 @@ class Kernel:
                     predicates=tuple(op.predicates) + tuple(sub.predicates),
                 )
         # Validate + order the COMPLETE space now (all pools folded in): a cross-pool derived
-        # dep (accDataType -> parameters.<iface>.storageDataType) resolves here, where its
+        # dep (accDataType -> parameters.<iface>.datatype) resolves here, where its
         # target is present, and a genuine typo still fails fast — at compile, before resolve.
         return op.finalize()
 
