@@ -32,7 +32,29 @@ engine's ``(point, context)`` closure signature. The union variants:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Callable
+
+
+@dataclass(frozen=True)
+class RegisterSpec:
+    """A ``DatatypeSpec`` for an internal register that ALSO declares derived ``deps``.
+
+    A bare register value in ``Backend.derived_dtypes`` is a plain ``DatatypeSpec`` with no
+    ordering constraint (it reads only axes + Context). When a register's derivation must read
+    ANOTHER derived — e.g. MVAU's ``accDataType`` reads the storage owner's published
+    ``parameters.<iface>.storageDataType`` — it wraps its spec in a ``RegisterSpec`` carrying
+    the dep names. ``_merge_derived_dtypes`` unwraps it: the inner ``spec`` resolves exactly as
+    before, and the ``deps`` flow onto the merged :class:`~finn.kernels.engine.derived.Derived`
+    so the unified topo-sort orders this register after the deriveds it reads (design-space-
+    model §2 / R2). Plain specs (the common case) need no wrapper."""
+
+    spec: Any  # the wrapped DatatypeSpec (None, DataType, str, VALUE_OPTIMIZED, or Callable)
+    deps: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self):
+        if not isinstance(self.deps, frozenset):
+            object.__setattr__(self, "deps", frozenset(self.deps))
 
 
 class _ValueOptimizedType:
@@ -93,6 +115,8 @@ def resolve_datatype_spec(spec: Any, *, iface: str, point, context):
     """
     from qonnx.core.datatype import BaseDataType
 
+    if isinstance(spec, RegisterSpec):
+        spec = spec.spec  # the deps are consumed at merge; resolution reads the inner spec
     if spec is None:
         return context.tensor_datatype(iface)
     if isinstance(spec, BaseDataType):

@@ -28,6 +28,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import KernelOp, TransformationResult
+from finn.kernels.engine.datatype_spec import resolve_datatype_spec
 from finn.kernels.engine.point import Illegal  # noqa: F401  (kept available for callers/tests)
 from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
 
@@ -200,9 +201,11 @@ class MvauKernelOp(KernelOp):
         # MVAU's output dtype is the out port's derived_dtype spec: the graph dtype when the
         # node has thresholds (they map the accumulator down), or the weight-derived
         # accumulator type when it has none. Resolve it so infer propagates the exact
-        # (possibly narrowed) type — the SAME rule the stream-width fold and emit read.
+        # (possibly narrowed) type — the SAME rule the stream-width fold and emit read. The
+        # spec is a RegisterSpec (it carries the storageDataType dep); resolve_datatype_spec
+        # unwraps it, so this reads authority off the descriptor like every other consumer.
         if index == 0:
-            return mvau_out_dtype()(point, ctx)
+            return resolve_datatype_spec(mvau_out_dtype(), iface=OUTPUT, point=point, context=ctx)
         return super()._output_datatype_from_point(kernel, ctx, point, index)
 
     def get_folding_axes(self):

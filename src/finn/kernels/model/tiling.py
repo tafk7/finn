@@ -507,11 +507,17 @@ def _width_derived(iface, width_expr: TileExpr, derived_dtype=None):
     """A per-interface stream-width ``Derived`` = fold_width * bitwidth(dtype), keyed
     ``stream_width.<iface>``. The dtype is the selected backend's declared ``derived_dtype``
     :class:`~finn.kernels.engine.datatype_spec.DatatypeSpec` for this port (resolved against
-    the point), or the raw graph tensor dtype when the backend declares none (``None``). The
-    spec resolves independently of any other point key, so the width derived no longer
-    couples to resolve ordering vs a ``dtype_source`` derived's presence."""
+    the point), or the raw graph tensor dtype when the backend declares none (``None``).
+
+    When the port's spec is a :class:`~finn.kernels.engine.datatype_spec.RegisterSpec`, its
+    declared ``deps`` flow onto this width derived — so a port whose produced dtype transitively
+    reads another derived (e.g. MVAU's OUTPUT under no-activation resolves the accumulator,
+    which reads the storage owner's ``storageDataType``) is ordered after that derived by the
+    unified topo-sort. A bare spec declares no deps and the width derived resolves freely."""
     from ..engine.derived import Derived
-    from ..engine.datatype_spec import resolve_datatype_spec
+    from ..engine.datatype_spec import RegisterSpec, resolve_datatype_spec
+
+    deps = derived_dtype.deps if isinstance(derived_dtype, RegisterSpec) else frozenset()
 
     def compute(point, context, _expr=width_expr, _iface=iface, _spec=derived_dtype):
         elems = _expr.eval(point)
@@ -520,4 +526,4 @@ def _width_derived(iface, width_expr: TileExpr, derived_dtype=None):
         )
         return int(elems) * dt.bitwidth()
 
-    return Derived(stream_width_key(iface.name), compute)
+    return Derived(stream_width_key(iface.name), compute, deps=deps)

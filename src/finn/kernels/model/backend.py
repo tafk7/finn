@@ -477,7 +477,13 @@ def _merge_derived(root_name, pool) -> list[Derived]:
     merged: list[Derived] = []
     for name, owning in owners.items():
         by_impl = {b.name: _derived_of(b, name) for b in owning}
-        merged.append(Derived(name, _dispatch_compute(root_name, by_impl)))
+        # Union each owning bundle's declared deps onto the merged derived (mirrors the axis
+        # and dtype-register merges), so a tiling-generated derived carrying deps — e.g.
+        # stream_width.out, whose output-dtype spec reads storageDataType — keeps its ordering
+        # constraint through the merge. Same-name bundle deriveds normally declare identical
+        # deps; the union is the safe superset.
+        deps = frozenset().union(*(d.deps for d in by_impl.values()))
+        merged.append(Derived(name, _dispatch_compute(root_name, by_impl), deps=deps))
     return merged
 
 
@@ -493,10 +499,22 @@ def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
         for name in bundle.derived_dtypes:
             owners.setdefault(name, []).append(bundle)
 
+    from ..engine.datatype_spec import RegisterSpec
+
     merged: list[Derived] = []
     for name, owning in owners.items():
         by_impl = {b.name: b.derived_dtypes[name] for b in owning}
-        merged.append(Derived(name, _dispatch_dtype_compute(root_name, name, by_impl)))
+        # A register may wrap its spec in a RegisterSpec to declare derived deps (e.g.
+        # accDataType reads the storage owner's storageDataType). Union the deps across
+        # owning impls — mirrors _merge_axes' dep union — so the topo-sort orders the merged
+        # register after whatever any owning impl reads. Bare specs contribute no deps.
+        deps: set[str] = set()
+        for spec in by_impl.values():
+            if isinstance(spec, RegisterSpec):
+                deps |= spec.deps
+        merged.append(
+            Derived(name, _dispatch_dtype_compute(root_name, name, by_impl), deps=frozenset(deps))
+        )
     return merged
 
 
