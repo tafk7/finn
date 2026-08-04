@@ -73,7 +73,6 @@ from .op import (  # noqa: F401  (re-exported public surface)
     mvau_kernel,
     mvau_pool,
     mvau_space,
-    mvau_shared,
 )
 
 # Import the built-in bundle modules for their registration side effect. A third-party
@@ -86,7 +85,6 @@ __all__ = [
     "mvau_kernel",
     "mvau_space",
     "mvau_pool",
-    "mvau_shared",
     "MvauKernelOp",
     "MVAU_HLS",
     "MVAU_DSP_SOFTVEC",

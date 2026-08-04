@@ -26,9 +26,10 @@ Sections (what each replaces in the classic FINN MVAU):
     7. ASSEMBLY          mvau_kernel() / mvau_space()  (FINN: the class itself)
 
 Tensor-name convention for the Context this schema resolves against:
-    "inp"      the activation input tensor   (inputDataType, dynamic)
-    "weights"  the weight tensor             (weightDataType + initializer VALUES)
-    "out"      the output tensor             (outputDataType, unless derived)
+    "inp"        the activation input tensor   (dynamic)
+    "weights"    the weight tensor             (static initializer VALUES)
+    "out"        the output tensor             (dtype derived when there is no activation)
+    "thresholds" the OPTIONAL activation operand — present iff a 3-input fused node
 """
 
 from __future__ import annotations
@@ -59,10 +60,7 @@ MVAU_DSP_PACKED = "mvau_dsp_packed"
 WEIGHTS = "weights"
 INPUT = "inp"
 OUTPUT = "out"
-# The optional activation-threshold operand. Shares the spelling with the standalone
-# Thresholding op, so ``ctx.initializer(THRESHOLDS)`` reads the same node slot. Present iff
-# the fused node has a threshold initializer (a 3-input node) — the emergent existence that
-# supersedes the declared ``noActivation`` flag.
+# Presence is EMERGENT (initializer attached?), superseding the classic ``noActivation`` flag.
 THRESHOLDS = "thresholds"
 
 
@@ -81,28 +79,16 @@ def mvau_interfaces():
     block; ``out`` iterates vectors and holds MH."""
     return (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
-        # weights — no IsStatic constraint. Initializer-presence already INFORMS the system
-        # without an op constraint: the frontend can_infer_from rejects a no-initializer MatMul
-        # (op.py), and the delivery contract's _demand_for returns None (a live edge, not a
-        # delivered param) when an interface has no initializer. IsStatic duplicated the former
-        # and contradicted the latter; it was also wrong for a future dynamic backend
-        # (activation x activation) where a no-initializer weights port is legal. The residual
-        # rule it covered — embedded with no values to bake — is topology feasibility (a storage
-        # topology needs values to store), homed in the parameters pool, not on the op (deferred).
+        # weights — no staticness constraint: initializer-presence is enforced upstream
+        # (frontend can_infer_from) and read by the delivery contract, not asserted here.
         InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
-        # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff a
-        # threshold initializer is attached (a 3-input node); absent nodes skip it in every
-        # Context-reading loop. Constant-only in the fused core, so no impl folds it. Rank-2
-        # (the step count is the tensor's own shape[1] — no independent numSteps axis, unlike
-        # standalone Thresholding); the ShapeRank constraint auto-skips when the port is absent.
+        # thresholds — optional (NumChannels, numSteps); ShapeRank auto-skips when absent.
         InterfaceSchema(
             "thresholds", Direction.IN, block=[FULL, FULL], optional=True,
             constraints=(ShapeRank(THRESHOLDS, 2),),
         ),
-        # The out stream width uses the backend-derived output type (= accDataType with no
-        # activation), not the raw graph dtype — declared per-backend as the out port's
-        # ``derived_dtype`` (see ``mvau_out_dtype`` in backends.py), so stream_width.out
-        # matches emit. The op identity declares only the arity/block here.
+        # out — dtype is backend-derived (accDataType under no-activation), declared as the
+        # out port's derived_dtype (mvau_out_dtype, backends.py); here only arity/block.
         InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
 
@@ -124,120 +110,66 @@ def _is_nonneg_int(v) -> bool:
 
 
 def op_axes():
-    # EMPTY for MVAU: there are zero hand-authored DSE dials. The real dials (SIMD/PE) are
-    # tiling-engine-generated from the interface BLOCKs; delivery dials (ram_style/…) are
-    # parameters-pool-generated. MW/MH/numInputVectors are BLOCK extents / leading dims read
-    # off the Context, not axes. Whether the MVU has an activation is EMERGENT
-    # (``ctx.initializer(THRESHOLDS) is not None``), not a declared flag.
+    # EMPTY: MVAU has no hand-authored DSE dials. SIMD/PE are tiling-engine-generated from the
+    # interface BLOCKs; ram_style/… are parameters-pool-generated; MW/MH are Context extents.
     return ()
 
 
 def kernel_attrs():
-    # Frontend-fixed structural constants: nodeattr-backed scalars that reach the Point (a
-    # backend closure reads them at resolve) but are NEVER explored — set once at conversion.
-    # Distinct from op_axes (DSE dials) and from delivered parameters (weight/threshold
-    # tensors). See Kernel.kernel_attrs for the naming rationale (vs kernel_params).
+    # Frontend-fixed scalars that reach the Point but are never explored (set once at
+    # conversion). See Kernel.kernel_attrs for how these differ from op_axes / parameters.
     return (
-        # ActVal — activation bias; unused on a no-threshold node.
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
-        # mlo_max_iter — per-node iteration count, unbounded non-neg (hwcustomop.py:317-319).
         predicate_axis("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
     )
 
 
-# -- op-level SHARED derived — the identity's threshold-operand datatype. The
-#    accumulator/weight/output datatype contract is BACKEND-SCOPED and lives in
-#    ``backends.py`` (composed per compute core), not here.
+# -- op-level SHARED derived — ONLY the threshold-operand dtype (realization-invariant). The
+#    accumulator/weight/output dtypes are backend-scoped (mvau_register_dtypes / mvau_out_dtype
+#    in backends.py); stream widths + geometry are tiling/emit-generated.
 
 
 def _threshold_dtype(p, ctx):
-    # thresholdDataType = the threshold storage owner's published ParamDatatype.dtype (read via
-    # the shared _threshold_datatype), or None when the operand is absent (a 2-input MVAU). The
-    # has_tensor guard fires first, so the point key is only read on a wired 3-input node.
+    # The threshold storage owner's published ParamDatatype.dtype, or None on a 2-input node.
+    # The has_tensor guard fires first, so the point key is read only on a wired 3-input node.
     return _threshold_datatype(p, ctx) if ctx.has_tensor(THRESHOLDS) else None
 
 
-def _identity_dtype_derived():
-    """The op-identity datatype facts: the THRESHOLD operand's value-narrowed dtype, which is
-    realization-invariant (present iff the threshold operand is wired, independent of the
-    compute core). The accumulator/weight/output datatypes are backend-scoped — see
-    :func:`mvau_register_dtypes` (acc/weight registers) and :func:`mvau_out_dtype` (out port)."""
+def op_derived():
+    # deps on the thresholds ParamDatatype (a parameters-pool derived) so the topo-sort orders
+    # this after it — the fused path is a pure consumer of the published authority.
     return (
-        # threshold identity — the fused path reads the threshold storage owner's published
-        # ParamDatatype (a parameters-pool derived), so it declares a cross-pool dep for
-        # ordering. Live value iff the operand is present, else None.
-        Derived(
-            "thresholdDataType",
-            _threshold_dtype,
-            deps={param_datatype_key(THRESHOLDS)},
-        ),
+        Derived("thresholdDataType", _threshold_dtype, deps={param_datatype_key(THRESHOLDS)}),
     )
 
 
-def op_derived():
-    # PURE IDENTITY — only the realization-invariant threshold-operand derivations. The
-    # accumulator/weight/output datatype contract is backend-scoped (mvau_register_dtypes +
-    # mvau_out_dtype), composed per compute core. Stream widths + demand are generated by the tiling engine /
-    # param_contract; geometry (MW/MH/fold depth) is read off Context by emit.
-    return _identity_dtype_derived()
-
-
-# -- op-level SHARED legality. Divisibility (MH%PE, MW%SIMD) is engine-generated from the
-#    tiling; pumpedMemory / URAM gates live in the parameters subsystem. The structural rules
-#    below are declarative CONSTRAINTS (engine/constraints.py), NOT hand-written predicates:
-#    per-port rules ride the owning InterfaceSchema.constraints (compiled with an automatic
-#    optional-port skip); the relational unsigned-input ⇒ thresholds>=0 rule is kernel-level.
+# -- op-level SHARED legality. Divisibility and the URAM/pumped gates are engine- and
+#    parameters-generated; the only op-authored rule is the relational one below.
 
 
 def _unsigned_input(p, ctx) -> bool:
-    """The gate for the nonneg-thresholds rule: True when the activation input is unsigned.
-    A cross-tensor read (INPUT dtype) that constrains a DIFFERENT port (THRESHOLDS) — why the
-    rule is kernel-level, not per-port."""
     return not ctx.tensor_datatype(INPUT).signed()
 
 
 def _mvau_constraints():
-    """The kernel-level (relational) constraints: unsigned input ⇒ all thresholds >= 0
-    (thresholding.py:243). Reads INPUT to gate a rule on THRESHOLDS, so it cannot live on one
-    port. The optional-port skip fires on THRESHOLDS (the constrained port)."""
+    # unsigned input ⇒ all thresholds >= 0 (thresholding.py:243). Reads INPUT to gate a rule on
+    # THRESHOLDS, so it is kernel-level (relational), not a per-port constraint.
     return (ValueNonNeg(THRESHOLDS, when=_unsigned_input),)
 
 
 def op_predicates():
-    # EMPTY: the former hand-written predicates are now declarative constraints — weight-
-    # present + threshold-rank on the ports, unsigned-nonneg at kernel level.
-    return ()
+    return ()  # all legality is now declarative constraints (per-port + the relational one)
+
+
+# 4. COMPUTE TILING — backend-scoped (COMPUTE_STREAM in backends.py); the op declares only the
+#    interface BLOCK, and the engine derives SIMD/PE + widths from it.
+# 5. DELIVERY / 6. COST — fully generic, no op-level authoring: delivery is derived from the
+#    pool's mem_modes (model/param_contract.py); the cost floor falls out of the tiling.
 
 
 # =============================================================================
-# 4. COMPUTE TILING — the default BLOCK->STREAM lowering (``COMPUTE_STREAM``) is a
-#    BACKEND-SCOPED fact (folding is realization, not identity), so it lives in ``backends.py``
-#    beside the datatype contract, composed by each compute core. The op declares only the
-#    BLOCK (see ``mvau_interfaces``); the engine derives SIMD/PE dials + widths from the fold.
+# 7. ASSEMBLY — the full MVAU design space as a Kernel.
 # =============================================================================
-
-
-# =============================================================================
-# 5. DELIVERY / 6. COST — both generic, no op-level authoring.
-#    Delivery: delivery-ness is DERIVED from the pool — an interface some backend declares in
-#    its ``mem_modes`` (weights + thresholds here). The Kernel builds the DeliveredParam list
-#    and synthesizes the COMPUTE→DEMAND→MEMORY waterfall generically (model/param_contract.py).
-#    Cost: MVAU's
-#    nf·sf·n_vecs falls out of the generic max-over-interfaces floor now that weights is a
-#    2-D block streamed SIMD·PE, so it declares NO cost_model.
-# =============================================================================
-
-
-# =============================================================================
-# 7. ASSEMBLY — the full MVAU design space as a Kernel (and as a bare DesignSpace).
-# =============================================================================
-
-
-def mvau_shared():
-    """The op-level shared (axes, derived, predicates) — everything every MVU has,
-    independent of the composed parameters couplings. Used by tests that assemble a
-    bare ``pool_space`` directly."""
-    return op_axes(), op_derived(), op_predicates()
 
 
 def mvau_pool():

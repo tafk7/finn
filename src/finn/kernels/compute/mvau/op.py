@@ -47,7 +47,6 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     mvau_pool,
     mvau_space,
     kernel_attrs,
-    mvau_shared,
     op_axes,
     op_derived,
     op_predicates,
