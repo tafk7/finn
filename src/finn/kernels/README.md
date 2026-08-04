@@ -19,7 +19,7 @@ For the *why* and the multi-stage plan, see
 | `model/` | **The op-model framework.** `Kernel`/`Backend`/`Interface`, the tiling/fold-depth projections, `ports` (role-tagged port taxonomy), the parameter-source CONTRACT (`param_contract`, `parameter_source`), `source_backend`, and — folded in here — `registry` (the op-agnostic implementation-registry factory) and `artifacts` (the typed emit-output vocabulary). |
 | `emit/` | **The emit PROCESS.** `manifest` (artifact manifest reader) + `stitch` (op-agnostic block-design wiring). Consumes a resolved Point → produces artifacts. |
 | `ir/` | **The host-facing seam.** The `KernelOp` bridge to FINN's node model, the nodeattr registry, and `routing` (the single kernel-side host-routing seam). |
-| `compute/` | Per-op bounded contexts — `mvau`, `thresholding`, `pool` — each a folder owning its Kernel/Schema definition, backends, and emit. |
+| `compute/` | Per-op bounded contexts — `mvau`, `thresholding` — each a folder owning its Kernel/DesignSpace definition, backends, and emit. |
 | `dataflow/` | Infrastructure kernels. Today `parameters/` (weight/threshold source); `fifo`/`dwc`/`iodma` to come. |
 | `tests/` | The mirror test tree: `tests/{engine,model,emit,ir,compute,dataflow,integration,hw}/`. |
 

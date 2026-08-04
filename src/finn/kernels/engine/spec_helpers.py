@@ -6,7 +6,7 @@
 #
 # Inlined verbatim from microsoft/brainsmith:brainsmith/dataflow/spec_helpers.py
 # @ 38faaf9 (MIT). Temporary vendored copy — see Stage 3 (source model) in
-# kernel-design/kernel-final-design/KERNEL_REFACTOR_PLAN.md for the de-vendoring plan.
+# scratchpad/kernel-final-design/KERNEL_REFACTOR_PLAN.md for the de-vendoring plan.
 ############################################################################
 
 """Datatype range helper for building kernel schemas.
@@ -14,7 +14,7 @@
 Only ``smallest_datatype_for_range`` survives the prune — it is the single symbol the
 built engine imports (``ops/mvau/op.py``). The rest of the vendored spec-helper surface
 (dimension/datatype derivation, context-aware binary-op builders) modelled the same
-concepts as the live ``space/`` engine and is removed.
+concepts as the live ``engine/`` package and is removed.
 """
 
 from typing import TYPE_CHECKING

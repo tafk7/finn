@@ -9,15 +9,14 @@
 """Topology-independent fold-depth geometry queries.
 
 A parameter memory's DEPTH is block geometry ÷ parallelism — the same quantity the
-decoupled topology publishes as ``parameters.<iface>.depth`` (``delivery.py:88``) and
+decoupled topology publishes as ``parameters.<iface>.depth`` (``impl_decoupled.py``) and
 the op used to alias as ``point.WMEM`` / ``point.TMEM``. Computed here from the block
 extents (``Context.tensor_shape``) and the fold dials on the point, these work in BOTH
 embedded HLS (where ``depth_key`` does NOT exist) and the decoupled memstream path — one
 source for a quantity that previously had two names.
 
-Standalone and op-agnostic on purpose: Arc 2 lifts this behavior onto
-``MemoryStrategy.calc_wmem`` (kernel-model.md §4). It lives in ``space/`` beside the
-folding engine, not in any op file."""
+Standalone and op-agnostic on purpose: it lives in ``model/`` beside the folding engine,
+not in any op file."""
 
 from __future__ import annotations
 

@@ -13,7 +13,7 @@ design space). A backend author reads it top to bottom; each ``impl_*.py`` bundl
 package declares only the HOW for one compute core. The FINN-facing
 :class:`~finn.kernels.compute.mvau.op.MvauKernelOp` wrapper lives beside this in ``op.py``.
 Source of truth for each axis/derived/predicate (file:line into real FINN):
-``kernel-design/kernel-final-design/mvau-design-space.md``.
+``scratchpad/kernel-final-design/mvau-design-space.md``.
 
 Sections (what each replaces in the classic FINN MVAU):
     1. CONSTANTS         tensor names + pool-member identities
@@ -21,9 +21,8 @@ Sections (what each replaces in the classic FINN MVAU):
     3. OP DESIGN SPACE   op_axes/op_derived/op_predicates — the shared BLOCK structure
                          (FINN: get_nodeattr_types + the shape/dtype getters' math)
     4. COMPUTE TILING    the BLOCK->STREAM lowering shared by the pool
-    5. DEMAND            the compute->memory demand stage of the supply waterfall
-    6. COST              rough op-level get_exp_cycles  (FINN: get_exp_cycles)
-    7. ASSEMBLY          mvau_kernel() / mvau_space()  (FINN: the class itself)
+    5. DELIVERY / COST   both fully generic — no op-level authoring (see the note below)
+    6. ASSEMBLY          mvau_kernel() / mvau_space()  (FINN: the class itself)
 
 Tensor-name convention for the Context this schema resolves against:
     "inp"        the activation input tensor   (dynamic)

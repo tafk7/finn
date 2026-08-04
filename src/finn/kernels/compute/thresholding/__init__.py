@@ -25,7 +25,7 @@ not re-derived; runtime-writability is a parameters-pool delivery concern, not a
 op axis (the former ``runtime_writeable_weights`` op-axis was dead and is deleted). Both
 backends have IDENTICAL integer dtype envelopes — there is intentionally NO per-bundle dtype
 feasibility gate (a fabricated one was falsified;
-``kernel-design/kernel-final-design/toy-vs-brainsmith-thresholding.md`` A1).
+``scratchpad/kernel-final-design/toy-vs-brainsmith-thresholding.md`` A1).
 """
 
 from __future__ import annotations

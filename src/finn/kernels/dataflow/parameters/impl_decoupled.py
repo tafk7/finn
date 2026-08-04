@@ -15,7 +15,7 @@ topology (``ram_style``, ``runtime_writeable_weights``, ``pumpedMemory``), its
 self-contained feasibility gates, AND its memstream GEOMETRY (``depth``/``width``/
 ``sets``/``init_file``) — which it now derives ITSELF from the compute→memory
 :class:`~finn.kernels.model.demand.ParamDemand` the composing op publishes
-under the ``parameters.demand`` key (rather than the op reaching in to compute the
+under the ``parameters.<iface>.demand`` key (rather than the op reaching in to compute the
 memstream realization). When the demand is absent (standalone resolve, no compute
 core), the geometry derived return ``None`` — so this bundle still resolves alone.
 
@@ -202,15 +202,26 @@ def _geometry_derived(iface):
         demand = _demand(p, iface)
         return 0 if demand is None else int(demand.bit_rate)
 
-    # The compute-facing delivery-port stream width, namespaced per interface
-    # (``parameters.<iface>.stream_width``) so it never collides — emitted unconditionally
-    # for every delivered interface (no ``weights``-only special case).
+    # NOTE — these read ``demand_key(iface)`` via ``p.get(..., None)``, an OPTIONAL read, and
+    # deliberately declare NO dep on it. The demand key exists only when this pool is COMPOSED
+    # into an op (a ParameterSource publishes it); ``parameters_schema()`` resolves this same
+    # pool STANDALONE, where the key is absent by design and a hard dep would fail finalize
+    # with "unknown name". The engine has no soft/optional dep, so when composed the
+    # demand→geometry order rests on compile()'s fold sequence (demand subspace folded before
+    # the source subspace) rather than on a declared edge. That is a real engine gap, not a
+    # local shortcut — see the engine hone's optional-dependency finding.
+    #
+    # The compute-facing delivery-port stream width is namespaced per interface
+    # (``parameters.<iface>.stream_width``) so it never collides — emitted unconditionally for
+    # every delivered interface (no ``weights``-only special case).
     return (
         Derived(param_stream_width_key(iface), _stream_width),
         Derived(width_key(iface), _mem_width),
         Derived(depth_key(iface), _mem_depth),
         Derived(sets_key(iface), _mem_sets),
-        Derived(init_file_key(iface), _mem_init_file),
+        # init_file additionally reads this topology's own ram_style axis — an axis of THIS
+        # bundle, so it always exists when this bundle is selected and the dep is safe.
+        Derived(init_file_key(iface), _mem_init_file, deps={ram_style_key(iface)}),
     )
 
 
@@ -222,7 +233,15 @@ def decoupled_topology(iface):
         language="rtl",  # emits its own memstream Verilog streamer
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface)
-        + (Derived(param_datatype_key(iface), _param_datatype(iface)),),
+        # The published datatype authority reads this topology's own runtime_writeable axis
+        # (the visibility gate) — declared so the topo-sort orders it after that axis.
+        + (
+            Derived(
+                param_datatype_key(iface),
+                _param_datatype(iface),
+                deps={runtime_writeable_key(iface)},
+            ),
+        ),
         predicates=(_uram_gate(iface), _pumped_gate(iface)),
         # One source-of-truth: the same manifest the emit resolves for the build copy (F9).
         sources=MEMSTREAM_MANIFEST.filenames,

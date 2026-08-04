@@ -12,8 +12,8 @@ Exercises E (engine) + S (pool selection) + T (tiling) + D (delivery) through th
 mvau_kernel: guarded axes, device pool pruning (DSP58/NUM_LANES/weight-width feasibility),
 forced-derived values (dsp_primitive/accDataType), URAM combination predicate, data-
 dependent accumulator dtype (static vs runtime-writeable), composability (a 4th bundle
-adds with zero edits; registry self-registration), the optional thresholds interface,
-consumption-mode gating (DSP cores are stream-weight-only), and per-interface cadence.
+adds with zero edits; registry self-registration), the optional thresholds interface, and
+consumption-mode gating (DSP cores are stream-weight-only).
 
 Also folds in the F2/D-R5 feasibility contract: each backend's feasibility is the single
 source of truth leveraged at claim time (the brittle op.py source-grep guard is dropped).

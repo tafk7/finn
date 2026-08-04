@@ -9,7 +9,7 @@
 """``KernelOp`` — the FINN adapter that lets a :class:`Kernel` back a real ONNX node and
 answer FINN's ``HWCustomOp`` contract.
 
-The engine (``space/``) is pure and graph-free: its getters take a :class:`Context`
+The engine (``engine/``) is pure and graph-free: its getters take a :class:`Context`
 (shapes/datatypes/VALUES as data) and a resolved :class:`Point`. This adapter sources that
 Context from the **live model**, following the ONNX ownership rule: a node owns ONLY its
 own internals (the design axes ``backend``/PE/SIMD/…), never graph-owned facts

@@ -44,7 +44,7 @@ def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
     # One delivery cell per DELIVERED PARAMETER whose selected topology streams (constant-mode
     # topologies have emit=None → no cell, e.g. embedded weights or the always-constant fused
     # thresholds). Iterate the Kernel's declared delivered_parameters so a second interface
-    # needs no change here — symmetric with the generic resolve-side wiring (space/delivery.py).
+    # needs no change here — symmetric with the generic resolve-side wiring (model/parameter_source.py).
     for dp in mvau_kernel().delivered_parameters:
         delivery_arts = _emit_delivery(point, context, module_name, dp)
         if delivery_arts is not None:

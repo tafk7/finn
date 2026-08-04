@@ -234,7 +234,7 @@ class Artifacts:
     writes these to a code-gen directory.
 
     ``ports`` is the block's declared port taxonomy (:class:`Port`) — the surface the
-    composition stitch (``space/stitch.py``) binds against. A single-cell emit
+    composition stitch (``emit/stitch.py``) binds against. A single-cell emit
     declares its own ports; :meth:`merge` unions the artifacts of two composed cells
     (compute + parameter delivery) so the resolver can wire them."""
 

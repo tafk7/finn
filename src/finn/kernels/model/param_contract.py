@@ -12,9 +12,9 @@ composes.
 
 A :class:`~finn.kernels.model.kernel.Kernel` that delivers parameters (weights,
 thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
-cadence + concrete source pool). The HOW — the ``(DEMAND stage, guarded source
-sub-schema)`` pair, in supply-waterfall order (COMPUTE → DEMAND → SOURCE) — is OWNED by
-``ParameterSource`` (design pitch §2), which reuses the two seam computations kept here:
+concrete source pool). The HOW — the ``(demand Derived, guarded source sub-schema)`` pair,
+whose supply-waterfall order (COMPUTE → DEMAND → SOURCE) falls out of their declared deps
+— is OWNED by ``ParameterSource``, which reuses the two seam computations kept here:
 
 * :func:`_demand_for` — the DEMAND closure: a realization-free
   :class:`~finn.kernels.model.demand.ParamDemand` sized from the RESOLVED interface

@@ -23,7 +23,7 @@ This package is the acid test for the composability thesis (design-space-model.m
 (``registry.py``). Adding a backend is purely additive — drop in one ``impl_*.py``, import
 it here (or let discovery find it), edit nothing else. No bundle imports a sibling; the
 pool is assembled from the registry, so a new backend cannot perturb an existing one.
-Source of truth for each axis/derived/predicate: ``kernel-design/kernel-final-design/
+Source of truth for each axis/derived/predicate: ``scratchpad/kernel-final-design/
 mvau-design-space.md``.
 
 Two structural relationships, kept distinct (model §1.2.2/§5):

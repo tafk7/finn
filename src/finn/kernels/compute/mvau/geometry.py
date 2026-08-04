@@ -12,7 +12,7 @@ FINN's ``matrixvectoractivation_hls`` and ``_rtl`` each hand-extracted the same
 matmul geometry (MW/MH, the weight-memory depth, numInputVectors) into two divergent
 template surfaces (``#define MW1`` vs ``parameter MW``) — the F3 divergence. This
 single accessor sources all of it from the interface block extents (Context) and the
-topology-independent fold-depth query (``space/folding``), so both emits read ONE
+topology-independent fold-depth query (``model/fold_depth.py``), so both emits read ONE
 truth. It reproduces the op's retired ``_matrix_dim``/``_wmem``/``_tmem``/
 ``_num_input_vectors`` derivations exactly."""
 

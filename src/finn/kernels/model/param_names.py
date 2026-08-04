@@ -7,7 +7,7 @@
 ############################################################################
 
 """Generic parameter-delivery vocabulary — the point-key builders + consumption-mode
-constants the delivery WIRING (``space/delivery.py``) emits and reads.
+constants the delivery WIRING (:mod:`~finn.kernels.model.parameter_source`) emits and reads.
 
 This is MECHANISM, not op content: a delivery pool is a pool of :class:`Backend`\\ s
 selected by a ``parameters.<iface>.topology`` root axis, and the generic Kernel wiring
@@ -20,7 +20,7 @@ Point keys are **namespaced AND interface-keyed**: ``parameters.<iface>.<field>`
 ``parameters.weights.topology``). The interface segment lets a kernel compose the delivery
 pool ONCE PER parameter interface (weights, thresholds, …) with no key collision — the
 prerequisite for a second parameter interface. See
-``kernel-design/kernel-final-design/param-delivery-design-space.md`` and
+``scratchpad/kernel-final-design/param-delivery-design-space.md`` and
 ``consumption-mode-delivery.md``.
 """
 
@@ -61,8 +61,9 @@ def sources_key(iface: str) -> str:
 
 def demand_key(iface: str) -> str:
     # The compute→memory DEMAND spec — a ParamDemand the composing op publishes (pure
-    # compute facts: parallelism, elem_bits, depth, cadence), read by the delivery topology
-    # to size its own realization. See space/demand.py.
+    # compute facts: parallelism, elem_bits, depth), read by the delivery topology to size
+    # its own realization. See model/demand.py. NOT a resolve "stage": it is one Derived,
+    # ordered between the pools by its declared deps, nothing more.
     return _key(iface, "demand")
 
 

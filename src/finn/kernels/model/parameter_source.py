@@ -53,6 +53,7 @@ from .backend import BACKEND_AXIS, Backend, pool_space
 from .param_contract import DeliveredParam, _demand_for, _topology_default, _topology_domain
 from ..engine.derived import Derived
 from .param_names import demand_key, sources_key, topology_key
+from .tiling import stream_width_key
 from ..engine.design_space import DesignSpace
 
 
@@ -99,22 +100,46 @@ class ParameterSource:
     deps: frozenset[str]
 
     def to_subspaces(self) -> tuple[DesignSpace, DesignSpace]:
-        """The ``(demand_schema, guarded source sub-schema)`` pair this interface
-        contributes, in supply-waterfall order.
+        """The ``(demand, guarded source sub-schema)`` pair this interface contributes.
 
-        The demand stage publishes ``parameters.<iface>.demand`` from resolved compute
-        geometry (``publishes``); the source pool then sizes its own realization from
-        that demand, its ``topology`` domain filtered by ``constrains`` to the modes the
-        selected compute backend accepts."""
+        The DEMAND is ONE :class:`~finn.kernels.engine.derived.Derived`, not a resolve
+        "stage": it publishes ``parameters.<iface>.demand`` from resolved compute geometry
+        (``publishes``), and the source pool sizes its realization from it. The pair is
+        returned separately only so the source half can have its ``topology`` domain
+        filtered by ``constrains`` before folding in.
+
+        Ordering is HALF declared today: COMPUTE→DEMAND rides the demand's own deps
+        (:meth:`_demand_space`), but DEMAND→SOURCE does NOT — the topology's geometry
+        deriveds read the demand key OPTIONALLY (the pool must also resolve standalone,
+        where that key does not exist), and the engine has no optional-dep kind, so that
+        edge rests on this method's fold order instead. See ``impl_decoupled``'s note."""
         return (self._demand_space(), self._source_subspace())
 
     def _demand_space(self) -> DesignSpace:
-        """The DEMAND stage as a derived-only schema, ordered BETWEEN the compute pool and
-        the source pool by its ``demand_key`` reading the tiling engine's resolved
-        ``stream_width.<iface>`` (present only after compute tiling)."""
+        """The demand :class:`~finn.kernels.engine.derived.Derived`, wrapped as a
+        derived-only :class:`DesignSpace` so it folds into the op schema uniformly.
+
+        ``deps`` declares what :func:`~finn.kernels.model.param_contract._demand_for`
+        reads, so the topo-sort — not fold order — carries COMPUTE → DEMAND → SOURCE.
+        ``parameters.<iface>.topology`` is UNCONDITIONAL (the mode check is the first
+        point read). ``stream_width.<iface>`` is CONDITIONAL: the tiling engine emits that
+        key only for an interface some backend declares a ``stream`` fold for, and the
+        closure reads it only past the embedded/no-initializer early-outs — so an
+        embedded-only parameter (fused thresholds) has no such key and declaring it
+        unconditionally would be a dep on a name the space never defines. We therefore
+        declare it only when the compute pool actually folds this interface, which is
+        exactly when the closure can reach that read.
+
+        This CONDITIONAL-DEP shape is a wart worth naming: ``deps`` is static while the
+        reads are guarded, so a dep set is really "keys reachable on SOME path". The engine
+        catches over-declaration (unknown name at ``finalize``) but not under-declaration —
+        see the recording-proxy check proposed in the engine hone."""
+        deps = {topology_key(self.schema)}
+        if any(self.stream.values()):  # some compute backend folds this interface
+            deps.add(stream_width_key(self.schema))
         return DesignSpace(
             axes=(),
-            derived=(Derived(demand_key(self.schema), self.publishes),),
+            derived=(Derived(demand_key(self.schema), self.publishes, deps=deps),),
             predicates=(),
         )
 

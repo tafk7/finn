@@ -22,7 +22,7 @@ strings, never in a conditional). No pin-name literal, no op type, no ``mem_mode
 That op-agnosticism is what makes it handle N-memory / compute⊗compute / zero-param
 kernel shapes for free — the cardinality question is answered structurally by
 ``(role, index)``, not by a hardcoded "one weight stream" assumption. See
-``kernel-design/kernel-final-design/port-taxonomy.md``.
+``scratchpad/kernel-final-design/port-taxonomy.md``.
 """
 
 from __future__ import annotations

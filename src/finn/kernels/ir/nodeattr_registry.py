@@ -19,7 +19,7 @@ never hardcoded here.
 
 The one wrinkle is **pool dispatch.** A pool member's axis (``resType``, ``ram_style``,
 ``pumpedCompute``) has its domain rewritten by ``pool_space`` to dispatch on the
-selected implementation (``space/implementation.py:_dispatch_domain``), so evaluating
+selected implementation (``model/backend.py:_dispatch_domain``), so evaluating
 it needs a point that pins the selection. We therefore probe each axis's domain across
 the cartesian product of the *statically-resolvable* discrete axes (the selection roots
 — ``implementation``, ``parameters.topology`` — plus simple flag axes) and union the

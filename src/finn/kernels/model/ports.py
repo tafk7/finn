@@ -10,7 +10,7 @@
 
 A composed kernel is a GRAPH of role-tagged hardware blocks; composition = wiring
 ports by role. An emit no longer just produces files — it DECLARES the ports its
-block exposes, so an op-agnostic resolver (``space/stitch.py``) can wire complementary
+block exposes, so an op-agnostic resolver (``emit/stitch.py``) can wire complementary
 roles into nets without knowing pin names, op types, or ``mem_mode``.
 
 The one idea that makes the resolver trivial: separate the PHYSICAL protocol
@@ -20,7 +20,7 @@ finn-proto prototype keyed by protocol (``s_axis``/``m_axis``/…), so activatio
 weights — both plain AXI-streams — collapsed together and were recovered only by a
 hardcoded ``in1_V`` string. Keying by role is the move past both: a weight stream and
 a data stream are the same Protocol (Stream) but different Role, and the resolver binds
-on Role. See ``kernel-design/kernel-final-design/port-taxonomy.md``.
+on Role. See ``scratchpad/kernel-final-design/port-taxonomy.md``.
 
 This module is the SHARED port vocabulary read by every phase: ``Protocol``/``Role``/
 ``Direction`` are leaf types both phase-1 :class:`~finn.kernels.model.kernel.InterfaceSchema`
