@@ -494,6 +494,26 @@ def test_thresholded_node_populates_threshold_identity(schema):
     assert r["thresholdDataType"] is not None
 
 
+def test_fused_threshold_consumes_published_param_datatype(schema):
+    # R-fused-thresh guard: MVAU's 3-input fused path reads the THRESHOLD storage owner's
+    # published ParamDatatype (a parameters-pool derived), not a re-derivation. Prove (a) the
+    # thresholds ParamDatatype composes and narrows on a fused node, and (b) thresholdDataType
+    # equals that published dtype — the fused path is a pure consumer.
+    thr_key = param_datatype_key("thresholds")
+    r = resolve(schema, make_thresh_context(steps=7), base_assignment())
+    assert isinstance(r, Point)
+    pd = r[thr_key]
+    assert pd is not None and pd.values_visible is True  # embedded thresholds -> visible
+    assert r["thresholdDataType"] == pd.dtype  # consumer reads the authority, no re-derive
+
+
+def test_fused_thresholddatatype_resolves_after_param_datatype(schema):
+    # R-order guard for the fused path: thresholdDataType deps on parameters.thresholds.datatype,
+    # so the unified topo-sort must order it after — across the compute/parameters pool boundary.
+    names = [d.name for d in schema.ordered_derived()]
+    assert names.index("thresholdDataType") > names.index(param_datatype_key("thresholds"))
+
+
 def test_malformed_threshold_tensor_is_illegal(schema):
     ctx = make_thresh_context(steps=7)
     n_ch = ctx.shapes["thresholds"][0]

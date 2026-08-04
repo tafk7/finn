@@ -101,12 +101,6 @@ def thresholding_kernel() -> Kernel:
     )
 
 
-def thresholding_kernel_space():
-    """The full Thresholding design space as a resolve ``DesignSpace`` — delegates to
-    :func:`thresholding_kernel`."""
-    return thresholding_kernel().compile()
-
-
 # =============================================================================
 # FINN WRAPPER — ThresholdingKernelOp(KernelOp): how FINN's build flow sees this kernel.
 # =============================================================================

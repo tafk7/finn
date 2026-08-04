@@ -39,6 +39,7 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
+from finn.kernels.model.param_names import param_datatype_key
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
 
 from .registry import build_pool
@@ -150,8 +151,9 @@ def kernel_attrs():
 
 
 def _threshold_dtype(p, ctx):
-    # thresholdDataType = value-narrowed threshold dtype (standalone _threshold_datatype),
-    # or None when absent. Mirrors the weight-dtype derive.
+    # thresholdDataType = the threshold storage owner's published ParamDatatype.dtype (read via
+    # the shared _threshold_datatype), or None when the operand is absent (a 2-input MVAU). The
+    # has_tensor guard fires first, so the point key is only read on a wired 3-input node.
     return _threshold_datatype(p, ctx) if ctx.has_tensor(THRESHOLDS) else None
 
 
@@ -161,8 +163,14 @@ def _identity_dtype_derived():
     compute core). The accumulator/weight/output datatypes are backend-scoped — see
     :func:`mvau_register_dtypes` (acc/weight registers) and :func:`mvau_out_dtype` (out port)."""
     return (
-        # threshold identity — live value iff the operand is present, else None.
-        Derived("thresholdDataType", _threshold_dtype),
+        # threshold identity — the fused path reads the threshold storage owner's published
+        # ParamDatatype (a parameters-pool derived), so it declares a cross-pool dep for
+        # ordering. Live value iff the operand is present, else None.
+        Derived(
+            "thresholdDataType",
+            _threshold_dtype,
+            deps={param_datatype_key(THRESHOLDS)},
+        ),
     )
 
 

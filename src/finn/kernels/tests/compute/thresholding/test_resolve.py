@@ -77,6 +77,29 @@ def test_tmem_and_widths(schema):
     assert r.outstream_width == DataType["UINT3"].bitwidth() * 2  # o_bits * PE
 
 
+def test_threshold_dtype_consumes_published_param_datatype(schema):
+    # thresholdDataType reads the storage owner's published ParamDatatype (thresholds compose the
+    # parameters pool in embedded mode → always visible → value-narrowed), not a re-derivation.
+    from finn.kernels.model.param_names import param_datatype_key
+
+    thr_key = param_datatype_key("thresholds")
+    # UINT8-typed thresholds valued 0..49 narrow to UINT6 (max 49 -> 6 bits).
+    r = resolve(schema, make_context(channels=8, steps=7, tdt="UINT8"), base_assignment(PE=2))
+    assert isinstance(r, Point)
+    pd = r[thr_key]
+    assert pd is not None and pd.values_visible is True
+    assert r["thresholdDataType"] == pd.dtype  # consumer reads the authority
+    assert pd.dtype == DataType["UINT6"]  # narrowed below the UINT8 graph envelope
+
+
+def test_threshold_datatype_resolves_after_param_datatype(schema):
+    # R-order: thresholdDataType deps on parameters.thresholds.datatype, ordered after it.
+    from finn.kernels.model.param_names import param_datatype_key
+
+    names = [d.name for d in schema.ordered_derived()]
+    assert names.index("thresholdDataType") > names.index(param_datatype_key("thresholds"))
+
+
 def test_pe_must_divide_channels(schema):
     r = resolve(schema, make_context(channels=8), base_assignment(PE=3))  # 3 ∤ 8
     assert isinstance(r, Illegal)
@@ -158,13 +181,16 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
 
 
 def test_third_implementation_composes_additively():
-    from finn.kernels.model.backend import Backend, pool_space
-    from finn.kernels.compute.thresholding import thresholding_pool, thresholding_shared
+    from dataclasses import replace
+    from finn.kernels.model.backend import Backend
+    from finn.kernels.compute.thresholding import thresholding_kernel, thresholding_pool
 
+    # A 4th backend adds to the pool with zero edits. Compose through the Kernel (the full
+    # space, so the parameters pool folds in and thresholdDataType's cross-pool dep resolves) —
+    # the compute pool alone is a fragment, not a schema.
     stub = Backend(name="thresholding_stub", language="stub", sources=("stub.sv",))
-    axes, derived, predicates = thresholding_shared()
     pool3 = thresholding_pool() + (stub,)
-    schema3 = pool_space("backend", axes, derived, predicates, pool3)
+    schema3 = replace(thresholding_kernel(), pool=pool3).compile()
     r = resolve(schema3, make_context(), base_assignment(backend="thresholding_stub"))
     assert isinstance(r, Point)
     assert _language_of(r, pool3) == "stub"

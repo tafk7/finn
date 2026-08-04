@@ -12,9 +12,14 @@ Thresholding is the model-stressing op: its memory-delivery cluster is NOT op-le
 (it is asymmetric and impl-local — HLS has mem_mode/ram_style, RTL has depth-triggers
 — and is DEFERRED entirely this task). What genuinely belongs to every implementation
 is only: the ``PE`` fold over ``NumChannels``, the threshold-step count ``numSteps``,
-the activation bias ``ActVal``, ``numInputVectors``, and the shared *intent*
-``runtime_writeable_weights`` (its realization is per-bundle). Derived: TMEM geometry,
+the activation bias ``ActVal``, and ``numInputVectors``. Derived: TMEM geometry,
 output/threshold datatypes, and the PE-scaled stream widths.
+
+The threshold DTYPE is the storage owner's published ``ParamDatatype.dtype`` (thresholds
+compose the parameters pool in embedded mode) — read, not re-derived. Runtime-writability
+is a delivery-topology concern owned by the parameters pool (``runtime_writeable_key``), not
+a self-declared op axis; the former ``runtime_writeable_weights`` op-axis was DEAD (no impl
+consumed it) and is deleted.
 
 Context convention: the ``thresholds`` tensor shape is ``(NumChannels, numSteps)``.
 Both backends have IDENTICAL integer dtype envelopes — there is intentionally NO
@@ -24,11 +29,10 @@ __init__).
 
 from __future__ import annotations
 
-from qonnx.core.datatype import DataType
-
 from finn.kernels.engine.axis import divisor_axis, fixed_axis, predicate_axis
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
+from finn.kernels.model.param_names import param_datatype_key
 
 from .names import INPUT, OUTPUT, THRESHOLDS
 
@@ -77,11 +81,6 @@ def op_axes():
         # activation accumulator bias (ActVal).
         predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
         predicate_axis("numInputVectors", "list[int]", _is_int_list, [1]),
-        # Shared INTENT to be runtime-writable; the delivery mechanism is per-bundle.
-        # (mem_mode/ram_style deferred entirely this task.)
-        predicate_axis(
-            "runtime_writeable_weights", "{0,1}", lambda v: v in (0, 1), 0
-        ),
     )
 
 
@@ -95,17 +94,12 @@ def _tmem(p, ctx):
 
 
 def _threshold_datatype(p, ctx):
-    # Threshold (weight) dtype narrowed from actual values when statically known,
-    # else the graph dtype. Mirrors the mvau weight-dtype derive.
-    thr = ctx.initializer(THRESHOLDS)
-    if thr is None or p.get("runtime_writeable_weights", 0):
-        return ctx.tensor_datatype(THRESHOLDS)
-    t_min = float(thr.min())
-    t_max = float(thr.max())
-    if t_min < 0:
-        extreme = t_min if abs(t_min) > t_max else -t_max - 1
-        return DataType.get_smallest_possible(extreme)
-    return DataType.get_smallest_possible(t_max)
+    # The threshold storage OWNER already applied the visibility regime to the dtype: the
+    # published ParamDatatype.dtype is the value-narrowed dtype (owner sees values) or the graph
+    # envelope (blind). Thresholds resolve only to embedded today → always visible → value-eval,
+    # identical to the old inline narrowing. Just read the authority — no re-derivation, no
+    # runtime-writable branch (that read was dead; its axis is deleted in T2).
+    return p[param_datatype_key(THRESHOLDS)].dtype
 
 
 def _instream_width(p, ctx):
@@ -122,7 +116,13 @@ def op_derived():
         # No outputDataType derived: the output dtype IS the graph output dtype (the trivial
         # DatatypeSpec — None → graph fallback), resolved uniformly like every other output's
         # derived_dtype. The out port declares no derived_dtype; no second mechanism here.
-        Derived("thresholdDataType", _threshold_datatype),
+        # thresholdDataType reads the storage owner's published ParamDatatype (a parameters-pool
+        # derived), so it declares a cross-pool dep — the unified topo-sort orders it after.
+        Derived(
+            "thresholdDataType",
+            _threshold_datatype,
+            deps={param_datatype_key(THRESHOLDS)},
+        ),
         Derived("instream_width", _instream_width),
         Derived("outstream_width", _outstream_width),
     )

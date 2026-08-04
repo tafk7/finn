@@ -19,16 +19,18 @@ fixed layer but "shared by all impls of THIS op". The two bundles contribute
     gate. No device feasibility gate (RTL is the default).
 
 Op-level shared is deliberately SMALL (``shared.py``): ``PE`` (folds ``NumChannels``),
-``numSteps``, ``ActVal``, ``numInputVectors``, ``runtime_writeable_weights`` (shared
-intent). Both backends have IDENTICAL integer dtype envelopes — there is intentionally
-NO per-bundle dtype feasibility gate (a fabricated one was falsified;
+``numSteps``, ``ActVal``, ``numInputVectors``. The threshold dtype is read from the storage
+owner's published ``ParamDatatype`` (thresholds compose the parameters pool in embedded mode),
+not re-derived; runtime-writability is a parameters-pool delivery concern, not a self-declared
+op axis (the former ``runtime_writeable_weights`` op-axis was dead and is deleted). Both
+backends have IDENTICAL integer dtype envelopes — there is intentionally NO per-bundle dtype
+feasibility gate (a fabricated one was falsified;
 ``kernel-design/kernel-final-design/toy-vs-brainsmith-thresholding.md`` A1).
 """
 
 from __future__ import annotations
 
 from finn.kernels.engine.design_space import DesignSpace
-from finn.kernels.model.backend import BACKEND_AXIS, pool_space
 
 from .names import (  # noqa: F401 (re-exported)
     INPUT,
@@ -48,7 +50,6 @@ from . import impl_rtl  # noqa: E402,F401
 from .op import (  # noqa: E402,F401 (re-exported public surface)
     ThresholdingKernelOp,
     thresholding_kernel,
-    thresholding_kernel_space,
 )
 
 
@@ -63,18 +64,16 @@ def thresholding_pool():
 
 
 def thresholding_space() -> DesignSpace:
-    """The full Thresholding design space as a bare resolve ``DesignSpace`` (compute pool only,
-    no delivered parameters). The Kernel-composed schema (adding the ``parameters.*``
-    namespace) is :func:`thresholding_kernel_space`."""
-    axes, derived, predicates = thresholding_shared()
-    return pool_space(
-        BACKEND_AXIS,
-        axes,
-        derived,
-        predicates,
-        thresholding_pool(),
-        unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
-    )
+    """The Thresholding design space — the full compose (``thresholding_kernel().compile()``).
+
+    THE single standardized space, symmetric with :func:`~finn.kernels.compute.mvau.mvau_space`:
+    the widest space the kernel could be, including the ``parameters.*`` pool it delivers
+    thresholds through. A specific scenario sharpens it (the pool defaults to ``embedded`` when
+    delivery axes go unpinned). There is deliberately NO compute-pool-only variant: the compute
+    pool alone is not a self-sufficient design space — its own ``thresholdDataType`` derived reads
+    the parameters pool's published ``ParamDatatype`` — so amputating the pool yields a fragment,
+    not a schema."""
+    return thresholding_kernel().compile()
 
 
 __all__ = [
@@ -82,7 +81,6 @@ __all__ = [
     "thresholding_pool",
     "thresholding_space",
     "thresholding_kernel",
-    "thresholding_kernel_space",
     "ThresholdingKernelOp",
     "THRESHOLDING_HLS",
     "THRESHOLDING_RTL",

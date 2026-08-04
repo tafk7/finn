@@ -290,7 +290,7 @@ def _norm_header_ws(s):
 def test_thresholding_hls_thresh_h_matches_finn():
     from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
     from finn.kernels.engine.resolve import resolve
-    from finn.kernels.compute.thresholding import THRESHOLDING_HLS, thresholding_kernel_space
+    from finn.kernels.compute.thresholding import THRESHOLDING_HLS, thresholding_space
     from finn.kernels.compute.thresholding.emit_hls import _thresh_h
 
     T = np.sort(np.array([[0, 40, 80, 120, 160, 200, 255]] * 4, dtype=np.float32), axis=-1)
@@ -309,7 +309,7 @@ def test_thresholding_hls_thresh_h_matches_finn():
         finn_thresh = open(os.path.join(d, "thresh.h")).read()
 
     ctx = _thresh_ctx(T, idt, tdt, odt)
-    point = resolve(thresholding_kernel_space(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
+    point = resolve(thresholding_space(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
     ours_thresh = _thresh_h(point, ctx)
     assert _norm_header_ws(finn_thresh) == _norm_header_ws(ours_thresh)
 
@@ -320,7 +320,7 @@ def test_thresholding_rtl_dat_matches_finn():
     from finn.kernels.model.backend import emit_point
     from finn.kernels.compute.thresholding import (
         THRESHOLDING_RTL,
-        thresholding_kernel_space,
+        thresholding_space,
         thresholding_pool,
     )
 
@@ -342,7 +342,7 @@ def test_thresholding_rtl_dat_matches_finn():
                 finn_dats[f[f.index("threshs_"):]] = open(os.path.join(d, f)).read()
 
     ctx = _thresh_ctx(T, idt, tdt, odt)
-    point = resolve(thresholding_kernel_space(), ctx, {"backend": THRESHOLDING_RTL, "PE": 2})
+    point = resolve(thresholding_space(), ctx, {"backend": THRESHOLDING_RTL, "PE": 2})
     arts = emit_point(thresholding_pool(), point, ctx)
     ours_dats = {}
     for f in arts.data_files:
