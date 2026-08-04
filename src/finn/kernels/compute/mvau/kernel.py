@@ -34,12 +34,11 @@ Tensor-name convention for the Context this schema resolves against:
 from __future__ import annotations
 
 from finn.kernels.engine.axis import predicate_axis
-from finn.kernels.engine.constraints import IsStatic, ShapeRank, ValueNonNeg
+from finn.kernels.engine.constraints import ShapeRank, ValueNonNeg
 from finn.kernels.engine.derived import Derived
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
-from finn.kernels.model.param_names import runtime_writeable_key
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
 
 from .registry import build_pool
@@ -81,11 +80,15 @@ def mvau_interfaces():
     block; ``out`` iterates vectors and holds MH."""
     return (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
-        # weights — required-static unless runtime-writable (base:782); an IsStatic constraint.
-        InterfaceSchema(
-            "weights", Direction.IN, block=[FULL, FULL],  # (MW, MH)
-            constraints=(IsStatic(WEIGHTS, unless=weights_may_change),),
-        ),
+        # weights — no IsStatic constraint. Initializer-presence already INFORMS the system
+        # without an op constraint: the frontend can_infer_from rejects a no-initializer MatMul
+        # (op.py), and the delivery contract's _demand_for returns None (a live edge, not a
+        # delivered param) when an interface has no initializer. IsStatic duplicated the former
+        # and contradicted the latter; it was also wrong for a future dynamic backend
+        # (activation x activation) where a no-initializer weights port is legal. The residual
+        # rule it covered — embedded with no values to bake — is topology feasibility (a storage
+        # topology needs values to store), homed in the parameters pool, not on the op (deferred).
+        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
         # thresholds — the OPTIONAL activation operand, (NumChannels, numSteps). Present iff a
         # threshold initializer is attached (a 3-input node); absent nodes skip it in every
         # Context-reading loop. Constant-only in the fused core, so no impl folds it. Rank-2
@@ -110,14 +113,6 @@ def mvau_interfaces():
 # =============================================================================
 
 # -- small guard/helper functions (named, not lambdas, for legible tracebacks) --
-
-
-def weights_may_change(p) -> bool:
-    """Whether weights are not statically known — accDataType/weightDataType then use
-    worst-case bounds rather than actual values (base:482-498). The staticness fact is
-    decided by the composed ``parameters.*`` fields; read with ``.get`` so it is safe on a
-    point where the parameters pool is absent (a param-free op) — absent ⇒ static."""
-    return bool(p.get(runtime_writeable_key(WEIGHTS), 0))
 
 
 def _is_nonneg_int(v) -> bool:

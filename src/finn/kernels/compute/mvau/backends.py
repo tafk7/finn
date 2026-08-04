@@ -25,8 +25,8 @@ identity — parked here rather than in ``kernel.py`` so the identity file stays
   specs. The narrowed WEIGHT dtype is NOT here: it belongs to the storage OWNER, which
   publishes it as ``parameters.<iface>.storageDataType`` (a ``StorageDescriptor``).
 
-Depends only on the identity's tensor-name constants + ``weights_may_change`` (imported from
-``kernel.py``) — a one-directional edge, no cycle. The impl bundles import these via ``op.py``.
+Depends only on the identity's tensor-name constants (imported from ``kernel.py``) — a
+one-directional edge, no cycle. The impl bundles import these via ``op.py``.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from finn.kernels.engine.datatype_spec import RegisterSpec
 from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
 from finn.kernels.model.param_names import storage_datatype_key
 
-from .kernel import INPUT, OUTPUT, THRESHOLDS, WEIGHTS, weights_may_change
+from .kernel import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
 
 
 # =============================================================================
@@ -72,8 +72,8 @@ def _acc_datatype(p, ctx):
     # published authority instead of a re-derived op-side predicate:
     #   trusted (owner sees values) -> per-column value-eval over the real matrix (FINN-tight)
     #   blind   (runtime-writable/…) -> worst-case dtype envelope over an (MW,MH) bounds matrix
-    # values_trusted == (not weights_may_change) on the composed point by construction, so this
-    # is bit-identical to the pre-seam sizing; the HW golden is the guard.
+    # values_trusted mirrors the pre-seam static-vs-runtime-writable gate on the composed point
+    # by construction, so this is bit-identical to the old sizing; the HW golden is the guard.
     idt = ctx.tensor_datatype(INPUT)
     descriptor = p[storage_datatype_key(WEIGHTS)]
     weights = ctx.initializer(WEIGHTS)

@@ -51,7 +51,6 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     op_axes,
     op_derived,
     op_predicates,
-    weights_may_change,
 )
 
 # The BACKEND-SCOPED shared contract (fold map + datatype derivations) — re-exported so the

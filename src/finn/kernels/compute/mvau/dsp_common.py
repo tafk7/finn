@@ -35,7 +35,9 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
-from .op import INPUT, THRESHOLDS, WEIGHTS, weights_may_change
+from finn.kernels.model.param_names import runtime_writeable_key
+
+from .op import INPUT, THRESHOLDS, WEIGHTS
 
 # The RTL/DSP MVU cores are integer matmuls (the signed/bitwidth gates in _rtl_mvu_feasible
 # assume it). Declared as datatype support per port and shared by both DSP bundles, so the
@@ -48,13 +50,16 @@ RTL_MVU_SUPPORT = {
 
 def _narrow_weights(p, ctx):
     # rtl:279-288 — data-dependent packing eligibility (MVAU-specific: reads MVAU's
-    # weight tensor + mlo axis). Runtime-writable weights cannot be value-narrow-packed
-    # (weights_may_change): you cannot value-narrow weights you cannot see statically.
+    # weight tensor + mlo axis). Runtime-writable weights cannot be value-narrow-packed:
+    # you cannot value-narrow weights you cannot see statically. Reads the composed delivery
+    # axis directly (.get so it is safe on a param-free point — absent ⇒ static). The
+    # mlo_max_iter term is packing eligibility (coord B), out of the dtype-authority scope.
     weights = ctx.initializer(WEIGHTS)
     if weights is None:
         return 0
     wdt = ctx.tensor_datatype(WEIGHTS)
-    if np.min(weights) == wdt.min() or weights_may_change(p) or p.get("mlo_max_iter", 0) > 1:
+    runtime_writeable = bool(p.get(runtime_writeable_key(WEIGHTS), 0))
+    if np.min(weights) == wdt.min() or runtime_writeable or p.get("mlo_max_iter", 0) > 1:
         return 0
     return 1
 
