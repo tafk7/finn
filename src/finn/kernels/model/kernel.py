@@ -364,7 +364,10 @@ class Kernel:
                     derived=tuple(op.derived) + tuple(sub.derived),
                     predicates=tuple(op.predicates) + tuple(sub.predicates),
                 )
-        return op
+        # Validate + order the COMPLETE space now (all pools folded in): a cross-pool derived
+        # dep (accDataType -> parameters.<iface>.storageDataType) resolves here, where its
+        # target is present, and a genuine typo still fails fast — at compile, before resolve.
+        return op.finalize()
 
     def configure(self, context: Context, assignment: Mapping | None = None):
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
