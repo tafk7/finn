@@ -208,7 +208,7 @@ class MvauKernelOp(KernelOp):
         # node has thresholds (they map the accumulator down), or the weight-derived
         # accumulator type when it has none. Resolve it so infer propagates the exact
         # (possibly narrowed) type — the SAME rule the stream-width fold and emit read. The
-        # spec is a RegisterSpec (it carries the ParamDatatype dep); resolve_datatype_spec
+        # spec is a DependentSpec (it carries the ParamDatatype dep); resolve_datatype_spec
         # unwraps it, so this reads authority off the ParamDatatype like every other consumer.
         if index == 0:
             return resolve_datatype_spec(mvau_out_dtype(), iface=OUTPUT, point=point, context=ctx)

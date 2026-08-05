@@ -34,7 +34,7 @@ from __future__ import annotations
 import numpy as np
 from qonnx.util.basic import calculate_matvec_accumulator_range
 
-from finn.kernels.engine.datatype_spec import RegisterSpec
+from finn.kernels.engine.datatype_spec import DependentSpec
 from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
 from finn.kernels.model.param_names import param_datatype_key
 
@@ -62,7 +62,7 @@ COMPUTE_STREAM = {
 # published pd (parameters.<iface>.datatype.values_visible). The accumulator is
 # compute-core-owned storage; it depends on delivery only THROUGH that published bit, never by
 # peeking at storage it does not own (design-space-model §2). The ParamDatatype is a parameters-
-# pool derived, so accDataType declares a dep on it (RegisterSpec below) — the unified topo-sort
+# pool derived, so accDataType declares a dep on it (DependentSpec below) — the unified topo-sort
 # orders acc after storage.
 # =============================================================================
 
@@ -109,11 +109,11 @@ def mvau_out_dtype():
     width fold reads the realized output type. Backend-scoped: a future float core supplies a
     different rule.
 
-    Wrapped in a :class:`~finn.kernels.engine.datatype_spec.RegisterSpec` with the WEIGHTS
+    Wrapped in a :class:`~finn.kernels.engine.datatype_spec.DependentSpec` with the WEIGHTS
     storage dep: under ``noActivation`` the output IS the accumulator, so the out-port stream
     width transitively reads the ParamDatatype and must order after it. The tiling engine's
     ``stream_width.out`` derived inherits these deps (:func:`~finn.kernels.model.tiling._width_derived`)."""
-    return RegisterSpec(_output_datatype, deps={param_datatype_key(WEIGHTS)})
+    return DependentSpec(_output_datatype, deps={param_datatype_key(WEIGHTS)})
 
 
 def mvau_register_dtypes():
@@ -126,7 +126,7 @@ def mvau_register_dtypes():
     the sibling ``derived_dtype`` on the port (:func:`mvau_out_dtype`).
 
     ``accDataType`` reads the WEIGHTS storage owner's published pd, a parameters-pool
-    derived — so it is wrapped in a :class:`~finn.kernels.engine.datatype_spec.RegisterSpec`
+    derived — so it is wrapped in a :class:`~finn.kernels.engine.datatype_spec.DependentSpec`
     declaring a dep on ``param_datatype_key(WEIGHTS)``. The unified topo-sort (R2) orders the
     accumulator after that pd, across the compute/parameters pool boundary.
 
@@ -136,5 +136,5 @@ def mvau_register_dtypes():
     reads the graph dtype directly (HLS ``context.tensor_datatype(WEIGHTS)``, RTL
     ``point.narrow_weights``), so there was never a runtime reader of the old register."""
     return {
-        "accDataType": RegisterSpec(_acc_datatype, deps={param_datatype_key(WEIGHTS)}),
+        "accDataType": DependentSpec(_acc_datatype, deps={param_datatype_key(WEIGHTS)}),
     }

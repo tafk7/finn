@@ -37,17 +37,26 @@ from typing import Any, Callable
 
 
 @dataclass(frozen=True)
-class RegisterSpec:
-    """A ``DatatypeSpec`` for an internal register that ALSO declares derived ``deps``.
+class DependentSpec:
+    """A ``DatatypeSpec`` that ALSO declares the deriveds its derivation reads.
 
-    A bare register value in ``Backend.derived_dtypes`` is a plain ``DatatypeSpec`` with no
-    ordering constraint (it reads only axes + Context). When a register's derivation must read
-    ANOTHER derived — e.g. MVAU's ``accDataType`` reads the storage owner's published
-    ``parameters.<iface>.datatype`` — it wraps its spec in a ``RegisterSpec`` carrying
-    the dep names. ``_merge_derived_dtypes`` unwraps it: the inner ``spec`` resolves exactly as
-    before, and the ``deps`` flow onto the merged :class:`~finn.kernels.engine.derived.Derived`
-    so the unified topo-sort orders this register after the deriveds it reads (design-space-
-    model §2 / R2). Plain specs (the common case) need no wrapper."""
+    A bare spec has no ordering constraint (it reads only axes + Context). When a derivation
+    reads ANOTHER derived — e.g. MVAU's ``accDataType`` reads the storage owner's published
+    ``parameters.<iface>.datatype`` — it wraps its spec here, carrying the dep names. Both
+    consumers unwrap identically via :func:`spec_and_deps`: the inner ``spec`` resolves exactly
+    as a bare one, and the ``deps`` flow onto the synthesized
+    :class:`~finn.kernels.engine.derived.Derived` so the topo-sort orders it correctly.
+
+    WHY A WRAPPER AND NOT JUST A ``Derived``: a ``DatatypeSpec`` is a UNION (None / DataType /
+    str / VALUE_OPTIMIZED / Callable), not a closure — that union is the vocabulary's whole
+    point, and it is load-bearing across both ops and both topologies. The ``Derived`` that
+    ultimately carries these deps is SYNTHESIZED later (by ``_merge_derived_dtypes`` for a
+    register, ``_width_derived`` for a port), so at declaration time there is no ``deps`` field
+    to write into. Pairing the spec with its deps is therefore the minimum needed, not
+    redundancy.
+
+    Formerly ``RegisterSpec`` — a misnomer, since ``Interface.derived_dtype`` (a PORT, not a
+    register) uses it too."""
 
     spec: Any  # the wrapped DatatypeSpec (None, DataType, str, VALUE_OPTIMIZED, or Callable)
     deps: frozenset[str] = field(default_factory=frozenset)
@@ -55,6 +64,16 @@ class RegisterSpec:
     def __post_init__(self):
         if not isinstance(self.deps, frozenset):
             object.__setattr__(self, "deps", frozenset(self.deps))
+
+
+def spec_and_deps(spec) -> tuple[Any, frozenset[str]]:
+    """Normalize any declared dtype spec to ``(inner_spec, deps)``.
+
+    The ONE place the optional wrapper is unwrapped, so a port and a register cannot drift
+    into handling it differently — they previously each open-coded the same isinstance check."""
+    if isinstance(spec, DependentSpec):
+        return spec.spec, spec.deps
+    return spec, frozenset()
 
 
 class _ValueOptimizedType:
@@ -115,8 +134,7 @@ def resolve_datatype_spec(spec: Any, *, iface: str, point, context):
     """
     from qonnx.core.datatype import BaseDataType
 
-    if isinstance(spec, RegisterSpec):
-        spec = spec.spec  # the deps are consumed at merge; resolution reads the inner spec
+    spec, _deps = spec_and_deps(spec)  # deps are consumed at merge; resolution reads the spec
     if spec is None:
         return context.tensor_datatype(iface)
     if isinstance(spec, BaseDataType):

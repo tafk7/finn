@@ -527,19 +527,18 @@ def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
         for name in bundle.derived_dtypes:
             owners.setdefault(name, []).append(bundle)
 
-    from ..engine.datatype_spec import RegisterSpec
+    from ..engine.datatype_spec import spec_and_deps
 
     merged: list[Derived] = []
     for name, owning in owners.items():
         by_impl = {b.name: b.derived_dtypes[name] for b in owning}
-        # A register may wrap its spec in a RegisterSpec to declare derived deps (e.g.
-        # accDataType reads the storage owner's ParamDatatype). Union the deps across
-        # owning impls — mirrors _merge_axes' dep union — so the topo-sort orders the merged
-        # register after whatever any owning impl reads. Bare specs contribute no deps.
+        # A spec may declare derived deps (e.g. accDataType reads the storage owner's
+        # ParamDatatype). Union them across owning impls — mirrors _merge_axes' dep union —
+        # so the topo-sort orders the merged register after whatever any owning impl reads.
+        # Bare specs contribute none. Unwrapped through the SAME helper the port path uses.
         deps: set[str] = {root_name}  # the dispatch reads the root to pick the owning spec
         for spec in by_impl.values():
-            if isinstance(spec, RegisterSpec):
-                deps |= spec.deps
+            deps |= set(spec_and_deps(spec)[1])
         merged.append(
             Derived(name, _dispatch_dtype_compute(root_name, name, by_impl), deps=frozenset(deps))
         )
