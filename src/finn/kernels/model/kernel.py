@@ -373,20 +373,74 @@ class Kernel:
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
         return resolve(self.compile(), context, assignment)
 
+    def _early_verdict(self, schema, context: Context, impl_name: str):
+        """Decide ``impl_name``'s feasibility WITHOUT a full resolve, where that is sound.
+
+        Returns ``False`` when some fold-independent rule rejects (definitively infeasible),
+        ``True`` when every rule for this member is fold-independent and all pass
+        (definitively feasible), and ``None`` when the answer genuinely needs a
+        configuration — the caller then runs the full-resolve trial exactly as before.
+
+        The soundness argument, in both directions:
+
+        * A **stratum ≤ 1** predicate's read-closure touches nothing but the selection root.
+          Its verdict therefore cannot change with any folding choice, so a rejection here is
+          a rejection the full resolve would also produce — no legal point exists for this
+          member at ANY fold. This is the case that turns a float MatMul from three full
+          resolves into a handful of dtype comparisons.
+        * ``True`` is only returned when the member has NO stratum-2 rule left to run. If
+          one exists it might reject at default fold, so we must not pre-empt the resolve.
+
+        Anything unexpected — a rule that raises, a closure naming a derived we have not
+        computed — yields ``None``. Falling back to the existing path is always safe; being
+        clever here is not."""
+        trial = {BACKEND_AXIS: impl_name}
+        view = Point(trial)
+        decided = 0
+        for pred in schema.predicates_upto(1):
+            # Every name the rule declares must be pinned here, else it would read an absent
+            # key. Its stratum says it reads only roots; a DIFFERENT root may be unpinned.
+            if not all(dep in trial for dep in pred.deps | pred.optional_deps):
+                continue
+            try:
+                reason = pred.check(view, context)
+            except Exception:
+                # A rule that cannot run against a root-only point tells us nothing. Note
+                # this does NOT swallow a typo-class kernel bug: returning None falls
+                # through to the full-resolve trial, which runs the same rule against a
+                # complete point and lets the exception propagate (INV5). The early path
+                # may only ever make a query CHEAPER, never quieter.
+                return None
+            if reason is not None:
+                return False
+            decided += 1
+
+        # Only claim feasibility when NOTHING is left to check; otherwise a stratum-2 rule
+        # could still reject at default fold and we must not pre-empt the resolve.
+        return True if decided == len(schema.predicates) else None
+
     def first_feasible_backend(self, context: Context) -> str | None:
         """The NAME of the first pool member (declaration order) that yields a legal
         :class:`Point` for this Context, or ``None`` if none does — the SELECTION query behind
         ``PerNodePolicy(first_feasible)`` (Seam B). Trials each backend with only its
         ``backend`` axis pinned (unpinned folding axes take defaults — the
-        specialized-at-default-fold semantics), returning the first that resolves. Reuses the
-        engine ``resolve`` unchanged.
+        specialized-at-default-fold semantics), returning the first that resolves.
 
-        This is the SAME per-backend trial :meth:`has_feasible_point` runs, so infer's claim
-        check (the boolean) and resolve's selection (the name) converge on ONE query — pool
-        order IS selection precedence. A node whose datatypes disqualify it from EVERY backend
-        (e.g. float32 where only integer is feasible) returns ``None``."""
+        Pool order IS selection precedence, and this is the SAME per-backend trial
+        :meth:`has_feasible_point` runs, so infer's claim check (the boolean) and resolve's
+        selection (the name) converge on ONE query. A node whose datatypes disqualify it from
+        EVERY backend (e.g. float32 where only integer is feasible) returns ``None``.
+
+        Each member is first offered to :meth:`_early_verdict`, which answers from the
+        fold-independent rules alone where it soundly can. The precedence order and the
+        answer are unchanged by that — only the cost is."""
         schema = self.compile()
         for impl in self.pool:
+            early = self._early_verdict(schema, context, impl.name)
+            if early is False:
+                continue  # fold-independent rejection: no fold could rescue this member
+            if early is True:
+                return impl.name
             try:
                 result = resolve(schema, context, {BACKEND_AXIS: impl.name})
             except (ValueError, KeyError, AbsentAxisError):
