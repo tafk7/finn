@@ -81,8 +81,11 @@ def test_only_selected_bundle_predicates_fire():
     # bad selected → both fire.
     r = resolve(schema, _ctx(), {"backend": "bad"})
     assert isinstance(r, Illegal)
-    assert "bad is never feasible" in r.reasons
-    assert "bad pred" in r.reasons
+    # Reasons carry a provenance suffix — a selection-guarded bundle rule is GENERATED, and
+    # the suffix is what says which mechanism produced it. Substring, not exact match.
+    assert any("bad is never feasible" in reason for reason in r.reasons)
+    assert any("bad pred" in reason for reason in r.reasons)
+    assert all("guarded on backend" in reason for reason in r.reasons)
 
 
 # --- S2: additivity / no sibling coupling -----------------------------------

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from math import gcd
 from typing import Any, Union
 
+from ..engine import provenance
 from ..engine.point import Point
 
 # A stream-tiling entry: a bare axis name, a plain int, or a composed expression.
@@ -475,7 +476,7 @@ def _fold_dial_axis(dial: str, binds, by_name):
     def default(p, ctx):
         return 1
 
-    return Axis(name=dial, domain=domain, default=default)
+    return Axis(name=dial, domain=domain, default=default, origin=provenance.fold_dial(dial, binds))
 
 
 def _divisibility_predicate(dial: str, iface, dim_idx: int):
@@ -497,6 +498,7 @@ def _divisibility_predicate(dial: str, iface, dim_idx: int):
         check=check,
         description=f"{iface.tensor} block[{dim_idx}] % {dial} == 0",
         optional_deps={dial},
+        origin=provenance.divisibility(dial, iface.tensor, dim_idx),
     )
 
 
@@ -539,4 +541,9 @@ def _width_derived(iface, width_expr: TileExpr, derived_dtype=None):
         )
         return int(elems) * dt.bitwidth()
 
-    return Derived(stream_width_key(iface.name), compute, deps=frozenset(deps))
+    return Derived(
+        stream_width_key(iface.name),
+        compute,
+        deps=frozenset(deps),
+        origin=provenance.stream_width(iface.name),
+    )

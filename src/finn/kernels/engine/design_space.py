@@ -107,6 +107,33 @@ class DesignSpace:
     def axis_names(self) -> frozenset[str]:
         return frozenset(a.name for a in self.axes)
 
+    def origin_of(self, name: str) -> str:
+        """Where the entry called ``name`` came from — ``""`` if it declares nothing.
+
+        The mechanical half of "trace what produced this key": most entries in a compiled
+        space are generated, and the name alone does not say by which mechanism. See
+        :mod:`finn.kernels.engine.provenance`."""
+        for node in tuple(self.axes) + tuple(self.derived):
+            if node.name == name:
+                return node.origin
+        raise KeyError(f"{name!r} is not an axis or derived of this space")
+
+    def describe_entry(self, name: str) -> str:
+        """One line describing an entry: its name, origin and declared deps. The lookup a
+        human runs when an error names a key they did not write."""
+        for node in tuple(self.axes) + tuple(self.derived):
+            if node.name == name:
+                kind = "axis" if node in self.axes else "derived"
+                parts = [f"{name} ({kind})"]
+                if node.origin:
+                    parts.append(node.origin)
+                if node.deps:
+                    parts.append(f"reads {sorted(node.deps)}")
+                if node.optional_deps:
+                    parts.append(f"may read {sorted(node.optional_deps)}")
+                return " | ".join(parts)
+        raise KeyError(f"{name!r} is not an axis or derived of this space")
+
     # -- stratum ------------------------------------------------------------
 
     def stratum_of(self, entry) -> int:

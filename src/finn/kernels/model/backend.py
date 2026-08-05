@@ -32,6 +32,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..engine import provenance
 from ..engine.axis import Axis, discrete_axis
 from ..engine.derived import Derived
 from .artifacts import Artifacts, RtlModule
@@ -443,6 +444,11 @@ def _merge_axes(root_name, pool) -> list[Axis]:
                 exists=_dispatch_exists(root_name, owner_names, by_impl),
                 deps=frozenset(dep_union),
                 optional_deps=frozenset(optional_union),
+                origin=provenance.merged(
+                    "axis",
+                    root_name,
+                    provenance.common(ax.origin for ax in by_impl.values()),
+                ),
             )
         )
     return merged
@@ -510,6 +516,11 @@ def _merge_derived(root_name, pool) -> list[Derived]:
                 _dispatch_compute(root_name, by_impl),
                 deps=deps,
                 optional_deps=optional,
+                origin=provenance.merged(
+                    "derived",
+                    root_name,
+                    provenance.common(d.origin for d in by_impl.values()),
+                ),
             )
         )
     return merged
@@ -540,7 +551,12 @@ def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
         for spec in by_impl.values():
             deps |= set(spec_and_deps(spec)[1])
         merged.append(
-            Derived(name, _dispatch_dtype_compute(root_name, name, by_impl), deps=frozenset(deps))
+            Derived(
+                name,
+                _dispatch_dtype_compute(root_name, name, by_impl),
+                deps=frozenset(deps),
+                origin=provenance.merged("register dtype", root_name),
+            )
         )
     return merged
 
@@ -587,7 +603,12 @@ def _field_derived(root_name, pool, field_name, *, key=None) -> Derived:
     def compute(point, _context, _root=root_name, _by=by_impl):
         return _by[point[_root]]
 
-    return Derived(key or field_name, compute, deps={root_name})
+    return Derived(
+        key or field_name,
+        compute,
+        deps={root_name},
+        origin=provenance.projection(field_name, root_name),
+    )
 
 
 def _wrap_predicates(root_name, pool) -> list[Predicate]:
@@ -630,4 +651,5 @@ def _guarded_predicate(root_name, impl_name, pred) -> Predicate:
         description=pred.describe(),
         deps=pred.deps | {root_name},
         optional_deps=pred.optional_deps - {root_name},
+        origin=pred.origin or provenance.selection_guard(root_name, impl_name),
     )

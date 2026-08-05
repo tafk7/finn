@@ -38,6 +38,7 @@ class Predicate:
     description: str = ""
     deps: frozenset[str] = field(default_factory=frozenset)
     optional_deps: frozenset[str] = field(default_factory=frozenset)
+    origin: str = ""  # where this came from; see engine.provenance
 
     def __post_init__(self):
         if not isinstance(self.deps, frozenset):

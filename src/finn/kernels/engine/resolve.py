@@ -87,7 +87,7 @@ def resolve(
     for pred in schema.predicates:
         reason = pred.check(_view(point), context)
         if reason is not None:
-            reasons.append(reason)
+            reasons.append(_with_origin(reason, pred))
     if reasons:
         return Illegal(reasons)
 
@@ -151,7 +151,7 @@ def _resolve_wanted(
             continue  # cannot decide from what we computed — do not guess
         reason = pred.check(_view(point), context)
         if reason is not None:
-            reasons.append(reason)
+            reasons.append(_with_origin(reason, pred))
     return Illegal(reasons) if reasons else Point(point)
 
 
@@ -174,6 +174,16 @@ def _closure(schema: DesignSpace, roots) -> frozenset[str]:
             d for d in node.deps | node.optional_deps if d in by_name and d not in seen
         )
     return frozenset(seen)
+
+
+def _with_origin(reason: str, pred) -> str:
+    """Append a generated rule's provenance to its reason.
+
+    A hand-written rule's description already names its file and intent; a GENERATED one
+    (a divisibility check, a selection-guarded bundle rule) reads as if it came from
+    nowhere. Suffixing the origin is what turns "who wrote this rule?" into a lookup.
+    Only generated entries carry an origin, so an authored rule's reason is unchanged."""
+    return f"{reason} [{pred.origin}]" if pred.origin else reason
 
 
 def _view(values: dict) -> Point:

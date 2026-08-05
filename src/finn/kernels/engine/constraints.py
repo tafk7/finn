@@ -39,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from . import provenance
 from .predicate import Predicate
 
 
@@ -182,4 +183,5 @@ def compile_constraint(constraint) -> Predicate:
         check=check,
         description=constraint.describe(),
         deps=getattr(constraint, "deps", frozenset()),
+        origin=provenance.constraint(f"{type(constraint).__name__}({constraint.describe()})"),
     )
