@@ -121,6 +121,18 @@ def test_sibling_coupling_via_optional_derived_dep_rejected():
         pool_space("backend", (), (), (), (a, b))
 
 
+def test_sibling_coupling_via_predicate_rejected():
+    """The third entry kind. A predicate declaring a dep on a sibling's axis couples exactly
+    as a derived does."""
+    a = Backend(name="a", axes=(discrete_axis("a_axis", {1, 2}, 1),))
+    b = Backend(
+        name="b",
+        predicates=(Predicate(lambda p, c: None, "b rule", deps={"a_axis"}),),
+    )
+    with pytest.raises(PoolError, match="sibling"):
+        pool_space("backend", (), (), (), (a, b))
+
+
 def test_axis_may_depend_on_root_shared_and_own():
     shared = discrete_axis("shared", {1, 2}, 1)
     a = Backend(

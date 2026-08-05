@@ -69,7 +69,7 @@ def num_lanes(w, a, version, narrow) -> int:
     return 1 + (a_width - (0 if narrow else 1) - w) // min_lane_width
 
 
-@predicate("RTL rejects resType=lut")
+@predicate("RTL rejects resType=lut", deps={"resType"})
 def rtl_no_lut(p, ctx):
     # Defensive: DSP RTL cores expose no LUT path, so the resType domain is {dsp} and
     # lut is already rejected at the domain check; kept for an explicit message
@@ -79,7 +79,9 @@ def rtl_no_lut(p, ctx):
     return None
 
 
-@predicate("SEGMENTLEN feasible only if ref_clk > 0.741ns")
+@predicate(
+    "SEGMENTLEN feasible only if ref_clk > 0.741ns", optional_deps={"pumpedCompute"}
+)
 def segmentlen_feasible(p, ctx):
     clk = ctx.clk if ctx.clk is not None else 5.0
     ref_clk = clk / 2 if p.get("pumpedCompute", 0) else clk
@@ -88,7 +90,7 @@ def segmentlen_feasible(p, ctx):
     return None
 
 
-@predicate("pumpedCompute => SIMD != 1")
+@predicate("pumpedCompute => SIMD != 1", deps={"SIMD"}, optional_deps={"pumpedCompute"})
 def pumped_compute_needs_simd(p, ctx):
     if p.get("pumpedCompute", 0) and p.SIMD == 1:
         return "pumpedCompute with SIMD=1 is not meaningful (rtl:334)"

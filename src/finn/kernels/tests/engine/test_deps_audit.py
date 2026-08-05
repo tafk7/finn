@@ -160,7 +160,19 @@ def audit_resolve(schema, context, assignment=None):
         point[d.name] = d.compute(view(sink), context)
         check("derived", d, sink, derived_mode=True)
 
-    reasons = [r for p in schema.predicates if (r := p.check(view(), context)) is not None]
+    reasons = []
+    for pred in schema.predicates:
+        sink = set()
+        reason = pred.check(view(sink), context)
+        # STRICTER than the derived rule: a predicate must declare EVERY point read,
+        # including axes. A derived's deps exist for ORDERING, and axes are all fixed before
+        # any derived, so an axis read needs no declaration. A predicate's deps exist for
+        # STRATUM -- "what must be pinned before this rule is decidable" -- and the axes it
+        # touches are exactly what that question is about. Undeclared axis reads would make
+        # a stratum-2 rule look stratum-0 and get evaluated against an unpinned point.
+        check("predicate", pred, sink)
+        if reason is not None:
+            reasons.append(reason)
     result = Illegal(reasons) if reasons else Point(point)
     return result, violations
 

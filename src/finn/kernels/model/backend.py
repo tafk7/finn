@@ -346,13 +346,12 @@ def pool_space(
 def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:
     """A pool member may not depend on a sibling pool member's axis. Sibling
     coupling would break the additive property (adding a 4th bundle could change a
-    sibling's resolution). A bundle axis or derived may depend on the root, on op-level
-    shared axes, on its OWN bundle's axes, or on any derived — never on another bundle's
-    axis.
+    sibling's resolution). A bundle axis, derived or predicate may depend on the root, on
+    op-level shared axes, on its OWN bundle's axes, or on any derived — never on another
+    bundle's axis.
 
-    Covers a bundle's AXES and its DERIVED. Predicates carry no deps yet (engine hone Task
-    3.1); when they do they join this same walk — the entry kind is irrelevant to the
-    property, only the dep is."""
+    Covers all THREE entry kinds. The kind carrying the dep is irrelevant to the property;
+    only the dep is."""
     shared_names = {a.name for a in shared_axes} | {root_name}
     for bundle in pool:
         own = {a.name for a in bundle.axes}
@@ -360,7 +359,11 @@ def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:
         # A sibling's axis names, keyed by the sibling that owns them.
         siblings = {s.name: {a.name for a in s.axes} for s in pool if s.name != bundle.name}
 
-        for kind, nodes in (("axis", bundle.axes), ("derived", bundle.derived)):
+        for kind, nodes in (
+            ("axis", bundle.axes),
+            ("derived", bundle.derived),
+            ("predicate", bundle.predicates),
+        ):
             for node in nodes:
                 # Both required and optional deps couple: an optional dep is a real edge
                 # wherever the name exists, and a sibling's axis exists in the merged space.
@@ -610,9 +613,21 @@ def _wrap_predicates(root_name, pool) -> list[Predicate]:
 
 
 def _guarded_predicate(root_name, impl_name, pred) -> Predicate:
+    """Wrap a bundle predicate so it fires only when its bundle is selected.
+
+    The wrapper reads the selection root, so the guarded rule's deps are the inner rule's
+    plus that root. This is why so many rules read ONLY ``backend``: they are pure-Context
+    rules wearing a selection guard, and recognising that is what lets them be decided
+    without pinning any fold."""
+
     def check(point, context, _root=root_name, _name=impl_name, _p=pred):
         if point.get(_root) != _name:
             return None
         return _p.check(point, context)
 
-    return Predicate(check=check, description=pred.describe())
+    return Predicate(
+        check=check,
+        description=pred.describe(),
+        deps=pred.deps | {root_name},
+        optional_deps=pred.optional_deps - {root_name},
+    )

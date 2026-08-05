@@ -43,7 +43,7 @@ from .registry import register
 _INTEGER = DatatypeSupport(kind=DatatypeKind.INTEGER)
 
 
-@predicate("HLS: SIMD >= MW/1024")
+@predicate("HLS: SIMD >= MW/1024", deps={"SIMD"})
 def _hls_simd_lower_bound(p, ctx):
     mw = ctx.tensor_shape(WEIGHTS)[0]  # the weight block's reduction extent
     if p.SIMD < mw / 1024:

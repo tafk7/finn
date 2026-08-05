@@ -491,7 +491,13 @@ def _divisibility_predicate(dial: str, iface, dim_idx: int):
             return f"{_iface.tensor} block dim {_idx} = {block} not divisible by {_dial} = {val}"
         return None
 
-    return Predicate(check=check, description=f"{iface.tensor} block[{dim_idx}] % {dial} == 0")
+    # Reads the fold dial OPTIONALLY: the dial is guarded out under an impl that does not
+    # declare this fold, which the `val is None` branch above handles.
+    return Predicate(
+        check=check,
+        description=f"{iface.tensor} block[{dim_idx}] % {dial} == 0",
+        optional_deps={dial},
+    )
 
 
 def stream_width_key(iface_name: str) -> str:

@@ -37,7 +37,10 @@ from .op import (
 from .registry import register
 
 
-@predicate("mvau_dsp_packed feasibility (DSP58 ∧ w<=8 ∧ a<=9 ∧ NUM_LANES<=3)")
+@predicate(
+    "mvau_dsp_packed feasibility (DSP58 ∧ w<=8 ∧ a<=9 ∧ NUM_LANES<=3)",
+    deps={"narrow_weights"},
+)
 def _packed_feasible(p, ctx):
     # F1 — the DSP58 INT8-packed core (mvu_vvu_8sx9_dsp58.sv) is feasible only under
     # the FULL generate condition (mvu_vvu_axi.sv:313): DSP58 AND w<=8 AND a<=9 AND

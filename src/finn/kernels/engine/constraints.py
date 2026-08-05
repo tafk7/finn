@@ -69,6 +69,7 @@ class ValueNonNeg:
 
     iface: str
     when: Callable[[Any, Any], bool] | None = None
+    deps: frozenset[str] = frozenset()  # point keys `when` reads, if any
 
     def check(self, point, context) -> str | None:
         if self.when is not None and not self.when(point, context):
@@ -90,6 +91,7 @@ class IsStatic:
 
     iface: str
     unless: Callable[[Any], bool] | None = None
+    deps: frozenset[str] = frozenset()  # point keys `unless` reads, if any
 
     def check(self, point, context) -> str | None:
         if self.unless is not None and self.unless(point):
@@ -130,6 +132,7 @@ class CustomConstraint:
     fn: Callable[[Any, Any], str | None]
     desc: str = ""
     iface: str | None = None
+    deps: frozenset[str] = frozenset()  # point keys `fn` reads, if any
 
     def check(self, point, context) -> str | None:
         return self.fn(point, context)
@@ -142,7 +145,12 @@ def compile_constraint(constraint) -> Predicate:
     """Lower a constraint to a :class:`Predicate`, baking in the optional-port skip: the
     predicate noops when the constrained port's tensor is absent
     (``not context.has_tensor(iface)``). A constraint with no ``iface`` (a port-agnostic
-    ``CustomConstraint``) always runs."""
+    ``CustomConstraint``) always runs.
+
+    ``ShapeRank`` and ``DatatypeConstraint`` read ONLY Context, so they compile to
+    zero-dep predicates — decidable before any choice is pinned, which is what makes a
+    cheap feasibility gate possible. The rest carry whatever their ``when``/``unless``/``fn``
+    closure declares."""
     iface = getattr(constraint, "iface", None)
 
     def check(point, context, _c=constraint, _iface=iface):
@@ -150,4 +158,8 @@ def compile_constraint(constraint) -> Predicate:
             return None
         return _c.check(point, context)
 
-    return Predicate(check=check, description=constraint.describe())
+    return Predicate(
+        check=check,
+        description=constraint.describe(),
+        deps=getattr(constraint, "deps", frozenset()),
+    )

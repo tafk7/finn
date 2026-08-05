@@ -85,7 +85,12 @@ def _decoupled_axes(iface):
 
 
 def _uram_gate(iface):
-    @predicate(f"{ram_style_key(iface)}=ultra & not versal => runtime_writeable=1")
+    @predicate(
+        f"{ram_style_key(iface)}=ultra & not versal => runtime_writeable=1",
+        # Both are axes of THIS bundle: present when it is selected, absent otherwise
+        # (the guarded wrapper short-circuits then), so both reads are optional.
+        optional_deps={ram_style_key(iface), runtime_writeable_key(iface)},
+    )
     def _uram_requires_ultrascale(p, ctx):
         # THE combination gate — reads point AND device in one condition (hls:147).
         if p.get(ram_style_key(iface)) == "ultra" and not is_versal(ctx.fpgapart) and (
@@ -101,7 +106,12 @@ def _uram_gate(iface):
 
 
 def _pumped_gate(iface):
-    @predicate(f"{pumped_memory_key(iface)} => not (parallelism == 1)")
+    @predicate(
+        f"{pumped_memory_key(iface)} => not (parallelism == 1)",
+        # pumpedMemory is this bundle's own axis; the demand exists only when composed
+        # into an op. Both reads are guarded, so both are optional.
+        optional_deps={pumped_memory_key(iface), demand_key(iface)},
+    )
     def _pumped_memory_needs_parallelism(p, ctx):
         # pumpedMemory splits each weight word across a double-pumped memory; with a
         # 1-element demand (PE==SIMD==1) there is nothing to split (base:717 "known bug").

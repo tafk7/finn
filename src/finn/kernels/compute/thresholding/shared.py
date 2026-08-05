@@ -133,14 +133,14 @@ def op_derived():
 # =============================================================================
 
 
-@predicate("NumChannels % PE == 0")
+@predicate("NumChannels % PE == 0", deps={"NumChannels", "PE"})
 def _pe_divides_channels(p, ctx):
     if p.NumChannels % p.PE != 0:
         return f"NumChannels={p.NumChannels} not divisible by PE={p.PE}"
     return None
 
 
-@predicate("threshold tensor is 2D with shape[1] == numSteps")
+@predicate("threshold tensor is 2D with shape[1] == numSteps", deps={"numSteps"})
 def _threshold_shape_matches_steps(p, ctx):
     shp = ctx.tensor_shape(THRESHOLDS)
     if len(shp) != 2:
