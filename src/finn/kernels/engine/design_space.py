@@ -107,6 +107,112 @@ class DesignSpace:
     def axis_names(self) -> frozenset[str]:
         return frozenset(a.name for a in self.axes)
 
+    # -- stratum ------------------------------------------------------------
+
+    def stratum_of(self, entry) -> int:
+        """How much must be PINNED before ``entry`` is decidable.
+
+        * **0** — its read-closure touches no axis. Decidable from Context ALONE, before any
+          choice is made. (A rule at this stratum can reject a node without a resolve.)
+        * **1** — the closure touches selection roots only. Decidable once a pool member is
+          chosen, with no folding pinned. Most guarded feasibility rules land here: they are
+          Context rules wearing a selection guard.
+        * **2** — the closure touches some other axis (a fold dial, a storage knob). Needs a
+          real configuration.
+
+        INFERRED from declared deps, never declared. An author-supplied annotation would be
+        a second home for a fact the deps already determine, and the two would drift — the
+        engine would then trust a stale label over the graph. The cost of inferring is that
+        deps must be complete, which is what the read-set audit enforces.
+
+        Accepts an entry object or, for an axis/derived, its name. Predicates must be passed
+        as objects: their ``name`` is a description, which is NOT unique (the same guarded
+        rule appears once per owning bundle)."""
+        if isinstance(entry, Predicate):
+            return self._predicate_strata()[id(entry)]
+        return self._strata()[entry.name if hasattr(entry, "name") else entry]
+
+    def predicates_at(self, stratum: int) -> tuple[Predicate, ...]:
+        """The predicates decidable at ``stratum`` — the feasibility gate's input."""
+        levels = self._predicate_strata()
+        return tuple(p for p in self.predicates if levels[id(p)] == stratum)
+
+    def predicates_upto(self, stratum: int) -> tuple[Predicate, ...]:
+        """Every predicate decidable at or below ``stratum``."""
+        levels = self._predicate_strata()
+        return tuple(p for p in self.predicates if levels[id(p)] <= stratum)
+
+    def _selection_roots(self) -> frozenset[str]:
+        """Axes that SELECT a pool member rather than configure one.
+
+        Identified structurally — an axis every merged bundle entry depends on — rather than
+        by name: the engine must not know that compute roots are called ``backend``. A pool
+        root is depended on by the merged axes/derived it dispatches (``_merge_*`` adds it
+        unconditionally), so "an axis that other axes depend on" identifies exactly the
+        roots without naming one."""
+        cached = getattr(self, "_roots_cache", None)
+        if cached is None:
+            axis_names = self.axis_names
+            cached = frozenset(
+                dep
+                for a in self.axes
+                for dep in a.deps | a.optional_deps
+                if dep in axis_names
+            )
+            object.__setattr__(self, "_roots_cache", cached)
+        return cached
+
+    def _strata(self) -> dict[str, int]:
+        """Per-entry stratum, memoized. Computed as a lattice-join over the transitive
+        read-closure: an entry is at least as high as everything it reads."""
+        cached = getattr(self, "_strata_cache", None)
+        if cached is not None:
+            return cached
+
+        self._ensure_ordered()  # validates; also guarantees deps name real entries
+        roots = self._selection_roots()
+        axis_names = self.axis_names
+        strata: dict[str, int] = {}
+
+        def axis_self_stratum(name: str) -> int:
+            # An axis is a CHOICE: reaching it means something must be pinned. Which kind
+            # decides 1 vs 2; a non-axis contributes nothing on its own account.
+            if name not in axis_names:
+                return 0
+            return 1 if name in roots else 2
+
+        # Axes and deriveds in topo order, so every dep is already resolved when read.
+        for node in self.ordered_axes() + self.ordered_derived():
+            level = axis_self_stratum(node.name)
+            for dep in node.deps | node.optional_deps:
+                if dep in strata:  # an absent optional dep contributes nothing
+                    level = max(level, strata[dep])
+            strata[node.name] = level
+
+        object.__setattr__(self, "_strata_cache", strata)
+        return strata
+
+    def _predicate_strata(self) -> dict[int, int]:
+        """Per-predicate stratum, keyed by IDENTITY.
+
+        Predicates are not in the DAG (nothing orders them), so they are levelled after the
+        axes and deriveds. Keyed by ``id`` rather than name because a predicate's name is
+        its description, and the same rule is wrapped once per owning bundle — by name they
+        would collide and the last one would win."""
+        cached = getattr(self, "_pred_strata_cache", None)
+        if cached is None:
+            strata = self._strata()
+            # A predicate is not itself a choice: its stratum is purely what it reads.
+            cached = {
+                id(p): max(
+                    (strata[d] for d in p.deps | p.optional_deps if d in strata),
+                    default=0,
+                )
+                for p in self.predicates
+            }
+            object.__setattr__(self, "_pred_strata_cache", cached)
+        return cached
+
     def ordered_axes(self) -> tuple[Axis, ...]:
         """Axes in dependency order (each axis after every axis it reads)."""
         return self._ensure_ordered()[0]
