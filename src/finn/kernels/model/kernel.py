@@ -412,24 +412,15 @@ class Kernel:
         than encoding a backend fact in the frontend."""
         return self.first_feasible_backend(context) is not None
 
-    def op_space(self) -> DesignSpace:
-        """The op-level, impl-INDEPENDENT subschema: the identity's shared axes/derived/
-        predicates ONLY, with NO pool (no ``implementation`` root axis, no per-backend fold
-        dials). It resolves the folding-independent facts — the datatype contract
-        (``accDataType``/``weightDataType``/``outputDataType``) and geometry — with NO
-        committed backend. Used to publish output datatypes on an UNSPECIALIZED node, where
-        the full :meth:`schema` would fabricate/require a backend selection (F1)."""
-        return DesignSpace(
-            axes=tuple(self.op_axes) + tuple(self.kernel_attrs),
-            derived=tuple(self.op_derived),
-            predicates=tuple(self.op_predicates) + self._constraint_predicates(),
-        )
-
-    def configure_op(self, context: Context, assignment: Mapping | None = None):
-        """Resolve an op-level (impl-independent) point over :meth:`op_space`. The
-        datatype/geometry deriveds do not depend on the selected backend, so this succeeds on
-        an unspecialized node."""
-        return resolve(self.op_space(), context, assignment)
+    # NOTE — there is exactly ONE schema-assembly path (:meth:`compile`). A second,
+    # impl-INDEPENDENT one (``op_space``/``configure_op``) was deleted: it excluded the pool
+    # and the whole parameters subspace, so once an op declared a derived with a cross-pool
+    # dep (``thresholdDataType`` -> ``parameters.thresholds.datatype``, true for BOTH live
+    # ops) it was unresolvable by construction. Its only caller had no callers, so nothing
+    # ever noticed. Its purpose — publishing output dtypes on an unspecialized node — is
+    # served by the context-only getters today, and by demand-driven ``resolve(want=...)``
+    # over the one space thereafter, which cannot diverge from it the way a parallel
+    # assembly path silently did.
 
     # -- interface lookup ---------------------------------------------------
 

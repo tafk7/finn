@@ -203,7 +203,7 @@ class KernelOp(HWCustomOp):
         (``backend`` unset — the "" sentinel) has no legal full point, so raise a
         LEGIBLE "unspecialized" error rather than a bare Illegal-ValueError (F1). Callers
         needing only impl-INDEPENDENT facts (normal shape/dtype, output-dtype publication)
-        use the context-only getters or :meth:`_op_point`."""
+        use the context-only getters."""
         from .routing import is_specialized
 
         if not is_specialized(self.onnx_node):
@@ -218,23 +218,6 @@ class KernelOp(HWCustomOp):
         if isinstance(result, Illegal):
             raise ValueError(
                 f"{self.onnx_node.name}: configuration is illegal: "
-                f"{'; '.join(result.reasons)}"
-            )
-        return kernel, ctx, result
-
-    def _op_point(self):
-        """Resolve the op-level, impl-INDEPENDENT point (:meth:`Kernel.configure_op`) —
-        the datatype/geometry deriveds that do not depend on the selected backend. Succeeds
-        on an UNSPECIALIZED node, so output-dtype publication (``infer_node_datatype``)
-        works before Seam B commits a backend (F1)."""
-        kernel = self.kernel()
-        ctx = self._context()
-        op_axes = kernel.op_space().axis_names
-        assignment = {k: v for k, v in self._assignment().items() if k in op_axes}
-        result = kernel.configure_op(ctx, assignment)
-        if isinstance(result, Illegal):
-            raise ValueError(
-                f"{self.onnx_node.name}: op-level configuration is illegal: "
                 f"{'; '.join(result.reasons)}"
             )
         return kernel, ctx, result
