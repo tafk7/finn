@@ -30,15 +30,18 @@ the source root axis, and a ``compose`` union documenting the gap it refused to 
   geometry). ``None`` for a live activation or an embedded-mode consumption.
 * ``constrains`` — the topology-mode GUARD: the source pool's ``topology`` domain kept
   to just the modes the selected compute backend accepts for this interface.
-* declared ``deps`` ``{implementation, topology.<iface>}`` — so the existing topo-sort
-  orders COMPUTE → DEMAND → SOURCE structurally, not by list position.
+* declared ``deps`` — so the existing topo-sort orders COMPUTE → DEMAND → SOURCE
+  structurally, not by list position. BOTH edges are declared: the demand names the
+  topology it gates on (plus the compute ``stream_width`` where that exists, optionally),
+  and the source pool's geometry deriveds name the demand key optionally. Fold position
+  carries no meaning.
 
 It introduces NO new resolve mechanism: it reads only existing ``Backend`` fields
 (``stream``, ``mem_modes``, topology ``mem_mode``) and existing point keys
 (``stream_width.<iface>``, ``topology.<iface>``, ``demand.<iface>``), and its two-root
 deps feed the topo-sort that already runs.
 
-This module OWNS the assembly (:meth:`ParameterSource.to_subspaces`), reusing the
+This module OWNS the assembly (:meth:`ParameterSource.subspace`), reusing the
 demand/guard COMPUTATION bodies (:func:`_demand_for`, :func:`_topology_domain`) kept in
 :mod:`~finn.kernels.model.param_contract` beside the op-facing :class:`DeliveredParam`
 declaration.
@@ -70,12 +73,12 @@ class ParameterSource:
         schema: the op-side interface name this realizes (the ``DeliveredParam.iface`` —
             also the Context tensor key).
         pool: the CONCRETE source pool (storage-topology ``Backend``\\ s) for this
-            interface. The selection space :meth:`to_subspaces` lowers to a ``DesignSpace``.
+            interface. The selection space :meth:`subspace` lowers to a ``DesignSpace``.
         stream: ``{compute_backend_name -> fold list}`` — the BLOCK→STREAM fold each
             compute backend declares for this port (a reference to ``Backend.stream[iface]``,
             not a copy of the fold math). Carried so the seam data lives in one object; the
             demand reads the RESOLVED ``stream_width.<iface>`` the tiling engine derives from
-            it, so this map is not itself consumed by :meth:`to_subspaces`.
+            it, so this map is not itself consumed by :meth:`subspace`.
         mem_modes: ``{compute_backend_name -> frozenset[str] | None}`` — the modes each
             compute backend accepts for this port (``None`` = permissive, both modes). The
             per-backend variation is dispatched on the selected ``implementation`` inside
@@ -99,25 +102,24 @@ class ParameterSource:
     constrains: tuple[Callable[[Any, Any], Any], Callable[[Any], Any]]
     deps: frozenset[str]
 
-    def to_subspaces(self) -> tuple[DesignSpace, DesignSpace]:
-        """The ``(demand, guarded source sub-schema)`` pair this interface contributes.
+    def subspace(self) -> DesignSpace:
+        """Everything this interface contributes: the demand derived + the guarded source
+        pool, as ONE space.
 
-        The DEMAND is ONE :class:`~finn.kernels.engine.derived.Derived`, not a resolve
-        "stage": it publishes ``parameters.<iface>.demand`` from resolved compute geometry
-        (``publishes``), and the source pool sizes its realization from it. The pair is
-        returned separately only so the source half can have its ``topology`` domain
-        filtered by ``constrains`` before folding in.
+        This used to be a ``(demand_space, source_subspace)`` 2-tuple whose first element
+        wrapped a single ``Derived`` — a "stage" implying a sequencing the caller had to
+        honour by folding them in order. It does not: COMPUTE→DEMAND rides the demand's own
+        deps (:meth:`_demand`) and DEMAND→SOURCE rides the geometry deriveds'
+        ``optional_deps`` on the demand key. With both edges declared, position carries no
+        meaning and the tuple had no job left."""
+        return DesignSpace.merge(
+            DesignSpace(axes=(), derived=(self._demand(),)),
+            self._source_subspace(),
+        )
 
-        Ordering is FULLY declared: COMPUTE→DEMAND rides the demand's own deps
-        (:meth:`_demand_space`), and DEMAND→SOURCE rides the geometry deriveds'
-        ``optional_deps`` on the demand key (optional because the same pool also resolves
-        standalone, where no op publishes a demand). The order in which these two fragments
-        fold in is therefore irrelevant to the result."""
-        return (self._demand_space(), self._source_subspace())
-
-    def _demand_space(self) -> DesignSpace:
-        """The demand :class:`~finn.kernels.engine.derived.Derived`, wrapped as a
-        derived-only :class:`DesignSpace` so it folds into the op schema uniformly.
+    def _demand(self) -> Derived:
+        """The compute→source DEMAND: ``parameters.<iface>.demand``, published from resolved
+        compute geometry.
 
         ``deps`` declares what :func:`~finn.kernels.model.param_contract._demand_for`
         reads, so the topo-sort — not fold order — carries COMPUTE → DEMAND → SOURCE.
@@ -131,17 +133,11 @@ class ParameterSource:
         A dep set is static while the reads are guarded, so it means "keys reachable on
         SOME path"; ``optional_deps`` is how a path that legitimately reaches nothing is
         expressed without either lying (``deps``) or staying silent (undeclared)."""
-        return DesignSpace(
-            axes=(),
-            derived=(
-                Derived(
-                    demand_key(self.schema),
-                    self.publishes,
-                    deps={topology_key(self.schema)},
-                    optional_deps={stream_width_key(self.schema)},
-                ),
-            ),
-            predicates=(),
+        return Derived(
+            demand_key(self.schema),
+            self.publishes,
+            deps={topology_key(self.schema)},
+            optional_deps={stream_width_key(self.schema)},
         )
 
     def _source_subspace(self) -> DesignSpace:

@@ -360,9 +360,8 @@ class Kernel:
         op = DesignSpace.merge(
             op,
             *(
-                sub
+                parameter_source_for(dp, self.pool).subspace()
                 for dp in self.delivered_parameters
-                for sub in parameter_source_for(dp, self.pool).to_subspaces()
             ),
         )
         # Validate + order the COMPLETE space now (all pools folded in): a cross-pool derived
