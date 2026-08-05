@@ -27,6 +27,15 @@ the first time the order is needed (any ``resolve``, or an explicit :meth:`final
 point every pool is present. A genuine typo still raises ``DesignSpaceError`` — just at
 finalize rather than at the fragment that introduced it. Deterministic, still before any point
 is produced.
+
+That handles a dep that is absent *yet* (a forward ref, resolved by composition). The dual
+case is a dep that may be absent *forever* on a legitimate path: the same storage pool is
+resolved STANDALONE (via ``parameters_schema()``, where no composing op publishes a demand)
+and COMPOSED into an op (where the demand exists and must order first). Neither ``deps``
+(fails finalize when absent) nor silence (leaves the edge to fold order) is right, so nodes
+also carry ``optional_deps`` — "order me after this name IF the space defines it". See
+:class:`~finn.kernels.engine.derived.Derived`. The distinction is load-bearing for the
+read-set audit: an undeclared read is a defect, a declared-optional-and-absent read is not.
 """
 
 from __future__ import annotations
@@ -79,6 +88,21 @@ class DesignSpace:
         self._ensure_ordered()
         return self
 
+    @classmethod
+    def merge(cls, *spaces: "DesignSpace") -> "DesignSpace":
+        """Union of assembly fragments into one unvalidated space.
+
+        The ONE place fragments are unioned, so a future third pool cannot get the
+        concatenation wrong. Order of the arguments carries NO meaning: every real
+        ordering constraint is a declared ``deps``/``optional_deps`` edge resolved by the
+        topo-sort. The result is deliberately NOT finalized — the caller finalizes once
+        every fragment is folded in."""
+        return cls(
+            axes=tuple(a for s in spaces for a in s.axes),
+            derived=tuple(d for s in spaces for d in s.derived),
+            predicates=tuple(p for s in spaces for p in s.predicates),
+        )
+
     @property
     def axis_names(self) -> frozenset[str]:
         return frozenset(a.name for a in self.axes)
@@ -111,9 +135,27 @@ def _topo_sort(axes, derived=()):
     for n in nodes:
         for dep in n.deps:
             if dep not in by_name:
+                # The two ways to get here are a typo and finalizing a FRAGMENT before its
+                # sibling fragments are merged in. They are indistinguishable from inside
+                # (that is why validation is deferred to the whole at all), so name both.
+                # Fragment-ness is not a property we can mark on the object: the same
+                # pool_space() output is a fragment under ParameterSource._source_subspace
+                # and a COMPLETE space under parameters_schema().
                 raise DesignSpaceError(
-                    f"{n.name!r} declares dependency on unknown name {dep!r}"
+                    f"{n.name!r} declares dependency on unknown name {dep!r} — either a "
+                    f"typo, or this space is an assembly FRAGMENT finalized before the "
+                    f"fragment defining {dep!r} was merged in (see DesignSpace.merge). If "
+                    f"{dep!r} is legitimately absent on some valid path, declare it in "
+                    f"optional_deps rather than deps."
                 )
+
+    # An OPTIONAL dep is an edge only when the name is present. Absent is legal and
+    # silent — that is the whole point: the same pool resolves standalone (key absent)
+    # and composed (key present, must order first). Resolving them ONCE here keeps the
+    # traversal below a plain lookup, and keeps `deps` strictly the typo-checked set.
+    edges = {
+        n.name: n.deps | {d for d in n.optional_deps if d in by_name} for n in nodes
+    }
 
     # Deterministic depth-first topological sort with cycle detection. Input
     # order is preserved among independent nodes so the schema reads predictably.
@@ -124,7 +166,7 @@ def _topo_sort(axes, derived=()):
     def visit(name: str, stack: list[str]):
         color[name] = GREY
         stack.append(name)
-        for dep in sorted(by_name[name].deps):
+        for dep in sorted(edges[name]):
             if color[dep] == GREY:
                 cycle = " -> ".join(stack[stack.index(dep):] + [dep])
                 raise DesignSpaceError(f"Dependency cycle: {cycle}")

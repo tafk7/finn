@@ -25,8 +25,13 @@ validation explicitly with ``finalize()``.
 import pytest
 
 from finn.kernels.engine.axis import Axis, discrete_axis
+from finn.kernels.engine.context import Context
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.design_space import DesignSpace, DesignSpaceError
+from finn.kernels.engine.resolve import resolve
+
+# The optional-dep tests resolve, but read nothing off the context.
+_CTX = Context()
 
 
 def test_duplicate_axis_name_rejected():
@@ -124,3 +129,91 @@ def test_ordered_derived_follows_dependency_order():
     # Axis order preserved; deriveds emerge after their deps regardless of list order.
     assert [a.name for a in schema.ordered_axes()] == ["x"]
     assert [d.name for d in schema.ordered_derived()] == ["a", "b"]
+
+
+# --- Fragment assembly: forward refs, merge, optional deps ------------------
+
+
+def test_fragment_forward_dep():
+    """A fragment declaring a dep on a name a LATER fragment introduces constructs fine and
+    finalizes fine after merge — the property compile() stages the space on. A genuine typo
+    is still caught on the merged whole."""
+    early = DesignSpace(
+        axes=(discrete_axis("x", {1}, 1),),
+        derived=(Derived("acc", lambda p, c: 0, deps={"later.storage"}),),
+    )
+    late = DesignSpace(axes=(), derived=(Derived("later.storage", lambda p, c: 1),))
+
+    whole = DesignSpace.merge(early, late).finalize()
+    assert [d.name for d in whole.ordered_derived()] == ["later.storage", "acc"]
+
+    # Merge order does NOT carry the ordering — deps do.
+    reversed_ = DesignSpace.merge(late, early).finalize()
+    assert [d.name for d in reversed_.ordered_derived()] == ["later.storage", "acc"]
+
+    # A dep no fragment defines is still a hard error.
+    with pytest.raises(DesignSpaceError, match="unknown"):
+        DesignSpace.merge(
+            early, DesignSpace(axes=(), derived=(Derived("nothing.like.it", lambda p, c: 1),))
+        ).finalize()
+
+
+def test_optional_dep_absent_is_legal():
+    """An optional dep naming a key the space does not define finalizes and resolves. This is
+    the standalone-pool case: parameters_schema() has no composing op to publish a demand."""
+    space = DesignSpace(
+        axes=(discrete_axis("x", {1}, 1),),
+        derived=(
+            Derived(
+                "geometry",
+                lambda p, c: p.get("absent.demand", None) or 7,
+                deps={"x"},
+                optional_deps={"absent.demand"},
+            ),
+        ),
+    ).finalize()
+    assert [d.name for d in space.ordered_derived()] == ["geometry"]
+    assert resolve(space, _CTX, {})["geometry"] == 7
+
+
+def test_optional_dep_present_orders():
+    """When the optional name IS present, it constrains the order exactly like a hard dep —
+    this is the composed case, and it is what makes DEMAND→SOURCE structural."""
+    space = DesignSpace(
+        axes=(discrete_axis("x", {1}, 1),),
+        derived=(
+            # Declared BEFORE its optional dep, so list position would give the wrong answer.
+            Derived(
+                "geometry",
+                lambda p, c: p.get("demand", None) or 7,
+                deps={"x"},
+                optional_deps={"demand"},
+            ),
+            Derived("demand", lambda p, c: 42),
+        ),
+    ).finalize()
+    assert [d.name for d in space.ordered_derived()] == ["demand", "geometry"]
+    # Ordered first => geometry actually SEES the value rather than defaulting.
+    assert resolve(space, _CTX, {})["geometry"] == 42
+
+
+def test_optional_dep_cycle_still_detected():
+    """An optional edge is a real edge when present, so it can close a cycle — and must be
+    caught rather than silently dropped to break the loop."""
+    with pytest.raises(DesignSpaceError, match="cycle"):
+        DesignSpace(
+            axes=(),
+            derived=(
+                Derived("a", lambda p, c: 1, deps={"b"}),
+                Derived("b", lambda p, c: 1, optional_deps={"a"}),
+            ),
+        ).finalize()
+
+
+def test_dep_may_not_be_both_required_and_optional():
+    """"Must exist" and "may be absent" are contradictory claims about one read. Purely local,
+    so unlike the unknown-name check this fires at construction."""
+    with pytest.raises(ValueError, match="BOTH deps and optional_deps"):
+        Derived("d", lambda p, c: 1, deps={"x"}, optional_deps={"x"})
+    with pytest.raises(ValueError, match="BOTH deps and optional_deps"):
+        discrete_axis("a", {1}, 1, deps={"x"}, optional_deps={"x"})

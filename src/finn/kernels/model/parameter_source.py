@@ -108,11 +108,11 @@ class ParameterSource:
         returned separately only so the source half can have its ``topology`` domain
         filtered by ``constrains`` before folding in.
 
-        Ordering is HALF declared today: COMPUTE→DEMAND rides the demand's own deps
-        (:meth:`_demand_space`), but DEMAND→SOURCE does NOT — the topology's geometry
-        deriveds read the demand key OPTIONALLY (the pool must also resolve standalone,
-        where that key does not exist), and the engine has no optional-dep kind, so that
-        edge rests on this method's fold order instead. See ``impl_decoupled``'s note."""
+        Ordering is FULLY declared: COMPUTE→DEMAND rides the demand's own deps
+        (:meth:`_demand_space`), and DEMAND→SOURCE rides the geometry deriveds'
+        ``optional_deps`` on the demand key (optional because the same pool also resolves
+        standalone, where no op publishes a demand). The order in which these two fragments
+        fold in is therefore irrelevant to the result."""
         return (self._demand_space(), self._source_subspace())
 
     def _demand_space(self) -> DesignSpace:
@@ -121,25 +121,26 @@ class ParameterSource:
 
         ``deps`` declares what :func:`~finn.kernels.model.param_contract._demand_for`
         reads, so the topo-sort — not fold order — carries COMPUTE → DEMAND → SOURCE.
-        ``parameters.<iface>.topology`` is UNCONDITIONAL (the mode check is the first
-        point read). ``stream_width.<iface>`` is CONDITIONAL: the tiling engine emits that
-        key only for an interface some backend declares a ``stream`` fold for, and the
-        closure reads it only past the embedded/no-initializer early-outs — so an
-        embedded-only parameter (fused thresholds) has no such key and declaring it
-        unconditionally would be a dep on a name the space never defines. We therefore
-        declare it only when the compute pool actually folds this interface, which is
-        exactly when the closure can reach that read.
+        ``parameters.<iface>.topology`` is REQUIRED (the mode check is the first point
+        read). ``stream_width.<iface>`` is OPTIONAL: the tiling engine emits that key only
+        for an interface some backend declares a ``stream`` fold for, and the closure reads
+        it only past the embedded/no-initializer early-outs — so an embedded-only parameter
+        (fused thresholds) has no such key. Declaring it optional says exactly that: order
+        after it where it exists, tolerate its absence where it does not.
 
-        This CONDITIONAL-DEP shape is a wart worth naming: ``deps`` is static while the
-        reads are guarded, so a dep set is really "keys reachable on SOME path". The engine
-        catches over-declaration (unknown name at ``finalize``) but not under-declaration —
-        see the recording-proxy check proposed in the engine hone."""
-        deps = {topology_key(self.schema)}
-        if any(self.stream.values()):  # some compute backend folds this interface
-            deps.add(stream_width_key(self.schema))
+        A dep set is static while the reads are guarded, so it means "keys reachable on
+        SOME path"; ``optional_deps`` is how a path that legitimately reaches nothing is
+        expressed without either lying (``deps``) or staying silent (undeclared)."""
         return DesignSpace(
             axes=(),
-            derived=(Derived(demand_key(self.schema), self.publishes, deps=deps),),
+            derived=(
+                Derived(
+                    demand_key(self.schema),
+                    self.publishes,
+                    deps={topology_key(self.schema)},
+                    optional_deps={stream_width_key(self.schema)},
+                ),
+            ),
             predicates=(),
         )
 

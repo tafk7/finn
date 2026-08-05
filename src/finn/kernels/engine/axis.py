@@ -17,7 +17,10 @@ context. ``default`` supplies the value when the caller's assignment does not pi
 the axis.
 
 ``deps`` names the axes this axis's guard/domain reads, so the schema can
-topologically order resolution without introspecting closures.
+topologically order resolution without introspecting closures. ``optional_deps``
+names a read that is conditional on composition — see
+:class:`~finn.kernels.engine.derived.Derived` for the full rationale; the two node
+kinds carry the same dependency protocol so the topo-sort walks one uniform DAG.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Union
 
+from .derived import _reject_dep_overlap
 from .ordered_parameter import OrderedParameter
 
 
@@ -66,10 +70,14 @@ class Axis:
     default: Callable[[Any, Any], Any]
     exists: Callable[[Any], bool] = _always
     deps: frozenset[str] = field(default_factory=frozenset)
+    optional_deps: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self):
         if not isinstance(self.deps, frozenset):
             object.__setattr__(self, "deps", frozenset(self.deps))
+        if not isinstance(self.optional_deps, frozenset):
+            object.__setattr__(self, "optional_deps", frozenset(self.optional_deps))
+        _reject_dep_overlap(self)
 
 
 # =============================================================================
@@ -84,6 +92,7 @@ def discrete_axis(
     *,
     guard: Callable[[Any], bool] | None = None,
     deps=(),
+    optional_deps=(),
 ) -> Axis:
     """A choice over a fixed discrete set (a ``frozenset`` domain).
 
@@ -99,6 +108,7 @@ def discrete_axis(
         default=default_fn,
         exists=exists_fn,
         deps=frozenset(deps),
+        optional_deps=frozenset(optional_deps),
     )
 
 
@@ -109,6 +119,7 @@ def divisor_axis(
     *,
     guard: Callable[[Any], bool] | None = None,
     deps=(),
+    optional_deps=(),
 ) -> Axis:
     """A folding-factor choice whose domain is the divisors of a context dim.
 
@@ -131,6 +142,7 @@ def divisor_axis(
         default=default_fn,
         exists=exists_fn,
         deps=frozenset(deps) | {dim},
+        optional_deps=frozenset(optional_deps),
     )
 
 
@@ -142,6 +154,7 @@ def predicate_axis(
     *,
     guard: Callable[[Any], bool] | None = None,
     deps=(),
+    optional_deps=(),
 ) -> Axis:
     """A choice whose domain is a membership test (non-enumerable values)."""
     dom = PredicateDomain(label, test)
@@ -153,10 +166,11 @@ def predicate_axis(
         default=default_fn,
         exists=exists_fn,
         deps=frozenset(deps),
+        optional_deps=frozenset(optional_deps),
     )
 
 
-def fixed_axis(name: str, default, *, deps=()) -> Axis:
+def fixed_axis(name: str, default, *, deps=(), optional_deps=()) -> Axis:
     """An axis whose domain is the single given value (a context-fixed quantity
     such as MW/MH that comes from tensor shape but is addressed like an axis)."""
     default_fn = default if callable(default) else (lambda p, ctx, _d=default: _d)
@@ -164,4 +178,10 @@ def fixed_axis(name: str, default, *, deps=()) -> Axis:
     def domain(p, ctx):
         return frozenset({default_fn(p, ctx)})
 
-    return Axis(name=name, domain=domain, default=default_fn, deps=frozenset(deps))
+    return Axis(
+        name=name,
+        domain=domain,
+        default=default_fn,
+        deps=frozenset(deps),
+        optional_deps=frozenset(optional_deps),
+    )

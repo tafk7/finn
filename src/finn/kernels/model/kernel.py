@@ -351,19 +351,20 @@ class Kernel:
         )
         # DELIVERED PARAMETERS: the generic compute→source wiring, OWNED by a
         # ParameterSource per delivered interface — the seam object
-        # that holds the DEMAND stage + guarded source sub-schema (design pitch §2). Its
-        # to_subspaces() folds into the op schema in supply-waterfall order; the seam has
-        # one owner and the waterfall is structural (its declared two-root deps) rather than
-        # list-position. Reads the compute pool's `mem_modes` + each topology's `mem_mode` — no
-        # op-specific logic here. Namespaced keys (`parameters.*`) + distinct sources_key
-        # mean the union never collides, so resolve walks it unchanged.
-        for dp in self.delivered_parameters:
-            for sub in parameter_source_for(dp, self.pool).to_subspaces():
-                op = DesignSpace(
-                    axes=tuple(op.axes) + tuple(sub.axes),
-                    derived=tuple(op.derived) + tuple(sub.derived),
-                    predicates=tuple(op.predicates) + tuple(sub.predicates),
-                )
+        # that holds the DEMAND derived + guarded source sub-schema (design pitch §2). Reads
+        # the compute pool's `mem_modes` + each topology's `mem_mode` — no op-specific logic
+        # here. Namespaced keys (`parameters.*`) + distinct sources_key mean the union never
+        # collides, so resolve walks it unchanged. The fold ORDER below carries no meaning:
+        # the supply waterfall COMPUTE→DEMAND→SOURCE is declared on the nodes themselves
+        # (deps + optional_deps) and realized by the topo-sort.
+        op = DesignSpace.merge(
+            op,
+            *(
+                sub
+                for dp in self.delivered_parameters
+                for sub in parameter_source_for(dp, self.pool).to_subspaces()
+            ),
+        )
         # Validate + order the COMPLETE space now (all pools folded in): a cross-pool derived
         # dep (accDataType -> parameters.<iface>.datatype) resolves here, where its
         # target is present, and a genuine typo still fails fast — at compile, before resolve.
