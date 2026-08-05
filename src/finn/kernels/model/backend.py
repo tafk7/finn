@@ -121,7 +121,13 @@ def ports_from(
     mem_modes = mem_modes or {}
     accepted_dtypes = accepted_dtypes or {}
     derived_dtype = derived_dtype or {}
-    names = set(stream) | set(mem_modes) | set(accepted_dtypes) | set(derived_dtype)
+    # DETERMINISTIC order: a set here would iterate by hash, so the ports map — and
+    # everything downstream that walks it, including each fold dial's bind list — would vary
+    # run to run with PYTHONHASHSEED. Declaration order (first facet to mention a port wins)
+    # is stable and matches how an author reads the bundle.
+    names = list(
+        dict.fromkeys([*stream, *mem_modes, *accepted_dtypes, *derived_dtype])
+    )
     return {
         n: Interface(
             stream=stream.get(n, ()),
