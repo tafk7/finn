@@ -346,28 +346,34 @@ def pool_space(
 def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:
     """A pool member may not depend on a sibling pool member's axis. Sibling
     coupling would break the additive property (adding a 4th bundle could change a
-    sibling's resolution). A bundle axis may depend on the root, on op-level shared
-    axes, on its OWN bundle's axes, or on any derived — never on another bundle's
-    axis."""
+    sibling's resolution). A bundle axis or derived may depend on the root, on op-level
+    shared axes, on its OWN bundle's axes, or on any derived — never on another bundle's
+    axis.
+
+    Covers a bundle's AXES and its DERIVED. Predicates carry no deps yet (engine hone Task
+    3.1); when they do they join this same walk — the entry kind is irrelevant to the
+    property, only the dep is."""
     shared_names = {a.name for a in shared_axes} | {root_name}
     for bundle in pool:
         own = {a.name for a in bundle.axes}
         allowed = shared_names | own
-        for axis in bundle.axes:
-            for dep in axis.deps:
-                # A dep that names another bundle's axis (present in some sibling,
-                # absent from allowed) is illegal sibling coupling. Deps on derived
-                # or shared/own axes are fine and simply aren't flagged here.
-                for sibling in pool:
-                    if sibling.name == bundle.name:
+        # A sibling's axis names, keyed by the sibling that owns them.
+        siblings = {s.name: {a.name for a in s.axes} for s in pool if s.name != bundle.name}
+
+        for kind, nodes in (("axis", bundle.axes), ("derived", bundle.derived)):
+            for node in nodes:
+                # Both required and optional deps couple: an optional dep is a real edge
+                # wherever the name exists, and a sibling's axis exists in the merged space.
+                for dep in node.deps | node.optional_deps:
+                    if dep in allowed:
                         continue
-                    sibling_axes = {a.name for a in sibling.axes}
-                    if dep in sibling_axes and dep not in allowed:
-                        raise PoolError(
-                            f"implementation {bundle.name!r} axis {axis.name!r} "
-                            f"depends on sibling {sibling.name!r}'s axis {dep!r} — "
-                            f"pool members must not couple to siblings"
-                        )
+                    for sibling_name, sibling_axes in siblings.items():
+                        if dep in sibling_axes:
+                            raise PoolError(
+                                f"implementation {bundle.name!r} {kind} {node.name!r} "
+                                f"depends on sibling {sibling_name!r}'s axis {dep!r} — "
+                                f"pool members must not couple to siblings"
+                            )
 
 
 def _check_no_derived_shadowing(shared_derived, pool, sources_key=SOURCES_KEY) -> None:

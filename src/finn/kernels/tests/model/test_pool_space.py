@@ -99,6 +99,28 @@ def test_sibling_coupling_rejected_at_assembly():
         pool_space("backend", (), (), (), (a, b))
 
 
+def test_sibling_coupling_via_derived_rejected():
+    """The additivity guarantee must hold for a bundle's DERIVED too, not just its axes —
+    the property is about the dep, and the entry kind carrying it is irrelevant."""
+    a = Backend(name="a", axes=(discrete_axis("a_axis", {1, 2}, 1),))
+    b = Backend(name="b", derived=(Derived("b_derived", lambda p, c: 1, deps={"a_axis"}),))
+    with pytest.raises(PoolError, match="sibling"):
+        pool_space("backend", (), (), (), (a, b))
+
+
+def test_sibling_coupling_via_optional_derived_dep_rejected():
+    """An OPTIONAL dep on a sibling's axis couples just as hard: in the merged pool that
+    name always exists, so the edge is always live. Optionality tolerates absence; it does
+    not license reaching across a sibling boundary."""
+    a = Backend(name="a", axes=(discrete_axis("a_axis", {1, 2}, 1),))
+    b = Backend(
+        name="b",
+        derived=(Derived("b_derived", lambda p, c: 1, optional_deps={"a_axis"}),),
+    )
+    with pytest.raises(PoolError, match="sibling"):
+        pool_space("backend", (), (), (), (a, b))
+
+
 def test_axis_may_depend_on_root_shared_and_own():
     shared = discrete_axis("shared", {1, 2}, 1)
     a = Backend(
@@ -107,6 +129,22 @@ def test_axis_may_depend_on_root_shared_and_own():
             discrete_axis("own", {1, 2}, 1),
             # depends on root + shared + own — all allowed.
             discrete_axis("dependent", {1, 2}, 1, deps={"backend", "shared", "own"}),
+        ),
+    )
+    schema = pool_space("backend", (shared,), (), (), (a,))
+    assert isinstance(resolve(schema, _ctx(), {"backend": "a"}), Point)
+
+
+def test_derived_may_depend_on_root_shared_own_and_derived():
+    """The legal surface for a bundle derived, so the check above is not merely rejecting
+    everything: root, op-level shared axes, its own bundle's axes, and another derived."""
+    shared = discrete_axis("shared", {1, 2}, 1)
+    a = Backend(
+        name="a",
+        axes=(discrete_axis("own", {1, 2}, 1),),
+        derived=(
+            Derived("base", lambda p, c: 1),
+            Derived("dependent", lambda p, c: 2, deps={"backend", "shared", "own", "base"}),
         ),
     )
     schema = pool_space("backend", (shared,), (), (), (a,))
