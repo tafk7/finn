@@ -96,7 +96,7 @@ class MvauKernelOp(KernelOp):
 
         graph_ctx = Context.from_model(model, "")
         operands = cls._operand_map(node)
-        shapes, datatypes, inits = {}, {}, {}
+        shapes, datatypes, inits, sparsity = {}, {}, {}, {}
         for iface, tname in operands.items():
             if tname in graph_ctx.shapes:
                 shapes[iface] = graph_ctx.shapes[tname]
@@ -105,8 +105,18 @@ class MvauKernelOp(KernelOp):
             init = graph_ctx.initializer(tname)
             if init is not None:
                 inits[iface] = init
+            # Sparsity must be carried, not just shapes/dtypes: the weights port declares a
+            # SparsityFree constraint, and a given the trial context drops is a rule that
+            # silently cannot fire.
+            sp = graph_ctx.tensor_sparsity(tname)
+            if sp is not None:
+                sparsity[iface] = sp
         return Context(
-            shapes=shapes, datatypes=datatypes, initializers=inits, fpgapart=graph_ctx.fpgapart
+            shapes=shapes,
+            datatypes=datatypes,
+            initializers=inits,
+            fpgapart=graph_ctx.fpgapart,
+            sparsity=sparsity,
         )
 
     @classmethod
@@ -124,13 +134,11 @@ class MvauKernelOp(KernelOp):
         # --- structural pattern (op-owned) ---
         if node.op_type != "MatMul":
             return False  # a plain structural no-match — legitimately "not mine", stays silent
-        # Sparse weights route to VVAU in the classic flow — not our pattern.
-        if model.get_tensor_sparsity(node.input[1]) is not None:
-            return False
-        # The slice claims the STATIC-weight case (a weight initializer must be present);
-        # the dynamic-weight branch is out of scope.
-        if model.get_initializer(node.input[1]) is None:
-            return False
+
+        # NO escape hatches here. The static-weight and dense-weight requirements used to be
+        # hand-written below this line; they are now IsStatic/SparsityFree constraints on the
+        # weights interface, so the claim is exactly "the pattern matches AND some backend
+        # can build it" — and a backend that widens either requirement needs no edit here.
 
         # --- feasibility (pool-delegated): ∃ a backend with a legal point? ---
         if not cls.kernel().has_feasible_point(cls._trial_context(node, model)):

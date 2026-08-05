@@ -34,7 +34,7 @@ Tensor-name convention for the Context this schema resolves against:
 from __future__ import annotations
 
 from finn.kernels.engine.axis import predicate_axis
-from finn.kernels.engine.constraints import ShapeRank, ValueNonNeg
+from finn.kernels.engine.constraints import IsStatic, ShapeRank, SparsityFree, ValueNonNeg
 from finn.kernels.engine.derived import Derived
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
@@ -81,9 +81,15 @@ def mvau_interfaces():
     block; ``out`` iterates vectors and holds MH."""
     return (
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),        # (n_vecs, MW)
-        # weights — no staticness constraint: initializer-presence is enforced upstream
-        # (frontend can_infer_from) and read by the delivery contract, not asserted here.
-        InterfaceSchema("weights", Direction.IN, block=[FULL, FULL]),  # (MW, MH)
+        # weights — the STATIC + DENSE requirements are declared here, where the pool can
+        # widen them. Both were hand-written escapes in the frontend claim, which meant the
+        # vocabulary member (IsStatic) sat dead while the fact it encodes lived in Python
+        # and could drift. A backend that can consume dynamic or sparse weights now widens
+        # what infer accepts by declaring so, with no frontend edit.
+        InterfaceSchema(
+            "weights", Direction.IN, block=[FULL, FULL],  # (MW, MH)
+            constraints=(IsStatic(WEIGHTS), SparsityFree(WEIGHTS)),
+        ),
         # thresholds — optional (NumChannels, numSteps); ShapeRank auto-skips when absent.
         InterfaceSchema(
             "thresholds", Direction.IN, block=[FULL, FULL], optional=True,

@@ -125,6 +125,27 @@ class ThresholdingKernelOp(KernelOp):
         in the pool and removes the consumer during its own inference, that node is normally
         gone before we reach it; the explicit producer check makes the ordering robust even
         against a stale node-list snapshot.
+
+        WHY THESE CHECKS STAY IN PYTHON (unlike MVAU's, which became IsStatic/SparsityFree
+        constraints): every one below is a FRONTEND-GRAPH fact, not a design-space fact. The
+        producer identity, the tensor layout and ``out_scale`` describe the shape of the
+        pattern this op claims — the op's own business — not what a backend can build. A
+        constraint is the right home only for the latter, because its whole purpose is to let
+        a NEW BACKEND widen the claim; no backend will ever make an NCHW layout claimable.
+
+        The dtype check is the interesting case, and it deliberately did NOT migrate to
+        ``DatatypeSupport``. Two reasons, both checked rather than assumed:
+          1. It is a UNION of kinds (integer OR fixed OR float32/16). ``DatatypeSupport`` is
+             one kind plus a bitwidth range, so expressing it would need a custom callable —
+             a closure on the port, which is no more declarative than the closure here.
+          2. Both backends have IDENTICAL envelopes and there is no verified per-bundle gate
+             (a fabricated one was previously falsified — see the package ``__init__`` and
+             ``scratchpad/reference/toy-vs-brainsmith-thresholding.md`` A1). Empirically this
+             check rejects only ``SCALEDINT`` among FINN's dtypes, so declaring a backend
+             gate would be inventing a distinction no backend actually makes.
+        Migrating it would move a frontend-pattern fact into the design space AND fabricate
+        backend knowledge to do it. When a Thresholding backend appears whose dtype envelope
+        genuinely differs, THAT is the moment to declare a gate — with a real case behind it.
         """
         if node.op_type != "MultiThreshold":
             return False
@@ -132,6 +153,8 @@ class ThresholdingKernelOp(KernelOp):
         if producer is not None and producer.op_type == "MatMul":
             return False
 
+        # Pattern-shape dtype admissibility (mirrors InferThresholdingLayer), NOT a
+        # buildability gate — see the docstring.
         idt = model.get_tensor_datatype(node.input[0])
         tdt = model.get_tensor_datatype(node.input[1])
         idt_ok = idt.is_integer() or idt.is_fixed_point() or idt in ["FLOAT32", "FLOAT16"]

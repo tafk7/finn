@@ -105,6 +105,26 @@ class IsStatic:
 
 
 @dataclass(frozen=True)
+class SparsityFree:
+    """The port's tensor must carry no sparsity annotation.
+
+    A sparse operand is a different computation (it routes to VVAU in the classic flow), not
+    a differently-configured one. Expressed as a constraint rather than a frontend check so
+    the claim is composable: a future backend that CAN consume sparse weights widens what
+    infer accepts by declaring so, with no edit to the frontend."""
+
+    iface: str
+
+    def check(self, point, context) -> str | None:
+        if context.tensor_sparsity(self.iface) is not None:
+            return f"{self.iface} carries a sparsity annotation (dense operand required)"
+        return None
+
+    def describe(self) -> str:
+        return f"{self.iface} is dense"
+
+
+@dataclass(frozen=True)
 class DatatypeConstraint:
     """Adapts a per-port datatype gate — a
     :class:`~finn.kernels.engine.datatype_support.DatatypeSupport` (its ``accepts``) or a raw

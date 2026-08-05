@@ -49,6 +49,7 @@ class Context:
     toolchain_version: str | None = None
     clk_ns: float | None = None
     arities: Mapping[str, int] = field(default_factory=dict)
+    sparsity: Mapping[str, Any] = field(default_factory=dict)
 
     def tensor_shape(self, name: str) -> tuple[int, ...]:
         return self.shapes[name]
@@ -58,6 +59,14 @@ class Context:
 
     def initializer(self, name: str) -> np.ndarray | None:
         return self.initializers.get(name)
+
+    def tensor_sparsity(self, name: str):
+        """The tensor's declared sparsity annotation, or ``None`` for a dense tensor.
+
+        A given, like a shape or a dtype — carried here so a rule about it can be a declared
+        :class:`~finn.kernels.engine.constraints.Constraint` rather than a hand-written check
+        in a frontend claim, which is how it could drift from the pool it is meant to describe."""
+        return self.sparsity.get(name)
 
     def arity(self, group: str) -> int:
         """How many concrete node slots a VARIADIC interface group expands to for this node —
@@ -99,6 +108,7 @@ class Context:
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict[str, Any] = {}
         initializers: dict[str, np.ndarray] = {}
+        sparsity: dict[str, Any] = {}
         for tensor in model.graph.input:
             name = tensor.name
             shapes[name] = tuple(model.get_tensor_shape(name))
@@ -114,6 +124,9 @@ class Context:
                 init = model.get_initializer(name)
                 if init is not None:
                     initializers[name] = init
+                sp = model.get_tensor_sparsity(name)
+                if sp is not None:
+                    sparsity[name] = sp
         return cls(
             shapes=shapes,
             datatypes=datatypes,
@@ -121,4 +134,5 @@ class Context:
             fpgapart=fpgapart,
             toolchain_version=toolchain_version,
             clk_ns=clk_ns,
+            sparsity=sparsity,
         )
