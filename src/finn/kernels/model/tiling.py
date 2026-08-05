@@ -523,7 +523,13 @@ def _width_derived(iface, width_expr: TileExpr, derived_dtype=None):
     from ..engine.derived import Derived
     from ..engine.datatype_spec import RegisterSpec, resolve_datatype_spec
 
-    deps = derived_dtype.deps if isinstance(derived_dtype, RegisterSpec) else frozenset()
+    # The fold expression's own dials are read by `eval` below. They are AXES, so they never
+    # affect ordering (axes all precede deriveds) — but they are exactly what decides this
+    # width's STRATUM, i.e. whether it is knowable before a fold is pinned. Declaring them
+    # is what makes that question answerable from the declaration rather than by running it.
+    deps = set(width_expr.deps())
+    if isinstance(derived_dtype, RegisterSpec):
+        deps |= set(derived_dtype.deps)
 
     def compute(point, context, _expr=width_expr, _iface=iface, _spec=derived_dtype):
         elems = _expr.eval(point)
@@ -532,4 +538,4 @@ def _width_derived(iface, width_expr: TileExpr, derived_dtype=None):
         )
         return int(elems) * dt.bitwidth()
 
-    return Derived(stream_width_key(iface.name), compute, deps=deps)
+    return Derived(stream_width_key(iface.name), compute, deps=frozenset(deps))

@@ -498,7 +498,8 @@ def _merge_derived(root_name, pool) -> list[Derived]:
         # stream_width.out, whose output-dtype spec reads the ParamDatatype key — keeps its ordering
         # constraint through the merge. Same-name bundle deriveds normally declare identical
         # deps; the union is the safe superset.
-        deps = frozenset().union(*(d.deps for d in by_impl.values()))
+        # Plus the root: the dispatch itself reads it to pick the owning bundle's compute.
+        deps = frozenset().union(*(d.deps for d in by_impl.values())) | {root_name}
         # optional_deps merge the same way, with one wrinkle: if ANY owning bundle declares
         # a name as REQUIRED, the merged node requires it (the union above already has it),
         # so it must not also appear as optional — that pairing is rejected as contradictory.
@@ -535,7 +536,7 @@ def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
         # accDataType reads the storage owner's ParamDatatype). Union the deps across
         # owning impls — mirrors _merge_axes' dep union — so the topo-sort orders the merged
         # register after whatever any owning impl reads. Bare specs contribute no deps.
-        deps: set[str] = set()
+        deps: set[str] = {root_name}  # the dispatch reads the root to pick the owning spec
         for spec in by_impl.values():
             if isinstance(spec, RegisterSpec):
                 deps |= spec.deps
@@ -587,7 +588,7 @@ def _field_derived(root_name, pool, field_name, *, key=None) -> Derived:
     def compute(point, _context, _root=root_name, _by=by_impl):
         return _by[point[_root]]
 
-    return Derived(key or field_name, compute)
+    return Derived(key or field_name, compute, deps={root_name})
 
 
 def _wrap_predicates(root_name, pool) -> list[Predicate]:

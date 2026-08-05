@@ -112,7 +112,7 @@ def _outstream_width(p, ctx):
 
 def op_derived():
     return (
-        Derived("TMEM", _tmem),
+        Derived("TMEM", _tmem, deps={"NumChannels", "PE"}),
         # No outputDataType derived: the output dtype IS the graph output dtype (the trivial
         # DatatypeSpec — None → graph fallback), resolved uniformly like every other output's
         # derived_dtype. The out port declares no derived_dtype; no second mechanism here.
@@ -123,8 +123,8 @@ def op_derived():
             _threshold_datatype,
             deps={param_datatype_key(THRESHOLDS)},
         ),
-        Derived("instream_width", _instream_width),
-        Derived("outstream_width", _outstream_width),
+        Derived("instream_width", _instream_width, deps={"PE"}),
+        Derived("outstream_width", _outstream_width, deps={"PE"}),
     )
 
 

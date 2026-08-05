@@ -18,13 +18,17 @@ This module closes that hole by resolving each real op through a recording ``Poi
 and diffing actual reads against declared ``deps``. The rules, mirroring what the engine
 guarantees about evaluation order:
 
-* An AXIS guard/domain/default must declare every point key it reads. Axes resolve among
-  themselves in dependency order, so nothing else orders them.
-* A DERIVED may read any AXIS undeclared — all axes are fixed before any derived, so no
-  sequencing is at stake. A read of another DERIVED must be declared.
+* EVERY node — axis, derived and predicate — must declare EVERY point key it reads.
 * An ``optional_deps`` name counts as declared. Absent-and-optional is the legitimate
   standalone-pool case; undeclared is a defect. Keeping these distinct is the whole reason
   ``optional_deps`` exists (see :mod:`finn.kernels.engine.design_space`).
+
+Deriveds are held to the same standard as axes even though an axis read cannot affect their
+ORDER (all axes are fixed before any derived). The reason is STRATUM: the inferred answer to
+"what must be pinned before this is knowable" is a transitive closure over declared deps, so
+an undeclared axis read anywhere in the closure makes a fold-dependent quantity look
+Context-decidable. Under-declaration is invisible while the only consumer is the topo-sort
+and load-bearing the moment anything reasons about the closure.
 
 Promoted from ``.agents/tmp/engine_hone_deps_probe.py`` (engine hone F1, Task 1.2).
 """
@@ -120,14 +124,11 @@ def audit_resolve(schema, context, assignment=None):
     def view(sink=None):
         return RecordingPoint(point, sink) if sink is not None else Point(point)
 
-    def check(kind, node, reads, *, derived_mode=False):
+    def check(kind, node, reads):
         reads = {r for r in reads if not r.startswith("_")}
-        # A derived may read any axis freely (all axes precede all deriveds); an axis may
-        # not. Both may read themselves (a self-reference is not an ordering edge).
-        allowed = _declared(node) | {node.name}
-        if derived_mode:
-            allowed |= axis_names
-        undeclared = reads - allowed
+        # A node may read itself (a self-reference is not an edge); everything else must be
+        # declared, axes included — see the module docstring on why stratum needs that.
+        undeclared = reads - _declared(node) - {node.name}
         if undeclared:
             violations.append(Violation(kind, node.name, undeclared))
 
@@ -158,7 +159,7 @@ def audit_resolve(schema, context, assignment=None):
     for d in schema.ordered_derived():
         sink = set()
         point[d.name] = d.compute(view(sink), context)
-        check("derived", d, sink, derived_mode=True)
+        check("derived", d, sink)
 
     reasons = []
     for pred in schema.predicates:

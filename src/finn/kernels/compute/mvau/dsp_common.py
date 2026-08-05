@@ -115,8 +115,16 @@ def dsp_rtl_common():
     derived = (
         Derived("dsp_primitive", dsp_primitive),
         Derived("dsp_version", dsp_version),
-        Derived("SEGMENTLEN", segmentlen),
-        Derived("narrow_weights", _narrow_weights),
+        # SEGMENTLEN reads the fold (SIMD) and the double-pump knob; narrow_weights reads
+        # the weight-storage runtime-writable bit and the MLO iteration count. Declared so
+        # each one's stratum — what must be pinned before it is knowable — is inferable.
+        Derived("SEGMENTLEN", segmentlen, deps={"SIMD", "pumpedCompute"}),
+        Derived(
+            "narrow_weights",
+            _narrow_weights,
+            deps={"mlo_max_iter"},
+            optional_deps={runtime_writeable_key(WEIGHTS)},
+        ),
     )
     predicates = (
         rtl_no_lut,
