@@ -270,31 +270,23 @@ def _kernel(which):
 # The KNOWN violations ledger.
 # =============================================================================
 #
-# Every entry here is a real under-declaration that Task 1.3 closes. The ledger is the
-# gate: a violation NOT listed fails the audit immediately (a new defect), and a listed
-# one that stops occurring fails test_ledger_has_no_stale_entries (progress that must be
-# recorded). Both directions are enforced, so this cannot rot into a rubber stamp.
+# The ledger is EMPTY: every read in both live ops is declared (Task 1.3). It stays here,
+# and stays enforced in both directions, because its job now is to keep it that way -- an
+# undeclared read is a hard failure, not an entry to add.
 #
-# Live count at 68874a893: 9 distinct. Two shapes, one cause each:
+# Cleared at Task 1.3 (was 9 at 68874a893). Both shapes and their fixes:
 #
-#  - parameters.<iface>.topology reads `backend`: the guarded root axis is built by
-#    ParameterSource._source_subspace via replace(root, domain=..., default=...), and the
-#    mem-mode guard closes over the compute pool. The dep never reaches the Axis.
-#  - the five parameters.weights geometry deriveds read parameters.weights.demand: these
-#    are the DEMAND->SOURCE edge, still carried by fold order. Task 1.1 shipped the
-#    optional_deps primitive they need; Task 1.3 declares them.
+#  - parameters.<iface>.topology read `backend` undeclared: the guarded root axis is built
+#    by ParameterSource._source_subspace via replace(root, domain=..., default=...), and the
+#    mem-mode guard closes over the compute pool. The replacement now carries the dep --
+#    the COMPUTE->SOURCE edge.
+#  - the five parameters.weights geometry deriveds read parameters.weights.demand: the
+#    DEMAND->SOURCE edge, previously carried by fold order. Now optional_deps (optional
+#    because the same pool also resolves standalone, where no op publishes a demand).
 #
-KNOWN_VIOLATIONS = {
-    Violation("axis.domain", "parameters.weights.topology", ["backend"]),
-    Violation("axis.default", "parameters.weights.topology", ["backend"]),
-    Violation("axis.domain", "parameters.thresholds.topology", ["backend"]),
-    Violation("axis.default", "parameters.thresholds.topology", ["backend"]),
-    Violation("derived", "parameters.weights.stream_width", ["parameters.weights.demand"]),
-    Violation("derived", "parameters.weights.width", ["parameters.weights.demand"]),
-    Violation("derived", "parameters.weights.depth", ["parameters.weights.demand"]),
-    Violation("derived", "parameters.weights.sets", ["parameters.weights.demand"]),
-    Violation("derived", "parameters.weights.init_file", ["parameters.weights.demand"]),
-}
+# Adding to this set is allowed only for a defect being tracked to a fix. It is NOT a
+# suppression list.
+KNOWN_VIOLATIONS: set = set()
 
 
 def _all_violations():
@@ -312,16 +304,12 @@ def _all_violations():
 
 
 @pytest.mark.parametrize("label,which,ctx_factory,assignment", TRIALS, ids=[t[0] for t in TRIALS])
-def test_no_new_deps_violations(label, which, ctx_factory, assignment):
-    """No trial may introduce an under-declaration outside the known ledger.
-
-    This is the forward gate: it passes today WITH the known defects listed, and starts
-    failing the moment a new closure reads something it did not declare."""
+def test_no_deps_violations(label, which, ctx_factory, assignment):
+    """Every point read by every axis and derived must be declared. The ledger is empty, so
+    this is now an absolute gate rather than a ratchet."""
     _, violations = audit_resolve(_kernel(which).compile(), ctx_factory(), assignment)
     new = set(violations) - KNOWN_VIOLATIONS
-    assert not new, "undeclared point reads (not in the known ledger):\n" + "\n".join(
-        f"  {v}" for v in sorted(new)
-    )
+    assert not new, "undeclared point reads:\n" + "\n".join(f"  {v}" for v in sorted(new))
 
 
 def test_ledger_has_no_stale_entries():
@@ -335,11 +323,10 @@ def test_ledger_has_no_stale_entries():
     )
 
 
-def test_known_violation_count():
-    """Pins the headline number so progress is visible in the diff. Update deliberately.
-
-    Task 1.3's exit gate is this reaching 0."""
-    assert len(KNOWN_VIOLATIONS) == 9
+def test_ledger_is_empty():
+    """The supply waterfall is fully declared. Task 1.3's exit gate, pinned so that adding a
+    ledger entry is a deliberate, visible act rather than a quiet way to green the suite."""
+    assert KNOWN_VIOLATIONS == set()
 
 
 def test_audit_walk_matches_real_resolve():

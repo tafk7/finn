@@ -148,7 +148,15 @@ class ParameterSource:
         """The source pool for this interface with its ``topology`` root-axis domain
         overridden by the mem-mode guard, so only topologies the selected compute
         backend can accept remain selectable. The default is likewise guarded so an
-        out-of-domain default never makes an unpinned topology illegal."""
+        out-of-domain default never makes an unpinned topology illegal.
+
+        Both the guarded domain and the guarded default close over the compute pool and read
+        ``backend`` (:func:`~finn.kernels.model.param_contract._topology_domain`), so the
+        replacement carries that dep — this is the COMPUTE→SOURCE edge, and without it the
+        topology axis could order before the backend it is guarded by. The dep is REQUIRED
+        rather than optional: this subspace exists only when composed into an op, where the
+        compute root axis is always present. (``parameters_schema()`` builds the pool
+        unguarded, so it never reaches this path.)"""
         schema = pool_space(
             topology_key(self.schema),
             (),
@@ -159,7 +167,12 @@ class ParameterSource:
         )
         root = schema.axes[0]  # pool_space emits the root topology axis first
         domain, legal = self.constrains
-        guarded = replace(root, domain=domain, default=_topology_default(root.default, legal))
+        guarded = replace(
+            root,
+            domain=domain,
+            default=_topology_default(root.default, legal),
+            deps=root.deps | {BACKEND_AXIS},
+        )
         return replace(schema, axes=(guarded,) + tuple(schema.axes[1:]))
 
 

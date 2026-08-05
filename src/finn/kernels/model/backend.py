@@ -415,10 +415,16 @@ def _merge_axes(root_name, pool) -> list[Axis]:
         # Union of the underlying axes' declared deps, plus the root (existence and
         # dispatch both read the selected impl). Exclude the axis's own name.
         dep_union: set[str] = set()
+        optional_union: set[str] = set()
         for ax in by_impl.values():
             dep_union |= set(ax.deps)
+            optional_union |= set(ax.optional_deps)
         dep_union.add(root_name)
         dep_union.discard(axis_name)
+        # A name REQUIRED by any owning impl is required on the merge, so drop it from the
+        # optional set (declaring both is contradictory and rejected at construction).
+        optional_union -= dep_union
+        optional_union.discard(axis_name)
 
         merged.append(
             Axis(
@@ -427,6 +433,7 @@ def _merge_axes(root_name, pool) -> list[Axis]:
                 default=_dispatch_default(root_name, by_impl),
                 exists=_dispatch_exists(root_name, owner_names, by_impl),
                 deps=frozenset(dep_union),
+                optional_deps=frozenset(optional_union),
             )
         )
     return merged
@@ -483,7 +490,18 @@ def _merge_derived(root_name, pool) -> list[Derived]:
         # constraint through the merge. Same-name bundle deriveds normally declare identical
         # deps; the union is the safe superset.
         deps = frozenset().union(*(d.deps for d in by_impl.values()))
-        merged.append(Derived(name, _dispatch_compute(root_name, by_impl), deps=deps))
+        # optional_deps merge the same way, with one wrinkle: if ANY owning bundle declares
+        # a name as REQUIRED, the merged node requires it (the union above already has it),
+        # so it must not also appear as optional — that pairing is rejected as contradictory.
+        optional = frozenset().union(*(d.optional_deps for d in by_impl.values())) - deps
+        merged.append(
+            Derived(
+                name,
+                _dispatch_compute(root_name, by_impl),
+                deps=deps,
+                optional_deps=optional,
+            )
+        )
     return merged
 
 
