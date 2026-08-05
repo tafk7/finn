@@ -188,5 +188,7 @@ def test_thresholding_strata():
     space = thresholding_kernel().compile()
     assert space.stratum_of("PE") == 2
     assert space.stratum_of("TMEM") == 2, "reads NumChannels and PE"
+    # The divisibility rule is now GENERATED from the declared stream fold, one per folded
+    # block dim, so it is named for the tensor/dim rather than hand-written as NumChannels%PE.
     at_two = {p.describe() for p in space.predicates_at(2)}
-    assert "NumChannels % PE == 0" in at_two
+    assert any("% PE == 0" in d for d in at_two), at_two

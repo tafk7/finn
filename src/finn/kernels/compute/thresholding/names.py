@@ -22,3 +22,16 @@ THRESHOLDING_RTL = "thresholding_rtl"
 THRESHOLDS = "thresholds"
 INPUT = "inp"
 OUTPUT = "out"
+
+# The BLOCK->STREAM lowering shared by both compute impls: PE folds the channel dim
+# (NumChannels) on the input, output, and the threshold block's leading (channel) extent.
+# The threshold's step dim is unfolded (a whole row per beat).
+#
+# Lives HERE rather than in op.py because each backend declares it (STREAM is backend-owned,
+# BLOCK is op-owned) and op.py imports the backends -- so op.py cannot be its home without a
+# cycle. It is re-exported from op.py for callers that expect it there.
+COMPUTE_STREAM = {
+    INPUT: [1, "PE"],
+    OUTPUT: [1, "PE"],
+    THRESHOLDS: ["PE", 1],
+}

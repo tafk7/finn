@@ -36,6 +36,8 @@ from finn.kernels.emit.manifest import ArtifactManifest, SourceFile
 from finn.kernels.model.ports import Direction, Port, Protocol, Role
 from finn.kernels.dataflow.parameters.serialize import layout, threshold_constraint
 
+from finn.kernels.model.tiling import stream_width_key
+
 from .names import INPUT, OUTPUT, THRESHOLDS
 
 # The single source-of-truth for the HLS backend's static finn-hlslib headers (F9). The HLS
@@ -98,8 +100,10 @@ def emit_thresholding_hls(point, context, module_name: str = "thresholding_top")
         f"                (in0_V, out0_V, threshs, numReps);"
     ]
 
-    in_width = point.instream_width
-    out_width = point.outstream_width
+    # The tiling engine derives these from the backend's declared stream fold, one key per
+    # interface — replacing the hand-written instream_width/outstream_width pair.
+    in_width = point[stream_width_key(INPUT)]
+    out_width = point[stream_width_key(OUTPUT)]
     blackbox = (
         f"void {module_name}(hls::stream<ap_uint<{in_width}>> &in0_V,\n"
         f"                    hls::stream<ap_uint<{out_width}>> &out0_V\n"

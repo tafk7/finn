@@ -22,7 +22,7 @@ from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import EMBEDDED
 
 from .emit_hls import emit_thresholding_hls
-from .names import THRESHOLDING_HLS, THRESHOLDS
+from .names import COMPUTE_STREAM, THRESHOLDING_HLS, THRESHOLDS
 from .registry import register
 
 
@@ -36,5 +36,7 @@ def hls_bundle() -> Backend:
         emit=emit_thresholding_hls,
         # The HLS core bakes thresholds into thresh.h — it consumes them in EMBEDDED mode
         # only (embedded ROM, no stream port). base FINN: internal_embedded is HLS-only.
-        ports=ports_from(mem_modes={THRESHOLDS: {EMBEDDED}}),
+        # The stream declares the BLOCK→STREAM fold, from which the tiling engine generates
+        # the PE dial, the divisibility rules and stream_width.<iface>.
+        ports=ports_from(stream=COMPUTE_STREAM, mem_modes={THRESHOLDS: {EMBEDDED}}),
     )

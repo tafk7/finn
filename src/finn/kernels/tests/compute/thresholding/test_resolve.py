@@ -70,11 +70,18 @@ def test_pool_is_hls_and_rtl():
 
 
 def test_tmem_and_widths(schema):
+    """The widths are now GENERATED per interface by the tiling engine from the declared
+    stream fold (``stream_width.<iface>``), replacing the hand-written singular
+    ``instream_width``/``outstream_width`` pair. The VALUES are unchanged: the generated
+    ``elems x dtype.bitwidth()`` equals the old ``dtype.bitwidth() x PE`` because these
+    ports declare no derived_dtype, so the dtype is the graph tensor dtype either way."""
+    from finn.kernels.model.tiling import stream_width_key
+
     r = resolve(schema, make_context(channels=8), base_assignment(PE=2))
     assert isinstance(r, Point)
     assert r.TMEM == 8 // 2
-    assert r.instream_width == DataType["UINT8"].bitwidth() * 2  # i_bits * PE
-    assert r.outstream_width == DataType["UINT3"].bitwidth() * 2  # o_bits * PE
+    assert r[stream_width_key("inp")] == DataType["UINT8"].bitwidth() * 2  # i_bits * PE
+    assert r[stream_width_key("out")] == DataType["UINT3"].bitwidth() * 2  # o_bits * PE
 
 
 def test_threshold_dtype_consumes_published_param_datatype(schema):
@@ -188,7 +195,20 @@ def test_third_implementation_composes_additively():
     # A 4th backend adds to the pool with zero edits. Compose through the Kernel (the full
     # space, so the parameters pool folds in and thresholdDataType's cross-pool dep resolves) —
     # the compute pool alone is a fragment, not a schema.
-    stub = Backend(name="thresholding_stub", language="stub", sources=("stub.sv",))
+    #
+    # The stub declares the shared stream like any real backend: PE is a GENERATED fold dial
+    # owned by the backends that declare a fold, not an op-level axis every member carries.
+    # (A stub declaring no stream would legitimately have no PE, and pinning it would be the
+    # "assigned but absent" error.) MVAU's equivalent stub does the same.
+    from finn.kernels.model.backend import ports_from
+    from finn.kernels.compute.thresholding.names import COMPUTE_STREAM
+
+    stub = Backend(
+        name="thresholding_stub",
+        language="stub",
+        sources=("stub.sv",),
+        ports=ports_from(stream=COMPUTE_STREAM),
+    )
     pool3 = thresholding_pool() + (stub,)
     schema3 = replace(thresholding_kernel(), pool=pool3).compile()
     r = resolve(schema3, make_context(), base_assignment(backend="thresholding_stub"))

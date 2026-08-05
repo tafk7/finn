@@ -31,7 +31,7 @@ from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import EMBEDDED
 
 from .emit_rtl import RTL_MANIFEST, emit_thresholding_rtl
-from .names import THRESHOLDING_RTL, THRESHOLDS
+from .names import COMPUTE_STREAM, THRESHOLDING_RTL, THRESHOLDS
 from .registry import register
 
 
@@ -65,7 +65,8 @@ def rtl_bundle() -> Backend:
         predicates=(_thresholds_sorted,),
         # The RTL core bakes thresholds into its parameter memory — embedded mode only (no
         # stream port), same as the HLS core. Explicit membership is the "param port" signal.
-        ports=ports_from(mem_modes={THRESHOLDS: {EMBEDDED}}),
+        # The stream declares the BLOCK→STREAM fold (see the HLS bundle).
+        ports=ports_from(stream=COMPUTE_STREAM, mem_modes={THRESHOLDS: {EMBEDDED}}),
         # One source-of-truth: the same manifest the emit copies into the build (F9).
         sources=RTL_MANIFEST.filenames,
         emit=emit_thresholding_rtl,

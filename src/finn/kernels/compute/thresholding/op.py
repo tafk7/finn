@@ -38,7 +38,14 @@ from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
-from .names import INPUT, OUTPUT, THRESHOLDING_HLS, THRESHOLDING_RTL, THRESHOLDS  # noqa: F401
+from .names import (  # noqa: F401
+    COMPUTE_STREAM,
+    INPUT,
+    OUTPUT,
+    THRESHOLDING_HLS,
+    THRESHOLDING_RTL,
+    THRESHOLDS,
+)
 from finn.kernels.dataflow.parameters.registry import generation as parameters_generation
 from finn.kernels.model.registry import registry_cached
 
@@ -61,19 +68,6 @@ def thresholding_interfaces():
         InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
         InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL]),
     )
-
-
-# =============================================================================
-# COMPUTE TILING — the BLOCK->STREAM lowering shared by both compute impls.
-# =============================================================================
-#
-# PE folds the channel dim (NumChannels) on the input, output, and the threshold block's
-# leading (channel) extent. The threshold's step dim is unfolded (whole row per beat).
-COMPUTE_STREAM = {
-    INPUT: [1, "PE"],
-    OUTPUT: [1, "PE"],
-    THRESHOLDS: ["PE", 1],
-}
 
 
 # =============================================================================
