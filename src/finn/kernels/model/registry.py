@@ -33,21 +33,61 @@ is interface-independent, so ``register`` probes with ``probe_arg`` to read it.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import wraps
 
 from .backend import Backend
 
 
+def registry_cached(*generations: Callable[[], int]):
+    """Memoize a zero-arg kernel/pool factory, keyed on the ``generation()`` of every
+    registry it reads.
+
+    Assembling a kernel is pure over its registries, but it was re-run on every query — and
+    every getter path funnels through it. Caching is therefore worth real time; caching
+    WRONGLY is worth a silent bug, because a backend registered after the first call would
+    never appear.
+
+    Keying on the generations makes invalidation structural: a registration bumps a counter,
+    the key changes, the next call rebuilds. Pass every registry the factory reads — an op
+    kernel reads its own pool AND the parameters pool it delivers through, and omitting one
+    would pin a stale half."""
+
+    def decorate(factory):
+        cache: dict[tuple[int, ...], object] = {}
+
+        @wraps(factory)
+        def wrapper():
+            key = tuple(g() for g in generations)
+            if key not in cache:
+                cache.clear()  # only the current generation is ever useful
+                cache[key] = factory()
+            return cache[key]
+
+        wrapper.cache_clear = cache.clear  # for tests that mutate a bundle in place
+        return wrapper
+
+    return decorate
+
+
 def make_registry(op_name: str, *, probe_arg=None):
     """Build a fresh registry for one op. Returns ``(register, build_pool,
-    registered_names, unregister)`` closed over a private ordered dict.
+    registered_names, unregister, generation)`` closed over a private ordered dict.
 
     ``probe_arg`` DECLARES the registry's arity: ``None`` (default) → a zero-arg pool whose
     factories are called ``factory()``; a non-``None`` value → an interface-threaded pool
     whose factories are called ``factory(arg)`` (``arg`` defaults to ``probe_arg``). It is
     also the value passed once at registration to read a bundle's interface-independent
-    ``.name``."""
+    ``.name``.
+
+    ``generation()`` returns a counter bumped by every ``register``/``unregister``. It exists
+    so a downstream cache of an ASSEMBLED kernel can be invalidated structurally rather than
+    by remembering to clear it: cache on the generation, and a registration automatically
+    makes the entry stale. Without it, memoizing an op's kernel would silently pin the pool
+    as it stood at first call — which is precisely what a test registering a transient
+    backend, or a plugin registering at import, would then fail to see."""
     registry: dict[str, Callable[..., Backend]] = {}
     interface_threaded = probe_arg is not None
+    gen = [0]
 
     def _invoke(factory, arg):
         # Arity is a registry-level fact (declared via probe_arg), not a per-factory sniff.
@@ -62,6 +102,7 @@ def make_registry(op_name: str, *, probe_arg=None):
         if name in registry:
             raise ValueError(f"duplicate {op_name} implementation registered: {name!r}")
         registry[name] = factory
+        gen[0] += 1
         return factory
 
     def build_pool(arg=probe_arg) -> tuple[Backend, ...]:
@@ -76,6 +117,12 @@ def make_registry(op_name: str, *, probe_arg=None):
     def unregister(name: str) -> None:
         """Remove a registered bundle by name (no-op if absent). Mainly for tests
         that register a transient stub and must not leak it into other tests."""
-        registry.pop(name, None)
+        if registry.pop(name, None) is not None:
+            gen[0] += 1
 
-    return register, build_pool, registered_names, unregister
+    def generation() -> int:
+        """A counter bumped by every registration change — the cache key for anything that
+        memoizes an assembled pool or kernel."""
+        return gen[0]
+
+    return register, build_pool, registered_names, unregister, generation

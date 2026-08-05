@@ -39,7 +39,10 @@ from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
 from .names import INPUT, OUTPUT, THRESHOLDING_HLS, THRESHOLDING_RTL, THRESHOLDS  # noqa: F401
-from .registry import build_pool
+from finn.kernels.dataflow.parameters.registry import generation as parameters_generation
+from finn.kernels.model.registry import registry_cached
+
+from .registry import build_pool, generation
 from .shared import op_axes, op_derived, op_predicates
 
 
@@ -83,6 +86,7 @@ def thresholding_pool():
     return build_pool()
 
 
+@registry_cached(generation, parameters_generation)
 def thresholding_kernel() -> Kernel:
     """The full Thresholding design space as a :class:`Kernel` — the WHAT-owning op node.
 
@@ -90,7 +94,9 @@ def thresholding_kernel() -> Kernel:
     interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the Kernel
     builds its DeliveredParam and synthesizes the supply waterfall generically; both backends
     consume thresholds in embedded mode → the delivery resolves to the ``embedded`` topology
-    (no memstream cell)."""
+    (no memstream cell).
+
+    CACHED on the compute + parameters registry generations — see :func:`mvau_kernel`."""
     return Kernel(
         name="Thresholding",
         interfaces=thresholding_interfaces(),

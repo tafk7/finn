@@ -222,6 +222,7 @@ class Kernel:
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
     delivered_parameters: tuple = field(default=(), init=False)  # derived from pool mem_modes
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+    _space_cache: list = field(default_factory=list, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
@@ -233,6 +234,7 @@ class Kernel:
         self._check_port_direction()
         object.__setattr__(self, "delivered_parameters", self._build_delivered())
         object.__setattr__(self, "_tiling_cache", {})
+        object.__setattr__(self, "_space_cache", [])
 
     def _check_port_direction(self) -> None:
         """Enforce the datatype/memory direction-exclusivity of each backend's
@@ -337,7 +339,21 @@ class Kernel:
         / divisibility / widths), plus the delivered parameters' realization sub-schemas.
         ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate source
         couplings that once lived here relocated into the parameters pool, and the
-        compute→source demand crosses the seam owned by a ``ParameterSource``."""
+        compute→source demand crosses the seam owned by a ``ParameterSource``.
+
+        MEMOIZED per Kernel instance: assembly is pure over the (frozen) kernel, and every
+        query path went through here — ``_assignment``, ``configure``,
+        ``first_feasible_backend`` and ``get_nodeattr_types`` each rebuilt the whole space.
+        Sharing one instance is safe because the result is frozen and its lazily-built
+        caches (order, strata) are idempotent — recomputing them yields the same values, so
+        a shared space cannot carry state between queries."""
+        if self._space_cache:
+            return self._space_cache[0]
+        space = self._compile()
+        self._space_cache.append(space)
+        return space
+
+    def _compile(self) -> DesignSpace:
         op = pool_space(
             BACKEND_AXIS,
             # kernel_attrs join the op-level shared axes: each is an Axis carried onto the

@@ -42,7 +42,10 @@ from finn.kernels.model.tiling import FULL
 from finn.kernels.model.param_names import param_datatype_key
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
 
-from .registry import build_pool
+from finn.kernels.dataflow.parameters.registry import generation as parameters_generation
+from finn.kernels.model.registry import registry_cached
+
+from .registry import build_pool, generation
 
 
 # =============================================================================
@@ -176,6 +179,7 @@ def mvau_pool():
     return build_pool()
 
 
+@registry_cached(generation, parameters_generation)
 def mvau_kernel() -> Kernel:
     """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
 
@@ -184,7 +188,11 @@ def mvau_kernel() -> Kernel:
     declares which param ports it consumes); the Kernel builds their DeliveredParam list and
     synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
     (model/param_contract.py); the getters project from a resolved point via the impl
-    ``stream``."""
+    ``stream``.
+
+    CACHED on the compute + parameters registry generations: assembly is pure over them, and
+    every getter path used to rebuild the whole thing. A registration invalidates it
+    automatically, so "add a backend, edit nothing else" still holds."""
     return Kernel(
         name="MVAU",
         interfaces=mvau_interfaces(),

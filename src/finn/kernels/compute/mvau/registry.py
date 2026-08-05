@@ -16,4 +16,4 @@ from __future__ import annotations
 
 from finn.kernels.model.registry import make_registry
 
-register, build_pool, registered_names, unregister = make_registry("mvau")
+register, build_pool, registered_names, unregister, generation = make_registry("mvau")

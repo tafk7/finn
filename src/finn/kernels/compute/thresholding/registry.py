@@ -14,4 +14,6 @@ from __future__ import annotations
 
 from finn.kernels.model.registry import make_registry
 
-register, build_pool, registered_names, unregister = make_registry("thresholding")
+register, build_pool, registered_names, unregister, generation = make_registry(
+    "thresholding"
+)

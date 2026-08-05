@@ -25,6 +25,6 @@ from finn.kernels.model.registry import make_registry
 
 from .names import WEIGHTS
 
-register, build_pool, registered_names, unregister = make_registry(
+register, build_pool, registered_names, unregister, generation = make_registry(
     "parameters", probe_arg=WEIGHTS
 )
