@@ -6,7 +6,7 @@
 #
 # Inlined verbatim from microsoft/brainsmith:brainsmith/dataflow/spec_helpers.py
 # @ 38faaf9 (MIT). Temporary vendored copy — see Stage 3 (source model) in
-# scratchpad/kernel-final-design/KERNEL_REFACTOR_PLAN.md for the de-vendoring plan.
+# scratchpad/archive/superseded/KERNEL_REFACTOR_PLAN.md for the de-vendoring plan.
 ############################################################################
 
 """Datatype range helper for building kernel schemas.

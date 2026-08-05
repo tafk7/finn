@@ -20,7 +20,7 @@ Point keys are **namespaced AND interface-keyed**: ``parameters.<iface>.<field>`
 ``parameters.weights.topology``). The interface segment lets a kernel compose the delivery
 pool ONCE PER parameter interface (weights, thresholds, …) with no key collision — the
 prerequisite for a second parameter interface. See
-``scratchpad/kernel-final-design/param-delivery-design-space.md`` and
+``scratchpad/archive/pending-harvest/param-delivery-design-space.md`` and
 ``consumption-mode-delivery.md``.
 """
 

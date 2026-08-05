@@ -13,7 +13,7 @@ design space). A backend author reads it top to bottom; each ``impl_*.py`` bundl
 package declares only the HOW for one compute core. The FINN-facing
 :class:`~finn.kernels.compute.mvau.op.MvauKernelOp` wrapper lives beside this in ``op.py``.
 Source of truth for each axis/derived/predicate (file:line into real FINN):
-``scratchpad/kernel-final-design/mvau-design-space.md``.
+``scratchpad/reference/mvau-design-space.md``.
 
 Sections (what each replaces in the classic FINN MVAU):
     1. CONSTANTS         tensor names + pool-member identities

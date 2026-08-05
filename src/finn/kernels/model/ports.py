@@ -20,7 +20,7 @@ finn-proto prototype keyed by protocol (``s_axis``/``m_axis``/…), so activatio
 weights — both plain AXI-streams — collapsed together and were recovered only by a
 hardcoded ``in1_V`` string. Keying by role is the move past both: a weight stream and
 a data stream are the same Protocol (Stream) but different Role, and the resolver binds
-on Role. See ``scratchpad/kernel-final-design/port-taxonomy.md``.
+on Role. See ``scratchpad/archive/pending-harvest/port-taxonomy.md``.
 
 This module is the SHARED port vocabulary read by every phase: ``Protocol``/``Role``/
 ``Direction`` are leaf types both phase-1 :class:`~finn.kernels.model.kernel.InterfaceSchema`

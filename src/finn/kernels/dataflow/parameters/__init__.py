@@ -12,7 +12,7 @@ The parameters subsystem owns how a kernel's parameters reach compute — storag
 transport, and selection — never their values. It is a SECOND selection pool that
 composes into an op's schema alongside the compute pool (namespaced ``parameters.*``),
 proven to need no new engine primitive (``tests/test_composition_mapping.py``,
-``scratchpad/kernel-final-design/param-delivery-design-space.md``).
+``scratchpad/archive/pending-harvest/param-delivery-design-space.md``).
 
 The pool's root axis is ``topology`` (coordinate A: storage/topology). Increment 1
 ships two members:

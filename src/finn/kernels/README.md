@@ -8,8 +8,8 @@ point to typed artifacts. This module is the proven foundation for replacing FIN
 `HWCustomOp` + `HLSBackend`/`RTLBackend` subsystem.
 
 For the *why* and the multi-stage plan, see
-[`MOTIVATION.md`](../../../../scratchpad/kernel-final-design/MOTIVATION.md) and
-[`KERNEL_REFACTOR_PLAN.md`](../../../../scratchpad/kernel-final-design/KERNEL_REFACTOR_PLAN.md).
+[`MOTIVATION.md`](../../../../scratchpad/current/MOTIVATION.md) and
+[`KERNEL_REFACTOR_PLAN.md`](../../../../scratchpad/archive/superseded/KERNEL_REFACTOR_PLAN.md).
 
 ## Layout
 
@@ -53,12 +53,18 @@ gated and run separately via `.agents/tmp/run_kernel_hw.sh`.
 
 ## Design docs
 
-Under [`../../../../scratchpad/kernel-final-design/`](../../../../scratchpad/kernel-final-design/):
-[`design-space-model.md`](../../../../scratchpad/kernel-final-design/design-space-model.md)
-(the engine primitives),
-[`port-taxonomy.md`](../../../../scratchpad/kernel-final-design/port-taxonomy.md) (kind vs
-role, the stitch),
-[`param-delivery-design-space.md`](../../../../scratchpad/kernel-final-design/param-delivery-design-space.md)
-(composition), and
-[`generality-gaps.md`](../../../../scratchpad/kernel-final-design/generality-gaps.md)
-(op-zoo coverage).
+The private design corpus lives under [`../../../../scratchpad/`](../../../../scratchpad/)
+(see its `README.md` for the map). It is tiered: `current/` is normative, `reference/`
+describes systems outside our control (FINN's baseline, brainsmith, the prototype), and
+`archive/` is historical — **do not read an archived doc as the spec.**
+
+Current: [`MOTIVATION.md`](../../../../scratchpad/current/MOTIVATION.md) (why this exists)
+and [`generality-gaps.md`](../../../../scratchpad/current/generality-gaps.md) (op-zoo
+coverage).
+
+The engine-facing specs — the design-space model, composition/parameter delivery, and the
+port taxonomy — are **being rewritten** and their stale predecessors sit in
+`archive/pending-harvest/`. Until they land, **the code is the spec**: start at
+`engine/design_space.py` + `engine/resolve.py` for the primitives, `model/kernel.py` +
+`model/backend.py` for the op model, and `model/parameter_source.py` for composition. The
+module docstrings there are maintained.

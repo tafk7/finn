@@ -18,7 +18,7 @@ data-dependent: the binary-search core requires thresholds sorted ascending
 
 Both backends share the SAME integer dtype envelope — there is intentionally no
 per-bundle dtype feasibility difference (a fabricated one was falsified; see
-scratchpad/kernel-final-design/toy-vs-brainsmith-thresholding.md A1).
+scratchpad/reference/toy-vs-brainsmith-thresholding.md A1).
 """
 
 from __future__ import annotations
