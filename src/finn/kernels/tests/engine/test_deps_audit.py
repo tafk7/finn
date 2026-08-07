@@ -43,6 +43,20 @@ from finn.kernels.model.param_names import topology_key
 
 VERSAL = "xcvc1902-vsvd1760-2MP-e-S"
 
+# The audit is DYNAMIC: it records the reads a closure actually performs, so it only sees
+# branches that EXECUTE. A rule branching on a CONTEXT fact hides its reads on every part
+# that does not take the branch — and ``fpgapart`` is the Context fact the live rules branch
+# on most (``get_dsp_block`` splits DSP58 / DSP48E2 / DSP48E1).
+#
+# Auditing Versal alone once reported an EMPTY ledger while an undeclared read sat in
+# source: MVAU's RTL-feasibility rule reads ``narrow_weights`` only on the DSP48E1 arm,
+# which ``and``-short-circuits away on Versal. One part per DSP block closes that gap.
+PARTS = (
+    ("versal", VERSAL),  # DSP58
+    ("ultrascale", "xczu3eg-sbva484-1-e"),  # DSP48E2
+    ("series7", "xc7z020clg400-1"),  # DSP48E1
+)
+
 
 # =============================================================================
 # The recording proxy + the instrumented walk.
@@ -183,7 +197,7 @@ def audit_resolve(schema, context, assignment=None):
 # =============================================================================
 
 
-def _mvau_ctx(with_thresholds=False, fpgapart=VERSAL):
+def _mvau_ctx(fpgapart=VERSAL, *, with_thresholds=False):
     mw, mh = 8, 8
     shapes = {"inp": (1, mw), "weights": (mw, mh), "out": (1, mh)}
     dts = {
@@ -227,19 +241,20 @@ def _thresholding_ctx(fpgapart=VERSAL):
 
 _WEIGHTS_TOPOLOGY = topology_key("weights")
 
-# (label, kernel-factory, context-factory, assignment)
-TRIALS = [
-    ("mvau/hls+embedded", "mvau", lambda: _mvau_ctx(), {"backend": "mvau_hls"}),
+# (label, kernel-factory, context-factory, assignment). The context factory takes the
+# fpgapart, so each shape is audited once per entry in PARTS.
+_SHAPES = [
+    ("mvau/hls+embedded", "mvau", _mvau_ctx, {"backend": "mvau_hls"}),
     (
         "mvau/hls+decoupled",
         "mvau",
-        lambda: _mvau_ctx(),
+        _mvau_ctx,
         {"backend": "mvau_hls", _WEIGHTS_TOPOLOGY: "decoupled"},
     ),
     (
         "mvau/softvec+decoupled",
         "mvau",
-        lambda: _mvau_ctx(),
+        _mvau_ctx,
         {
             "backend": "mvau_dsp_softvec",
             _WEIGHTS_TOPOLOGY: "decoupled",
@@ -250,7 +265,7 @@ TRIALS = [
     (
         "mvau/packed+decoupled",
         "mvau",
-        lambda: _mvau_ctx(),
+        _mvau_ctx,
         {
             "backend": "mvau_dsp_packed",
             _WEIGHTS_TOPOLOGY: "decoupled",
@@ -261,11 +276,22 @@ TRIALS = [
     (
         "mvau/hls+thresholds",
         "mvau",
-        lambda: _mvau_ctx(with_thresholds=True),
+        lambda fpgapart: _mvau_ctx(with_thresholds=True, fpgapart=fpgapart),
         {"backend": "mvau_hls"},
     ),
     ("thr/hls", "thresholding", _thresholding_ctx, {"backend": "thresholding_hls"}),
     ("thr/rtl", "thresholding", _thresholding_ctx, {"backend": "thresholding_rtl"}),
+]
+
+TRIALS = [
+    (
+        f"{label}@{part_label}",
+        which,
+        (lambda _f=ctx_factory, _p=part: _f(_p)),
+        assignment,
+    )
+    for part_label, part in PARTS
+    for label, which, ctx_factory, assignment in _SHAPES
 ]
 
 
@@ -299,7 +325,32 @@ def _kernel(which):
 #
 # Adding to this set is allowed only for a defect being tracked to a fix. It is NOT a
 # suppression list.
-KNOWN_VIOLATIONS: set = set()
+#
+# ONE ENTRY, added when the audit gained non-Versal parts (see PARTS above). It is a
+# TRACKED DEFECT with a decided fix, not an accepted state:
+#
+#  - `_rtl_mvu_feasible` (compute/mvau/dsp_common.py) declares deps={'backend'} but reads
+#    `p.narrow_weights` on the DSP48E1 arm. On DSP58/DSP48E2 the `and` short-circuits and
+#    the read never happens, which is why a Versal-only audit reported an empty ledger
+#    while the undeclared read sat in source.
+#
+#    The read is not merely undeclared, it is a PHASE INVERSION: `narrow_weights` derives
+#    from the weight-DELIVERY choice (`runtime_writeable_weights`, `mlo_max_iter`), so a
+#    capability gate consulted at infer is asking about a value chosen later. Declaring the
+#    dep would make the audit pass while leaving the inversion — so the fix is upstream of
+#    this file.
+#
+#    Fix (decisions.md, "An owned initializer is DOWNSTREAM of its kernel"): make
+#    `runtime_writeable_weights` a phase-0 configuration fact rather than a folding knob.
+#    Ownership of the weight values is then settled at infer, `narrow_weights` with it, and
+#    this rule can read it honestly. Delete this entry in the commit that lands that move.
+KNOWN_VIOLATIONS: set = {
+    (
+        "predicate",
+        "RTL-MVU feasibility (_mvu_rtl_possible)",
+        ("narrow_weights",),
+    ),
+}
 
 
 def _all_violations():
@@ -336,10 +387,25 @@ def test_ledger_has_no_stale_entries():
     )
 
 
-def test_ledger_is_empty():
-    """The supply waterfall is fully declared. Task 1.3's exit gate, pinned so that adding a
-    ledger entry is a deliberate, visible act rather than a quiet way to green the suite."""
-    assert KNOWN_VIOLATIONS == set()
+def test_ledger_holds_only_the_tracked_defect():
+    """The ledger is pinned to its EXACT contents, so adding an entry is a deliberate,
+    visible act rather than a quiet way to green the suite.
+
+    It was pinned EMPTY at Task 1.3. It now holds exactly one entry, admitted when the audit
+    gained non-Versal parts and found a read that a Versal-only sweep could not see. That
+    entry has a decided fix (make ``runtime_writeable_weights`` phase-0 configuration — see
+    the ledger comment); when it lands, both the entry and this expectation go back to empty.
+
+    Pinning the contents rather than the COUNT is deliberate: a second undeclared read must
+    not be able to slip in by silently replacing this one."""
+    expected = {
+        (
+            "predicate",
+            "RTL-MVU feasibility (_mvu_rtl_possible)",
+            ("narrow_weights",),
+        ),
+    }
+    assert KNOWN_VIOLATIONS == expected
 
 
 def test_audit_walk_matches_real_resolve():
