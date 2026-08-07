@@ -51,7 +51,19 @@ class MinimizeAccumulatorWidth(Transformation):
                 inst = getCustomOp(node)
                 if hasattr(inst, "minimize_accumulator_width"):
                     inst.minimize_accumulator_width(model)
-                    # Since this transformation is applied iteratively, we have to ensure that
-                    # we propagate the new datatype to other layers
-                    model = model.transform(InferDataTypes())
+                # Re-propagate after EVERY dataflow node, not only after one carrying the
+                # hook. The loop's invariant is "once node i has been visited, the graph
+                # reflects node i's narrowing"; a node that narrows by another mechanism
+                # still needs its result published before node i+1 reads it.
+                #
+                # A `finn.kernels` node is exactly that case: it narrows during datatype
+                # INFERENCE (KernelOp.infer_node_datatype resolves accDataType from the live
+                # graph) rather than through this hook, so `hasattr` is False for it while
+                # is_fpgadataflow_node is True. With the propagation nested under the hook,
+                # a kernel node both skipped narrowing AND suppressed the re-propagation,
+                # leaving a downstream CLASSIC node to size its accumulator from a stale
+                # input dtype -- an under-sized accumulator, i.e. silent overflow, not just
+                # wasted resources. Hoisting also makes the pass converge in one round for
+                # mixed graphs, matching the all-classic behaviour it is compared against.
+                model = model.transform(InferDataTypes())
         return (model, False)
