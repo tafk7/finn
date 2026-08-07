@@ -52,7 +52,6 @@ from finn.kernels.model.param_names import (
     init_file_key,
     pumped_memory_key,
     ram_style_key,
-    runtime_writeable_key,
     sets_key,
     sources_key,
     width_key,
@@ -262,7 +261,10 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
         Port(Direction.IN, Protocol.Clock, Role.CLOCK, "ap_clk2x"),
         Port(Direction.IN, Protocol.Reset, Role.RESET, "ap_rst_n"),
     ]
-    if point.get(runtime_writeable_key(iface), 0):
+    # The AXI-Lite config port exists iff the build was MANDATED runtime-writable (a phase-0
+    # Context fact, not a point choice) — that mandate is precisely "the driver must be able
+    # to rewrite these values", and this port is how it does so.
+    if context.is_runtime_writeable(iface):
         ports.append(
             Port(Direction.IN, Protocol.Config, Role.CONFIG, "s_axilite", index=0,
                  boundary=True)

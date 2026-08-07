@@ -71,8 +71,13 @@ ULTRASCALE = "xcku040-ffva1156-2-e"  # not Versal
 _UNFILLED = re.compile(r"\$[A-Z][A-Z0-9_]*\$")
 
 
-def _ctx(part=VERSAL):
-    return Context(fpgapart=part)
+def _ctx(part=VERSAL, runtime_writeable=False):
+    # runtime-writability is a phase-0 Context MANDATE, not an axis — tests that used to
+    # pin it in the assignment now state it as a given.
+    return Context(
+        fpgapart=part,
+        runtime_writeable={WEIGHTS: True} if runtime_writeable else {},
+    )
 
 
 # ===========================================================================
@@ -97,12 +102,22 @@ def test_default_topology_is_embedded_with_no_delivery_axes():
 def test_decoupled_exposes_its_selection_axes():
     r = resolve(
         parameters_schema(), _ctx(),
-        {TOPOLOGY: DECOUPLED, RAM_STYLE: "block", RUNTIME_WRITEABLE: 1, PUMPED_MEMORY: 1},
+        {TOPOLOGY: DECOUPLED, RAM_STYLE: "block", PUMPED_MEMORY: 1},
     )
     assert r[TOPOLOGY] == DECOUPLED
     assert r[RAM_STYLE] == "block"
-    assert r[RUNTIME_WRITEABLE] == 1
     assert r[PUMPED_MEMORY] == 1
+    # runtime_writeable is NOT among them: it is a phase-0 mandate on the Context, so this
+    # topology offers no choice about it. It never reaches the point, and an assignment
+    # naming it is inert -- the Context is the only thing that decides.
+    assert RUNTIME_WRITEABLE not in r
+    r_pinned = resolve(
+        parameters_schema(), _ctx(),
+        {TOPOLOGY: DECOUPLED, RAM_STYLE: "block", RUNTIME_WRITEABLE: 1},
+    )
+    assert RUNTIME_WRITEABLE not in r_pinned
+    assert resolve(parameters_schema(), _ctx(runtime_writeable=True),
+                   {TOPOLOGY: DECOUPLED, RAM_STYLE: "block"})[TOPOLOGY] == DECOUPLED
 
 
 def test_decoupled_axes_absent_under_embedded():
@@ -113,7 +128,7 @@ def test_decoupled_axes_absent_under_embedded():
 def test_uram_gate_fires_on_non_versal_without_runtime_writeable():
     r = resolve(
         parameters_schema(), _ctx(ULTRASCALE),
-        {TOPOLOGY: DECOUPLED, RAM_STYLE: "ultra", RUNTIME_WRITEABLE: 0},
+        {TOPOLOGY: DECOUPLED, RAM_STYLE: "ultra"},
     )
     assert isinstance(r, Illegal)
     assert any("runtime_writeable" in reason for reason in r.reasons)
@@ -121,8 +136,8 @@ def test_uram_gate_fires_on_non_versal_without_runtime_writeable():
 
 def test_uram_gate_satisfied_when_runtime_writeable():
     r = resolve(
-        parameters_schema(), _ctx(ULTRASCALE),
-        {TOPOLOGY: DECOUPLED, RAM_STYLE: "ultra", RUNTIME_WRITEABLE: 1},
+        parameters_schema(), _ctx(ULTRASCALE, runtime_writeable=True),
+        {TOPOLOGY: DECOUPLED, RAM_STYLE: "ultra"},
     )
     assert not isinstance(r, Illegal)
     assert r[RAM_STYLE] == "ultra"
@@ -131,7 +146,7 @@ def test_uram_gate_satisfied_when_runtime_writeable():
 def test_uram_on_versal_needs_no_runtime_writeable():
     r = resolve(
         parameters_schema(), _ctx(VERSAL),
-        {TOPOLOGY: DECOUPLED, RAM_STYLE: "ultra", RUNTIME_WRITEABLE: 0},
+        {TOPOLOGY: DECOUPLED, RAM_STYLE: "ultra"},
     )
     assert not isinstance(r, Illegal)
 
@@ -154,13 +169,14 @@ def test_embedded_topology_self_registers():
 # ===========================================================================
 
 
-def _mvau_ctx(part=VERSAL, mw=6, mh=8, wdt="INT8"):
+def _mvau_ctx(part=VERSAL, mw=6, mh=8, wdt="INT8", runtime_writeable=False):
     w = np.random.RandomState(0).randint(-7, 7, size=(mw, mh)).astype(np.float32)
     return Context(
         shapes={"weights": (mw, mh), "inp": (1, mw), "out": (1, mh)},
         datatypes={"weights": DataType[wdt], "inp": DataType["INT8"], "out": DataType["INT16"]},
         initializers={"weights": w},
         fpgapart=part, clk_ns=5.0,
+        runtime_writeable={WEIGHTS: True} if runtime_writeable else {},
     )
 
 
@@ -235,7 +251,7 @@ def test_decoupled_static_publishes_visible_narrowed_param_datatype():
 def test_decoupled_runtime_writeable_publishes_blind_envelope_param_datatype():
     # runtime_writeable=1: the host may overwrite cells post-build -> owner BLIND. It must
     # NOT narrow; it publishes the declared graph dtype (envelope) and withholds trust.
-    desc = _decoupled_point(_mvau_ctx(wdt="INT8"), **{RUNTIME_WRITEABLE: 1})[PARAM_DTYPE]
+    desc = _decoupled_point(_mvau_ctx(wdt="INT8", runtime_writeable=True))[PARAM_DTYPE]
     assert isinstance(desc, ParamDatatype)
     assert desc.values_visible is False
     assert desc.dtype == DataType["INT8"]  # graph dtype, NOT the INT4 narrowing
@@ -292,8 +308,10 @@ def test_pumped_memory_splits_each_word_in_two():
 
 
 def test_uram_non_versal_blanks_init_file_and_omits_dat():
-    ctx = _mvau_ctx(ULTRASCALE)
-    arts = emit_memstream(_decoupled_point(ctx, **{RAM_STYLE: "ultra", RUNTIME_WRITEABLE: 1}), ctx)
+    # URAM on a non-Versal part is only legal under the runtime-writable mandate, which is
+    # now a Context given rather than something the assignment can turn on.
+    ctx = _mvau_ctx(ULTRASCALE, runtime_writeable=True)
+    arts = emit_memstream(_decoupled_point(ctx, **{RAM_STYLE: "ultra"}), ctx)
     assert 'INIT_FILE = ""' in arts.generated[0].content()
     assert all(d.filename != "memblock.dat" for d in arts.data_files)
 

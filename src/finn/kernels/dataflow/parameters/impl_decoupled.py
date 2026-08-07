@@ -44,7 +44,6 @@ from finn.kernels.model.param_names import (
     init_file_key,
     pumped_memory_key,
     ram_style_key,
-    runtime_writeable_key,
     sets_key,
     param_datatype_key,
     width_key,
@@ -67,9 +66,13 @@ from finn.kernels.model.source_backend import source_backend
 
 
 def _decoupled_axes(iface):
+    # NOTE: ``runtime_writeable_weights`` is deliberately NOT an axis here. It is a phase-0
+    # MANDATE on the design space — the deployed artifact must let the driver rewrite these
+    # values — read off the Context via ``ctx.is_runtime_writeable(iface)``. It does not
+    # describe how to build, so this topology does not offer it as a choice. Modelling it as
+    # an axis is what let capability gates consult a value chosen AFTER specialization.
     return (
         discrete_axis(ram_style_key(iface), {"auto", "block", "distributed", "ultra"}, "auto"),
-        discrete_axis(runtime_writeable_key(iface), {0, 1}, 0),
         discrete_axis(pumped_memory_key(iface), {0, 1}, 0),
     )
 
@@ -87,14 +90,20 @@ def _decoupled_axes(iface):
 def _uram_gate(iface):
     @predicate(
         f"{ram_style_key(iface)}=ultra & not versal => runtime_writeable=1",
-        # Both are axes of THIS bundle: present when it is selected, absent otherwise
-        # (the guarded wrapper short-circuits then), so both reads are optional.
-        optional_deps={ram_style_key(iface), runtime_writeable_key(iface)},
+        # ram_style is an axis of THIS bundle: present when it is selected, absent otherwise
+        # (the guarded wrapper short-circuits then), so the read is optional.
+        # runtime_writeable is a Context mandate now, not a point read.
+        optional_deps={ram_style_key(iface)},
     )
     def _uram_requires_ultrascale(p, ctx):
-        # THE combination gate — reads point AND device in one condition (hls:147).
-        if p.get(ram_style_key(iface)) == "ultra" and not is_versal(ctx.fpgapart) and (
-            p.get(runtime_writeable_key(iface), 0) != 1
+        # THE combination gate — reads the point AND the device AND the phase-0 mandate
+        # (hls:147). Now that runtime-writability is a given rather than a choice, this reads
+        # as it should: URAM on UltraScale is only available when the build was ALREADY
+        # mandated runtime-writable — you cannot rescue it by flipping a knob later.
+        if (
+            p.get(ram_style_key(iface)) == "ultra"
+            and not is_versal(ctx.fpgapart)
+            and not ctx.is_runtime_writeable(iface)
         ):
             return (
                 "URAM weights on a non-Versal (UltraScale) device require "
@@ -151,11 +160,15 @@ def _demand(p, iface):
 #
 # decoupled sees its params at build time UNLESS they are runtime-writable: the host may
 # overwrite a runtime-writable weight cell after build, so the owner is BLIND and must not
-# narrow (it publishes the declared graph dtype = the envelope). When static
-# (runtime_writeable==0) the owner has visibility and narrows via value_optimized — the same
-# static-vs-worst-case split baseline FINN gates by hand (matrixvectoractivation.py:517),
-# here owned by the storage topology and read by the compute core off the published bit.
-# Branching on its OWN runtime_writeable knob is legitimate (the owner reading its own axis).
+# narrow (it publishes the declared graph dtype = the envelope). When static the owner has
+# visibility and narrows via value_optimized — the same static-vs-worst-case split baseline
+# FINN gates by hand (matrixvectoractivation.py:517), here owned by the storage topology and
+# read by the compute core off the published bit.
+#
+# Runtime-writability is a phase-0 Context MANDATE, so this whole derived reads no axis: its
+# closure is Context-only and it SETTLES AT INFER. That is what makes owned-parameter dtypes
+# an infer-time fact (decisions.md, "An owned initializer is DOWNSTREAM of its kernel") and
+# what lets a capability gate read `narrow_weights` without asking about a later choice.
 # =============================================================================
 
 
@@ -163,7 +176,7 @@ def _param_datatype(iface):
     def _compute(p, ctx):
         if not ctx.has_tensor(iface):
             return None  # unwired interface (standalone resolve) — mirrors the geometry deriveds
-        visible = p.get(runtime_writeable_key(iface), 0) == 0
+        visible = not ctx.is_runtime_writeable(iface)
         if visible:
             dtype = value_optimized(iface)(p, ctx)  # owner sees values -> narrow
         else:
@@ -251,13 +264,13 @@ def decoupled_topology(iface):
         language="rtl",  # emits its own memstream Verilog streamer
         axes=_decoupled_axes(iface),
         derived=_geometry_derived(iface)
-        # The published datatype authority reads this topology's own runtime_writeable axis
-        # (the visibility gate) — declared so the topo-sort orders it after that axis.
+        # The published datatype authority reads NO axis: its visibility gate is the phase-0
+        # runtime-writability mandate on the Context, so it needs no ordering dep and settles
+        # at infer alongside the other owned-parameter facts.
         + (
             Derived(
                 param_datatype_key(iface),
                 _param_datatype(iface),
-                deps={runtime_writeable_key(iface)},
             ),
         ),
         predicates=(_uram_gate(iface), _pumped_gate(iface)),

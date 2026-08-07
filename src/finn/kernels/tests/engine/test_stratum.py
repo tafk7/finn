@@ -148,7 +148,7 @@ def test_mvau_guarded_feasibility_rules_are_stratum_1(mvau_space):
     at_one = {p.describe() for p in mvau_space.predicates_at(1)}
     assert "weights datatype support" in at_one
     assert "inp datatype support" in at_one
-    assert "RTL-MVU feasibility (_mvu_rtl_possible)" in at_one
+    assert "true-binary (non-bipolar) inputs/weights unsupported" in at_one
 
 
 def test_mvau_fold_dependent_rules_are_stratum_2(mvau_space):
@@ -159,6 +159,18 @@ def test_mvau_fold_dependent_rules_are_stratum_2(mvau_space):
     assert "pumpedCompute => SIMD != 1" in at_two
     assert "mvau_dsp_packed feasibility (DSP58 ∧ w<=8 ∧ a<=9 ∧ NUM_LANES<=3)" in at_two, (
         "reads narrow_weights, which reads mlo_max_iter"
+    )
+    # Same shape, and it took a part-parameterized deps audit to expose it: the RTL-MVU gate
+    # reads `narrow_weights` on the DSP48E1 arm ONLY, so a Versal-only sweep never took that
+    # branch and the rule LOOKED stratum 1. Declaring the read puts `mlo_max_iter` in its
+    # closure. This is the honest classification, not a regression.
+    #
+    # The remaining escalation is `mlo_max_iter` — itself a phase-0/1 given still modelled as
+    # an axis. When it moves to Context (as `runtime_writeable_weights` now has), this rule
+    # and the packed gate both drop to stratum 1 and the capability envelope becomes
+    # axis-free by construction.
+    assert "RTL-MVU feasibility (_mvu_rtl_possible)" in at_two, (
+        "reads narrow_weights on the DSP48E1 arm, which reads mlo_max_iter"
     )
 
 

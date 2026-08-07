@@ -40,6 +40,9 @@ class Context:
         clk_ns: target clock period in ns (toolchain global; drives SEGMENTLEN).
         arities: variadic-group name -> concrete slot count for this node (read by
             :meth:`arity`). Empty for the all-fixed-arity common case (MVAU/Thresholding).
+        runtime_writeable: interface name -> whether the deployed artifact must let the
+            driver rewrite that parameter's values (read by :meth:`is_runtime_writeable`).
+            A phase-0 MANDATE, not a design choice — see the method docstring.
     """
 
     shapes: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
@@ -50,6 +53,7 @@ class Context:
     clk_ns: float | None = None
     arities: Mapping[str, int] = field(default_factory=dict)
     sparsity: Mapping[str, Any] = field(default_factory=dict)
+    runtime_writeable: Mapping[str, bool] = field(default_factory=dict)
 
     def tensor_shape(self, name: str) -> tuple[int, ...]:
         return self.shapes[name]
@@ -67,6 +71,24 @@ class Context:
         :class:`~finn.kernels.engine.constraints.Constraint` rather than a hand-written check
         in a frontend claim, which is how it could drift from the pool it is meant to describe."""
         return self.sparsity.get(name)
+
+    def is_runtime_writeable(self, name: str) -> bool:
+        """Whether the deployed artifact must let the DRIVER rewrite this parameter's values
+        after the bitstream ships. Default ``False``.
+
+        A phase-0 MANDATE on the design space, not a folding knob: it does not describe *how
+        to build*, it describes *what the deployed artifact must support*. Baseline FINN files
+        it with the folding config purely by accident of its step list (there is no field for
+        it in ``DataflowBuildConfig``), and treats it as a per-node attribute that later passes
+        may flip — which is what let a capability gate consult a value chosen after
+        specialization.
+
+        Carried here because it determines OWNERSHIP of the parameter values: a runtime-writable
+        parameter is one the kernel cannot see at build time, so no narrowing of it is sound.
+        With this as a given, ``ParamDatatype.values_visible`` — and every dtype derived from it
+        — settles at INFER rather than after delivery is chosen. See ``decisions.md``,
+        *"An owned initializer is DOWNSTREAM of its kernel"*."""
+        return bool(self.runtime_writeable.get(name, False))
 
     def arity(self, group: str) -> int:
         """How many concrete node slots a VARIADIC interface group expands to for this node —

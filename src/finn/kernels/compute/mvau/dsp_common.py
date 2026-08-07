@@ -35,8 +35,6 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
-from finn.kernels.model.param_names import runtime_writeable_key
-
 from .op import INPUT, THRESHOLDS, WEIGHTS
 
 # The RTL/DSP MVU cores are integer matmuls (the signed/bitwidth gates in _rtl_mvu_feasible
@@ -51,20 +49,31 @@ RTL_MVU_SUPPORT = {
 def _narrow_weights(p, ctx):
     # rtl:279-288 — data-dependent packing eligibility (MVAU-specific: reads MVAU's
     # weight tensor + mlo axis). Runtime-writable weights cannot be value-narrow-packed:
-    # you cannot value-narrow weights you cannot see statically. Reads the composed delivery
-    # axis directly (.get so it is safe on a param-free point — absent ⇒ static). The
-    # mlo_max_iter term is packing eligibility (coord B), out of the dtype-authority scope.
+    # you cannot value-narrow weights you cannot see statically. Runtime-writability is a
+    # phase-0 Context MANDATE, so that term is a given, not a delivery choice — which is what
+    # lets `_rtl_mvu_feasible` consult this without asking about a post-specialization value.
+    # The mlo_max_iter term is packing eligibility (coord B), out of the dtype-authority scope.
     weights = ctx.initializer(WEIGHTS)
     if weights is None:
         return 0
     wdt = ctx.tensor_datatype(WEIGHTS)
-    runtime_writeable = bool(p.get(runtime_writeable_key(WEIGHTS), 0))
-    if np.min(weights) == wdt.min() or runtime_writeable or p.get("mlo_max_iter", 0) > 1:
+    if (
+        np.min(weights) == wdt.min()
+        or ctx.is_runtime_writeable(WEIGHTS)
+        or p.get("mlo_max_iter", 0) > 1
+    ):
         return 0
     return 1
 
 
-@predicate("RTL-MVU feasibility (_mvu_rtl_possible)")
+@predicate(
+    "RTL-MVU feasibility (_mvu_rtl_possible)",
+    # The DSP48E1 arm reads `narrow_weights`. Declared now that it is honest to do so: with
+    # runtime-writability a phase-0 Context mandate, narrow_weights no longer depends on any
+    # POST-SPECIALIZATION value, so consulting it during a capability query is well-founded.
+    # Optional because the derived exists only in the DSP RTL bundles.
+    optional_deps={"narrow_weights"},
+)
 def _rtl_mvu_feasible(p, ctx):
     # The real gate deciding whether an RTL-MVU can be used at all
     # (specialize_layers.py:235 `_mvu_rtl_possible`). Reads config + device + data.
@@ -123,7 +132,6 @@ def dsp_rtl_common():
             "narrow_weights",
             _narrow_weights,
             deps={"mlo_max_iter"},
-            optional_deps={runtime_writeable_key(WEIGHTS)},
         ),
     )
     predicates = (

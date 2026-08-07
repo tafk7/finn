@@ -84,7 +84,8 @@ def narrow_weights(shape=(6, 8), wdt="INT4"):
     return rng.randint(lo, hi + 1, size=shape).astype(np.float32)
 
 
-def make_context(fpgapart=SEVEN_SERIES, weights=None, wdt="INT4", idt="INT4"):
+def make_context(fpgapart=SEVEN_SERIES, weights=None, wdt="INT4", idt="INT4",
+                 runtime_writeable=False):
     if weights is None:
         rng = np.random.RandomState(0)
         weights = rng.randint(-8, 8, size=(6, 8)).astype(np.float32)
@@ -94,6 +95,8 @@ def make_context(fpgapart=SEVEN_SERIES, weights=None, wdt="INT4", idt="INT4"):
         initializers={"weights": weights},
         fpgapart=fpgapart,
         clk_ns=5.0,
+        # A phase-0 MANDATE, not an axis: stated as a given, never pinned in an assignment.
+        runtime_writeable={PARAM_WEIGHTS: True} if runtime_writeable else {},
     )
 
 
@@ -109,7 +112,6 @@ _MEM_MODE_TO_TOPOLOGY = {
 }
 _DELIVERY_KEYS = {
     "ram_style": PARAM_RAM_STYLE,
-    "runtime_writeable_weights": PARAM_RUNTIME_WRITEABLE,
     "pumpedMemory": PARAM_PUMPED_MEMORY,
 }
 
@@ -236,8 +238,8 @@ def test_acc_datatype_worst_case_when_runtime_writeable(schema):
     r_static = resolve(schema, make_context(weights=small), base_assignment(noActivation=1))
     r_rtw = resolve(
         schema,
-        make_context(weights=small),
-        base_assignment(noActivation=1, runtime_writeable_weights=1),
+        make_context(weights=small, runtime_writeable=True),
+        base_assignment(noActivation=1),
     )
     assert isinstance(r_static, Point) and isinstance(r_rtw, Point)
     # The mechanism: the runtime-writable owner withheld trust, flipping acc to the envelope.
@@ -260,15 +262,18 @@ def test_acc_datatype_resolves_after_param_datatype(schema):
 
 
 def test_uram_requires_runtime_writeable_on_ultrascale(schema):
+    # The mandate is a Context given now, so the two arms differ in the CONTEXT, not the
+    # assignment: URAM on UltraScale is available only to a build already mandated
+    # runtime-writable -- it cannot be rescued by a later knob.
     illegal = resolve(
         schema, make_context(ULTRASCALE),
-        base_assignment(ram_style="ultra", runtime_writeable_weights=0),
+        base_assignment(ram_style="ultra"),
     )
     assert isinstance(illegal, Illegal)
     assert any("URAM" in reason for reason in illegal.reasons)
     legal = resolve(
-        schema, make_context(ULTRASCALE),
-        base_assignment(ram_style="ultra", runtime_writeable_weights=1),
+        schema, make_context(ULTRASCALE, runtime_writeable=True),
+        base_assignment(ram_style="ultra"),
     )
     assert isinstance(legal, Point)
 
@@ -333,23 +338,22 @@ def test_predicate_violation_illegal(schema):
 
 
 def test_guards_compress_the_space(schema):
-    ctx = make_context()
+    # runtime-writability is no longer one of the dimensions: it is a Context mandate, so
+    # the DESIGN space is exactly (topology x ram_style), guarded.
     topologies = ["internal_embedded", "internal_decoupled"]
     ram_styles = ["auto", "block", "distributed"]
-    rw = [0, 1]
-    naive = len(topologies) * len(ram_styles) * len(rw)
+    naive = len(topologies) * len(ram_styles)
     seen = set()
-    for mm, rs, w in itertools.product(topologies, ram_styles, rw):
+    for mm, rs in itertools.product(topologies, ram_styles):
         assignment = base_assignment(mem_mode=mm)
         if mm == "internal_decoupled":
             assignment[PARAM_RAM_STYLE] = rs
-            assignment[PARAM_RUNTIME_WRITEABLE] = w
-        r = resolve(schema, ctx, assignment)
+        r = resolve(schema, make_context(), assignment)
         if isinstance(r, Point):
-            seen.add((r[PARAM_TOPOLOGY], r.get(PARAM_RAM_STYLE), r.get(PARAM_RUNTIME_WRITEABLE)))
-    dependent = len(seen)
-    assert dependent == 6 + 1
-    assert dependent < naive
+            seen.add((r[PARAM_TOPOLOGY], r.get(PARAM_RAM_STYLE)))
+    # 3 decoupled ram_styles + 1 embedded (where ram_style guards out entirely)
+    assert len(seen) == 3 + 1
+    assert len(seen) < naive
 
 
 # --- F1 packed feasibility computes NUM_LANES for real ---------------------

@@ -257,6 +257,21 @@ class DataflowBuildConfig:
     #: writeable weights is not enabled.
     minimize_bit_width: Optional[bool] = True
 
+    #: (Optional) Whether the generated accelerator must let the DRIVER rewrite
+    #: parameter values after the bitstream ships. A mandate on the design space,
+    #: not a folding knob: it does not describe *how to build*, it describes *what
+    #: the deployed artifact must support*. Because a runtime-writable parameter is
+    #: one whose values the build cannot see, enabling this disables value-based
+    #: narrowing for those parameters — the same coupling ``minimize_bit_width``
+    #: documents above, here stated as a design-space given rather than discovered
+    #: partway through the flow.
+    #:
+    #: Applies to ``finn.kernels`` nodes: stamped onto the model by
+    #: ``step_configure_kernels`` and read as a phase-0 fact. Classic nodes keep
+    #: their per-node ``runtime_writeable_weights`` attribute. One global flag for
+    #: now; per-interface control can be added without engine changes.
+    runtime_writeable_weights: Optional[bool] = False
+
     #: (Optional) Whether to skip converting the first Transpose node
     #: to a Shuffle layer. This is useful for image classification networks where
     #: the first transpose converts NCHW to NHWC layout for data preprocessing.

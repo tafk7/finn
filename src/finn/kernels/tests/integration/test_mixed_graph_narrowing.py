@@ -44,7 +44,8 @@ from qonnx.util.basic import qonnx_make_model
 from finn.kernels.compute.mvau.op import MvauKernelOp, WEIGHTS
 from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
 from finn.kernels.dataflow.parameters.names import DECOUPLED
-from finn.kernels.model.param_names import runtime_writeable_key, topology_key
+from finn.kernels.ir.kernel_op import RUNTIME_WRITEABLE_PROP
+from finn.kernels.model.param_names import topology_key
 from finn.transformation.fpgadataflow.convert_to_hw_layers import (
     InferQuantizedMatrixVectorActivation,
 )
@@ -130,7 +131,12 @@ def _prepared(mixed: bool):
     inst = model.get_customop_wrapper(first)
     if first.domain == "finn.kernels":
         inst.set_nodeattr(topology_key(WEIGHTS), DECOUPLED)
-        inst.set_nodeattr(runtime_writeable_key(WEIGHTS), 1)
+        # Runtime-writability is a phase-0 mandate on the model, not a per-node attr. Setting
+        # it HERE (after specialization, before minimize) is the point of the test: it is the
+        # gap step_apply_folding_config sits in, and it invalidates the already-published
+        # output dtype without anything re-inferring.
+        model.set_metadata_prop(RUNTIME_WRITEABLE_PROP, "1")
+        inst._context_cache = None  # the mandate changed; drop the cached Context
     else:
         inst.set_nodeattr("mem_mode", "internal_decoupled")
         inst.set_nodeattr("runtime_writeable_weights", 1)

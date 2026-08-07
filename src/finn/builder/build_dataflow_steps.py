@@ -473,8 +473,17 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     # MultiThreshold -> finn.kernels/Thresholding) before FINN's classic Infer* transforms,
     # which then see only the remainder. This never touches FINN's classic MVAU path.
     from finn.transformation.fpgadataflow.infer_kernels import InferKernels
+    from finn.kernels.ir.kernel_op import RUNTIME_WRITEABLE_PROP
     from finn.kernels.compute.mvau.op import MvauKernelOp
     from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+
+    # Phase-0 mandates are stamped BEFORE inference, because inference already depends on
+    # them: a runtime-writable parameter is one whose values the build cannot see, so the
+    # flag settles owned-parameter datatypes and feeds backend capability gates. Setting it
+    # later would invalidate decisions already taken (decisions.md, "An owned initializer is
+    # DOWNSTREAM of its kernel").
+    if cfg.runtime_writeable_weights:
+        model.set_metadata_prop(RUNTIME_WRITEABLE_PROP, "1")
 
     model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
 

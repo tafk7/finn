@@ -57,6 +57,12 @@ from finn.kernels.model.kernel import InterfaceSchema
 from finn.kernels.model.ports import Direction
 from .nodeattr_registry import axis_nodeattr_types
 
+# Model metadata prop carrying the phase-0 runtime-writability mandate. A metadata prop
+# (run-level) rather than a nodeattr (per-node) because it constrains the whole design
+# space, not one node's configuration. Written by ``step_configure_kernels`` from
+# ``DataflowBuildConfig.runtime_writeable_weights``.
+RUNTIME_WRITEABLE_PROP = "finn_kernels_runtime_writeable_weights"
+
 
 @dataclass(frozen=True)
 class TransformationResult:
@@ -172,9 +178,30 @@ class KernelOp(HWCustomOp):
             fpgapart=graph_ctx.fpgapart,
             toolchain_version=graph_ctx.toolchain_version,
             clk_ns=graph_ctx.clk_ns,
+            runtime_writeable=self._runtime_writeable_from(model),
         )
         self._context_cache = ctx
         return ctx
+
+    def _runtime_writeable_from(self, model) -> dict:
+        """Which delivered parameters this build MANDATES be driver-rewritable (phase 0).
+
+        Sourced from a model METADATA PROP, not a nodeattr, because it is a run-level mandate
+        on the design space rather than a per-node design choice — see ``decisions.md``,
+        *"An owned initializer is DOWNSTREAM of its kernel"*.
+        ``DataflowBuildConfig.runtime_writeable_weights`` is the user-facing surface and
+        ``step_configure_kernels`` stamps it onto the model.
+
+        The config surface is a single GLOBAL flag today while :class:`Context` keys it per
+        interface. That asymmetry is deliberate: the engine models the general case, so the
+        API can grow per-interface control later without touching anything below it."""
+        try:
+            flag = model.get_metadata_prop(RUNTIME_WRITEABLE_PROP)
+        except AttributeError:
+            return {}
+        if flag is None or str(flag).lower() in ("", "0", "false"):
+            return {}
+        return {dp.iface: True for dp in self.kernel().delivered_parameters}
 
     def _fpgapart_from(self, model) -> str:
         # Placement/part is harness-owned; prefer the node's own attr, else empty.

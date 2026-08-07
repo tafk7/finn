@@ -326,31 +326,15 @@ def _kernel(which):
 # Adding to this set is allowed only for a defect being tracked to a fix. It is NOT a
 # suppression list.
 #
-# ONE ENTRY, added when the audit gained non-Versal parts (see PARTS above). It is a
-# TRACKED DEFECT with a decided fix, not an accepted state:
-#
-#  - `_rtl_mvu_feasible` (compute/mvau/dsp_common.py) declares deps={'backend'} but reads
-#    `p.narrow_weights` on the DSP48E1 arm. On DSP58/DSP48E2 the `and` short-circuits and
-#    the read never happens, which is why a Versal-only audit reported an empty ledger
-#    while the undeclared read sat in source.
-#
-#    The read is not merely undeclared, it is a PHASE INVERSION: `narrow_weights` derives
-#    from the weight-DELIVERY choice (`runtime_writeable_weights`, `mlo_max_iter`), so a
-#    capability gate consulted at infer is asking about a value chosen later. Declaring the
-#    dep would make the audit pass while leaving the inversion — so the fix is upstream of
-#    this file.
-#
-#    Fix (decisions.md, "An owned initializer is DOWNSTREAM of its kernel"): make
-#    `runtime_writeable_weights` a phase-0 configuration fact rather than a folding knob.
-#    Ownership of the weight values is then settled at infer, `narrow_weights` with it, and
-#    this rule can read it honestly. Delete this entry in the commit that lands that move.
-KNOWN_VIOLATIONS: set = {
-    (
-        "predicate",
-        "RTL-MVU feasibility (_mvu_rtl_possible)",
-        ("narrow_weights",),
-    ),
-}
+# Briefly held ONE entry: `_rtl_mvu_feasible` reading `p.narrow_weights` undeclared on the
+# DSP48E1 arm, found the moment the audit gained non-Versal parts. That read was not merely
+# undeclared but a PHASE INVERSION — `narrow_weights` derived from the weight-DELIVERY
+# choice, so a capability gate consulted at infer was asking about a value chosen later.
+# Declaring the dep would have greened the audit while leaving the inversion, so the fix
+# went upstream: `runtime_writeable_weights` became a phase-0 Context mandate
+# (decisions.md, "An owned initializer is DOWNSTREAM of its kernel"). `narrow_weights` then
+# settles at infer and the rule declares the read honestly.
+KNOWN_VIOLATIONS: set = set()
 
 
 def _all_violations():
@@ -387,25 +371,13 @@ def test_ledger_has_no_stale_entries():
     )
 
 
-def test_ledger_holds_only_the_tracked_defect():
-    """The ledger is pinned to its EXACT contents, so adding an entry is a deliberate,
-    visible act rather than a quiet way to green the suite.
+def test_ledger_is_empty():
+    """The supply waterfall is fully declared. Task 1.3's exit gate, pinned so that adding a
+    ledger entry is a deliberate, visible act rather than a quiet way to green the suite.
 
-    It was pinned EMPTY at Task 1.3. It now holds exactly one entry, admitted when the audit
-    gained non-Versal parts and found a read that a Versal-only sweep could not see. That
-    entry has a decided fix (make ``runtime_writeable_weights`` phase-0 configuration — see
-    the ledger comment); when it lands, both the entry and this expectation go back to empty.
-
-    Pinning the contents rather than the COUNT is deliberate: a second undeclared read must
-    not be able to slip in by silently replacing this one."""
-    expected = {
-        (
-            "predicate",
-            "RTL-MVU feasibility (_mvu_rtl_possible)",
-            ("narrow_weights",),
-        ),
-    }
-    assert KNOWN_VIOLATIONS == expected
+    Held one tracked entry while non-Versal coverage was landing ahead of its fix; empty
+    again now that ``runtime_writeable_weights`` is a phase-0 Context mandate."""
+    assert KNOWN_VIOLATIONS == set()
 
 
 def test_audit_walk_matches_real_resolve():
