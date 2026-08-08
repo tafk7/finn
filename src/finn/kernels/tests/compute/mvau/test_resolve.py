@@ -383,6 +383,46 @@ def test_packed_num_lanes_ok_for_int8(schema):
     assert isinstance(r, Point)
 
 
+@pytest.mark.parametrize("mlo", [1, 2, 4])
+def test_mlo_suppresses_weight_narrowing_at_every_iteration_count(schema, mlo):
+    """ANY MLO count blocks value-narrowing, including 1.
+
+    The rule is VISIBILITY, not size: under MLO the weights are fetched per iteration from
+    external memory (``fetch_weights_wrapper``), so the build never sees the values it would
+    be packing — as true at one set as at four. Every baseline reader agrees, gating on
+    truthiness (``hwcustomop.py:374``: ``en_mlo = "EN_MLO" if mlo_max_iter else "NO_MLO"``).
+
+    Regression: this derived used ``mlo_max_iter > 1``, which let ``mlo == 1`` narrow weights
+    the build cannot see. That comparison belongs to the separate GEOMETRY question —
+    memstream's ``SETS < 2`` really does collapse to single-set hardware
+    (``memstream.sv:75`` ``genSingleSet``) — and one integer cannot answer both."""
+    ctx = make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8")
+    r = resolve(
+        schema, ctx,
+        base_assignment(
+            backend=MVAU_DSP_SOFTVEC, resType="dsp",
+            mem_mode="internal_decoupled", mlo_max_iter=mlo,
+        ),
+    )
+    assert isinstance(r, Point)
+    assert r.narrow_weights == 0, f"mlo_max_iter={mlo} must suppress narrowing"
+
+
+def test_no_mlo_still_narrows_narrowable_weights(schema):
+    """Control for the above: MLO off and values visible ⇒ narrowing still happens. Without
+    this, the parametrized test would also pass against a derived that always returns 0."""
+    ctx = make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8")
+    r = resolve(
+        schema, ctx,
+        base_assignment(
+            backend=MVAU_DSP_SOFTVEC, resType="dsp",
+            mem_mode="internal_decoupled", mlo_max_iter=0,
+        ),
+    )
+    assert isinstance(r, Point)
+    assert r.narrow_weights == 1
+
+
 # --- F3 true-binary rejection reads the full condition ---------------------
 
 

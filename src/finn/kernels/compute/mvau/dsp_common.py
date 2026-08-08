@@ -48,11 +48,24 @@ RTL_MVU_SUPPORT = {
 
 def _narrow_weights(p, ctx):
     # rtl:279-288 — data-dependent packing eligibility (MVAU-specific: reads MVAU's
-    # weight tensor + mlo axis). Runtime-writable weights cannot be value-narrow-packed:
-    # you cannot value-narrow weights you cannot see statically. Runtime-writability is a
-    # phase-0 Context MANDATE, so that term is a given, not a delivery choice — which is what
-    # lets `_rtl_mvu_feasible` consult this without asking about a post-specialization value.
-    # The mlo_max_iter term is packing eligibility (coord B), out of the dtype-authority scope.
+    # weight tensor + mlo axis). The unifying rule is VISIBILITY: value-narrow packing is
+    # legal only when the build can SEE the values it is packing.
+    #
+    #   * runtime-writable — the driver overwrites them after the bitstream ships. A phase-0
+    #     Context MANDATE, so this term is a given rather than a delivery choice, which is
+    #     what lets `_rtl_mvu_feasible` consult this derived without asking about a
+    #     post-specialization value.
+    #   * MLO — the weights are fetched per iteration from external memory through
+    #     `fetch_weights_wrapper`, so no single static set exists to narrow.
+    #
+    # MLO is TRUTHY here, not `> 1`. Every baseline reader gates on truthiness
+    # (`hwcustomop.py:374` `en_mlo = "EN_MLO" if mlo_max_iter else "NO_MLO"`;
+    # `matrixvectoractivation_rtl.py:72`, `thresholding.py:133`), and it is the right test
+    # for THIS question: `mlo_max_iter == 1` still routes weights through the external fetch
+    # path, so the values are just as invisible as at N > 1. `> 1` conflated this with the
+    # separate GEOMETRY question — memstream's `SETS < 2` really does collapse to the
+    # single-set hardware (`memstream.sv:75` genSingleSet) — and answering both with one
+    # comparison narrowed weights the build cannot see.
     weights = ctx.initializer(WEIGHTS)
     if weights is None:
         return 0
@@ -60,7 +73,7 @@ def _narrow_weights(p, ctx):
     if (
         np.min(weights) == wdt.min()
         or ctx.is_runtime_writeable(WEIGHTS)
-        or p.get("mlo_max_iter", 0) > 1
+        or p.get("mlo_max_iter", 0)
     ):
         return 0
     return 1
