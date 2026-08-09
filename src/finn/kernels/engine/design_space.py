@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .attr import Attr
 from .axis import Axis
 from .derived import Derived
 from .predicate import Predicate
@@ -56,11 +57,16 @@ class DesignSpace:
     axes: tuple[Axis, ...]
     derived: tuple[Derived, ...] = ()
     predicates: tuple[Predicate, ...] = ()
+    # Node CONSTANTS — on the point, never explored, deliberately NOT in `axes`. See
+    # :mod:`finn.kernels.engine.attr`; the exclusion from ``axis_names`` is the whole point
+    # (an attr is not a choice, so nothing need be pinned to decide it).
+    attrs: tuple[Attr, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "axes", tuple(self.axes))
         object.__setattr__(self, "derived", tuple(self.derived))
         object.__setattr__(self, "predicates", tuple(self.predicates))
+        object.__setattr__(self, "attrs", tuple(self.attrs))
         # No topo-sort here: this may be an assembly FRAGMENT (the compute pool before the
         # parameters sub-schemas fold in) whose cross-pool deps are not yet satisfiable.
         # Ordering + validation run once on the finalized whole — see _ensure_ordered.
@@ -73,7 +79,7 @@ class DesignSpace:
         NOT a field — it takes no part in equality/hash and never appears in ``repr``."""
         cached = getattr(self, "_order_cache", None)
         if cached is None:
-            order = _topo_sort(self.axes, self.derived)
+            order = _topo_sort(self.axes, self.derived, self.attrs)
             cached = (
                 tuple(n for n in order if isinstance(n, Axis)),
                 tuple(n for n in order if isinstance(n, Derived)),
@@ -101,11 +107,34 @@ class DesignSpace:
             axes=tuple(a for s in spaces for a in s.axes),
             derived=tuple(d for s in spaces for d in s.derived),
             predicates=tuple(p for s in spaces for p in s.predicates),
+            attrs=tuple(a for s in spaces for a in s.attrs),
         )
 
     @property
     def axis_names(self) -> frozenset[str]:
+        """The names of the CHOICES. Deliberately excludes ``attrs`` — an attr is on the
+        point but is not a dial, and conflating the two is what made a frontend-fixed scalar
+        read as stratum 2. Callers wanting "every name the point carries from outside"
+        (the nodeattr bridge, the KernelOp assignment) want ``axis_names | attr_names``."""
         return frozenset(a.name for a in self.axes)
+
+    @property
+    def attr_names(self) -> frozenset[str]:
+        """The names of the node CONSTANTS. Disjoint from :attr:`axis_names` by construction
+        (``_topo_sort`` rejects a duplicate across the two)."""
+        return frozenset(a.name for a in self.attrs)
+
+    def _entries(self) -> tuple:
+        """Every NAMED entry of this space, in the order the point is built: attrs (written
+        first, constants), then axes, then deriveds. The one walk ``origin_of`` /
+        ``describe_entry`` / ``_topo_sort`` share, so a new node kind cannot be added to one
+        and forgotten in the others."""
+        return tuple(self.attrs) + tuple(self.axes) + tuple(self.derived)
+
+    def _kind_of(self, node) -> str:
+        if isinstance(node, Attr):
+            return "attr"
+        return "axis" if isinstance(node, Axis) else "derived"
 
     def origin_of(self, name: str) -> str:
         """Where the entry called ``name`` came from — ``""`` if it declares nothing.
@@ -113,17 +142,17 @@ class DesignSpace:
         The mechanical half of "trace what produced this key": most entries in a compiled
         space are generated, and the name alone does not say by which mechanism. See
         :mod:`finn.kernels.engine.provenance`."""
-        for node in tuple(self.axes) + tuple(self.derived):
+        for node in self._entries():
             if node.name == name:
                 return node.origin
-        raise KeyError(f"{name!r} is not an axis or derived of this space")
+        raise KeyError(f"{name!r} is not an axis, attr or derived of this space")
 
     def describe_entry(self, name: str) -> str:
         """One line describing an entry: its name, origin and declared deps. The lookup a
         human runs when an error names a key they did not write."""
-        for node in tuple(self.axes) + tuple(self.derived):
+        for node in self._entries():
             if node.name == name:
-                kind = "axis" if node in self.axes else "derived"
+                kind = self._kind_of(node)
                 parts = [f"{name} ({kind})"]
                 if node.origin:
                     parts.append(node.origin)
@@ -132,15 +161,19 @@ class DesignSpace:
                 if node.optional_deps:
                     parts.append(f"may read {sorted(node.optional_deps)}")
                 return " | ".join(parts)
-        raise KeyError(f"{name!r} is not an axis or derived of this space")
+        raise KeyError(f"{name!r} is not an axis, attr or derived of this space")
 
     # -- stratum ------------------------------------------------------------
 
     def stratum_of(self, entry) -> int:
         """How much must be PINNED before ``entry`` is decidable.
 
-        * **0** — its read-closure touches no axis. Decidable from Context ALONE, before any
-          choice is made. (A rule at this stratum can reject a node without a resolve.)
+        * **0** — its read-closure touches no axis. Decidable from Context and node CONSTANTS
+          (:class:`~finn.kernels.engine.attr.Attr`) alone, before any choice is made. (A rule
+          at this stratum can reject a node without a resolve.) An attr is at this stratum for
+          the same reason Context is: both are fixed at t=0, so reaching one obliges nothing to
+          be pinned. Before attrs existed this read "from Context ALONE", which was the same
+          claim under a narrower inventory of givens.
         * **1** — the closure touches selection roots only. Decidable once a pool member is
           chosen, with no folding pinned. Most guarded feasibility rules land here: they are
           Context rules wearing a selection guard.
@@ -203,10 +236,17 @@ class DesignSpace:
 
         def axis_self_stratum(name: str) -> int:
             # An axis is a CHOICE: reaching it means something must be pinned. Which kind
-            # decides 1 vs 2; a non-axis contributes nothing on its own account.
+            # decides 1 vs 2; a non-axis (a derived, or an ATTR — a node constant) contributes
+            # nothing on its own account.
             if name not in axis_names:
                 return 0
             return 1 if name in roots else 2
+
+        # Attrs first: constants, stratum 0 by construction, and legal dep TARGETS — so a
+        # derived reading one must find it already levelled. They are not in the topo order
+        # (they declare no deps, so nothing orders them) but they ARE in the name space.
+        for a in self.attrs:
+            strata[a.name] = 0
 
         # Axes and deriveds in topo order, so every dep is already resolved when read.
         for node in self.ordered_axes() + self.ordered_derived():
@@ -249,7 +289,7 @@ class DesignSpace:
         return self._ensure_ordered()[1]
 
 
-def _topo_sort(axes, derived=()):
+def _topo_sort(axes, derived=(), attrs=()):
     """Topologically order axes and deriveds as one DAG.
 
     Axes are fed first, so — because an axis only ever reads other axes, never a
@@ -257,9 +297,21 @@ def _topo_sort(axes, derived=()):
     would produce (declaration order preserved among independent axes). Deriveds
     follow, each after the axes and deriveds its ``deps`` name. Duplicate names,
     unknown deps, and cycles all raise :class:`DesignSpaceError`.
+
+    ``attrs`` take part in the NAME space but not the ORDER: an
+    :class:`~finn.kernels.engine.attr.Attr` declares no deps and is written to the point
+    before any axis, so it can be a dep TARGET (``narrow_weights`` reads ``mlo_max_iter``)
+    without ever being an edge SOURCE. Registering them here is what keeps such a dep from
+    reading as a typo — the alternative is a special case in every dep check.
     """
     nodes = list(axes) + list(derived)
     by_name: dict[str, object] = {}
+    # Attrs first: they are the constants everything else may name. A collision between an
+    # attr and an axis/derived is the same authoring error as any other duplicate.
+    for a in attrs:
+        if a.name in by_name:
+            raise DesignSpaceError(f"Duplicate name: {a.name!r}")
+        by_name[a.name] = a
     for n in nodes:
         if n.name in by_name:
             raise DesignSpaceError(f"Duplicate name: {n.name!r}")
@@ -286,14 +338,19 @@ def _topo_sort(axes, derived=()):
     # silent — that is the whole point: the same pool resolves standalone (key absent)
     # and composed (key present, must order first). Resolving them ONCE here keeps the
     # traversal below a plain lookup, and keeps `deps` strictly the typo-checked set.
+    #
+    # Built over `by_name` (attrs INCLUDED) rather than `nodes`: a derived may name an attr,
+    # and the traversal below looks up every dep in both maps. An attr's deps are frozen
+    # empty, so it is a leaf — it terminates a walk rather than extending one.
     edges = {
-        n.name: n.deps | {d for d in n.optional_deps if d in by_name} for n in nodes
+        n.name: n.deps | {d for d in n.optional_deps if d in by_name}
+        for n in by_name.values()
     }
 
     # Deterministic depth-first topological sort with cycle detection. Input
     # order is preserved among independent nodes so the schema reads predictably.
     WHITE, GREY, BLACK = 0, 1, 2
-    color = {n.name: WHITE for n in nodes}
+    color = {name: WHITE for name in by_name}
     order: list[object] = []
 
     def visit(name: str, stack: list[str]):
