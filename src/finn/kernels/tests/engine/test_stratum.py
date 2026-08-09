@@ -16,7 +16,7 @@ node's datatypes).
 Stratum is the missing distinction, computed as a lattice-join over the transitive
 read-closure of declared deps:
 
-* 0 — closure touches no axis (Context alone)
+* 0 — closure touches no axis (Context + node constants alone)
 * 1 — closure touches selection roots only (a pool member is chosen; no folding pinned)
 * 2 — closure touches any other axis (a real configuration)
 
@@ -132,9 +132,14 @@ def mvau_space():
     return mvau_kernel().compile()
 
 
-def test_mvau_pure_context_rules_are_stratum_0(mvau_space):
+def test_mvau_given_only_rules_are_stratum_0(mvau_space):
     """The rules that can reject a node with NO resolve at all. These are the ones that make
-    a float MatMul cheap to turn away."""
+    a float MatMul cheap to turn away.
+
+    "Given-only" rather than "pure-Context": stratum 0 means the closure reaches nothing that
+    must be PINNED, and a node constant (:class:`Attr`) qualifies alongside Context — both are
+    fixed at t=0. The distinction only became visible once attrs stopped being modelled as
+    axes."""
     at_zero = {p.describe() for p in mvau_space.predicates_at(0)}
     assert "thresholds is rank 2" in at_zero
     # `when`-gated, but the gate reads only Context, so it stays Context-decidable.
@@ -157,21 +162,36 @@ def test_mvau_fold_dependent_rules_are_stratum_2(mvau_space):
     at_two = {p.describe() for p in mvau_space.predicates_at(2)}
     assert "HLS: SIMD >= MW/1024" in at_two, "reads SIMD"
     assert "pumpedCompute => SIMD != 1" in at_two
-    assert "mvau_dsp_packed feasibility (DSP58 ∧ w<=8 ∧ a<=9 ∧ NUM_LANES<=3)" in at_two, (
-        "reads narrow_weights, which reads mlo_max_iter"
-    )
-    # Same shape, and it took a part-parameterized deps audit to expose it: the RTL-MVU gate
-    # reads `narrow_weights` on the DSP48E1 arm ONLY, so a Versal-only sweep never took that
-    # branch and the rule LOOKED stratum 1. Declaring the read puts `mlo_max_iter` in its
-    # closure. This is the honest classification, not a regression.
-    #
-    # The remaining escalation is `mlo_max_iter` — itself a phase-0/1 given still modelled as
-    # an axis. When it moves to Context (as `runtime_writeable_weights` now has), this rule
-    # and the packed gate both drop to stratum 1 and the capability envelope becomes
-    # axis-free by construction.
-    assert "RTL-MVU feasibility (_mvu_rtl_possible)" in at_two, (
-        "reads narrow_weights on the DSP48E1 arm, which reads mlo_max_iter"
-    )
+
+
+def test_mvau_capability_gates_read_no_axis(mvau_space):
+    """The two backend CAPABILITY gates — "can this backend build this node?" — are
+    decidable once a pool member is chosen, with NO folding pinned.
+
+    They were stratum 2 while `mlo_max_iter` was modelled as an Axis: both read
+    `narrow_weights`, which reads it, so a frontend-fixed constant dragged the whole closure
+    up. It was never a choice — nothing searches it, and `loop_rolling` counts it from the
+    graph — so the escalation was an artefact of the modelling, not a fact about the rules.
+    Making it an `Attr` (a node CONSTANT, outside `axes`) is what corrects it.
+
+    A previous revision of this file predicted this drop would arrive with the MLO pass. It
+    did not need to: the phantom-axis damage and the MLO carrier question are separable, and
+    only the first is fixed here. `mlo_max_iter` is still misnamed and still carries two
+    concepts — see `mlo-cardinality.md`, which owns that."""
+    at_one = {p.describe() for p in mvau_space.predicates_at(1)}
+    assert "RTL-MVU feasibility (_mvu_rtl_possible)" in at_one
+    assert "mvau_dsp_packed feasibility (DSP58 ∧ w<=8 ∧ a<=9 ∧ NUM_LANES<=3)" in at_one
+    # ...because the derived they both read no longer reaches an axis.
+    assert mvau_space.stratum_of("narrow_weights") == 1
+
+
+def test_mvau_attrs_are_stratum_zero(mvau_space):
+    """A node CONSTANT obliges nothing to be pinned — the property that lets a rule reading
+    one stay decidable before any choice is made."""
+    assert mvau_space.attr_names == frozenset({"ActVal", "mlo_max_iter"})
+    for name in mvau_space.attr_names:
+        assert mvau_space.stratum_of(name) == 0
+        assert name not in mvau_space.axis_names
 
 
 def test_mvau_fold_dials_and_widths_are_stratum_2(mvau_space):

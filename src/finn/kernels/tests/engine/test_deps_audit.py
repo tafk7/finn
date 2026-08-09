@@ -146,6 +146,15 @@ def audit_resolve(schema, context, assignment=None):
         if undeclared:
             violations.append(Violation(kind, node.name, undeclared))
 
+    # Attrs first, mirroring resolve's phase 0. They read NOTHING (no guard, no
+    # point-dependent domain), so there is no read to audit — but they must be ON the point
+    # before the axis walk, or every closure that legitimately reads one would report an
+    # undeclared read of an absent key and the ledger would fill with phantom violations.
+    for a in schema.attrs:
+        point[a.name] = (
+            assignment[a.name] if a.name in assignment else a.value(context)
+        )
+
     for axis in schema.ordered_axes():
         sink = set()
         present = axis.exists(view(sink))

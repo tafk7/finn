@@ -50,7 +50,7 @@ from finn.kernels.dataflow.parameters.registry import generation as parameters_g
 from finn.kernels.model.registry import registry_cached
 
 from .registry import build_pool, generation
-from .shared import op_axes, op_derived, op_predicates
+from .shared import kernel_attrs, op_axes, op_derived, op_predicates
 
 
 # =============================================================================
@@ -96,6 +96,7 @@ def thresholding_kernel() -> Kernel:
         interfaces=thresholding_interfaces(),
         op_axes=op_axes(),
         op_derived=op_derived(),
+        kernel_attrs=kernel_attrs(),
         op_predicates=op_predicates(),
         pool=thresholding_pool(),
     )

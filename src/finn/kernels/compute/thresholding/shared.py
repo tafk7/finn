@@ -29,6 +29,7 @@ __init__).
 
 from __future__ import annotations
 
+from finn.kernels.engine.attr import attr
 from finn.kernels.engine.axis import predicate_axis
 from finn.kernels.model.fold_depth import threshold_fold_depth
 from finn.kernels.engine.derived import Derived
@@ -75,8 +76,6 @@ def op_axes():
     return (
         # threshold-step count (matches threshold tensor's step dim).
         predicate_axis("numSteps", "pos int", _is_pos_int, _num_steps_default),
-        # activation accumulator bias (ActVal).
-        predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
         predicate_axis("numInputVectors", "list[int]", _is_int_list, [1]),
     )
     # NOT here, and deliberately: the ``PE`` fold dial and the ``NumChannels`` divisibility
@@ -84,6 +83,17 @@ def op_axes():
     # ``stream=COMPUTE_STREAM``. They were hand-written while the stream was declared but
     # never wired, which also forced ``NumChannels`` to be carried as a pseudo-axis purely
     # to feed ``divisor_axis``. It is a Context fact, so it is now a Derived (below).
+    #
+    # ALSO not here any more: ``ActVal``, which moved to kernel_attrs — a node CONSTANT, not
+    # a choice. ``numSteps``/``numInputVectors`` are not choices either, but nor are they
+    # attrs: both are derivable from Context, so they dissolve rather than migrate (A4b).
+
+
+def kernel_attrs():
+    # The absorbed MultiThreshold's out_bias — infer bakes it (op.py) and emit reads it off
+    # the Point (emit_hls.py, emit_rtl.py). No graph home once the frontend node is gone,
+    # which is what makes it an Attr rather than a Context fact. See engine/attr.py.
+    return (attr("ActVal", "int", lambda v: isinstance(v, int), 0),)
 
 
 # =============================================================================

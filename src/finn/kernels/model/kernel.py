@@ -31,7 +31,7 @@ last-axis reshape; asking for that shape raises loudly rather than faking a resh
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from ..engine.context import Context
@@ -182,16 +182,18 @@ class Kernel:
     onto ``Kernel``). Every identity field is independently optional: a minimal op declares
     only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
 
-    ``kernel_attrs`` is a THIRD design-space category, distinct from ``op_axes`` (the DSE
+    ``kernel_attrs`` is the THIRD design-space category, distinct from ``op_axes`` (the DSE
     dials — SIMD/PE, tiling-engine-generated) and from delivered parameters: a
-    ``kernel_attr`` is a nodeattr-backed scalar that reaches the Point (backends read it)
-    but is FRONTEND-FIXED — set once at conversion, never a search dial (MVU's ActVal
-    activation bias, mlo_max_iter iteration count). Structurally each entry is an ``Axis``
-    (built with ``predicate_axis``/``discrete_axis``); resolve carries it onto the Point at
-    its assignment/default with nothing exploring it. We call it ``kernel_attrs`` (not
-    brainsmith's ``kernel_params``) deliberately: the ``parameters`` namespace here is
-    claimed by the weight/threshold DELIVERY subsystem, so "attribute" names what these are
-    (node-owned scalars) rather than what they aren't (delivered tensors).
+    ``kernel_attr`` is a node CONSTANT that reaches the Point (backends read it) but is
+    FRONTEND-FIXED — set once at conversion, never a search dial (MVU's ActVal activation
+    bias, mlo_max_iter iteration count). Each entry is an
+    :class:`~finn.kernels.engine.attr.Attr`, and they reach the compiled space as
+    ``DesignSpace.attrs`` — deliberately NOT concatenated into the axis tuple, which is what
+    made a frontend-fixed scalar read as a stratum-2 choice and inflated every closure that
+    touched it. We call it ``kernel_attrs`` (not brainsmith's ``kernel_params``)
+    deliberately: the ``parameters`` namespace here is claimed by the weight/threshold
+    DELIVERY subsystem, so "attribute" names what these are (node-owned scalars) rather than
+    what they aren't (delivered tensors).
 
     ``constraints`` is the KERNEL-LEVEL constraint list: structural-legality
     :mod:`~finn.kernels.engine.constraints` that cannot live on a single port — RELATIONAL
@@ -217,7 +219,7 @@ class Kernel:
     op_axes: tuple = ()
     op_derived: tuple = ()
     op_predicates: tuple = ()
-    kernel_attrs: tuple = ()  # frontend-fixed nodeattr scalars — in the Point, never explored
+    kernel_attrs: tuple = ()  # Attr constants — on the Point, never explored, NOT axes
     constraints: tuple = ()  # kernel-level structural constraints (relational/value rules)
     cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
     delivered_parameters: tuple = field(default=(), init=False)  # derived from pool mem_modes
@@ -356,15 +358,19 @@ class Kernel:
     def _compile(self) -> DesignSpace:
         op = pool_space(
             BACKEND_AXIS,
-            # kernel_attrs join the op-level shared axes: each is an Axis carried onto the
-            # Point at its assignment/default, reaching backends + the nodeattr bridge, with
-            # nothing exploring it (resolve is pure assignment-or-default — no DSE engine).
-            tuple(self.op_axes) + tuple(self.kernel_attrs),
+            tuple(self.op_axes),
             tuple(self.op_derived),
             tuple(self.op_predicates) + self._constraint_predicates(),
             self._augmented_pool(),
             unspecialized_sentinel=True,  # compute root: "" = no backend committed (F1)
         )
+        # kernel_attrs are CONSTANTS, not choices — they ride `attrs`, outside `axes`, so
+        # `stratum_of` does not read them as something that must be pinned. They still reach
+        # the Point (resolve writes them first), the backends and the nodeattr bridge; the
+        # only thing that changes is that nothing treats them as explorable. Attached AFTER
+        # pool_space because they are op-level identity, not a pool contribution: no backend
+        # declares one, and none is dispatched on selection.
+        op = replace(op, attrs=tuple(self.kernel_attrs))
         # DELIVERED PARAMETERS: the generic compute→source wiring, OWNED by a
         # ParameterSource per delivered interface — the seam object
         # that holds the DEMAND derived + guarded source sub-schema (design pitch §2). Reads

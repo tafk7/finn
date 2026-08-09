@@ -33,7 +33,7 @@ Tensor-name convention for the Context this schema resolves against:
 
 from __future__ import annotations
 
-from finn.kernels.engine.axis import predicate_axis
+from finn.kernels.engine.attr import attr
 from finn.kernels.engine.constraints import IsStatic, ShapeRank, SparsityFree, ValueNonNeg
 from finn.kernels.engine.derived import Derived
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
@@ -124,11 +124,18 @@ def op_axes():
 
 
 def kernel_attrs():
-    # Frontend-fixed scalars that reach the Point but are never explored (set once at
-    # conversion). See Kernel.kernel_attrs for how these differ from op_axes / parameters.
+    # Node CONSTANTS: on the Point, read by emit, never explored. See engine/attr.py for why
+    # these are a primitive rather than Context fields — both are named in deps
+    # (`narrow_weights` reads mlo_max_iter), and a Context field can never be.
     return (
-        predicate_axis("ActVal", "int", lambda v: isinstance(v, int), 0),
-        predicate_axis("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
+        # The absorbed MultiThreshold's out_bias. THE case proving the category is real:
+        # infer REMOVES that node (op.py), so the graph no longer holds this value.
+        attr("ActVal", "int", lambda v: isinstance(v, int), 0),
+        # MLO parameter-set cardinality, written by loop_rolling.py. Still misnamed (the RTL
+        # calls it SETS) and still carrying two concepts — mlo-cardinality.md owns that
+        # question. It is an Attr here purely so the strata are honest meanwhile; nothing
+        # about this forecloses where that pass decides the value should live.
+        attr("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
     )
 
 

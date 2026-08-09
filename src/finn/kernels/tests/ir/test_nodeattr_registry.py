@@ -25,14 +25,26 @@ def _reg():
     return axis_nodeattr_types(mvau_kernel().compile())
 
 
-def test_every_axis_has_a_spec():
+def test_every_node_owned_name_has_a_spec():
+    """The registry publishes what the NODE carries — axes AND attrs. Those are different
+    questions: ``axis_names`` is the set of CHOICES, while a nodeattr exists for anything the
+    frontend may bake and resolve reads back. ``ActVal`` is the case that separates them."""
     reg = _reg()
     schema = mvau_kernel().compile()
-    assert set(reg) == set(schema.axis_names)
+    assert set(reg) == set(schema.axis_names | schema.attr_names)
     for spec in reg.values():
         assert spec[0] in ("i", "s", "ints")
         assert spec[1] is False  # all non-required (resolve supplies defaults)
         assert 3 <= len(spec) <= 4
+
+
+def test_attrs_are_published_but_are_not_axes():
+    """Both halves matter: dropping them from the registry would lose the frontend bake,
+    and leaving them in ``axes`` is the phantom-axis defect the category exists to fix."""
+    schema = mvau_kernel().compile()
+    assert schema.attr_names == frozenset({"ActVal", "mlo_max_iter"})
+    assert not (schema.axis_names & schema.attr_names)
+    assert {"ActVal", "mlo_max_iter"} <= set(_reg())
 
 
 def test_folding_dials_are_ints():
@@ -74,6 +86,8 @@ def test_num_input_vectors_is_not_an_axis():
 def test_kernel_attrs_flow_through_the_nodeattr_bridge():
     # ActVal/mlo_max_iter are kernel_attrs (frontend-fixed), not DSE axes — but they must
     # still reach the nodeattr registry (the frontend sets them, backends read them).
+    # Typed via the ATTR path now (straight off validate/default, no probe grid), so these
+    # also pin that the two paths agree on the storage type.
     reg = _reg()
-    assert reg["ActVal"][0] == "i"
-    assert reg["mlo_max_iter"][0] == "i"
+    assert reg["ActVal"] == ("i", False, 0)
+    assert reg["mlo_max_iter"] == ("i", False, 0)

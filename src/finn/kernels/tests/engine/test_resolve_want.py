@@ -20,6 +20,8 @@ Two properties, and the compatibility one is the more important:
    timing, so it cannot pass by accident.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
@@ -124,7 +126,10 @@ def test_want_does_not_compute_unrelated_deriveds():
             spied.append(Derived(d.name, counting, deps=d.deps, optional_deps=d.optional_deps))
         else:
             spied.append(d)
-    probe = DesignSpace(axes=space.axes, derived=tuple(spied), predicates=space.predicates)
+    # `replace`, NOT a field-by-field rebuild: listing the fields explicitly silently drops
+    # any the caller does not know about, and a space missing a field its own nodes depend on
+    # fails at finalize (this rebuild dropped `attrs`, and `narrow_weights` deps on one).
+    probe = replace(space, derived=tuple(spied))
 
     ctx = _mvau_ctx()
     resolve(probe, ctx, {"backend": "mvau_hls"}, want=frozenset({"stream_width.inp"}))
