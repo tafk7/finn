@@ -86,27 +86,39 @@ def test_tmem_and_widths(schema):
     assert r[stream_width_key("out")] == DataType["UINT3"].bitwidth() * 2  # o_bits * PE
 
 
-def test_threshold_dtype_consumes_published_param_datatype(schema):
-    # thresholdDataType reads the storage owner's published ParamDatatype (thresholds compose the
-    # parameters pool in embedded mode → always visible → value-narrowed), not a re-derivation.
+def test_threshold_dtype_is_the_declared_dtype_not_the_narrowed_one(schema):
+    """PARITY GATE: thresholdDataType is the DECLARED graph dtype, matching baseline FINN
+    (``hls/thresholding_hls.py:210`` reads ``get_input_datatype(1)``).
+
+    The storage owner still publishes a value-NARROWED ParamDatatype, and this test pins that
+    the consumer deliberately does NOT read it — see ``_threshold_datatype``'s TODO. The
+    narrowing changes the emitted ``ThresholdsActivation<>`` width, which is a real divergence
+    from FINN that nothing has functionally validated. Parity outranks the optimization until
+    it does; re-enabling means flipping this test back with an rtlsim case beside it."""
     from finn.kernels.model.param_names import param_datatype_key
 
     thr_key = param_datatype_key("thresholds")
-    # UINT8-typed thresholds valued 0..49 narrow to UINT6 (max 49 -> 6 bits).
+    # UINT8-typed thresholds valued 0..49: the owner narrows to UINT6, we must still say UINT8.
     r = resolve(schema, make_context(channels=8, steps=7, tdt="UINT8"), base_assignment(PE=2))
     assert isinstance(r, Point)
     pd = r[thr_key]
     assert pd is not None and pd.values_visible is True
-    assert r["thresholdDataType"] == pd.dtype  # consumer reads the authority
-    assert pd.dtype == DataType["UINT6"]  # narrowed below the UINT8 graph envelope
+    assert pd.dtype == DataType["UINT6"], "the owner still publishes the narrowed authority"
+    assert r["thresholdDataType"] == DataType["UINT8"], (
+        "the consumer must use the DECLARED dtype for FINN parity, not the narrowed one"
+    )
 
 
-def test_threshold_datatype_resolves_after_param_datatype(schema):
-    # R-order: thresholdDataType deps on parameters.thresholds.datatype, ordered after it.
-    from finn.kernels.model.param_names import param_datatype_key
+def test_threshold_datatype_declares_no_dep_while_narrowing_is_off(schema):
+    """thresholdDataType is Context-only for now, so it declares no dep and needs no ordering.
 
-    names = [d.name for d in schema.ordered_derived()]
-    assert names.index("thresholdDataType") > names.index(param_datatype_key("thresholds"))
+    It USED to dep on ``parameters.thresholds.datatype`` and be ordered after it. Re-enabling
+    the narrowing restores both the read and that dep — this test is the reminder that the two
+    move together, since a restored read with a dropped dep is exactly the undeclared-read
+    class ``test_deps_audit`` exists to catch."""
+    tdt = next(d for d in schema.ordered_derived() if d.name == "thresholdDataType")
+    assert tdt.deps == frozenset()
+    assert tdt.optional_deps == frozenset()
 
 
 def test_pe_must_divide_channels(schema):

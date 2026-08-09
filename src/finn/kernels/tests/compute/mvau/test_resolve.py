@@ -538,24 +538,34 @@ def test_thresholded_node_populates_threshold_identity(schema):
     assert r["thresholdDataType"] is not None
 
 
-def test_fused_threshold_consumes_published_param_datatype(schema):
-    # R-fused-thresh guard: MVAU's 3-input fused path reads the THRESHOLD storage owner's
-    # published ParamDatatype (a parameters-pool derived), not a re-derivation. Prove (a) the
-    # thresholds ParamDatatype composes and narrows on a fused node, and (b) thresholdDataType
-    # equals that published dtype — the fused path is a pure consumer.
+def test_fused_threshold_dtype_is_declared_not_narrowed(schema):
+    """PARITY GATE for MVAU's fused path, the sibling of the standalone Thresholding case.
+
+    The thresholds ParamDatatype still composes and still narrows on a fused node — but
+    ``thresholdDataType`` deliberately reports the DECLARED dtype, because that is what FINN
+    bakes into ``ThresholdsActivation<>`` (``hls/thresholding_hls.py:210`). Both consumers
+    read one derived, so this and the standalone test move together."""
     thr_key = param_datatype_key("thresholds")
-    r = resolve(schema, make_thresh_context(steps=7), base_assignment())
+    ctx = make_thresh_context(steps=7)
+    r = resolve(schema, ctx, base_assignment())
     assert isinstance(r, Point)
     pd = r[thr_key]
     assert pd is not None and pd.values_visible is True  # embedded thresholds -> visible
-    assert r["thresholdDataType"] == pd.dtype  # consumer reads the authority, no re-derive
+    assert r["thresholdDataType"] == ctx.tensor_datatype("thresholds"), (
+        "fused thresh.h must use the DECLARED dtype for FINN parity"
+    )
 
 
-def test_fused_thresholddatatype_resolves_after_param_datatype(schema):
-    # R-order guard for the fused path: thresholdDataType deps on parameters.thresholds.datatype,
-    # so the unified topo-sort must order it after — across the compute/parameters pool boundary.
-    names = [d.name for d in schema.ordered_derived()]
-    assert names.index("thresholdDataType") > names.index(param_datatype_key("thresholds"))
+def test_fused_thresholddatatype_declares_no_dep_while_narrowing_is_off(schema):
+    """Was an ORDER guard (thresholdDataType after parameters.thresholds.datatype, across the
+    pool boundary). With the narrowing disabled for parity the read is gone, so the dep is too.
+
+    Pinned as a dep assertion rather than an order one because ordering still holds by accident
+    here — publisher happens to precede consumer — and an accidental pass would not notice the
+    dep going stale. Re-enabling the narrowing restores read, dep and ordering together."""
+    tdt = next(d for d in schema.ordered_derived() if d.name == "thresholdDataType")
+    assert tdt.deps == frozenset()
+    assert tdt.optional_deps == frozenset()
 
 
 def test_malformed_threshold_tensor_is_illegal(schema):

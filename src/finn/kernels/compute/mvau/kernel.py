@@ -39,7 +39,6 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
-from finn.kernels.model.param_names import param_datatype_key
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
 
 from finn.kernels.dataflow.parameters.registry import generation as parameters_generation
@@ -145,17 +144,19 @@ def kernel_attrs():
 
 
 def _threshold_dtype(p, ctx):
-    # The threshold storage owner's published ParamDatatype.dtype, or None on a 2-input node.
-    # The has_tensor guard fires first, so the point key is read only on a wired 3-input node.
+    # The threshold operand's DECLARED dtype, or None on a 2-input node. Delegates to the
+    # SHARED Thresholding rule so the fused and standalone paths cannot drift — see
+    # ``compute/thresholding/shared.py::_threshold_datatype`` for the parity TODO on
+    # re-enabling value-narrowing.
     return _threshold_datatype(p, ctx) if ctx.has_tensor(THRESHOLDS) else None
 
 
 def op_derived():
-    # deps on the thresholds ParamDatatype (a parameters-pool derived) so the topo-sort orders
-    # this after it — the fused path is a pure consumer of the published authority.
-    return (
-        Derived("thresholdDataType", _threshold_dtype, deps={param_datatype_key(THRESHOLDS)}),
-    )
+    # No dep: while the narrowing is off for FINN parity the shared rule is Context-only, so
+    # there is nothing to order against. Re-enabling it restores the read of the thresholds
+    # ParamDatatype (a parameters-pool derived) AND this dep together — the topo-sort needs the
+    # dep to place this after the publisher, across the compute/parameters pool boundary.
+    return (Derived("thresholdDataType", _threshold_dtype),)
 
 
 # -- op-level SHARED legality. Divisibility and the URAM/pumped gates are engine- and
