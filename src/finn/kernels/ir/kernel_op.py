@@ -213,12 +213,20 @@ class KernelOp(HWCustomOp):
     # -- configure: nodeattrs -> Point --------------------------------------
 
     def _assignment(self) -> dict:
-        """The design-axis values currently set on the node (the ones the user/flow
-        pinned). Unset axes are omitted so the schema supplies their defaults."""
+        """The node-owned values currently set on the node (the ones the user/flow pinned).
+        Unset names are omitted so the schema supplies their defaults.
+
+        Covers BOTH design axes and :class:`~finn.kernels.engine.attr.Attr` constants. The
+        attr half is load-bearing and easy to lose: this is the gate deciding WHICH NODEATTRS
+        REACH RESOLVE, so narrowing it to ``axis_names`` alone would silently drop the
+        frontend-baked ``ActVal`` (infer bakes it; emit reads ``point.ActVal``) and bake a
+        default 0 into the hardware — no exception, no Illegal. ``test_attr_round_trip.py``
+        is the regression."""
         from qonnx.util.basic import get_by_name
 
+        schema = self.kernel().compile()
         out: dict = {}
-        for name in self.kernel().compile().axis_names:
+        for name in schema.axis_names | schema.attr_names:
             if get_by_name(self.onnx_node.attribute, name) is not None:
                 out[name] = self.get_nodeattr(name)
         return out

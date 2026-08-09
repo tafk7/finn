@@ -43,14 +43,37 @@ _MAX_PROBES = 512
 
 
 def axis_nodeattr_types(schema) -> dict[str, tuple]:
-    """Map every axis in ``schema`` to a FINN nodeattr type tuple.
+    """Map every axis AND attr in ``schema`` to a FINN nodeattr type tuple.
 
-    Returns ``{axis_name: (dtype, required, default[, allowed_values])}`` — the shape
-    FINN's ``get_nodeattr_types`` expects. All axes are non-required (``False``): an
-    unpinned axis resolves to its schema default, so FINN need never supply it.
+    Returns ``{name: (dtype, required, default[, allowed_values])}`` — the shape
+    FINN's ``get_nodeattr_types`` expects. All entries are non-required (``False``): an
+    unpinned axis or attr resolves to its schema default, so FINN need never supply it.
+
+    Both kinds appear because both are node-owned values the frontend may bake and resolve
+    reads back — the nodeattr surface is "what the node carries", which is not the same
+    question as "what is a choice". An :class:`~finn.kernels.engine.attr.Attr` types DIRECTLY
+    from its ``label``/``default`` and needs no probe grid: its domain cannot depend on a
+    point, which is precisely what the probe grid exists to work around for a pool-dispatched
+    axis.
     """
     probes = _probe_points(schema)
-    return {axis.name: _axis_to_nodeattr(axis, probes) for axis in schema.ordered_axes()}
+    types = {axis.name: _axis_to_nodeattr(axis, probes) for axis in schema.ordered_axes()}
+    types.update({a.name: _attr_to_nodeattr(a) for a in schema.attrs})
+    return types
+
+
+def _attr_to_nodeattr(a) -> tuple:
+    """An attr's nodeattr spec, read straight off the declaration.
+
+    No probe grid, no domain resolution, no `_safe_default` fallback — an attr's default is
+    either a plain value or a ``(context) -> value`` callable, and in the latter case the
+    registry has no Context, so the storage-type zero is the honest answer (the real value is
+    supplied per node, exactly as for a context-derived axis default)."""
+    dtype = _predicate_storage_type(a.label)
+    default = a.default
+    if callable(default):
+        default = _ZERO[dtype]
+    return (dtype, False, default)
 
 
 def _axis_to_nodeattr(axis, probes) -> tuple:
@@ -59,6 +82,16 @@ def _axis_to_nodeattr(axis, probes) -> tuple:
     if allowed is not None:
         return (dtype, False, default, allowed)
     return (dtype, False, default)
+
+
+def _predicate_storage_type(label: str) -> str:
+    """FINN storage type for a membership-test domain, from its LABEL.
+
+    A non-enumerable domain carries no values to inspect, so the label is the only signal —
+    ``"list[int]"`` is an int list, anything else a scalar int. Shared by the axis path
+    (:func:`_classify_domain`, via a resolved ``PredicateDomain``) and the attr path, so the
+    two cannot classify the same label differently."""
+    return "ints" if "list" in label else "i"
 
 
 def _resolve_domain(axis, point):
@@ -108,7 +141,7 @@ def _classify_domain(axis, probes) -> tuple[str, frozenset | None]:
     for point in probes:
         dom = _resolve_domain(axis, point)
         if isinstance(dom, PredicateDomain):
-            if "list" in dom.label:
+            if _predicate_storage_type(dom.label) == "ints":
                 saw_list_predicate = True
             else:
                 saw_str_predicate = True
@@ -122,6 +155,7 @@ def _classify_domain(axis, probes) -> tuple[str, frozenset | None]:
         # A non-list predicate domain (ActVal "int", mlo_max_iter "nonneg int") is a
         # scalar int stored as "i" with no membership constraint.
         return "i", None
+    # (both branches above go through _predicate_storage_type's rule — see there)
     if saw_frozenset:
         if all(isinstance(v, str) for v in values):
             return "s", frozenset(values)
