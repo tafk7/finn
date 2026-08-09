@@ -26,9 +26,12 @@ not weaken it.
 import pytest
 
 from finn.kernels.engine.attr import Attr, attr
-from finn.kernels.engine.axis import discrete_axis
+from finn.kernels.engine.axis import Axis, discrete_axis
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.design_space import DesignSpace, DesignSpaceError
+from finn.kernels.engine.point import Illegal, Point
+from finn.kernels.engine.predicate import Predicate
+from finn.kernels.engine.resolve import resolve
 
 
 ACTVAL = attr("ActVal", "int", lambda v: isinstance(v, int), 0)
@@ -129,3 +132,72 @@ def test_an_attr_may_not_shadow_an_axis():
     and silently letting one win would make which-definition-applies depend on walk order."""
     with pytest.raises(DesignSpaceError, match="Duplicate name"):
         DesignSpace(axes=(discrete_axis("ActVal", {0}, 0),), attrs=(ACTVAL,)).finalize()
+
+
+# =============================================================================
+# Resolve behaviour.
+# =============================================================================
+
+
+def test_resolve_takes_the_assignment_or_falls_to_the_default():
+    space = DesignSpace(axes=(FOLD,), attrs=(ACTVAL,)).finalize()
+    assert resolve(space, None, {"ActVal": -8})["ActVal"] == -8
+    assert resolve(space, None, {})["ActVal"] == 0
+
+
+def test_resolve_rejects_an_out_of_domain_attr():
+    """``validate`` is not vestigial — it is checked, exactly as an axis domain is."""
+    space = DesignSpace(axes=(FOLD,), attrs=(ACTVAL,)).finalize()
+    result = resolve(space, None, {"ActVal": "eight"})
+    assert isinstance(result, Illegal)
+    assert "ActVal" in result.reasons[0]
+
+
+def test_attrs_are_written_before_axes():
+    """Ordering with teeth: an axis DOMAIN that reads an attr would hit an absent key if
+    attrs were written after the axis loop, so this pins the phase order rather than an
+    incidental dict ordering."""
+    scaled = Axis(
+        name="width",
+        domain=lambda p, ctx: frozenset({p["ActVal"] * 2}),
+        default=lambda p, ctx: p["ActVal"] * 2,
+        deps=frozenset({"ActVal"}),
+    )
+    space = DesignSpace(axes=(scaled,), attrs=(ACTVAL,)).finalize()
+    assert resolve(space, None, {"ActVal": 5})["width"] == 10
+
+
+def test_a_derived_reads_an_attr_off_the_point():
+    """The ``narrow_weights`` shape, in miniature."""
+    narrow = Derived("narrow", lambda p, c: 0 if p["ActVal"] else 1, deps={"ActVal"})
+    space = DesignSpace(axes=(FOLD,), derived=(narrow,), attrs=(ACTVAL,)).finalize()
+    assert resolve(space, None, {"ActVal": 3})["narrow"] == 0
+    assert resolve(space, None, {"ActVal": 0})["narrow"] == 1
+
+
+def test_a_predicate_may_read_an_attr_and_stays_stratum_zero():
+    """A rule reading ONLY constants is decidable before any choice — the property that
+    makes the capability envelope reachable without pinning a fold."""
+    rule = Predicate(
+        lambda pt, c: None if pt["ActVal"] >= 0 else "ActVal must be >= 0",
+        "ActVal sign",
+        deps={"ActVal"},
+    )
+    space = DesignSpace(axes=(FOLD,), predicates=(rule,), attrs=(ACTVAL,)).finalize()
+    assert isinstance(resolve(space, None, {"ActVal": 1}), Point)
+    assert isinstance(resolve(space, None, {"ActVal": -1}), Illegal)
+    assert space.stratum_of(rule) == 0
+
+
+def test_want_pulls_a_needed_attr_and_skips_an_unneeded_one():
+    """Demand-driven resolve must see attrs in the closure — otherwise the walk would read a
+    key it never wrote — while still computing nothing it was not asked for."""
+    narrow = Derived("narrow", lambda p, c: 0 if p["ActVal"] else 1, deps={"ActVal"})
+    space = DesignSpace(axes=(FOLD,), derived=(narrow,), attrs=(ACTVAL,)).finalize()
+
+    wanted = resolve(space, None, {"ActVal": 3}, want={"narrow"})
+    assert wanted["narrow"] == 0
+    assert "ActVal" in wanted, "the attr its closure names must be pulled in"
+
+    unrelated = resolve(space, None, {"ActVal": 3}, want={"fold"})
+    assert "ActVal" not in unrelated, "an unrelated attr must not be computed"

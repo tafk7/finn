@@ -10,10 +10,14 @@
 
     resolve(schema, context, assignment, *, want=None) -> Point | Illegal(reasons)
 
-Walk axes in dependency order; skip a guarded-out axis (it is ABSENT, not
+Write the Attrs (node constants — assignment-or-default, no guard, no ordering);
+walk axes in dependency order, skipping a guarded-out axis (it is ABSENT, not
 defaulted); take the value from the assignment or the axis default; reject a
 value outside its domain; compute Derived after axes are fixed; run every
 Predicate on the assembled point and collect all reasons.
+
+Attrs go FIRST so an axis guard/domain or a derived may read one. They cannot read
+anything themselves, so no ordering question arises among them.
 
 ``resolve`` is pure over (schema, context, assignment). Collecting *all* predicate
 reasons powers the explain-style diagnostics the model emphasises, so the eager
@@ -51,6 +55,13 @@ def resolve(
 
     if want is not None:
         return _resolve_wanted(schema, context, assignment, frozenset(want))
+
+    # 0. Attrs — node CONSTANTS, written FIRST so every axis guard/domain and every derived
+    #    can read one. No guard, no point-dependent domain, no ordering: an attr is fixed
+    #    before resolution begins (engine/attr.py).
+    illegal = _write_attrs(schema, context, assignment, point)
+    if illegal is not None:
+        return illegal
 
     # 1. Axes, in dependency order.
     for axis in schema.ordered_axes():
@@ -116,6 +127,14 @@ def _resolve_wanted(
     needed = _closure(schema, want)
     point: dict = {}
 
+    # Attrs are constants: cheap, unordered, and readable by anything. Writing only the ones
+    # in the closure keeps the demand-driven promise (compute nothing unasked-for).
+    illegal = _write_attrs(
+        schema, context, assignment, point, only=lambda name: name in needed
+    )
+    if illegal is not None:
+        return illegal
+
     for axis in schema.ordered_axes():
         if axis.name not in needed:
             continue
@@ -155,13 +174,42 @@ def _resolve_wanted(
     return Illegal(reasons) if reasons else Point(point)
 
 
+def _write_attrs(
+    schema: DesignSpace, context: Context, assignment: dict, point: dict, *, only=None
+) -> Illegal | None:
+    """Write the node CONSTANTS onto ``point``: assignment-or-default, domain-checked.
+
+    Returns an :class:`Illegal` on an out-of-domain value, else ``None``. Deliberately much
+    simpler than the axis loop — no guard (an attr is never absent), no point-dependent domain
+    (its membership test is fixed), no ordering (it reads nothing). That simplicity IS the
+    category: everything the axis loop does beyond this exists to serve a CHOICE.
+
+    ``only`` filters by name for the demand-driven path."""
+    for a in schema.attrs:
+        if only is not None and not only(a.name):
+            continue
+        val = assignment[a.name] if a.name in assignment else a.value(context)
+        if val not in a.domain:
+            return Illegal([f"{a.name} = {val!r} not in {a.domain}"])
+        point[a.name] = val
+    return None
+
+
 def _closure(schema: DesignSpace, roots) -> frozenset[str]:
     """The transitive read-closure of ``roots`` over declared deps.
 
     Optional deps are included WHEN PRESENT: if the space defines the name, the reader may
     genuinely read it, so it must be computed first. An optional dep the space does not
-    define contributes nothing, which is exactly its meaning."""
-    by_name = {n.name: n for n in tuple(schema.axes) + tuple(schema.derived)}
+    define contributes nothing, which is exactly its meaning.
+
+    Attrs are in ``by_name`` because a derived may NAME one (``narrow_weights`` reads
+    ``mlo_max_iter``); omitting them would silently drop that entry from the closure, and the
+    demand-driven walk would then read a key it never wrote. They extend no walk — an attr's
+    deps are empty, so it is always a leaf."""
+    by_name = {
+        n.name: n
+        for n in tuple(schema.attrs) + tuple(schema.axes) + tuple(schema.derived)
+    }
     seen: set[str] = set()
     stack = [r for r in roots if r in by_name]
     while stack:
