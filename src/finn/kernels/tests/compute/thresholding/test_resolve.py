@@ -15,6 +15,8 @@ channel dim; numSteps is derived from the threshold tensor; data-dependent predi
 reject unsorted (RTL) and negative-under-unsigned thresholds.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
@@ -113,10 +115,32 @@ def test_pe_must_divide_channels(schema):
     assert any("PE" in reason for reason in r.reasons)
 
 
-def test_num_steps_must_match_threshold_shape(schema):
-    r = resolve(schema, make_context(steps=7), base_assignment(numSteps=5))
-    assert isinstance(r, Illegal)
-    assert any("numSteps" in reason or "steps" in reason for reason in r.reasons)
+def test_num_steps_is_the_threshold_step_extent(schema):
+    """``numSteps`` IS the tensor's step dim, so it cannot disagree with it.
+
+    This replaces a test asserting that pinning an INCONSISTENT ``numSteps`` was rejected.
+    That was the weaker property: it required a predicate to notice a duplicate had drifted.
+    Now there is no duplicate to drift — the value is derived, so agreement is structural and
+    the rule that policed it is gone."""
+    for steps in (7, 15):
+        r = resolve(schema, make_context(steps=steps), base_assignment())
+        assert isinstance(r, Point)
+        assert r["numSteps"] == steps
+    assert "numSteps" not in schema.axis_names, "a derivation, not a dial"
+
+
+def test_a_non_2d_threshold_tensor_reports_its_rank(schema):
+    """The RANK requirement survives the numSteps dissolution — and now reports LEGIBLY.
+
+    It raises rather than returning ``Illegal`` because the geometry deriveds index this
+    shape positionally, and deriveds run before predicates: a rule could never fire first. So
+    the check moved to the shape read. The exception type matters — ``ValueError`` is in the
+    set ``Kernel.first_feasible_backend`` treats as "not resolvable for this context", whereas
+    the bare ``IndexError`` this used to raise would escape as a kernel bug (INV5) on a node
+    that is merely ineligible."""
+    ctx = replace(make_context(), shapes={**make_context().shapes, "thresholds": (8,)})
+    with pytest.raises(ValueError, match="must be 2D"):
+        resolve(schema, ctx, base_assignment())
 
 
 # --- RTL-local axes disjoint from HLS --------------------------------------

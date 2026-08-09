@@ -34,6 +34,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import KernelOp, TransformationResult
+from finn.kernels.engine.constraints import ShapeRank
 from finn.kernels.model.kernel import InterfaceSchema, Kernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
@@ -65,7 +66,16 @@ def thresholding_interfaces():
     block. PE folds the channel dim (out position 1); the threshold block folds with it."""
     return (
         InterfaceSchema(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, NumChannels)
-        InterfaceSchema(THRESHOLDS, Direction.IN, block=[FULL, FULL]),  # (NumChannels, numSteps)
+        # The rank-2 requirement is a PER-PORT structural constraint, not an op predicate:
+        # NumChannels and numSteps are both read positionally off this shape, so a non-2D
+        # tensor is unresolvable rather than merely illegal. Declaring it here is what makes
+        # it fire BEFORE the deriveds that index the shape — an op_predicate runs after them,
+        # so a 1-D tensor raised IndexError instead of reporting the real reason. Same
+        # mechanism MVAU already uses for its optional threshold port.
+        InterfaceSchema(
+            THRESHOLDS, Direction.IN, block=[FULL, FULL],  # (NumChannels, numSteps)
+            constraints=(ShapeRank(THRESHOLDS, 2),),
+        ),
         InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL]),
     )
 
