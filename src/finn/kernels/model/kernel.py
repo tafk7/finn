@@ -405,18 +405,27 @@ class Kernel:
 
         The soundness argument, in both directions:
 
-        * A **stratum ≤ 1** predicate's read-closure touches nothing but the selection root.
-          Its verdict therefore cannot change with any folding choice, so a rejection here is
-          a rejection the full resolve would also produce — no legal point exists for this
-          member at ANY fold. This is the case that turns a float MatMul from three full
-          resolves into a handful of dtype comparisons.
+        * A **stratum ≤ 1** predicate's read-closure touches nothing but the selection root
+          and node CONSTANTS. Its verdict therefore cannot change with any folding choice, so
+          a rejection here is a rejection the full resolve would also produce — no legal point
+          exists for this member at ANY fold. This is the case that turns a float MatMul from
+          three full resolves into a handful of dtype comparisons.
         * ``True`` is only returned when the member has NO stratum-2 rule left to run. If
           one exists it might reject at default fold, so we must not pre-empt the resolve.
+
+        The trial point carries the ATTRS as well as the selection root. They are constants —
+        fixed before specialization, identical in every point this trial stands for — so
+        seeding them cannot change a verdict, only allow one to be reached: a stratum-≤1 rule
+        naming an attr would otherwise be skipped by the all-deps-pinned test below and
+        decide nothing. Note the attrs come from the SCHEMA defaults, not from a node
+        assignment, which is the honest reading of "would ANY node on this backend work" —
+        `first_feasible_backend`'s question at Seam B.
 
         Anything unexpected — a rule that raises, a closure naming a derived we have not
         computed — yields ``None``. Falling back to the existing path is always safe; being
         clever here is not."""
-        trial = {BACKEND_AXIS: impl_name}
+        trial = {a.name: a.value(context) for a in schema.attrs}
+        trial[BACKEND_AXIS] = impl_name
         view = Point(trial)
         decided = 0
         for pred in schema.predicates_upto(1):

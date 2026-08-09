@@ -185,6 +185,36 @@ def test_mvau_capability_gates_read_no_axis(mvau_space):
     assert mvau_space.stratum_of("narrow_weights") == 1
 
 
+def test_the_capability_gates_are_classified_early_but_not_yet_DECIDED_early(mvau_space):
+    """An honest classification is not the same as a realized speed-up, and conflating the
+    two is easy — so pin the gap rather than let a later reader assume it closed.
+
+    Both gates are stratum 1, but ``_early_verdict``'s trial pins only the selection root and
+    the attrs. These rules read ``narrow_weights`` — a DERIVED, which the trial does not
+    compute — so the all-deps-pinned test skips them and they are still decided by the full
+    resolve. Closing that needs the trial to evaluate stratum-≤1 deriveds too, which is a
+    separate change with its own soundness argument (a derived may read Context in ways a
+    root-only point cannot satisfy).
+
+    If someone later teaches the trial to compute deriveds, this test should FAIL and be
+    replaced by one asserting the gates now run."""
+    from finn.kernels.model.backend import BACKEND_AXIS
+
+    trial = set(mvau_space.attr_names) | {BACKEND_AXIS}
+    gates = [
+        p
+        for p in mvau_space.predicates_upto(1)
+        if "feasibility (_mvu_rtl_possible)" in p.describe()
+        or "mvau_dsp_packed feasibility" in p.describe()
+    ]
+    assert gates, "the gates should be reachable at stratum <= 1"
+    for gate in gates:
+        unpinned = (gate.deps | gate.optional_deps) - trial
+        assert unpinned == {"narrow_weights"}, (
+            f"{gate.describe()}: expected exactly the derived to be missing, got {unpinned}"
+        )
+
+
 def test_mvau_attrs_are_stratum_zero(mvau_space):
     """A node CONSTANT obliges nothing to be pinned — the property that lets a rule reading
     one stay decidable before any choice is made."""
