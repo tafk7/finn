@@ -423,6 +423,63 @@ def test_no_mlo_still_narrows_narrowable_weights(schema):
     assert r.narrow_weights == 1
 
 
+def test_runtime_writeable_suppresses_narrow_weights(schema):
+    """A DELIBERATE DIVERGENCE FROM FINN, pinned so it cannot be "fixed" back by accident.
+
+    NARROW_WEIGHTS is a range COMMITMENT to the DSP packing logic — "no weight equals
+    wdt.min()" (``mvu.sv:44``) — which the RTL spends on lane density, and which is checked
+    only in simulation. Under runtime-writability the driver replaces the values after the
+    bitstream ships, so a promise derived from the build-time initializer is unsound.
+
+    Baseline FINN emits NARROW_WEIGHTS=1 here anyway
+    (``matrixvectoractivation_rtl.py:305-315`` guards only on
+    ``mem_mode in ["dynamic", "external_mem"]``). We treat that as a latent FINN bug rather
+    than a contract to match, because FINN's own siblings in the same file
+    (``minimize_weight_bit_width`` :562, ``minimize_accumulator_width`` :514) guard on a
+    STRICT SUPERSET that includes runtime-writability. See ``dsp_common._narrow_weights``."""
+    ctx = make_context(VERSAL, weights=narrow_weights(wdt="INT8"), wdt="INT8",
+                       runtime_writeable=True)
+    r = resolve(
+        schema, ctx,
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp",
+                        mem_mode="internal_decoupled", mlo_max_iter=0),
+    )
+    assert isinstance(r, Point)
+    assert r.narrow_weights == 0, (
+        "runtime-writable weights cannot carry a narrow-range commitment, even though "
+        "baseline FINN emits one here"
+    )
+
+
+def test_runtime_writeable_costs_the_rtl_backend_on_dsp48e1(schema):
+    """The observable consequence of the divergence above, on the part where it bites.
+
+    DSP48E1 admits ONLY narrow weights, so suppressing the commitment makes the RTL cores
+    infeasible for a runtime-writable node — FINN would specialize such a node to MVAU_rtl,
+    we route it to HLS. Pinned because it is a backend-SELECTION difference, not just a
+    parameter value: anything comparing our specialization against FINN's on 7-series
+    runtime-writable MVAUs will see it and should be updated, not silenced."""
+    ctx = make_context(SEVEN_SERIES, weights=narrow_weights(wdt="INT8"), wdt="INT8",
+                       runtime_writeable=True)
+    r = resolve(
+        schema, ctx,
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp",
+                        mem_mode="internal_decoupled"),
+    )
+    assert isinstance(r, Illegal)
+    assert any("narrow weights" in reason for reason in r.reasons)
+
+    # Same node without the mandate: RTL is feasible again. Without this the test would
+    # also pass if the DSP cores were infeasible on 7-series for some unrelated reason.
+    ctx_static = make_context(SEVEN_SERIES, weights=narrow_weights(wdt="INT8"), wdt="INT8")
+    r_static = resolve(
+        schema, ctx_static,
+        base_assignment(backend=MVAU_DSP_SOFTVEC, resType="dsp",
+                        mem_mode="internal_decoupled"),
+    )
+    assert isinstance(r_static, Point)
+
+
 # --- F3 true-binary rejection reads the full condition ---------------------
 
 

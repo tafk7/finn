@@ -47,16 +47,44 @@ RTL_MVU_SUPPORT = {
 
 
 def _narrow_weights(p, ctx):
-    # rtl:279-288 — data-dependent packing eligibility (MVAU-specific: reads MVAU's
-    # weight tensor + mlo axis). The unifying rule is VISIBILITY: value-narrow packing is
-    # legal only when the build can SEE the values it is packing.
+    # rtl:279-288 — data-dependent packing eligibility. NARROW_WEIGHTS is a RANGE COMMITMENT
+    # to the DSP packing logic, not a dtype width: `mvu.sv:44` defines it as "weights in
+    # (-W:W) rather than [-W:W)", i.e. a promise that no weight equals wdt.min(). The RTL
+    # spends that promise on LANE DENSITY — the non-narrow path reserves a guard bit
+    # (`mvu.sv:115,135`), so narrow weights fit more SIMD lanes per DSP. The commitment is
+    # checked ONLY in simulation (`mvu.sv:281-288` `$warning`); in silicon a violation is
+    # silently wrong arithmetic.
     #
-    #   * runtime-writable — the driver overwrites them after the bitstream ships. A phase-0
-    #     Context MANDATE, so this term is a given rather than a delivery choice, which is
-    #     what lets `_rtl_mvu_feasible` consult this derived without asking about a
+    # The unifying rule is VISIBILITY: the promise is only sound if the build can SEE the
+    # values it is promising about.
+    #
+    #   * runtime-writable — the driver overwrites the values after the bitstream ships. A
+    #     phase-0 Context MANDATE, so this term is a given rather than a delivery choice,
+    #     which is what lets `_rtl_mvu_feasible` consult this derived without asking about a
     #     post-specialization value.
-    #   * MLO — the weights are fetched per iteration from external memory through
+    #   * MLO — weights are fetched per iteration from external memory through
     #     `fetch_weights_wrapper`, so no single static set exists to narrow.
+    #
+    # WE DELIBERATELY DIVERGE FROM FINN ON THE RUNTIME-WRITABLE TERM. Baseline
+    # (`matrixvectoractivation_rtl.py:305-315`) gates only on
+    # `mem_mode in ["dynamic", "external_mem"]` and emits NARROW_WEIGHTS=1 for a
+    # runtime-writable node, deriving the promise from an initializer the driver may replace.
+    # That is unsound, and FINN's own siblings in the same file disagree with it:
+    # `minimize_weight_bit_width` (:562) and `minimize_accumulator_width` (:514) both guard on
+    # `runtime_writeable_weights OR mem_mode in ["external", "external_mem", "dynamic"]` — a
+    # STRICT SUPERSET of the guard here. Three value-derived quantities, one missing the
+    # check, no comment anywhere acknowledging it: an oversight, not a considered exemption.
+    # Sharpest case: UltraScale + ram_style=ultra FORCES runtime_writeable_weights=1
+    # (`matrixvectoractivation.py:1004`), the memstream ships INIT_FILE="" — no weights in the
+    # bitstream at all — and the wrapper still claims NARROW_WEIGHTS=1.
+    #
+    # Observable consequence: on DSP48E1 at runtime_writeable=1 our `_rtl_mvu_feasible`
+    # rejects the RTL cores where FINN admits them, so such a node routes to HLS. Pinned by
+    # `tests/compute/mvau/test_resolve.py::test_runtime_writeable_suppresses_narrow_weights`.
+    #
+    # The MLO term is NOT a divergence: FINN reaches the same 0 by another route, since
+    # mlo_max_iter>0 forces mem_mode="external_mem" (`matrixvectoractivation_rtl.py:63-73`),
+    # which its mem_mode guard already catches.
     #
     # MLO is TRUTHY here, not `> 1`. Every baseline reader gates on truthiness
     # (`hwcustomop.py:374` `en_mlo = "EN_MLO" if mlo_max_iter else "NO_MLO"`;
