@@ -5,10 +5,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-# The .dat binary-search packing and the narrow-quant bias/threshold adjustment
-# are faithful in BEHAVIOUR to FINN's thresholding_rtl.py
-# (prepare_codegen_rtl_values / make_weight_file), rewritten as pure functions of
-# (point, context) with no self.onnx_node / model access.
+# The .dat binary-search packing and the narrow-quant zero-padding are faithful in
+# BEHAVIOUR to FINN's thresholding_rtl.py (prepare_codegen_rtl_values /
+# make_weight_file), rewritten as pure functions of (point, context) with no
+# self.onnx_node / model access. "Faithful" is load-bearing and was once false here:
+# a `_narrow_quant_adjust` helper claimed it while running a DIFFERENT algorithm
+# (sentinel insertion + bias/wdt shift instead of FINN's zero-pad). Verify against
+# FINN before changing anything in this file.
 ############################################################################
 
 """Hermetic RTL codegen for Thresholding (embedded ``.dat`` memory-init mode).
@@ -144,29 +147,46 @@ def emit_thresholding_rtl(point, context, module_name: str = "thresholding_top")
 
     thresholds = np.asarray(context.initializer(THRESHOLDS))
     n_steps = thresholds.shape[1]
-    act_val = int(point.ActVal)
+    bias = int(point.ActVal)
 
-    # Narrow-range quantization: the core expects 2^N-1 thresholds. If the op has one
-    # fewer, adjust bias (signed) or widen wdt (unsigned).
-    bias, wdt, thresholds, n_steps = _narrow_quant_adjust(
-        thresholds, n_steps, o_bits, act_val, idt, odt, wdt
-    )
+    # NARROW-RANGE QUANT — FINN's shape exactly (rtl/thresholding_rtl.py). The two halves are
+    # deliberately SEPARATE there, and conflating them is what made us diverge:
+    #
+    #   * the WRAPPER PARAMS use the RAW values — $N$ = n_thres_steps, $WT$ = wdt,
+    #     $BIAS$ = ActVal (`:244-251`). No adjustment of any kind.
+    #   * only the TABLE is reshaped: make_weight_file zero-PADS to 2**o_bitwidth - 1
+    #     (`:489-496`), leaving dtype and bias untouched.
+    #
+    # We previously ran a `_narrow_quant_adjust` that inserted a sentinel threshold, shifted
+    # the bias and could WIDEN wdt, then reported the adjusted values as params. Measured on
+    # steps=6/UINT3: FINN emits N=6 WT=8, we emitted N=7 WT=9, and every .dat line differed.
+    # Its docstring claimed to be "faithful to FINN's make_weight_file /
+    # prepare_codegen_rtl_values" — it was not, which is why the claim is gone with it.
+    expected = 2 ** o_bits - 1
+    if expected > n_steps:
+        thresholds = np.pad(
+            thresholds,
+            ((0, 0), (0, expected - n_steps)),
+            mode="constant",
+            constant_values=(0, 0),
+        )
 
     # If a single shared threshold row, the core treats C as PE.
     c_param = pe if thresholds.shape[0] == 1 else num_channels
 
-    # Output container width (accounts for bias-shifted range).
+    # Output container width, from the RAW step count + bias (rtl:271-276).
     if bias >= 0:
-        out_bits = math.ceil(math.log2(2 ** o_bits + bias))
+        out_bits = math.ceil(math.log2(n_steps + bias + 1))
     else:
-        neg = -bias if -bias >= 2 ** (o_bits - 1) else 2 ** o_bits + bias
-        out_bits = 1 + math.ceil(math.log2(neg))
+        out_bits = 1 + math.ceil(
+            math.log2(-bias if -bias >= (n_steps + 1) / 2 else n_steps + bias + 1)
+        )
 
     bindings = {
         "MODULE": module_name,
         "WI": i_bits,
         "WT": wdt.bitwidth(),
-        "N": 2 ** o_bits - 1,
+        "N": n_steps,
         "C": c_param,
         "PE": pe,
         "SIGNED": 1 if idt.signed() else 0,
@@ -177,11 +197,15 @@ def emit_thresholding_rtl(point, context, module_name: str = "thresholding_top")
         "DEPTH_TRIGGER_URAM": int(point.get("depth_trigger_uram", 0)),
         "DEPTH_TRIGGER_BRAM": int(point.get("depth_trigger_bram", 0)),
         "DEEP_PIPELINE": int(point.get("deep_pipeline", 1)),
-        "O_BITS": out_bits,
+        "O_BITS": int(out_bits),
     }
     top = GeneratedFile(f"{module_name}.v", _V_WRAPPER, bindings)
 
-    dat_files = _threshold_dat_files(thresholds, pe, c_param, o_bits, n_steps, wdt)
+    # The .dat files consume the PADDED table (FINN's make_weight_file operates on the padded
+    # array), while the params above kept the raw counts.
+    dat_files = _threshold_dat_files(
+        thresholds, pe, c_param, o_bits, thresholds.shape[1], wdt
+    )
 
     return Artifacts(
         generated=(top,),
@@ -194,32 +218,9 @@ def emit_thresholding_rtl(point, context, module_name: str = "thresholding_top")
 
 
 # ------------------------------------------------------------- pure helpers
-# Faithful to FINN's make_weight_file / prepare_codegen_rtl_values; already self-free.
-
-
-def _narrow_quant_adjust(thresholds, n_steps, o_bits, act_val, idt, odt, wdt):
-    """Handle narrow-range quant: prepend/append a dummy threshold and shift bias/wdt
-    so the core always sees 2^N-1 steps."""
-    expected = 2 ** o_bits - 1
-    bias = act_val
-    if expected != n_steps:
-        if odt.signed():
-            bias = bias - 1
-            thresholds = np.insert(thresholds, 0, wdt.min(), axis=1)
-        else:
-            max_val = wdt.max()
-            if max_val > idt.max():
-                thresholds = np.insert(thresholds, thresholds.shape[1], max_val, axis=1)
-            else:
-                max_val = max_val + 1
-                wdt = (
-                    DataType.get_smallest_possible(max_val)
-                    if not wdt.signed()
-                    else DataType.get_smallest_possible(-max_val - 1)
-                )
-                thresholds = np.insert(thresholds, thresholds.shape[1], max_val, axis=1)
-        n_steps += 1
-    return bias, wdt, thresholds, n_steps
+# Mirrors FINN's make_weight_file; already self-free. (A `_narrow_quant_adjust` helper used
+# to live here claiming the same of prepare_codegen_rtl_values -- it diverged, and the
+# narrow-quant handling is now inline in emit_thresholding_rtl as FINN's zero-pad.)
 
 
 def _threshold_dat_files(thresholds, pe, num_channels, o_bits, n_steps, wdt):

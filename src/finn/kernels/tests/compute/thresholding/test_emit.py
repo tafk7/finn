@@ -105,14 +105,26 @@ def test_dat_content_is_valid_hex():
             int(line, 16)  # raises if not valid hex
 
 
-def test_narrow_quant_adjusts_steps():
+def test_narrow_quant_pads_the_table_and_leaves_params_raw():
+    """PARITY GATE: narrow-range quant zero-PADS the table; wrapper params stay RAW.
+
+    FINN keeps these separate (rtl/thresholding_rtl.py): prepare_codegen_rtl_values emits
+    ``$N$ = n_thres_steps`` and ``$WT$ = wdt`` untouched (`:244-251`), while make_weight_file
+    pads the threshold array to ``2**o_bitwidth - 1`` with zeros (`:489-496`).
+
+    We used to run a `_narrow_quant_adjust` that inserted a sentinel, shifted the bias and
+    widened wdt, then reported the ADJUSTED values as params — measured divergence on this
+    exact case: FINN N=6 WT=8, ours N=7 WT=9, and every .dat line different. Nothing caught
+    it because the only differential test diffs the .dat alone, at the one step count where
+    padding is a no-op."""
     schema = thresholding_space()
     thr = np.sort(np.random.RandomState(1).randint(0, 50, size=(4, 6)).astype(np.float32), axis=-1)
     ctx = make_context(channels=4, steps=6, idt="UINT8", tdt="UINT8", odt="UINT3", thresholds=thr)
     content = emit_point(
-        thresholding_pool(), rtl_point(schema, ctx, PE=2, numSteps=6), ctx
+        thresholding_pool(), rtl_point(schema, ctx, PE=2), ctx
     ).generated[0].content()
-    assert "parameter  N = 7" in content  # unsigned narrow-quant fix keeps N=7
+    assert "parameter  N = 6" in content, "N is the RAW step count, not the padded width"
+    assert "parameter  WT = 8" in content, "wdt is never widened by narrow-quant"
 
 
 # --- HLS baked ROM (the ONE home for this assertion) -----------------------
