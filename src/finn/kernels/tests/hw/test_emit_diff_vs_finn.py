@@ -457,6 +457,11 @@ def _norm_cpp(s):
 # Both make our bound WIDER, and the knob is an upper bound on ap_uint width — a larger
 # value costs HLS compile time, not hardware. So this is not being forced to match here;
 # it is recorded as a real, non-gating delta rather than silently normalized away.
+#
+# Whether to converge on FINN's formula or keep the divergence deliberately is still open,
+# and tracked in the design corpus — the two deltas above want different answers, and the
+# floor may simply be unjustified. Do not "fix" this to match FINN without reading that
+# first; the exclusion is intentional, not an oversight.
 _CPP_EXCLUDED = ("#define AP_INT_MAX_W",)
 
 
