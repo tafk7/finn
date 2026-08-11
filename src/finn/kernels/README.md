@@ -33,12 +33,12 @@ The suite runs inside the FINN Docker env against FINN's pinned qonnx (`deps/qon
 a committed runner:
 
 ```bash
-./run-docker.sh bash .agents/tmp/run_kernel_tests.sh   # fast + integration + finn_codegen
+./run-docker.sh bash scripts/run_kernel_tests.sh   # fast + integration + finn_codegen
 ```
 
 This covers `tests/{engine,model,emit,ir,compute,dataflow,integration}/` (`-m "not
 slow_hw"`). The `slow_hw` hardware tier (`tests/hw/`, requiring Vivado / `xsi.so`) is
-gated and run separately via `.agents/tmp/run_kernel_hw.sh`.
+gated and run separately via `scripts/run_kernel_hw.sh`.
 
 ## Provenance & licensing
 
