@@ -30,7 +30,7 @@ an undeclared axis read anywhere in the closure makes a fold-dependent quantity 
 Context-decidable. Under-declaration is invisible while the only consumer is the topo-sort
 and load-bearing the moment anything reasons about the closure.
 
-Promoted from ``.agents/tmp/engine_hone_deps_probe.py`` (engine hone F1, Task 1.2).
+Promoted from a one-shot probe during the engine hone (F1, Task 1.2).
 """
 
 import numpy as np
