@@ -31,7 +31,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.compute.mvau.op import MvauKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp
 from finn.kernels.engine.resolve import resolve
 
 
@@ -64,13 +64,13 @@ def _rejection_reasons(model, node):
     slots `infer_from` would use — rather than from a per-op trial builder. That is the F9
     point: one Context builder, so a given cannot be present for the claim and missing for
     the build (which is how `sparsity` came to be carried by one and dropped by the other)."""
-    inputs, outputs = MvauKernelOp._candidate_slots(node, model)
-    ctx = MvauKernelOp.candidate_op(model, inputs, outputs)._context()
-    space = MvauKernelOp.kernel().compile()
+    inputs, outputs = MvauDataflowOp._candidate_slots(node, model)
+    ctx = MvauDataflowOp.candidate_op(model, inputs, outputs)._context()
+    space = MvauDataflowOp.kernel().compile()
     reasons = []
-    for impl in MvauKernelOp.kernel().pool:
+    for backend in MvauDataflowOp.kernel().pool:
         try:
-            r = resolve(space, ctx, {"backend": impl.name})
+            r = resolve(space, ctx, {"backend": backend.name})
         except Exception:
             continue  # part-less probe context — the signal first_feasible_backend tolerates
         reasons.extend(getattr(r, "reasons", ()))
@@ -79,14 +79,14 @@ def _rejection_reasons(model, node):
 
 def test_dense_static_integer_matmul_is_claimed():
     model, node = _matmul_model()
-    assert MvauKernelOp.can_infer_from(node, model) is True
+    assert MvauDataflowOp.can_infer_from(node, model) is True
 
 
 def test_dynamic_weight_matmul_rejected_by_IsStatic():
     """Was a hand-written `get_initializer(...) is None` escape; now the IsStatic constraint.
     The reason string is the evidence that the DECLARED rule did the rejecting."""
     model, node = _matmul_model(static=False)
-    assert MvauKernelOp.can_infer_from(node, model) is False
+    assert MvauDataflowOp.can_infer_from(node, model) is False
     assert any("initializer required" in r for r in _rejection_reasons(model, node))
 
 
@@ -95,14 +95,14 @@ def test_sparse_weight_matmul_rejected_by_SparsityFree():
     Requires Context to carry sparsity — a given the trial context must not drop, or the
     rule silently cannot fire."""
     model, node = _matmul_model(sparse=True)
-    assert MvauKernelOp.can_infer_from(node, model) is False
+    assert MvauDataflowOp.can_infer_from(node, model) is False
     assert any("sparsity" in r for r in _rejection_reasons(model, node))
 
 
 def test_float_matmul_still_rejected_by_datatype_support():
     """Unchanged behaviour, included so the rewrite is not silently widening the claim."""
     model, node = _matmul_model(idt="FLOAT32", wdt="FLOAT32")
-    assert MvauKernelOp.can_infer_from(node, model) is False
+    assert MvauDataflowOp.can_infer_from(node, model) is False
     assert any("not integer" in r for r in _rejection_reasons(model, node))
 
 
@@ -112,7 +112,7 @@ def test_claim_has_no_hand_written_escapes():
     justify itself as a constraint instead."""
     import inspect
 
-    src = inspect.getsource(MvauKernelOp.can_infer_from)
+    src = inspect.getsource(MvauDataflowOp.can_infer_from)
     body = "\n".join(
         line for line in src.splitlines() if not line.strip().startswith("#")
     )
@@ -139,7 +139,7 @@ def test_the_claim_leaves_the_graph_unmodified():
     graph."""
     model, node = _matmul_model()
     before = model.model.SerializeToString()
-    MvauKernelOp.can_infer_from(node, model)
+    MvauDataflowOp.can_infer_from(node, model)
     assert model.model.SerializeToString() == before
 
 
@@ -151,6 +151,6 @@ def test_sparsity_reaches_a_real_kernel_nodes_context():
     and was silently inert on the resulting kernel node. One builder now, and this pins the
     given that was being dropped."""
     model, matmul = _matmul_model(sparse=True)
-    inputs, outputs = MvauKernelOp._candidate_slots(matmul, model)
-    ctx = MvauKernelOp.candidate_op(model, inputs, outputs)._context()
+    inputs, outputs = MvauDataflowOp._candidate_slots(matmul, model)
+    ctx = MvauDataflowOp.candidate_op(model, inputs, outputs)._context()
     assert ctx.tensor_sparsity("weights") is not None

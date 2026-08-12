@@ -468,14 +468,14 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(transform)
         return model
 
-    # Kernel-substrate inference runs FIRST (handoff Seam A): the new kernel ops claim their
+    # DataflowKernel-substrate inference runs FIRST (handoff Seam A): the new kernel ops claim their
     # frontend patterns (MatMul[+MultiThreshold] -> finn.kernels/MVAU, standalone
     # MultiThreshold -> finn.kernels/Thresholding) before FINN's classic Infer* transforms,
     # which then see only the remainder. This never touches FINN's classic MVAU path.
     from finn.transformation.fpgadataflow.infer_kernels import InferKernels
     from finn.kernels.ir.kernel_op import RUNTIME_WRITEABLE_PROP
-    from finn.kernels.compute.mvau.op import MvauKernelOp
-    from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
+    from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 
     # Phase-0 mandates are stamped BEFORE inference, because inference already depends on
     # them: a runtime-writable parameter is one whose values the build cannot see, so the
@@ -485,7 +485,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     if cfg.runtime_writeable_weights:
         model.set_metadata_prop(RUNTIME_WRITEABLE_PROP, "1")
 
-    model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
+    model = model.transform(InferKernels([MvauDataflowOp, ThresholdingDataflowOp]))
 
     # Thresholding layers (standalone mode)
     if cfg.standalone_thresholds:
@@ -680,7 +680,7 @@ def step_specialize_layers(model: ModelWrapper, cfg: DataflowBuildConfig):
     which contains the desired setting. If the user preference cannot be fulfilled,
     a warning will be printed and the implementation style will be set to a default."""
 
-    # Kernel-substrate specialization runs FIRST (handoff Seam B): SpecializeKernels commits
+    # DataflowKernel-substrate specialization runs FIRST (handoff Seam B): SpecializeKernels commits
     # the `backend` axis on finn.kernels nodes (selection as data, via a Policy) before FINN's
     # classic SpecializeLayers, which is domain-gated to finn.custom_op.fpgadataflow and so
     # sees only the classic remainder. Mirrors the InferKernels injection in step_convert_to_hw.

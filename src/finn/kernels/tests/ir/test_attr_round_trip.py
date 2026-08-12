@@ -8,7 +8,7 @@
 
 """The frontend-bake round trip: nodeattr → ``_assignment`` → Point.
 
-``KernelOp._assignment`` decides WHICH NODEATTRS REACH RESOLVE. Every other test of this
+``DataflowOp._assignment`` decides WHICH NODEATTRS REACH RESOLVE. Every other test of this
 path either asserts the nodeattr (never resolving) or calls ``resolve`` with an explicit
 assignment (never touching ``_assignment``), so the join between them was untested — and it
 is exactly where a value can be lost SILENTLY: infer bakes ``ActVal``
@@ -39,7 +39,7 @@ BAKED_MLO = 3
 
 def _mvau_model(**attrs):
     """A specialized 3-input MVAU node — the shape infer produces, plus a committed
-    backend so the impl-dependent getters resolve."""
+    backend so the backend-dependent getters resolve."""
     inp = helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, MW])
     out = helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, MH])
     weights = helper.make_tensor_value_info("weights", TensorProto.FLOAT, [MW, MH])

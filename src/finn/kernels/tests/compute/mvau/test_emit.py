@@ -50,8 +50,8 @@ def make_context(mw=6, mh=8, wdt="INT8", idt="INT8", weights=None):
     )
 
 
-def dsp_point(schema, ctx, impl, **overrides):
-    a = {"backend": impl, "PE": 2, "SIMD": 2, "resType": "dsp", TOPOLOGY: DECOUPLED}
+def dsp_point(schema, ctx, backend, **overrides):
+    a = {"backend": backend, "PE": 2, "SIMD": 2, "resType": "dsp", TOPOLOGY: DECOUPLED}
     a.update(overrides)
     return resolve(schema, ctx, a)
 
@@ -152,10 +152,10 @@ def test_all_three_bundles_emit():
         MVAU_DSP_PACKED: dsp_point(schema, ctx, MVAU_DSP_PACKED),
         MVAU_HLS: hls_point(schema, ctx),
     }
-    for impl, p in points.items():
+    for backend, p in points.items():
         arts = emit_point(mvau_pool(), p, ctx)
-        assert isinstance(arts, Artifacts), impl
-        assert len(arts.generated) == 1, impl
+        assert isinstance(arts, Artifacts), backend
+        assert len(arts.generated) == 1, backend
 
 
 def test_emit_needs_only_point_and_dict_context():

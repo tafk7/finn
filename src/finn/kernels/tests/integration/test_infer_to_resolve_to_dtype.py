@@ -26,8 +26,8 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.transformation.fpgadataflow.infer_kernels import InferKernels
-from finn.kernels.compute.mvau.op import MvauKernelOp
-from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 from finn.kernels.ir.routing import is_specialized, kernel_hw_language
 from finn.util.fpgadataflow import is_fpgadataflow_node, is_hls_node, is_rtl_node
 
@@ -39,7 +39,7 @@ KERNEL_DOMAIN = "finn.kernels"
 
 
 def _pool():
-    return InferKernels([MvauKernelOp, ThresholdingKernelOp])
+    return InferKernels([MvauDataflowOp, ThresholdingDataflowOp])
 
 
 def _matmul_only_model():

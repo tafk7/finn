@@ -8,7 +8,7 @@
 
 """F11 — an RTL backend is REACHABLE through the real specialize path.
 
-The defect at ``0b05d3d82``: ``KernelOp._fpgapart_from`` read an ``fpgapart`` nodeattr no op
+The defect at ``0b05d3d82``: ``DataflowOp._fpgapart_from`` read an ``fpgapart`` nodeattr no op
 declares. qonnx raises ``AttributeError`` on an undeclared name, the bare ``except`` swallowed
 it, so every Context carried ``fpgapart=""``. Both MVAU DSP backends then raise "DSP block
 needs a non-empty fpgapart" on every node, ``first_feasible_backend`` catches that as "not

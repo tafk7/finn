@@ -26,7 +26,7 @@ identity — parked here rather than in ``kernel.py`` so the identity file stays
   publishes it as ``parameters.<iface>.datatype`` (a ``ParamDatatype``).
 
 Depends only on the identity's tensor-name constants (imported from ``kernel.py``) — a
-one-directional edge, no cycle. The impl bundles import these via ``op.py``.
+one-directional edge, no cycle. The backend modules import these via ``op.py``.
 """
 
 from __future__ import annotations

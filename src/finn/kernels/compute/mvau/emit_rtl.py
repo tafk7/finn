@@ -12,7 +12,7 @@
 
 """Hermetic RTL codegen for the MVAU compute core (internal_embedded mode).
 
-Both DSP bundles (softvec + packed) share THIS emit — they fill the SAME AXI-lite
+Both DSP backends (softvec + packed) share THIS emit — they fill the SAME AXI-lite
 wrapper template (``mvu_vvu_axi_wrapper.v``) and differ in (a) which per-core wrapper
 the top instantiates (the selected backend's ``rtl_core_module`` field ->
 ``$MODULE_NAME_COMPUTE_CORE$``) and (b) which compute core ``.sv`` + per-core wrapper is
@@ -152,7 +152,7 @@ def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     wdt = context.tensor_datatype(WEIGHTS)
     geo = mvau_geometry(point, context)
     # rtl_core_module is a STATIC Backend identity field (F5) — read off the selected
-    # bundle, not re-projected onto the point.
+    # backend, not re-projected onto the point.
     rtl_core_module = mvau_kernel().selected_backend(point).rtl_core_module
 
     # Padded weight-stream width: (PE*SIMD*WEIGHT_WIDTH + 7)//8 * 8 — matches the

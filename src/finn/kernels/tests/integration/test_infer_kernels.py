@@ -30,8 +30,8 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import get_by_name, qonnx_make_model
 
 from finn.transformation.fpgadataflow.infer_kernels import InferKernels
-from finn.kernels.compute.mvau.op import MvauKernelOp
-from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 
 pytestmark = pytest.mark.integration
 
@@ -41,7 +41,7 @@ KERNEL_DOMAIN = "finn.kernels"
 
 
 def _pool():
-    return InferKernels([MvauKernelOp, ThresholdingKernelOp])
+    return InferKernels([MvauDataflowOp, ThresholdingDataflowOp])
 
 
 def _thresholds(rows, seed=2, lo=0, hi=100):
@@ -249,13 +249,13 @@ def test_mixed_graph_kernel_claims_only_its_pattern():
 # --- I4 (INV5): the driver surfaces kernel bugs, not swallows them ----------
 
 
-class _BrokenPredicate(MvauKernelOp):
+class _BrokenPredicate(MvauDataflowOp):
     @classmethod
     def can_infer_from(cls, node, model):
         raise AttributeError("bug in can_infer_from")
 
 
-class _BrokenBuilder(MvauKernelOp):
+class _BrokenBuilder(MvauDataflowOp):
     @classmethod
     def infer_from(cls, node, model, insert_index):
         raise AttributeError("bug in infer_from")
@@ -275,19 +275,19 @@ def test_unexpected_validation_error_propagates(monkeypatch):
     def _boom(self, model):
         raise AttributeError("unexpected bug during validation")
 
-    monkeypatch.setattr(MvauKernelOp, "infer_node_datatype", _boom)
+    monkeypatch.setattr(MvauDataflowOp, "infer_node_datatype", _boom)
     with pytest.raises(AttributeError, match="unexpected bug during validation"):
-        _matmul_only_model().transform(InferKernels([MvauKernelOp]))
+        _matmul_only_model().transform(InferKernels([MvauDataflowOp]))
 
 
 def test_legitimate_instantiation_failure_skips_with_warning(monkeypatch, caplog):
     def _illegal(self, model):
         raise ValueError("node cannot legally instantiate")
 
-    monkeypatch.setattr(MvauKernelOp, "infer_node_datatype", _illegal)
+    monkeypatch.setattr(MvauDataflowOp, "infer_node_datatype", _illegal)
     model = _matmul_only_model()
     with caplog.at_level(logging.WARNING):
-        out = model.transform(InferKernels([MvauKernelOp]))
+        out = model.transform(InferKernels([MvauDataflowOp]))
     assert [n.op_type for n in out.graph.node] == ["MatMul"]
     assert any("validation" in r.message for r in caplog.records)
 

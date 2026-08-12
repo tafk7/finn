@@ -9,10 +9,10 @@
 """Thresholding — the multi-threshold activation kernel: WHAT it is, and how FINN sees it.
 
 The op-definition file (mirrors FINN's ``thresholding.py``, declarative). The shared
-design space (axes/derived/predicates) lives in ``shared.py``; each ``impl_*.py`` bundle
+design space (axes/derived/predicates) lives in ``shared.py``; each ``impl_*.py`` backend
 declares the HOW for one compute core (HLS baked-ROM, RTL binary-search). This file adds
-the two assemblies the bundles could not: the ``_LegacyKernel`` (identity + pool + delivered
-parameters) and the FINN ``KernelOp`` wrapper.
+the two assemblies the backends could not: the ``DataflowKernel`` (identity + pool + delivered
+parameters) and the FINN ``DataflowOp`` wrapper.
 
 Tensor-name convention for the Context this schema resolves against:
     "inp"         the activation input tensor   (inputDataType, dynamic)
@@ -33,9 +33,9 @@ from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.kernels.ir import KernelOp, TransformationResult
+from finn.kernels.ir import DataflowOp, TransformationResult
 from finn.kernels.engine.constraints import ShapeRank
-from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
+from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -81,7 +81,7 @@ def thresholding_interfaces():
 
 
 # =============================================================================
-# ASSEMBLY — the full Thresholding design space as a _LegacyKernel (and as a DesignSpace).
+# ASSEMBLY — the full Thresholding design space as a DataflowKernel (and as a DesignSpace).
 # =============================================================================
 
 
@@ -91,17 +91,17 @@ def thresholding_pool():
 
 
 @registry_cached(generation, parameters_generation)
-def thresholding_kernel() -> _LegacyKernel:
-    """The full Thresholding design space as a :class:`_LegacyKernel` — the WHAT-owning op node.
+def thresholding_kernel() -> DataflowKernel:
+    """The full Thresholding design space as a :class:`DataflowKernel` — the WHAT-owning op node.
 
-    The compute pool (``implementation``: HLS / RTL) with impl-owned tiling. The threshold
-    interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the _LegacyKernel
+    The compute pool (``implementation``: HLS / RTL) with backend-owned tiling. The threshold
+    interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the DataflowKernel
     builds its DeliveredParam and synthesizes the supply waterfall generically; both backends
     consume thresholds in embedded mode → the delivery resolves to the ``embedded`` topology
     (no memstream cell).
 
     CACHED on the compute + parameters registry generations — see :func:`mvau_kernel`."""
-    return _LegacyKernel(
+    return DataflowKernel(
         name="Thresholding",
         interfaces=thresholding_interfaces(),
         op_axes=op_axes(),
@@ -113,15 +113,15 @@ def thresholding_kernel() -> _LegacyKernel:
 
 
 # =============================================================================
-# FINN WRAPPER — ThresholdingKernelOp(KernelOp): how FINN's build flow sees this kernel.
+# FINN WRAPPER — ThresholdingDataflowOp(DataflowOp): how FINN's build flow sees this kernel.
 # =============================================================================
 #
 # The interface↔node-slot binding is the kernel's own interface list (inp=0, thresholds=1,
 # out=0 — declaration order); no separate PortSpec (F9).
 
 
-class ThresholdingKernelOp(KernelOp):
-    """Thresholding (multi-threshold activation) as a _LegacyKernel-backed FINN op."""
+class ThresholdingDataflowOp(DataflowOp):
+    """Thresholding (multi-threshold activation) as a DataflowKernel-backed FINN op."""
 
     # -- Seam A: frontend claim (mirror of InferThresholdingLayer) ---------------------
 
@@ -149,7 +149,7 @@ class ThresholdingKernelOp(KernelOp):
           1. It is a UNION of kinds (integer OR fixed OR float32/16). ``DatatypeSupport`` is
              one kind plus a bitwidth range, so expressing it would need a custom callable —
              a closure on the port, which is no more declarative than the closure here.
-          2. Both backends have IDENTICAL envelopes and there is no verified per-bundle gate
+          2. Both backends have IDENTICAL envelopes and there is no verified per-backend gate
              (a fabricated one was previously falsified — see the package ``__init__`` and
              ``scratchpad/reference/toy-vs-brainsmith-thresholding.md`` A1). Empirically this
              check rejects only ``SCALEDINT`` among FINN's dtypes, so declaring a backend

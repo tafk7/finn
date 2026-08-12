@@ -9,7 +9,7 @@
 """Thresholding **op-level shared** elements — deliberately SMALL.
 
 Thresholding is the model-stressing op: its memory-delivery cluster is NOT op-level
-(it is asymmetric and impl-local — HLS has mem_mode/ram_style, RTL has depth-triggers
+(it is asymmetric and backend-local — HLS has mem_mode/ram_style, RTL has depth-triggers
 — and is DEFERRED entirely this task). What genuinely belongs to every implementation
 is only the activation bias ``ActVal`` -- a node CONSTANT (``kernel_attrs``), not a dial.
 Derived: the ``NumChannels``/``numSteps`` threshold geometry, TMEM, output/threshold
@@ -22,12 +22,12 @@ scalar it used to carry as an Axis was either a Context fact (``numSteps``), ine
 The threshold DTYPE is the storage owner's published ``ParamDatatype.dtype`` (thresholds
 compose the parameters pool in embedded mode) — read, not re-derived. Runtime-writability
 is a delivery-topology concern owned by the parameters pool (``runtime_writeable_key``), not
-a self-declared op axis; the former ``runtime_writeable_weights`` op-axis was DEAD (no impl
+a self-declared op axis; the former ``runtime_writeable_weights`` op-axis was DEAD (no backend
 consumed it) and is deleted.
 
 Context convention: the ``thresholds`` tensor shape is ``(NumChannels, numSteps)``.
 Both backends have IDENTICAL integer dtype envelopes — there is intentionally NO
-per-bundle dtype feasibility gate (a fabricated one was falsified; see the package
+per-backend dtype feasibility gate (a fabricated one was falsified; see the package
 __init__).
 """
 
@@ -57,7 +57,7 @@ def _threshold_shape(ctx, what):
     Both geometry deriveds index this positionally, and a DERIVED runs before any predicate —
     so on a non-2D tensor the raw index raises ``IndexError``, which is neither legible nor in
     the ``(ValueError, KeyError, AbsentAxisError)`` set the feasibility trials treat as "not
-    resolvable for this context" (``_LegacyKernel.first_feasible_backend``). It would propagate as a
+    resolvable for this context" (``DataflowKernel.first_feasible_backend``). It would propagate as a
     kernel bug (INV5) on a node that is merely ineligible. Raising the narrow ValueError here
     keeps the diagnosis at the shape read, where the real reason is in hand.
 
@@ -84,7 +84,7 @@ def _num_steps(p, ctx):
 
 
 # =============================================================================
-# Op-level SHARED axes — everything every Thresholding impl has.
+# Op-level SHARED axes — everything every Thresholding backend has.
 # =============================================================================
 
 

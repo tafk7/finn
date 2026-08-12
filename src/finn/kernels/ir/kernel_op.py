@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``KernelOp`` — the FINN adapter that lets a :class:`_LegacyKernel` back a real ONNX node and
+"""``DataflowOp`` — the FINN adapter that lets a :class:`DataflowKernel` back a real ONNX node and
 answer FINN's ``HWCustomOp`` contract.
 
 The engine (``engine/``) is pure and graph-free: its getters take a :class:`Context`
@@ -26,7 +26,7 @@ consumer-surface-model.md Tier 0-3):
      dtypes, REAL initializer values), re-keyed to the kernel's literal interface names.
   2. **Configure** — ``_point()`` reads the design axes off nodeattrs and
      ``kernel.configure``s them into a Point (or raises on Illegal).
-  3. **Project** — each FINN getter delegates to the matching _LegacyKernel getter, adapting the
+  3. **Project** — each FINN getter delegates to the matching DataflowKernel getter, adapting the
      ``(ind)`` FINN signature to the engine's ``(point, context, ind)``.
 
 Because the Context carries REAL weight values, value-derived dtypes (MVAU's accumulator
@@ -37,7 +37,7 @@ construct via ``model.get_customop_wrapper(node)``.
 
 Specialization is by the ``backend`` nodeattr (mapping onto the engine's ``backend``
 selection axis — the root axis whose value names the selected :class:`Backend` pool member),
-NOT by FINN's domain mutation — one KernelOp class serves every compute impl
+NOT by FINN's domain mutation — one DataflowOp class serves every compute backend
 (consumer-surface-model.md R11).
 """
 
@@ -69,7 +69,7 @@ RUNTIME_WRITEABLE_PROP = "finn_kernels_runtime_writeable_weights"
 @dataclass(frozen=True)
 class TransformationResult:
     """The result of one kernel's ``infer_from`` — the graph edit to apply (the infer-seam
-    CONTRACT, co-located with the :class:`KernelOp` base that declares ``infer_from``, so a
+    CONTRACT, co-located with the :class:`DataflowOp` base that declares ``infer_from``, so a
     kernel op never has to import the ``InferKernels`` transformation to name its own return
     type).
 
@@ -84,8 +84,8 @@ class TransformationResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class KernelOp(HWCustomOp):
-    """Base FINN adapter over a :class:`~finn.kernels.model.kernel._LegacyKernel`.
+class DataflowOp(HWCustomOp):
+    """Base FINN adapter over a :class:`~finn.kernels.model.kernel.DataflowKernel`.
 
     Subclasses implement only :meth:`kernel` (the design-space object). The
     interface↔node-slot binding is the kernel's own
@@ -95,7 +95,7 @@ class KernelOp(HWCustomOp):
     Context bridge, and all the HWCustomOp getters — is derived generically here.
     """
 
-    # Every KernelOp derives its shapes/dtypes/widths from live graph context, so it
+    # Every DataflowOp derives its shapes/dtypes/widths from live graph context, so it
     # opts into the qonnx model-aware contract (CustomOp.wants_model). This makes
     # ``model.get_customop_wrapper(node)`` attach the model automatically — the
     # graph-derived getters below would otherwise raise (see ``_context``).
@@ -106,8 +106,8 @@ class KernelOp(HWCustomOp):
     @classmethod
     @abstractmethod
     def kernel(cls):
-        """Return this op's :class:`_LegacyKernel` (the design space). Zero-arg factory
-        result, e.g. ``mvau_kernel()``. A ``classmethod`` — the _LegacyKernel is op-class
+        """Return this op's :class:`DataflowKernel` (the design space). Zero-arg factory
+        result, e.g. ``mvau_kernel()``. A ``classmethod`` — the DataflowKernel is op-class
         identity, independent of any node/model — so bare-node routing
         (``kernel_hw_language``) can reach the pool via the op class without
         instantiating the op."""
@@ -160,20 +160,20 @@ class KernelOp(HWCustomOp):
 
     # -- model attach + Context cache (brainsmith _ensure_ready pattern) ----
 
-    def attach_model(self, model) -> "KernelOp":
+    def attach_model(self, model) -> "DataflowOp":
         """Attach the live model this op belongs to, so the getters can source their
         Context (shapes/dtypes/REAL values) from it. Caches the built Context; a later
         attach with a different model regenerates it (``invalidate``). Returns ``self``
         so ``model.get_customop_wrapper(node)`` yields the attached op in one expression.
 
-        This overrides the qonnx :meth:`CustomOp.attach_model` hook — a KernelOp opts
+        This overrides the qonnx :meth:`CustomOp.attach_model` hook — a DataflowOp opts
         into the model-aware contract via ``wants_model = True``, so this runs whenever
         the op is built through ``get_customop_wrapper``."""
         self._model = model
         self._context_cache = None
         return self
 
-    def attach_device(self, device: DeviceFacts | None) -> "KernelOp":
+    def attach_device(self, device: DeviceFacts | None) -> "DataflowOp":
         """Attach the build's :class:`~finn.kernels.engine.device.DeviceFacts` — the part,
         clock and toolchain this design targets.
 
@@ -280,7 +280,7 @@ class KernelOp(HWCustomOp):
     @classmethod
     def candidate_op(
         cls, model, inputs, outputs, device: "DeviceFacts | None" = None, **attrs
-    ) -> "KernelOp":
+    ) -> "DataflowOp":
         """A wrapped kernel op over a candidate node that is NOT in the graph.
 
         The generic replacement for a per-op ``_trial_context``. Asking "could this kernel
@@ -341,13 +341,13 @@ class KernelOp(HWCustomOp):
         Impl-DEPENDENT: requires a committed backend. An unspecialized node
         (``backend`` unset — the "" sentinel) has no legal full point, so raise a
         LEGIBLE "unspecialized" error rather than a bare Illegal-ValueError (F1). Callers
-        needing only impl-INDEPENDENT facts (normal shape/dtype, output-dtype publication)
+        needing only backend-INDEPENDENT facts (normal shape/dtype, output-dtype publication)
         use the context-only getters."""
         from .routing import is_specialized
 
         if not is_specialized(self.onnx_node):
             raise ValueError(
-                f"{self.onnx_node.name}: impl-dependent getter needs a committed backend, "
+                f"{self.onnx_node.name}: backend-dependent getter needs a committed backend, "
                 f"but `backend` is unset (node is unspecialized). Specialize it "
                 f"(Seam B) before folded-shape/width/cycle queries."
             )
@@ -365,7 +365,7 @@ class KernelOp(HWCustomOp):
         """The name of the first pool member feasible for this node's live Context, or ``None``
         — the model-aware bridge behind ``SpecializeKernels``' ``PerNodePolicy(first_feasible)``
         (Seam B). Sources the live Context (real weight VALUES, so value-derived feasibility is
-        exact) and delegates to :meth:`_LegacyKernel.first_feasible_backend`.
+        exact) and delegates to :meth:`DataflowKernel.first_feasible_backend`.
 
         The resolve-time counterpart to infer-time ``can_infer_from`` (``compute/mvau/op.py``),
         which trials a bare-node ``_trial_context`` because the node is still a frontend op;
@@ -375,7 +375,7 @@ class KernelOp(HWCustomOp):
     # -- Tier-3 getters: shapes / widths / datatypes ------------------------
 
     def get_normal_input_shape(self, ind=0):
-        # Normal (tensor) shape is impl-INDEPENDENT — a pure Context read; no committed
+        # Normal (tensor) shape is backend-INDEPENDENT — a pure Context read; no committed
         # backend needed, so an unspecialized node answers it (the Seam A verify gate).
         return self.kernel().get_normal_input_shape(self._context(), ind)
 

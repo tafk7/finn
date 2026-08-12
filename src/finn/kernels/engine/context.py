@@ -28,7 +28,7 @@ is what made the field universally empty on every node.
 The taxonomy pass fixed the CAUSE by making device facts an input
 (:class:`~finn.kernels.engine.device.DeviceFacts`, threaded from ``SpecializeKernels``) and
 then deliberately did NOT delete this dataclass. Churning 267 references buys no behavioural
-change: once the facts arrive correctly, one bundle carrying both is a grouping, not a phase
+change: once the facts arrive correctly, one backend carrying both is a grouping, not a phase
 confusion. The finding was the phantom nodeattr, not the struct.
 
 Context reads are audited by ``RecordingContext`` in ``tests/engine/test_deps_audit.py`` —
@@ -110,7 +110,7 @@ class Context:
 
     def arity(self, group: str) -> int:
         """How many concrete node slots a VARIADIC interface group expands to for this node —
-        the count :meth:`_LegacyKernel.expanded_interfaces` reads to expand a
+        the count :meth:`DataflowKernel.expanded_interfaces` reads to expand a
         :class:`~finn.kernels.model.ports.Variadic` ``(count_from=group)``. Sourced from the
         instantiated node's wired slots (the ONNX variadic slot count), so it is a Context
         given, not a design choice. The adapter builds a Context that records each variadic
@@ -125,7 +125,7 @@ class Context:
         constant — unlike ``initializer(name) is not None``, which only sees constants. The
         schema declares a slot MAY exist (``InterfaceSchema.optional``); this answers whether
         it DOES on the instantiated node's Context. Same presence rule as
-        :meth:`_LegacyKernel.present_interfaces`."""
+        :meth:`DataflowKernel.present_interfaces`."""
         return name in self.shapes
 
     @property

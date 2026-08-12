@@ -6,12 +6,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Backend bundle: ``mvau_dsp_softvec`` — the unified soft-vectorized DSP
+"""Backend backend: ``mvau_dsp_softvec`` — the unified soft-vectorized DSP
 core (``mvu.sv``).
 
 Spans ALL DSP primitives (DSP48E1/E2/DSP58 via ``case(VERSION)``, mvu.sv:337-710);
 ``dsp_primitive`` is FORCED from the device (no overlap ⇒ Derived, stays inside this
-bundle). Shares DSP-RTL declarations with the packed bundle via ``dsp_rtl_common``
+backend). Shares DSP-RTL declarations with the packed backend via ``dsp_rtl_common``
 (shared CODE, not a modeled node) — the two remain flat pool peers.
 """
 

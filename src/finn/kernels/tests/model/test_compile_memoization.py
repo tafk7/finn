@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""_LegacyKernel/space assembly is memoized, and INVALIDATED by registration (engine hone 4.1).
+"""DataflowKernel/space assembly is memoized, and INVALIDATED by registration (engine hone 4.1).
 
 ``compile()`` ran on every query — ``_assignment``, ``configure``,
 ``first_feasible_backend`` and ``get_nodeattr_types`` each rebuilt the entire space, and

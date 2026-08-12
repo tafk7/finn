@@ -12,7 +12,7 @@
 A compute Backend consumes a parameter (weight/threshold) at some rate; the delivery
 subsystem must SUPPLY it. Historically the composing op reached across that seam and
 computed the memory realization itself (memstream width/depth/sets/init_file), because
-``compose`` is a plain schema union and the parameters bundle could not see the op's
+``compose`` is a plain schema union and the parameters backend could not see the op's
 compute fold (``PE``/``SIMD``/``WMEM``). That put memory-backend knowledge (roundup-to-8,
 ``.dat`` naming, URAM blanking) on the op — the wrong owner.
 
@@ -20,7 +20,7 @@ The demand contract inverts it: the compute side publishes a small, realization-
 :class:`ParamDemand` under the pool-declared per-interface
 :func:`~finn.kernels.model.param_names.demand_key` key (pure facts about what the core
 consumes), and the delivery Backend reads THAT and computes its own geometry inside its
-bundle. The op stops knowing how memstream is built.
+backend. The op stops knowing how memstream is built.
 
 The spec is sized purely from the resolved interface geometry (parallelism, elem_bits,
 depth). Consumption *cadence* — how often the core re-traverses a word — is a

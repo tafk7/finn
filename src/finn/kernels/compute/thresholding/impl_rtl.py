@@ -6,18 +6,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Backend bundle: ``thresholding_rtl`` — the RTL backend.
+"""Backend backend: ``thresholding_rtl`` — the RTL backend.
 
 A single template family (binary-search comparator core). No device feasibility gate
-(there is no ``_thresholding_rtl_possible`` — RTL is the default). Its impl-local axes
-are DISJOINT from the HLS bundle's: where HLS would carry a mem_mode/ram_style delivery
+(there is no ``_thresholding_rtl_possible`` — RTL is the default). Its backend-local axes
+are DISJOINT from the HLS backend's: where HLS would carry a mem_mode/ram_style delivery
 cluster, RTL carries resource/timing knobs — ``depth_trigger_bram/uram``,
 ``uniform_thres``, ``deep_pipeline`` (thresholding_rtl.py:60-70). Its one extra gate is
 data-dependent: the binary-search core requires thresholds sorted ascending
 (thresholding_rtl.py:455-459).
 
 Both backends share the SAME integer dtype envelope — there is intentionally no
-per-bundle dtype feasibility difference (a fabricated one was falsified; see
+per-backend dtype feasibility difference (a fabricated one was falsified; see
 scratchpad/reference/toy-vs-brainsmith-thresholding.md A1).
 """
 
@@ -65,7 +65,7 @@ def rtl_bundle() -> Backend:
         predicates=(_thresholds_sorted,),
         # The RTL core bakes thresholds into its parameter memory — embedded mode only (no
         # stream port), same as the HLS core. Explicit membership is the "param port" signal.
-        # The stream declares the BLOCK→STREAM fold (see the HLS bundle).
+        # The stream declares the BLOCK→STREAM fold (see the HLS backend).
         ports=ports_from(stream=COMPUTE_STREAM, mem_modes={THRESHOLDS: {EMBEDDED}}),
         # One source-of-truth: the same manifest the emit copies into the build (F9).
         sources=RTL_MANIFEST.filenames,

@@ -6,11 +6,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""The Thresholding design space as a pool of implementation bundles.
+"""The Thresholding design space as a pool of implementation backends.
 
 Thresholding is the **model-stressing** op — it proves "op-level shared" is not a
-fixed layer but "shared by all impls of THIS op". The two bundles contribute
-**disjoint impl-local axes**:
+fixed layer but "shared by all impls of THIS op". The two backends contribute
+**disjoint backend-local axes**:
 
   * ``thresholding_hls`` (``impl_hls.py``) — universal HLS backend. (Its mem_mode /
     ram_style delivery cluster is DEFERRED this task.)
@@ -23,7 +23,7 @@ Op-level shared is deliberately SMALL (``shared.py``): ``PE`` (folds ``NumChanne
 owner's published ``ParamDatatype`` (thresholds compose the parameters pool in embedded mode),
 not re-derived; runtime-writability is a parameters-pool delivery concern, not a self-declared
 op axis (the former ``runtime_writeable_weights`` op-axis was dead and is deleted). Both
-backends have IDENTICAL integer dtype envelopes — there is intentionally NO per-bundle dtype
+backends have IDENTICAL integer dtype envelopes — there is intentionally NO per-backend dtype
 feasibility gate (a fabricated one was falsified;
 ``scratchpad/reference/toy-vs-brainsmith-thresholding.md`` A1).
 """
@@ -42,13 +42,13 @@ from .names import (  # noqa: F401 (re-exported)
 from .registry import build_pool
 from .shared import op_axes, op_derived, op_predicates
 
-# Import the built-in bundle modules for their registration side effect.
+# Import the built-in backend modules for their registration side effect.
 from . import impl_hls  # noqa: E402,F401
 from . import impl_rtl  # noqa: E402,F401
 
-# The _LegacyKernel assembly + FINN wrapper (imported after the bundles register).
+# The DataflowKernel assembly + FINN wrapper (imported after the backends register).
 from .op import (  # noqa: E402,F401 (re-exported public surface)
-    ThresholdingKernelOp,
+    ThresholdingDataflowOp,
     thresholding_kernel,
 )
 
@@ -81,7 +81,7 @@ __all__ = [
     "thresholding_pool",
     "thresholding_space",
     "thresholding_kernel",
-    "ThresholdingKernelOp",
+    "ThresholdingDataflowOp",
     "THRESHOLDING_HLS",
     "THRESHOLDING_RTL",
     "THRESHOLDS",

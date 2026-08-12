@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""MVAU — how FINN's build flow sees the kernel: ``MvauKernelOp(KernelOp)``.
+"""MVAU — how FINN's build flow sees the kernel: ``MvauDataflowOp(DataflowOp)``.
 
 The kernel DEFINITION (interfaces, design space, datatype rules, cost, assembly) lives in
 ``kernel.py`` — read that to understand WHAT an MVAU is. This file holds only the FINN
@@ -15,8 +15,8 @@ wrapper: the Seam-A frontend claim (``can_infer_from``/``infer_from``, mirror of
 slots to the kernel's inp/weights/thresholds/out interfaces.
 
 The kernel's public surface (constants, ``mvau_kernel``/``mvau_space``/``mvau_pool``/…) is
-re-exported here so ``from finn.kernels.compute.mvau.op import X`` keeps resolving — the impl
-bundles and tests read constants/assembly through this module.
+re-exported here so ``from finn.kernels.compute.mvau.op import X`` keeps resolving — the backend
+backends and tests read constants/assembly through this module.
 """
 
 from __future__ import annotations
@@ -27,13 +27,13 @@ from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.kernels.ir import KernelOp, TransformationResult
+from finn.kernels.ir import DataflowOp, TransformationResult
 from finn.kernels.engine.datatype_spec import resolve_datatype_spec
 from finn.kernels.engine.point import Illegal  # noqa: F401  (kept available for callers/tests)
-from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-exported for bundles)
+from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-exported for backends)
 
-# The kernel DEFINITION — re-exported so `from .op import X` keeps working for the impl
-# bundles, the composition helper, and the tests that resolve against this module.
+# The kernel DEFINITION — re-exported so `from .op import X` keeps working for the backend
+# backends, the composition helper, and the tests that resolve against this module.
 from .kernel import (  # noqa: F401  (re-exported public surface)
     INPUT,
     MVAU_DSP_PACKED,
@@ -53,7 +53,7 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
 )
 
 # The BACKEND-SCOPED shared contract (fold map + datatype derivations) — re-exported so the
-# impl bundles read `from .op import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes`.
+# backend modules read `from .op import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes`.
 from .backends import (  # noqa: F401  (re-exported public surface)
     COMPUTE_STREAM,
     mvau_out_dtype,
@@ -64,16 +64,16 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# FINN WRAPPER — MvauKernelOp(KernelOp): how FINN's build flow sees this kernel.
+# FINN WRAPPER — MvauDataflowOp(DataflowOp): how FINN's build flow sees this kernel.
 # =============================================================================
 #
 # The interface↔node-slot binding is the kernel's own interface list (inp=0, weights=1,
-# optional thresholds=2, out=0 — declaration order). The real compute impl is chosen by the
+# optional thresholds=2, out=0 — declaration order). The real compute backend is chosen by the
 # ``backend`` nodeattr, not the domain (consumer-surface-model.md R11).
 
 
-class MvauKernelOp(KernelOp):
-    """MVAU (matrix-vector activation) as a _LegacyKernel-backed FINN op."""
+class MvauDataflowOp(DataflowOp):
+    """MVAU (matrix-vector activation) as a DataflowKernel-backed FINN op."""
 
     # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
 
@@ -102,7 +102,7 @@ class MvauKernelOp(KernelOp):
         """Whether ``node`` is a ``MatMul`` this kernel can claim (optionally with a following
         ``MultiThreshold``). The claim is STRUCTURAL PATTERN (op-owned) ∧ ∃ a feasible backend
         (pool-delegated): the op owns the shape of the pattern, but WHICH datatypes are
-        buildable is a backend fact, so it delegates to :meth:`_LegacyKernel.has_feasible_point`
+        buildable is a backend fact, so it delegates to :meth:`DataflowKernel.has_feasible_point`
         rather than encoding an integer literal here (F2/D-R5). A future float backend widens
         what infer accepts with ZERO edits here; today an all-integer pool rejects a float
         MatMul FOR THE RIGHT REASON (no feasible backend). Mirrors

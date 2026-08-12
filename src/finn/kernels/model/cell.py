@@ -218,7 +218,7 @@ class Kernel:
     def _attributed(self, predicates, member: Backend) -> tuple:
         """Stamp each of a member's rules with its owner, WITHOUT wrapping the check.
 
-        Under the merge, a bundle rule's attribution came from the selection guard's origin —
+        Under the merge, a backend rule's attribution came from the selection guard's origin —
         so deleting the guard would silently drop "which backend's rule was this?" from every
         `Illegal` reason (`resolve._with_origin` appends it). That is a real diagnostic loss
         and none of it needs a wrapper: origin is metadata, so it can be set on a copy while

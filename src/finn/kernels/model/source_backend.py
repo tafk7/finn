@@ -12,13 +12,13 @@ A ``source_backend`` is one pool member of a ``ParameterSource`` — the ``PARAM
 mirror of a compute :class:`~finn.kernels.model.backend.Backend`. A **storage topology** is
 one way a kernel's parameters physically live and travel to the compute core: ``embedded``
 (compiled in), ``decoupled`` (on-chip replay via memstream), and later ``external`` /
-``off-chip-DMA`` / ``dynamic``. Each topology is a self-contained bundle — its own
+``off-chip-DMA`` / ``dynamic``. Each topology is a self-contained backend — its own
 storage/transport/selection axes, coupling derived, feasibility predicates, RTL sources, and
 emit — exactly the shape of a :class:`Backend`. We do not introduce a parallel type:
 ``pool_space`` reads a ``Backend`` structurally, and the root axis name (``topology``) is
 what gives the pool its meaning. This factory is a semantic alias so a source backend reads
 as a source, not as a compute "backend", while reusing the proven selection
-machinery ([[impl-bundles]]).
+machinery ([[backend-backends]]).
 """
 
 from __future__ import annotations

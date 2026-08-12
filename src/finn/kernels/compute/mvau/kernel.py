@@ -9,9 +9,9 @@
 """MVAU — the matrix-vector activation kernel DEFINITION: WHAT it is.
 
 The declarative op definition (mirrors FINN's ``matrixvectoractivation.py``, but as a
-design space). A backend author reads it top to bottom; each ``impl_*.py`` bundle in this
+design space). A backend author reads it top to bottom; each ``impl_*.py`` backend in this
 package declares only the HOW for one compute core. The FINN-facing
-:class:`~finn.kernels.compute.mvau.op.MvauKernelOp` wrapper lives beside this in ``op.py``.
+:class:`~finn.kernels.compute.mvau.op.MvauDataflowOp` wrapper lives beside this in ``op.py``.
 Source of truth for each axis/derived/predicate (file:line into real FINN):
 ``scratchpad/reference/mvau-design-space.md``.
 
@@ -36,7 +36,7 @@ from __future__ import annotations
 from finn.kernels.engine.attr import attr
 from finn.kernels.engine.constraints import IsStatic, ShapeRank, SparsityFree, ValueNonNeg
 from finn.kernels.engine.derived import Derived
-from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
+from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
@@ -52,7 +52,7 @@ from .registry import build_pool, generation
 # =============================================================================
 
 # Pool-member identities (values of the root `implementation` axis). A new backend
-# defines its own name in its own bundle file; these three are the built-ins.
+# defines its own name in its own backend file; these three are the built-ins.
 MVAU_HLS = "mvau_hls"
 MVAU_DSP_SOFTVEC = "mvau_dsp_softvec"
 MVAU_DSP_PACKED = "mvau_dsp_packed"
@@ -66,14 +66,14 @@ THRESHOLDS = "thresholds"
 
 
 # =============================================================================
-# 2. INTERFACES — the ONNX-facing arity + direction (no tiling; tiling is impl-owned)
+# 2. INTERFACES — the ONNX-facing arity + direction (no tiling; tiling is backend-owned)
 # =============================================================================
 
 
 def mvau_interfaces():
     """The op-side interface list — identity + DIRECTION + BLOCK structure (the math). No
     semantic role: whether ``weights`` is a stored parameter or a live activation emerges
-    from graph context (initializer?) at resolve time. Stream folding (SIMD/PE) is impl-owned.
+    from graph context (initializer?) at resolve time. Stream folding (SIMD/PE) is backend-owned.
 
     The block reads as the matmul: ``inp`` iterates its vector count (``1``) and holds the
     reduction dim MW in-block (``FULL``); ``weights`` is the whole matrix ``(MW, MH)`` in one
@@ -102,8 +102,8 @@ def mvau_interfaces():
 
 # =============================================================================
 # 3. OP DESIGN SPACE — the shared BLOCK structure (axes / derived / predicates).
-#    Everything every MVU has, regardless of the chosen compute core. An impl
-#    bundle never edits this; it resolves against it.
+#    Everything every MVU has, regardless of the chosen compute core. An backend
+#    backend never edits this; it resolves against it.
 # =============================================================================
 
 # -- small guard/helper functions (named, not lambdas, for legible tracebacks) --
@@ -184,7 +184,7 @@ def op_predicates():
 
 
 # =============================================================================
-# 7. ASSEMBLY — the full MVAU design space as a _LegacyKernel.
+# 7. ASSEMBLY — the full MVAU design space as a DataflowKernel.
 # =============================================================================
 
 
@@ -194,20 +194,20 @@ def mvau_pool():
 
 
 @registry_cached(generation, parameters_generation)
-def mvau_kernel() -> _LegacyKernel:
-    """The full MVAU design space as a :class:`_LegacyKernel` — the WHAT-owning op node.
+def mvau_kernel() -> DataflowKernel:
+    """The full MVAU design space as a :class:`DataflowKernel` — the WHAT-owning op node.
 
-    The compute pool (HLS / DSP-softvec / DSP-packed) with impl-owned tiling. Weights +
+    The compute pool (HLS / DSP-softvec / DSP-packed) with backend-owned tiling. Weights +
     thresholds are DERIVED as delivered parameters from the pool's ``mem_modes`` (a backend
-    declares which param ports it consumes); the _LegacyKernel builds their DeliveredParam list and
+    declares which param ports it consumes); the DataflowKernel builds their DeliveredParam list and
     synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
-    (model/param_contract.py); the getters project from a resolved point via the impl
+    (model/param_contract.py); the getters project from a resolved point via the backend
     ``stream``.
 
     CACHED on the compute + parameters registry generations: assembly is pure over them, and
     every getter path used to rebuild the whole thing. A registration invalidates it
     automatically, so "add a backend, edit nothing else" still holds."""
-    return _LegacyKernel(
+    return DataflowKernel(
         name="MVAU",
         interfaces=mvau_interfaces(),
         op_axes=op_axes(),

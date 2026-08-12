@@ -10,14 +10,14 @@
 
 Parameters live in on-chip RAM (BRAM/URAM) and are replayed onto the compute core's
 weight stream by a memstream block, initialized from a ``.dat`` at build time (and
-optionally reloadable via AXI-lite). This bundle owns the SELECTION axes of that
+optionally reloadable via AXI-lite). This backend owns the SELECTION axes of that
 topology (``ram_style``, ``runtime_writeable_weights``, ``pumpedMemory``), its
 self-contained feasibility gates, AND its memstream GEOMETRY (``depth``/``width``/
 ``sets``/``init_file``) — which it now derives ITSELF from the compute→memory
 :class:`~finn.kernels.model.demand.ParamDemand` the composing op publishes
 under the ``parameters.<iface>.demand`` key (rather than the op reaching in to compute the
 memstream realization). When the demand is absent (standalone resolve, no compute
-core), the geometry derived return ``None`` — so this bundle still resolves alone.
+core), the geometry derived return ``None`` — so this backend still resolves alone.
 
 The ``pumpedMemory ⇒ not(PE==SIMD==1)`` gate likewise now reads the demand's
 ``parallelism`` (= PE*SIMD) instead of the raw compute fold, so it too is owned here.
@@ -59,7 +59,7 @@ from finn.kernels.model.source_backend import source_backend
 # =============================================================================
 # Selection axes — the free choices of the decoupled (memstream) topology.
 # These are always present when this topology is selected (the pool guards them on
-# selection); no further guard is needed inside the bundle. Names are namespaced AND
+# selection); no further guard is needed inside the backend. Names are namespaced AND
 # interface-keyed ``parameters.<iface>.*`` (self-identification; keeps the composed op
 # point collision-safe AND lets the pool compose once per parameter interface).
 # =============================================================================
@@ -80,7 +80,7 @@ def _decoupled_axes(iface):
 # =============================================================================
 # Feasibility predicates.
 #
-# The URAM gate reads only this bundle's axes + the device. The `pumpedMemory =>
+# The URAM gate reads only this backend's axes + the device. The `pumpedMemory =>
 # not(parallelism==1)` gate reads the compute→memory DEMAND's parallelism (= PE*SIMD),
 # not the raw compute fold — so it too is owned here now, not brokered by the op. Both
 # no-op when the demand is absent, so the pool still resolves standalone.
@@ -90,7 +90,7 @@ def _decoupled_axes(iface):
 def _uram_gate(iface):
     @predicate(
         f"{ram_style_key(iface)}=ultra & not versal => runtime_writeable=1",
-        # ram_style is an axis of THIS bundle: present when it is selected, absent otherwise
+        # ram_style is an axis of THIS backend: present when it is selected, absent otherwise
         # (the guarded wrapper short-circuits then), so the read is optional.
         # runtime_writeable is a Context mandate now, not a point read.
         optional_deps={ram_style_key(iface)},
@@ -117,7 +117,7 @@ def _uram_gate(iface):
 def _pumped_gate(iface):
     @predicate(
         f"{pumped_memory_key(iface)} => not (parallelism == 1)",
-        # pumpedMemory is this bundle's own axis; the demand exists only when composed
+        # pumpedMemory is this backend's own axis; the demand exists only when composed
         # into an op. Both reads are guarded, so both are optional.
         optional_deps={pumped_memory_key(iface), demand_key(iface)},
     )
@@ -141,8 +141,8 @@ def _pumped_gate(iface):
 # Memstream GEOMETRY — derived HERE from the compute→memory demand spec.
 #
 # Historically the composing op computed these (it had the compute fold in scope and
-# the parameters bundle did not). With the demand contract the op publishes a
-# realization-free ParamDemand under `parameters.<iface>.demand`, and THIS bundle turns it
+# the parameters backend did not). With the demand contract the op publishes a
+# realization-free ParamDemand under `parameters.<iface>.demand`, and THIS backend turns it
 # into memstream geometry — the memory backend owning its own realization. Each returns
 # None when the demand is absent (standalone resolve, no compute core, OR the interface is
 # consumed in constant mode), preserving the pool's stand-alone resolvability.
@@ -246,7 +246,7 @@ def _geometry_derived(iface):
         Derived(depth_key(iface), _mem_depth, optional_deps=on_demand),
         Derived(sets_key(iface), _mem_sets, optional_deps=on_demand),
         # init_file additionally reads this topology's own ram_style axis — an axis of THIS
-        # bundle, so it always exists when this bundle is selected and the dep is safe.
+        # backend, so it always exists when this backend is selected and the dep is safe.
         Derived(
             init_file_key(iface),
             _mem_init_file,

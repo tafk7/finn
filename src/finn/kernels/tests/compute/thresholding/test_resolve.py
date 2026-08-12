@@ -8,9 +8,9 @@
 
 """Thresholding resolve — the model-stressing op.
 
-Proves "op-level shared is per-op": the RTL bundle contributes impl-local axes
+Proves "op-level shared is per-op": the RTL backend contributes backend-local axes
 (depth_trigger_*, uniform_thres, deep_pipeline) ABSENT under the HLS sibling, while both
-share the SAME integer dtype envelope (no fabricated per-bundle dtype gate). PE folds the
+share the SAME integer dtype envelope (no fabricated per-backend dtype gate). PE folds the
 channel dim; numSteps is derived from the threshold tensor; data-dependent predicates
 reject unsorted (RTL) and negative-under-unsigned thresholds.
 """
@@ -147,7 +147,7 @@ def test_a_non_2d_threshold_tensor_reports_its_rank(schema):
     It raises rather than returning ``Illegal`` because the geometry deriveds index this
     shape positionally, and deriveds run before predicates: a rule could never fire first. So
     the check moved to the shape read. The exception type matters — ``ValueError`` is in the
-    set ``_LegacyKernel.first_feasible_backend`` treats as "not resolvable for this context", whereas
+    set ``DataflowKernel.first_feasible_backend`` treats as "not resolvable for this context", whereas
     the bare ``IndexError`` this used to raise would escape as a kernel bug (INV5) on a node
     that is merely ineligible."""
     ctx = replace(make_context(), shapes={**make_context().shapes, "thresholds": (8,)})
@@ -162,7 +162,7 @@ def test_rtl_local_axes_absent_under_hls(schema):
     r = resolve(schema, make_context(), base_assignment(backend=THRESHOLDING_HLS))
     assert isinstance(r, Point)
     for name in ("depth_trigger_bram", "depth_trigger_uram", "uniform_thres", "deep_pipeline"):
-        assert name not in r, f"{name} must NOT exist under the HLS bundle"
+        assert name not in r, f"{name} must NOT exist under the HLS backend"
         with pytest.raises(AbsentAxisError):
             _ = r[name]
 
@@ -188,7 +188,7 @@ def test_assigning_rtl_axis_under_hls_is_illegal(schema):
     assert any("depth_trigger_bram" in reason for reason in r.reasons)
 
 
-# --- no fabricated per-bundle dtype gate -----------------------------------
+# --- no fabricated per-backend dtype gate -----------------------------------
 
 
 def test_same_integer_dtype_resolves_under_both_bundles(schema):
@@ -228,7 +228,7 @@ def test_third_implementation_composes_additively():
     from finn.kernels.model.backend import Backend
     from finn.kernels.compute.thresholding import thresholding_kernel, thresholding_pool
 
-    # A 4th backend adds to the pool with zero edits. Compose through the _LegacyKernel (the full
+    # A 4th backend adds to the pool with zero edits. Compose through the DataflowKernel (the full
     # space, so the parameters pool folds in and thresholdDataType's cross-pool dep resolves) —
     # the compute pool alone is a fragment, not a schema.
     #

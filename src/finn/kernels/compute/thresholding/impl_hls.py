@@ -6,14 +6,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Backend bundle: ``thresholding_hls`` — the HLS backend.
+"""Backend backend: ``thresholding_hls`` — the HLS backend.
 
 Universal (no device/dtype feasibility gate). Bakes thresholds into a ``thresh.h``
 ``ThresholdsActivation`` ROM (the constant/embedded topology) via the shared parameter
 serializer — the SEPARABLE, static-schedule threshold memory. The decoupled
 threshold-stream cluster (mem_mode/ram_style) is DEFERRED, mirroring the MVAU HLS core's
-deferred weight-stream path; the HLS and RTL bundles carry DISJOINT impl-local axes (the
-RTL bundle carries depth-triggers etc.).
+deferred weight-stream path; the HLS and RTL backends carry DISJOINT backend-local axes (the
+RTL backend carries depth-triggers etc.).
 """
 
 from __future__ import annotations

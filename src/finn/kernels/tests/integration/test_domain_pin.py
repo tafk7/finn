@@ -9,7 +9,7 @@
 """Domain-pin guard (PERMANENT — N1).
 
 The kernel system's qonnx presence rests on ONE coupling: the ``custom_op`` dict in
-``finn/kernels/__init__.py`` maps each op_type to its ``KernelOp`` class, and qonnx's
+``finn/kernels/__init__.py`` maps each op_type to its ``DataflowOp`` class, and qonnx's
 ``getCustomOp`` resolves a ``(domain="finn.kernels", op_type=…)`` node through it. A future
 op MOVE can silently break that resolution without any other test noticing — the failure
 surfaces only deep in a build flow. This guard asserts the pin holds: every registered op
@@ -21,7 +21,7 @@ from onnx import helper
 from qonnx.custom_op.registry import getCustomOp
 
 import finn.kernels
-from finn.kernels.ir import KernelOp
+from finn.kernels.ir import DataflowOp
 
 pytestmark = pytest.mark.integration
 
@@ -35,7 +35,7 @@ EXPECTED_OPS = {"MVAU", "Thresholding"}
 def test_custom_op_dict_is_populated():
     assert set(finn.kernels.custom_op) == EXPECTED_OPS
     for op_type, cls in finn.kernels.custom_op.items():
-        assert isinstance(cls, type) and issubclass(cls, KernelOp), (op_type, cls)
+        assert isinstance(cls, type) and issubclass(cls, DataflowOp), (op_type, cls)
 
 
 @pytest.mark.parametrize("op_type", sorted(EXPECTED_OPS))

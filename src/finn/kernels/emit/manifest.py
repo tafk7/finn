@@ -11,7 +11,7 @@
 A component's HDL/library source list was written down TWICE: as a bare ``Backend.sources``
 tuple (filenames, for pool bookkeeping) AND as a hand-built ``StaticFile`` list inside emit
 (the same files as full resolved paths, for the build copy). The two could silently drift —
-a file added to one but forgotten in the other yields a bundle that RESOLVES fine but FAILS
+a file added to one but forgotten in the other yields a backend that RESOLVES fine but FAILS
 at elaboration with a missing-module error. On top of that, the *path resolution* (which
 in-tree subdir each file lives under — ``finn-rtllib/mvu/`` vs ``deps/finn-hlslib/`` vs
 ``finn-rtllib/thresholding/hdl/``) was scattered across inline f-strings and per-file

@@ -23,8 +23,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import get_by_name, qonnx_make_model
 
 from finn.transformation.fpgadataflow.infer_kernels import InferKernels
-from finn.kernels.compute.mvau.op import MvauKernelOp
-from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 from finn.kernels.ir.routing import is_specialized, kernel_hw_language
 from finn.util.fpgadataflow import (
     is_fpgadataflow_node,
@@ -51,7 +51,7 @@ def _unresolved_mvau_node():
     model.set_tensor_datatype("inp", DataType["INT8"])
     model.set_tensor_datatype("weights", DataType["INT8"])
     model.set_initializer("weights", np.ones((MW, MH), dtype=np.float32))
-    model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
+    model = model.transform(InferKernels([MvauDataflowOp, ThresholdingDataflowOp]))
     return [n for n in model.graph.node if n.domain == KERNEL_DOMAIN][0]
 
 
@@ -85,8 +85,8 @@ def _plain_node():
 
 def test_unresolved_kernel_node_routes_nowhere():
     kn = _unresolved_mvau_node()
-    impl = get_by_name(kn.attribute, "backend")
-    assert impl is None or impl.s.decode("UTF-8") == ""
+    backend = get_by_name(kn.attribute, "backend")
+    assert backend is None or backend.s.decode("UTF-8") == ""
     assert is_specialized(kn) is False
     assert kernel_hw_language(kn) is None
     assert is_hls_node(kn) is False

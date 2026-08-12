@@ -104,7 +104,7 @@ def first_feasible(
 ) -> dict | None:
     """Reference local_fn: commit the FIRST feasible backend (pool order = precedence).
 
-    Delegates to the model-aware op bridge (``KernelOp.first_feasible_backend``), which
+    Delegates to the model-aware op bridge (``DataflowOp.first_feasible_backend``), which
     reuses the SAME per-backend trial that infer's ``has_feasible_point`` claim check runs —
     so a node infer claimed as buildable specializes here to a concrete member. Returns
     ``None`` when no backend is feasible (should not happen for an infer-claimed node; logged

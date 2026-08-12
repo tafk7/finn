@@ -6,14 +6,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``_LegacyKernel`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
+"""``DataflowKernel`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
 it projects from a resolved :class:`~finn.kernels.engine.point.Point`
 (kernelop-tensor-block-stream.md §3, §7; consumer-surface-model.md Tier 0-3).
 
 The op declares its **interfaces** (identity + role — the ONNX-facing arity, the
 BLOCK/reduction structure) and a **pool** of Backends. Each Backend owns
 its **stream tiling** (the BLOCK->STREAM lowering) — so a *normal* shape resolves with
-no backend, while a *folded* shape needs a resolved point that names the selected impl
+no backend, while a *folded* shape needs a resolved point that names the selected backend
 and its fold dials.
 
 This module builds ONLY the estimate-only surface: the port-indexed normal/folded
@@ -46,7 +46,7 @@ from .tiling import TileError, generate_tiling, stream_width_key as _stream_widt
 
 
 class KernelError(ValueError):
-    """Raised for an ill-formed _LegacyKernel query (unknown interface index, a folded-shape
+    """Raised for an ill-formed DataflowKernel query (unknown interface index, a folded-shape
     request on a non-last-axis PARAM port, or a stream dial that does not divide)."""
 
 
@@ -58,7 +58,7 @@ _DATAFLOW_PROTOCOLS = frozenset({Protocol.Stream, Protocol.MemoryMapped, Protoco
 def _resolve_interface_indices(interfaces):
     """Resolve each interface's ``index`` sentinel (``-1``) to its declaration-order position
     among same-direction peers, leaving any explicitly-set index untouched. Called once at
-    ``_LegacyKernel`` construction so ``iface.index`` is always a concrete node-slot index the
+    ``DataflowKernel`` construction so ``iface.index`` is always a concrete node-slot index the
     adapter can read (the index-authoritative-at-the-ONNX-boundary rule, F9)."""
     from dataclasses import replace
 
@@ -78,7 +78,7 @@ class InterfaceSchema:
     The op declares the arity, the direction (which node slot), and how the block segments
     this tensor (``block`` — which dims a calc-state quantum spans). The selected Backend
     owns how the block is folded into a stream (its ``stream`` map). Block folding is the
-    math → op-owned; stream folding is the realization → impl-owned. An impl cannot change
+    math → op-owned; stream folding is the realization → backend-owned. An backend cannot change
     the block: it has no field to express one (the ownership split, made structural).
 
     NO SEMANTIC ROLE. An interface is neutral: whether it is a weight/parameter feed or a
@@ -98,13 +98,13 @@ class InterfaceSchema:
             ``FULL`` (the whole dim sits in one block), ``1`` (iterate one at a time), an
             int size, or a ``derive(...)`` expr (a bounded / cross-interface block, e.g. a
             conv window). NO reduce/free tag — reduction is emergent from the math, not
-            declared (matches brainsmith's block_tiling). The impl's ``stream[name][i]``
+            declared (matches brainsmith's block_tiling). The backend's ``stream[name][i]``
             folds ``block[i]``, positionally.
         optional: whether this is an OPTIONAL node input (0-or-1). An ONNX-invariant
             identity fact (like ``direction``) — the opset says the slot may be absent (MVU
             thresholds, a bias, MaxPool indices). Its PRESENCE for a given node is EMERGENT
             from Context (its tensor exists), read at projection time by
-            :meth:`_LegacyKernel.present_interfaces` — the same declared-slot / emergent-existence
+            :meth:`DataflowKernel.present_interfaces` — the same declared-slot / emergent-existence
             split as role emergence. A required interface (default ``False``) is always
             present. (Variadic 0-to-N is a later additive generalization of the same rule:
             present interfaces come from Context, not the declared list.)
@@ -114,13 +114,13 @@ class InterfaceSchema:
             backend cannot override (a rank check, a static-initializer requirement). Each
             compiles to a predicate that auto-skips when the port's tensor is absent
             (so an optional port needs no ``has_tensor`` guard). Relational rules that read
-            ANOTHER tensor live on :attr:`_LegacyKernel.constraints` instead.
+            ANOTHER tensor live on :attr:`DataflowKernel.constraints` instead.
 
         index: the node-slot index WITHIN this interface's direction (0=first input/output).
             The adapter reads ``node.input[index]``/``node.output[index]`` to resolve this
             interface's Context tensor — the index-authoritative-at-the-ONNX-boundary fact
             (F9). Defaults to the sentinel ``-1`` = "declaration order among same-direction
-            peers", resolved to a concrete positional index at ``_LegacyKernel`` construction
+            peers", resolved to a concrete positional index at ``DataflowKernel`` construction
             (:func:`_resolve_interface_indices`). An op
             with a non-declaration-order wiring (an operand at a shifted slot) sets it
             explicitly. Replaces the old ``PortSpec.index`` — one interface object now carries
@@ -140,7 +140,7 @@ class InterfaceSchema:
             common case) or :class:`~finn.kernels.model.ports.Variadic` ``(count_from)`` (N
             homogeneous repeats, N read from Context via ``ctx.arity(count_from)`` — Concat).
             Distinct from ``optional`` (ONNX ``Optional``, a heterogeneous 0-or-1 operand):
-            ``Variadic`` is ONNX ``Variadic``, a homogeneous repeat. :meth:`_LegacyKernel.interfaces`
+            ``Variadic`` is ONNX ``Variadic``, a homogeneous repeat. :meth:`DataflowKernel.interfaces`
             expands ``Variadic`` to N concrete peers.
     """
 
@@ -171,7 +171,7 @@ class InterfaceSchema:
 
 
 @dataclass(frozen=True)
-class _LegacyKernel:
+class DataflowKernel:
     """A hardware kernel op: its immutable, ONNX-invariant IDENTITY (name, interfaces,
     op-level design space, frontend-fixed attrs, rough cost) + a ``pool`` of Backends
     (realizations). Delivered parameters (weight/threshold delivery, memory) are DERIVED
@@ -179,7 +179,7 @@ class _LegacyKernel:
 
     The identity fields are held directly (the identity ⊥ realization split is the
     field grouping, not a nested wrapper — F10.1 collapsed the former ``KernelSchema``
-    onto ``_LegacyKernel``). Every identity field is independently optional: a minimal op declares
+    onto ``DataflowKernel``). Every identity field is independently optional: a minimal op declares
     only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
 
     ``kernel_attrs`` is the THIRD design-space category, distinct from ``op_axes`` (the DSE
@@ -305,35 +305,35 @@ class _LegacyKernel:
 
     # -- schema / resolve ---------------------------------------------------
 
-    def _generated(self, impl: Backend):
+    def _generated(self, backend: Backend):
         """The tiling engine's generated fragments + fold map for one Backend,
         derived from its ``stream`` map joined against the op interfaces' ``block``.
-        Memoized per _LegacyKernel by impl name."""
+        Memoized per DataflowKernel by backend name."""
         cache = self._tiling_cache
-        got = cache.get(impl.name)
+        got = cache.get(backend.name)
         if got is None:
-            dtypes = {n: p.derived_dtype for n, p in impl.ports.items()}
-            got = generate_tiling(self.interfaces, dict(impl.stream), dtypes)
-            cache[impl.name] = got
+            dtypes = {n: p.derived_dtype for n, p in backend.ports.items()}
+            got = generate_tiling(self.interfaces, dict(backend.stream), dtypes)
+            cache[backend.name] = got
         return got
 
     def _augmented_pool(self) -> tuple[Backend, ...]:
         """Each Backend with the tiling-engine-generated axes/divisibility
         predicates appended to its OWN axes/predicates (so ``pool_space`` dispatches
-        them on selection), and the generated stream-width deriveds. The impl's declared
+        them on selection), and the generated stream-width deriveds. The backend's declared
         tiling map is the single source; the fold dials, their ranges, the divisibility,
         and the widths are all derived here — not hand-written on the op."""
         from dataclasses import replace
 
         out = []
-        for impl in self.pool:
-            gen = self._generated(impl)
+        for backend in self.pool:
+            gen = self._generated(backend)
             out.append(
                 replace(
-                    impl,
-                    axes=tuple(impl.axes) + gen.axes,
-                    derived=tuple(impl.derived) + gen.derived,
-                    predicates=tuple(impl.predicates) + gen.predicates,
+                    backend,
+                    axes=tuple(backend.axes) + gen.axes,
+                    derived=tuple(backend.derived) + gen.derived,
+                    predicates=tuple(backend.predicates) + gen.predicates,
                 )
             )
         return tuple(out)
@@ -357,7 +357,7 @@ class _LegacyKernel:
         set and its one rejection are. It is not deleted because ``pool_space`` is SHARED
         with the storage pool, which still needs the whole assembler — see the note there.
 
-        MEMOIZED per _LegacyKernel instance: assembly is pure over the (frozen) kernel.
+        MEMOIZED per DataflowKernel instance: assembly is pure over the (frozen) kernel.
         Sharing one instance is safe because the result is frozen and its lazily-built
         caches (order, strata) are idempotent — recomputing them yields the same values, so
         a shared space cannot carry state between queries."""
@@ -447,7 +447,7 @@ class _LegacyKernel:
         """Resolve a design point (or an Illegal).
 
         Routes through the PER-REALIZATION space when the assignment names a backend, which
-        is every impl-dependent query: one member selected means no merge, no dispatch
+        is every backend-dependent query: one member selected means no merge, no dispatch
         closures, no selection guards (F1). An assignment with no backend — or naming one
         outside the pool — still goes through the merged space, which is the only one that
         can represent "unspecialized" (the ``""`` sentinel is not a pool member, so
@@ -475,10 +475,10 @@ class _LegacyKernel:
         on two of three), and its one winning case — every member rejected on datatype — is
         decided at stratum 0, from Context alone, which needs no selection-root concept. T8
         deletes it."""
-        for impl in self.pool:
+        for backend in self.pool:
             try:
                 result = resolve(
-                    self.realized_space(impl.name), context, {BACKEND_AXIS: impl.name}
+                    self.realized_space(backend.name), context, {BACKEND_AXIS: backend.name}
                 )
             except (ValueError, KeyError, AbsentAxisError):
                 # A backend feasibility check that raises on THIS context (e.g. a
@@ -490,7 +490,7 @@ class _LegacyKernel:
                 # A backend that IS feasible resolves cleanly; the pool needs only ONE.
                 continue
             if isinstance(result, Point):
-                return impl.name
+                return backend.name
         return None
 
     def has_feasible_point(self, context: Context) -> bool:
@@ -503,7 +503,7 @@ class _LegacyKernel:
         return self.first_feasible_backend(context) is not None
 
     # NOTE — there is exactly ONE schema-assembly path (:meth:`compile`). A second,
-    # impl-INDEPENDENT one (``op_space``/``configure_op``) was deleted: it excluded the pool
+    # backend-INDEPENDENT one (``op_space``/``configure_op``) was deleted: it excluded the pool
     # and the whole parameters subspace, so once an op declared a derived with a cross-pool
     # dep (``thresholdDataType`` -> ``parameters.thresholds.datatype``, true for BOTH live
     # ops) it was unresolvable by construction. Its only caller had no callers, so nothing
@@ -649,7 +649,7 @@ class _LegacyKernel:
         cross-interface coupling real cost needs — e.g. MVU re-traverses the weight block
         once per input vector, so true cost is ``nf·sf·n_vecs`` while this floor gives only
         ``max(nf·sf, ...)`` (undercounts whenever n_vecs>1, i.e. conv-as-matmul). A proper
-        cost model (nested block traversal, pipeline fill/drain, per-impl overrides) is a
+        cost model (nested block traversal, pipeline fill/drain, per-backend overrides) is a
         FUTURE PASS; cost modelling is deliberately ignored for now.
 
         The former ``cost_model`` field — an op-level ``(point, context) -> int`` override —
@@ -682,19 +682,19 @@ class _LegacyKernel:
 
     def _selected(self, point: Point) -> Backend:
         """The pool member named by the resolved ``backend`` axis."""
-        impl_name = point[BACKEND_AXIS]
+        backend_name = point[BACKEND_AXIS]
         by_name = {b.name: b for b in self.pool}
-        bundle = by_name.get(impl_name)
-        if bundle is None:
+        backend = by_name.get(backend_name)
+        if backend is None:
             raise KernelError(
-                f"resolved implementation {impl_name!r} is not in the pool "
+                f"resolved implementation {backend_name!r} is not in the pool "
                 f"(have {sorted(by_name)})"
             )
-        return bundle
+        return backend
 
     def _stream_elems(self, iface: InterfaceSchema, point: Point) -> int:
         """Elements/cycle for this interface = the generated stream-width expression for
-        the selected impl (1 if the impl declares no tiling for it)."""
+        the selected backend (1 if the backend declares no tiling for it)."""
         gen = self._generated(self._selected(point))
         expr = gen.width_exprs.get(iface.name)
         if expr is None:
@@ -709,12 +709,12 @@ class _LegacyKernel:
         ``stream_width.<iface>`` derived the tiling engine produced on the point — the
         SAME value emit reads, so the getter (FINN's contract) and emit share one produced
         quantity instead of a recompute-vs-precompute pair. Falls back to recomputing from
-        ``width_exprs`` when the interface has no generated width key (an impl that declares
+        ``width_exprs`` when the interface has no generated width key (a backend that declares
         no stream for it — the key is absent from the point)."""
         key = _stream_width_key(iface.name)
         if key in point:
             return int(point[key])
-        # No generated width derived (impl declares no stream for this interface): the
+        # No generated width derived (backend declares no stream for this interface): the
         # stream is one element/cycle at the interface's realized dtype — the selected
         # backend's declared derived_dtype spec (absent ⇒ the raw graph tensor dtype).
         from ..engine.datatype_spec import resolve_datatype_spec
@@ -731,13 +731,13 @@ class _LegacyKernel:
 
     def _folds_reshape(self, iface: InterfaceSchema, point: Point) -> bool:
         """Whether a folded SHAPE is a plain reshape for this interface under the selected
-        impl. Derived from the stream folds (a fold whose width is a cross-interface expr
-        ⇒ not a plain reshape). True when the impl declares no stream for the interface."""
+        backend. Derived from the stream folds (a fold whose width is a cross-interface expr
+        ⇒ not a plain reshape). True when the backend declares no stream for the interface."""
         gen = self._generated(self._selected(point))
         return gen.reshapes.get(iface.name, True)
 
     def _folded_shape(self, iface: InterfaceSchema, point: Point, context: Context):
-        """Fold each dim the impl's stream map folds: for each position ``(dim_index,
+        """Fold each dim the backend's stream map folds: for each position ``(dim_index,
         elems_expr)``, split that tensor dim into ``(extent // elems, elems)``. The engine's
         ``fold_map`` names WHICH dims fold (any dim, not just the last), so a 2-D weight
         block ``(MW, MH)`` streamed ``[SIMD, PE]`` folds to ``(MW/SIMD, MH/PE, SIMD, PE)``.

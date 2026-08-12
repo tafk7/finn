@@ -11,14 +11,14 @@
 ``protocol`` defaults to ``Stream`` and is restricted to the three dataflow protocols
 (Stream/MemoryMapped/Config) — a Sideband/Clock/Reset interface is a construction error.
 ``multiplicity`` defaults to ``Fixed(1)``; a ``Variadic(count_from=...)`` interface expands
-to N concrete peers under :meth:`_LegacyKernel.expanded_interfaces` reading ``ctx.arity``.
+to N concrete peers under :meth:`DataflowKernel.expanded_interfaces` reading ``ctx.arity``.
 """
 
 import pytest
 
 from finn.kernels.engine.context import Context
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
+from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
 from finn.kernels.model.ports import Direction, Fixed, Protocol, Variadic
 from finn.kernels.model.tiling import FULL
 
@@ -28,7 +28,7 @@ def _kernel(ifaces):
         name="core",
         ports=ports_from(stream={i.name: [1, "PE"] for i in ifaces if i.direction == Direction.IN}),
     )
-    return _LegacyKernel(name="K", interfaces=ifaces, pool=(backend,))
+    return DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
 
 
 def test_defaults_are_stream_and_fixed_one():

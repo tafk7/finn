@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Backend bundle: ``mvau_dsp_packed`` — the DSP58 INT8-packed core
+"""Backend backend: ``mvau_dsp_packed`` — the DSP58 INT8-packed core
 (``mvu_vvu_8sx9_dsp58.sv``).
 
 It OVERLAPS softvec on DSP58+small-widths (the wrapper's ``else: genSoftVec`` branch

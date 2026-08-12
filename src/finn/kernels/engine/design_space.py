@@ -138,7 +138,7 @@ class DesignSpace:
         """The names of the CHOICES. Deliberately excludes ``attrs`` — an attr is on the
         point but is not a dial, and conflating the two is what made a frontend-fixed scalar
         read as stratum 2. Callers wanting "every name the point carries from outside"
-        (the nodeattr bridge, the KernelOp assignment) want ``axis_names | attr_names``."""
+        (the nodeattr bridge, the DataflowOp assignment) want ``axis_names | attr_names``."""
         return frozenset(a.name for a in self.axes)
 
     @property
@@ -210,7 +210,7 @@ class DesignSpace:
 
         Accepts an entry object or, for an axis/derived, its name. Predicates must be passed
         as objects: their ``name`` is a description, which is NOT unique (the same guarded
-        rule appears once per owning bundle)."""
+        rule appears once per owning backend)."""
         if isinstance(entry, Predicate):
             return self._predicate_strata()[id(entry)]
         return self._strata()[entry.name if hasattr(entry, "name") else entry]
@@ -303,7 +303,7 @@ class DesignSpace:
 
         Predicates are not in the DAG (nothing orders them), so they are levelled after the
         axes and deriveds. Keyed by ``id`` rather than name because a predicate's name is
-        its description, and the same rule is wrapped once per owning bundle — by name they
+        its description, and the same rule is wrapped once per owning backend — by name they
         would collide and the last one would win."""
         cached = getattr(self, "_pred_strata_cache", None)
         if cached is None:

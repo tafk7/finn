@@ -41,8 +41,8 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.compute.mvau.op import MvauKernelOp, WEIGHTS
-from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp, WEIGHTS
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 from finn.kernels.dataflow.parameters.names import DECOUPLED
 from finn.kernels.ir.kernel_op import RUNTIME_WRITEABLE_PROP
 from finn.kernels.model.param_names import topology_key
@@ -72,7 +72,7 @@ W1 = _rng.randint(-1, 2, size=(MW, MH)).astype(np.float32)
 W2 = _rng.randint(-128, 128, size=(MH, MH)).astype(np.float32)
 
 
-class _OnlyFirstMatMul(MvauKernelOp):
+class _OnlyFirstMatMul(MvauDataflowOp):
     """Claims ONLY ``mm0``, so ``mm1`` falls through to the classic HLS/RTL path —
     which is what makes the graph mixed at a kernel→classic boundary."""
 
@@ -111,7 +111,7 @@ def _prepared(mixed: bool):
     reproducing the gap between ``step_apply_folding_config`` and
     ``step_minimize_bit_width``."""
     model = _matmul_chain()
-    pool = [_OnlyFirstMatMul, ThresholdingKernelOp] if mixed else [ThresholdingKernelOp]
+    pool = [_OnlyFirstMatMul, ThresholdingDataflowOp] if mixed else [ThresholdingDataflowOp]
     model = model.transform(InferKernels(pool))
     model = model.transform(InferQuantizedMatrixVectorActivation())
     model = model.transform(InferShapes()).transform(InferDataTypes())

@@ -11,7 +11,7 @@
 Exercises E (engine) + S (pool selection) + T (tiling) + D (delivery) through the real
 mvau_kernel: guarded axes, device pool pruning (DSP58/NUM_LANES/weight-width feasibility),
 forced-derived values (dsp_primitive/accDataType), URAM combination predicate, data-
-dependent accumulator dtype (static vs runtime-writeable), composability (a 4th bundle
+dependent accumulator dtype (static vs runtime-writeable), composability (a 4th backend
 adds with zero edits; registry self-registration), the optional thresholds interface, and
 consumption-mode gating (DSP cores are stream-weight-only).
 
@@ -39,7 +39,7 @@ from finn.kernels.compute.mvau import (
     mvau_pool,
     mvau_space,
 )
-from finn.kernels.compute.mvau.op import MvauKernelOp, mvau_kernel
+from finn.kernels.compute.mvau.op import MvauDataflowOp, mvau_kernel
 from finn.kernels.dataflow.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
@@ -490,7 +490,7 @@ def test_hls_rejects_binary_weights(schema):
     assert any("binary" in reason.lower() for reason in r.reasons)
 
 
-# --- composability: a 4th bundle adds with zero edits ----------------------
+# --- composability: a 4th backend adds with zero edits ----------------------
 
 
 def test_fourth_implementation_composes_additively():
@@ -719,12 +719,12 @@ def _matmul_model(idt="INT8", wdt="INT8"):
     return model
 
 
-@pytest.mark.parametrize("impl", ["mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"])
-def test_each_backend_rejects_float_iw(impl):
+@pytest.mark.parametrize("backend", ["mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"])
+def test_each_backend_rejects_float_iw(backend):
     k = mvau_kernel()
-    float_pt = resolve(k.compile(), _feas_ctx(idt="FLOAT32", wdt="FLOAT32"), {"backend": impl})
+    float_pt = resolve(k.compile(), _feas_ctx(idt="FLOAT32", wdt="FLOAT32"), {"backend": backend})
     assert isinstance(float_pt, Illegal)
-    int_pt = resolve(k.compile(), _feas_ctx(idt="INT8", wdt="INT8"), {"backend": impl})
+    int_pt = resolve(k.compile(), _feas_ctx(idt="INT8", wdt="INT8"), {"backend": backend})
     assert isinstance(int_pt, Point)
 
 
@@ -745,7 +745,7 @@ def test_first_feasible_backend_names_first_pool_member_or_none():
 
 def test_can_infer_from_rejects_float_matmul_for_no_feasible_backend(caplog):
     with caplog.at_level(logging.INFO):
-        claimed = MvauKernelOp.can_infer_from(
+        claimed = MvauDataflowOp.can_infer_from(
             _matmul_model(idt="FLOAT32", wdt="FLOAT32").graph.node[0],
             _matmul_model(idt="FLOAT32", wdt="FLOAT32"),
         )
@@ -755,7 +755,7 @@ def test_can_infer_from_rejects_float_matmul_for_no_feasible_backend(caplog):
 
 def test_can_infer_from_claims_integer_matmul():
     model = _matmul_model(idt="INT8", wdt="INT8")
-    assert MvauKernelOp.can_infer_from(model.graph.node[0], model) is True
+    assert MvauDataflowOp.can_infer_from(model.graph.node[0], model) is True
 
 
 def test_float_backend_widens_the_accepted_datatypes_union():
@@ -794,14 +794,14 @@ def test_claim_and_build_read_one_description_of_the_wiring():
     model = _matmul_model()
     node = model.graph.node[0]
 
-    inputs, outputs = MvauKernelOp._candidate_slots(node, model)
+    inputs, outputs = MvauDataflowOp._candidate_slots(node, model)
     assert (inputs, outputs) == (["inp", "weights"], ["out"])
 
     # The CLAIM's view: a candidate node re-keyed by the interfaces themselves.
-    claim_ctx = MvauKernelOp.candidate_op(model, inputs, outputs)._context()
+    claim_ctx = MvauDataflowOp.candidate_op(model, inputs, outputs)._context()
     assert set(claim_ctx.shapes) == {"inp", "weights", "out"}
 
     # The BUILD's view: the node infer_from actually emits, over the same slots.
-    built = MvauKernelOp.infer_from(node, model, 1).nodes_to_insert[0]
+    built = MvauDataflowOp.infer_from(node, model, 1).nodes_to_insert[0]
     assert list(built.input) == inputs
     assert list(built.output) == outputs

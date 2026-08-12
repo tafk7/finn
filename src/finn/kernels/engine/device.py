@@ -17,7 +17,7 @@ The givens a design resolves against arrive in two phases, and conflating them i
   through whichever step owns ``cfg``.
 
 :class:`~finn.kernels.engine.context.Context` bundled both, so constructing one demanded a
-part before any caller had one. ``KernelOp`` filled the gap with ``_fpgapart_from``, which
+part before any caller had one. ``DataflowOp`` filled the gap with ``_fpgapart_from``, which
 read an ``fpgapart`` nodeattr **no op declares** — qonnx raises ``AttributeError`` on an
 undeclared name, the bare ``except`` swallowed it, and every Context therefore carried
 ``fpgapart=""``. Measured consequence at ``0b05d3d82``: both MVAU DSP backends raise
@@ -38,7 +38,7 @@ from dataclasses import dataclass
 class DeviceFacts:
     """The build's target device + toolchain, as one passable value.
 
-    A bundle rather than three parameters because they travel together and are chosen
+    A backend rather than three parameters because they travel together and are chosen
     together — a caller with a part almost always has the clock too, and threading them
     separately through the transform/op/Context chain is how one of them gets dropped.
 

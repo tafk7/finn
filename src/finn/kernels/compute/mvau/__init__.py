@@ -19,9 +19,9 @@
 
 This package is the acid test for the composability thesis (design-space-model.md
 §1.2.1/§1.2.2): MVAU is one op (op.py) plus a **pool** of self-contained
-:class:`Backend` bundles, each in its own ``impl_*.py`` that **registers itself**
+:class:`Backend` backends, each in its own ``impl_*.py`` that **registers itself**
 (``registry.py``). Adding a backend is purely additive — drop in one ``impl_*.py``, import
-it here (or let discovery find it), edit nothing else. No bundle imports a sibling; the
+it here (or let discovery find it), edit nothing else. No backend imports a sibling; the
 pool is assembled from the registry, so a new backend cannot perturb an existing one.
 Source of truth for each axis/derived/predicate:
 ``scratchpad/reference/mvau-design-space.md``.
@@ -37,8 +37,8 @@ Two structural relationships, kept distinct (model §1.2.2/§5):
 FINN's fused wrapper (``mvu_vvu_axi.sv``) forked softvec/packed with a ``generate``
 block (mvu_vvu_axi.sv:313) that duplicated ``mvu.sv``'s NUM_LANES math (the source's own
 ``@todo``, axi:305-307; audit finding F1). Because that one file references BOTH cores,
-any bundle shipping it had an incomplete/ambiguous transitive closure — the physical
-non-separation surfaced by the two DSP bundles' overlapping ``.sources``. The split
+any backend shipping it had an incomplete/ambiguous transitive closure — the physical
+non-separation surfaced by the two DSP backends' overlapping ``.sources``. The split
 resolves it at the source:
   * Shared core-agnostic plumbing (params, AXI I/O, replay buffer, double-pump machinery,
     input unflatten/VVU interleave, flow-control, output queue) lives in
@@ -49,12 +49,12 @@ resolves it at the source:
   * NUM_LANES≤3 routing is purely ``mvau_dsp_packed`` feasibility (impl_rtl_packed.py) +
     preference (packed>softvec). Emit selects the per-core wrapper via the selected
     backend's ``rtl_core_module`` field (emit_rtl.py ``$MODULE_NAME_COMPUTE_CORE$`` slot); each
-    bundle's ``.sources`` are now DISJOINT on the core/wrapper (share only the base
+    backend's ``.sources`` are now DISJOINT on the core/wrapper (share only the base
     ``.svh``). The fused ``mvu_vvu_axi.sv`` is retired from our emit path (kept in-tree
     only as the golden for the rtlsim bit-equivalence oracle).
   Verified: ``rtlsim_split_equiv_mvau.py`` proves each per-core wrapper is BIT-IDENTICAL
   to the fused wrapper's matching fork branch (softvec on DSP48E2, packed on DSP58/INT8);
-  ``elaborate_mvau_emit.py`` elaborates each bundle against its own disjoint source set.
+  ``elaborate_mvau_emit.py`` elaborates each backend against its own disjoint source set.
   Because this forks vendored HDL, the byte-``run_diff`` oracle no longer applies to the
   instantiation line; the rtlsim-equivalence check is its behavioural replacement.
 ------------------------------------------------------------------------------------
@@ -69,13 +69,13 @@ from .op import (  # noqa: F401  (re-exported public surface)
     MVAU_HLS,
     OUTPUT,
     WEIGHTS,
-    MvauKernelOp,
+    MvauDataflowOp,
     mvau_kernel,
     mvau_pool,
     mvau_space,
 )
 
-# Import the built-in bundle modules for their registration side effect. A third-party
+# Import the built-in backend modules for their registration side effect. A third-party
 # backend adds one such import (or is discovered) and nothing else.
 from . import impl_hls  # noqa: E402,F401
 from . import impl_rtl_softvec  # noqa: E402,F401
@@ -85,7 +85,7 @@ __all__ = [
     "mvau_kernel",
     "mvau_space",
     "mvau_pool",
-    "MvauKernelOp",
+    "MvauDataflowOp",
     "MVAU_HLS",
     "MVAU_DSP_SOFTVEC",
     "MVAU_DSP_PACKED",

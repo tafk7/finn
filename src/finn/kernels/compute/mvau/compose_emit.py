@@ -43,7 +43,7 @@ def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
 
     # One delivery cell per DELIVERED PARAMETER whose selected topology streams (constant-mode
     # topologies have emit=None → no cell, e.g. embedded weights or the always-constant fused
-    # thresholds). Iterate the _LegacyKernel's declared delivered_parameters so a second interface
+    # thresholds). Iterate the DataflowKernel's declared delivered_parameters so a second interface
     # needs no change here — symmetric with the generic resolve-side wiring (model/parameter_source.py).
     for dp in mvau_kernel().delivered_parameters:
         delivery_arts = _emit_delivery(point, context, module_name, dp)
@@ -71,21 +71,21 @@ def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
 
 
 def _emit_compute(point, context, module_name):
-    """Dispatch the selected compute bundle's emit, threading ``module_name`` into the
+    """Dispatch the selected compute backend's emit, threading ``module_name`` into the
     wrapper name. Looked up by the compute pool's root axis (``backend``)."""
-    impl = point[BACKEND_AXIS]
-    bundle = {b.name: b for b in mvau_pool()}[impl]
-    return bundle.emit(point, context, module_name)
+    backend = point[BACKEND_AXIS]
+    backend = {b.name: b for b in mvau_pool()}[backend]
+    return backend.emit(point, context, module_name)
 
 
 def _emit_delivery(point, context, module_name, dp):
     """Dispatch the selected delivery topology's emit for one delivered parameter, or None
     when the topology has no streamer (``constant`` mode / ``emit=None`` — embedded weights or
-    the always-constant fused thresholds). Looks the bundle up by the interface-keyed root axis
+    the always-constant fused thresholds). Looks the backend up by the interface-keyed root axis
     from the DeliveredParam's own pool, so a new topology or interface needs no change here.
     Calls the emit directly (not ``emit_point``) to thread ``module_name`` + the interface."""
     topo = point[topology_key(dp.iface)]
-    bundle = {b.name: b for b in dp.pool}[topo]
-    if bundle.emit is None:
+    backend = {b.name: b for b in dp.pool}[topo]
+    if backend.emit is None:
         return None
-    return bundle.emit(point, context, module_name, dp.iface)
+    return backend.emit(point, context, module_name, dp.iface)

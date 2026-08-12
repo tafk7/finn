@@ -60,7 +60,7 @@ def is_specialized(node) -> bool:
     :class:`~finn.kernels.model.backend.Backend` pool member pinned on the ``backend``
     nodeattr). Bare-node — reads only that nodeattr. Absent-or-empty => unspecialized.
 
-    Every consumer (routing, the impl-dependent kernel getters, future ResolveKernels) calls
+    Every consumer (routing, the backend-dependent kernel getters, future ResolveKernels) calls
     this; none re-implements it. ``set_nodeattr("backend", name)`` is the ONE write
     that flips a node to specialized.
 
@@ -97,7 +97,7 @@ def kernel_hw_language(node) -> str | None:
     Bare-node: reads only the ``backend`` nodeattr + a static pool lookup. No model,
     no ``getCustomOp``, no op instantiation — safe to call from the hot routing predicates.
     """
-    impl = selected_backend_name(node)
-    if impl is None:
+    backend = selected_backend_name(node)
+    if backend is None:
         return None  # not a kernel node, or unspecialized -> not HW-ready
-    return _language_table().get(node.op_type, {}).get(impl)
+    return _language_table().get(node.op_type, {}).get(backend)

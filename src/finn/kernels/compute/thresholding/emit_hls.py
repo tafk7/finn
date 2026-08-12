@@ -41,7 +41,7 @@ from finn.kernels.model.tiling import stream_width_key
 from .names import INPUT, OUTPUT, THRESHOLDS
 
 # The single source-of-truth for the HLS backend's static finn-hlslib headers (F9). The HLS
-# bundle's `sources` is its Python codegen module (thresholding_hls.py — a bookkeeping
+# backend's `sources` is its Python codegen module (thresholding_hls.py — a bookkeeping
 # marker), so the manifest here covers the emitted static build sources the top .cpp needs.
 HLS_STATIC_MANIFEST = ArtifactManifest(
     sources=(

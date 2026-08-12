@@ -64,13 +64,13 @@ def _reference_first_feasible(kernel, context):
     ``kernel.compile()``. Kept as the ORACLE — per-realization resolution is only correct
     insofar as it agrees with the merge it replaces, which is precisely T7's claim."""
     schema = kernel.compile()
-    for impl in kernel.pool:
+    for backend in kernel.pool:
         try:
-            result = real_resolve(schema, context, {BACKEND_AXIS: impl.name})
+            result = real_resolve(schema, context, {BACKEND_AXIS: backend.name})
         except (ValueError, KeyError, AbsentAxisError):
             continue
         if isinstance(result, Point):
-            return impl.name
+            return backend.name
     return None
 
 
@@ -129,7 +129,7 @@ def test_typo_class_bug_still_propagates():
     between a buggy rule and a silent skip, so what used to be a backstop is now the whole
     guarantee."""
     from finn.kernels.model.backend import Backend, ports_from
-    from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
+    from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
     from finn.kernels.model.ports import Direction
     from finn.kernels.model.tiling import FULL
 
@@ -137,7 +137,7 @@ def test_typo_class_bug_still_propagates():
     def _buggy(p, ctx):
         return ctx.this_method_does_not_exist()
 
-    kernel = _LegacyKernel(
+    kernel = DataflowKernel(
         name="MVU",
         interfaces=(
             InterfaceSchema("inp", Direction.IN, block=[1, FULL]),

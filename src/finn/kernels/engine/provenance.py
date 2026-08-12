@@ -44,9 +44,9 @@ def stream_width(iface: str) -> str:
 
 
 def merged(kind: str, root: str, inner: str = "") -> str:
-    """An entry synthesized by the pool combinator by merging per-bundle declarations.
+    """An entry synthesized by the pool combinator by merging per-backend declarations.
 
-    ``inner`` is the origin the underlying per-bundle entries already carried, and it is
+    ``inner`` is the origin the underlying per-backend entries already carried, and it is
     KEPT rather than replaced: a fold dial that says only "merged across the backend pool"
     has lost the very thing worth knowing (which ports it folds). The merge is a wrapper, so
     its provenance should read as one."""
@@ -55,17 +55,17 @@ def merged(kind: str, root: str, inner: str = "") -> str:
 
 
 def common(origins) -> str:
-    """The single origin shared by a group of per-bundle entries, or ``""`` if they differ.
+    """The single origin shared by a group of per-backend entries, or ``""`` if they differ.
 
-    Same-named entries across bundles normally come from the same generator; when they do
+    Same-named entries across backends normally come from the same generator; when they do
     not, no one inner origin describes the merge, so claiming one would be a lie."""
     distinct = {o for o in origins if o}
     return distinct.pop() if len(distinct) == 1 else ""
 
 
-def selection_guard(root: str, impl: str) -> str:
-    """A bundle rule wrapped so it fires only when its bundle is selected."""
-    return f"generated: {impl}'s rule, guarded on {root}"
+def selection_guard(root: str, backend: str) -> str:
+    """A backend rule wrapped so it fires only when its backend is selected."""
+    return f"generated: {backend}'s rule, guarded on {root}"
 
 
 def realized(kind: str, member: str, inner: str = "") -> str:

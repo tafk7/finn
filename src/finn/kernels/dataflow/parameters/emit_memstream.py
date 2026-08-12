@@ -62,7 +62,7 @@ from .names import WEIGHTS
 # The single source-of-truth for the memstream cell's static finn-rtllib sources (F9). Each
 # carries its own real subdir (base:1170,1182-1184) — axilite.sv under axi/hdl, the memstream
 # cores under memstream/hdl — centralizing the per-file path resolution that was an inline
-# override dict. The decoupled bundle's `sources` reads ``.filenames``; the emit resolves each
+# override dict. The decoupled backend's `sources` reads ``.filenames``; the emit resolves each
 # resolved source name against this manifest's path table.
 MEMSTREAM_MANIFEST = ArtifactManifest(
     sources=(
@@ -239,7 +239,7 @@ def emit_memstream(point, context, module_name: str = "mvau_top", iface: str = W
     # Static memstream HDL — the selected topology's resolved source names, each mapped to
     # its real finn-rtllib subdir via the ONE manifest (axilite.sv under axi/hdl, the
     # memstream cores under memstream/hdl; base:1182-1184). One source-of-truth, so the
-    # bundle's `sources` and this build copy cannot drift.
+    # backend's `sources` and this build copy cannot drift.
     static = tuple(
         _MANIFEST_BY_NAME[s].as_static() for s in point.get(sources_key(iface), ())
     )

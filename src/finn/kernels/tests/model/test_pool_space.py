@@ -8,9 +8,9 @@
 
 """Pool selection / composition assembler (S1-S7).
 
-``pool_space`` lowers a pool of self-contained ``Backend`` bundles into the flat DesignSpace
+``pool_space`` lowers a pool of self-contained ``Backend`` backends into the flat DesignSpace
 resolve consumes. This tests the ASSEMBLER with tiny synthetic pools — durable because it
-tests the mechanism, not any op. The additivity guarantee (a bundle axis may depend on
+tests the mechanism, not any op. The additivity guarantee (a backend axis may depend on
 root/shared/own/derived, never a sibling's axis) is what makes "add a backend, edit
 nothing else" hold as the op count grows.
 
@@ -81,7 +81,7 @@ def test_only_selected_bundle_predicates_fire():
     # bad selected → both fire.
     r = resolve(schema, _ctx(), {"backend": "bad"})
     assert isinstance(r, Illegal)
-    # Reasons carry a provenance suffix — a selection-guarded bundle rule is GENERATED, and
+    # Reasons carry a provenance suffix — a selection-guarded backend rule is GENERATED, and
     # the suffix is what says which mechanism produced it. Substring, not exact match.
     assert any("bad is never feasible" in reason for reason in r.reasons)
     assert any("bad pred" in reason for reason in r.reasons)
@@ -103,7 +103,7 @@ def test_sibling_coupling_rejected_at_assembly():
 
 
 def test_sibling_coupling_via_derived_rejected():
-    """The additivity guarantee must hold for a bundle's DERIVED too, not just its axes —
+    """The additivity guarantee must hold for a backend's DERIVED too, not just its axes —
     the property is about the dep, and the entry kind carrying it is irrelevant."""
     a = Backend(name="a", axes=(discrete_axis("a_axis", {1, 2}, 1),))
     b = Backend(name="b", derived=(Derived("b_derived", lambda p, c: 1, deps={"a_axis"}),))
@@ -151,8 +151,8 @@ def test_axis_may_depend_on_root_shared_and_own():
 
 
 def test_derived_may_depend_on_root_shared_own_and_derived():
-    """The legal surface for a bundle derived, so the check above is not merely rejecting
-    everything: root, op-level shared axes, its own bundle's axes, and another derived."""
+    """The legal surface for a backend derived, so the check above is not merely rejecting
+    everything: root, op-level shared axes, its own backend's axes, and another derived."""
     shared = discrete_axis("shared", {1, 2}, 1)
     a = Backend(
         name="a",
@@ -183,7 +183,7 @@ def test_bundle_derived_named_sources_rejected():
 
 
 def test_same_name_derived_across_bundles_is_the_merge():
-    # Same-name derived ACROSS bundles is the intended per-impl dispatch merge, not shadow.
+    # Same-name derived ACROSS backends is the intended per-backend dispatch merge, not shadow.
     a = Backend(name="a", derived=(Derived("v", lambda p, c: 1),))
     b = Backend(name="b", derived=(Derived("v", lambda p, c: 2),))
     schema = pool_space("backend", (), (), (), (a, b))
@@ -375,10 +375,10 @@ def test_duplicate_derived_is_caught_by_finalize_not_by_the_shadowing_check():
 
 
 def test_the_reserved_sources_key_is_the_half_that_earns_its_keep():
-    """`sources` is a key pool_space ADDS. A bundle declaring one collides with a projection
+    """`sources` is a key pool_space ADDS. A backend declaring one collides with a projection
     that does not exist yet at finalize time, so the duplicate check cannot see it — this is
     a genuinely different rule, and it names the reservation instead of reporting an
     anonymous collision."""
-    bundle = Backend(name="a", derived=(Derived("sources", lambda p, c: 1),))
+    backend = Backend(name="a", derived=(Derived("sources", lambda p, c: 1),))
     with pytest.raises(PoolError, match="reserved by pool_space"):
-        pool_space("backend", (), (), (), (bundle,))
+        pool_space("backend", (), (), (), (backend,))

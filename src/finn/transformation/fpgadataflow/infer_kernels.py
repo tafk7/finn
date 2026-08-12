@@ -18,14 +18,14 @@ pattern FIRST, at infer, and never touches FINN's classic MVAU path.
 This module carries the generic DRIVER of that seam:
 
   * :class:`InferKernels` — one generic qonnx ``Transformation`` driven by a POOL of
-    KernelOp classes. For each graph node, the first pool op whose ``can_infer_from``
+    DataflowOp classes. For each graph node, the first pool op whose ``can_infer_from``
     returns True wins; its ``infer_from`` produces the replacement node(s). The concrete
-    match/build logic lives ON each KernelOp (``compute/mvau/op.py``,
+    match/build logic lives ON each DataflowOp (``compute/mvau/op.py``,
     ``compute/thresholding/op.py``) — this driver is oblivious to how the pool was assembled,
     so a future registry-driven pool drops in with no change here.
 
 The per-node return of a kernel's ``infer_from`` — :class:`~finn.kernels.ir.kernel_op.TransformationResult`
-— is the kernel INFER CONTRACT, co-located with the ``KernelOp`` base in ``kernels/ir/``
+— is the kernel INFER CONTRACT, co-located with the ``DataflowOp`` base in ``kernels/ir/``
 so a kernel op names its own return type without importing this transformation.
 """
 
@@ -46,7 +46,7 @@ KERNEL_DOMAIN = "finn.kernels"
 
 
 class InferKernels(Transformation):
-    """Drive a POOL of KernelOp classes over the graph, claiming frontend patterns.
+    """Drive a POOL of DataflowOp classes over the graph, claiming frontend patterns.
 
     Constructed with an ordered pool (``list`` order == precedence): for each node, the
     FIRST pool op whose ``can_infer_from`` returns True wins, its ``infer_from`` builds
@@ -56,8 +56,8 @@ class InferKernels(Transformation):
     re-run once at the end if anything changed (as every FINN infer does).
 
     Args:
-        pool: ordered ``list[type[KernelOp]]``. For the vertical slice this is the
-            hardcoded ``[MvauKernelOp, ThresholdingKernelOp]`` supplied at the call site;
+        pool: ordered ``list[type[DataflowOp]]``. For the vertical slice this is the
+            hardcoded ``[MvauDataflowOp, ThresholdingDataflowOp]`` supplied at the call site;
             the future registry-driven version swaps that literal for ``registry.kernels()``
             with no change to this driver.
     """

@@ -29,8 +29,8 @@ from finn.transformation.fpgadataflow.specialize_kernels import (
     SpecializeKernels,
     first_feasible,
 )
-from finn.kernels.compute.mvau.op import MvauKernelOp
-from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 from finn.kernels.ir.routing import is_specialized, kernel_hw_language
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 
@@ -42,7 +42,7 @@ KERNEL_DOMAIN = "finn.kernels"
 
 
 def _infer():
-    return InferKernels([MvauKernelOp, ThresholdingKernelOp])
+    return InferKernels([MvauDataflowOp, ThresholdingDataflowOp])
 
 
 def _specialize():
@@ -119,7 +119,7 @@ def test_mvau_specializes_autonomously():
 
 def test_mvau_folds_at_default_after_autonomous_specialize():
     # Once specialized (backend committed, folding unpinned = INCREMENTAL staging), the
-    # impl-dependent getters resolve at the DEFAULT fold — the node is ready for SetFolding.
+    # backend-dependent getters resolve at the DEFAULT fold — the node is ready for SetFolding.
     model = _matmul_only_model().transform(_infer()).transform(_specialize())
     inst = model.get_customop_wrapper(_kernel_node(model))
     assert tuple(inst.get_folded_output_shape(0))  # resolves (no "unspecialized" raise)

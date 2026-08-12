@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Backend bundle: ``mvau_hls`` — the HLS compute core.
+"""Backend backend: ``mvau_hls`` — the HLS compute core.
 
 Self-contained: its axes/derived/predicates/feasibility/sources live here and
 nowhere else. Registers itself via the registry decorator; adding or removing this

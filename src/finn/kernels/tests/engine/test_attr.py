@@ -77,7 +77,7 @@ def test_default_may_be_a_plain_value_or_read_context():
 
 def test_attrs_are_not_axes():
     """THE property. ``axis_names`` is the set of CHOICES, and it gates both the stratum
-    inference and (via KernelOp) which nodeattrs reach resolve."""
+    inference and (via DataflowOp) which nodeattrs reach resolve."""
     space = DesignSpace(axes=(FOLD,), attrs=(ACTVAL,)).finalize()
     assert space.axis_names == frozenset({"fold"})
     assert space.attr_names == frozenset({"ActVal"})

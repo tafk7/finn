@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""INSTANTIATE seam: the KernelOp bridge over a live ModelWrapper (N3-N6).
+"""INSTANTIATE seam: the DataflowOp bridge over a live ModelWrapper (N3-N6).
 
 A kernel op owns only its design axes (backend/PE/SIMD/ActVal); shapes/dtypes/values come
 from the LIVE model, re-keyed to interface names (N3). The getter partition:
@@ -14,8 +14,8 @@ from the LIVE model, re-keyed to interface names (N3). The getter partition:
   * Group-1 (committed-config, node-owned) getters answer on a bare getCustomOp(node).
   * Group-2 (graph-derived) getters RAISE "no model attached" on a bare instance — a stale
     node snapshot is the single-source-of-truth sin the design avoids.
-  * impl-INDEPENDENT getters (normal shape/dtype, infer_node_datatype) answer on an
-    UNSPECIALIZED node (the Seam-A verify gate, N4); impl-DEPENDENT getters (folded
+  * backend-INDEPENDENT getters (normal shape/dtype, infer_node_datatype) answer on an
+    UNSPECIALIZED node (the Seam-A verify gate, N4); backend-DEPENDENT getters (folded
     shape/width/cycles) raise a legible "unspecialized" error until backend is committed.
 
 N5 exact value-derived dtypes (accumulator from REAL weights) · N6 folding capability from
@@ -118,7 +118,7 @@ def _unspecialized_model():
 
 
 def test_getcustomop_resolves_to_mvau_kernel_op():
-    assert type(_inst(_build_model())).__name__ == "MvauKernelOp"
+    assert type(_inst(_build_model())).__name__ == "MvauDataflowOp"
 
 
 def test_kernel_op_opts_into_model_aware_contract():
@@ -242,7 +242,7 @@ def test_infer_datatype_derives_accumulator_under_noactivation():
 
 
 # ===========================================================================
-# N4 — impl-independent getters answer UNSPECIALIZED; impl-dependent raise.
+# N4 — backend-independent getters answer UNSPECIALIZED; backend-dependent raise.
 # ===========================================================================
 
 
@@ -307,7 +307,7 @@ def test_serialize_rehydrate_roundtrip(tmp_path):
 
 # ===========================================================================
 # The 4 latent skips: stock FINN analyses instantiate via bare getCustomOp(node)
-# (no model); a model-bearing KernelOp cannot serve them until the deferred
+# (no model); a model-bearing DataflowOp cannot serve them until the deferred
 # getCustomOp-with-model build-flow wiring lands. Kept skipped, not deleted.
 # ===========================================================================
 

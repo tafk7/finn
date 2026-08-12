@@ -24,7 +24,7 @@ from finn.kernels.engine.context import Context
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.point import Illegal, Point
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
+from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import (
     FULL,
@@ -164,7 +164,7 @@ def test_divisibility_predicate_fires():
 
 def test_expr_fold_is_widthonly_no_range_source():
     # weights delivered as ONE cross-interface expr position (PE*SIMD/TH): folds a width
-    # but not a plain reshape, and sources no dial range (TH is a real impl axis).
+    # but not a plain reshape, and sources no dial range (TH is a real backend axis).
     stream = {
         "inp": [1, "SIMD"],
         "out": [1, "PE"],
@@ -197,16 +197,16 @@ def test_stream_names_unknown_interface_raises():
 
 
 # ===========================================================================
-# T4/T5/T7 — folded shapes + widths through the _LegacyKernel facade.
+# T4/T5/T7 — folded shapes + widths through the DataflowKernel facade.
 # ===========================================================================
 
 
 def _mvu_kernel():
     stream = {"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}
-    impl = Backend(name="mvu", ports=ports_from(stream=stream))
-    return _LegacyKernel(
+    backend = Backend(name="mvu", ports=ports_from(stream=stream))
+    return DataflowKernel(
         name="MVU", interfaces=MVU_IFACES, op_axes=(),
-        pool=(impl,),
+        pool=(backend,),
     )
 
 
@@ -254,14 +254,14 @@ def test_width_uses_derived_dtype():
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
         InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
-    impl = Backend(
+    backend = Backend(
         name="k",
         ports=ports_from(
             stream={"inp": [1, "SIMD"], "out": [1, "PE"]},
             derived_dtype={"out": DataType["INT16"]},
         ),
     )
-    k = _LegacyKernel(name="K", interfaces=ifaces, pool=(impl,))
+    k = DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
     ctx = Context(
         shapes={"inp": (1, 128), "out": (1, 64)},
         datatypes={"inp": DataType["INT8"], "out": DataType["INT32"]},
@@ -286,11 +286,11 @@ def _kernel_with_port(iface_name, direction, **port_kwargs):
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
         InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
-    impl = Backend(
+    backend = Backend(
         name="k",
         ports={iface_name: Interface(**port_kwargs)},
     )
-    return _LegacyKernel(name="K", interfaces=ifaces, pool=(impl,))
+    return DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
 
 
 def test_derived_dtype_on_input_port_rejected():
@@ -325,7 +325,7 @@ def test_derived_dtype_on_output_and_accepted_on_input_ok():
         InterfaceSchema("inp", Direction.IN, block=[1, FULL]),
         InterfaceSchema("out", Direction.OUT, block=[1, FULL]),
     )
-    impl = Backend(
+    backend = Backend(
         name="k",
         ports={
             "inp": Interface(accepted_dtypes=DatatypeSupport(kind=DatatypeKind.INTEGER)),
@@ -333,4 +333,4 @@ def test_derived_dtype_on_output_and_accepted_on_input_ok():
         },
     )
     # Constructs without raising — correct-direction facts are legal.
-    _LegacyKernel(name="K", interfaces=ifaces, pool=(impl,))
+    DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))

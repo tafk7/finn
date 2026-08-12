@@ -218,7 +218,7 @@ def test_split_wrappers_bit_identical_to_fused(cfg):
     from finn.kernels.dataflow.parameters.names import DECOUPLED, WEIGHTS
     from finn.kernels.model.param_names import topology_key
 
-    label, impl, fpgapart, wdt_name, idt_name, pe, simd, mw, mh = cfg
+    label, backend, fpgapart, wdt_name, idt_name, pe, simd, mw, mh = cfg
     wdt, idt, odt = DataType[wdt_name], DataType[idt_name], DataType["INT16"]
     rng = np.random.RandomState(0)
     W = rng.randint(int(wdt.min()) + 1, int(wdt.max()) + 1, size=(mw, mh)).astype(np.float32)
@@ -228,7 +228,7 @@ def test_split_wrappers_bit_identical_to_fused(cfg):
         initializers={"weights": W}, fpgapart=fpgapart, clk_ns=5.0,
     )
     point = resolve(mvau_space(), ctx, {
-        "backend": impl, "PE": pe, "SIMD": simd, "resType": "dsp", topology_key(WEIGHTS): DECOUPLED,
+        "backend": backend, "PE": pe, "SIMD": simd, "resType": "dsp", topology_key(WEIGHTS): DECOUPLED,
     })
 
     split_arts = emit_mvau_rtl(point, ctx, module_name="mvau_split")

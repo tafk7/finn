@@ -9,11 +9,11 @@
 """Storage topology: ``embedded`` — parameters compiled into the compute core.
 
 The trivial topology: params are baked in (HLS ``params.h`` / RTL literal), so there
-is NO streamer, NO param file, NO free choice, and NO stream port. This bundle owns only
+is NO streamer, NO param file, NO free choice, and NO stream port. This backend owns only
 its identity plus the one consequence of having no stream — its
 ``parameters.<iface>.stream_width`` is ``0`` regardless of the compute demand. (This used
 to be an op-level derived branching on the topology; it is a per-topology fact, so it
-belongs in the topology bundle, dispatched on selection.) It is the pool default (first
+belongs in the topology backend, dispatched on selection.) It is the pool default (first
 registered → root-axis default), so a kernel with no delivery choice still resolves to a
 legal parameters point.
 """

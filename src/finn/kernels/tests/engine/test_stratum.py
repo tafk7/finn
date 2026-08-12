@@ -110,7 +110,7 @@ def test_present_optional_dep_does_raise_stratum():
 
 def test_same_description_predicates_do_not_collide():
     """A predicate's name is its DESCRIPTION, which is not unique — the same guarded rule is
-    wrapped once per owning bundle. Strata must key on identity or one would clobber another."""
+    wrapped once per owning backend. Strata must key on identity or one would clobber another."""
     root = discrete_axis("root", {"a"}, "a")
     fold = discrete_axis("fold", {1, 2}, 1, deps={"root"})
     cheap = Predicate(lambda p, c: None, "same text")

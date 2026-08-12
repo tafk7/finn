@@ -10,7 +10,7 @@
 COMPUTATION bodies a :class:`~finn.kernels.model.parameter_source.ParameterSource`
 composes.
 
-A :class:`~finn.kernels.model.kernel._LegacyKernel` that delivers parameters (weights,
+A :class:`~finn.kernels.model.kernel.DataflowKernel` that delivers parameters (weights,
 thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
 concrete source pool). The HOW — the ``(demand Derived, guarded source sub-schema)`` pair,
 whose supply-waterfall order (COMPUTE → DEMAND → SOURCE) falls out of their declared deps
@@ -46,13 +46,13 @@ from .tiling import stream_width_key
 class DeliveredParam:
     """One parameter interface an op delivers through a source (parameters) pool.
 
-    An INTERNAL assembly struct: an op no longer constructs this — ``_LegacyKernel`` DERIVES the
+    An INTERNAL assembly struct: an op no longer constructs this — ``DataflowKernel`` DERIVES the
     ``DeliveredParam`` list from the pool (an interface some backend declares in its
     ``mem_modes``). The generic ``ParameterSource`` wiring consumes it. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
     * ``pool`` — the CONCRETE source pool (a tuple of storage-topology ``Backend``\\ s),
-      built by ``_LegacyKernel.compile()`` from ``parameters_pool(iface)``. Handed to the wiring so
+      built by ``DataflowKernel.compile()`` from ``parameters_pool(iface)``. Handed to the wiring so
       it reads the pool directly instead of hardcoding a lookup.
     """
 
@@ -109,8 +109,8 @@ def _topology_domain(compute_pool, dp: DeliveredParam):
     def legal(p):
         # Defensive read: during real resolve `backend` is fixed before this axis;
         # under a bare probe point (nodeattr typing) it is absent → permissive (all modes).
-        impl = p.get(BACKEND_AXIS) if hasattr(p, "get") else None
-        backend = by_name.get(impl)
+        selected = p.get(BACKEND_AXIS) if hasattr(p, "get") else None
+        backend = by_name.get(selected)
         modes = (backend.mem_modes_of(iface) if backend else None) or ALL_MODES
         return tuple(name for name, mode in topo_modes.items() if mode in modes)
 

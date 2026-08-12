@@ -57,7 +57,7 @@ class MinimizeAccumulatorWidth(Transformation):
                 # still needs its result published before node i+1 reads it.
                 #
                 # A `finn.kernels` node is exactly that case: it narrows during datatype
-                # INFERENCE (KernelOp.infer_node_datatype resolves accDataType from the live
+                # INFERENCE (DataflowOp.infer_node_datatype resolves accDataType from the live
                 # graph) rather than through this hook, so `hasattr` is False for it while
                 # is_fpgadataflow_node is True. With the propagation nested under the hook,
                 # a kernel node both skipped narrowing AND suppressed the re-propagation,

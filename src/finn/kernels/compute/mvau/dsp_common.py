@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Shared CODE for the two MVAU DSP RTL bundles (soft-vec and packed).
+"""Shared CODE for the two MVAU DSP RTL backends (soft-vec and packed).
 
 softvec and packed are flat PEERS in the pool; they merely share declarations, which
 we dedup by CODE here rather than by introducing a "substrate" node in the engine.
@@ -38,7 +38,7 @@ from finn.util.basic import get_dsp_block
 from .op import INPUT, THRESHOLDS, WEIGHTS
 
 # The RTL/DSP MVU cores are integer matmuls (the signed/bitwidth gates in _rtl_mvu_feasible
-# assume it). Declared as datatype support per port and shared by both DSP bundles, so the
+# assume it). Declared as datatype support per port and shared by both DSP backends, so the
 # integer requirement has one home the pool unions for the frontend claim.
 RTL_MVU_SUPPORT = {
     INPUT: DatatypeSupport(kind=DatatypeKind.INTEGER),
@@ -112,7 +112,7 @@ def _narrow_weights(p, ctx):
     # The DSP48E1 arm reads `narrow_weights`. Declared now that it is honest to do so: with
     # runtime-writability a phase-0 Context mandate, narrow_weights no longer depends on any
     # POST-SPECIALIZATION value, so consulting it during a capability query is well-founded.
-    # Optional because the derived exists only in the DSP RTL bundles.
+    # Optional because the derived exists only in the DSP RTL backends.
     optional_deps={"narrow_weights"},
 )
 def _rtl_mvu_feasible(p, ctx):
@@ -142,7 +142,7 @@ def _rtl_mvu_feasible(p, ctx):
 # The core-agnostic AXI wrapper body + shared plumbing both MVAU DSP cores compile
 # against. Post-2c-split, the fused `mvu_vvu_axi.sv` is retired from our source lists:
 # the shared body lives in the two `.svh` fragments (included by the per-core `.sv`
-# wrappers), so this set is genuinely shared — each bundle appends its OWN per-core
+# wrappers), so this set is genuinely shared — each backend appends its OWN per-core
 # wrapper + core on top. This removes the internal genINT8/genSoftVec `generate` fork
 # whose two-core closure made the fused source list incomplete/ambiguous.
 SHARED_SOURCES = (
@@ -155,7 +155,7 @@ SHARED_SOURCES = (
 
 
 def dsp_rtl_common():
-    """Axes/derived/predicates common to the two MVAU DSP RTL bundles (shared CODE)."""
+    """Axes/derived/predicates common to the two MVAU DSP RTL backends (shared CODE)."""
     axes = (
         # Double-pumped DSP compute — a real lever on the DSP RTL cores (rtl:53).
         discrete_axis("pumpedCompute", {0, 1}, 0),

@@ -228,7 +228,7 @@ def _with_origin(reason: str, pred) -> str:
     """Append a generated rule's provenance to its reason.
 
     A hand-written rule's description already names its file and intent; a GENERATED one
-    (a divisibility check, a selection-guarded bundle rule) reads as if it came from
+    (a divisibility check, a selection-guarded backend rule) reads as if it came from
     nowhere. Suffixing the origin is what turns "who wrote this rule?" into a lookup.
     Only generated entries carry an origin, so an authored rule's reason is unchanged."""
     return f"{reason} [{pred.origin}]" if pred.origin else reason

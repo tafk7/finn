@@ -103,7 +103,7 @@ def _make_mvau_model(W, pe, simd, wdt, idt, odt, T=None, tdt=None, actval=0):
     return model
 
 
-def _mvau_context_point(W, pe, simd, wdt, idt, odt, impl, restype,
+def _mvau_context_point(W, pe, simd, wdt, idt, odt, backend, restype,
                         T=None, tdt=None, actval=None, **extra):
     from finn.kernels.engine.context import Context
     from finn.kernels.engine.resolve import resolve
@@ -125,7 +125,7 @@ def _mvau_context_point(W, pe, simd, wdt, idt, odt, impl, restype,
         fpgapart=extra.pop("fpgapart", FPGAPART), clk_ns=CLK_NS,
     )
     assignment = {
-        "backend": impl, "PE": pe, "SIMD": simd, "resType": restype, MVAU_TOPOLOGY: DECOUPLED,
+        "backend": backend, "PE": pe, "SIMD": simd, "resType": restype, MVAU_TOPOLOGY: DECOUPLED,
     }
     if actval is not None:
         assignment["ActVal"] = actval

@@ -57,7 +57,7 @@ class Variadic:
     node at resolve time via ``ctx.arity(count_from)`` (Concat's inputs, a fused-add's
     addends). Distinct from ``optional`` (ONNX ``Optional`` — a heterogeneous may-be-
     absent slot); ``Variadic`` is ONNX ``Variadic`` — a homogeneous repeat.
-    :meth:`_LegacyKernel.interfaces` expands it to N concrete ``InterfaceSchema`` at the slot
+    :meth:`DataflowKernel.interfaces` expands it to N concrete ``InterfaceSchema`` at the slot
     indices ``[base, base+1, …]``."""
 
     count_from: str

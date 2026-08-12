@@ -25,7 +25,7 @@ walks the tree and returns exactly the point keys the expr reads — never a gue
 These exprs live on a **Backend**'s interface (they ARE the RTL translation),
 so their operands are backend-local: ``mvau_rtl_tiled``'s weight port
 ``div(mul(Ref('PE'), Ref('SIMD')), param('TH'))`` reads ``TH``, which exists only on
-that bundle, so every dep is in scope wherever the expr is declared.
+that backend, so every dep is in scope wherever the expr is declared.
 """
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ FULL = _FullType()
 
 # A block extent (op-side): FULL sentinel, an int, or a derived expr.
 BlockExtent = Union["_FullType", int, TileExpr]
-# A stream fold (impl-side): 1 (unfolded), a dial name, an int width, or an expr.
+# A stream fold (backend-side): 1 (unfolded), a dial name, an int width, or an expr.
 StreamFold = Union[str, int, TileExpr]
 
 
@@ -324,14 +324,14 @@ def _fold_elems_expr(fold: StreamFold) -> TileExpr:
 
 @dataclass(frozen=True)
 class GeneratedTiling:
-    """The schema fragments + fold map the engine derives from one impl's ``stream`` map
+    """The schema fragments + fold map the engine derives from one backend's ``stream`` map
     joined against the op interfaces' ``block``.
 
     Attributes:
         axes/derived/predicates: fragments to append to the Backend's own before
-            ``pool_space`` merges them (so they dispatch on the selected impl).
+            ``pool_space`` merges them (so they dispatch on the selected backend).
         width_exprs: ``{interface_name: TileExpr}`` — the elements/cycle width, used by
-            the _LegacyKernel getters (``_stream_elems``).
+            the DataflowKernel getters (``_stream_elems``).
         fold_map: ``{interface_name: [(dim_index, elems_expr | None)]}`` — the folded
             positions and their stream-element expressions; None = unfolded pass-through.
         reshapes: ``{interface_name: bool}`` — whether a folded SHAPE is a plain reshape
@@ -352,7 +352,7 @@ def generate_tiling(interfaces, stream: dict, derived_dtypes: dict | None = None
     """Derive design-space fragments + the fold map from one Backend's ``stream``
     map joined against the op ``interfaces`` block structure.
 
-    ``interfaces`` is the _LegacyKernel's interface tuple — each carries the op-owned ``block``
+    ``interfaces`` is the DataflowKernel's interface tuple — each carries the op-owned ``block``
     (extents per tensor dim). ``stream`` is ``{interface_name: [StreamFold, ...]}`` —
     positional over the SAME dims: ``stream[iface][i]`` folds ``block[iface][i]``.
     ``derived_dtypes`` is ``{interface_name: DatatypeSpec}`` — the selected backend's
@@ -493,12 +493,12 @@ def _divisibility_predicate(dial: str, iface, dim_idx: int):
         block = _block_extent(extent, _iface, _idx, context)
         val = point.get(_dial)
         if val is None:
-            return None  # dial guarded out under this impl — nothing to check
+            return None  # dial guarded out under this backend — nothing to check
         if block % val != 0:
             return f"{_iface.tensor} block dim {_idx} = {block} not divisible by {_dial} = {val}"
         return None
 
-    # Reads the fold dial OPTIONALLY: the dial is guarded out under an impl that does not
+    # Reads the fold dial OPTIONALLY: the dial is guarded out under a backend that does not
     # declare this fold, which the `val is None` branch above handles.
     return Predicate(
         check=check,

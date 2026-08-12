@@ -22,8 +22,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import get_by_name, qonnx_make_model
 
 from finn.transformation.fpgadataflow.infer_kernels import InferKernels
-from finn.kernels.compute.mvau.op import MvauKernelOp
-from finn.kernels.compute.thresholding.op import ThresholdingKernelOp
+from finn.kernels.compute.mvau.op import MvauDataflowOp
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 from finn.util.fpgadataflow import is_fpgadataflow_node
 
 pytestmark = pytest.mark.integration
@@ -78,7 +78,7 @@ def test_inferred_kernel_node_has_no_stamp_but_is_member():
     model.set_tensor_datatype("inp", DataType["INT8"])
     model.set_tensor_datatype("weights", DataType["INT8"])
     model.set_initializer("weights", np.ones((MW, MH), dtype=np.float32))
-    model = model.transform(InferKernels([MvauKernelOp, ThresholdingKernelOp]))
+    model = model.transform(InferKernels([MvauDataflowOp, ThresholdingDataflowOp]))
     kn = [n for n in model.graph.node if n.domain == "finn.kernels"][0]
     assert get_by_name(kn.attribute, "backend") is None
     assert is_fpgadataflow_node(kn) is True
