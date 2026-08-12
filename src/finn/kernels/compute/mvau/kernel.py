@@ -36,15 +36,12 @@ from __future__ import annotations
 from finn.kernels.engine.attr import attr
 from finn.kernels.engine.constraints import IsStatic, ShapeRank, SparsityFree, ValueNonNeg
 from finn.kernels.engine.derived import Derived
-from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
+from finn.kernels.model.kernel import InterfaceSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
 
-from finn.kernels.dataflow.parameters.registry import generation as parameters_generation
-from finn.kernels.model.registry import registry_cached
 
-from .registry import build_pool, generation
 
 
 # =============================================================================
@@ -189,34 +186,21 @@ def op_predicates():
 
 
 def mvau_pool():
-    """The registered MVAU implementations (flat peers), in registration order."""
-    return build_pool()
+    """The MVAU backends, in declaration order (= selection precedence)."""
+    from .op import MvauDataflowOp
+
+    return MvauDataflowOp.pool
 
 
-@registry_cached(generation, parameters_generation)
-def mvau_kernel() -> DataflowKernel:
-    """The full MVAU design space as a :class:`DataflowKernel` — the WHAT-owning op node.
+def mvau_kernel():
+    """The MVAU design space — now simply the op class.
 
-    The compute pool (HLS / DSP-softvec / DSP-packed) with backend-owned tiling. Weights +
-    thresholds are DERIVED as delivered parameters from the pool's ``mem_modes`` (a backend
-    declares which param ports it consumes); the DataflowKernel builds their DeliveredParam list and
-    synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
-    (model/param_contract.py); the getters project from a resolved point via the backend
-    ``stream``.
+    Kept as a one-line shim: `MvauDataflowOp` IS the kernel (the container collapsed into it,
+    F6), so there is no separate object to build. Callers that just want the class should say
+    so; this exists so the ~40 sites naming `mvau_kernel()` keep reading naturally."""
+    from .op import MvauDataflowOp
 
-    CACHED on the compute + parameters registry generations: assembly is pure over them, and
-    every getter path used to rebuild the whole thing. A registration invalidates it
-    automatically, so "add a backend, edit nothing else" still holds."""
-    return DataflowKernel(
-        name="MVAU",
-        interfaces=mvau_interfaces(),
-        op_axes=op_axes(),
-        op_derived=op_derived(),
-        op_predicates=op_predicates(),
-        kernel_attrs=kernel_attrs(),
-        constraints=_mvau_constraints(),
-        pool=mvau_pool(),
-    )
+    return MvauDataflowOp
 
 
 def mvau_space():

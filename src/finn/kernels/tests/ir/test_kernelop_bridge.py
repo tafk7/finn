@@ -30,7 +30,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.compute.mvau import mvau_kernel
+from finn.kernels.compute.mvau.op import MvauDataflowOp
 from finn.kernels.engine.context import Context
 
 MW, MH = 128, 64
@@ -178,21 +178,37 @@ def test_nodeattr_types_include_axes_no_geometry_bakes():
 
 
 # ===========================================================================
-# N3/N5 — adapter getters agree with the engine; exact value-derived dtype.
+# N3/N5 — the getters project the resolved point; exact value-derived dtype.
 # ===========================================================================
 
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64)])
-def test_getters_agree_with_engine(simd, pe):
+def test_getters_project_the_resolved_point(simd, pe):
+    """The getters answer from the node's OWN resolved point, for every fold.
+
+    This used to assert that the adapter getter agreed with a same-named container getter
+    taking `(point, ctx, ind)`. That assertion is now unwritable, and its absence is the
+    point: there is one method per question (F6), so there is no second implementation left
+    to disagree with. What is still worth pinning is that the values track the fold — which
+    the arithmetic below does directly, against the engine's own resolved widths."""
     inst = _inst(_build_model(simd=simd, pe=pe))
-    kernel, ctx = mvau_kernel(), _ctx()
-    point = kernel.configure(ctx, {"backend": "mvau_hls", "SIMD": simd, "PE": pe})
-    assert inst.get_instream_width(0) == kernel.get_instream_width(point, ctx, 0)
-    assert inst.get_instream_width(1) == kernel.get_instream_width(point, ctx, 1)
-    assert inst.get_outstream_width(0) == kernel.get_outstream_width(point, ctx, 0)
-    assert tuple(inst.get_folded_input_shape(0)) == kernel.get_folded_input_shape(point, ctx, 0)
-    assert tuple(inst.get_folded_output_shape(0)) == kernel.get_folded_output_shape(point, ctx, 0)
-    assert inst.get_exp_cycles() == kernel.get_exp_cycles(point, ctx)
+    point = MvauDataflowOp.configure(
+        _ctx(), {"backend": "mvau_hls", "SIMD": simd, "PE": pe}
+    )
+    # inp streams SIMD elements of INT8; out streams PE of the resolved accumulator.
+    assert inst.get_instream_width(0) == point["stream_width.inp"]
+    assert inst.get_instream_width(1) == point["stream_width.weights"]
+    assert inst.get_outstream_width(0) == point["stream_width.out"]
+    # Folded shapes split the folded dim into (count, elems).
+    assert tuple(inst.get_folded_input_shape(0)) == (1, MW // simd, simd)
+    assert tuple(inst.get_folded_output_shape(0)) == (1, MH // pe, pe)
+    # The cost floor is the MAX over stream interfaces. On this 3-input node that is the
+    # THRESHOLDS port, which no backend folds — MH*numSteps elements at 1/cycle — so it
+    # dominates every fold of inp/weights/out. Asserted explicitly rather than as a formula
+    # over simd/pe, because "the unfolded port sets the floor" is the real behaviour and a
+    # simd/pe formula would silently encode the wrong model.
+    assert inst.get_exp_cycles() == MH * NUM_STEPS
+    assert MH * NUM_STEPS >= max(MW // simd, MH // pe, (MW * MH) // (simd * pe))
 
 
 def test_datatype_getters():
@@ -211,12 +227,13 @@ def test_noactivation_output_uses_real_weight_accumulator():
     # exact because the Context carries the REAL weight values (not placeholder zeros).
     model = _build_model(thresholds=False, annotate_out=False)
     inst = _inst(model)
-    kernel, ctx = mvau_kernel(), _ctx(thresholds=False)
-    point = kernel.configure(ctx, {"backend": "mvau_hls", "SIMD": 16, "PE": 4})
+    ctx = _ctx(thresholds=False)
+    point = MvauDataflowOp.configure(ctx, {"backend": "mvau_hls", "SIMD": 16, "PE": 4})
     inst.set_nodeattr("SIMD", 16)
     inst.set_nodeattr("PE", 4)
     got = inst.get_outstream_width(0)
-    assert got == kernel.get_outstream_width(point, ctx, 0)
+    # The node's own answer equals the engine's resolved width for the same configuration.
+    assert got == point["stream_width.out"]
     assert got > 0  # real all-ones weights give a positive-width accumulator stream
 
 

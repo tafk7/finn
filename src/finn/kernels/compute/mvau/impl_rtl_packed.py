@@ -27,7 +27,6 @@ from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
 from ._dsp_rtl import VERSION
 from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
 from .kernel import INPUT, MVAU_DSP_PACKED, OUTPUT, WEIGHTS
-from .registry import register
 
 
 @predicate(
@@ -61,7 +60,6 @@ def _packed_feasible(p, ctx):
     return None
 
 
-@register
 def packed_bundle() -> Backend:
     axes, derived, predicates = dsp_rtl_common()
     return Backend(

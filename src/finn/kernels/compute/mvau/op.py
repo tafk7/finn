@@ -34,6 +34,10 @@ from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-export
 
 # The kernel DEFINITION — re-exported so `from .op import X` keeps working for the backend
 # backends, the composition helper, and the tests that resolve against this module.
+from .impl_hls import hls_bundle as hls_backend
+from .impl_rtl_packed import packed_bundle as packed_backend
+from .impl_rtl_softvec import softvec_bundle as softvec_backend
+from .kernel import _mvau_constraints
 from .kernel import (  # noqa: F401  (re-exported public surface)
     INPUT,
     MVAU_DSP_PACKED,
@@ -73,7 +77,28 @@ logger = logging.getLogger(__name__)
 
 
 class MvauDataflowOp(DataflowOp):
-    """MVAU (matrix-vector activation) as a DataflowKernel-backed FINN op."""
+    """MVAU (matrix-vector activation) — the op class IS the kernel.
+
+    The class body below is the design space that used to be a separate `DataflowKernel`
+    value reached through a `.kernel()` classmethod. Every field here is op-CLASS identity —
+    true of every MVAU node, not of any one — so a class body is its home (F6).
+
+    The compute pool (HLS / DSP-softvec / DSP-packed) carries backend-owned tiling. Weights +
+    thresholds are DERIVED as delivered parameters from the pool's ``mem_modes`` (a backend
+    declares which param ports it consumes) by `DataflowOp.__init_subclass__`, which also
+    resolves the interface slot indices and validates per-port direction — all at class
+    definition, so an authoring mistake is an import error.
+    """
+
+    # -- the design space (see kernel.py for what each piece means) ---------
+    name = "MVAU"
+    interfaces = mvau_interfaces()
+    pool = (hls_backend(), softvec_backend(), packed_backend())
+    op_axes = op_axes()
+    op_derived = op_derived()
+    op_predicates = op_predicates()
+    kernel_attrs = kernel_attrs()
+    constraints = _mvau_constraints()
 
     # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
 
@@ -124,7 +149,7 @@ class MvauDataflowOp(DataflowOp):
         # candidate is never inserted; the graph is unmodified.
         inputs, outputs = cls._candidate_slots(node, model)
         candidate = cls.candidate_op(model, inputs, outputs)
-        if not cls.kernel().has_feasible_point(candidate._context()):
+        if not cls.has_feasible_point(candidate._context()):
             # A node that MATCHES the structural pattern but has NO feasible backend is
             # "should be a kernel, but unbuildable by the current pool" — it correctly rides
             # FINN's classic path, but that is a SILENT loss of a structurally-valid kernel
@@ -173,7 +198,7 @@ class MvauDataflowOp(DataflowOp):
     def kernel(cls):
         return mvau_kernel()
 
-    def _output_datatype_from_point(self, kernel, ctx, point, index):
+    def _output_datatype_from_point(self, ctx, point, index):
         # MVAU's output dtype is the out port's derived_dtype spec: the graph dtype when the
         # node has thresholds (they map the accumulator down), or the weight-derived
         # accumulator type when it has none. Resolve it so infer propagates the exact
@@ -182,7 +207,7 @@ class MvauDataflowOp(DataflowOp):
         # unwraps it, so this reads authority off the ParamDatatype like every other consumer.
         if index == 0:
             return resolve_datatype_spec(mvau_out_dtype(), iface=OUTPUT, point=point, context=ctx)
-        return super()._output_datatype_from_point(kernel, ctx, point, index)
+        return super()._output_datatype_from_point(ctx, point, index)
 
     def get_folding_axes(self):
         """The folding dials this op exposes, each mapped to its resolved max value —
@@ -190,6 +215,6 @@ class MvauDataflowOp(DataflowOp):
         (consumer-surface-model.md R1). SIMD folds the reduction dim MW, PE the output
         dim MH; both are the weight block's extents, read straight off the Context
         (``tensor_shape(weights) == (MW, MH)``), not a stored nodeattr."""
-        _, ctx, _ = self._point()
+        ctx = self._context()
         mw, mh = ctx.tensor_shape(WEIGHTS)
         return {"SIMD": int(mw), "PE": int(mh)}

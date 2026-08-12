@@ -82,7 +82,7 @@ def test_a_baked_nonzero_actval_reaches_the_point():
     """THE regression. A baked value must arrive at the Point unchanged — emit reads it
     from there, so a drop here is silently wrong hardware."""
     op = _op(_mvau_model(ActVal=BAKED_ACTVAL))
-    _, _, point = op._point()
+    point = op._point()
     assert point.ActVal == BAKED_ACTVAL
 
 
@@ -96,7 +96,7 @@ def test_an_unbaked_actval_falls_to_the_schema_default():
     """The other half of assignment-or-default: absent means default, not an error."""
     op = _op(_mvau_model())
     assert "ActVal" not in op._assignment()
-    _, _, point = op._point()
+    point = op._point()
     assert point.ActVal == 0
 
 
@@ -117,7 +117,7 @@ def test_every_node_owned_name_round_trips():
     assignment = op._assignment()
     assert assignment.get("ActVal") == BAKED_ACTVAL
     assert assignment.get("mlo_max_iter") == BAKED_MLO
-    _, _, point = op._point()
+    point = op._point()
     assert point.ActVal == BAKED_ACTVAL
     assert point["mlo_max_iter"] == BAKED_MLO
 
@@ -152,5 +152,5 @@ def test_thresholding_bakes_actval_through_the_same_path():
     model.set_tensor_datatype("out", DataType["UINT4"])
 
     op = model.get_customop_wrapper(model.graph.node[0])
-    _, _, point = op._point()
+    point = op._point()
     assert point.ActVal == BAKED_ACTVAL

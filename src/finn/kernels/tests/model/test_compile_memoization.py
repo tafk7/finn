@@ -6,93 +6,80 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""DataflowKernel/space assembly is memoized, and INVALIDATED by registration (engine hone 4.1).
+"""Space assembly is memoized per op class, and safe to share.
 
 ``compile()`` ran on every query — ``_assignment``, ``configure``,
-``first_feasible_backend`` and ``get_nodeattr_types`` each rebuilt the entire space, and
-``mvau_kernel()`` rebuilt every ``Backend`` from the registry each call.
+``first_feasible_backend`` and ``get_nodeattr_types`` each rebuilt the entire space. Caching
+it is easy; caching it CORRECTLY is what these tests are for.
 
-Caching that is easy; caching it CORRECTLY is the point of these tests. A stale cache would
-silently pin the pool as it stood at first call, so "add a backend, edit nothing else" —
-the property the registry exists to provide — would quietly stop holding. Invalidation is
-therefore structural: every cache keys on a registry ``generation()`` counter that
-registration bumps, rather than on anyone remembering to clear it.
+**What changed when the container merged into the op class (F6).** Two tests here pinned
+registry-driven invalidation: the kernel was a VALUE built by a factory from a mutable
+registry, so its cache had to key on a ``generation()`` counter that ``register`` bumped, or
+"add a backend, edit nothing else" would silently stop holding. With the pool a plain class
+attribute there is no mutable registry behind the compute pool and nothing to invalidate — a
+backend is added by naming it in a class body, and a widened pool is a different class with
+its own cache. Those two tests are DELETED rather than rewritten: they pinned a mechanism,
+and the mechanism is gone. :func:`test_a_subclass_gets_its_own_cache` replaces them, because
+that is the property the caching still has to get right.
+
+``make_registry`` itself survives — the STORAGE pool is interface-threaded and still
+assembles through it — so its generation counter is still tested at the bottom.
 """
 
 import pytest
 
-from finn.kernels.compute.mvau import kernel as mvau_kernel_mod
-from finn.kernels.compute.mvau.op import mvau_kernel
-from finn.kernels.compute.thresholding.op import thresholding_kernel
+from finn.kernels.compute.mvau.op import MvauDataflowOp
+from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.registry import make_registry
 
 
-def test_kernel_and_space_are_memoized():
-    assert mvau_kernel() is mvau_kernel()
-    assert thresholding_kernel() is thresholding_kernel()
-    k = mvau_kernel()
-    assert k.compile() is k.compile()
+def test_space_is_memoized_per_class():
+    assert MvauDataflowOp.compile() is MvauDataflowOp.compile()
+    assert ThresholdingDataflowOp.compile() is ThresholdingDataflowOp.compile()
 
 
-def test_registering_a_backend_invalidates_the_kernel_cache():
-    """THE reason this needs a test. A newly registered backend must appear in the very next
-    mvau_kernel() — otherwise memoization silently breaks the registry's whole promise."""
+def test_realized_spaces_are_memoized_per_member():
+    first = MvauDataflowOp.realized_space("mvau_hls")
+    assert first is MvauDataflowOp.realized_space("mvau_hls")
+    assert first is not MvauDataflowOp.realized_space("mvau_dsp_softvec")
+
+
+def test_a_subclass_gets_its_own_cache():
+    """The property that replaces registry invalidation.
+
+    A subclass widening the pool must NOT inherit the parent's compiled space — that would
+    be the stale-cache bug in a new shape, silently pinning the space as the parent saw it.
+    ``__init_subclass__`` hands each subclass a fresh cache."""
     from finn.kernels.compute.mvau.op import COMPUTE_STREAM
-    from finn.kernels.compute.mvau.registry import register, unregister
 
-    before = mvau_kernel()
-    assert "mvau_memo_stub" not in {b.name for b in before.pool}
+    stub = Backend(name="mvau_cache_stub", ports=ports_from(stream=COMPUTE_STREAM))
 
-    @register
-    def _stub():
-        return Backend(
-            name="mvau_memo_stub",
-            sources=("stub.sv",),
-            ports=ports_from(stream=COMPUTE_STREAM),
-        )
+    class _Widened(MvauDataflowOp):
+        pool = MvauDataflowOp.pool + (stub,)
 
-    try:
-        after = mvau_kernel()
-        assert after is not before, "cache was not invalidated by register()"
-        assert "mvau_memo_stub" in {b.name for b in after.pool}
-        # and it is really in the compiled space, not just the pool list
-        root = next(a for a in after.compile().axes if a.name == "backend")
-        assert "mvau_memo_stub" in root.domain(None, None)
-    finally:
-        unregister("mvau_memo_stub")
+    assert _Widened.compile() is not MvauDataflowOp.compile()
+    assert "mvau_cache_stub" in {b.name for b in _Widened.pool}
+    # ...and it is really in the compiled space, not just the pool list.
+    root = next(a for a in _Widened.compile().axes if a.name == "backend")
+    assert "mvau_cache_stub" in root.domain(None, None)
 
-    restored = mvau_kernel()
-    assert "mvau_memo_stub" not in {b.name for b in restored.pool}, (
-        "cache was not invalidated by unregister()"
-    )
+    # The parent is untouched — the registry path needed a try/finally to guarantee this.
+    assert "mvau_cache_stub" not in {b.name for b in MvauDataflowOp.pool}
+    assert MvauDataflowOp.compile() is MvauDataflowOp.compile()
 
 
-def test_parameters_registration_also_invalidates():
-    """A compute kernel delivers through the PARAMETERS pool, so it must key on that
-    registry too — keying only on its own would pin a stale storage half."""
-    from finn.kernels.dataflow.parameters.names import DECOUPLED
-    from finn.kernels.dataflow.parameters.registry import register, unregister
-    from finn.kernels.model.source_backend import source_backend
-
-    before = mvau_kernel()
-
-    @register
-    def _stub_topology(iface):
-        return source_backend("memo_stub_topology", mem_mode=DECOUPLED, language="rtl")
-
-    try:
-        assert mvau_kernel() is not before, (
-            "a parameters registration must invalidate the compute kernel cache"
-        )
-    finally:
-        unregister("memo_stub_topology")
+def test_two_ops_do_not_share_a_cache():
+    """The failure mode of declaring the cache as a ClassVar on the BASE: every op would
+    write into one dict and the second op would read the first op's space."""
+    assert MvauDataflowOp.compile() is not ThresholdingDataflowOp.compile()
+    assert MvauDataflowOp._space_cache is not ThresholdingDataflowOp._space_cache
 
 
 def test_memoized_space_is_frozen_and_its_caches_idempotent():
     """Sharing one space across queries is only safe if nothing mutates it. It is frozen,
     and its lazily-built order/stratum caches recompute to the same values."""
-    space = mvau_kernel().compile()
+    space = MvauDataflowOp.compile()
     with pytest.raises(Exception):
         space.axes = ()  # frozen dataclass
 
@@ -104,7 +91,8 @@ def test_memoized_space_is_frozen_and_its_caches_idempotent():
 
 
 def test_generation_counter_tracks_registration():
-    """The invalidation primitive itself, on a private registry."""
+    """The invalidation primitive itself, on a private registry. Still live: the STORAGE
+    pool is interface-threaded and assembled through ``make_registry``."""
     register, build_pool, _names, unregister, generation = make_registry("probe")
 
     start = generation()

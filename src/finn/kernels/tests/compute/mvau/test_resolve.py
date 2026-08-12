@@ -510,10 +510,14 @@ def test_fourth_implementation_composes_additively():
         axes=(), predicates=(lut_rtl_feasible,), sources=("mvu_lut.sv",),
         ports=ports_from(stream=COMPUTE_STREAM),
     )
-    from dataclasses import replace
+    # Widening is a SUBCLASS now, not `replace(kernel, pool=...)`: the op class IS the
+    # kernel (F6), so "same op, one more backend" is exactly what subclassing expresses.
+    # It cannot mutate the base, and `__init_subclass__` re-derives delivered_parameters
+    # and hands the subclass its own space cache.
+    class _WithLutRtl(MvauDataflowOp):
+        pool = MvauDataflowOp.pool + (lut_rtl,)
 
-    base = mvau_kernel()
-    kernel4 = replace(base, pool=mvau_pool() + (lut_rtl,))
+    kernel4 = _WithLutRtl
     schema4 = kernel4.compile()
 
     legal = resolve(
@@ -536,31 +540,41 @@ def test_fourth_implementation_composes_additively():
     assert _language_of(r_hls, kernel4.pool) == "hls"
 
 
-def test_registry_makes_addition_structural():
+def test_adding_a_backend_needs_no_op_edit():
+    """"Add a backend, edit nothing else" — the property, under the new mechanism.
+
+    This used to go through a REGISTRY: an `@register`-decorated factory pushed into a
+    mutable dict, and a generation counter invalidated the memoized kernel so the next
+    `mvau_pool()` saw the addition. That indirection existed to break an import cycle (the
+    impl modules imported constants THROUGH op.py), not to enable extensibility — every real
+    registration was a fixed `from . import impl_*` line in the package __init__.
+
+    With the cycle gone and the op class holding its own pool, the property is expressed
+    directly: name the backend in a class body. Nothing is mutated, nothing needs
+    invalidating, and the addition is visible in the type rather than in global state."""
     from finn.kernels.model.backend import Backend, ports_from
-    from finn.kernels.compute.mvau import mvau_pool, mvau_space
-    from finn.kernels.compute.mvau.op import COMPUTE_STREAM
-    from finn.kernels.compute.mvau.registry import register, unregister
+    from finn.kernels.compute.mvau.op import COMPUTE_STREAM, MvauDataflowOp
 
-    before = {b.name for b in mvau_pool()}
-    assert "mvau_stub_backend" not in before
+    stub = Backend(name="mvau_stub_backend", sources=("stub.sv",),
+                   ports=ports_from(stream=COMPUTE_STREAM))
 
-    @register
-    def _stub_bundle():
-        return Backend(name="mvau_stub_backend", sources=("stub.sv",),
-                       ports=ports_from(stream=COMPUTE_STREAM))
+    class _WithStub(MvauDataflowOp):
+        pool = MvauDataflowOp.pool + (stub,)
 
-    try:
-        after = {b.name for b in mvau_pool()}
-        assert after == before | {"mvau_stub_backend"}
-        r = resolve(
-            mvau_space(), make_context(SEVEN_SERIES),
-            base_assignment(backend="mvau_stub_backend", mem_mode="internal_embedded"),
-        )
-        assert isinstance(r, Point)
-        assert r.sources == ("stub.sv",)
-    finally:
-        unregister("mvau_stub_backend")
+    assert {b.name for b in _WithStub.pool} == {
+        b.name for b in MvauDataflowOp.pool
+    } | {"mvau_stub_backend"}
+
+    r = resolve(
+        _WithStub.compile(), make_context(SEVEN_SERIES),
+        base_assignment(backend="mvau_stub_backend", mem_mode="internal_embedded"),
+    )
+    assert isinstance(r, Point)
+    assert r.sources == ("stub.sv",)
+
+    # The base class is UNTOUCHED — the old registry path mutated global state and needed a
+    # try/finally to undo it; a subclass cannot reach its parent's pool.
+    assert "mvau_stub_backend" not in {b.name for b in MvauDataflowOp.pool}
 
 
 # --- thresholds: the optional 3rd interface --------------------------------
@@ -762,22 +776,22 @@ def test_float_backend_widens_the_accepted_datatypes_union():
     # The viability the frontend claim reads is the UNION of the pool's declared datatype
     # support. Adding a float-supporting backend must make a float MatMul feasible with ZERO
     # edits to the op / can_infer_from — the whole point of declarative per-backend support.
-    from dataclasses import replace
     from finn.kernels.model.backend import Backend, ports_from
     from finn.kernels.engine.datatype_support import DatatypeKind, DatatypeSupport
-    from finn.kernels.compute.mvau import mvau_kernel, mvau_pool
-    from finn.kernels.compute.mvau.op import COMPUTE_STREAM, INPUT, WEIGHTS
+    from finn.kernels.compute.mvau.op import COMPUTE_STREAM, INPUT, MvauDataflowOp, WEIGHTS
 
-    base = mvau_kernel()
     # Baseline: the all-integer pool has no feasible point for a float node.
-    assert base.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is False
+    assert MvauDataflowOp.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is False
 
     fp = DatatypeSupport(kind=DatatypeKind.FLOAT)
     float_backend = Backend(
         name="mvau_fp16", language="hls", sources=("mvu_fp.sv",),
         ports=ports_from(stream=COMPUTE_STREAM, accepted_dtypes={INPUT: fp, WEIGHTS: fp}),
     )
-    widened = replace(base, pool=mvau_pool() + (float_backend,))
+    class _WithFloat(MvauDataflowOp):
+        pool = MvauDataflowOp.pool + (float_backend,)
+
+    widened = _WithFloat
     assert widened.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is True
     # integer nodes still feasible (the union only grew).
     assert widened.has_feasible_point(_feas_ctx(idt="INT8", wdt="INT8")) is True

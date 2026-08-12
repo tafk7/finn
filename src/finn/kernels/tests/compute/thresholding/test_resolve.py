@@ -245,8 +245,14 @@ def test_third_implementation_composes_additively():
         sources=("stub.sv",),
         ports=ports_from(stream=COMPUTE_STREAM),
     )
-    pool3 = thresholding_pool() + (stub,)
-    schema3 = replace(thresholding_kernel(), pool=pool3).compile()
+    # A subclass, not `replace(kernel, pool=...)`: the op class IS the kernel (F6).
+    from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
+
+    class _WithStub(ThresholdingDataflowOp):
+        pool = ThresholdingDataflowOp.pool + (stub,)
+
+    pool3 = _WithStub.pool
+    schema3 = _WithStub.compile()
     r = resolve(schema3, make_context(), base_assignment(backend="thresholding_stub"))
     assert isinstance(r, Point)
     assert _language_of(r, pool3) == "stub"

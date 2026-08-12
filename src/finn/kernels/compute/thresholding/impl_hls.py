@@ -23,10 +23,8 @@ from finn.kernels.model.param_names import EMBEDDED
 
 from .emit_hls import emit_thresholding_hls
 from .names import COMPUTE_STREAM, THRESHOLDING_HLS, THRESHOLDS
-from .registry import register
 
 
-@register
 def hls_bundle() -> Backend:
     return Backend(
         name=THRESHOLDING_HLS,

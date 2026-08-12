@@ -26,7 +26,6 @@ from finn.kernels.model.param_names import DECOUPLED, EMBEDDED
 from .emit_hls import emit_mvau_hls
 from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
 from .kernel import INPUT, MVAU_HLS, OUTPUT, THRESHOLDS, WEIGHTS
-from .registry import register
 
 # The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no legal
 # HLS realization. Declared per port so the pool's UNION of supported datatypes is the single
@@ -58,7 +57,6 @@ def _no_true_binary(p, ctx):
     return None
 
 
-@register
 def hls_bundle() -> Backend:
     return Backend(
         name=MVAU_HLS,

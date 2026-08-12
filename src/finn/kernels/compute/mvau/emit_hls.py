@@ -52,7 +52,8 @@ HLS_STATIC_MANIFEST = ArtifactManifest(
 from finn.kernels.engine.datatype_spec import resolve_datatype_spec
 
 from .geometry import mvau_geometry
-from .op import INPUT, OUTPUT, THRESHOLDS, WEIGHTS, mvau_out_dtype
+from .backends import mvau_out_dtype
+from .kernel import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
 
 _MULT_STYLE = {"auto": "ap_resource_dflt()", "lut": "ap_resource_lut()", "dsp": "ap_resource_dsp()"}
 

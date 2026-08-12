@@ -35,7 +35,7 @@ from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import DataflowOp, TransformationResult
 from finn.kernels.engine.constraints import ShapeRank
-from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
+from finn.kernels.model.kernel import InterfaceSchema
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -47,10 +47,9 @@ from .names import (  # noqa: F401
     THRESHOLDING_RTL,
     THRESHOLDS,
 )
-from finn.kernels.dataflow.parameters.registry import generation as parameters_generation
-from finn.kernels.model.registry import registry_cached
 
-from .registry import build_pool, generation
+from .impl_hls import hls_bundle as hls_backend
+from .impl_rtl import rtl_bundle as rtl_backend
 from .shared import kernel_attrs, op_axes, op_derived, op_predicates
 
 
@@ -87,29 +86,15 @@ def thresholding_interfaces():
 
 def thresholding_pool():
     """The registered Thresholding implementations (flat peers), in registration order."""
-    return build_pool()
+    return ThresholdingDataflowOp.pool
 
 
-@registry_cached(generation, parameters_generation)
-def thresholding_kernel() -> DataflowKernel:
-    """The full Thresholding design space as a :class:`DataflowKernel` — the WHAT-owning op node.
+def thresholding_kernel():
+    """The Thresholding design space — now simply the op class.
 
-    The compute pool (``implementation``: HLS / RTL) with backend-owned tiling. The threshold
-    interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the DataflowKernel
-    builds its DeliveredParam and synthesizes the supply waterfall generically; both backends
-    consume thresholds in embedded mode → the delivery resolves to the ``embedded`` topology
-    (no memstream cell).
-
-    CACHED on the compute + parameters registry generations — see :func:`mvau_kernel`."""
-    return DataflowKernel(
-        name="Thresholding",
-        interfaces=thresholding_interfaces(),
-        op_axes=op_axes(),
-        op_derived=op_derived(),
-        kernel_attrs=kernel_attrs(),
-        op_predicates=op_predicates(),
-        pool=thresholding_pool(),
-    )
+    A one-line shim: `ThresholdingDataflowOp` IS the kernel (the container collapsed into
+    it, F6). Kept so existing callers keep reading naturally."""
+    return ThresholdingDataflowOp
 
 
 # =============================================================================
@@ -121,7 +106,23 @@ def thresholding_kernel() -> DataflowKernel:
 
 
 class ThresholdingDataflowOp(DataflowOp):
-    """Thresholding (multi-threshold activation) as a DataflowKernel-backed FINN op."""
+    """Thresholding (multi-threshold activation) — the op class IS the kernel.
+
+    The class body is the design space that used to be a separate `DataflowKernel` value
+    (F6). The compute pool (HLS / RTL) carries backend-owned tiling; the threshold interface
+    is DERIVED as a delivered parameter from the pool's ``mem_modes`` by
+    `DataflowOp.__init_subclass__`. Both backends consume thresholds in embedded mode, so
+    delivery resolves to the ``embedded`` topology (no memstream cell).
+    """
+
+    # -- the design space ---------------------------------------------------
+    name = "Thresholding"
+    interfaces = thresholding_interfaces()
+    pool = (hls_backend(), rtl_backend())
+    op_axes = op_axes()
+    op_derived = op_derived()
+    op_predicates = op_predicates()
+    kernel_attrs = kernel_attrs()
 
     # -- Seam A: frontend claim (mirror of InferThresholdingLayer) ---------------------
 
@@ -212,6 +213,6 @@ class ThresholdingDataflowOp(DataflowOp):
     def get_folding_axes(self):
         """PE folds the channel dim NumChannels (the threshold tensor's leading extent),
         read straight off the Context."""
-        _, ctx, _ = self._point()
+        ctx = self._context()
         channels = ctx.tensor_shape(THRESHOLDS)[0]
         return {"PE": int(channels)}

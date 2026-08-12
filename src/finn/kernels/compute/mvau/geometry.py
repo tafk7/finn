@@ -24,7 +24,7 @@ import numpy as np
 
 from finn.kernels.model.fold_depth import threshold_fold_depth, weight_fold_depth
 
-from .op import INPUT, THRESHOLDS, WEIGHTS
+from .kernel import INPUT, THRESHOLDS, WEIGHTS
 
 
 @dataclass(frozen=True)

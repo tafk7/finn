@@ -115,7 +115,7 @@ def first_feasible(
     F11, which is why this is a parameter rather than something recovered from the graph."""
     inst = model.get_customop_wrapper(node)
     inst.attach_device(device)
-    name = inst.first_feasible_backend()
+    name = inst.selected_backend_for_this_node()
     if name is None:
         logger.warning(
             "SpecializeKernels: %s node %s has no feasible backend — leaving it "

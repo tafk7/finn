@@ -39,7 +39,6 @@ from .names import (  # noqa: F401 (re-exported)
     THRESHOLDING_RTL,
     THRESHOLDS,
 )
-from .registry import build_pool
 from .shared import op_axes, op_derived, op_predicates
 
 # Import the built-in backend modules for their registration side effect.
@@ -59,8 +58,8 @@ def thresholding_shared():
 
 
 def thresholding_pool():
-    """The registered Thresholding implementations, in registration order."""
-    return build_pool()
+    """The Thresholding backends, in declaration order (= selection precedence)."""
+    return ThresholdingDataflowOp.pool
 
 
 def thresholding_space() -> DesignSpace:

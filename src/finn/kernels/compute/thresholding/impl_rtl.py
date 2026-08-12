@@ -32,7 +32,6 @@ from finn.kernels.model.param_names import EMBEDDED
 
 from .emit_rtl import RTL_MANIFEST, emit_thresholding_rtl
 from .names import COMPUTE_STREAM, THRESHOLDING_RTL, THRESHOLDS
-from .registry import register
 
 
 def _is_nonneg_int(v) -> bool:
@@ -49,7 +48,6 @@ def _thresholds_sorted(p, ctx):
     return None
 
 
-@register
 def rtl_bundle() -> Backend:
     return Backend(
         name=THRESHOLDING_RTL,
