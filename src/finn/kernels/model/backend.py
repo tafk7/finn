@@ -295,6 +295,20 @@ def pool_space(
     fire. ``resolve`` is unchanged — this produces the flat structure it already
     walks.
 
+    **WHO STILL USES THIS, measured — the taxonomy pass expected to delete it and could
+    not.** Per-realization construction (:meth:`~finn.kernels.model.cell.Kernel.space_for`)
+    replaced the merge on the COMPUTE side, so no compute dispatch closure is evaluated any
+    more. But this function is SHARED, and the STORAGE pool still routes through it
+    (``ParameterSource._source_subspace``, scope-guard P6). Poison-probing every helper
+    showed the storage path exercising ALL of them except ``_dispatch_dtype_compute`` — so
+    "delete the merge layer" is not available while storage composes this way.
+
+    The pitch's measurement that the storage merge is DEGENERATE (zero shared axis names:
+    ``embedded`` declares none, ``decoupled`` owns ``ram_style`` + ``pumpedMemory`` alone) is
+    confirmed and is the reason a future pass can collapse it — every merged storage axis has
+    exactly one owner, so its dispatch is a one-branch switch. Doing that is the storage
+    subsystem's own pass, not this one: the scope guard says defer to the status quo.
+
     ``sources_key`` is the point key under which the selected bundle's source list is
     exposed (default ``"sources"``). A SECONDARY pool folded into the same op schema (e.g.
     the ``parameters`` source pool via a
@@ -387,11 +401,27 @@ def _check_no_sibling_coupling(root_name, shared_axes, pool) -> None:
 
 
 def _check_no_derived_shadowing(shared_derived, pool, sources_key=SOURCES_KEY) -> None:
-    """A bundle's derived must not shadow an op-level shared derived or the pool_space
-    reserved ``sources`` projection key. ``DesignSpace`` only dedups *axis* names, so a colliding
-    derived would silently let one definition win with no diagnostic — breaking the
-    "additive, can't perturb others" guarantee. (Bundle derived sharing a name ACROSS
-    bundles is fine and intentional — that is the per-impl dispatch merge.)"""
+    """A bundle's derived must not take the reserved ``sources`` projection key.
+
+    F13 — the rationale this check used to give is DISPROVED, and the correction matters
+    because it is the difference between a load-bearing check and a redundant one. It read:
+    "``DesignSpace`` only dedups *axis* names, so a colliding derived would silently let one
+    definition win with no diagnostic." Probed: ``_topo_sort`` raises
+    ``DesignSpaceError: Duplicate name`` on a duplicate DERIVED exactly as it does on an
+    axis. Nothing was ever silent.
+
+    What survives is the RESERVED-KEY half, which is a genuinely different rule: ``sources``
+    is a key ``pool_space`` itself adds, so a bundle declaring one does not collide with a
+    peer's declaration but with a projection that does not exist yet at finalize time. That
+    is not reachable by the duplicate check, and it earns its error message — which names
+    the reservation rather than reporting an anonymous collision.
+
+    The op-level-shadowing half is kept as the same reserved-name question one level up: an
+    op-level shared derived is likewise not a peer of a bundle's, so "which wins" is a
+    question the author should not have to ask. It fires before finalize and says why.
+
+    (Bundle derived sharing a name ACROSS bundles is fine and intentional — that is the
+    per-impl dispatch merge.)"""
     shared_names = {d.name for d in shared_derived}
     reserved = {sources_key}
     for bundle in pool:

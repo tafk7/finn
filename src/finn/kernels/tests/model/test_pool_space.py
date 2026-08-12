@@ -353,3 +353,32 @@ def test_embedded_topology_has_no_schema():
     from finn.kernels.dataflow.parameters.impl_embedded import embedded_topology
 
     assert embedded_topology("weights").schema is None
+
+
+# --- F13: what the shadowing check is actually for --------------------------
+
+
+def test_duplicate_derived_is_caught_by_finalize_not_by_the_shadowing_check():
+    """F13. `_check_no_derived_shadowing` justified itself with "DesignSpace only dedups
+    *axis* names, so a colliding derived would silently let one definition win". Probed and
+    disproved: `_topo_sort` raises on a duplicate derived exactly as on a duplicate axis.
+
+    Pinned so the disproved rationale cannot creep back into the docstring."""
+    from finn.kernels.engine.design_space import DesignSpace, DesignSpaceError
+
+    space = DesignSpace(
+        axes=(),
+        derived=(Derived("collide", lambda p, c: 1), Derived("collide", lambda p, c: 2)),
+    )
+    with pytest.raises(DesignSpaceError, match="Duplicate name"):
+        space.finalize()
+
+
+def test_the_reserved_sources_key_is_the_half_that_earns_its_keep():
+    """`sources` is a key pool_space ADDS. A bundle declaring one collides with a projection
+    that does not exist yet at finalize time, so the duplicate check cannot see it — this is
+    a genuinely different rule, and it names the reservation instead of reporting an
+    anonymous collision."""
+    bundle = Backend(name="a", derived=(Derived("sources", lambda p, c: 1),))
+    with pytest.raises(PoolError, match="reserved by pool_space"):
+        pool_space("backend", (), (), (), (bundle,))

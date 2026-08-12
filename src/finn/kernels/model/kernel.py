@@ -340,16 +340,25 @@ class _LegacyKernel:
         return tuple(out)
 
     def compile(self) -> DesignSpace:
-        """The full design space: the identity's op-level shared elements + the
-        backend pool (each backend augmented with its tiling-engine-derived fold dials
-        / divisibility / widths), plus the delivered parameters' realization sub-schemas.
-        ``op_derived``/``op_predicates`` are PURE identity — the cross-coordinate source
-        couplings that once lived here relocated into the parameters pool, and the
-        compute→source demand crosses the seam owned by a ``ParameterSource``.
+        """The UNSPECIALIZED design space — every pool member merged behind a dispatch on
+        the ``backend`` root.
 
-        MEMOIZED per _LegacyKernel instance: assembly is pure over the (frozen) kernel, and every
-        query path went through here — ``_assignment``, ``configure``,
-        ``first_feasible_backend`` and ``get_nodeattr_types`` each rebuilt the whole space.
+        **Scope after T7.** Resolution of a specialized node goes through
+        :meth:`realized_space`; this survives for the one thing it alone can express, a node
+        with NO committed backend. The ``""`` sentinel is not a pool member, so there is no
+        realization to build a space for. Two live callers:
+
+        * ``configure`` with no backend in the assignment — which can only ever return
+          ``Illegal("backend = '' not in {...}")``. That verdict is the point: it is what the
+          getters turn into a legible "unspecialized" raise.
+        * ``get_nodeattr_types`` on an unspecialized node, which needs the NAME SET
+          (pitch §5.4 — the node must declare every name it could carry).
+
+        So the merge's *dispatch* is no longer evaluated on any compute path; only its name
+        set and its one rejection are. It is not deleted because ``pool_space`` is SHARED
+        with the storage pool, which still needs the whole assembler — see the note there.
+
+        MEMOIZED per _LegacyKernel instance: assembly is pure over the (frozen) kernel.
         Sharing one instance is safe because the result is frozen and its lazily-built
         caches (order, strata) are idempotent — recomputing them yields the same values, so
         a shared space cannot carry state between queries."""
