@@ -91,3 +91,39 @@ def test_kernel_attrs_flow_through_the_nodeattr_bridge():
     reg = _reg()
     assert reg["ActVal"] == ("i", False, 0)
     assert reg["mlo_max_iter"] == ("i", False, 0)
+
+
+def test_the_probe_grid_is_still_load_bearing_for_an_unspecialized_node():
+    """T10 expected to delete the probe grid; it cannot go yet, and this pins why.
+
+    The grid exists to undo `_dispatch_domain`. `axis_nodeattr_types_for` removed the need on
+    the SPECIALIZED path (a realized domain is a value, read directly). But an unspecialized
+    node has no selection to realize, so it still reads the merged space — whose domains are
+    still dispatch closures needing a point that pins the root.
+
+    Stub the grid to the empty point and the enum specs collapse to bare ints: the node would
+    publish `("i", False, 0)` where a host expects a string with allowed values."""
+    import finn.kernels.ir.nodeattr_registry as reg
+
+    schema = mvau_kernel().compile()
+    good = reg.axis_nodeattr_types(schema)
+
+    real_probe = reg._probe_points
+    try:
+        reg._probe_points = lambda _schema: [{}]
+        degraded = reg.axis_nodeattr_types(schema)
+    finally:
+        reg._probe_points = real_probe
+
+    assert good["resType"] == ("s", False, "dsp", frozenset({"lut", "dsp"}))
+    assert degraded["resType"] == ("i", False, 0)
+    assert {n for n in good if good[n] != degraded[n]} == {
+        "resType",
+        "pumpedCompute",
+        "SIMD",
+        "PE",
+        "parameters.weights.ram_style",
+        "parameters.weights.pumpedMemory",
+        "parameters.thresholds.ram_style",
+        "parameters.thresholds.pumpedMemory",
+    }

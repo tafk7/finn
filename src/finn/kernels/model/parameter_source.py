@@ -50,7 +50,7 @@ declaration.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from .backend import BACKEND_AXIS, Backend, pool_space
 from .param_contract import DeliveredParam, _demand_for, _topology_default, _topology_domain
@@ -74,15 +74,6 @@ class ParameterSource:
             also the Context tensor key).
         pool: the CONCRETE source pool (storage-topology ``Backend``\\ s) for this
             interface. The selection space :meth:`subspace` lowers to a ``DesignSpace``.
-        stream: ``{compute_backend_name -> fold list}`` — the BLOCK→STREAM fold each
-            compute backend declares for this port (a reference to ``Backend.stream[iface]``,
-            not a copy of the fold math). Carried so the seam data lives in one object; the
-            demand reads the RESOLVED ``stream_width.<iface>`` the tiling engine derives from
-            it, so this map is not itself consumed by :meth:`subspace`.
-        mem_modes: ``{compute_backend_name -> frozenset[str] | None}`` — the modes each
-            compute backend accepts for this port (``None`` = permissive, both modes). The
-            per-backend variation is dispatched on the selected ``implementation`` inside
-            ``constrains``; this map exposes the same facts declaratively.
         publishes: the DEMAND closure ``(point, context) -> ParamDemand | None`` sized from
             the resolved ``stream_width.<iface>``. ``None`` when the interface has no demand
             for any point is expressed inside the closure (returns ``None``), never as a
@@ -90,17 +81,30 @@ class ParameterSource:
         constrains: the topology-mode guard as ``(domain_closure, legal)`` — ``domain_closure``
             ``(point, context) -> frozenset`` overrides the delivery root-axis domain;
             ``legal`` ``(point) -> tuple[str, ...]`` is reused to guard the axis default.
-        deps: the declared cross-pool dependencies ``{"backend", topology.<iface>}``
-            that make the supply waterfall structural for the topo-sort.
+
+    F4 — three fields DELETED (``.stream``, ``.mem_modes``, ``.deps``), each dead for a
+    DIFFERENT reason, recorded because "design for the full op corpus" argues differently
+    about each:
+
+    * ``.deps`` was WRONG, not merely unused — a third restatement of edges already declared
+      correctly on the nodes themselves (:meth:`_demand`'s deps, and the root-axis surgery in
+      :meth:`_source_subspace`). More ops means more drift surface for a fact nothing read.
+    * ``.mem_modes`` was REDUNDANT — the same fact from a worse source. The guard reads the
+      LIVE compute ``Backend`` via ``mem_modes_of`` (P2); this was a stale snapshot beside it.
+    * ``.stream`` was PREMATURE and superseded. The information IS needed, but the demand
+      closure gets it better, from the resolved ``stream_width.<iface>`` on the point. It was
+      a per-member map keyed by member NAME — precisely the realization coupling
+      :class:`~finn.kernels.model.demand.ParamDemand` exists to avoid — so keeping it "for
+      the corpus" would have preserved the wrong shape.
+
+    Poison-probe verified before removal: no ``self.stream`` / ``self.mem_modes`` /
+    ``self.deps`` read anywhere in this module.
     """
 
     schema: str
     pool: tuple[Backend, ...]
-    stream: Mapping[str, Any]
-    mem_modes: Mapping[str, Any]
     publishes: Callable[[Any, Any], Any]
     constrains: tuple[Callable[[Any, Any], Any], Callable[[Any], Any]]
-    deps: frozenset[str]
 
     def subspace(self) -> DesignSpace:
         """Everything this interface contributes: the demand derived + the guarded source
@@ -177,15 +181,9 @@ def parameter_source_for(dp: DeliveredParam, compute_pool) -> ParameterSource:
     :class:`~finn.kernels.model.param_contract.DeliveredParam` declaration + the op's compute
     pool. The single place the compute→source contract is built — the demand schema and
     the guarded source sub-schema for this interface have one owner."""
-    iface = dp.iface
-    stream = {b.name: b.stream_of(iface) for b in compute_pool}
-    mem_modes = {b.name: b.mem_modes_of(iface) for b in compute_pool}
     return ParameterSource(
-        schema=iface,
+        schema=dp.iface,
         pool=tuple(dp.pool),
-        stream=stream,
-        mem_modes=mem_modes,
         publishes=_demand_for(dp),
         constrains=_topology_domain(compute_pool, dp),
-        deps=frozenset({BACKEND_AXIS, topology_key(iface)}),
     )

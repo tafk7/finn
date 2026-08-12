@@ -189,7 +189,20 @@ def _probe_points(schema) -> list[dict]:
     """Candidate points pinning the discrete selection axes, so pool-dispatched axes
     resolve. Built from the cartesian product of every axis whose domain is a static
     non-empty ``frozenset`` (the roots + simple flags) — the axes other axes dispatch
-    on. Always includes the empty point so a fully-static axis is probed too."""
+    on. Always includes the empty point so a fully-static axis is probed too.
+
+    **Still load-bearing, though the taxonomy pass expected to delete it.** The grid exists
+    to undo ``_dispatch_domain``, and :func:`axis_nodeattr_types_for` removed the need on the
+    SPECIALIZED path — a realized domain is a value, so it is read directly. But the
+    UNSPECIALIZED path has no selection to realize, so it still reads the merged space, whose
+    domains are still dispatch closures.
+
+    Measured (``.agents`` probe): with the grid stubbed to the empty point, EIGHT specs
+    degrade to bare ``("i", False, 0)`` — ``resType``, ``pumpedCompute``, ``SIMD``, ``PE``,
+    and both interfaces' ``ram_style``/``pumpedMemory``. An unspecialized node would publish
+    an int where a host expects a string enum with allowed values. So the grid goes when the
+    merged space does, which is the storage pass's business (see
+    :func:`~finn.kernels.model.backend.pool_space`), not this one's."""
     choices: list[list[tuple[str, Any]]] = []
     for axis in schema.ordered_axes():
         dom = _resolve_domain(axis, {})
