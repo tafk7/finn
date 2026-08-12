@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from onnx import NodeProto
+from onnx import NodeProto, helper
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.kernels.engine.context import Context
@@ -57,6 +57,7 @@ from finn.kernels.engine.point import Illegal
 from finn.kernels.model.kernel import InterfaceSchema
 from finn.kernels.model.ports import Direction
 from .nodeattr_registry import axis_nodeattr_types_for
+from .routing import KERNEL_DOMAIN
 
 # Model metadata prop carrying the phase-0 runtime-writability mandate. A metadata prop
 # (run-level) rather than a nodeattr (per-node) because it constrains the whole design
@@ -221,6 +222,7 @@ class KernelOp(HWCustomOp):
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict = {}
         initializers: dict[str, np.ndarray] = {}
+        sparsity: dict = {}
         for iface in self.kernel().interfaces:
             tname = self._tensor_name(iface)
             if tname is None:
@@ -232,10 +234,19 @@ class KernelOp(HWCustomOp):
             init = graph_ctx.initializer(tname)
             if init is not None:
                 initializers[iface.name] = init
+            # SPARSITY. Every given a re-keying drops is a declared rule that silently
+            # cannot fire — the weights port declares SparsityFree, and this builder omitted
+            # sparsity while the (now deleted) `_trial_context` carried it. So the constraint
+            # held at the CLAIM and was inert on the resulting kernel NODE. Two builders, one
+            # of them incomplete: exactly the F9 shape, found by collapsing them into one.
+            sp = graph_ctx.tensor_sparsity(tname)
+            if sp is not None:
+                sparsity[iface.name] = sp
         ctx = Context(
             shapes=shapes,
             datatypes=datatypes,
             initializers=initializers,
+            sparsity=sparsity,
             fpgapart=graph_ctx.fpgapart,
             toolchain_version=graph_ctx.toolchain_version,
             clk_ns=graph_ctx.clk_ns,
@@ -263,6 +274,45 @@ class KernelOp(HWCustomOp):
         if flag is None or str(flag).lower() in ("", "0", "false"):
             return {}
         return {dp.iface: True for dp in self.kernel().delivered_parameters}
+
+    # -- Seam A: the frontend claim, asked of a CANDIDATE node ---------------
+
+    @classmethod
+    def candidate_op(
+        cls, model, inputs, outputs, device: "DeviceFacts | None" = None, **attrs
+    ) -> "KernelOp":
+        """A wrapped kernel op over a candidate node that is NOT in the graph.
+
+        The generic replacement for a per-op ``_trial_context``. Asking "could this kernel
+        claim these tensors?" used to mean hand-building a Context from a
+        ``{iface -> tensor}`` map the op declared separately (``_operand_map``) — a duplicate
+        of ``InterfaceSchema.index``, and the docstring claimed a single-source guarantee the
+        code did not provide (F9): the claim path read the map while the build path read
+        ``node.input[index]``, so the two could disagree silently.
+
+        Here there is nothing to duplicate. Build the node the op would insert, wrap it, and
+        let the SAME ``_tensor_name``/``_context`` the build path uses do the re-keying. A
+        divergence is now unrepresentable rather than merely tested for.
+
+        The graph is UNMODIFIED — verified: the candidate is never appended, and the model
+        serializes byte-identically across the call. ``model.get_customop_wrapper`` needs the
+        node only to read its op_type/domain/attributes.
+        """
+        node = NodeProto()
+        node.op_type = cls.op_type_name()
+        node.domain = KERNEL_DOMAIN
+        node.name = f"{cls.op_type_name()}_candidate"
+        node.input.extend(inputs)
+        node.output.extend(outputs)
+        for name, value in attrs.items():
+            node.attribute.append(helper.make_attribute(name, value))
+        return model.get_customop_wrapper(node).attach_device(device)
+
+    @classmethod
+    def op_type_name(cls) -> str:
+        """The ONNX op_type this class backs. Defaults to the kernel's own name, so an op
+        whose class, kernel and node all agree declares it once."""
+        return cls.kernel().name
 
     # -- configure: nodeattrs -> Point --------------------------------------
 

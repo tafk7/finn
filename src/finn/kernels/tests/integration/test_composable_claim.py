@@ -58,8 +58,14 @@ def _matmul_model(static=True, sparse=False, idt="INT4", wdt="INT4", mw=8, mh=8)
 
 
 def _rejection_reasons(model, node):
-    """Every reason the pool gives for this node, across all backends."""
-    ctx = MvauKernelOp._trial_context(node, model)
+    """Every reason the pool gives for this node, across all backends.
+
+    Sources the Context the way the claim now does — from a CANDIDATE kernel node over the
+    slots `infer_from` would use — rather than from a per-op trial builder. That is the F9
+    point: one Context builder, so a given cannot be present for the claim and missing for
+    the build (which is how `sparsity` came to be carried by one and dropped by the other)."""
+    inputs, outputs = MvauKernelOp._candidate_slots(node, model)
+    ctx = MvauKernelOp.candidate_op(model, inputs, outputs)._context()
     space = MvauKernelOp.kernel().compile()
     reasons = []
     for impl in MvauKernelOp.kernel().pool:
@@ -124,3 +130,27 @@ def test_context_carries_sparsity_from_model():
 
     dense, _ = _matmul_model(sparse=False)
     assert Context.from_model(dense, "").tensor_sparsity("weights") is None
+
+
+def test_the_claim_leaves_the_graph_unmodified():
+    """The candidate node is built, wrapped and interrogated — never inserted. Asserted on
+    SERIALIZED BYTES, not node identity: protobuf hands back a fresh Python wrapper on each
+    access to a repeated field, so an id()-based check reports a change for an untouched
+    graph."""
+    model, node = _matmul_model()
+    before = model.model.SerializeToString()
+    MvauKernelOp.can_infer_from(node, model)
+    assert model.model.SerializeToString() == before
+
+
+def test_sparsity_reaches_a_real_kernel_nodes_context():
+    """The second F9-family defect, found by collapsing the two Context builders into one.
+
+    `_context` (the BUILD path) did not carry sparsity while `_trial_context` (the CLAIM
+    path) did — so the weights port's declared `SparsityFree` constraint held at the claim
+    and was silently inert on the resulting kernel node. One builder now, and this pins the
+    given that was being dropped."""
+    model, matmul = _matmul_model(sparse=True)
+    inputs, outputs = MvauKernelOp._candidate_slots(matmul, model)
+    ctx = MvauKernelOp.candidate_op(model, inputs, outputs)._context()
+    assert ctx.tensor_sparsity("weights") is not None

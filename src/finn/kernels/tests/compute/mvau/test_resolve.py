@@ -783,10 +783,25 @@ def test_float_backend_widens_the_accepted_datatypes_union():
     assert widened.has_feasible_point(_feas_ctx(idt="INT8", wdt="INT8")) is True
 
 
-def test_operand_map_shared_by_claim_and_build():
+def test_claim_and_build_read_one_description_of_the_wiring():
+    """F9. The old `_operand_map` restated `InterfaceSchema.index` as an
+    `{interface: tensor}` dict, and the claim read the dict while the build read
+    `node.input[index]` — a docstring-asserted single source the code did not provide.
+
+    Now both call `_candidate_slots`, which returns SLOTS positionally and lets the
+    interface's own index do the binding. Asserted as the two paths agreeing on tensors, not
+    as a mapping's contents, because the mapping no longer exists to be checked."""
     model = _matmul_model()
     node = model.graph.node[0]
-    mapping = MvauKernelOp._operand_map(node)
-    assert mapping == {"inp": "inp", "weights": "weights", "out": "out"}
-    trial = MvauKernelOp._trial_context(node, model)
-    assert set(trial.shapes) == {"inp", "weights", "out"}
+
+    inputs, outputs = MvauKernelOp._candidate_slots(node, model)
+    assert (inputs, outputs) == (["inp", "weights"], ["out"])
+
+    # The CLAIM's view: a candidate node re-keyed by the interfaces themselves.
+    claim_ctx = MvauKernelOp.candidate_op(model, inputs, outputs)._context()
+    assert set(claim_ctx.shapes) == {"inp", "weights", "out"}
+
+    # The BUILD's view: the node infer_from actually emits, over the same slots.
+    built = MvauKernelOp.infer_from(node, model, 1).nodes_to_insert[0]
+    assert list(built.input) == inputs
+    assert list(built.output) == outputs

@@ -77,47 +77,25 @@ class MvauKernelOp(KernelOp):
 
     # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
 
-    @staticmethod
-    def _operand_map(node: NodeProto) -> dict:
-        """The FRONTEND ``MatMul`` tensor → kernel interface-name mapping: ``input[0]`` is
-        the activation (``inp``), ``input[1]`` the weight (``weights``), ``output[0]`` the
-        result (``out``). The ONE place this mapping lives — both the feasibility trial
-        (:meth:`_trial_context`) and the build (:meth:`infer_from`) read it, so a mis-mapped
-        operand fails both identically instead of letting the claim and the build diverge."""
-        return {INPUT: node.input[0], WEIGHTS: node.input[1], OUTPUT: node.output[0]}
-
     @classmethod
-    def _trial_context(cls, node: NodeProto, model: ModelWrapper) -> "Context":
-        """The trial :class:`Context` for a FRONTEND ``MatMul`` node, mapping its operands to
-        this kernel's interface names via the shared :meth:`_operand_map`. Reads
-        shapes/dtypes/initializers off the model — the ``out`` shape is needed too (the tiling
-        fold-dial domains read every interface's block extent)."""
-        from finn.kernels.engine.context import Context
+    def _candidate_slots(cls, node: NodeProto, model: ModelWrapper) -> tuple[list, list]:
+        """The node slots the kernel node WOULD carry if it claimed this ``MatMul`` — the
+        activation and weight inputs, plus the absorbed ``MultiThreshold``'s thresholds and
+        output when one follows.
 
-        graph_ctx = Context.from_model(model, "")
-        operands = cls._operand_map(node)
-        shapes, datatypes, inits, sparsity = {}, {}, {}, {}
-        for iface, tname in operands.items():
-            if tname in graph_ctx.shapes:
-                shapes[iface] = graph_ctx.shapes[tname]
-            if tname in graph_ctx.datatypes:
-                datatypes[iface] = graph_ctx.datatypes[tname]
-            init = graph_ctx.initializer(tname)
-            if init is not None:
-                inits[iface] = init
-            # Sparsity must be carried, not just shapes/dtypes: the weights port declares a
-            # SparsityFree constraint, and a given the trial context drops is a rule that
-            # silently cannot fire.
-            sp = graph_ctx.tensor_sparsity(tname)
-            if sp is not None:
-                sparsity[iface] = sp
-        return Context(
-            shapes=shapes,
-            datatypes=datatypes,
-            initializers=inits,
-            fpgapart=graph_ctx.fpgapart,
-            sparsity=sparsity,
-        )
+        The ONE description of the frontend→kernel wiring, read by both the claim
+        (:meth:`can_infer_from`, via :meth:`candidate_op`) and the build
+        (:meth:`infer_from`). It returns SLOTS, positionally, not an
+        ``{interface: tensor}`` map: the interface binding is
+        :attr:`InterfaceSchema.index`, and restating it here is what let the old
+        ``_operand_map`` drift from the build path (F9)."""
+        inputs = [node.input[0], node.input[1]]
+        outputs = [node.output[0]]
+        consumer = model.find_consumer(node.output[0])
+        if consumer is not None and consumer.op_type == "MultiThreshold":
+            inputs.append(consumer.input[1])
+            outputs = [consumer.output[0]]
+        return inputs, outputs
 
     @classmethod
     def can_infer_from(cls, node: NodeProto, model: ModelWrapper) -> bool:
@@ -141,7 +119,12 @@ class MvauKernelOp(KernelOp):
         # can build it" — and a backend that widens either requirement needs no edit here.
 
         # --- feasibility (pool-delegated): ∃ a backend with a legal point? ---
-        if not cls.kernel().has_feasible_point(cls._trial_context(node, model)):
+        # Asked of a CANDIDATE kernel node built from the same slots infer_from would use, so
+        # the claim and the build cannot disagree about which tensor is which (F9). The
+        # candidate is never inserted; the graph is unmodified.
+        inputs, outputs = cls._candidate_slots(node, model)
+        candidate = cls.candidate_op(model, inputs, outputs)
+        if not cls.kernel().has_feasible_point(candidate._context()):
             # A node that MATCHES the structural pattern but has NO feasible backend is
             # "should be a kernel, but unbuildable by the current pool" — it correctly rides
             # FINN's classic path, but that is a SILENT loss of a structurally-valid kernel
@@ -165,39 +148,26 @@ class MvauKernelOp(KernelOp):
         ``out_bias``). MW/MH/SIMD/PE/mem_mode/numInputVectors and all dtypes stay derived
         live from Context; the folding axes are unset until resolve (Seam B).
         """
-        operands = cls._operand_map(node)
-        mm_input = operands[INPUT]
-        mm_weight = operands[WEIGHTS]
-        mm_output = operands[OUTPUT]
+        # The SAME slots the claim interrogated (F9) — one description of the wiring, so a
+        # node that was claimed is built over exactly the tensors it was claimed on.
+        inputs, outputs = cls._candidate_slots(node, model)
 
-        consumer = model.find_consumer(mm_output)
+        consumer = model.find_consumer(node.output[0])
         has_activation = consumer is not None and consumer.op_type == "MultiThreshold"
-
-        if has_activation:
-            mt_thres = consumer.input[1]
-            mt_output = consumer.output[0]
-            actval = int(getCustomOp(consumer).get_nodeattr("out_bias"))
-            kernel_node = helper.make_node(
-                "MVAU",
-                [mm_input, mm_weight, mt_thres],
-                [mt_output],
-                domain="finn.kernels",
-                name="MVAU_" + node.name,
-                ActVal=actval,
-            )
-            return TransformationResult(
-                nodes_to_insert=[kernel_node], nodes_to_remove=[node, consumer]
-            )
+        actval = (
+            int(getCustomOp(consumer).get_nodeattr("out_bias")) if has_activation else 0
+        )
 
         kernel_node = helper.make_node(
             "MVAU",
-            [mm_input, mm_weight],
-            [mm_output],
+            inputs,
+            outputs,
             domain="finn.kernels",
             name="MVAU_" + node.name,
-            ActVal=0,
+            ActVal=actval,
         )
-        return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=[node])
+        removed = [node, consumer] if has_activation else [node]
+        return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=removed)
 
     @classmethod
     def kernel(cls):
