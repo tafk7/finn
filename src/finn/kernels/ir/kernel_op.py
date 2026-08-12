@@ -52,6 +52,7 @@ from onnx import NodeProto
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.kernels.engine.context import Context
+from finn.kernels.engine.device import DeviceFacts
 from finn.kernels.engine.point import Illegal
 from finn.kernels.model.kernel import InterfaceSchema
 from finn.kernels.model.ports import Direction
@@ -171,6 +172,28 @@ class KernelOp(HWCustomOp):
         self._context_cache = None
         return self
 
+    def attach_device(self, device: DeviceFacts | None) -> "KernelOp":
+        """Attach the build's :class:`~finn.kernels.engine.device.DeviceFacts` — the part,
+        clock and toolchain this design targets.
+
+        SEPARATE from :meth:`attach_model` because the two arrive in different phases and
+        from different owners (F11). Graph givens come with the node; device facts come from
+        whichever step holds ``cfg``, and there is no honest way to recover them from the
+        graph — which is what ``_fpgapart_from`` tried to do, via a nodeattr no op declares.
+
+        Invalidates the Context cache, since the facts are baked into it."""
+        self._device = device
+        self._context_cache = None
+        return self
+
+    def _device_facts(self) -> DeviceFacts:
+        """This op's device facts, or the explicit unknown when none was attached.
+
+        Unknown is a legitimate state, not a failure: a bare-node query outside a build has
+        no part, and a backend whose feasibility needs one correctly declines to answer. What
+        F11 got wrong was making unknown UNIVERSAL and silent."""
+        return getattr(self, "_device", None) or DeviceFacts.unknown()
+
     def _context(self) -> Context:
         """Build (and cache) the Context from the ATTACHED model: per-interface shapes,
         datatypes, and REAL initializer values, re-keyed from the node's actual tensor
@@ -188,7 +211,13 @@ class KernelOp(HWCustomOp):
                 f"model.get_customop_wrapper(node) so the Context can be built from the "
                 f"live graph"
             )
-        graph_ctx = Context.from_model(model, self._fpgapart_from(model))
+        device = self._device_facts()
+        graph_ctx = Context.from_model(
+            model,
+            device.fpgapart,
+            toolchain_version=device.toolchain_version,
+            clk_ns=device.clk_ns,
+        )
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict = {}
         initializers: dict[str, np.ndarray] = {}
@@ -234,13 +263,6 @@ class KernelOp(HWCustomOp):
         if flag is None or str(flag).lower() in ("", "0", "false"):
             return {}
         return {dp.iface: True for dp in self.kernel().delivered_parameters}
-
-    def _fpgapart_from(self, model) -> str:
-        # Placement/part is harness-owned; prefer the node's own attr, else empty.
-        try:
-            return self.get_nodeattr("fpgapart")
-        except AttributeError:
-            return ""
 
     # -- configure: nodeattrs -> Point --------------------------------------
 

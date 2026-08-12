@@ -41,6 +41,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import InferDataTypes
 
+from finn.kernels.engine.device import DeviceFacts
 from finn.kernels.ir.routing import KERNEL_DOMAIN, is_specialized
 from finn.kernels.model.backend import BACKEND_AXIS
 
@@ -58,7 +59,7 @@ class Policy(ABC):
     """
 
     @abstractmethod
-    def assign(self, model: ModelWrapper, constraints=None) -> list:
+    def assign(self, model: ModelWrapper, constraints=None, device=None) -> list:
         """Return a list of ``(node, {axis_name: value})`` pairs — the axes to commit on each
         node. Only ``finn.kernels`` nodes should appear (classic nodes are SpecializeLayers'
         job); a node absent from the list is left untouched. A LIST of pairs rather than a
@@ -67,41 +68,54 @@ class Policy(ABC):
 
         ``constraints`` is threaded for future drivers (a target-fps budget, a device pin) but
         is UNUSED by the reference policy — do not build a cost model or ranking behind it;
-        that is explicitly out of this seam's scope."""
+        that is explicitly out of this seam's scope.
+
+        ``device`` is the build's :class:`~finn.kernels.engine.device.DeviceFacts`. Distinct
+        from ``constraints``, and not folded into it: it is not a driver preference but a
+        GIVEN that feasibility is evaluated against. Every policy needs it; only some will
+        ever want constraints."""
         raise NotImplementedError
 
 
 class PerNodePolicy(Policy):
     """A :class:`Policy` adapter that decides each node INDEPENDENTLY via a local function.
 
-    ``local_fn(node, model) -> dict | None`` returns the axes to commit for one node, or
-    ``None`` to leave it unspecialized. This adapter owns the two graph-walk concerns — the
+    ``local_fn(node, model, device) -> dict | None`` returns the axes to commit for one node,
+    or ``None`` to leave it unspecialized. This adapter owns the two graph-walk concerns — the
     ``finn.kernels`` domain gate and skipping already-specialized nodes — so a local_fn sees
     only fresh kernel nodes and returns pure per-node data."""
 
     def __init__(self, local_fn):
         self.local_fn = local_fn
 
-    def assign(self, model: ModelWrapper, constraints=None) -> list:
+    def assign(self, model: ModelWrapper, constraints=None, device=None) -> list:
         out: list = []
         for node in model.graph.node:
             if node.domain != KERNEL_DOMAIN or is_specialized(node):
                 continue
-            axes = self.local_fn(node, model)
+            axes = self.local_fn(node, model, device)
             if axes:
                 out.append((node, axes))
         return out
 
 
-def first_feasible(node: NodeProto, model: ModelWrapper) -> dict | None:
+def first_feasible(
+    node: NodeProto, model: ModelWrapper, device: DeviceFacts | None = None
+) -> dict | None:
     """Reference local_fn: commit the FIRST feasible backend (pool order = precedence).
 
     Delegates to the model-aware op bridge (``KernelOp.first_feasible_backend``), which
     reuses the SAME per-backend trial that infer's ``has_feasible_point`` claim check runs —
     so a node infer claimed as buildable specializes here to a concrete member. Returns
     ``None`` when no backend is feasible (should not happen for an infer-claimed node; logged
-    as a lost kernel, INV5)."""
-    name = model.get_customop_wrapper(node).first_feasible_backend()
+    as a lost kernel, INV5).
+
+    ``device`` carries the target part/clock. Without it every device-gated backend refuses
+    to answer and the selection silently collapses to the first part-independent member —
+    F11, which is why this is a parameter rather than something recovered from the graph."""
+    inst = model.get_customop_wrapper(node)
+    inst.attach_device(device)
+    name = inst.first_feasible_backend()
     if name is None:
         logger.warning(
             "SpecializeKernels: %s node %s has no feasible backend — leaving it "
@@ -125,16 +139,25 @@ class SpecializeKernels(Transformation):
         policy: the selection driver (:class:`Policy`). For the reference build this is
             ``PerNodePolicy(first_feasible)``; a config/optimizer/interactive driver swaps in
             here with no change to this transform.
+        device: the build's :class:`~finn.kernels.engine.device.DeviceFacts` — target part,
+            clock, toolchain. Feasibility is evaluated AGAINST these, so omitting them makes
+            every device-gated backend refuse to answer and the selection collapse to the
+            first part-independent member (F11). Mirrors the incumbent
+            ``SpecializeLayers(cfg._resolve_fpga_part())``: same fact, same owner, same seam.
+            Optional so a bare-node test can still construct the transform, but a real build
+            always passes it.
     """
 
-    def __init__(self, policy: Policy):
+    def __init__(self, policy: Policy, device: DeviceFacts | None = None):
         super().__init__()
         self.policy = policy
+        self.device = device
 
     def apply(self, model: ModelWrapper):
-        assignment = self.policy.assign(model)
+        assignment = self.policy.assign(model, device=self.device)
         for node, axes in assignment:
             inst = model.get_customop_wrapper(node)
+            inst.attach_device(self.device)
             for axis_name, value in axes.items():
                 inst.set_nodeattr(axis_name, value)
 
