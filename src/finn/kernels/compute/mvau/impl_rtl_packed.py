@@ -24,16 +24,9 @@ from finn.util.basic import get_dsp_block
 
 from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common, num_lanes
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
-from .op import (
-    COMPUTE_STREAM,
-    INPUT,
-    MVAU_DSP_PACKED,
-    OUTPUT,
-    VERSION,
-    WEIGHTS,
-    mvau_out_dtype,
-    mvau_register_dtypes,
-)
+from ._dsp_rtl import VERSION
+from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
+from .kernel import INPUT, MVAU_DSP_PACKED, OUTPUT, WEIGHTS
 from .registry import register
 
 

@@ -24,16 +24,8 @@ from finn.kernels.model.backend import Backend, ports_from
 from finn.kernels.model.param_names import DECOUPLED, EMBEDDED
 
 from .emit_hls import emit_mvau_hls
-from .op import (
-    COMPUTE_STREAM,
-    INPUT,
-    MVAU_HLS,
-    OUTPUT,
-    THRESHOLDS,
-    WEIGHTS,
-    mvau_out_dtype,
-    mvau_register_dtypes,
-)
+from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
+from .kernel import INPUT, MVAU_HLS, OUTPUT, THRESHOLDS, WEIGHTS
 from .registry import register
 
 # The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no legal
