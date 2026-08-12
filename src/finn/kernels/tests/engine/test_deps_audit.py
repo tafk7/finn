@@ -101,6 +101,59 @@ class RecordingPoint(Point):
         return Point.__contains__(self, name)
 
 
+class RecordingContext:
+    """A :class:`Context` proxy that records every GIVEN read through it.
+
+    The pitch's §5.3(b) coverage for the gap that let F11 hide. ``RecordingPoint`` audits
+    POINT reads, and the read-set discipline it enforces is what keeps `deps` honest — but
+    Context reads were never audited at all. So a rule could read ``ctx.fpgapart`` with
+    nothing recording that it did, and the fact that EVERY such read was getting ``""`` was
+    invisible to the harness that exists to find exactly this.
+
+    Deliberately a REPORT, not an assertion. There is no `deps`-equivalent to check a Context
+    read against — givens are not declared per node — so the artifact is the read map itself:
+    which rules consult which givens. That is the thing you look at to ask "should this rule
+    really depend on the part?", and the thing that would have made F11's blast radius
+    obvious.
+
+    Proxies rather than subclasses ``Context`` because the accessors are plain methods on a
+    frozen dataclass; wrapping by delegation records the CALL, which is the unit of interest
+    (``tensor_datatype("weights")``), not the attribute lookup."""
+
+    #: the nine read-surface accessors a closure can reach a given through.
+    ACCESSORS = (
+        "tensor_shape",
+        "tensor_datatype",
+        "initializer",
+        "has_tensor",
+        "tensor_sparsity",
+        "is_runtime_writeable",
+        "arity",
+    )
+    #: plain FIELDS that are device facts rather than graph givens — the F11 surface.
+    FIELDS = ("fpgapart", "clk_ns", "clk", "toolchain_version")
+
+    def __init__(self, context, sink):
+        object.__setattr__(self, "_context", context)
+        object.__setattr__(self, "_sink", sink)
+
+    def __getattr__(self, name):
+        ctx = object.__getattribute__(self, "_context")
+        sink = object.__getattribute__(self, "_sink")
+        attr = getattr(ctx, name)
+        if name in RecordingContext.FIELDS:
+            sink.add(name)
+            return attr
+        if name in RecordingContext.ACCESSORS:
+
+            def recording(*args, _n=name, _f=attr, **kwargs):
+                sink.add(f"{_n}({args[0]!r})" if args else _n)
+                return _f(*args, **kwargs)
+
+            return recording
+        return attr
+
+
 class Violation(tuple):
     """``(kind, name, undeclared_reads)`` — the identity of one under-declaration.
 
@@ -115,6 +168,20 @@ class Violation(tuple):
 
     def __str__(self):
         return f"{self[0]:14s} {self[1]:44s} undeclared_reads={list(self[2])}"
+
+
+class _WithGivens(list):
+    """The violations list, carrying the RecordingContext read-map as an attribute.
+
+    A list subclass rather than a third return value so every existing
+    ``result, violations = audit_resolve(...)`` caller keeps working unchanged. The givens
+    report is an artifact you go and look at, not something a caller branches on."""
+
+    __slots__ = ("given_reads",)
+
+    def __init__(self, items, given_reads):
+        super().__init__(items)
+        self.given_reads = given_reads
 
 
 def _declared(node):
@@ -134,9 +201,19 @@ def audit_resolve(schema, context, assignment=None):
     point: dict = {}
     axis_names = set(schema.axis_names)
     violations: list[Violation] = []
+    # {("kind", name) -> {given, ...}} — the REPORT half (RecordingContext), distinct from
+    # `violations`, which is the ASSERTION half (RecordingPoint).
+    given_reads: dict = {}
 
     def view(sink=None):
         return RecordingPoint(point, sink) if sink is not None else Point(point)
+
+    def ctx_view(sink):
+        """The Context, recording which GIVENS this node reads. Reads land in
+        ``given_reads`` rather than in ``sink``: a Context read is not a `deps` violation
+        (givens are not declared per node), so mixing them would turn the read map into
+        phantom violations."""
+        return RecordingContext(context, sink)
 
     def check(kind, node, reads):
         reads = {r for r in reads if not r.startswith("_")}
@@ -164,9 +241,11 @@ def audit_resolve(schema, context, assignment=None):
                 return Illegal([f"{axis.name} assigned but absent"]), violations
             continue
 
-        sink = set()
-        dom = axis.domain(view(sink), context)
+        sink, givens = set(), set()
+        dom = axis.domain(view(sink), ctx_view(givens))
         check("axis.domain", axis, sink)
+        if givens:
+            given_reads.setdefault(("axis.domain", axis.name), set()).update(givens)
 
         if axis.name in assignment:
             val = assignment[axis.name]
@@ -180,14 +259,18 @@ def audit_resolve(schema, context, assignment=None):
         point[axis.name] = val
 
     for d in schema.ordered_derived():
-        sink = set()
-        point[d.name] = d.compute(view(sink), context)
+        sink, givens = set(), set()
+        point[d.name] = d.compute(view(sink), ctx_view(givens))
         check("derived", d, sink)
+        if givens:
+            given_reads.setdefault(("derived", d.name), set()).update(givens)
 
     reasons = []
     for pred in schema.predicates:
-        sink = set()
-        reason = pred.check(view(sink), context)
+        sink, givens = set(), set()
+        reason = pred.check(view(sink), ctx_view(givens))
+        if givens:
+            given_reads.setdefault(("predicate", pred.describe()), set()).update(givens)
         # STRICTER than the derived rule: a predicate must declare EVERY point read,
         # including axes. A derived's deps exist for ORDERING, and axes are all fixed before
         # any derived, so an axis read needs no declaration. A predicate's deps exist for
@@ -198,6 +281,10 @@ def audit_resolve(schema, context, assignment=None):
         if reason is not None:
             reasons.append(reason)
     result = Illegal(reasons) if reasons else Point(point)
+    # The given-read map rides on the violations list rather than widening the return tuple:
+    # every existing caller unpacks two values, and the report is an artifact to inspect, not
+    # a result to branch on.
+    violations = _WithGivens(violations, given_reads)
     return result, violations
 
 
@@ -454,3 +541,60 @@ def test_undeclared_read_is_reported():
     )
     _, violations = audit_resolve(space, Context(), {})
     assert Violation("derived", "geometry", ["published"]) in set(violations)
+
+
+# =============================================================================
+# RecordingContext — the givens read-map (pitch §5.3b).
+# =============================================================================
+
+
+def test_recording_context_reports_which_givens_each_rule_reads():
+    """The coverage gap that let F11 hide, closed as a REPORT.
+
+    `RecordingPoint` audits point reads against declared deps. Context reads had no audit at
+    all — so a rule could read `ctx.fpgapart` with nothing recording it, and the fact that
+    every such read was returning `""` was invisible to the very harness meant to catch this.
+
+    There is no `deps`-equivalent to assert against (givens are not declared per node), so
+    the artifact is the map itself. What IS asserted is that the map is non-empty and that
+    the device-fact reads are visible in it — if this ever goes empty, the audit has stopped
+    watching the surface F11 came from."""
+    from finn.kernels.compute.mvau import mvau_kernel
+
+    kernel = mvau_kernel()
+    _result, violations = audit_resolve(
+        kernel.realized_space("mvau_dsp_softvec"),
+        _mvau_ctx(),
+        {"backend": "mvau_dsp_softvec", "SIMD": 2, "PE": 2},
+    )
+
+    reads = violations.given_reads
+    assert reads, "no givens recorded at all — the Context audit is not wired in"
+
+    all_givens = {g for gs in reads.values() for g in gs}
+    # The device facts F11 was about are read, and now visibly so.
+    assert "fpgapart" in all_givens
+    # And graph givens come through the accessor form, argument included.
+    assert any(g.startswith("tensor_datatype(") for g in all_givens)
+
+
+def test_recording_context_names_the_rules_that_depend_on_the_device():
+    """The report's actual use: WHICH rules consult the part. This is the list you read to
+    ask "should this really be device-dependent?", and the one that makes an empty
+    `fpgapart` a visible blast radius rather than a silent default."""
+    from finn.kernels.compute.mvau import mvau_kernel
+
+    kernel = mvau_kernel()
+    _result, violations = audit_resolve(
+        kernel.realized_space("mvau_dsp_softvec"),
+        _mvau_ctx(),
+        {"backend": "mvau_dsp_softvec", "SIMD": 2, "PE": 2},
+    )
+
+    device_readers = {
+        node for node, givens in violations.given_reads.items() if "fpgapart" in givens
+    }
+    assert device_readers, "no rule reads fpgapart — did the DSP feasibility gate vanish?"
+    # Every one is a predicate or derived, never an axis guard: device-dependence belongs in
+    # feasibility, not in whether a dial EXISTS.
+    assert {kind for kind, _name in device_readers} <= {"predicate", "derived"}

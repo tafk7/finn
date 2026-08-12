@@ -16,6 +16,24 @@ needs (design-space-model.md §1.1).
 
 Two constructors: :meth:`from_model` wraps a QONNX ``ModelWrapper`` for real use;
 the default constructor takes plain dicts so tests need no ONNX graph.
+
+**On the two arrival phases (F11), and why this type survives.** The givens here come from
+two owners at two different times. GRAPH givens (shapes, datatypes, initializers) are
+derivable from ``(ModelWrapper, node)`` the moment the node exists. DEVICE facts
+(``fpgapart``, ``clk_ns``, ``toolchain_version``) belong to the build config and arrive from
+whichever step holds it. Bundling them meant constructing a Context demanded a part before
+any caller had one — and the workaround for that, an ``fpgapart`` nodeattr no op declares,
+is what made the field universally empty on every node.
+
+The taxonomy pass fixed the CAUSE by making device facts an input
+(:class:`~finn.kernels.engine.device.DeviceFacts`, threaded from ``SpecializeKernels``) and
+then deliberately did NOT delete this dataclass. Churning 267 references buys no behavioural
+change: once the facts arrive correctly, one bundle carrying both is a grouping, not a phase
+confusion. The finding was the phantom nodeattr, not the struct.
+
+Context reads are audited by ``RecordingContext`` in ``tests/engine/test_deps_audit.py`` —
+added because they previously were not, which is precisely how F11 stayed invisible to the
+harness meant to catch it.
 """
 
 from __future__ import annotations
