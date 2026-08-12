@@ -553,6 +553,11 @@ def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
         # ParamDatatype). Union them across owning impls — mirrors _merge_axes' dep union —
         # so the topo-sort orders the merged register after whatever any owning impl reads.
         # Bare specs contribute none. Unwrapped through the SAME helper the port path uses.
+        #
+        # Deliberately NOT `datatype_spec.datatype_derived`, which lifts ONE spec: the merge
+        # needs N specs behind a root dispatch, so it unions their deps and resolves whichever
+        # the point selects. That difference IS the merge, and it goes with it at T9 —
+        # `Kernel.space_for` already builds its registers through the shared helper.
         deps: set[str] = {root_name}  # the dispatch reads the root to pick the owning spec
         for spec in by_impl.values():
             deps |= set(spec_and_deps(spec)[1])

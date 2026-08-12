@@ -68,6 +68,19 @@ def selection_guard(root: str, impl: str) -> str:
     return f"generated: {impl}'s rule, guarded on {root}"
 
 
+def realized(kind: str, member: str, inner: str = "") -> str:
+    """An entry spliced in by :meth:`~finn.kernels.model.cell.Kernel.space_for` for the ONE
+    selected realization.
+
+    The counterpart to :func:`merged`, and the difference is the point: a merged entry
+    dispatches at resolve time across every pool member, so its origin must say "merged";
+    a realized entry belongs to one member unconditionally, so its origin names that member.
+    ``inner`` is kept for the same reason it is in :func:`merged` — a fold dial that says
+    only "realized for mvau_hls" has lost which ports it folds."""
+    base = f"generated: {kind} realized for {member}"
+    return f"{inner} -> {base}" if inner else base
+
+
 def constraint(describe: str) -> str:
     return f"constraint: {describe}"
 

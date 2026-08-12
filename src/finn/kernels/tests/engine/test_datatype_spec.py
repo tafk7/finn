@@ -15,6 +15,8 @@ from qonnx.core.datatype import DataType
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.datatype_spec import (
     VALUE_OPTIMIZED,
+    DependentSpec,
+    datatype_derived,
     resolve_datatype_spec,
     value_optimized,
 )
@@ -86,3 +88,37 @@ def test_invalid_spec_raises():
     ctx = _ctx(datatypes={"out": DataType["INT32"]})
     with pytest.raises(ValueError):
         resolve_datatype_spec(123, iface="out", point=_point(), context=ctx)
+
+
+# --- datatype_derived: the shared spec -> Derived lift ------------------------
+
+
+def test_datatype_derived_resolves_the_spec_onto_the_point():
+    ctx = _ctx(datatypes={"acc": DataType["INT16"]})
+    d = datatype_derived("acc", None)
+    assert d.name == "acc"
+    assert d.compute(_point(), ctx) == DataType["INT16"]
+
+
+def test_datatype_derived_hoists_the_specs_declared_deps():
+    """A DependentSpec's deps must reach the Derived, or the topo-sort orders the register
+    before the derived its derivation reads. This is the pairing both call sites had to get
+    right independently before the lift existed."""
+    d = datatype_derived("acc", DependentSpec(DataType["INT8"], deps={"parameters.w.datatype"}))
+    assert d.deps == frozenset({"parameters.w.datatype"})
+
+
+def test_datatype_derived_merges_extra_deps():
+    d = datatype_derived(
+        "acc", DependentSpec(None, deps={"a"}), extra_deps=("b",)
+    )
+    assert d.deps == frozenset({"a", "b"})
+
+
+def test_datatype_derived_uses_the_name_as_the_fallback_tensor():
+    """An internal register has no port, so a None/VALUE_OPTIMIZED spec reads Context under
+    the REGISTER name — the same convention resolve_datatype_spec's `iface` arg encodes."""
+    w = np.array([-3, 2], dtype=np.float32)
+    ctx = _ctx(datatypes={"weightDataType": DataType["INT8"]}, initializers={"weightDataType": w})
+    d = datatype_derived("weightDataType", VALUE_OPTIMIZED)
+    assert d.compute(_point(), ctx).bitwidth() < DataType["INT8"].bitwidth()

@@ -76,6 +76,36 @@ def spec_and_deps(spec) -> tuple[Any, frozenset[str]]:
     return spec, frozenset()
 
 
+def datatype_derived(name: str, spec, *, origin: str = "", extra_deps=()):
+    """Lift one declared dtype spec into the :class:`~finn.kernels.engine.derived.Derived`
+    that resolves it onto the point under ``name``.
+
+    A ``DatatypeSpec`` is a UNION, not a closure, so something must synthesize the ``Derived``
+    that carries it — and every caller needs the same two things: resolve the spec against
+    ``(point, context)``, and hoist the spec's declared ``deps`` onto the node so the
+    topo-sort orders it after whatever the derivation reads. Both call sites derived that
+    pair independently before this existed.
+
+    ``name`` doubles as the fallback tensor: an internal register has no port, so
+    :func:`resolve_datatype_spec` reads Context through the register name only if the spec
+    (``None``/``VALUE_OPTIMIZED``) asks it to. ``extra_deps`` is for a caller with an
+    additional ordering constraint the spec itself does not express.
+    """
+    from .derived import Derived
+
+    inner, spec_deps = spec_and_deps(spec)
+
+    def compute(point, context, _spec=inner, _name=name):
+        return resolve_datatype_spec(_spec, iface=_name, point=point, context=context)
+
+    return Derived(
+        name,
+        compute,
+        deps=frozenset(spec_deps) | frozenset(extra_deps),
+        origin=origin,
+    )
+
+
 class _ValueOptimizedType:
     """Sentinel for VALUE_OPTIMIZED — narrow a datatype from a static tensor's actual
     values, falling back to the graph dtype when the tensor is dynamic. Mirrors brainsmith's
