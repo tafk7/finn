@@ -436,63 +436,19 @@ class _LegacyKernel:
         return cached
 
     def configure(self, context: Context, assignment: Mapping | None = None):
-        """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""
+        """Resolve a design point (or an Illegal).
+
+        Routes through the PER-REALIZATION space when the assignment names a backend, which
+        is every impl-dependent query: one member selected means no merge, no dispatch
+        closures, no selection guards (F1). An assignment with no backend — or naming one
+        outside the pool — still goes through the merged space, which is the only one that
+        can represent "unspecialized" (the ``""`` sentinel is not a pool member, so
+        ``space_for`` has nothing to build)."""
+        assignment = dict(assignment or {})
+        member = assignment.get(BACKEND_AXIS)
+        if member and any(b.name == member for b in self.pool):
+            return resolve(self.realized_space(member), context, assignment)
         return resolve(self.compile(), context, assignment)
-
-    def _early_verdict(self, schema, context: Context, impl_name: str):
-        """Decide ``impl_name``'s feasibility WITHOUT a full resolve, where that is sound.
-
-        Returns ``False`` when some fold-independent rule rejects (definitively infeasible),
-        ``True`` when every rule for this member is fold-independent and all pass
-        (definitively feasible), and ``None`` when the answer genuinely needs a
-        configuration — the caller then runs the full-resolve trial exactly as before.
-
-        The soundness argument, in both directions:
-
-        * A **stratum ≤ 1** predicate's read-closure touches nothing but the selection root
-          and node CONSTANTS. Its verdict therefore cannot change with any folding choice, so
-          a rejection here is a rejection the full resolve would also produce — no legal point
-          exists for this member at ANY fold. This is the case that turns a float MatMul from
-          three full resolves into a handful of dtype comparisons.
-        * ``True`` is only returned when the member has NO stratum-2 rule left to run. If
-          one exists it might reject at default fold, so we must not pre-empt the resolve.
-
-        The trial point carries the ATTRS as well as the selection root. They are constants —
-        fixed before specialization, identical in every point this trial stands for — so
-        seeding them cannot change a verdict, only allow one to be reached: a stratum-≤1 rule
-        naming an attr would otherwise be skipped by the all-deps-pinned test below and
-        decide nothing. Note the attrs come from the SCHEMA defaults, not from a node
-        assignment, which is the honest reading of "would ANY node on this backend work" —
-        `first_feasible_backend`'s question at Seam B.
-
-        Anything unexpected — a rule that raises, a closure naming a derived we have not
-        computed — yields ``None``. Falling back to the existing path is always safe; being
-        clever here is not."""
-        trial = {a.name: a.value(context) for a in schema.attrs}
-        trial[BACKEND_AXIS] = impl_name
-        view = Point(trial)
-        decided = 0
-        for pred in schema.predicates_upto(1):
-            # Every name the rule declares must be pinned here, else it would read an absent
-            # key. Its stratum says it reads only roots; a DIFFERENT root may be unpinned.
-            if not all(dep in trial for dep in pred.deps | pred.optional_deps):
-                continue
-            try:
-                reason = pred.check(view, context)
-            except Exception:
-                # A rule that cannot run against a root-only point tells us nothing. Note
-                # this does NOT swallow a typo-class kernel bug: returning None falls
-                # through to the full-resolve trial, which runs the same rule against a
-                # complete point and lets the exception propagate (INV5). The early path
-                # may only ever make a query CHEAPER, never quieter.
-                return None
-            if reason is not None:
-                return False
-            decided += 1
-
-        # Only claim feasibility when NOTHING is left to check; otherwise a stratum-2 rule
-        # could still reject at default fold and we must not pre-empt the resolve.
-        return True if decided == len(schema.predicates) else None
 
     def first_feasible_backend(self, context: Context) -> str | None:
         """The NAME of the first pool member (declaration order) that yields a legal
@@ -506,18 +462,16 @@ class _LegacyKernel:
         selection (the name) converge on ONE query. A node whose datatypes disqualify it from
         EVERY backend (e.g. float32 where only integer is feasible) returns ``None``.
 
-        Each member is first offered to :meth:`_early_verdict`, which answers from the
-        fold-independent rules alone where it soundly can. The precedence order and the
-        answer are unchanged by that — only the cost is."""
-        schema = self.compile()
+        Each member is trialled against its OWN realized space rather than the merged one.
+        No ``_early_verdict``: it was measured at −1% on both realistic paths (net negative
+        on two of three), and its one winning case — every member rejected on datatype — is
+        decided at stratum 0, from Context alone, which needs no selection-root concept. T8
+        deletes it."""
         for impl in self.pool:
-            early = self._early_verdict(schema, context, impl.name)
-            if early is False:
-                continue  # fold-independent rejection: no fold could rescue this member
-            if early is True:
-                return impl.name
             try:
-                result = resolve(schema, context, {BACKEND_AXIS: impl.name})
+                result = resolve(
+                    self.realized_space(impl.name), context, {BACKEND_AXIS: impl.name}
+                )
             except (ValueError, KeyError, AbsentAxisError):
                 # A backend feasibility check that raises on THIS context (e.g. a
                 # device-family probe that needs an fpgapart the trial context omits) is not

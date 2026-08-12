@@ -179,9 +179,9 @@ class Kernel:
 
         predicates = (
             tuple(self.predicates)
-            + tuple(member.predicates)
+            + tuple(self._attributed(member.predicates, member))
             + tuple(gen.predicates)
-            + tuple(self._dtype_gates(member))
+            + tuple(self._attributed(self._dtype_gates(member), member))
         )
 
         return DesignSpace(axes=axes, derived=derived, predicates=predicates)
@@ -213,6 +213,26 @@ class Kernel:
                 origin=provenance.realized("register dtype", member.name),
             )
             for name, spec in member.derived_dtypes.items()
+        )
+
+    def _attributed(self, predicates, member: Backend) -> tuple:
+        """Stamp each of a member's rules with its owner, WITHOUT wrapping the check.
+
+        Under the merge, a bundle rule's attribution came from the selection guard's origin —
+        so deleting the guard would silently drop "which backend's rule was this?" from every
+        `Illegal` reason (`resolve._with_origin` appends it). That is a real diagnostic loss
+        and none of it needs a wrapper: origin is metadata, so it can be set on a copy while
+        the rule itself stays unguarded and fires unconditionally.
+
+        A rule that already declares its own origin keeps it — an author's attribution beats a
+        generated one."""
+        from dataclasses import replace
+
+        return tuple(
+            p
+            if p.origin
+            else replace(p, origin=provenance.realized("rule", member.name))
+            for p in predicates
         )
 
     def _dtype_gates(self, member: Backend) -> tuple:
