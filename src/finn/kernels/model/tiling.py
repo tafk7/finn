@@ -294,7 +294,13 @@ def _block_extent(extent: BlockExtent, iface, dim_idx: int, context) -> int:
                 f"block extent expr for {iface.tensor!r} dim {dim_idx} needs a Context "
                 f"(context-dependent; a context-less probe cannot resolve it)"
             )
-        return int(extent.eval_ctx(context)) if hasattr(extent, "eval_ctx") else int(extent.eval(context))
+        # No TileExpr defines `eval_ctx` — the hasattr branch that used to be here was dead,
+        # and its FALLBACK is the live path: `eval(context)` passes a Context where every
+        # `eval` signature says Point. That works only because a block-extent expr reads
+        # dims, and both objects answer a subscript-ish read for the names it uses. Left
+        # as-is (it is the behaviour the differential is green on), but named rather than
+        # disguised by a hasattr that implied an alternative existed. F12.
+        return int(extent.eval(context))
     return int(extent)
 
 

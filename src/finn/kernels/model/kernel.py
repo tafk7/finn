@@ -19,8 +19,8 @@ and its fold dials.
 This module builds ONLY the estimate-only surface: the port-indexed normal/folded
 shapes + stream widths, and a rough ``get_exp_cycles`` (``prod(stream_cycles)`` — the
 monotone throughput floor that drives folding search). No emit, no codegen, no Vivado
-(those are Tier-4). Cost is a defaultable op-level derived; a Backend may
-override it (not exercised here).
+(those are Tier-4). Cost is a fixed placeholder floor — the per-op override field is gone
+(F12: zero ops declared one), and real cost modelling is a future pass.
 
 SCOPE (increment 1): folding is a LAST-AXIS reshape of a DATA interface — the common
 case shared by LayerNorm/elementwise/MVU activation+output. A PARAM interface whose
@@ -221,7 +221,6 @@ class _LegacyKernel:
     op_predicates: tuple = ()
     kernel_attrs: tuple = ()  # Attr constants — on the Point, never explored, NOT axes
     constraints: tuple = ()  # kernel-level structural constraints (relational/value rules)
-    cost_model: Any = None  # (point, context) -> int; None => the rough op-level default
     delivered_parameters: tuple = field(default=(), init=False)  # derived from pool mem_modes
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
     _space_cache: list = field(default_factory=list, init=False, repr=False, compare=False)
@@ -523,6 +522,15 @@ class _LegacyKernel:
         generalization of :meth:`present_interfaces`' emergent-presence rule: the concrete
         node-slot interfaces come from Context, not the declared list.
 
+        NO PRODUCTION CALLER — T13 lists it as dead surface and it is KEPT, because deleting
+        it would remove a declared capability rather than dead weight. It is the only thing
+        that gives :class:`~finn.kernels.model.ports.Variadic` meaning: the field, the
+        ``Multiplicity`` union, ``Context.arity`` and a whole test file exist to express
+        0-to-N operands, and this is where that expression is cashed. Deleting the method
+        alone would leave the declaration inert (worse than either end state); deleting the
+        whole cluster is a scope this pass did not take. Both live ops are fixed-arity, so
+        the fast path returns ``self.interfaces`` verbatim and nothing pays for it.
+
         The all-fixed-arity common case (MVAU/Thresholding) returns the declared list verbatim
         — the field ``interfaces`` is authoritative and no ctx read happens. Only a variadic
         op pays the expansion."""
@@ -642,10 +650,13 @@ class _LegacyKernel:
         once per input vector, so true cost is ``nf·sf·n_vecs`` while this floor gives only
         ``max(nf·sf, ...)`` (undercounts whenever n_vecs>1, i.e. conv-as-matmul). A proper
         cost model (nested block traversal, pipeline fill/drain, per-impl overrides) is a
-        FUTURE PASS; cost modelling is deliberately ignored for now. ``cost_model`` remains
-        an op-level escape hatch if an op needs a real number before then."""
-        if self.cost_model is not None:
-            return int(self.cost_model(point, context))
+        FUTURE PASS; cost modelling is deliberately ignored for now.
+
+        The former ``cost_model`` field — an op-level ``(point, context) -> int`` override —
+        is DELETED (F12). Zero ops declared one, so it was an escape hatch from a placeholder,
+        installed before there was anything to escape. When real cost modelling arrives it
+        will need per-backend overrides and a shape this field does not have, so keeping it
+        reserved the name without reserving the design."""
         cycles = 1
         for iface in self.present_interfaces(context):
             if iface.protocol != Protocol.Stream:

@@ -129,6 +129,3 @@ def _topology_default(base_default, legal):
         return d if d in allowed else (allowed[0] if allowed else d)
 
     return default
-
-
-# --- helpers ------------------------------------------------------------------

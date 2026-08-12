@@ -51,6 +51,13 @@ class OrderedParameter:
         8
         >>> simd.step_up(8, n=2)
         32
+
+    NAVIGATION HAS NO PRODUCTION CALLER YET (``min``/``max``/``step_up``/``step_down``/
+    ``at_percentage``; grep finds only docstring examples and tests). Deliberately KEPT: the
+    obvious consumer is one step away — ``SetFolding`` currently reimplements divisor-walking
+    itself — so this is a seam waiting for a caller rather than an abstraction with none. That
+    is a different judgement from the fields deleted elsewhere in this pass, which were
+    superseded or wrong rather than merely unused; noted so the distinction is legible.
     """
 
     name: str
