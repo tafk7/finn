@@ -21,14 +21,15 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.engine.context import Context
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema, KernelError
+from finn.kernels.model.kernel import InterfaceSchema, KernelError
+from .synthetic import synthetic_op
 from finn.kernels.model.ports import Direction, Protocol
 from finn.kernels.model.tiling import FULL
 
 
 def _kernel(ifaces, stream):
     backend = Backend(name="core", ports=ports_from(stream=stream))
-    return DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
+    return synthetic_op(interfaces=ifaces, pool=(backend,), name="K")
 
 
 def _ctx():
@@ -58,9 +59,9 @@ def test_memorymapped_input_absent_from_stream_projection():
 
     # Stream input index 0 is 'inp' — the MemoryMapped 'mem' does NOT occupy a stream index,
     # so there is exactly ONE stream input. Index 1 is outside the projection's domain.
-    assert k.get_instream_width(point, ctx, 0) > 0
+    assert k._stream_width(k._stream_input(0), point, ctx) > 0
     with pytest.raises(KernelError, match="no stream input port at index 1"):
-        k.get_instream_width(point, ctx, 1)
+        k._stream_width(k._stream_input(1), point, ctx)
 
 
 def test_all_stream_kernel_indexing_is_unchanged():
@@ -74,5 +75,5 @@ def test_all_stream_kernel_indexing_is_unchanged():
     )
     ctx = _ctx()
     point = k.configure(ctx, {"backend": "core"})
-    assert k.get_instream_width(point, ctx, 0) > 0
-    assert k.get_outstream_width(point, ctx, 0) > 0
+    assert k._stream_width(k._stream_input(0), point, ctx) > 0
+    assert k._stream_width(k._stream_output(0), point, ctx) > 0

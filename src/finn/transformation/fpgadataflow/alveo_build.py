@@ -83,14 +83,14 @@ def _check_slash_axilite_compat(kernel_model, node_name):
     axilite = json.loads(raw).get("axilite", [])
     if len(axilite) > 1:
         raise Exception(
-            f"DataflowKernel '{node_name}' exposes {len(axilite)} AXI-lite interfaces "
+            f"Kernel '{node_name}' exposes {len(axilite)} AXI-lite interfaces "
             f"{axilite}, but SLASH supports at most one control AXI-lite slave "
             "per kernel."
         )
     bad = [name for name in axilite if name.rsplit("_", 1)[0] not in _SLASH_ALLOWED_AXILITE_STEMS]
     if bad:
         raise Exception(
-            f"DataflowKernel '{node_name}' exposes AXI-lite interfaces {bad} that "
+            f"Kernel '{node_name}' exposes AXI-lite interfaces {bad} that "
             "SLASH does not support. SLASH only accepts AXI-lite slaves wired "
             "to a kernel control register block (e.g. 's_axi_control'). The "
             "most common cause is an MVAU/VVAU/Thresholding node with "

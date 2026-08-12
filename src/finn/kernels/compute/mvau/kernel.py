@@ -181,7 +181,7 @@ def op_predicates():
 
 
 # =============================================================================
-# 7. ASSEMBLY — the full MVAU design space as a DataflowKernel.
+# 7. ASSEMBLY — the MVAU design space, now the op class.
 # =============================================================================
 
 

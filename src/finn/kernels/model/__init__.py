@@ -7,7 +7,7 @@
 ############################################################################
 """The op-model: how a hardware kernel is modeled on top of the resolve engine.
 
-Holds the :class:`~finn.kernels.model.kernel.DataflowKernel` / :class:`~finn.kernels.model.backend.Backend`
+Holds the :class:`~finn.kernels.ir.DataflowOp` / :class:`~finn.kernels.model.backend.Backend`
 / :class:`~finn.kernels.model.parameter_source.ParameterSource` vocabulary, the tiling/fold-depth
 projections, ``ports``, and the op-agnostic parameter-source CONTRACT (``demand``,
 ``param_names``, ``param_contract``) plus the ``source_backend`` abstraction (the

@@ -45,7 +45,7 @@ from .shared import op_axes, op_derived, op_predicates
 from . import impl_hls  # noqa: E402,F401
 from . import impl_rtl  # noqa: E402,F401
 
-# The DataflowKernel assembly + FINN wrapper (imported after the backends register).
+# The design-space assembly + FINN wrapper (imported after the backends register).
 from .op import (  # noqa: E402,F401 (re-exported public surface)
     ThresholdingDataflowOp,
     thresholding_kernel,

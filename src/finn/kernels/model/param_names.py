@@ -10,7 +10,7 @@
 constants the delivery WIRING (:mod:`~finn.kernels.model.parameter_source`) emits and reads.
 
 This is MECHANISM, not op content: a delivery pool is a pool of :class:`Backend`\\ s
-selected by a ``parameters.<iface>.topology`` root axis, and the generic DataflowKernel wiring
+selected by a ``parameters.<iface>.topology`` root axis, and the generic op wiring
 that connects a compute pool to a delivery pool needs to name that pool's keys and read a
 topology's consumption mode. So the vocabulary lives in ``model/`` beside the op-model;
 the CONCRETE source backends (``embedded``/``decoupled`` + their memstream emit) and the

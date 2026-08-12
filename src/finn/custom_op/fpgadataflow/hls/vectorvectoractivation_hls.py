@@ -87,7 +87,7 @@ class VVAU_hls(VVAU, HLSBackend):
         # accumulator
         acc_datatype = self.get_accumulator_datatype()
         acc_bits = acc_datatype.bitwidth()
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         # if accDataType is not set, then it will default to INT32, which would
         # be a large overestimate in most (if not all) cases. In this scenario,
         # we would use the minimum accumulator as determined by the data types
@@ -303,7 +303,7 @@ class VVAU_hls(VVAU, HLSBackend):
     def defines(self, var):
         dim_h, dim_w = self.get_nodeattr("Dim")
         numReps = 1 * dim_h * dim_w
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         innerProdDim = k_h * k_w
         mem_mode = self.get_nodeattr("mem_mode")
 

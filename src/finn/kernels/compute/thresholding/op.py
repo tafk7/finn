@@ -11,7 +11,7 @@
 The op-definition file (mirrors FINN's ``thresholding.py``, declarative). The shared
 design space (axes/derived/predicates) lives in ``shared.py``; each ``impl_*.py`` backend
 declares the HOW for one compute core (HLS baked-ROM, RTL binary-search). This file adds
-the two assemblies the backends could not: the ``DataflowKernel`` (identity + pool + delivered
+the two assemblies the backends could not: the ``DataflowOp`` (identity + pool + delivered
 parameters) and the FINN ``DataflowOp`` wrapper.
 
 Tensor-name convention for the Context this schema resolves against:
@@ -80,7 +80,7 @@ def thresholding_interfaces():
 
 
 # =============================================================================
-# ASSEMBLY — the full Thresholding design space as a DataflowKernel (and as a DesignSpace).
+# ASSEMBLY — the Thresholding design space, now the op class.
 # =============================================================================
 
 

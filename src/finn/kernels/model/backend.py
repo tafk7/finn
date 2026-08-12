@@ -90,7 +90,7 @@ class Interface:
 
     Direction-exclusivity (``accepted_dtypes``/``mem_modes`` on INPUT only, ``derived_dtype``
     on OUTPUT only) is enforced at pool assembly by
-    :meth:`~finn.kernels.model.kernel.DataflowKernel._check_port_direction`, where the op schema
+    :meth:`~finn.kernels.ir.DataflowOp._check_port_direction`, where the op schema
     supplies each port's direction. Internal-register derivations (accumulator, narrowed
     weight — no port) live on :attr:`Backend.derived_dtypes`, not here.
     """
@@ -317,7 +317,7 @@ def pool_space(
 
     The backend IDENTITY fields ``language``/``rtl_core_module`` are STATIC FIELDS on the
     :class:`Backend` (read bare-node by routing, and off the selected backend by emit via
-    :meth:`~finn.kernels.model.kernel.DataflowKernel.selected_backend`). They are deliberately NOT
+    :meth:`~finn.kernels.ir.DataflowOp.selected_backend`). They are deliberately NOT
     re-projected onto the point as deriveds — one fact, one home.
 
     ``unspecialized_sentinel`` makes the root selection axis default to ``""`` — the
@@ -587,7 +587,7 @@ def _merge_derived_dtypes(root_name, pool) -> list[Derived]:
         # Deliberately NOT `datatype_spec.datatype_derived`, which lifts ONE spec: the merge
         # needs N specs behind a root dispatch, so it unions their deps and resolves whichever
         # the point selects. That difference IS the merge, and it goes with it at T9 —
-        # `DataflowKernel.space_for` already builds its registers through the shared helper.
+        # `Kernel.space_for` already builds its registers through the shared helper.
         deps: set[str] = {root_name}  # the dispatch reads the root to pick the owning spec
         for spec in by_backend.values():
             deps |= set(spec_and_deps(spec)[1])

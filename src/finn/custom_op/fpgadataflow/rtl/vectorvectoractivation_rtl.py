@@ -272,7 +272,7 @@ class VVAU_rtl(VVAU, RTLBackend):
         code_gen_dict["$IS_MVU$"] = [str(0)]
         code_gen_dict["$VERSION$"] = [str(self._resolve_dsp_version(fpgapart))]
         code_gen_dict["$PUMPED_COMPUTE$"] = [str(0)]
-        mw = int(np.prod(self.get_nodeattr("DataflowKernel")))
+        mw = int(np.prod(self.get_nodeattr("Kernel")))
         code_gen_dict["$MW$"] = [str(mw)]
         code_gen_dict["$MH$"] = [str(self.get_nodeattr("Channels"))]
         code_gen_dict["$PE$"] = [str(self.get_nodeattr("PE"))]

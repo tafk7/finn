@@ -56,7 +56,7 @@ class VVAU(HWCustomOp):
             "SIMD": ("i", False, 1),
             "Dim": ("ints", True, []),  # [H, W]
             "Channels": ("i", True, 0),
-            "DataflowKernel": ("ints", True, []),  # [H, W]
+            "Kernel": ("ints", True, []),  # [H, W]
             "resType": ("s", False, "auto", {"auto", "lut", "dsp"}),
             "ActVal": ("i", False, 0),
             # FINN DataTypes for inputs, weights, outputs
@@ -120,7 +120,7 @@ class VVAU(HWCustomOp):
         node = self.onnx_node
         in_act = context[node.input[0]]
         (_, dim_h, dim_w, _) = in_act.shape
-        (k_h, k_w) = self.get_nodeattr("DataflowKernel")
+        (k_h, k_w) = self.get_nodeattr("Kernel")
         channels = self.get_nodeattr("Channels")
         producer = [x for x in graph.node if x.output[0] == node.input[0]]
         if bool(producer) and (
@@ -235,7 +235,7 @@ class VVAU(HWCustomOp):
         return out_width
 
     def get_folded_input_shape(self, ind=0):
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         dim_h, dim_w = self.get_nodeattr("Dim")
         ch = self.get_nodeattr("Channels")
         simd = self.get_nodeattr("SIMD")
@@ -268,7 +268,7 @@ class VVAU(HWCustomOp):
     def get_normal_input_shape(self, ind=0):
         dim_h, dim_w = self.get_nodeattr("Dim")
         ch = self.get_nodeattr("Channels")
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         normal_input_shape = tuple([1, dim_h, dim_w, k_h * k_w * ch])
         return normal_input_shape
 
@@ -281,7 +281,7 @@ class VVAU(HWCustomOp):
     def calc_wmem(self):
         """Calculates and returns WMEM."""
         ch = self.get_nodeattr("Channels")
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         pe = self.get_nodeattr("PE")
         simd = self.get_nodeattr("SIMD")
         wmem = (k_h * k_w * ch // pe) // simd
@@ -370,7 +370,7 @@ class VVAU(HWCustomOp):
         # for narrow data types on Versal devices.
         wdt = self.get_input_datatype(1)
         W = wdt.bitwidth()
-        D_in = int(np.prod(self.get_nodeattr("DataflowKernel")))
+        D_in = int(np.prod(self.get_nodeattr("Kernel")))
         D_out = self.get_nodeattr("Channels")
         uram_est = self.uram_estimation()
         if uram_est == 0:
@@ -384,7 +384,7 @@ class VVAU(HWCustomOp):
         simd = self.get_nodeattr("SIMD")
         ch = self.get_nodeattr("Channels")
         dim_h, dim_w = self.get_nodeattr("Dim")
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         # currently FINN supports for vvau a batch size of 1
         batch_size = 1
         # since mmv != 1 is not supported yet, we set mmv for now to 1
@@ -396,7 +396,7 @@ class VVAU(HWCustomOp):
         """Minimize the accumulator bit width according to the weight values,
         input data types, and size of dot product"""
         weights = model.get_initializer(self.onnx_node.input[1])
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         fm = self.get_nodeattr("Channels")
         # put weights into the shape expected by calculate_matvec_accumulator_range
         weights = weights.reshape(fm, k_h * k_w).transpose()
@@ -528,7 +528,7 @@ class VVAU(HWCustomOp):
         pe = self.get_nodeattr("PE")
         simd = self.get_nodeattr("SIMD")
         ch = self.get_nodeattr("Channels")
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         wmem = self.calc_wmem()
         assert orig_weight_matrix.shape == (
             ch,
@@ -740,7 +740,7 @@ class VVAU(HWCustomOp):
                 f_thresh.close()
 
     def get_op_and_param_counts(self):
-        k_h, k_w = self.get_nodeattr("DataflowKernel")
+        k_h, k_w = self.get_nodeattr("Kernel")
         fm = self.get_nodeattr("Channels")
         dim_h, dim_w = self.get_nodeattr("Dim")
         weight_bits = self.get_input_datatype(1).bitwidth()

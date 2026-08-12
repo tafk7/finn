@@ -468,7 +468,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(transform)
         return model
 
-    # DataflowKernel-substrate inference runs FIRST (handoff Seam A): the new kernel ops claim their
+    # kernel-substrate inference runs FIRST (handoff Seam A): the new kernel ops claim their
     # frontend patterns (MatMul[+MultiThreshold] -> finn.kernels/MVAU, standalone
     # MultiThreshold -> finn.kernels/Thresholding) before FINN's classic Infer* transforms,
     # which then see only the remainder. This never touches FINN's classic MVAU path.
@@ -680,7 +680,7 @@ def step_specialize_layers(model: ModelWrapper, cfg: DataflowBuildConfig):
     which contains the desired setting. If the user preference cannot be fulfilled,
     a warning will be printed and the implementation style will be set to a default."""
 
-    # DataflowKernel-substrate specialization runs FIRST (handoff Seam B): SpecializeKernels commits
+    # kernel-substrate specialization runs FIRST (handoff Seam B): SpecializeKernels commits
     # the `backend` axis on finn.kernels nodes (selection as data, via a Policy) before FINN's
     # classic SpecializeLayers, which is domain-gated to finn.custom_op.fpgadataflow and so
     # sees only the classic remainder. Mirrors the InferKernels injection in step_convert_to_hw.

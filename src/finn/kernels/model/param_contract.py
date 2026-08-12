@@ -10,7 +10,7 @@
 COMPUTATION bodies a :class:`~finn.kernels.model.parameter_source.ParameterSource`
 composes.
 
-A :class:`~finn.kernels.model.kernel.DataflowKernel` that delivers parameters (weights,
+A :class:`~finn.kernels.ir.DataflowOp` that delivers parameters (weights,
 thresholds, …) declares a :class:`DeliveredParam` per interface — the WHAT (interface +
 concrete source pool). The HOW — the ``(demand Derived, guarded source sub-schema)`` pair,
 whose supply-waterfall order (COMPUTE → DEMAND → SOURCE) falls out of their declared deps
@@ -46,13 +46,13 @@ from .tiling import stream_width_key
 class DeliveredParam:
     """One parameter interface an op delivers through a source (parameters) pool.
 
-    An INTERNAL assembly struct: an op no longer constructs this — ``DataflowKernel`` DERIVES the
+    An INTERNAL assembly struct: an op no longer constructs this — ``DataflowOp`` DERIVES the
     ``DeliveredParam`` list from the pool (an interface some backend declares in its
     ``mem_modes``). The generic ``ParameterSource`` wiring consumes it. Fields:
 
     * ``iface`` — the parameter interface name (also the Context tensor key).
     * ``pool`` — the CONCRETE source pool (a tuple of storage-topology ``Backend``\\ s),
-      built by ``DataflowKernel.compile()`` from ``parameters_pool(iface)``. Handed to the wiring so
+      built by ``DataflowOp.compile()`` from ``parameters_pool(iface)``. Handed to the wiring so
       it reads the pool directly instead of hardcoding a lookup.
     """
 

@@ -23,7 +23,8 @@ from qonnx.core.datatype import DataType
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.predicate import predicate
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
+from finn.kernels.model.kernel import InterfaceSchema
+from .synthetic import synthetic_op
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -51,7 +52,7 @@ def _kernel_with_predicate(pred):
         predicates=(pred,),
         ports=ports_from(stream={"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}),
     )
-    return DataflowKernel(name="MVU", interfaces=_ifaces(), pool=(backend,))
+    return synthetic_op(interfaces=_ifaces(), pool=(backend,), name="MVU")
 
 
 def test_typo_class_bug_propagates_not_silently_infeasible():

@@ -155,7 +155,7 @@ class SetFolding(Transformation):
             # attached to the model so its get_folding_axes/get_exp_cycles getters can
             # read live graph context; classic ops get an identical bare instance.
             node_inst = model.get_customop_wrapper(node)
-            # Capability query (R1 down-payment): a DataflowKernel-engine-backed op advertises
+            # Capability query (R1 down-payment): a kernel-engine-backed op advertises
             # its folding dials mapped to each dial's resolved max, so SetFolding folds
             # it without matching op_type strings. Each dial is swept low→high until the
             # cycle target is met, exactly like the classic branches.
@@ -215,7 +215,7 @@ class SetFolding(Transformation):
                     and pe == max_pe
                     and cyc > self.target_cycles_per_frame
                 ):
-                    max_simd = np.prod(node_inst.get_nodeattr("DataflowKernel"))
+                    max_simd = np.prod(node_inst.get_nodeattr("Kernel"))
                     self.optimize_attribute_val(node_inst, max_simd, "SIMD")
                 # also set the folding of the upsteam DW SWU
                 # which must be identical to this node
@@ -231,7 +231,7 @@ class SetFolding(Transformation):
                             swu_node_inst.set_nodeattr("parallel_window", 0)
                 else:
                     if op_type in ["VVAU_hls", "VVAU_rtl"]:
-                        ksize = np.prod(node_inst.get_nodeattr("DataflowKernel"))
+                        ksize = np.prod(node_inst.get_nodeattr("Kernel"))
                     elif op_type == "Pool_hls":
                         ksize = node_inst.get_nodeattr("KernelSize")
                     else:

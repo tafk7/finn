@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""A DataflowKernel-backed MVAU folded by the STOCK ``SetFolding`` transform (R1 seam).
+"""A kernel-backed MVAU folded by the STOCK ``SetFolding`` transform (R1 seam).
 
 Folding rides the ``get_folding_axes`` capability query — no op_type-string match. The
 dials round-trip through nodeattrs and drive ``get_exp_cycles`` down monotonically.

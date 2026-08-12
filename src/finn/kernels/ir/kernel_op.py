@@ -6,8 +6,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``DataflowOp`` — the FINN adapter that lets a :class:`DataflowKernel` back a real ONNX node and
-answer FINN's ``HWCustomOp`` contract.
+"""``DataflowOp`` — a hardware kernel AS a real ONNX node.
+
+The op class IS the kernel. Its body declares the design space (interfaces, backend pool,
+cell-level axes/derived/predicates); the instance answers FINN's ``HWCustomOp`` contract for
+one graph node. There is no separate container object and no ``.kernel()`` hop — that split
+was F6, and its visible symptom was ten getters existing twice.
 
 The engine (``engine/``) is pure and graph-free: its getters take a :class:`Context`
 (shapes/datatypes/VALUES as data) and a resolved :class:`Point`. This adapter sources that
@@ -26,8 +30,9 @@ consumer-surface-model.md Tier 0-3):
      dtypes, REAL initializer values), re-keyed to the kernel's literal interface names.
   2. **Configure** — ``_point()`` reads the design axes off nodeattrs and
      ``kernel.configure``s them into a Point (or raises on Illegal).
-  3. **Project** — each FINN getter delegates to the matching DataflowKernel getter, adapting the
-     ``(ind)`` FINN signature to the engine's ``(point, context, ind)``.
+  3. **Project** — each FINN getter answers from the node's own point + context. ONE method
+     per question: the public ``(ind)`` form is the HWCustomOp contract, and the
+     ``(point, context)`` projection math lives in the private helpers it calls.
 
 Because the Context carries REAL weight values, value-derived dtypes (MVAU's accumulator
 under ``noActivation``) are exact for the getters too — not correct-only-by-luck under a
@@ -96,7 +101,7 @@ class TransformationResult:
 
 
 class DataflowOp(HWCustomOp):
-    """Base FINN adapter over a :class:`~finn.kernels.model.kernel.DataflowKernel`.
+    """Base FINN adapter over a :class:`~finn.kernels.ir.DataflowOp`.
 
     Subclasses implement only :meth:`kernel` (the design-space object). The
     interface↔node-slot binding is the kernel's own
@@ -461,14 +466,20 @@ class DataflowOp(HWCustomOp):
         true cost is ``nf·sf·n_vecs`` while this floor gives only ``max(nf·sf, ...)``
         (undercounts whenever n_vecs>1, i.e. conv-as-matmul). A proper cost model (nested
         block traversal, pipeline fill/drain, per-backend overrides) is a FUTURE PASS."""
-        point, context = self._point(), self._context()
+        return self._exp_cycles(self._point(), self._context())
+
+    @classmethod
+    def _exp_cycles(cls, point, context) -> int:
+        """The cost floor for an explicit (point, context) — the projection math, without a
+        node. The public :meth:`get_exp_cycles` is this sourced from the node's own state;
+        this form is what a graph-free caller (and the tiling tests) wants."""
         cycles = 1
-        for iface in self.present_interfaces(context):
+        for iface in cls.present_interfaces(context):
             if iface.protocol != Protocol.Stream:
                 continue  # only Stream ports contribute a stream-cycle count (T1.4); an
                 # MM/Config port has no tensor-axis stream, so it would give a bogus count.
             n = prod(context.tensor_shape(iface.tensor))
-            elems = self._stream_elems(iface, point)
+            elems = cls._stream_elems(iface, point)
             if elems <= 0 or n % elems != 0:
                 # A partial last stream is a real cycle; round up.
                 cycles = max(cycles, -(-n // max(elems, 1)))
@@ -645,7 +656,7 @@ class DataflowOp(HWCustomOp):
     def _generated(cls, backend: Backend):
         """The tiling engine's generated fragments + fold map for one Backend,
         derived from its ``stream`` map joined against the op interfaces' ``block``.
-        Memoized per DataflowKernel by backend name."""
+        Memoized per op class by backend name."""
         cache = cls._tiling_cache
         got = cache.get(backend.name)
         if got is None:
@@ -696,7 +707,7 @@ class DataflowOp(HWCustomOp):
         set and its one rejection are. It is not deleted because ``pool_space`` is SHARED
         with the storage pool, which still needs the whole assembler — see the note there.
 
-        MEMOIZED per DataflowKernel instance: assembly is pure over the (frozen) kernel.
+        MEMOIZED per op class: assembly is pure over the (frozen) kernel.
         Sharing one instance is safe because the result is frozen and its lazily-built
         caches (order, strata) are idempotent — recomputing them yields the same values, so
         a shared space cannot carry state between queries."""

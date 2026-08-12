@@ -12,7 +12,7 @@ Only the ops-authored bits live here: the topology member-identity strings (the 
 the ``parameters.<iface>.topology`` axis) and the default parameter-interface name. The
 GENERIC delivery vocabulary — the ``parameters.<iface>.*`` point-key builders and the
 consumption-mode constants — moved DOWN to :mod:`finn.kernels.model.param_names` (it is
-engine mechanism the generic DataflowKernel wiring emits, not op content). Import key builders /
+engine mechanism the generic op wiring emits, not op content). Import key builders /
 mode constants from there; import topology identities from here.
 """
 

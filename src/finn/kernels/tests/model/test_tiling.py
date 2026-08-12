@@ -24,7 +24,8 @@ from finn.kernels.engine.context import Context
 from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.point import Illegal, Point
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
+from finn.kernels.model.kernel import InterfaceSchema
+from .synthetic import synthetic_op
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import (
     FULL,
@@ -197,14 +198,14 @@ def test_stream_names_unknown_interface_raises():
 
 
 # ===========================================================================
-# T4/T5/T7 — folded shapes + widths through the DataflowKernel facade.
+# T4/T5/T7 — folded shapes + widths through the op-class facade.
 # ===========================================================================
 
 
 def _mvu_kernel():
     stream = {"inp": [1, "SIMD"], "out": [1, "PE"], "weights": ["SIMD", "PE"]}
     backend = Backend(name="mvu", ports=ports_from(stream=stream))
-    return DataflowKernel(
+    return synthetic_op(
         name="MVU", interfaces=MVU_IFACES, op_axes=(),
         pool=(backend,),
     )
@@ -215,16 +216,16 @@ def test_weight_2d_block_folds_and_width():
     pt = k.configure(ctx, {"backend": "mvu", "SIMD": 16, "PE": 4})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # weight stream WIDTH = SIMD*PE*wbits = 16*4*8 = 512.
-    assert k.get_instream_width(pt, ctx, 1) == 16 * 4 * 8
+    assert k._stream_width(k._stream_input(1), pt, ctx) == 16 * 4 * 8
     # 2-D block (MW,MH) streamed [SIMD,PE] -> (MW/SIMD, MH/PE, SIMD, PE).
-    assert k.get_folded_input_shape(pt, ctx, 1) == (128 // 16, 64 // 4, 16, 4)
+    assert k._folded_shape(k._stream_input(1), pt, ctx) == (128 // 16, 64 // 4, 16, 4)
 
 
 def test_folded_shape_folds_the_named_dim():
     k, ctx = _mvu_kernel(), _ctx(mw=128, mh=64)
     pt = k.configure(ctx, {"backend": "mvu", "SIMD": 16, "PE": 4})
-    assert k.get_folded_input_shape(pt, ctx, 0) == (1, 8, 16)   # inp (1,128) folds MW by SIMD
-    assert k.get_folded_output_shape(pt, ctx, 0) == (1, 16, 4)  # out (1,64) folds MH by PE
+    assert k._folded_shape(k._stream_input(0), pt, ctx) == (1, 8, 16)   # inp (1,128) folds MW by SIMD
+    assert k._folded_shape(k._stream_output(0), pt, ctx) == (1, 16, 4)  # out (1,64) folds MH by PE
 
 
 @pytest.mark.parametrize("simd,pe", [(16, 4), (8, 8), (128, 64)])
@@ -232,7 +233,7 @@ def test_exp_cycles_is_reduction_product_from_floor(simd, pe):
     k, ctx = _mvu_kernel(), _ctx(mw=128, mh=64)
     pt = k.configure(ctx, {"backend": "mvu", "SIMD": simd, "PE": pe})
     # weights = MW*MH/(SIMD*PE) = sf*nf is the largest interface term; no override needed.
-    assert k.get_exp_cycles(pt, ctx) == (128 // simd) * (64 // pe)
+    assert k._exp_cycles(pt, ctx) == (128 // simd) * (64 // pe)
 
 
 def test_direction_is_declared_not_role():
@@ -243,8 +244,8 @@ def test_direction_is_declared_not_role():
 def test_index_derived_from_position():
     k = _mvu_kernel()
     assert [i.name for i in k.inputs()] == ["inp", "weights"]
-    assert k.get_input_datatype(_ctx(), 0) == DataType["INT8"]   # inp
-    assert k.get_input_datatype(_ctx(), 1) == DataType["INT8"]   # weights
+    assert _ctx().tensor_datatype(k._input(0).tensor) == DataType["INT8"]   # inp
+    assert _ctx().tensor_datatype(k._input(1).tensor) == DataType["INT8"]  # weights
 
 
 def test_width_uses_derived_dtype():
@@ -261,7 +262,7 @@ def test_width_uses_derived_dtype():
             derived_dtype={"out": DataType["INT16"]},
         ),
     )
-    k = DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
+    k = synthetic_op(interfaces=ifaces, pool=(backend,), name="K")
     ctx = Context(
         shapes={"inp": (1, 128), "out": (1, 64)},
         datatypes={"inp": DataType["INT8"], "out": DataType["INT32"]},
@@ -269,7 +270,7 @@ def test_width_uses_derived_dtype():
     pt = k.configure(ctx, {"backend": "k", "SIMD": 16, "PE": 4})
     assert not isinstance(pt, Illegal), getattr(pt, "reasons", None)
     # PE=4 elements * INT16 (from derived_dtype), NOT INT32 (the tensor dtype).
-    assert k.get_outstream_width(pt, ctx, 0) == 4 * 16
+    assert k._stream_width(k._stream_output(0), pt, ctx) == 4 * 16
     assert pt["stream_width.out"] == 4 * 16
 
 
@@ -290,7 +291,7 @@ def _kernel_with_port(iface_name, direction, **port_kwargs):
         name="k",
         ports={iface_name: Interface(**port_kwargs)},
     )
-    return DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
+    return synthetic_op(interfaces=ifaces, pool=(backend,), name="K")
 
 
 def test_derived_dtype_on_input_port_rejected():
@@ -333,4 +334,4 @@ def test_derived_dtype_on_output_and_accepted_on_input_ok():
         },
     )
     # Constructs without raising — correct-direction facts are legal.
-    DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
+    synthetic_op(interfaces=ifaces, pool=(backend,), name="K")

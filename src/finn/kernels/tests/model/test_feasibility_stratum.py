@@ -129,7 +129,8 @@ def test_typo_class_bug_still_propagates():
     between a buggy rule and a silent skip, so what used to be a backstop is now the whole
     guarantee."""
     from finn.kernels.model.backend import Backend, ports_from
-    from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
+    from finn.kernels.model.kernel import InterfaceSchema
+    from .synthetic import synthetic_op
     from finn.kernels.model.ports import Direction
     from finn.kernels.model.tiling import FULL
 
@@ -137,7 +138,7 @@ def test_typo_class_bug_still_propagates():
     def _buggy(p, ctx):
         return ctx.this_method_does_not_exist()
 
-    kernel = DataflowKernel(
+    kernel = synthetic_op(
         name="MVU",
         interfaces=(
             InterfaceSchema("inp", Direction.IN, block=[1, FULL]),

@@ -14,7 +14,8 @@ explicit index (an operand wired at a shifted slot) is honored verbatim.
 """
 
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import DataflowKernel, InterfaceSchema
+from finn.kernels.model.kernel import InterfaceSchema
+from .synthetic import synthetic_op
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -24,7 +25,7 @@ def _kernel(ifaces):
         name="core",
         ports=ports_from(stream={i.name: [1, "PE"] for i in ifaces if i.direction == Direction.IN}),
     )
-    return DataflowKernel(name="K", interfaces=ifaces, pool=(backend,))
+    return synthetic_op(interfaces=ifaces, pool=(backend,), name="K")
 
 
 def test_sentinel_indices_resolve_to_declaration_order():
