@@ -11,7 +11,7 @@
 The op-definition file (mirrors FINN's ``thresholding.py``, declarative). The shared
 design space (axes/derived/predicates) lives in ``shared.py``; each ``impl_*.py`` bundle
 declares the HOW for one compute core (HLS baked-ROM, RTL binary-search). This file adds
-the two assemblies the bundles could not: the ``Kernel`` (identity + pool + delivered
+the two assemblies the bundles could not: the ``_LegacyKernel`` (identity + pool + delivered
 parameters) and the FINN ``KernelOp`` wrapper.
 
 Tensor-name convention for the Context this schema resolves against:
@@ -35,7 +35,7 @@ from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.ir import KernelOp, TransformationResult
 from finn.kernels.engine.constraints import ShapeRank
-from finn.kernels.model.kernel import InterfaceSchema, Kernel
+from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 
@@ -81,7 +81,7 @@ def thresholding_interfaces():
 
 
 # =============================================================================
-# ASSEMBLY — the full Thresholding design space as a Kernel (and as a DesignSpace).
+# ASSEMBLY — the full Thresholding design space as a _LegacyKernel (and as a DesignSpace).
 # =============================================================================
 
 
@@ -91,17 +91,17 @@ def thresholding_pool():
 
 
 @registry_cached(generation, parameters_generation)
-def thresholding_kernel() -> Kernel:
-    """The full Thresholding design space as a :class:`Kernel` — the WHAT-owning op node.
+def thresholding_kernel() -> _LegacyKernel:
+    """The full Thresholding design space as a :class:`_LegacyKernel` — the WHAT-owning op node.
 
     The compute pool (``implementation``: HLS / RTL) with impl-owned tiling. The threshold
-    interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the Kernel
+    interface is DERIVED as a delivered parameter from the pool's ``mem_modes``; the _LegacyKernel
     builds its DeliveredParam and synthesizes the supply waterfall generically; both backends
     consume thresholds in embedded mode → the delivery resolves to the ``embedded`` topology
     (no memstream cell).
 
     CACHED on the compute + parameters registry generations — see :func:`mvau_kernel`."""
-    return Kernel(
+    return _LegacyKernel(
         name="Thresholding",
         interfaces=thresholding_interfaces(),
         op_axes=op_axes(),
@@ -121,7 +121,7 @@ def thresholding_kernel() -> Kernel:
 
 
 class ThresholdingKernelOp(KernelOp):
-    """Thresholding (multi-threshold activation) as a Kernel-backed FINN op."""
+    """Thresholding (multi-threshold activation) as a _LegacyKernel-backed FINN op."""
 
     # -- Seam A: frontend claim (mirror of InferThresholdingLayer) ---------------------
 

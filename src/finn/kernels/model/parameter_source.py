@@ -9,7 +9,7 @@
 """``ParameterSource`` — the compute→source seam for one delivered parameter (design pitch §2).
 
 A ``ParameterSource`` HOLDS the source backends for one parameter interface (a pool → one
-is selected); it is the parameter-side MIRROR of a compute :class:`~finn.kernels.model.kernel.Kernel`,
+is selected); it is the parameter-side MIRROR of a compute :class:`~finn.kernels.model.kernel._LegacyKernel`,
 NOT itself a source backend (that is a pool member — see
 :func:`~finn.kernels.model.source_backend.source_backend`).
 
@@ -67,7 +67,7 @@ class ParameterSource:
     :class:`~finn.kernels.model.param_contract.DeliveredParam` (the op's WHAT) plus the compute
     pool (whose members' ``mem_modes`` drive the guard). A ``ParameterSource`` HOLDS the pool
     of source backends (one is selected); it is the parameter-side mirror of a compute
-    ``Kernel``, NOT itself a source backend.
+    ``_LegacyKernel``, NOT itself a source backend.
 
     Attributes:
         schema: the op-side interface name this realizes (the ``DeliveredParam.iface`` —

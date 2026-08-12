@@ -142,7 +142,7 @@ def test_typo_class_bug_still_propagates_through_the_fast_path():
     swallow a kernel BUG. Falling through to the full resolve is what preserves INV5: a
     typo-class error still escapes, just from the trial rather than the pre-check."""
     from finn.kernels.model.backend import Backend, ports_from
-    from finn.kernels.model.kernel import InterfaceSchema, Kernel
+    from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
     from finn.kernels.model.ports import Direction
     from finn.kernels.model.tiling import FULL
 
@@ -150,7 +150,7 @@ def test_typo_class_bug_still_propagates_through_the_fast_path():
     def _buggy(p, ctx):
         return ctx.this_method_does_not_exist()
 
-    kernel = Kernel(
+    kernel = _LegacyKernel(
         name="MVU",
         interfaces=(
             InterfaceSchema("inp", Direction.IN, block=[1, FULL]),

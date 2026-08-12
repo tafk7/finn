@@ -46,7 +46,7 @@ from .shared import op_axes, op_derived, op_predicates
 from . import impl_hls  # noqa: E402,F401
 from . import impl_rtl  # noqa: E402,F401
 
-# The Kernel assembly + FINN wrapper (imported after the bundles register).
+# The _LegacyKernel assembly + FINN wrapper (imported after the bundles register).
 from .op import (  # noqa: E402,F401 (re-exported public surface)
     ThresholdingKernelOp,
     thresholding_kernel,

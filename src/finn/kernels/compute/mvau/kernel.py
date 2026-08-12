@@ -36,7 +36,7 @@ from __future__ import annotations
 from finn.kernels.engine.attr import attr
 from finn.kernels.engine.constraints import IsStatic, ShapeRank, SparsityFree, ValueNonNeg
 from finn.kernels.engine.derived import Derived
-from finn.kernels.model.kernel import InterfaceSchema, Kernel
+from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel
 from finn.kernels.model.ports import Direction
 from finn.kernels.model.tiling import FULL
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
@@ -184,7 +184,7 @@ def op_predicates():
 
 
 # =============================================================================
-# 7. ASSEMBLY — the full MVAU design space as a Kernel.
+# 7. ASSEMBLY — the full MVAU design space as a _LegacyKernel.
 # =============================================================================
 
 
@@ -194,12 +194,12 @@ def mvau_pool():
 
 
 @registry_cached(generation, parameters_generation)
-def mvau_kernel() -> Kernel:
-    """The full MVAU design space as a :class:`Kernel` — the WHAT-owning op node.
+def mvau_kernel() -> _LegacyKernel:
+    """The full MVAU design space as a :class:`_LegacyKernel` — the WHAT-owning op node.
 
     The compute pool (HLS / DSP-softvec / DSP-packed) with impl-owned tiling. Weights +
     thresholds are DERIVED as delivered parameters from the pool's ``mem_modes`` (a backend
-    declares which param ports it consumes); the Kernel builds their DeliveredParam list and
+    declares which param ports it consumes); the _LegacyKernel builds their DeliveredParam list and
     synthesizes the COMPUTE→DEMAND→MEMORY supply waterfall per interface generically
     (model/param_contract.py); the getters project from a resolved point via the impl
     ``stream``.
@@ -207,7 +207,7 @@ def mvau_kernel() -> Kernel:
     CACHED on the compute + parameters registry generations: assembly is pure over them, and
     every getter path used to rebuild the whole thing. A registration invalidates it
     automatically, so "add a backend, edit nothing else" still holds."""
-    return Kernel(
+    return _LegacyKernel(
         name="MVAU",
         interfaces=mvau_interfaces(),
         op_axes=op_axes(),

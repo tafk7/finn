@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``Kernel`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
+"""``_LegacyKernel`` — the WHAT-owning op node, and the Tier-3 (estimate-only) surface
 it projects from a resolved :class:`~finn.kernels.engine.point.Point`
 (kernelop-tensor-block-stream.md §3, §7; consumer-surface-model.md Tier 0-3).
 
@@ -46,7 +46,7 @@ from .tiling import TileError, generate_tiling, stream_width_key as _stream_widt
 
 
 class KernelError(ValueError):
-    """Raised for an ill-formed Kernel query (unknown interface index, a folded-shape
+    """Raised for an ill-formed _LegacyKernel query (unknown interface index, a folded-shape
     request on a non-last-axis PARAM port, or a stream dial that does not divide)."""
 
 
@@ -58,7 +58,7 @@ _DATAFLOW_PROTOCOLS = frozenset({Protocol.Stream, Protocol.MemoryMapped, Protoco
 def _resolve_interface_indices(interfaces):
     """Resolve each interface's ``index`` sentinel (``-1``) to its declaration-order position
     among same-direction peers, leaving any explicitly-set index untouched. Called once at
-    ``Kernel`` construction so ``iface.index`` is always a concrete node-slot index the
+    ``_LegacyKernel`` construction so ``iface.index`` is always a concrete node-slot index the
     adapter can read (the index-authoritative-at-the-ONNX-boundary rule, F9)."""
     from dataclasses import replace
 
@@ -104,7 +104,7 @@ class InterfaceSchema:
             identity fact (like ``direction``) — the opset says the slot may be absent (MVU
             thresholds, a bias, MaxPool indices). Its PRESENCE for a given node is EMERGENT
             from Context (its tensor exists), read at projection time by
-            :meth:`Kernel.present_interfaces` — the same declared-slot / emergent-existence
+            :meth:`_LegacyKernel.present_interfaces` — the same declared-slot / emergent-existence
             split as role emergence. A required interface (default ``False``) is always
             present. (Variadic 0-to-N is a later additive generalization of the same rule:
             present interfaces come from Context, not the declared list.)
@@ -114,13 +114,13 @@ class InterfaceSchema:
             backend cannot override (a rank check, a static-initializer requirement). Each
             compiles to a predicate that auto-skips when the port's tensor is absent
             (so an optional port needs no ``has_tensor`` guard). Relational rules that read
-            ANOTHER tensor live on :attr:`Kernel.constraints` instead.
+            ANOTHER tensor live on :attr:`_LegacyKernel.constraints` instead.
 
         index: the node-slot index WITHIN this interface's direction (0=first input/output).
             The adapter reads ``node.input[index]``/``node.output[index]`` to resolve this
             interface's Context tensor — the index-authoritative-at-the-ONNX-boundary fact
             (F9). Defaults to the sentinel ``-1`` = "declaration order among same-direction
-            peers", resolved to a concrete positional index at ``Kernel`` construction
+            peers", resolved to a concrete positional index at ``_LegacyKernel`` construction
             (:func:`_resolve_interface_indices`). An op
             with a non-declaration-order wiring (an operand at a shifted slot) sets it
             explicitly. Replaces the old ``PortSpec.index`` — one interface object now carries
@@ -140,7 +140,7 @@ class InterfaceSchema:
             common case) or :class:`~finn.kernels.model.ports.Variadic` ``(count_from)`` (N
             homogeneous repeats, N read from Context via ``ctx.arity(count_from)`` — Concat).
             Distinct from ``optional`` (ONNX ``Optional``, a heterogeneous 0-or-1 operand):
-            ``Variadic`` is ONNX ``Variadic``, a homogeneous repeat. :meth:`Kernel.interfaces`
+            ``Variadic`` is ONNX ``Variadic``, a homogeneous repeat. :meth:`_LegacyKernel.interfaces`
             expands ``Variadic`` to N concrete peers.
     """
 
@@ -171,7 +171,7 @@ class InterfaceSchema:
 
 
 @dataclass(frozen=True)
-class Kernel:
+class _LegacyKernel:
     """A hardware kernel op: its immutable, ONNX-invariant IDENTITY (name, interfaces,
     op-level design space, frontend-fixed attrs, rough cost) + a ``pool`` of Backends
     (realizations). Delivered parameters (weight/threshold delivery, memory) are DERIVED
@@ -179,7 +179,7 @@ class Kernel:
 
     The identity fields are held directly (the identity ⊥ realization split is the
     field grouping, not a nested wrapper — F10.1 collapsed the former ``KernelSchema``
-    onto ``Kernel``). Every identity field is independently optional: a minimal op declares
+    onto ``_LegacyKernel``). Every identity field is independently optional: a minimal op declares
     only ``name`` + ``interfaces`` (the whole space then comes from the pool's tiling).
 
     ``kernel_attrs`` is the THIRD design-space category, distinct from ``op_axes`` (the DSE
@@ -305,7 +305,7 @@ class Kernel:
     def _generated(self, impl: Backend):
         """The tiling engine's generated fragments + fold map for one Backend,
         derived from its ``stream`` map joined against the op interfaces' ``block``.
-        Memoized per Kernel by impl name."""
+        Memoized per _LegacyKernel by impl name."""
         cache = self._tiling_cache
         got = cache.get(impl.name)
         if got is None:
@@ -343,7 +343,7 @@ class Kernel:
         couplings that once lived here relocated into the parameters pool, and the
         compute→source demand crosses the seam owned by a ``ParameterSource``.
 
-        MEMOIZED per Kernel instance: assembly is pure over the (frozen) kernel, and every
+        MEMOIZED per _LegacyKernel instance: assembly is pure over the (frozen) kernel, and every
         query path went through here — ``_assignment``, ``configure``,
         ``first_feasible_backend`` and ``get_nodeattr_types`` each rebuilt the whole space.
         Sharing one instance is safe because the result is frozen and its lazily-built

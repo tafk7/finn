@@ -90,7 +90,7 @@ class Interface:
 
     Direction-exclusivity (``accepted_dtypes``/``mem_modes`` on INPUT only, ``derived_dtype``
     on OUTPUT only) is enforced at pool assembly by
-    :meth:`~finn.kernels.model.kernel.Kernel._check_port_direction`, where the op schema
+    :meth:`~finn.kernels.model.kernel._LegacyKernel._check_port_direction`, where the op schema
     supplies each port's direction. Internal-register derivations (accumulator, narrowed
     weight — no port) live on :attr:`Backend.derived_dtypes`, not here.
     """
@@ -303,7 +303,7 @@ def pool_space(
 
     The backend IDENTITY fields ``language``/``rtl_core_module`` are STATIC FIELDS on the
     :class:`Backend` (read bare-node by routing, and off the selected bundle by emit via
-    :meth:`~finn.kernels.model.kernel.Kernel.selected_backend`). They are deliberately NOT
+    :meth:`~finn.kernels.model.kernel._LegacyKernel.selected_backend`). They are deliberately NOT
     re-projected onto the point as deriveds — one fact, one home.
 
     ``unspecialized_sentinel`` makes the root selection axis default to ``""`` — the

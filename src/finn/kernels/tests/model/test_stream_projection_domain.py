@@ -21,14 +21,14 @@ from qonnx.core.datatype import DataType
 
 from finn.kernels.engine.context import Context
 from finn.kernels.model.backend import Backend, ports_from
-from finn.kernels.model.kernel import InterfaceSchema, Kernel, KernelError
+from finn.kernels.model.kernel import InterfaceSchema, _LegacyKernel, KernelError
 from finn.kernels.model.ports import Direction, Protocol
 from finn.kernels.model.tiling import FULL
 
 
 def _kernel(ifaces, stream):
     backend = Backend(name="core", ports=ports_from(stream=stream))
-    return Kernel(name="K", interfaces=ifaces, pool=(backend,))
+    return _LegacyKernel(name="K", interfaces=ifaces, pool=(backend,))
 
 
 def _ctx():

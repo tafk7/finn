@@ -57,7 +57,7 @@ def _threshold_shape(ctx, what):
     Both geometry deriveds index this positionally, and a DERIVED runs before any predicate —
     so on a non-2D tensor the raw index raises ``IndexError``, which is neither legible nor in
     the ``(ValueError, KeyError, AbsentAxisError)`` set the feasibility trials treat as "not
-    resolvable for this context" (``Kernel.first_feasible_backend``). It would propagate as a
+    resolvable for this context" (``_LegacyKernel.first_feasible_backend``). It would propagate as a
     kernel bug (INV5) on a node that is merely ineligible. Raising the narrow ValueError here
     keeps the diagnosis at the shape read, where the real reason is in hand.
 

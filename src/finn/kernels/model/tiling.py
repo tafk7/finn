@@ -325,7 +325,7 @@ class GeneratedTiling:
         axes/derived/predicates: fragments to append to the Backend's own before
             ``pool_space`` merges them (so they dispatch on the selected impl).
         width_exprs: ``{interface_name: TileExpr}`` — the elements/cycle width, used by
-            the Kernel getters (``_stream_elems``).
+            the _LegacyKernel getters (``_stream_elems``).
         fold_map: ``{interface_name: [(dim_index, elems_expr | None)]}`` — the folded
             positions and their stream-element expressions; None = unfolded pass-through.
         reshapes: ``{interface_name: bool}`` — whether a folded SHAPE is a plain reshape
@@ -346,7 +346,7 @@ def generate_tiling(interfaces, stream: dict, derived_dtypes: dict | None = None
     """Derive design-space fragments + the fold map from one Backend's ``stream``
     map joined against the op ``interfaces`` block structure.
 
-    ``interfaces`` is the Kernel's interface tuple — each carries the op-owned ``block``
+    ``interfaces`` is the _LegacyKernel's interface tuple — each carries the op-owned ``block``
     (extents per tensor dim). ``stream`` is ``{interface_name: [StreamFold, ...]}`` —
     positional over the SAME dims: ``stream[iface][i]`` folds ``block[iface][i]``.
     ``derived_dtypes`` is ``{interface_name: DatatypeSpec}`` — the selected backend's

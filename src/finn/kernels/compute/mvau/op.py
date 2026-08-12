@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 
 
 class MvauKernelOp(KernelOp):
-    """MVAU (matrix-vector activation) as a Kernel-backed FINN op."""
+    """MVAU (matrix-vector activation) as a _LegacyKernel-backed FINN op."""
 
     # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
 
@@ -124,7 +124,7 @@ class MvauKernelOp(KernelOp):
         """Whether ``node`` is a ``MatMul`` this kernel can claim (optionally with a following
         ``MultiThreshold``). The claim is STRUCTURAL PATTERN (op-owned) ∧ ∃ a feasible backend
         (pool-delegated): the op owns the shape of the pattern, but WHICH datatypes are
-        buildable is a backend fact, so it delegates to :meth:`Kernel.has_feasible_point`
+        buildable is a backend fact, so it delegates to :meth:`_LegacyKernel.has_feasible_point`
         rather than encoding an integer literal here (F2/D-R5). A future float backend widens
         what infer accepts with ZERO edits here; today an all-integer pool rejects a float
         MatMul FOR THE RIGHT REASON (no feasible backend). Mirrors

@@ -147,7 +147,7 @@ def test_a_non_2d_threshold_tensor_reports_its_rank(schema):
     It raises rather than returning ``Illegal`` because the geometry deriveds index this
     shape positionally, and deriveds run before predicates: a rule could never fire first. So
     the check moved to the shape read. The exception type matters — ``ValueError`` is in the
-    set ``Kernel.first_feasible_backend`` treats as "not resolvable for this context", whereas
+    set ``_LegacyKernel.first_feasible_backend`` treats as "not resolvable for this context", whereas
     the bare ``IndexError`` this used to raise would escape as a kernel bug (INV5) on a node
     that is merely ineligible."""
     ctx = replace(make_context(), shapes={**make_context().shapes, "thresholds": (8,)})
@@ -228,7 +228,7 @@ def test_third_implementation_composes_additively():
     from finn.kernels.model.backend import Backend
     from finn.kernels.compute.thresholding import thresholding_kernel, thresholding_pool
 
-    # A 4th backend adds to the pool with zero edits. Compose through the Kernel (the full
+    # A 4th backend adds to the pool with zero edits. Compose through the _LegacyKernel (the full
     # space, so the parameters pool folds in and thresholdDataType's cross-pool dep resolves) —
     # the compute pool alone is a fragment, not a schema.
     #

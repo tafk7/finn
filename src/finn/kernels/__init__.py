@@ -9,7 +9,7 @@
 
 ``engine/`` holds the pure resolve core: Context, Axis, Derived, Predicate, and resolve
 (plus the vendored value objects — ordered parameters, datatype range-builders).
-``model/`` holds the op-model framework (Kernel/Backend/Interface, tiling, ports, the
+``model/`` holds the op-model framework (_LegacyKernel/Backend/Interface, tiling, ports, the
 parameter-source contract); ``emit/``, ``ir/``, ``compute/`` and ``dataflow/`` build on it.
 
 This package IS the ``finn.kernels`` qonnx DOMAIN (handoff Seam C): the domain string

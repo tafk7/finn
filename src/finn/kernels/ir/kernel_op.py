@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``KernelOp`` — the FINN adapter that lets a :class:`Kernel` back a real ONNX node and
+"""``KernelOp`` — the FINN adapter that lets a :class:`_LegacyKernel` back a real ONNX node and
 answer FINN's ``HWCustomOp`` contract.
 
 The engine (``engine/``) is pure and graph-free: its getters take a :class:`Context`
@@ -26,7 +26,7 @@ consumer-surface-model.md Tier 0-3):
      dtypes, REAL initializer values), re-keyed to the kernel's literal interface names.
   2. **Configure** — ``_point()`` reads the design axes off nodeattrs and
      ``kernel.configure``s them into a Point (or raises on Illegal).
-  3. **Project** — each FINN getter delegates to the matching Kernel getter, adapting the
+  3. **Project** — each FINN getter delegates to the matching _LegacyKernel getter, adapting the
      ``(ind)`` FINN signature to the engine's ``(point, context, ind)``.
 
 Because the Context carries REAL weight values, value-derived dtypes (MVAU's accumulator
@@ -83,7 +83,7 @@ class TransformationResult:
 
 
 class KernelOp(HWCustomOp):
-    """Base FINN adapter over a :class:`~finn.kernels.model.kernel.Kernel`.
+    """Base FINN adapter over a :class:`~finn.kernels.model.kernel._LegacyKernel`.
 
     Subclasses implement only :meth:`kernel` (the design-space object). The
     interface↔node-slot binding is the kernel's own
@@ -104,8 +104,8 @@ class KernelOp(HWCustomOp):
     @classmethod
     @abstractmethod
     def kernel(cls):
-        """Return this op's :class:`Kernel` (the design space). Zero-arg factory
-        result, e.g. ``mvau_kernel()``. A ``classmethod`` — the Kernel is op-class
+        """Return this op's :class:`_LegacyKernel` (the design space). Zero-arg factory
+        result, e.g. ``mvau_kernel()``. A ``classmethod`` — the _LegacyKernel is op-class
         identity, independent of any node/model — so bare-node routing
         (``kernel_hw_language``) can reach the pool via the op class without
         instantiating the op."""
@@ -261,7 +261,7 @@ class KernelOp(HWCustomOp):
         """The name of the first pool member feasible for this node's live Context, or ``None``
         — the model-aware bridge behind ``SpecializeKernels``' ``PerNodePolicy(first_feasible)``
         (Seam B). Sources the live Context (real weight VALUES, so value-derived feasibility is
-        exact) and delegates to :meth:`Kernel.first_feasible_backend`.
+        exact) and delegates to :meth:`_LegacyKernel.first_feasible_backend`.
 
         The resolve-time counterpart to infer-time ``can_infer_from`` (``compute/mvau/op.py``),
         which trials a bare-node ``_trial_context`` because the node is still a frontend op;
