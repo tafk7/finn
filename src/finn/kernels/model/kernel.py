@@ -225,6 +225,9 @@ class _LegacyKernel:
     delivered_parameters: tuple = field(default=(), init=False)  # derived from pool mem_modes
     _tiling_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
     _space_cache: list = field(default_factory=list, init=False, repr=False, compare=False)
+    # member name -> its realized space (see realized_space); keyed rather than singular
+    # because there is one per pool member, not one per kernel.
+    _realized_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "pool", tuple(self.pool))
@@ -237,6 +240,7 @@ class _LegacyKernel:
         object.__setattr__(self, "delivered_parameters", self._build_delivered())
         object.__setattr__(self, "_tiling_cache", {})
         object.__setattr__(self, "_space_cache", [])
+        object.__setattr__(self, "_realized_cache", {})
 
     def _check_port_direction(self) -> None:
         """Enforce the datatype/memory direction-exclusivity of each backend's
@@ -390,6 +394,46 @@ class _LegacyKernel:
         # dep (accDataType -> parameters.<iface>.datatype) resolves here, where its
         # target is present, and a genuine typo still fails fast — at compile, before resolve.
         return op.finalize()
+
+    def compute_cell(self):
+        """This op's compute :class:`~finn.kernels.model.cell.Kernel` — the CELL tier, holding
+        the pool plus the cell-level entries currently spelled ``op_axes``/``op_derived``/
+        ``op_predicates``.
+
+        Built on demand rather than stored, so this commit stays additive: the container is
+        still the authoring surface and its fields are still the source of truth. T7 routes
+        resolution through the cell; T9 moves the fields onto it and this becomes the plain
+        accessor for a real one."""
+        from .cell import Kernel as Cell
+
+        return Cell(
+            name="compute",
+            pool=self.pool,
+            root_axis=BACKEND_AXIS,
+            axes=tuple(self.op_axes),
+            derived=tuple(self.op_derived),
+            predicates=tuple(self.op_predicates) + self._constraint_predicates(),
+        )
+
+    def realized_space(self, member_name: str) -> DesignSpace:
+        """The op's full design space with ONE compute member realized — the per-realization
+        counterpart to :meth:`compile`.
+
+        Same composition as :meth:`_compile`: the compute space, the ``kernel_attrs``, then one
+        parameters sub-schema per delivered parameter. ONLY the compute half differs, so any
+        divergence between the two can only come from the merge this pass deletes.
+
+        MEMOIZED per member name for the reason ``compile`` is: assembly is pure over the
+        frozen kernel, and ``get_nodeattr_types`` sits on a hot protocol path."""
+        cached = self._realized_cache.get(member_name)
+        if cached is None:
+            space = self.compute_cell().space_for(member_name, interfaces=self.interfaces)
+            space = replace(space, attrs=tuple(self.kernel_attrs))
+            for dp in self.delivered_parameters:
+                space = space + parameter_source_for(dp, self.pool).subspace()
+            cached = space.finalize()
+            self._realized_cache[member_name] = cached
+        return cached
 
     def configure(self, context: Context, assignment: Mapping | None = None):
         """Resolve a design point (or an Illegal). Thin wrapper over ``resolve``."""

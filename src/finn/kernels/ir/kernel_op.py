@@ -55,7 +55,7 @@ from finn.kernels.engine.context import Context
 from finn.kernels.engine.point import Illegal
 from finn.kernels.model.kernel import InterfaceSchema
 from finn.kernels.model.ports import Direction
-from .nodeattr_registry import axis_nodeattr_types
+from .nodeattr_registry import axis_nodeattr_types_for
 
 # Model metadata prop carrying the phase-0 runtime-writability mandate. A metadata prop
 # (run-level) rather than a nodeattr (per-node) because it constrains the whole design
@@ -119,10 +119,42 @@ class KernelOp(HWCustomOp):
         The design axes come straight from the kernel schema (the R12 dissolution —
         ``nodeattr_registry``). Graph-owned geometry (tensor shapes/datatypes/values) is
         NOT baked onto the node — it is sourced from the live model at construction, per
-        ONNX ownership. So there are no ``<iface>_shape``/``<iface>_dtype`` nodeattrs."""
+        ONNX ownership. So there are no ``<iface>_shape``/``<iface>_dtype`` nodeattrs.
+
+        Names are the pool UNION; each DOMAIN comes from the SELECTED realization once the
+        node is specialized (F3). See
+        :func:`~finn.kernels.ir.nodeattr_registry.axis_nodeattr_types_for` for why those are
+        different questions."""
         attrs = super().get_nodeattr_types()
-        attrs.update(axis_nodeattr_types(self.kernel().compile()))
+        attrs.update(
+            axis_nodeattr_types_for(self.kernel().compile(), self._realized_space())
+        )
         return attrs
+
+    def _realized_space(self):
+        """This node's per-realization design space, or ``None`` when it is unspecialized.
+
+        The selection is read BARE-NODE (``routing.selected_backend_name``), not via
+        ``self.get_nodeattr``. That is not an optimization: ``get_nodeattr`` calls
+        ``get_nodeattr_def`` → ``get_nodeattr_types``, which is the method this feeds, so
+        going through the op recurses until the stack ends.
+
+        Deliberately failure-tolerant. ``get_nodeattr_types`` is on the qonnx attribute
+        protocol and is called constantly, including on nodes mid-edit whose ``backend`` names
+        a member that is not (yet) in the pool. A node that cannot produce a realized space
+        falls back to the union — the pre-F3 behaviour — rather than making an attribute read
+        raise."""
+        from finn.kernels.model.backend import PoolError
+
+        from .routing import selected_backend_name
+
+        member = selected_backend_name(self.onnx_node)
+        if member is None:
+            return None
+        try:
+            return self.kernel().realized_space(member)
+        except (PoolError, ValueError, KeyError):
+            return None
 
     # -- model attach + Context cache (brainsmith _ensure_ready pattern) ----
 

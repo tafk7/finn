@@ -73,6 +73,22 @@ def is_specialized(node) -> bool:
     return bool(attr is not None and attr.s.decode("UTF-8"))
 
 
+def selected_backend_name(node) -> str | None:
+    """The committed backend NAME for a kernel node, or ``None`` when unspecialized.
+
+    Bare-node by construction, and that is load-bearing rather than merely fast: the qonnx
+    ``get_nodeattr`` path calls ``get_nodeattr_def`` → ``get_nodeattr_types``, so any caller
+    that is ITSELF answering ``get_nodeattr_types`` — as the F3 domain narrowing is — would
+    recurse infinitely by reading the selection through the op. Reading the attribute
+    directly is the only way to ask "which backend" from inside the attribute protocol.
+
+    The name half of :func:`kernel_hw_language`'s first two lines, extracted so the two
+    callers share one reader instead of each decoding the AttributeProto."""
+    if not is_specialized(node):
+        return None
+    return get_by_name(node.attribute, BACKEND_AXIS).s.decode("UTF-8")
+
+
 def kernel_hw_language(node) -> str | None:
     """The resolved backend's language (``"hls"``/``"rtl"``) for a ``finn.kernels`` node, or
     ``None`` when the node is not a kernel node, is unspecialized (``backend`` empty or
@@ -81,7 +97,7 @@ def kernel_hw_language(node) -> str | None:
     Bare-node: reads only the ``backend`` nodeattr + a static pool lookup. No model,
     no ``getCustomOp``, no op instantiation — safe to call from the hot routing predicates.
     """
-    if not is_specialized(node):
+    impl = selected_backend_name(node)
+    if impl is None:
         return None  # not a kernel node, or unspecialized -> not HW-ready
-    impl = get_by_name(node.attribute, BACKEND_AXIS).s.decode("UTF-8")
     return _language_table().get(node.op_type, {}).get(impl)

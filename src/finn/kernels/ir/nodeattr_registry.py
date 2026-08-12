@@ -33,6 +33,7 @@ from itertools import product
 from typing import Any
 
 from finn.kernels.engine.axis import PredicateDomain
+from finn.kernels.engine.ordered_parameter import OrderedParameter
 from finn.kernels.engine.point import AbsentAxisError
 
 # FINN AttributeProto member names (qonnx base.py): "i" int, "s" str, "ints" int list.
@@ -40,6 +41,84 @@ _ZERO: dict[str, Any] = {"i": 0, "s": "", "ints": []}
 # Bound on the probe grid — the selection space is tiny (a few discrete axes); this
 # only guards against a pathological schema, never trims a real one.
 _MAX_PROBES = 512
+
+
+def axis_nodeattr_types_for(schema, realized=None) -> dict[str, tuple]:
+    """The nodeattr specs for a node, with each DOMAIN taken from the selected realization.
+
+    F3. ``axis_nodeattr_types`` publishes the pool UNION of domains, so a DSP node advertises
+    ``resType in {lut, dsp}`` and ``set_nodeattr("resType", "lut")`` succeeds at the write,
+    failing later at whichever getter first resolves a point. The union is right for one
+    question and wrong for the other, and the two were conflated:
+
+    * the NAME SET is a union — ``get_nodeattr_types`` must declare every name the node could
+      carry, or re-specializing onto another member would hit an undeclared attribute;
+    * each published DOMAIN is a fact about the COMMITTED realization, so it comes from
+      ``realized``.
+
+    ``realized`` is an already-per-realization space (from
+    :meth:`~finn.kernels.model.cell.Kernel.space_for`). Its axis domains are plain VALUES —
+    there is no sibling to dispatch to — so they are read directly, with no probe grid.
+    ``None`` means the node is unspecialized: there is no selection to read, so every spec
+    falls back to the union, which is both the honest answer and the only one that leaves an
+    unspecialized node writable.
+    """
+    union = axis_nodeattr_types(schema)
+    if realized is None:
+        return union
+
+    from finn.kernels.engine.point import Point
+
+    empty = Point({})
+    out = dict(union)
+    for axis in realized.ordered_axes():
+        try:
+            dom = axis.domain(empty, None)
+        except (ValueError, KeyError, AbsentAxisError):
+            # A context-dependent domain (a divisor over a matrix dim) cannot resolve without
+            # a point — the same case the union path types as a bare int. Keep its spec.
+            continue
+        dtype, allowed = _classify_resolved(dom)
+        if dtype is None:
+            continue
+        default = _realized_default(axis, empty, dtype)
+        out[axis.name] = (
+            (dtype, False, default, allowed) if allowed is not None else (dtype, False, default)
+        )
+    return out
+
+
+def _classify_resolved(dom) -> tuple[str | None, frozenset | None]:
+    """(FINN dtype, allowed_values) for an ALREADY-RESOLVED domain value.
+
+    The union path's :func:`_classify_domain` accumulates across a probe grid because a
+    dispatched domain needs a point that pins the selection. A realized domain is just a
+    value, so this is the same classification with the grid removed. ``(None, None)`` means
+    "no opinion" — leave the union's spec alone."""
+    if isinstance(dom, PredicateDomain):
+        return _predicate_storage_type(dom.label), None
+    if isinstance(dom, frozenset) and dom:
+        if all(isinstance(v, str) for v in dom):
+            return "s", frozenset(dom)
+        # bool is an int subclass; {0,1} flags are ints, not strings.
+        if all(isinstance(v, int) for v in dom):
+            return "i", frozenset(int(v) for v in dom)
+        return None, None
+    if isinstance(dom, OrderedParameter):
+        # A fold dial's divisors. Enumerable in principle, but publishing them as
+        # `allowed_values` would pin the node to ONE geometry's divisor set, and geometry is
+        # a tensor fact that a reshape upstream can change. Type only.
+        return "i", None
+    return None, None
+
+
+def _realized_default(axis, point, dtype: str):
+    """The axis's own default, or the storage-type zero when it needs a point/context."""
+    try:
+        value = axis.default(point, None)
+    except (ValueError, KeyError, AbsentAxisError):
+        return _ZERO[dtype]
+    return _ZERO[dtype] if value is None else value
 
 
 def axis_nodeattr_types(schema) -> dict[str, tuple]:
