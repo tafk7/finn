@@ -254,3 +254,47 @@ def test_thresholding_strata():
     # block dim, so it is named for the tensor/dim rather than hand-written as NumChannels%PE.
     at_two = {p.describe() for p in space.predicates_at(2)}
     assert any("% PE == 0" in d for d in at_two), at_two
+
+
+# --- what per-realization construction did to root inference (F8) ------------
+
+
+def test_selection_root_inference_is_blind_to_a_lone_compute_cell():
+    """The F8 premise, measured rather than assumed.
+
+    `_selection_roots` infers "an axis another axis depends on". That identified the compute
+    root only because `_merge_*` added it to every merged entry's deps. `space_for` adds no
+    such dep, so a compute-cell space alone infers NOTHING — silently, returning a smaller
+    set rather than raising, which is the failure mode that makes structural inference the
+    wrong mechanism here."""
+    from finn.kernels.compute.mvau import mvau_kernel
+
+    kernel = mvau_kernel()
+    bare = kernel.compute_cell().space_for(
+        "mvau_dsp_softvec", interfaces=kernel.interfaces
+    )
+    assert "backend" in bare.axis_names
+    assert bare._selection_roots() == frozenset()
+
+
+def test_a_composed_op_still_infers_backend_but_only_incidentally():
+    """And the reason it still works, which is NOT the reason the docstring used to give.
+
+    The storage cells' `topology` axes declare a genuine authored `deps={backend}` — the
+    mem-mode guard (P2). That real edge happens to look like the artificial one the merge
+    used to add, so the inference lands on the right answer for the ops we have. An op with
+    no delivered parameters would get `frozenset()`."""
+    from finn.kernels.compute.mvau import mvau_kernel
+
+    kernel = mvau_kernel()
+    realized = kernel.realized_space("mvau_dsp_softvec")
+    assert "backend" in realized._selection_roots()
+
+    carriers = {
+        a.name for a in realized.axes if "backend" in (a.deps | a.optional_deps)
+    }
+    # Every carrier is a storage topology axis — no compute-side axis supplies the edge.
+    assert carriers == {
+        "parameters.weights.topology",
+        "parameters.thresholds.topology",
+    }

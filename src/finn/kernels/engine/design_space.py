@@ -228,11 +228,27 @@ class DesignSpace:
     def _selection_roots(self) -> frozenset[str]:
         """Axes that SELECT a pool member rather than configure one.
 
-        Identified structurally — an axis every merged bundle entry depends on — rather than
-        by name: the engine must not know that compute roots are called ``backend``. A pool
-        root is depended on by the merged axes/derived it dispatches (``_merge_*`` adds it
-        unconditionally), so "an axis that other axes depend on" identifies exactly the
-        roots without naming one."""
+        Identified structurally — "an axis that another axis depends on" — rather than by
+        name, because the engine must not know that compute roots are called ``backend``.
+
+        **Its premise is now only partly true, and the difference is measured.** The rule
+        worked because ``_merge_*`` added the root to every merged entry's deps
+        unconditionally. Per-realization construction
+        (:meth:`~finn.kernels.model.cell.Kernel.space_for`) adds no such dep, so a
+        compute-cell space ALONE infers ``frozenset()`` — the root is invisible. A composed
+        op still infers ``backend`` correctly, but only incidentally: the storage cells'
+        ``topology`` axes carry a genuine authored ``deps={backend}`` (the mem-mode guard,
+        P2), and that real edge happens to look like the artificial one.
+
+        So the inference is sound today for the ops we have, and would go wrong for an op
+        with no delivered parameters — silently, returning a smaller set rather than raising,
+        which is what makes it the wrong mechanism rather than a slow one. The declared
+        replacement is :attr:`~finn.kernels.model.cell.Kernel.root_axis`.
+
+        KEPT rather than deleted: ``stratum_of`` is the only reader, it is diagnostic-only
+        (no production caller — verified by grep), and deleting a working query to replace it
+        with a plumbed-through field is a cost this pass has no reason to pay. Recorded so
+        the next reader does not take the rationale above at face value."""
         cached = getattr(self, "_roots_cache", None)
         if cached is None:
             axis_names = self.axis_names
