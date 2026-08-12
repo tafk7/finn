@@ -684,7 +684,6 @@ def step_specialize_layers(model: ModelWrapper, cfg: DataflowBuildConfig):
     # the `backend` axis on finn.kernels nodes (selection as data, via a Policy) before FINN's
     # classic SpecializeLayers, which is domain-gated to finn.custom_op.fpgadataflow and so
     # sees only the classic remainder. Mirrors the InferKernels injection in step_convert_to_hw.
-    from finn.kernels.engine.device import DeviceFacts
     from finn.transformation.fpgadataflow.specialize_kernels import (
         PerNodePolicy,
         SpecializeKernels,
@@ -696,7 +695,8 @@ def step_specialize_layers(model: ModelWrapper, cfg: DataflowBuildConfig):
     # no way to receive them and every device-gated backend was unreachable (F11).
     model = model.transform(
         SpecializeKernels(
-            PerNodePolicy(first_feasible), device=DeviceFacts.from_build_config(cfg)
+            PerNodePolicy(first_feasible),
+            device=(cfg._resolve_fpga_part(), cfg._resolve_hls_clk_period(), None),
         )
     )
 

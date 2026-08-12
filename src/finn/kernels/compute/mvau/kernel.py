@@ -6,23 +6,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""MVAU — the matrix-vector activation kernel DEFINITION: WHAT it is.
+"""MVAU — the tensor-name constants and the interface list.
 
-The declarative op definition (mirrors FINN's ``matrixvectoractivation.py``, but as a
-design space). A backend author reads it top to bottom; each ``impl_*.py`` backend in this
-package declares only the HOW for one compute core. The FINN-facing
-:class:`~finn.kernels.compute.mvau.op.MvauDataflowOp` wrapper lives beside this in ``op.py``.
+**The design space itself lives on the op class**, in ``op.py``: `MvauDataflowOp`'s class body
+declares the pool, axes, deriveds, predicates, attrs and constraints, because those are
+op-CLASS facts (F6 — the op IS the kernel). Read that class top to bottom to understand what
+an MVAU is.
+
+What stays here is what EIGHT sibling modules import — the tensor names and
+:func:`mvau_interfaces`. They cannot move to ``op.py``: the backend modules
+(``impl_*.py``) name these constants, and ``op.py`` names the backends, so pulling them up
+would recreate the import cycle. This module is deliberately a LEAF.
+
 Source of truth for each axis/derived/predicate (file:line into real FINN):
 ``scratchpad/reference/mvau-design-space.md``.
-
-Sections (what each replaces in the classic FINN MVAU):
-    1. CONSTANTS         tensor names + pool-member identities
-    2. INTERFACES        the ONNX-facing arity + direction  (FINN: node in/out wiring)
-    3. OP DESIGN SPACE   op_axes/op_derived/op_predicates — the shared BLOCK structure
-                         (FINN: get_nodeattr_types + the shape/dtype getters' math)
-    4. COMPUTE TILING    the BLOCK->STREAM lowering shared by the pool
-    5. DELIVERY / COST   both fully generic — no op-level authoring (see the note below)
-    6. ASSEMBLY          mvau_kernel() / mvau_space()  (FINN: the class itself)
 
 Tensor-name convention for the Context this schema resolves against:
     "inp"        the activation input tensor   (dynamic)
@@ -97,114 +94,8 @@ def mvau_interfaces():
     )
 
 
-# =============================================================================
-# 3. OP DESIGN SPACE — the shared BLOCK structure (axes / derived / predicates).
-#    Everything every MVU has, regardless of the chosen compute core. An backend
-#    backend never edits this; it resolves against it.
-# =============================================================================
-
-# -- small guard/helper functions (named, not lambdas, for legible tracebacks) --
-
-
-def _is_nonneg_int(v) -> bool:
-    return isinstance(v, int) and v >= 0
-
-
-# -- op-level SHARED axes — present under every implementation ------------------
-
-
-def op_axes():
-    # EMPTY: MVAU has no hand-authored DSE dials. SIMD/PE are tiling-engine-generated from the
-    # interface BLOCKs; ram_style/… are parameters-pool-generated; MW/MH are Context extents.
-    return ()
-
-
-def kernel_attrs():
-    # Node CONSTANTS: on the Point, read by emit, never explored. See engine/attr.py for why
-    # these are a primitive rather than Context fields — both are named in deps
-    # (`narrow_weights` reads mlo_max_iter), and a Context field can never be.
-    return (
-        # The absorbed MultiThreshold's out_bias. THE case proving the category is real:
-        # infer REMOVES that node (op.py), so the graph no longer holds this value.
-        attr("ActVal", "int", lambda v: isinstance(v, int), 0),
-        # MLO parameter-set cardinality, written by loop_rolling.py. Still misnamed (the RTL
-        # calls it SETS) and still carrying two concepts — mlo-cardinality.md owns that
-        # question. It is an Attr here purely so the strata are honest meanwhile; nothing
-        # about this forecloses where that pass decides the value should live.
-        attr("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
-    )
-
-
-# -- op-level SHARED derived — ONLY the threshold-operand dtype (realization-invariant). The
-#    accumulator/weight/output dtypes are backend-scoped (mvau_register_dtypes / mvau_out_dtype
-#    in backends.py); stream widths + geometry are tiling/emit-generated.
-
-
-def _threshold_dtype(p, ctx):
-    # The threshold operand's DECLARED dtype, or None on a 2-input node. Delegates to the
-    # SHARED Thresholding rule so the fused and standalone paths cannot drift — see
-    # ``compute/thresholding/shared.py::_threshold_datatype`` for the parity TODO on
-    # re-enabling value-narrowing.
-    return _threshold_datatype(p, ctx) if ctx.has_tensor(THRESHOLDS) else None
-
-
-def op_derived():
-    # No dep: while the narrowing is off for FINN parity the shared rule is Context-only, so
-    # there is nothing to order against. Re-enabling it restores the read of the thresholds
-    # ParamDatatype (a parameters-pool derived) AND this dep together — the topo-sort needs the
-    # dep to place this after the publisher, across the compute/parameters pool boundary.
-    return (Derived("thresholdDataType", _threshold_dtype),)
-
-
-# -- op-level SHARED legality. Divisibility and the URAM/pumped gates are engine- and
-#    parameters-generated; the only op-authored rule is the relational one below.
-
-
-def _unsigned_input(p, ctx) -> bool:
-    return not ctx.tensor_datatype(INPUT).signed()
-
-
-def _mvau_constraints():
-    # unsigned input ⇒ all thresholds >= 0 (thresholding.py:243). Reads INPUT to gate a rule on
-    # THRESHOLDS, so it is kernel-level (relational), not a per-port constraint.
-    return (ValueNonNeg(THRESHOLDS, when=_unsigned_input),)
-
-
-def op_predicates():
-    return ()  # all legality is now declarative constraints (per-port + the relational one)
-
-
-# 4. COMPUTE TILING — backend-scoped (COMPUTE_STREAM in backends.py); the op declares only the
-#    interface BLOCK, and the engine derives SIMD/PE + widths from it.
-# 5. DELIVERY / 6. COST — fully generic, no op-level authoring: delivery is derived from the
-#    pool's mem_modes (model/param_contract.py); the cost floor falls out of the tiling.
-
-
-# =============================================================================
-# 7. ASSEMBLY — the MVAU design space, now the op class.
-# =============================================================================
-
-
-def mvau_pool():
-    """The MVAU backends, in declaration order (= selection precedence)."""
-    from .op import MvauDataflowOp
-
-    return MvauDataflowOp.pool
-
-
-def mvau_kernel():
-    """The MVAU design space — now simply the op class.
-
-    Kept as a one-line shim: `MvauDataflowOp` IS the kernel (the container collapsed into it,
-    F6), so there is no separate object to build. Callers that just want the class should say
-    so; this exists so the ~40 sites naming `mvau_kernel()` keep reading naturally."""
-    from .op import MvauDataflowOp
-
-    return MvauDataflowOp
-
-
-def mvau_space():
-    """The full MVAU design space as a resolve ``DesignSpace`` — delegates to
-    :func:`mvau_kernel` (identical assembly). Kept as the name emit/composition tests
-    resolve against."""
-    return mvau_kernel().compile()
+# The op CLASS holds everything else — the design space (axes / derived / predicates /
+# attrs / constraints / pool) is `MvauDataflowOp`'s class body in `op.py`, because those are
+# op-CLASS facts. What stays here is what 8 sibling modules import: the tensor-name constants
+# and the interface list. Pulling those from `op.py` instead would rebuild the import cycle
+# (`op.py` names the backends; the backends name these constants).

@@ -58,7 +58,6 @@ from onnx import NodeProto, helper
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.kernels.engine.context import Context
 from finn.kernels.engine.design_space import DesignSpace
-from finn.kernels.engine.device import DeviceFacts
 from finn.kernels.engine.point import AbsentAxisError, Illegal, Point
 from finn.kernels.engine.resolve import resolve
 from finn.kernels.model._util import prod
@@ -225,27 +224,24 @@ class DataflowOp(HWCustomOp):
         self._context_cache = None
         return self
 
-    def attach_device(self, device: DeviceFacts | None) -> "DataflowOp":
-        """Attach the build's :class:`~finn.kernels.engine.device.DeviceFacts` — the part,
-        clock and toolchain this design targets.
+    def attach_device(
+        self, fpgapart: str = "", clk_ns: float | None = None, toolchain_version=None
+    ) -> "DataflowOp":
+        """Attach the build's target device — part, clock, toolchain.
 
         SEPARATE from :meth:`attach_model` because the two arrive in different phases and
         from different owners (F11). Graph givens come with the node; device facts come from
         whichever step holds ``cfg``, and there is no honest way to recover them from the
         graph — which is what ``_fpgapart_from`` tried to do, via a nodeattr no op declares.
 
-        Invalidates the Context cache, since the facts are baked into it."""
-        self._device = device
+        An EMPTY part is a legitimate state, not a failure: a bare-node query outside a build
+        genuinely has no device, and a backend whose feasibility needs one correctly declines
+        to answer. What F11 got wrong was making that state UNIVERSAL and SILENT.
+
+        Invalidates the Context cache, since these are baked into it."""
+        self._device = (fpgapart, clk_ns, toolchain_version)
         self._context_cache = None
         return self
-
-    def _device_facts(self) -> DeviceFacts:
-        """This op's device facts, or the explicit unknown when none was attached.
-
-        Unknown is a legitimate state, not a failure: a bare-node query outside a build has
-        no part, and a backend whose feasibility needs one correctly declines to answer. What
-        F11 got wrong was making unknown UNIVERSAL and silent."""
-        return getattr(self, "_device", None) or DeviceFacts.unknown()
 
     def _context(self) -> Context:
         """Build (and cache) the Context from the ATTACHED model: per-interface shapes,
@@ -264,12 +260,9 @@ class DataflowOp(HWCustomOp):
                 f"model.get_customop_wrapper(node) so the Context can be built from the "
                 f"live graph"
             )
-        device = self._device_facts()
+        fpgapart, clk_ns, toolchain_version = getattr(self, "_device", ("", None, None))
         graph_ctx = Context.from_model(
-            model,
-            device.fpgapart,
-            toolchain_version=device.toolchain_version,
-            clk_ns=device.clk_ns,
+            model, fpgapart, toolchain_version=toolchain_version, clk_ns=clk_ns
         )
         shapes: dict[str, tuple[int, ...]] = {}
         datatypes: dict = {}
@@ -331,7 +324,7 @@ class DataflowOp(HWCustomOp):
 
     @classmethod
     def candidate_op(
-        cls, model, inputs, outputs, device: "DeviceFacts | None" = None, **attrs
+        cls, model, inputs, outputs, device=None, **attrs
     ) -> "DataflowOp":
         """A wrapped kernel op over a candidate node that is NOT in the graph.
 
@@ -358,7 +351,8 @@ class DataflowOp(HWCustomOp):
         node.output.extend(outputs)
         for name, value in attrs.items():
             node.attribute.append(helper.make_attribute(name, value))
-        return model.get_customop_wrapper(node).attach_device(device)
+        op = model.get_customop_wrapper(node)
+        return op.attach_device(*device) if device else op
 
     @classmethod
     def op_type_name(cls) -> str:

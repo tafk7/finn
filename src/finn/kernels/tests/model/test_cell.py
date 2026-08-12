@@ -21,7 +21,7 @@ from finn.kernels.model.cell import Kernel
 
 
 def _mvau_cell() -> Kernel:
-    from finn.kernels.compute.mvau.kernel import mvau_pool
+    from finn.kernels.compute.mvau.op import mvau_pool
 
     return Kernel(name="compute", pool=mvau_pool(), root_axis=BACKEND_AXIS)
 

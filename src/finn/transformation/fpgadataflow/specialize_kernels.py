@@ -41,7 +41,6 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import InferDataTypes
 
-from finn.kernels.engine.device import DeviceFacts
 from finn.kernels.ir.routing import KERNEL_DOMAIN, is_specialized
 from finn.kernels.model.backend import BACKEND_AXIS
 
@@ -70,10 +69,10 @@ class Policy(ABC):
         is UNUSED by the reference policy — do not build a cost model or ranking behind it;
         that is explicitly out of this seam's scope.
 
-        ``device`` is the build's :class:`~finn.kernels.engine.device.DeviceFacts`. Distinct
-        from ``constraints``, and not folded into it: it is not a driver preference but a
-        GIVEN that feasibility is evaluated against. Every policy needs it; only some will
-        ever want constraints."""
+        ``device`` is the build's ``(fpgapart, clk_ns, toolchain_version)``. Distinct from
+        ``constraints``, and not folded into it: it is not a driver preference but a GIVEN
+        that feasibility is evaluated against. Every policy needs it; only some will ever
+        want constraints."""
         raise NotImplementedError
 
 
@@ -100,7 +99,7 @@ class PerNodePolicy(Policy):
 
 
 def first_feasible(
-    node: NodeProto, model: ModelWrapper, device: DeviceFacts | None = None
+    node: NodeProto, model: ModelWrapper, device=None
 ) -> dict | None:
     """Reference local_fn: commit the FIRST feasible backend (pool order = precedence).
 
@@ -110,11 +109,13 @@ def first_feasible(
     ``None`` when no backend is feasible (should not happen for an infer-claimed node; logged
     as a lost kernel, INV5).
 
-    ``device`` carries the target part/clock. Without it every device-gated backend refuses
-    to answer and the selection silently collapses to the first part-independent member —
-    F11, which is why this is a parameter rather than something recovered from the graph."""
+    ``device`` is the ``(fpgapart, clk_ns, toolchain_version)`` the build targets. Without it
+    every device-gated backend refuses to answer and the selection silently collapses to the
+    first part-independent member — F11, which is why this is a parameter rather than
+    something recovered from the graph."""
     inst = model.get_customop_wrapper(node)
-    inst.attach_device(device)
+    if device:
+        inst.attach_device(*device)
     name = inst.selected_backend_for_this_node()
     if name is None:
         logger.warning(
@@ -139,16 +140,15 @@ class SpecializeKernels(Transformation):
         policy: the selection driver (:class:`Policy`). For the reference build this is
             ``PerNodePolicy(first_feasible)``; a config/optimizer/interactive driver swaps in
             here with no change to this transform.
-        device: the build's :class:`~finn.kernels.engine.device.DeviceFacts` — target part,
-            clock, toolchain. Feasibility is evaluated AGAINST these, so omitting them makes
-            every device-gated backend refuse to answer and the selection collapse to the
-            first part-independent member (F11). Mirrors the incumbent
-            ``SpecializeLayers(cfg._resolve_fpga_part())``: same fact, same owner, same seam.
-            Optional so a bare-node test can still construct the transform, but a real build
-            always passes it.
+        device: the build's ``(fpgapart, clk_ns, toolchain_version)``. Feasibility is
+            evaluated AGAINST these, so omitting them makes every device-gated backend refuse
+            to answer and the selection collapse to the first part-independent member (F11).
+            Mirrors the incumbent ``SpecializeLayers(cfg._resolve_fpga_part())``: same fact,
+            same owner, same seam. Optional so a bare-node test can still construct the
+            transform, but a real build always passes it.
     """
 
-    def __init__(self, policy: Policy, device: DeviceFacts | None = None):
+    def __init__(self, policy: Policy, device=None):
         super().__init__()
         self.policy = policy
         self.device = device
@@ -157,7 +157,8 @@ class SpecializeKernels(Transformation):
         assignment = self.policy.assign(model, device=self.device)
         for node, axes in assignment:
             inst = model.get_customop_wrapper(node)
-            inst.attach_device(self.device)
+            if self.device:
+                inst.attach_device(*self.device)
             for axis_name, value in axes.items():
                 inst.set_nodeattr(axis_name, value)
 

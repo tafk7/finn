@@ -32,7 +32,6 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.kernels.engine.device import DeviceFacts
 from finn.transformation.fpgadataflow.specialize_kernels import (
     PerNodePolicy,
     SpecializeKernels,
@@ -71,7 +70,7 @@ def _op(part):
     """A node with device facts attached exactly as `SpecializeKernels` attaches them."""
     model = _model()
     op = model.get_customop_wrapper(model.graph.node[0])
-    op.attach_device(DeviceFacts(fpgapart=part, clk_ns=5.0))
+    op.attach_device(part, clk_ns=5.0)
     return op
 
 
@@ -128,12 +127,12 @@ def test_specialize_kernels_threads_the_part_through():
     model = _model()
     model = model.transform(
         SpecializeKernels(
-            PerNodePolicy(first_feasible), device=DeviceFacts(fpgapart=VERSAL, clk_ns=5.0)
+            PerNodePolicy(first_feasible), device=(VERSAL, 5.0, None)
         )
     )
     node = model.graph.node[0]
     op = model.get_customop_wrapper(node)
-    op.attach_device(DeviceFacts(fpgapart=VERSAL, clk_ns=5.0))
+    op.attach_device(VERSAL, clk_ns=5.0)
     assert op._context().fpgapart == VERSAL
     # A backend WAS committed — the transform ran and selected.
     assert op.get_nodeattr("backend") in {b.name for b in op.kernel().pool}

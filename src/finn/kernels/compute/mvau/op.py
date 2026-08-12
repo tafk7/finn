@@ -6,17 +6,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""MVAU — how FINN's build flow sees the kernel: ``MvauDataflowOp(DataflowOp)``.
+"""MVAU — the matrix-vector activation kernel. The op class IS the kernel.
 
-The kernel DEFINITION (interfaces, design space, datatype rules, cost, assembly) lives in
-``kernel.py`` — read that to understand WHAT an MVAU is. This file holds only the FINN
-wrapper: the Seam-A frontend claim (``can_infer_from``/``infer_from``, mirror of
-``InferQuantizedMatrixVectorActivation``) and the port binding that maps the graph's tensor
-slots to the kernel's inp/weights/thresholds/out interfaces.
+`MvauDataflowOp`'s class body IS the design space: interfaces, the backend pool, the
+op-level axes/deriveds/predicates/attrs/constraints. Read it top to bottom to understand
+what an MVAU is; there is no separate container object and no ``.kernel()`` hop (F6).
 
-The kernel's public surface (constants, ``mvau_kernel``/``mvau_space``/``mvau_pool``/…) is
-re-exported here so ``from finn.kernels.compute.mvau.op import X`` keeps resolving — the backend
-backends and tests read constants/assembly through this module.
+Also here: the Seam-A frontend claim (``can_infer_from``/``infer_from``, mirroring
+``InferQuantizedMatrixVectorActivation``), which is op-owned pattern knowledge.
+
+The tensor-name constants and :func:`mvau_interfaces` live in ``kernel.py`` — a LEAF module,
+because the backend modules import them and this module imports the backends. The
+backend-scoped contract (fold map, datatype derivations) is in ``backends.py``. Both are
+re-exported here so ``from .op import X`` keeps resolving for the tests and helpers that
+read them through this module.
 """
 
 from __future__ import annotations
@@ -27,6 +30,10 @@ from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
+from finn.kernels.engine.attr import attr
+from finn.kernels.engine.constraints import ValueNonNeg
+from finn.kernels.engine.derived import Derived
+from finn.kernels.compute.thresholding.shared import _threshold_datatype
 from finn.kernels.ir import DataflowOp, TransformationResult
 from finn.kernels.engine.datatype_spec import resolve_datatype_spec
 from finn.kernels.engine.point import Illegal  # noqa: F401  (kept available for callers/tests)
@@ -37,7 +44,6 @@ from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-export
 from .impl_hls import hls_bundle as hls_backend
 from .impl_rtl_packed import packed_bundle as packed_backend
 from .impl_rtl_softvec import softvec_bundle as softvec_backend
-from .kernel import _mvau_constraints
 from .kernel import (  # noqa: F401  (re-exported public surface)
     INPUT,
     MVAU_DSP_PACKED,
@@ -47,13 +53,6 @@ from .kernel import (  # noqa: F401  (re-exported public surface)
     THRESHOLDS,
     WEIGHTS,
     mvau_interfaces,
-    mvau_kernel,
-    mvau_pool,
-    mvau_space,
-    kernel_attrs,
-    op_axes,
-    op_derived,
-    op_predicates,
 )
 
 # The BACKEND-SCOPED shared contract (fold map + datatype derivations) — re-exported so the
@@ -65,6 +64,28 @@ from .backends import (  # noqa: F401  (re-exported public surface)
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# OP DESIGN SPACE helpers — the shared BLOCK structure's small closures.
+# Named functions (not lambdas) so a traceback reads.
+# =============================================================================
+
+
+def _is_nonneg_int(v) -> bool:
+    return isinstance(v, int) and v >= 0
+
+
+def _threshold_dtype(p, ctx):
+    # The threshold operand's DECLARED dtype, or None on a 2-input node. Delegates to the
+    # SHARED Thresholding rule so the fused and standalone paths cannot drift — see
+    # ``compute/thresholding/shared.py::_threshold_datatype`` for the parity TODO on
+    # re-enabling value-narrowing.
+    return _threshold_datatype(p, ctx) if ctx.has_tensor(THRESHOLDS) else None
+
+
+def _unsigned_input(p, ctx) -> bool:
+    return not ctx.tensor_datatype(INPUT).signed()
 
 
 # =============================================================================
@@ -90,15 +111,50 @@ class MvauDataflowOp(DataflowOp):
     definition, so an authoring mistake is an import error.
     """
 
-    # -- the design space (see kernel.py for what each piece means) ---------
+    # -- the design space ---------------------------------------------------
     name = "MVAU"
+
+    # The ONNX-facing arity + BLOCK structure (the math). Stream folding is backend-owned.
     interfaces = mvau_interfaces()
+
+    # The compute pool: HLS / DSP-softvec / DSP-packed. Declaration order IS selection
+    # precedence. Adding a backend = write one impl_*.py and name it here.
     pool = (hls_backend(), softvec_backend(), packed_backend())
-    op_axes = op_axes()
-    op_derived = op_derived()
-    op_predicates = op_predicates()
-    kernel_attrs = kernel_attrs()
-    constraints = _mvau_constraints()
+
+    # EMPTY: MVAU has no hand-authored DSE dials. SIMD/PE are tiling-engine-generated from
+    # the interface BLOCKs; ram_style/… are parameters-pool-generated; MW/MH are Context
+    # extents.
+    op_axes = ()
+
+    # All legality is declarative constraints (per-port + the relational one below).
+    op_predicates = ()
+
+    # ONLY the threshold-operand dtype is realization-invariant. The accumulator / weight /
+    # output dtypes are backend-scoped (`mvau_register_dtypes` / `mvau_out_dtype` in
+    # backends.py); stream widths + geometry are tiling/emit-generated.
+    #
+    # No dep: while narrowing is off for FINN parity the shared rule is Context-only, so
+    # there is nothing to order against. Re-enabling it restores the read of the thresholds
+    # ParamDatatype AND this dep together — the topo-sort needs the dep to place this after
+    # the publisher, across the compute/parameters pool boundary.
+    op_derived = (Derived("thresholdDataType", _threshold_dtype),)
+
+    # Node CONSTANTS: on the Point, read by emit, never explored. See engine/attr.py for why
+    # these are a primitive rather than Context fields — both are named in deps
+    # (`narrow_weights` reads mlo_max_iter), and a Context field can never be.
+    kernel_attrs = (
+        # The absorbed MultiThreshold's out_bias. THE case proving the category is real:
+        # infer REMOVES that node, so the graph no longer holds this value.
+        attr("ActVal", "int", lambda v: isinstance(v, int), 0),
+        # MLO parameter-set cardinality, written by loop_rolling.py. Still misnamed (the RTL
+        # calls it SETS) and still carrying two concepts — mlo-cardinality.md owns that
+        # question. It is an Attr here purely so the strata are honest meanwhile.
+        attr("mlo_max_iter", "nonneg int", _is_nonneg_int, 0),
+    )
+
+    # unsigned input ⇒ all thresholds >= 0 (thresholding.py:243). Reads INPUT to gate a rule
+    # on THRESHOLDS, so it is kernel-level (relational), not a per-port constraint.
+    constraints = (ValueNonNeg(THRESHOLDS, when=_unsigned_input),)
 
     # -- Seam A: frontend claim (mirror of InferQuantizedMatrixVectorActivation) -------
 
@@ -218,3 +274,26 @@ class MvauDataflowOp(DataflowOp):
         ctx = self._context()
         mw, mh = ctx.tensor_shape(WEIGHTS)
         return {"SIMD": int(mw), "PE": int(mh)}
+
+
+# =============================================================================
+# COMPATIBILITY SHIMS — the op class IS the kernel; these are spellings, not objects.
+# =============================================================================
+
+
+def mvau_kernel():
+    """The MVAU design space — which is simply the op class.
+
+    A one-line alias kept so the ~40 sites naming ``mvau_kernel()`` keep reading naturally.
+    There is no object to build: `MvauDataflowOp` holds the space in its class body (F6)."""
+    return MvauDataflowOp
+
+
+def mvau_pool():
+    """The MVAU backends, in declaration order (= selection precedence)."""
+    return MvauDataflowOp.pool
+
+
+def mvau_space():
+    """The full MVAU design space as a resolve ``DesignSpace``."""
+    return MvauDataflowOp.compile()

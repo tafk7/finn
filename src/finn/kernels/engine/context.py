@@ -25,9 +25,9 @@ whichever step holds it. Bundling them meant constructing a Context demanded a p
 any caller had one — and the workaround for that, an ``fpgapart`` nodeattr no op declares,
 is what made the field universally empty on every node.
 
-The taxonomy pass fixed the CAUSE by making device facts an input
-(:class:`~finn.kernels.engine.device.DeviceFacts`, threaded from ``SpecializeKernels``) and
-then deliberately did NOT delete this dataclass. Churning 267 references buys no behavioural
+The taxonomy pass fixed the CAUSE by making device facts an INPUT — ``attach_device(fpgapart,
+clk_ns, toolchain_version)``, threaded from ``SpecializeKernels`` — and then deliberately did
+NOT delete this dataclass. Churning 267 references buys no behavioural
 change: once the facts arrive correctly, one backend carrying both is a grouping, not a phase
 confusion. The finding was the phantom nodeattr, not the struct.
 
