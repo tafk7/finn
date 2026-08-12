@@ -217,3 +217,64 @@ def test_dep_may_not_be_both_required_and_optional():
         Derived("d", lambda p, c: 1, deps={"x"}, optional_deps={"x"})
     with pytest.raises(ValueError, match="BOTH deps and optional_deps"):
         discrete_axis("a", {1}, 1, deps={"x"}, optional_deps={"x"})
+
+
+# --- composition: `+` is the two-argument merge ------------------------------
+
+
+def _frag(axis_name, derived_name, *, deps=frozenset()):
+    return DesignSpace(
+        axes=(discrete_axis(axis_name, {1}, 1),),
+        derived=(Derived(derived_name, lambda p, c: 0, deps=deps),),
+    )
+
+
+def test_plus_equals_two_argument_merge():
+    a, b = _frag("x", "dx"), _frag("y", "dy")
+    assert a + b == DesignSpace.merge(a, b)
+
+
+def test_plus_chain_and_variadic_merge_finalize_identically():
+    """`(a + b) + c` builds an intermediate `merge(a, b, c)` does not, but the two finalize to
+    the same evaluation order — both preserve the same left-to-right input order, so chaining
+    `+` is a drop-in for the variadic call rather than a differently-ordered space."""
+    a, b = _frag("x", "dx"), _frag("y", "dy")
+    c = _frag("z", "dz", deps={"x"})  # a real edge, so order is not merely input order
+    chained = ((a + b) + c).finalize()
+    variadic = DesignSpace.merge(a, b, c).finalize()
+    assert [n.name for n in chained.ordered_axes()] == [
+        n.name for n in variadic.ordered_axes()
+    ]
+    assert [n.name for n in chained.ordered_derived()] == [
+        n.name for n in variadic.ordered_derived()
+    ]
+
+
+def test_plus_is_commutative_in_the_resolved_point():
+    """Composition order cannot change a resolved Point — the property `+` actually claims.
+
+    Deliberately NOT a claim about the emitted sequence: among entries with no edge between
+    them the sort preserves input order, so `ordered_derived()` genuinely differs between the
+    two arms. Entries with no edge cannot read each other, so that difference is unobservable
+    in the result, which is what makes the spelling honest."""
+    a = _frag("x", "dx")
+    b = _frag("y", "dy", deps={"x"})
+    assert resolve((a + b).finalize(), _CTX, {}) == resolve((b + a).finalize(), _CTX, {})
+
+
+def test_plus_honours_a_real_edge_from_either_side():
+    """A dependent entry orders after its dep whichever fragment was composed first — the
+    concrete reason order-in cannot leak into order-out anywhere it would be observable."""
+    a = _frag("x", "dx")
+    b = DesignSpace(
+        axes=(),
+        derived=(Derived("reader", lambda p, c: p["dx"] + 1, deps={"dx"}),),
+    )
+    for space in (a + b, b + a):
+        names = [d.name for d in space.finalize().ordered_derived()]
+        assert names.index("dx") < names.index("reader")
+
+
+def test_plus_rejects_a_non_space():
+    with pytest.raises(TypeError):
+        _frag("x", "dx") + 3

@@ -110,6 +110,29 @@ class DesignSpace:
             attrs=tuple(a for s in spaces for a in s.attrs),
         )
 
+    def __add__(self, other: "DesignSpace") -> "DesignSpace":
+        """Compose two spaces — the two-argument :meth:`merge`, spelled as an operator.
+
+        ``+`` is COMMUTATIVE IN EFFECT: composition order cannot change a resolved
+        :class:`~finn.kernels.engine.point.Point`. Every real ordering constraint is a
+        declared ``deps``/``optional_deps`` edge, and ``_topo_sort`` recovers those edges
+        regardless of which fragment came first — so ``a + b`` and ``b + a`` resolve
+        identically. That is why an operator is the honest spelling: a call whose argument
+        order carries no meaning reads as though it does.
+
+        Precisely: commutative in the resolved point, NOT in the emitted
+        :meth:`ordered_derived` sequence. Among entries with no edge between them
+        ``_topo_sort`` deliberately preserves input order (so a schema reads predictably),
+        and that order does show through — but two entries with no edge cannot read each
+        other, so which runs first is unobservable in the result.
+
+        Not associative-by-flattening in the argument sense — ``(a + b) + c`` builds one
+        intermediate where ``merge(a, b, c)`` does not — but the two finalize identically,
+        because both preserve the same left-to-right input order."""
+        if not isinstance(other, DesignSpace):
+            return NotImplemented
+        return DesignSpace.merge(self, other)
+
     @property
     def axis_names(self) -> frozenset[str]:
         """The names of the CHOICES. Deliberately excludes ``attrs`` — an attr is on the
