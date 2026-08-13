@@ -100,8 +100,8 @@ def thresholding_pool():
 def thresholding_kernel():
     """The Thresholding design space — now simply the op class.
 
-    A one-line shim: `ThresholdingDataflowOp` IS the kernel (the container collapsed into
-    it, F6). Kept so existing callers keep reading naturally."""
+    A one-line shim: the container collapsed into `ThresholdingDataflowOp` (F6), so there is
+    no separate object to return. Kept so existing callers keep reading naturally."""
     return ThresholdingDataflowOp
 
 
@@ -109,18 +109,19 @@ def thresholding_kernel():
 # FINN WRAPPER — ThresholdingDataflowOp(DataflowOp): how FINN's build flow sees this kernel.
 # =============================================================================
 #
-# The interface↔node-slot binding is the kernel's own interface list (inp=0, thresholds=1,
+# The interface↔node-slot binding is the op's own interface list (inp=0, thresholds=1,
 # out=0 — declaration order); no separate PortSpec (F9).
 
 
 class ThresholdingDataflowOp(DataflowOp):
-    """Thresholding (multi-threshold activation) — the op class IS the kernel.
+    """Thresholding (multi-threshold activation) — an op composing two cells.
 
-    The class body is the design space that used to be a separate `DataflowKernel` value
-    (F6). The compute pool (HLS / RTL) carries backend-owned tiling; the threshold interface
-    is DERIVED as a delivered parameter from the pool's ``mem_modes`` by
-    `DataflowOp.__init_subclass__`. Both backends consume thresholds in embedded mode, so
-    delivery resolves to the ``embedded`` topology (no memstream cell).
+    The class body is the design space that used to be a separate `DataflowKernel` container
+    (F6). Only the COMPUTE cell's pool (HLS / RTL) is written here; the threshold interface
+    becomes a second, delivery cell because both backends name it in ``mem_modes``, derived
+    by `DataflowOp.__init_subclass__`. So the compiled space has two selection roots
+    (``backend``, ``parameters.thresholds.topology``). Both backends consume thresholds in
+    embedded mode, so delivery resolves to the ``embedded`` topology (no memstream cell).
     """
 
     # -- the design space ---------------------------------------------------

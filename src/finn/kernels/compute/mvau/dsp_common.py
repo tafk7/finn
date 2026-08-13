@@ -35,7 +35,7 @@ from finn.kernels.engine.derived import Derived
 from finn.kernels.engine.predicate import predicate
 from finn.util.basic import get_dsp_block
 
-from .kernel import INPUT, THRESHOLDS, WEIGHTS
+from .names import INPUT, THRESHOLDS, WEIGHTS
 
 # The RTL/DSP MVU cores are integer matmuls (the signed/bitwidth gates in _rtl_mvu_feasible
 # assume it). Declared as datatype support per port and shared by both DSP backends, so the

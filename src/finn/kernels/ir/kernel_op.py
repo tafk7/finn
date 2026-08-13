@@ -6,12 +6,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""``DataflowOp`` — a hardware kernel AS a real ONNX node.
+"""``DataflowOp`` — a composition of hardware kernels AS a real ONNX node.
 
-The op class IS the kernel. Its body declares the design space (interfaces, backend pool,
+The op class declares its own design space in its body (interfaces, the compute pool,
 cell-level axes/derived/predicates); the instance answers FINN's ``HWCustomOp`` contract for
 one graph node. There is no separate container object and no ``.kernel()`` hop — that split
 was F6, and its visible symptom was ten getters existing twice.
+
+What merged into the class was the CONTAINER, not a kernel. An op COMPOSES one or more
+:class:`~finn.kernels.model.cell.Kernel` cells — the compute cell it declares, plus one
+delivery cell per parameter interface, derived from the pool's ``mem_modes``. The op is the
+PRODUCT (a point picks one member per cell); a kernel is a SUM over one pool. MVAU composes
+three cells and its compiled space has three selection roots. See ``model/cell.py``.
 
 The engine (``engine/``) is pure and graph-free: its getters take a :class:`Context`
 (shapes/datatypes/VALUES as data) and a resolved :class:`Point`. This adapter sources that
@@ -100,14 +106,15 @@ class TransformationResult:
 
 
 class DataflowOp(HWCustomOp):
-    """Base FINN adapter over a :class:`~finn.kernels.ir.DataflowOp`.
+    """Base class for a dataflow op: a composition of kernel cells, as an ONNX node.
 
-    Subclasses implement only :meth:`kernel` (the design-space object). The
-    interface↔node-slot binding is the kernel's own
+    A subclass declares its design space in its class body — ``interfaces``, the compute
+    ``pool``, and the cell-level entries. The delivery cells are DERIVED from that pool, so
+    the subclass never names them. The interface↔node-slot binding is the op's own
     :class:`~finn.kernels.model.kernel.InterfaceSchema` list (name + direction + index +
-    optional) — the adapter iterates ``self.kernel().interfaces`` directly, so there is no
-    second binding object to keep in sync (F9). Everything else — the nodeattr registry, the
-    Context bridge, and all the HWCustomOp getters — is derived generically here.
+    optional), iterated directly, so there is no second binding object to keep in sync (F9).
+    Everything else — the nodeattr registry, the Context bridge, and all the HWCustomOp
+    getters — is derived generically here.
     """
 
     # Every DataflowOp derives its shapes/dtypes/widths from live graph context, so it
@@ -118,10 +125,11 @@ class DataflowOp(HWCustomOp):
 
     # -- op-class IDENTITY: the subclass declares these in its body ----------
     #
-    # These WERE the fields of a separate frozen `DataflowKernel` dataclass, reached through
+    # These WERE the fields of a separate frozen `DataflowKernel` container, reached through
     # a `.kernel()` classmethod. They are op-CLASS facts — true of every MVAU node, not of
-    # any one — so a class body is their home, and `MvauDataflowOp` simply IS the MVAU
-    # kernel. That collapse is F6; the pass-through getters it removes were the symptom.
+    # any one — so a class body is their home. That collapse is F6; the pass-through getters
+    # it removes were the symptom. Note `pool` is the COMPUTE cell's pool only: the delivery
+    # cells are derived from it by `_build_delivered`, so an op declares one and gets N.
 
     name: ClassVar[str] = ""
     interfaces: ClassVar[tuple] = ()
@@ -494,9 +502,9 @@ class DataflowOp(HWCustomOp):
 
         Each member is trialled against its OWN realized space rather than a merged one.
 
-        ``context`` defaults to this node's own — the normal case now that the op IS the
-        kernel. It is passed explicitly only by a caller holding a context for a node that
-        does not exist yet (the claim path's candidate)."""
+        ``context`` defaults to this node's own — the normal case now that the op is
+        model-bearing. It is passed explicitly only by a caller holding a context for a node
+        that does not exist yet (the claim path's candidate)."""
         return cls._first_feasible_backend(context)
 
     @classmethod
@@ -563,7 +571,8 @@ class DataflowOp(HWCustomOp):
         dtype). An op with a value-derived output type (e.g. MVAU's accumulator under
         ``noActivation``) overrides to read the derived off the ``point``.
 
-        The ``kernel`` parameter this used to take is gone: the op IS the kernel now."""
+        The ``kernel`` parameter this used to take is gone: the design space is the op's own
+        class body now, so there is nothing to hand in."""
         return ctx.tensor_datatype(self._output(index).tensor)
 
     def make_shape_compatible_op(self, model):
@@ -815,8 +824,8 @@ class DataflowOp(HWCustomOp):
         EVERY backend has no feasible point, so ``can_infer_from`` can delegate to this rather
         than encoding a backend fact in the frontend.
 
-        ``context`` defaults to this node's own — the normal case now that the op IS the
-        kernel. The CLAIM path passes one explicitly only when it has already built a
+        ``context`` defaults to this node's own — the normal case now that the op is
+        model-bearing. The CLAIM path passes one explicitly only when it has already built a
         candidate's context by hand."""
         return cls._first_feasible_backend(context) is not None
 

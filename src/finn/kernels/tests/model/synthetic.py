@@ -13,8 +13,8 @@ validation, delivered-parameter derivation, the tiling projections — on a made
 than on MVAU, so the mechanism is tested in isolation from any real design space.
 
 Before the container merged into the op class (F6), that meant constructing a
-``DataflowKernel(name=..., interfaces=..., pool=...)`` value. The op class IS the kernel now,
-so the equivalent is a subclass — which is also what production does, making these tests
+``DataflowKernel(name=..., interfaces=..., pool=...)`` value. The op class declares that
+design space in its own body now, so the equivalent is a subclass — which is also what production does, making these tests
 exercise the real construction path instead of a parallel one.
 
 ``type()`` rather than a ``class`` statement because the interfaces and pool vary per test;

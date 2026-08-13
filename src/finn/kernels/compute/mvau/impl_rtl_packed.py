@@ -26,7 +26,10 @@ from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common, num_lan
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
 from ._dsp_rtl import VERSION
 from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
-from .kernel import INPUT, MVAU_DSP_PACKED, OUTPUT, WEIGHTS
+from .names import INPUT, OUTPUT, WEIGHTS
+
+# This backend's identity — see the note in ``impl_hls.py``: a pool member names itself.
+MVAU_DSP_PACKED = "mvau_dsp_packed"
 
 
 @predicate(

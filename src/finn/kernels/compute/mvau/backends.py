@@ -38,7 +38,7 @@ from finn.kernels.engine.datatype_spec import DependentSpec
 from finn.kernels.engine.spec_helpers import smallest_datatype_for_range
 from finn.kernels.model.param_names import param_datatype_key
 
-from .kernel import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
+from .names import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
 
 
 # =============================================================================

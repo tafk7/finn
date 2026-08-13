@@ -23,7 +23,10 @@ from finn.kernels.model.param_names import DECOUPLED
 from .dsp_common import RTL_MVU_SUPPORT, SHARED_SOURCES, dsp_rtl_common
 from .emit_rtl import _V_WRAPPER_SCHEMA, emit_mvau_rtl
 from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
-from .kernel import MVAU_DSP_SOFTVEC, OUTPUT, WEIGHTS
+from .names import OUTPUT, WEIGHTS
+
+# This backend's identity — see the note in ``impl_hls.py``: a pool member names itself.
+MVAU_DSP_SOFTVEC = "mvau_dsp_softvec"
 
 
 # softvec has NO extra feasibility gate: the soft-vectorized core builds on any DSP part,

@@ -37,7 +37,7 @@ from finn.kernels.model.artifacts import Artifacts, BitWidth, Bool, Dim, Generat
 from finn.kernels.model.ports import Direction, Port, Protocol, Role
 
 from .geometry import mvau_geometry
-from .kernel import INPUT, WEIGHTS
+from .names import INPUT, WEIGHTS
 
 # finn-rtllib/mvu/mvu_vvu_axi_wrapper.v — 14 $UPPERCASE$ slots (all compute-core
 # config; none touch the weight-delivery cluster). Verilog expressions like

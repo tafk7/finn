@@ -6,20 +6,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""MVAU — the matrix-vector activation kernel. The op class IS the kernel.
+"""MVAU — the matrix-vector activation op. Its class body declares the whole design space.
 
-`MvauDataflowOp`'s class body IS the design space: interfaces, the backend pool, the
-op-level axes/deriveds/predicates/attrs/constraints. Read it top to bottom to understand
-what an MVAU is; there is no separate container object and no ``.kernel()`` hop (F6).
+`MvauDataflowOp` COMPOSES three cells — the compute kernel (HLS / DSP-softvec / DSP-packed)
+plus one parameter-delivery kernel per delivered interface (``weights``, ``thresholds``) —
+into a single design space with three selection roots. The op is the PRODUCT; each cell is
+a SUM over its pool. What F6 merged into this class was the CONTAINER (`DataflowKernel`),
+not a kernel: there is no separate container object and no ``.kernel()`` hop, but the op is
+still not one kernel. See ``model/cell.py`` for the tier table.
+
+The parameter cells are DERIVED, not declared — `__init_subclass__` reads the pool's
+``mem_modes`` — so this file names only the compute pool and the op-level design space.
 
 Also here: the Seam-A frontend claim (``can_infer_from``/``infer_from``, mirroring
 ``InferQuantizedMatrixVectorActivation``), which is op-owned pattern knowledge.
 
-The tensor-name constants and :func:`mvau_interfaces` live in ``kernel.py`` — a LEAF module,
-because the backend modules import them and this module imports the backends. The
-backend-scoped contract (fold map, datatype derivations) is in ``backends.py``. Both are
-re-exported here so ``from .op import X`` keeps resolving for the tests and helpers that
-read them through this module.
+Tensor names live in ``names.py``, a LEAF, because the backend modules key Context lookups
+by them and this module imports the backends. Each backend's IDENTITY string lives in that
+backend's own ``impl_*.py`` (a pool member names itself). The backend-scoped contract (fold
+map, datatype derivations) is in ``backends.py``. All are re-exported here so
+``from .op import X`` keeps resolving for the tests and helpers that read them through this
+module.
 """
 
 from __future__ import annotations
@@ -31,8 +38,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.kernels.engine.attr import attr
-from finn.kernels.engine.constraints import ValueNonNeg
+from finn.kernels.engine.constraints import IsStatic, ShapeRank, SparsityFree, ValueNonNeg
 from finn.kernels.engine.derived import Derived
+from finn.kernels.model.kernel import InterfaceSchema
+from finn.kernels.model.ports import Direction
+from finn.kernels.model.tiling import FULL
 from finn.kernels.compute.thresholding.shared import _threshold_datatype
 from finn.kernels.ir import DataflowOp, TransformationResult
 from finn.kernels.engine.datatype_spec import resolve_datatype_spec
@@ -41,19 +51,16 @@ from finn.kernels.compute.mvau._dsp_rtl import VERSION  # noqa: F401  (re-export
 
 # The kernel DEFINITION — re-exported so `from .op import X` keeps working for the backend
 # backends, the composition helper, and the tests that resolve against this module.
-from .impl_hls import hls_bundle as hls_backend
-from .impl_rtl_packed import packed_bundle as packed_backend
-from .impl_rtl_softvec import softvec_bundle as softvec_backend
-from .kernel import (  # noqa: F401  (re-exported public surface)
-    INPUT,
+from .impl_hls import MVAU_HLS, hls_bundle as hls_backend  # noqa: F401  (name re-exported)
+from .impl_rtl_packed import (  # noqa: F401  (name re-exported)
     MVAU_DSP_PACKED,
-    MVAU_DSP_SOFTVEC,
-    MVAU_HLS,
-    OUTPUT,
-    THRESHOLDS,
-    WEIGHTS,
-    mvau_interfaces,
+    packed_bundle as packed_backend,
 )
+from .impl_rtl_softvec import (  # noqa: F401  (name re-exported)
+    MVAU_DSP_SOFTVEC,
+    softvec_bundle as softvec_backend,
+)
+from .names import INPUT, OUTPUT, THRESHOLDS, WEIGHTS  # noqa: F401  (re-exported)
 
 # The BACKEND-SCOPED shared contract (fold map + datatype derivations) — re-exported so the
 # backend modules read `from .op import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes`.
@@ -89,26 +96,65 @@ def _unsigned_input(p, ctx) -> bool:
 
 
 # =============================================================================
+# INTERFACES — the ONNX-facing arity + direction (no tiling; tiling is backend-owned)
+# =============================================================================
+
+
+def mvau_interfaces():
+    """The op-side interface list — identity + DIRECTION + BLOCK structure (the math). No
+    semantic role: whether ``weights`` is a stored parameter or a live activation emerges
+    from graph context (initializer?) at resolve time. Stream folding (SIMD/PE) is backend-owned.
+
+    The block reads as the matmul: ``inp`` iterates its vector count (``1``) and holds the
+    reduction dim MW in-block (``FULL``); ``weights`` is the whole matrix ``(MW, MH)`` in one
+    block; ``out`` iterates vectors and holds MH."""
+    return (
+        InterfaceSchema(INPUT, Direction.IN, block=[1, FULL]),          # (n_vecs, MW)
+        # weights — the STATIC + DENSE requirements are declared here, where the pool can
+        # widen them. Both were hand-written escapes in the frontend claim, which meant the
+        # vocabulary member (IsStatic) sat dead while the fact it encodes lived in Python
+        # and could drift. A backend that can consume dynamic or sparse weights now widens
+        # what infer accepts by declaring so, with no frontend edit.
+        InterfaceSchema(
+            WEIGHTS, Direction.IN, block=[FULL, FULL],  # (MW, MH)
+            constraints=(IsStatic(WEIGHTS), SparsityFree(WEIGHTS)),
+        ),
+        # thresholds — optional (NumChannels, numSteps); ShapeRank auto-skips when absent.
+        InterfaceSchema(
+            THRESHOLDS, Direction.IN, block=[FULL, FULL], optional=True,
+            constraints=(ShapeRank(THRESHOLDS, 2),),
+        ),
+        # out — dtype is backend-derived (accDataType under no-activation), declared as the
+        # out port's derived_dtype (mvau_out_dtype, backends.py); here only arity/block.
+        InterfaceSchema(OUTPUT, Direction.OUT, block=[1, FULL]),
+    )
+
+
+# =============================================================================
 # FINN WRAPPER — MvauDataflowOp(DataflowOp): how FINN's build flow sees this kernel.
 # =============================================================================
 #
-# The interface↔node-slot binding is the kernel's own interface list (inp=0, weights=1,
+# The interface↔node-slot binding is the op's own interface list (inp=0, weights=1,
 # optional thresholds=2, out=0 — declaration order). The real compute backend is chosen by the
 # ``backend`` nodeattr, not the domain (consumer-surface-model.md R11).
 
 
 class MvauDataflowOp(DataflowOp):
-    """MVAU (matrix-vector activation) — the op class IS the kernel.
+    """MVAU (matrix-vector activation) — an op composing three cells.
 
     The class body below is the design space that used to be a separate `DataflowKernel`
     value reached through a `.kernel()` classmethod. Every field here is op-CLASS identity —
     true of every MVAU node, not of any one — so a class body is its home (F6).
 
-    The compute pool (HLS / DSP-softvec / DSP-packed) carries backend-owned tiling. Weights +
-    thresholds are DERIVED as delivered parameters from the pool's ``mem_modes`` (a backend
-    declares which param ports it consumes) by `DataflowOp.__init_subclass__`, which also
-    resolves the interface slot indices and validates per-port direction — all at class
-    definition, so an authoring mistake is an import error.
+    Only the COMPUTE cell's pool (HLS / DSP-softvec / DSP-packed) is written here. The other
+    two cells are derived: weights + thresholds become delivered parameters because some
+    backend names them in its ``mem_modes``, and `DataflowOp.__init_subclass__` turns each
+    into a storage-topology pool of its own. So the compiled space has three selection roots
+    (``backend``, ``parameters.weights.topology``, ``parameters.thresholds.topology``), and
+    a design point picks one member from each.
+
+    ``__init_subclass__`` also resolves the interface slot indices and validates per-port
+    direction — at class definition, so an authoring mistake is an import error.
     """
 
     # -- the design space ---------------------------------------------------
@@ -277,7 +323,7 @@ class MvauDataflowOp(DataflowOp):
 
 
 # =============================================================================
-# COMPATIBILITY SHIMS — the op class IS the kernel; these are spellings, not objects.
+# COMPATIBILITY SHIMS — there is no container object; these are spellings, not objects.
 # =============================================================================
 
 

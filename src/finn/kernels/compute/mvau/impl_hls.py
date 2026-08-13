@@ -25,7 +25,12 @@ from finn.kernels.model.param_names import DECOUPLED, EMBEDDED
 
 from .emit_hls import emit_mvau_hls
 from .backends import COMPUTE_STREAM, mvau_out_dtype, mvau_register_dtypes
-from .kernel import INPUT, MVAU_HLS, OUTPUT, THRESHOLDS, WEIGHTS
+from .names import INPUT, OUTPUT, THRESHOLDS, WEIGHTS
+
+# This backend's identity — the value of the root `backend` axis that selects it. Declared
+# HERE because a pool member names ITSELF and nothing dispatches on the value; a shared
+# constants module would be a leaf hop for a single reader.
+MVAU_HLS = "mvau_hls"
 
 # The HLS MVU compute core is a quantized-integer matmul: a float32 i/w tensor has no legal
 # HLS realization. Declared per port so the pool's UNION of supported datatypes is the single

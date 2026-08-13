@@ -510,8 +510,8 @@ def test_fourth_implementation_composes_additively():
         axes=(), predicates=(lut_rtl_feasible,), sources=("mvu_lut.sv",),
         ports=ports_from(stream=COMPUTE_STREAM),
     )
-    # Widening is a SUBCLASS now, not `replace(kernel, pool=...)`: the op class IS the
-    # kernel (F6), so "same op, one more backend" is exactly what subclassing expresses.
+    # Widening is a SUBCLASS now, not `replace(kernel, pool=...)`: the pool is a class
+    # attribute (F6), so "same op, one more backend" is exactly what subclassing expresses.
     # It cannot mutate the base, and `__init_subclass__` re-derives delivered_parameters
     # and hands the subclass its own space cache.
     class _WithLutRtl(MvauDataflowOp):

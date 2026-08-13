@@ -245,7 +245,7 @@ def test_third_implementation_composes_additively():
         sources=("stub.sv",),
         ports=ports_from(stream=COMPUTE_STREAM),
     )
-    # A subclass, not `replace(kernel, pool=...)`: the op class IS the kernel (F6).
+    # A subclass, not `replace(kernel, pool=...)`: the pool is a class attribute now (F6).
     from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 
     class _WithStub(ThresholdingDataflowOp):

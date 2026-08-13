@@ -10,7 +10,8 @@
 
 **The design space itself lives on the op class**, in ``op.py``: `ThresholdingDataflowOp`'s
 class body declares the pool, axes, deriveds, predicates and attrs, because those are
-op-CLASS facts (F6 — the op IS the kernel). Read that class to see what a Thresholding is.
+op-CLASS facts (F6 — the container collapsed into the op). Read that class to see what a
+Thresholding is.
 
 What stays here is the closure bodies those declarations reference, plus the ONE genuinely
 cross-op function: :func:`_threshold_datatype`, which **MVAU also imports** so the fused
