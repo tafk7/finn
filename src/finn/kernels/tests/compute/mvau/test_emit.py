@@ -28,8 +28,7 @@ from finn.kernels.compute.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
-    mvau_pool,
-    mvau_space,
+    MvauDataflowOp,
 )
 from finn.kernels.dataflow.parameters.names import DECOUPLED, EMBEDDED, WEIGHTS
 from finn.kernels.model.param_names import topology_key
@@ -66,8 +65,8 @@ def hls_point(schema, ctx, **overrides):
 
 
 def test_rtl_softvec_wrapper_all_slots_filled_ships_softvec_core():
-    schema, ctx = mvau_space(), make_context()
-    arts = emit_point(mvau_pool(), dsp_point(schema, ctx, MVAU_DSP_SOFTVEC), ctx)
+    schema, ctx = MvauDataflowOp.compile(), make_context()
+    arts = emit_point(MvauDataflowOp.pool, dsp_point(schema, ctx, MVAU_DSP_SOFTVEC), ctx)
     assert isinstance(arts, Artifacts)
     assert len(arts.generated) == 1
     c = arts.generated[0].content()
@@ -81,8 +80,8 @@ def test_rtl_softvec_wrapper_all_slots_filled_ships_softvec_core():
 
 
 def test_rtl_packed_ships_packed_core():
-    schema, ctx = mvau_space(), make_context()
-    arts = emit_point(mvau_pool(), dsp_point(schema, ctx, MVAU_DSP_PACKED), ctx)
+    schema, ctx = MvauDataflowOp.compile(), make_context()
+    arts = emit_point(MvauDataflowOp.pool, dsp_point(schema, ctx, MVAU_DSP_PACKED), ctx)
     assert "mvu_vvu_axi_packed #(" in arts.generated[0].content()
     static = [s.resource.split("/")[-1] for s in arts.static_files]
     assert "mvu_vvu_axi_packed.sv" in static and "mvu_vvu_8sx9_dsp58.sv" in static
@@ -90,9 +89,9 @@ def test_rtl_packed_ships_packed_core():
 
 
 def test_dsp_bundles_wrapper_differs_only_in_core_module():
-    schema, ctx = mvau_space(), make_context()
-    a_sv = emit_point(mvau_pool(), dsp_point(schema, ctx, MVAU_DSP_SOFTVEC), ctx)
-    a_pk = emit_point(mvau_pool(), dsp_point(schema, ctx, MVAU_DSP_PACKED), ctx)
+    schema, ctx = MvauDataflowOp.compile(), make_context()
+    a_sv = emit_point(MvauDataflowOp.pool, dsp_point(schema, ctx, MVAU_DSP_SOFTVEC), ctx)
+    a_pk = emit_point(MvauDataflowOp.pool, dsp_point(schema, ctx, MVAU_DSP_PACKED), ctx)
     c_sv, c_pk = a_sv.generated[0].content(), a_pk.generated[0].content()
     assert c_sv != c_pk
     assert c_sv.replace("mvu_vvu_axi_softvec", "X") == c_pk.replace("mvu_vvu_axi_packed", "X")
@@ -103,8 +102,8 @@ def test_dsp_bundles_wrapper_differs_only_in_core_module():
 
 
 def test_hls_cpp_all_slots_filled():
-    schema, ctx = mvau_space(), make_context()
-    c = emit_point(mvau_pool(), hls_point(schema, ctx, PE=2, SIMD=2, resType="lut"), ctx).generated[0].content()
+    schema, ctx = MvauDataflowOp.compile(), make_context()
+    c = emit_point(MvauDataflowOp.pool, hls_point(schema, ctx, PE=2, SIMD=2, resType="lut"), ctx).generated[0].content()
     assert "Matrix_Vector_Activate_Batch<" in c
     assert "ap_resource_lut()" in c
     assert '#include "params.h"' in c
@@ -112,14 +111,14 @@ def test_hls_cpp_all_slots_filled():
 
 
 def test_hls_restype_dsp_maps_to_dsp_resource():
-    schema, ctx = mvau_space(), make_context()
-    c = emit_point(mvau_pool(), hls_point(schema, ctx, resType="dsp"), ctx).generated[0].content()
+    schema, ctx = MvauDataflowOp.compile(), make_context()
+    c = emit_point(MvauDataflowOp.pool, hls_point(schema, ctx, resType="dsp"), ctx).generated[0].content()
     assert "ap_resource_dsp()" in c
 
 
 def test_hls_params_header_geometry():
-    schema, ctx = mvau_space(), make_context(mw=6, mh=8, wdt="INT8")
-    arts = emit_point(mvau_pool(), hls_point(schema, ctx, PE=2, SIMD=2), ctx)
+    schema, ctx = MvauDataflowOp.compile(), make_context(mw=6, mh=8, wdt="INT8")
+    arts = emit_point(MvauDataflowOp.pool, hls_point(schema, ctx, PE=2, SIMD=2), ctx)
     params = [d for d in arts.data_files if d.filename == "params.h"]
     assert len(params) == 1
     text = params[0].content
@@ -133,9 +132,9 @@ def test_hls_params_header_geometry():
 
 
 def test_emitted_port_widths_match_stream_widths():
-    schema, ctx = mvau_space(), make_context()
+    schema, ctx = MvauDataflowOp.compile(), make_context()
     p = dsp_point(schema, ctx, MVAU_DSP_SOFTVEC)
-    arts = emit_point(mvau_pool(), p, ctx)
+    arts = emit_point(MvauDataflowOp.pool, p, ctx)
     by_role = {port.role.value: port for port in arts.ports}
     # DATA_IN carries the input stream width; DATA_OUT the output stream width.
     assert by_role["data_in"].width == p["stream_width.inp"]
@@ -146,22 +145,22 @@ def test_emitted_port_widths_match_stream_widths():
 
 
 def test_all_three_bundles_emit():
-    schema, ctx = mvau_space(), make_context()
+    schema, ctx = MvauDataflowOp.compile(), make_context()
     points = {
         MVAU_DSP_SOFTVEC: dsp_point(schema, ctx, MVAU_DSP_SOFTVEC),
         MVAU_DSP_PACKED: dsp_point(schema, ctx, MVAU_DSP_PACKED),
         MVAU_HLS: hls_point(schema, ctx),
     }
     for backend, p in points.items():
-        arts = emit_point(mvau_pool(), p, ctx)
+        arts = emit_point(MvauDataflowOp.pool, p, ctx)
         assert isinstance(arts, Artifacts), backend
         assert len(arts.generated) == 1, backend
 
 
 def test_emit_needs_only_point_and_dict_context():
-    schema, ctx = mvau_space(), make_context()
+    schema, ctx = MvauDataflowOp.compile(), make_context()
     for p in (dsp_point(schema, ctx, MVAU_DSP_SOFTVEC), hls_point(schema, ctx)):
-        assert emit_point(mvau_pool(), p, ctx).generated[0].content()
+        assert emit_point(MvauDataflowOp.pool, p, ctx).generated[0].content()
     assert not hasattr(ctx, "graph") and not hasattr(ctx, "model")
 
 
@@ -183,8 +182,8 @@ def _thresh_context(mw=6, mh=8, steps=7, tdt="INT16"):
 
 
 def test_hls_thresholded_node_bakes_thresh_h():
-    schema, ctx = mvau_space(), _thresh_context(steps=7)
-    arts = emit_point(mvau_pool(), hls_point(schema, ctx, PE=2, SIMD=2, resType="lut"), ctx)
+    schema, ctx = MvauDataflowOp.compile(), _thresh_context(steps=7)
+    arts = emit_point(MvauDataflowOp.pool, hls_point(schema, ctx, PE=2, SIMD=2, resType="lut"), ctx)
     assert "thresh.h" in {d.filename for d in arts.data_files}
     thresh = next(d for d in arts.data_files if d.filename == "thresh.h").content
     assert "ThresholdsActivation<" in thresh
@@ -195,8 +194,8 @@ def test_hls_thresholded_node_bakes_thresh_h():
 
 
 def test_hls_no_threshold_node_has_no_thresh_h():
-    schema, ctx = mvau_space(), make_context()
-    arts = emit_point(mvau_pool(), hls_point(schema, ctx, PE=2, SIMD=2, resType="lut"), ctx)
+    schema, ctx = MvauDataflowOp.compile(), make_context()
+    arts = emit_point(MvauDataflowOp.pool, hls_point(schema, ctx, PE=2, SIMD=2, resType="lut"), ctx)
     assert "thresh.h" not in {d.filename for d in arts.data_files}
     cpp = arts.generated[0].content()
     assert "PassThroughActivation" in cpp

@@ -29,9 +29,9 @@ from finn.kernels.engine.predicate import Predicate
 
 @pytest.fixture(scope="module")
 def mvau_space():
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    return mvau_kernel().compile()
+    return MvauDataflowOp.compile()
 
 
 def test_generated_entries_carry_an_origin(mvau_space):

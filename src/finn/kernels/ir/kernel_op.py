@@ -126,7 +126,8 @@ class DataflowOp(HWCustomOp):
     # -- op-class IDENTITY: the subclass declares these in its body ----------
     #
     # These WERE the fields of a separate frozen `DataflowKernel` container, reached through
-    # a `.kernel()` classmethod. They are op-CLASS facts — true of every MVAU node, not of
+    # a `.kernel()` classmethod — both now deleted, along with the per-op `<op>_kernel()` /
+    # `<op>_pool()` / `<op>_space()` aliases, every one of which had become an identity. They are op-CLASS facts — true of every MVAU node, not of
     # any one — so a class body is their home. That collapse is F6; the pass-through getters
     # it removes were the symptom. Note `pool` is the COMPUTE cell's pool only: the delivery
     # cells are derived from it by `_build_delivered`, so an op declares one and gets N.
@@ -709,6 +710,13 @@ class DataflowOp(HWCustomOp):
         So the merge's *dispatch* is no longer evaluated on any compute path; only its name
         set and its one rejection are. It is not deleted because ``pool_space`` is SHARED
         with the storage pool, which still needs the whole assembler — see the note there.
+
+        **Always the FULL compose**, every cell included — there is deliberately no
+        compute-pool-only variant. The compute cell alone is not a self-sufficient design
+        space: Thresholding's own ``thresholdDataType`` derived reads the parameters pool's
+        published ``ParamDatatype``, so amputating the delivery cells yields a fragment, not
+        a schema. A specific scenario sharpens the space instead (delivery defaults to
+        ``embedded`` when its axes go unpinned).
 
         MEMOIZED per op class: assembly is pure over the (frozen) kernel.
         Sharing one instance is safe because the result is frozen and its lazily-built

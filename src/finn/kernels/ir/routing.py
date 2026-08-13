@@ -42,14 +42,14 @@ _LANGUAGE_TABLE: dict[str, dict[str, str | None]] | None = None
 
 def _language_table() -> dict[str, dict[str, str | None]]:
     """The op_type → {backend-name → language} map, built once from the kernel op
-    registry. Reads each op class's pool via the ``kernel()`` classmethod — bare-node, no op
+    registry. Reads each op class's ``pool`` attribute directly — bare-node, no op
     instantiation. Cached module-side; the registry + pools are static per process."""
     global _LANGUAGE_TABLE
     if _LANGUAGE_TABLE is None:
         from finn.kernels import custom_op
 
         _LANGUAGE_TABLE = {
-            op_type: {b.name: b.language for b in cls.kernel().pool}
+            op_type: {b.name: b.language for b in cls.pool}
             for op_type, cls in custom_op.items()
         }
     return _LANGUAGE_TABLE

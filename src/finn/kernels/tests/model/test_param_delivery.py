@@ -64,11 +64,11 @@ def _mvau_ctx(part=VERSAL):
 
 
 def _resolve_mvau(assignment):
-    from finn.kernels.compute.mvau import mvau_space
+    from finn.kernels.compute.mvau import MvauDataflowOp
 
     base = {"backend": "mvau_hls", "PE": 2, "SIMD": 2, "resType": "lut"}
     base.update(assignment)
-    return resolve(mvau_space(), _mvau_ctx(), base)
+    return resolve(MvauDataflowOp.compile(), _mvau_ctx(), base)
 
 
 # --- D6: embedded is constant mode; decoupled is stream ---------------------
@@ -223,10 +223,10 @@ def _thresh_ctx(mw=6, mh=8, steps=7):
 
 
 def test_weight_fold_depth_matches_wmem_decoupled():
-    from finn.kernels.compute.mvau import MVAU_DSP_SOFTVEC, mvau_space
+    from finn.kernels.compute.mvau import MVAU_DSP_SOFTVEC, MvauDataflowOp
 
     ctx = _fd_ctx()
-    p = resolve(mvau_space(), ctx, {
+    p = resolve(MvauDataflowOp.compile(), ctx, {
         "backend": MVAU_DSP_SOFTVEC, "PE": 2, "SIMD": 2,
         "resType": "dsp", TOPOLOGY: DECOUPLED,
     })
@@ -236,10 +236,10 @@ def test_weight_fold_depth_matches_wmem_decoupled():
 
 
 def test_weight_fold_depth_matches_wmem_embedded():
-    from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
+    from finn.kernels.compute.mvau import MVAU_HLS, MvauDataflowOp
 
     ctx = _fd_ctx()
-    p = resolve(mvau_space(), ctx, {
+    p = resolve(MvauDataflowOp.compile(), ctx, {
         "backend": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
@@ -249,10 +249,10 @@ def test_weight_fold_depth_matches_wmem_embedded():
 
 
 def test_threshold_fold_depth_matches_tmem_present():
-    from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
+    from finn.kernels.compute.mvau import MVAU_HLS, MvauDataflowOp
 
     ctx = _thresh_ctx()
-    p = resolve(mvau_space(), ctx, {
+    p = resolve(MvauDataflowOp.compile(), ctx, {
         "backend": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })
@@ -260,10 +260,10 @@ def test_threshold_fold_depth_matches_tmem_present():
 
 
 def test_threshold_fold_depth_zero_when_absent():
-    from finn.kernels.compute.mvau import MVAU_HLS, mvau_space
+    from finn.kernels.compute.mvau import MVAU_HLS, MvauDataflowOp
 
     ctx = _fd_ctx()  # no thresholds
-    p = resolve(mvau_space(), ctx, {
+    p = resolve(MvauDataflowOp.compile(), ctx, {
         "backend": MVAU_HLS, "PE": 2, "SIMD": 2,
         "resType": "lut", TOPOLOGY: EMBEDDED,
     })

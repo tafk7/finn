@@ -144,7 +144,8 @@ class MvauDataflowOp(DataflowOp):
 
     The class body below is the design space that used to be a separate `DataflowKernel`
     value reached through a `.kernel()` classmethod. Every field here is op-CLASS identity —
-    true of every MVAU node, not of any one — so a class body is its home (F6).
+    true of every MVAU node, not of any one — so a class body is its home (F6). Ask this
+    class directly: `MvauDataflowOp.pool`, `.compile()`, `.realized_space(member)`.
 
     Only the COMPUTE cell's pool (HLS / DSP-softvec / DSP-packed) is written here. The other
     two cells are derived: weights + thresholds become delivered parameters because some
@@ -296,10 +297,6 @@ class MvauDataflowOp(DataflowOp):
         removed = [node, consumer] if has_activation else [node]
         return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=removed)
 
-    @classmethod
-    def kernel(cls):
-        return mvau_kernel()
-
     def _output_datatype_from_point(self, ctx, point, index):
         # MVAU's output dtype is the out port's derived_dtype spec: the graph dtype when the
         # node has thresholds (they map the accumulator down), or the weight-derived
@@ -320,26 +317,3 @@ class MvauDataflowOp(DataflowOp):
         ctx = self._context()
         mw, mh = ctx.tensor_shape(WEIGHTS)
         return {"SIMD": int(mw), "PE": int(mh)}
-
-
-# =============================================================================
-# COMPATIBILITY SHIMS — there is no container object; these are spellings, not objects.
-# =============================================================================
-
-
-def mvau_kernel():
-    """The MVAU design space — which is simply the op class.
-
-    A one-line alias kept so the ~40 sites naming ``mvau_kernel()`` keep reading naturally.
-    There is no object to build: `MvauDataflowOp` holds the space in its class body (F6)."""
-    return MvauDataflowOp
-
-
-def mvau_pool():
-    """The MVAU backends, in declaration order (= selection precedence)."""
-    return MvauDataflowOp.pool
-
-
-def mvau_space():
-    """The full MVAU design space as a resolve ``DesignSpace``."""
-    return MvauDataflowOp.compile()

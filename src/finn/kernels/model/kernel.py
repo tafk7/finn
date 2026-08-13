@@ -2,9 +2,9 @@
 
 This module used to also hold ``DataflowOp``, the op container — interfaces + pool +
 the Tier-3 projections. That container is GONE: its contents are op-CLASS identity, so they
-live in the op class's own body now (``ir/dataflow_op.py``'s ``DataflowOp``, and each
-concrete op's subclass). `MvauDataflowOp` IS the MVAU kernel; there is no separate value to
-build and no ``.kernel()`` hop to make. See design pitch F6.
+live in the op class's own body now (``ir/kernel_op.py``'s ``DataflowOp``, and each concrete
+op's subclass). There is no separate value to build and no ``.kernel()`` hop to make — ask
+the op class itself. See design pitch F6.
 
 What is left here is the interface DECLARATION and its two helpers, which are pure data with
 no graph and no ONNX:

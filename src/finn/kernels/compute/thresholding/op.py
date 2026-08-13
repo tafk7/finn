@@ -88,24 +88,6 @@ def thresholding_interfaces():
 
 
 # =============================================================================
-# ASSEMBLY — the Thresholding design space, now the op class.
-# =============================================================================
-
-
-def thresholding_pool():
-    """The registered Thresholding implementations (flat peers), in registration order."""
-    return ThresholdingDataflowOp.pool
-
-
-def thresholding_kernel():
-    """The Thresholding design space — now simply the op class.
-
-    A one-line shim: the container collapsed into `ThresholdingDataflowOp` (F6), so there is
-    no separate object to return. Kept so existing callers keep reading naturally."""
-    return ThresholdingDataflowOp
-
-
-# =============================================================================
 # FINN WRAPPER — ThresholdingDataflowOp(DataflowOp): how FINN's build flow sees this kernel.
 # =============================================================================
 #
@@ -269,10 +251,6 @@ class ThresholdingDataflowOp(DataflowOp):
             ActVal=actval,
         )
         return TransformationResult(nodes_to_insert=[kernel_node], nodes_to_remove=[node])
-
-    @classmethod
-    def kernel(cls):
-        return thresholding_kernel()
 
     def get_folding_axes(self):
         """PE folds the channel dim NumChannels (the threshold tensor's leading extent),

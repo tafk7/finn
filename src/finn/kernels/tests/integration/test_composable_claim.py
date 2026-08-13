@@ -66,9 +66,9 @@ def _rejection_reasons(model, node):
     the build (which is how `sparsity` came to be carried by one and dropped by the other)."""
     inputs, outputs = MvauDataflowOp._candidate_slots(node, model)
     ctx = MvauDataflowOp.candidate_op(model, inputs, outputs)._context()
-    space = MvauDataflowOp.kernel().compile()
+    space = MvauDataflowOp.compile()
     reasons = []
-    for backend in MvauDataflowOp.kernel().pool:
+    for backend in MvauDataflowOp.pool:
         try:
             r = resolve(space, ctx, {"backend": backend.name})
         except Exception:

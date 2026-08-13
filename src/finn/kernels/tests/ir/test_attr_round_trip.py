@@ -105,7 +105,7 @@ def test_every_node_owned_name_round_trips():
     the registry PUBLISHES must be readable back through ``_assignment``. A published
     nodeattr the assignment gate cannot see is the defect class this file exists for."""
     op = _op(_mvau_model(ActVal=BAKED_ACTVAL, mlo_max_iter=BAKED_MLO))
-    schema = op.kernel().compile()
+    schema = type(op).compile()
     from finn.kernels.ir.nodeattr_registry import axis_nodeattr_types
 
     published = set(axis_nodeattr_types(schema))

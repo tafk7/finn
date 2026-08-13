@@ -127,9 +127,9 @@ def test_same_description_predicates_do_not_collide():
 
 @pytest.fixture(scope="module")
 def mvau_space():
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    return mvau_kernel().compile()
+    return MvauDataflowOp.compile()
 
 
 def test_mvau_given_only_rules_are_stratum_0(mvau_space):
@@ -245,9 +245,9 @@ def test_stratum_partitions_every_entry(mvau_space):
 
 
 def test_thresholding_strata():
-    from finn.kernels.compute.thresholding.op import thresholding_kernel
+    from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 
-    space = thresholding_kernel().compile()
+    space = ThresholdingDataflowOp.compile()
     assert space.stratum_of("PE") == 2
     assert space.stratum_of("TMEM") == 2, "reads NumChannels and PE"
     # The divisibility rule is now GENERATED from the declared stream fold, one per folded
@@ -267,9 +267,9 @@ def test_selection_root_inference_is_blind_to_a_lone_compute_cell():
     such dep, so a compute-cell space alone infers NOTHING — silently, returning a smaller
     set rather than raising, which is the failure mode that makes structural inference the
     wrong mechanism here."""
-    from finn.kernels.compute.mvau import mvau_kernel
+    from finn.kernels.compute.mvau import MvauDataflowOp
 
-    kernel = mvau_kernel()
+    kernel = MvauDataflowOp
     bare = kernel.compute_cell().space_for(
         "mvau_dsp_softvec", interfaces=kernel.interfaces
     )
@@ -284,9 +284,9 @@ def test_a_composed_op_still_infers_backend_but_only_incidentally():
     mem-mode guard (P2). That real edge happens to look like the artificial one the merge
     used to add, so the inference lands on the right answer for the ops we have. An op with
     no delivered parameters would get `frozenset()`."""
-    from finn.kernels.compute.mvau import mvau_kernel
+    from finn.kernels.compute.mvau import MvauDataflowOp
 
-    kernel = mvau_kernel()
+    kernel = MvauDataflowOp
     realized = kernel.realized_space("mvau_dsp_softvec")
     assert "backend" in realized._selection_roots()
 

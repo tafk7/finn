@@ -21,9 +21,9 @@ from finn.kernels.model.cell import Kernel
 
 
 def _mvau_cell() -> Kernel:
-    from finn.kernels.compute.mvau.op import mvau_pool
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    return Kernel(name="compute", pool=mvau_pool(), root_axis=BACKEND_AXIS)
+    return Kernel(name="compute", pool=MvauDataflowOp.pool, root_axis=BACKEND_AXIS)
 
 
 def test_holds_the_live_mvau_pool():
@@ -89,9 +89,9 @@ def test_root_axis_is_declared_not_inferred():
 
 def _mvau_parts():
     """The live MVAU container, its compute cell, and the op interfaces `space_for` needs."""
-    from finn.kernels.compute.mvau import mvau_kernel
+    from finn.kernels.compute.mvau import MvauDataflowOp
 
-    legacy = mvau_kernel()
+    legacy = MvauDataflowOp
     cell = Kernel(
         name="compute",
         pool=legacy.pool,

@@ -70,9 +70,6 @@ from .op import (  # noqa: F401  (re-exported public surface)
     OUTPUT,
     WEIGHTS,
     MvauDataflowOp,
-    mvau_kernel,
-    mvau_pool,
-    mvau_space,
 )
 
 # Import the built-in backend modules for their registration side effect. A third-party
@@ -82,9 +79,6 @@ from . import impl_rtl_softvec  # noqa: E402,F401
 from . import impl_rtl_packed  # noqa: E402,F401
 
 __all__ = [
-    "mvau_kernel",
-    "mvau_space",
-    "mvau_pool",
     "MvauDataflowOp",
     "MVAU_HLS",
     "MVAU_DSP_SOFTVEC",

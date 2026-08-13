@@ -28,8 +28,7 @@ from finn.kernels.model.backend import EmitError, emit_point
 from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
-    thresholding_pool,
-    thresholding_space,
+    ThresholdingDataflowOp,
 )
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
@@ -62,9 +61,9 @@ def rtl_point(schema, ctx, **overrides):
 
 
 def test_emit_produces_expected_artifacts():
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     ctx = make_context(channels=4, steps=7, odt="UINT3")  # o_bits=3 -> 7 steps
-    arts = emit_point(thresholding_pool(), rtl_point(schema, ctx, PE=2, depth_trigger_bram=1024), ctx)
+    arts = emit_point(ThresholdingDataflowOp.pool, rtl_point(schema, ctx, PE=2, depth_trigger_bram=1024), ctx)
     assert isinstance(arts, Artifacts)
     assert len(arts.generated) == 1
     assert arts.generated[0].filename == "thresholding_top.v"
@@ -80,10 +79,10 @@ def test_emit_produces_expected_artifacts():
 
 
 def test_rendered_top_has_bound_values_and_no_unfilled_slots():
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     ctx = make_context(channels=4, steps=7, idt="UINT8", odt="UINT3")
     content = emit_point(
-        thresholding_pool(), rtl_point(schema, ctx, PE=2, depth_trigger_bram=1024, depth_trigger_uram=0), ctx
+        ThresholdingDataflowOp.pool, rtl_point(schema, ctx, PE=2, depth_trigger_bram=1024, depth_trigger_uram=0), ctx
     ).generated[0].content()
     assert "parameter  PE = 2" in content
     assert "parameter  WI = 8" in content  # input bitwidth
@@ -95,10 +94,10 @@ def test_rendered_top_has_bound_values_and_no_unfilled_slots():
 
 
 def test_dat_content_is_valid_hex():
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     thr = np.array([[2, 5, 9]], dtype=np.float32)  # 1 channel, 3 sorted steps
     ctx = make_context(channels=1, steps=3, idt="UINT8", tdt="UINT8", odt="UINT2", thresholds=thr)
-    arts = emit_point(thresholding_pool(), rtl_point(schema, ctx, PE=1), ctx)
+    arts = emit_point(ThresholdingDataflowOp.pool, rtl_point(schema, ctx, PE=1), ctx)
     assert len(arts.data_files) == 2  # PE=1 * o_bits=2
     for d in arts.data_files:
         for line in d.content.splitlines():
@@ -117,11 +116,11 @@ def test_narrow_quant_pads_the_table_and_leaves_params_raw():
     exact case: FINN N=6 WT=8, ours N=7 WT=9, and every .dat line different. Nothing caught
     it because the only differential test diffs the .dat alone, at the one step count where
     padding is a no-op."""
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     thr = np.sort(np.random.RandomState(1).randint(0, 50, size=(4, 6)).astype(np.float32), axis=-1)
     ctx = make_context(channels=4, steps=6, idt="UINT8", tdt="UINT8", odt="UINT3", thresholds=thr)
     content = emit_point(
-        thresholding_pool(), rtl_point(schema, ctx, PE=2), ctx
+        ThresholdingDataflowOp.pool, rtl_point(schema, ctx, PE=2), ctx
     ).generated[0].content()
     assert "parameter  N = 6" in content, "N is the RAW step count, not the padded width"
     assert "parameter  WT = 8" in content, "wdt is never widened by narrow-quant"
@@ -131,9 +130,9 @@ def test_narrow_quant_pads_the_table_and_leaves_params_raw():
 
 
 def test_hls_bakes_thresholds_activation_rom():
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     ctx = make_context(channels=4, steps=7, odt="UINT3")
-    arts = emit_point(thresholding_pool(), resolve(schema, ctx, {"backend": THRESHOLDING_HLS, "PE": 2}), ctx)
+    arts = emit_point(ThresholdingDataflowOp.pool, resolve(schema, ctx, {"backend": THRESHOLDING_HLS, "PE": 2}), ctx)
     assert arts.generated[0].filename == "top_thresholding_top.cpp"
     assert {d.filename for d in arts.data_files} == {"thresh.h"}
     body = arts.data_files[0].content
@@ -145,7 +144,7 @@ def test_hls_bakes_thresholds_activation_rom():
 
 
 def test_emit_point_unknown_impl_raises():
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     ctx = make_context()
     with pytest.raises(EmitError, match="not in the pool"):
         emit_point((), rtl_point(schema, ctx, PE=2), ctx)
@@ -155,8 +154,8 @@ def test_emit_point_unknown_impl_raises():
 
 
 def test_emit_needs_only_point_and_dict_context():
-    schema = thresholding_space()
+    schema = ThresholdingDataflowOp.compile()
     ctx = make_context()
-    arts = emit_point(thresholding_pool(), rtl_point(schema, ctx, PE=2), ctx)
+    arts = emit_point(ThresholdingDataflowOp.pool, rtl_point(schema, ctx, PE=2), ctx)
     assert arts.generated[0].content()
     assert not hasattr(ctx, "graph") and not hasattr(ctx, "model")

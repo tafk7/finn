@@ -27,21 +27,20 @@ from finn.kernels.engine.resolve import resolve
 from finn.kernels.compute.thresholding import (
     THRESHOLDING_HLS,
     THRESHOLDING_RTL,
-    thresholding_pool,
-    thresholding_space,
+    ThresholdingDataflowOp,
 )
 
 VERSAL = "xcvc1902-vsva2197-2MP-e-S"
 
 
 def _language_of(point, pool=None):
-    by_name = {b.name: b for b in (pool if pool is not None else thresholding_pool())}
+    by_name = {b.name: b for b in (pool if pool is not None else ThresholdingDataflowOp.pool)}
     return by_name[point["backend"]].language
 
 
 @pytest.fixture
 def schema():
-    return thresholding_space()
+    return ThresholdingDataflowOp.compile()
 
 
 def sorted_thresholds(channels=8, steps=7, signed=False):
@@ -68,7 +67,7 @@ def base_assignment(**overrides):
 
 
 def test_pool_is_hls_and_rtl():
-    assert [b.name for b in thresholding_pool()] == [THRESHOLDING_HLS, THRESHOLDING_RTL]
+    assert [b.name for b in ThresholdingDataflowOp.pool] == [THRESHOLDING_HLS, THRESHOLDING_RTL]
 
 
 def test_tmem_and_widths(schema):
@@ -226,7 +225,7 @@ def test_unsigned_input_requires_nonneg_thresholds(schema):
 def test_third_implementation_composes_additively():
     from dataclasses import replace
     from finn.kernels.model.backend import Backend
-    from finn.kernels.compute.thresholding import thresholding_kernel, thresholding_pool
+    from finn.kernels.compute.thresholding import ThresholdingDataflowOp
 
     # A 4th backend adds to the pool with zero edits. Compose through the op class (the full
     # space, so the parameters pool folds in and thresholdDataType's cross-pool dep resolves) —

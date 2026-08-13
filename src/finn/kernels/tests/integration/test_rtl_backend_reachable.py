@@ -86,10 +86,9 @@ def test_a_dsp_backend_is_feasible_on_versal():
     """THE regression. Before the fix every DSP backend raised on its device probe, so this
     returned an empty set on every part."""
     op = _op(VERSAL)
-    kernel = op.kernel()
     ctx = op._context()
     feasible = {
-        b.name for b in kernel.pool if kernel.configure(ctx, {"backend": b.name})
+        b.name for b in type(op).pool if type(op).configure(ctx, {"backend": b.name})
     }
     assert "mvau_dsp_softvec" in feasible
     assert "mvau_dsp_packed" in feasible
@@ -100,11 +99,10 @@ def test_no_dsp_backend_is_feasible_without_device_facts():
     than a silent narrowing. Unknown-part is a legitimate state and the honest answer there
     is "cannot say" — the bug was that it was the ONLY state."""
     op = _op("")
-    kernel = op.kernel()
     ctx = op._context()
     for member in ("mvau_dsp_softvec", "mvau_dsp_packed"):
         with pytest.raises(ValueError, match="fpgapart"):
-            kernel.configure(ctx, {"backend": member})
+            type(op).configure(ctx, {"backend": member})
 
 
 def test_device_gating_discriminates_between_parts():
@@ -112,11 +110,10 @@ def test_device_gating_discriminates_between_parts():
     DSP48E1 part must still reject it. A fix that made every backend feasible everywhere
     would pass the test above and be just as wrong."""
     zynq = _op(ZYNQ7)
-    kernel = zynq.kernel()
     ctx = zynq._context()
     from finn.kernels.engine.point import Illegal
 
-    result = kernel.configure(ctx, {"backend": "mvau_dsp_packed"})
+    result = type(zynq).configure(ctx, {"backend": "mvau_dsp_packed"})
     assert isinstance(result, Illegal)
     assert any("DSP58" in r for r in result.reasons)
 
@@ -135,7 +132,7 @@ def test_specialize_kernels_threads_the_part_through():
     op.attach_device(VERSAL, clk_ns=5.0)
     assert op._context().fpgapart == VERSAL
     # A backend WAS committed — the transform ran and selected.
-    assert op.get_nodeattr("backend") in {b.name for b in op.kernel().pool}
+    assert op.get_nodeattr("backend") in {b.name for b in type(op).pool}
 
 
 def test_specialize_without_device_facts_still_specializes():

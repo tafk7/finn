@@ -28,8 +28,8 @@ from finn.kernels.model.backend import BACKEND_AXIS
 from finn.kernels.emit.stitch import Cell, stitch
 from finn.kernels.model.param_names import topology_key
 
-from . import mvau_pool
-from .op import mvau_kernel
+from . import MvauDataflowOp
+from .op import MvauDataflowOp
 
 
 def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
@@ -45,7 +45,7 @@ def emit_composed(point, context, module_name: str = "mvau_top") -> Artifacts:
     # topologies have emit=None → no cell, e.g. embedded weights or the always-constant fused
     # thresholds). Iterate the op's declared delivered_parameters so a second interface
     # needs no change here — symmetric with the generic resolve-side wiring (model/parameter_source.py).
-    for dp in mvau_kernel().delivered_parameters:
+    for dp in MvauDataflowOp.delivered_parameters:
         delivery_arts = _emit_delivery(point, context, module_name, dp)
         if delivery_arts is not None:
             strm = f"{module_name}_{dp.iface}strm"
@@ -74,7 +74,7 @@ def _emit_compute(point, context, module_name):
     """Dispatch the selected compute backend's emit, threading ``module_name`` into the
     wrapper name. Looked up by the compute pool's root axis (``backend``)."""
     backend = point[BACKEND_AXIS]
-    backend = {b.name: b for b in mvau_pool()}[backend]
+    backend = {b.name: b for b in MvauDataflowOp.pool}[backend]
     return backend.emit(point, context, module_name)
 
 

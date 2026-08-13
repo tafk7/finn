@@ -146,14 +146,14 @@ _V_WRAPPER_SCHEMA = RtlModule(
 
 def emit_mvau_rtl(point, context, module_name: str = "mvau_top") -> Artifacts:
     """Produce embedded-mode RTL MVAU compute-core artifacts from a resolved point."""
-    from .op import mvau_kernel
+    from .op import MvauDataflowOp
 
     idt = context.tensor_datatype(INPUT)
     wdt = context.tensor_datatype(WEIGHTS)
     geo = mvau_geometry(point, context)
     # rtl_core_module is a STATIC Backend identity field (F5) — read off the selected
     # backend, not re-projected onto the point.
-    rtl_core_module = mvau_kernel().selected_backend(point).rtl_core_module
+    rtl_core_module = MvauDataflowOp.selected_backend(point).rtl_core_module
 
     # Padded weight-stream width: (PE*SIMD*WEIGHT_WIDTH + 7)//8 * 8 — matches the
     # wrapper's WEIGHT_STREAM_WIDTH_BA and the memstream m_axis_0 width the stitch

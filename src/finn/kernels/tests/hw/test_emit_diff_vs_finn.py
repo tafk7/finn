@@ -107,7 +107,7 @@ def _mvau_context_point(W, pe, simd, wdt, idt, odt, backend, restype,
                         T=None, tdt=None, actval=None, **extra):
     from finn.kernels.engine.context import Context
     from finn.kernels.engine.resolve import resolve
-    from finn.kernels.compute.mvau import mvau_space
+    from finn.kernels.compute.mvau import MvauDataflowOp
     from finn.kernels.dataflow.parameters.names import DECOUPLED
 
     mw, mh = W.shape
@@ -130,7 +130,7 @@ def _mvau_context_point(W, pe, simd, wdt, idt, odt, backend, restype,
     if actval is not None:
         assignment["ActVal"] = actval
     assignment.update(extra)
-    point = resolve(mvau_space(), ctx, assignment)
+    point = resolve(MvauDataflowOp.compile(), ctx, assignment)
     return ctx, point
 
 
@@ -259,7 +259,7 @@ def test_mvau_rtl_wrapper_params_match_finn(fpgapart, pumped):
         MinimizeAccumulatorWidth,
     )
     from finn.kernels.model.backend import emit_point
-    from finn.kernels.compute.mvau import mvau_pool, MVAU_DSP_SOFTVEC
+    from finn.kernels.compute.mvau import MvauDataflowOp, MVAU_DSP_SOFTVEC
 
     rng = np.random.RandomState(0)
     W = rng.randint(int(DataType["INT8"].min()) + 1, int(DataType["INT8"].max()) + 1,
@@ -288,7 +288,7 @@ def test_mvau_rtl_wrapper_params_match_finn(fpgapart, pumped):
         W, pe, simd, wdt, idt, odt, MVAU_DSP_SOFTVEC, "dsp",
         fpgapart=fpgapart, pumpedCompute=pumped,
     )
-    ours_v = emit_point(mvau_pool(), point, ctx).generated[0].content()
+    ours_v = emit_point(MvauDataflowOp.pool, point, ctx).generated[0].content()
 
     fp, op = _params_of(finn_v), _params_of(ours_v)
     # The slots this parametrization exists to move. If a rename ever drops them from the
@@ -311,7 +311,7 @@ def test_mvau_rtl_arms_are_distinct():
     inert and this drops to 3, which is the regression this guards.
     """
     from finn.kernels.engine.point import Illegal
-    from finn.kernels.compute.mvau import mvau_pool, MVAU_DSP_SOFTVEC
+    from finn.kernels.compute.mvau import MvauDataflowOp, MVAU_DSP_SOFTVEC
     from finn.kernels.model.backend import emit_point
 
     rng = np.random.RandomState(0)
@@ -328,7 +328,7 @@ def test_mvau_rtl_arms_are_distinct():
                 fpgapart=part, pumpedCompute=pumped,
             )
             assert not isinstance(point, Illegal), (part, pumped, point)
-            params = _params_of(emit_point(mvau_pool(), point, ctx).generated[0].content())
+            params = _params_of(emit_point(MvauDataflowOp.pool, point, ctx).generated[0].content())
             seen[(part, pumped)] = tuple(params[k] for k in ("VERSION", "SEGMENTLEN"))
 
     assert len(set(seen.values())) == 6, f"arms collapsed: {seen}"
@@ -537,7 +537,7 @@ def test_mvau_memstream_wrapper_and_dat_match_finn():
     from finn.kernels.engine.context import Context
     from finn.kernels.engine.resolve import resolve
     from finn.kernels.model.backend import emit_point
-    from finn.kernels.compute.mvau import mvau_space, MVAU_HLS
+    from finn.kernels.compute.mvau import MvauDataflowOp, MVAU_HLS
     from finn.kernels.dataflow.parameters import parameters_pool
     from finn.kernels.dataflow.parameters.names import DECOUPLED
 
@@ -570,7 +570,7 @@ def test_mvau_memstream_wrapper_and_dat_match_finn():
         initializers={"weights": W},
         fpgapart=FPGAPART, clk_ns=CLK_NS,
     )
-    point = resolve(mvau_space(), ctx, {
+    point = resolve(MvauDataflowOp.compile(), ctx, {
         "backend": MVAU_HLS, "PE": pe, "SIMD": simd, "resType": "lut",
         MVAU_TOPOLOGY: DECOUPLED, MVAU_RAM_STYLE: "block",
     })
@@ -689,7 +689,7 @@ def _norm_header_ws(s):
 def test_thresholding_hls_thresh_h_matches_finn(steps, odt_name, regime):
     from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
     from finn.kernels.engine.resolve import resolve
-    from finn.kernels.compute.thresholding import THRESHOLDING_HLS, thresholding_space
+    from finn.kernels.compute.thresholding import THRESHOLDING_HLS, ThresholdingDataflowOp
     from finn.kernels.compute.thresholding.emit_hls import _thresh_h
 
     T = _thresh_table(4, steps, regime)
@@ -710,7 +710,7 @@ def test_thresholding_hls_thresh_h_matches_finn(steps, odt_name, regime):
         finn_thresh = open(os.path.join(d, "thresh.h")).read()
 
     ctx = _thresh_ctx(T, idt, tdt, odt)
-    point = resolve(thresholding_space(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
+    point = resolve(ThresholdingDataflowOp.compile(), ctx, {"backend": THRESHOLDING_HLS, "PE": 2})
     ours_thresh = _thresh_h(point, ctx)
     assert "ThresholdsActivation<" in finn_thresh, "FINN emitted no activation to diff against"
     assert _norm_header_ws(finn_thresh) == _norm_header_ws(ours_thresh)
@@ -735,8 +735,7 @@ def test_thresholding_rtl_dat_and_params_match_finn(steps, odt_name):
     from finn.kernels.model.backend import emit_point
     from finn.kernels.compute.thresholding import (
         THRESHOLDING_RTL,
-        thresholding_space,
-        thresholding_pool,
+            ThresholdingDataflowOp,
     )
 
     T = _thresh_table(4, steps, "non_saturating")
@@ -760,8 +759,8 @@ def test_thresholding_rtl_dat_and_params_match_finn(steps, odt_name):
                 finn_dats[f[f.index("threshs_"):]] = open(os.path.join(d, f)).read()
 
     ctx = _thresh_ctx(T, idt, tdt, odt)
-    point = resolve(thresholding_space(), ctx, {"backend": THRESHOLDING_RTL, "PE": 2})
-    arts = emit_point(thresholding_pool(), point, ctx)
+    point = resolve(ThresholdingDataflowOp.compile(), ctx, {"backend": THRESHOLDING_RTL, "PE": 2})
+    arts = emit_point(ThresholdingDataflowOp.pool, point, ctx)
     ours_dats = {}
     for f in arts.data_files:
         c = f.content

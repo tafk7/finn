@@ -9,7 +9,7 @@
 """MVAU resolve — the depth-first flagship (the richest op, end to end).
 
 Exercises E (engine) + S (pool selection) + T (tiling) + D (delivery) through the real
-mvau_kernel: guarded axes, device pool pruning (DSP58/NUM_LANES/weight-width feasibility),
+MvauDataflowOp: guarded axes, device pool pruning (DSP58/NUM_LANES/weight-width feasibility),
 forced-derived values (dsp_primitive/accDataType), URAM combination predicate, data-
 dependent accumulator dtype (static vs runtime-writeable), composability (a 4th backend
 adds with zero edits; registry self-registration), the optional thresholds interface, and
@@ -36,10 +36,8 @@ from finn.kernels.compute.mvau import (
     MVAU_DSP_PACKED,
     MVAU_DSP_SOFTVEC,
     MVAU_HLS,
-    mvau_pool,
-    mvau_space,
 )
-from finn.kernels.compute.mvau.op import MvauDataflowOp, mvau_kernel
+from finn.kernels.compute.mvau.op import MvauDataflowOp
 from finn.kernels.dataflow.parameters.names import (
     DECOUPLED as PARAM_DECOUPLED,
     EMBEDDED as PARAM_EMBEDDED,
@@ -56,7 +54,7 @@ from finn.util.basic import is_versal
 
 
 def _language_of(point, pool=None):
-    by_name = {b.name: b for b in (pool if pool is not None else mvau_pool())}
+    by_name = {b.name: b for b in (pool if pool is not None else MvauDataflowOp.pool)}
     return by_name[point["backend"]].language
 
 
@@ -74,7 +72,7 @@ VERSAL = "xcvc1902-vsva2197-2MP-e-S"  # Versal, DSP58
 
 @pytest.fixture
 def schema():
-    return mvau_space()
+    return MvauDataflowOp.compile()
 
 
 def narrow_weights(shape=(6, 8), wdt="INT4"):
@@ -496,7 +494,7 @@ def test_hls_rejects_binary_weights(schema):
 def test_fourth_implementation_composes_additively():
     from finn.kernels.engine.predicate import predicate
     from finn.kernels.model.backend import Backend, ports_from
-    from finn.kernels.compute.mvau import mvau_kernel, mvau_pool
+    from finn.kernels.compute.mvau import MvauDataflowOp
     from finn.kernels.compute.mvau.op import COMPUTE_STREAM
 
     @predicate("mvau_lut_rtl targets non-Versal parts only (hypothetical)")
@@ -545,7 +543,7 @@ def test_adding_a_backend_needs_no_op_edit():
 
     This used to go through a REGISTRY: an `@register`-decorated factory pushed into a
     mutable dict, and a generation counter invalidated the memoized kernel so the next
-    `mvau_pool()` saw the addition. That indirection existed to break an import cycle (the
+    `MvauDataflowOp.pool` saw the addition. That indirection existed to break an import cycle (the
     impl modules imported constants THROUGH op.py), not to enable extensibility — every real
     registration was a fixed `from . import impl_*` line in the package __init__.
 
@@ -735,7 +733,7 @@ def _matmul_model(idt="INT8", wdt="INT8"):
 
 @pytest.mark.parametrize("backend", ["mvau_hls", "mvau_dsp_softvec", "mvau_dsp_packed"])
 def test_each_backend_rejects_float_iw(backend):
-    k = mvau_kernel()
+    k = MvauDataflowOp
     float_pt = resolve(k.compile(), _feas_ctx(idt="FLOAT32", wdt="FLOAT32"), {"backend": backend})
     assert isinstance(float_pt, Illegal)
     int_pt = resolve(k.compile(), _feas_ctx(idt="INT8", wdt="INT8"), {"backend": backend})
@@ -743,7 +741,7 @@ def test_each_backend_rejects_float_iw(backend):
 
 
 def test_has_feasible_point_true_for_int_false_for_float():
-    k = mvau_kernel()
+    k = MvauDataflowOp
     assert k.has_feasible_point(_feas_ctx(idt="INT8", wdt="INT8")) is True
     assert k.has_feasible_point(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is False
 
@@ -752,7 +750,7 @@ def test_first_feasible_backend_names_first_pool_member_or_none():
     # The SELECTION query behind PerNodePolicy(first_feasible): pool order is precedence, so
     # the integer node selects the first member (mvau_hls); a float node has no feasible
     # backend and returns None. has_feasible_point is the boolean over this same query.
-    k = mvau_kernel()
+    k = MvauDataflowOp
     assert k.first_feasible_backend(_feas_ctx(idt="INT8", wdt="INT8")) == "mvau_hls"
     assert k.first_feasible_backend(_feas_ctx(idt="FLOAT32", wdt="FLOAT32")) is None
 

@@ -393,12 +393,12 @@ TRIALS = [
 
 def _kernel(which):
     if which == "mvau":
-        from finn.kernels.compute.mvau.op import mvau_kernel
+        from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-        return mvau_kernel()
-    from finn.kernels.compute.thresholding.op import thresholding_kernel
+        return MvauDataflowOp
+    from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 
-    return thresholding_kernel()
+    return ThresholdingDataflowOp
 
 
 # =============================================================================
@@ -559,9 +559,9 @@ def test_recording_context_reports_which_givens_each_rule_reads():
     the artifact is the map itself. What IS asserted is that the map is non-empty and that
     the device-fact reads are visible in it — if this ever goes empty, the audit has stopped
     watching the surface F11 came from."""
-    from finn.kernels.compute.mvau import mvau_kernel
+    from finn.kernels.compute.mvau import MvauDataflowOp
 
-    kernel = mvau_kernel()
+    kernel = MvauDataflowOp
     _result, violations = audit_resolve(
         kernel.realized_space("mvau_dsp_softvec"),
         _mvau_ctx(),
@@ -582,9 +582,9 @@ def test_recording_context_names_the_rules_that_depend_on_the_device():
     """The report's actual use: WHICH rules consult the part. This is the list you read to
     ask "should this really be device-dependent?", and the one that makes an empty
     `fpgapart` a visible blast radius rather than a silent default."""
-    from finn.kernels.compute.mvau import mvau_kernel
+    from finn.kernels.compute.mvau import MvauDataflowOp
 
-    kernel = mvau_kernel()
+    kernel = MvauDataflowOp
     _result, violations = audit_resolve(
         kernel.realized_space("mvau_dsp_softvec"),
         _mvau_ctx(),

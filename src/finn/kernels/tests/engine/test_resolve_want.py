@@ -66,9 +66,9 @@ def _mvau_ctx(with_thresholds=False):
 
 @pytest.mark.parametrize("with_thresholds", [False, True], ids=["plain", "thresholds"])
 def test_want_none_is_unchanged_for_mvau(with_thresholds):
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    k = mvau_kernel()
+    k = MvauDataflowOp
     ctx = _mvau_ctx(with_thresholds)
     explicit = resolve(k.compile(), ctx, {"backend": "mvau_hls"}, want=None)
     default = resolve(k.compile(), ctx, {"backend": "mvau_hls"})
@@ -77,9 +77,9 @@ def test_want_none_is_unchanged_for_mvau(with_thresholds):
 
 
 def test_want_none_is_unchanged_for_thresholding():
-    from finn.kernels.compute.thresholding.op import thresholding_kernel
+    from finn.kernels.compute.thresholding.op import ThresholdingDataflowOp
 
-    k = thresholding_kernel()
+    k = ThresholdingDataflowOp
     ctx = Context(
         shapes={"inp": (1, 8), "thresholds": (8, 15), "out": (1, 8)},
         datatypes={
@@ -109,9 +109,9 @@ def test_want_none_is_unchanged_for_thresholding():
 def test_want_does_not_compute_unrelated_deriveds():
     """The plan's named check: asking for a stream width must not run the accumulator
     derivation. A counting spy, so this cannot pass by coincidence."""
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    space = mvau_kernel().compile()
+    space = MvauDataflowOp.compile()
     calls = {"acc": 0}
 
     spied = []
@@ -141,9 +141,9 @@ def test_want_does_not_compute_unrelated_deriveds():
 
 
 def test_want_returns_the_requested_value_and_its_closure():
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    space = mvau_kernel().compile()
+    space = MvauDataflowOp.compile()
     ctx = _mvau_ctx()
     r = resolve(space, ctx, {"backend": "mvau_hls"}, want=frozenset({"stream_width.inp"}))
     assert isinstance(r, Point)
@@ -155,9 +155,9 @@ def test_want_returns_the_requested_value_and_its_closure():
 
 def test_want_value_matches_the_eager_value():
     """Demand-driven must not mean different — only less."""
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    space = mvau_kernel().compile()
+    space = MvauDataflowOp.compile()
     ctx = _mvau_ctx()
     asg = {"backend": "mvau_hls", "SIMD": 4, "PE": 4}
     full = resolve(space, ctx, asg)

@@ -30,8 +30,6 @@ feasibility gate (a fabricated one was falsified;
 
 from __future__ import annotations
 
-from finn.kernels.engine.design_space import DesignSpace
-
 from .names import (  # noqa: F401 (re-exported)
     INPUT,
     OUTPUT,
@@ -45,34 +43,9 @@ from . import impl_hls  # noqa: E402,F401
 from . import impl_rtl  # noqa: E402,F401
 
 # The design-space assembly + FINN wrapper (imported after the backends register).
-from .op import (  # noqa: E402,F401 (re-exported public surface)
-    ThresholdingDataflowOp,
-    thresholding_kernel,
-)
-
-
-def thresholding_pool():
-    """The Thresholding backends, in declaration order (= selection precedence)."""
-    return ThresholdingDataflowOp.pool
-
-
-def thresholding_space() -> DesignSpace:
-    """The Thresholding design space — the full compose (``thresholding_kernel().compile()``).
-
-    THE single standardized space, symmetric with :func:`~finn.kernels.compute.mvau.mvau_space`:
-    the widest space the kernel could be, including the ``parameters.*`` pool it delivers
-    thresholds through. A specific scenario sharpens it (the pool defaults to ``embedded`` when
-    delivery axes go unpinned). There is deliberately NO compute-pool-only variant: the compute
-    pool alone is not a self-sufficient design space — its own ``thresholdDataType`` derived reads
-    the parameters pool's published ``ParamDatatype`` — so amputating the pool yields a fragment,
-    not a schema."""
-    return thresholding_kernel().compile()
-
+from .op import ThresholdingDataflowOp  # noqa: E402,F401 (re-exported public surface)
 
 __all__ = [
-    "thresholding_pool",
-    "thresholding_space",
-    "thresholding_kernel",
     "ThresholdingDataflowOp",
     "THRESHOLDING_HLS",
     "THRESHOLDING_RTL",

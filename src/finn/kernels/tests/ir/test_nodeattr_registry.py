@@ -15,14 +15,14 @@ axis (resType/ram_style) unions its allowed set across implementations. No shape
 bakes — geometry lives on the ONNX tensors.
 """
 
-from finn.kernels.compute.mvau import mvau_kernel
+from finn.kernels.compute.mvau import MvauDataflowOp
 from finn.kernels.dataflow.parameters.names import WEIGHTS
 from finn.kernels.ir.nodeattr_registry import axis_nodeattr_types
 from finn.kernels.model.param_names import ram_style_key
 
 
 def _reg():
-    return axis_nodeattr_types(mvau_kernel().compile())
+    return axis_nodeattr_types(MvauDataflowOp.compile())
 
 
 def test_every_node_owned_name_has_a_spec():
@@ -30,7 +30,7 @@ def test_every_node_owned_name_has_a_spec():
     questions: ``axis_names`` is the set of CHOICES, while a nodeattr exists for anything the
     frontend may bake and resolve reads back. ``ActVal`` is the case that separates them."""
     reg = _reg()
-    schema = mvau_kernel().compile()
+    schema = MvauDataflowOp.compile()
     assert set(reg) == set(schema.axis_names | schema.attr_names)
     for spec in reg.values():
         assert spec[0] in ("i", "s", "ints")
@@ -41,7 +41,7 @@ def test_every_node_owned_name_has_a_spec():
 def test_attrs_are_published_but_are_not_axes():
     """Both halves matter: dropping them from the registry would lose the frontend bake,
     and leaving them in ``axes`` is the phantom-axis defect the category exists to fix."""
-    schema = mvau_kernel().compile()
+    schema = MvauDataflowOp.compile()
     assert schema.attr_names == frozenset({"ActVal", "mlo_max_iter"})
     assert not (schema.axis_names & schema.attr_names)
     assert {"ActVal", "mlo_max_iter"} <= set(_reg())
@@ -105,7 +105,7 @@ def test_the_probe_grid_is_still_load_bearing_for_an_unspecialized_node():
     publish `("i", False, 0)` where a host expects a string with allowed values."""
     import finn.kernels.ir.nodeattr_registry as reg
 
-    schema = mvau_kernel().compile()
+    schema = MvauDataflowOp.compile()
     good = reg.axis_nodeattr_types(schema)
 
     real_probe = reg._probe_points

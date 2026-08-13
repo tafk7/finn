@@ -89,9 +89,9 @@ _DTYPES = [
 
 @pytest.fixture(scope="module")
 def mvau():
-    from finn.kernels.compute.mvau.op import mvau_kernel
+    from finn.kernels.compute.mvau.op import MvauDataflowOp
 
-    return mvau_kernel()
+    return MvauDataflowOp
 
 
 @pytest.mark.parametrize("fpgapart", [VERSAL, SEVEN_SERIES, ULTRASCALE])
