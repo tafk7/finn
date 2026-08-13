@@ -6,29 +6,35 @@
 # SPDX-License-Identifier: BSD-3-Clause
 ############################################################################
 
-"""Thresholding **op-level shared** elements — deliberately SMALL.
+"""Thresholding's shared derivation HELPERS — the closures its design space is built from.
 
-Thresholding is the model-stressing op: its memory-delivery cluster is NOT op-level
-(it is asymmetric and backend-local — HLS has mem_mode/ram_style, RTL has depth-triggers
-— and is DEFERRED entirely this task). What genuinely belongs to every implementation
-is only the activation bias ``ActVal`` -- a node CONSTANT (``kernel_attrs``), not a dial.
-Derived: the ``NumChannels``/``numSteps`` threshold geometry, TMEM, output/threshold
-datatypes, and the PE-scaled stream widths. The ``PE`` fold itself is tiling-generated.
+**The design space itself lives on the op class**, in ``op.py``: `ThresholdingDataflowOp`'s
+class body declares the pool, axes, deriveds, predicates and attrs, because those are
+op-CLASS facts (F6 — the op IS the kernel). Read that class to see what a Thresholding is.
 
-``op_axes`` is EMPTY, and that is the point: this op declares no hand-authored choice. Every
-scalar it used to carry as an Axis was either a Context fact (``numSteps``), inert
-(``numInputVectors``, deleted), or a constant (``ActVal``).
+What stays here is the closure bodies those declarations reference, plus the ONE genuinely
+cross-op function: :func:`_threshold_datatype`, which **MVAU also imports** so the fused
+(MVAU-with-thresholds) and standalone paths cannot drift on threshold dtype. That shared
+consumer is why this module exists at all rather than folding into ``op.py`` — it would
+otherwise be a leaf with a single importer.
 
-The threshold DTYPE is the storage owner's published ``ParamDatatype.dtype`` (thresholds
-compose the parameters pool in embedded mode) — read, not re-derived. Runtime-writability
-is a delivery-topology concern owned by the parameters pool (``runtime_writeable_key``), not
-a self-declared op axis; the former ``runtime_writeable_weights`` op-axis was DEAD (no backend
-consumed it) and is deleted.
+Notes that outlived the move, because they explain absences a reader will wonder about:
+
+* ``op_axes`` is EMPTY, and that is the point: this op declares no hand-authored choice.
+  Every scalar it used to carry as an Axis was either a Context fact (``numSteps``), inert
+  (``numInputVectors``, deleted), or a constant (``ActVal``). The ``PE`` fold is
+  tiling-generated from the declared stream.
+* The memory-delivery cluster is NOT op-level — it is asymmetric and backend-local (HLS has
+  mem_mode/ram_style, RTL has depth-triggers).
+* The threshold DTYPE is the storage owner's published ``ParamDatatype.dtype`` (thresholds
+  compose the parameters pool in embedded mode) — read, not re-derived. Runtime-writability
+  is a delivery-topology concern owned by the parameters pool, not a self-declared op axis;
+  the former ``runtime_writeable_weights`` op-axis was DEAD and is deleted.
+* Both backends have IDENTICAL integer dtype envelopes — there is intentionally NO
+  per-backend dtype feasibility gate (a fabricated one was falsified; see the package
+  docstring).
 
 Context convention: the ``thresholds`` tensor shape is ``(NumChannels, numSteps)``.
-Both backends have IDENTICAL integer dtype envelopes — there is intentionally NO
-per-backend dtype feasibility gate (a fabricated one was falsified; see the package
-__init__).
 """
 
 from __future__ import annotations
@@ -88,42 +94,6 @@ def _num_steps(p, ctx):
 # =============================================================================
 
 
-def op_axes():
-    return ()
-    # EMPTY, and every removal was measured:
-    #
-    # ``numSteps`` -> Derived (below). Its only LEGAL value was the Context one: its default
-    # already read ``tensor_shape(THRESHOLDS)[1]``, and a predicate rejected anything else. An
-    # axis whose domain is a singleton determined by Context is a derivation wearing an Axis
-    # costume — the same correction ``NumChannels`` already had, for the same reason. The
-    # predicate went with it: it was not a legality rule, it was a consistency check on a
-    # duplicate.
-    #
-    # ``numInputVectors`` -> DELETED. It was INERT: nothing in this package read it, and
-    # pinning it changed no resolved value (folded shapes track the TENSOR). Baseline FINN
-    # needs it because it RECONSTRUCTS shapes from nodeattrs (``tuple(vecs + [ich])``,
-    # thresholding.py:211); we source shapes from the live graph, so the reconstruction input
-    # is dead weight. MVAU already treats it as Context (``geometry.py``: ``nvec`` from the
-    # input tensor's leading dims) and publishes no such nodeattr — the two ops disagreed
-    # about one quantity and MVAU was right.
-    #
-    # ``ActVal`` -> kernel_attrs (a node CONSTANT; it is the one value here the graph really
-    # does not hold once infer absorbs the MultiThreshold).
-    #
-    # NOT here either, and deliberately: the ``PE`` fold dial and the ``NumChannels``
-    # divisibility rule are GENERATED by the tiling engine from each backend's declared
-    # ``stream=COMPUTE_STREAM``. They were hand-written while the stream was declared but
-    # never wired, which also forced ``NumChannels`` to be carried as a pseudo-axis purely
-    # to feed ``divisor_axis``. It is a Context fact, so it is now a Derived (below).
-
-
-def kernel_attrs():
-    # The absorbed MultiThreshold's out_bias — infer bakes it (op.py) and emit reads it off
-    # the Point (emit_hls.py, emit_rtl.py). No graph home once the frontend node is gone,
-    # which is what makes it an Attr rather than a Context fact. See engine/attr.py.
-    return (attr("ActVal", "int", lambda v: isinstance(v, int), 0),)
-
-
 # =============================================================================
 # Op-level SHARED derived.
 # =============================================================================
@@ -161,34 +131,6 @@ def _threshold_datatype(p, ctx):
     return ctx.tensor_datatype(THRESHOLDS)
 
 
-def op_derived():
-    return (
-        # NumChannels is a CONTEXT fact (the threshold tensor's channel extent), not a
-        # choice. It was an Axis only because divisor_axis("PE", "NumChannels") needed to
-        # read it off the point; with PE generated from the declared stream, it can be what
-        # it always was. Emit reads point.NumChannels, so the key stays.
-        Derived("NumChannels", _num_channels),
-        # numSteps is the threshold tensor's STEP extent — the sibling fact to NumChannels,
-        # and it took the same route: an Axis whose default read Context, whose domain was a
-        # singleton, and whose "legality" predicate only checked it had not been overridden
-        # to something inconsistent. Emit reads point.numSteps, so the key stays.
-        Derived("numSteps", _num_steps),
-        Derived("TMEM", _tmem, deps={"NumChannels", "PE"}),
-        # No outputDataType derived: the output dtype IS the graph output dtype (the trivial
-        # DatatypeSpec — None → graph fallback), resolved uniformly like every other output's
-        # derived_dtype. The out port declares no derived_dtype; no second mechanism here.
-        # thresholdDataType is Context-only while the narrowing is disabled for FINN parity
-        # (see _threshold_datatype's TODO), so it declares NO dep. Re-enabling the narrowing
-        # means reading the storage owner's published ParamDatatype again, which is a
-        # parameters-pool derived — restore ``deps={param_datatype_key(THRESHOLDS)}`` with it
-        # so the unified topo-sort orders this after the publisher.
-        Derived("thresholdDataType", _threshold_datatype),
-    )
-    # instream_width/outstream_width are GONE: they are the singular-stream pair
-    # resolution-phases.md §4 dissolved, hand-reintroduced here because this op bypassed the
-    # tiling engine. The generated per-interface ``stream_width.<iface>`` replaces them.
-
-
 # =============================================================================
 # Op-level SHARED predicates.
 # =============================================================================
@@ -220,5 +162,3 @@ def _unsigned_input_nonneg_thresholds(p, ctx):
     return None
 
 
-def op_predicates():
-    return (_unsigned_input_nonneg_thresholds,)

@@ -39,7 +39,6 @@ from .names import (  # noqa: F401 (re-exported)
     THRESHOLDING_RTL,
     THRESHOLDS,
 )
-from .shared import op_axes, op_derived, op_predicates
 
 # Import the built-in backend modules for their registration side effect.
 from . import impl_hls  # noqa: E402,F401
@@ -50,11 +49,6 @@ from .op import (  # noqa: E402,F401 (re-exported public surface)
     ThresholdingDataflowOp,
     thresholding_kernel,
 )
-
-
-def thresholding_shared():
-    """The op-level shared (axes, derived, predicates)."""
-    return op_axes(), op_derived(), op_predicates()
 
 
 def thresholding_pool():
@@ -76,7 +70,6 @@ def thresholding_space() -> DesignSpace:
 
 
 __all__ = [
-    "thresholding_shared",
     "thresholding_pool",
     "thresholding_space",
     "thresholding_kernel",
