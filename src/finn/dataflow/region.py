@@ -323,7 +323,7 @@ class ScheduledInputRequirements:
         entries: Mapping[RequirementKey, int] | Iterable[RequirementEntry] = (),
     ) -> None:
         items = entries.items() if isinstance(entries, Mapping) else entries
-        declared = {}
+        declared: dict[RequirementKey, int] = {}
         for raw_key, multiplicity in items:
             try:
                 raw_iteration, raw_position = raw_key
@@ -395,7 +395,7 @@ class ScheduledOutputAvailability:
         entries: Mapping[Coordinate, Coordinate] | Iterable[AvailabilityEntry] = (),
     ) -> None:
         items = entries.items() if isinstance(entries, Mapping) else entries
-        declared = {}
+        declared: dict[Coordinate, Coordinate] = {}
         for raw_position, raw_iteration in items:
             position = _coordinate(raw_position, "availability position")
             iteration = _coordinate(raw_iteration, "availability iteration")

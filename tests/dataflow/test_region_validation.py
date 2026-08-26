@@ -46,7 +46,7 @@ def test_s1_rank_zero_scalar_pass_is_structurally_valid():
     )
 
     assert region.schedule.iteration_points == ((),)
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
 
 
 def test_s2_replay_shaped_input_is_structurally_valid():
@@ -60,7 +60,7 @@ def test_s2_replay_shaped_input_is_structurally_valid():
     interface = region.input_interface("in")
     assert interface.requirements.occurrence_count == 2
     assert interface.port.beat_sequence.delivered_field_count == 1
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
 
 
 def test_s3_repeated_boundary_input_is_structurally_valid():
@@ -71,7 +71,7 @@ def test_s3_repeated_boundary_input_is_structurally_valid():
         (),
     )
 
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
 
 
 def test_s4_locally_supplied_input_position_is_structurally_valid():
@@ -83,7 +83,7 @@ def test_s4_locally_supplied_input_position_is_structurally_valid():
     )
 
     assert (1,) not in region.input_interface("in").port.beat_sequence.image
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
 
 
 def test_s5_repeated_output_position_is_structurally_valid():
@@ -94,7 +94,7 @@ def test_s5_repeated_output_position_is_structurally_valid():
         (_output("out", operand, (((0,),), ((0,),)), {(0,): (0,)}),),
     )
 
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
 
 
 def test_s6_output_position_missing_availability_fails_condition_8():

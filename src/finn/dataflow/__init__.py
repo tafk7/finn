@@ -32,6 +32,7 @@ from finn.dataflow.region_profiles import (
 )
 from finn.dataflow.region_validation import (
     RegionValidationIssue,
+    RegionValidationReport,
     is_structurally_well_formed,
     validate_region,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "ProfileCertificationError",
     "ProfileCertificationIssue",
     "RegionValidationIssue",
+    "RegionValidationReport",
     "ScheduleLevel",
     "ScheduledInputRequirements",
     "ScheduledOutputAvailability",

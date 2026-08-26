@@ -3,16 +3,14 @@
 
 import pytest
 
+from finn.dataflow.mvau_design import construct_streamed_weight_mvau_region
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
-    LogicalSchedule,
     NumericElementType,
-    Operand,
     OutputInterface,
     Port,
-    ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
 from finn.dataflow.region_validation import validate_region
@@ -28,76 +26,57 @@ def _mvau_region(
     weight_field_order=None,
     output_field_order=None,
 ):
-    if matrix_width % simd != 0 or matrix_height % pe != 0:
-        raise ValueError("SIMD must divide MW and PE must divide MH")
+    element_type = NumericElementType("int", 8)
+    region = construct_streamed_weight_mvau_region(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        element_type,
+        element_type,
+        element_type,
+        pe,
+        simd,
+    )
+    if weight_field_order is None and output_field_order is None:
+        return region
+
     input_folds = matrix_width // simd
     output_folds = matrix_height // pe
-    schedule = LogicalSchedule((("rep", repetitions), ("nf", output_folds), ("sf", input_folds)))
-    element_type = NumericElementType("int", 8)
-    activation = Operand("X", element_type, (repetitions, matrix_width))
-    weight = Operand("W", element_type, (matrix_height, matrix_width))
-    output = Operand("Y", element_type, (repetitions, matrix_height))
-
-    activation_requirements = {}
-    weight_requirements = {}
-    availability = {}
-    for rep in range(repetitions):
-        for nf in range(output_folds):
-            for sf in range(input_folds):
-                iteration = (rep, nf, sf)
-                for lane in range(simd):
-                    activation_requirements[(iteration, (rep, sf * simd + lane))] = 1
-                for pe_index in range(pe):
-                    for lane in range(simd):
-                        weight_requirements[(iteration, (nf * pe + pe_index, sf * simd + lane))] = 1
-            for pe_index in range(pe):
-                availability[(rep, nf * pe + pe_index)] = (rep, nf, input_folds - 1)
-
-    activation_beats = tuple(
-        tuple((rep, sf * simd + lane) for lane in range(simd))
-        for rep in range(repetitions)
-        for sf in range(input_folds)
-    )
+    weight = region.input_interface("weight")
+    output = region.output_interface("output")
     if weight_field_order is None:
         weight_field_order = tuple(
             (pe_index, lane) for pe_index in range(pe) for lane in range(simd)
         )
-    else:
-        weight_field_order = tuple(weight_field_order)
+    if output_field_order is None:
+        output_field_order = tuple(range(pe))
     weight_beats = tuple(
         tuple((nf * pe + pe_index, sf * simd + lane) for pe_index, lane in weight_field_order)
-        for rep in range(repetitions)
+        for _rep in range(repetitions)
         for nf in range(output_folds)
         for sf in range(input_folds)
     )
-    if output_field_order is None:
-        output_field_order = tuple(range(pe))
-    else:
-        output_field_order = tuple(output_field_order)
     output_beats = tuple(
         tuple((rep, nf * pe + pe_index) for pe_index in output_field_order)
         for rep in range(repetitions)
         for nf in range(output_folds)
     )
-
+    reordered_weight = InputInterface(
+        Port(
+            "weight",
+            weight.port.operand,
+            BeatSequence(pe * simd, weight_beats),
+        ),
+        weight.requirements,
+    )
+    reordered_output = OutputInterface(
+        Port("output", output.port.operand, BeatSequence(pe, output_beats)),
+        output.availability,
+    )
     return DataflowRegion(
-        schedule,
-        (
-            InputInterface(
-                Port("activation", activation, BeatSequence(simd, activation_beats)),
-                ScheduledInputRequirements(activation_requirements),
-            ),
-            InputInterface(
-                Port("weight", weight, BeatSequence(pe * simd, weight_beats)),
-                ScheduledInputRequirements(weight_requirements),
-            ),
-        ),
-        (
-            OutputInterface(
-                Port("output", output, BeatSequence(pe, output_beats)),
-                ScheduledOutputAvailability(availability),
-            ),
-        ),
+        region.schedule,
+        (region.input_interface("activation"), reordered_weight),
+        (reordered_output,),
     )
 
 
@@ -110,7 +89,7 @@ def test_small_streamed_weight_mvau_region_matches_authoring_semantics():
     weight = region.input_interface("weight")
     output = region.output_interface("output")
 
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
     assert region.schedule.level_names == ("rep", "nf", "sf")
     assert region.schedule.rank((1, 0, 1)) == 5
     assert activation.requirements.occurrence_count == (
@@ -162,7 +141,7 @@ def test_mvau_field_bijections_change_sequences_without_changing_widths_or_shape
     original_output = original.output_interface("output").port
     reordered_output = reordered.output_interface("output").port
 
-    assert validate_region(reordered) == ()
+    assert validate_region(reordered).issues == ()
     assert original_weight.operand.shape == reordered_weight.operand.shape
     assert original_weight.logical_beat_bits == reordered_weight.logical_beat_bits
     assert original_weight.beat_sequence != reordered_weight.beat_sequence
@@ -203,6 +182,6 @@ def test_mvau_concrete_storage_scales_with_occurrences(
 ):
     region = _mvau_region(repetitions, matrix_width, matrix_height, simd, pe)
 
-    assert validate_region(region) == ()
+    assert validate_region(region).issues == ()
     assert len(region.input_interface("activation").requirements.entries) == expected_activation
     assert len(region.input_interface("weight").requirements.entries) == expected_weight

@@ -7,16 +7,19 @@ from collections import Counter
 from dataclasses import dataclass
 from itertools import product
 from math import prod
-from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar
 
 from finn.dataflow.region import (
     BeatSequence,
     Coordinate,
     LogicalSchedule,
+    RequirementKey,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -37,7 +40,7 @@ class ProfileCertificationError(ValueError):
         super().__init__(summary or "profile certification failed")
 
 
-def _as_tuple(values: Iterable[object], field_name: str) -> tuple:
+def _as_tuple(values: Iterable[T], field_name: str) -> Tuple[T, ...]:
     try:
         return tuple(values)
     except TypeError as exc:
@@ -59,7 +62,12 @@ def explicit_beat_sequence(
     elements_per_beat: int, beats: Iterable[Iterable[Iterable[int]]]
 ) -> BeatSequence:
     """Normalize a concrete explicit beat form to a ``BeatSequence``."""
-    return BeatSequence(elements_per_beat, tuple(tuple(beat) for beat in beats))
+    return BeatSequence(
+        elements_per_beat,
+        tuple(
+            tuple(_as_coordinate(position, "beat position") for position in beat) for beat in beats
+        ),
+    )
 
 
 def lexicographic_occurrence_to_field(
@@ -120,7 +128,7 @@ class CanonicalExtentProfile:
         normalized_field_map = None
         if raw_field_map is not None:
             items = raw_field_map.items() if isinstance(raw_field_map, Mapping) else raw_field_map
-            declared_field_map = {}
+            declared_field_map: dict[Coordinate, int] = {}
             for raw_coordinate, field_index in items:
                 coordinate = _as_coordinate(raw_coordinate, "occurrence coordinate")
                 if type(field_index) is not int:
@@ -373,7 +381,7 @@ class CanonicalExtentProfile:
         return self._position_unchecked(iteration, occurrence)
 
     def _requirements_unchecked(self) -> ScheduledInputRequirements:
-        entries = {}
+        entries: dict[RequirementKey, int] = {}
         schedule = self._schedule_unchecked()
         occurrences = _coordinate_set(self.spatial_extents)
         for iteration in schedule.iter_points():

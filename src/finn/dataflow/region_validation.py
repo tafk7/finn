@@ -4,10 +4,16 @@
 """Structural validation for normalized dataflow regions."""
 
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Tuple
 
-from finn.dataflow.region import DataflowRegion, InputInterface, OutputInterface
+from finn.dataflow.region import (
+    DataflowRegion,
+    InputInterface,
+    Operand,
+    OutputInterface,
+)
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,28 @@ class RegionValidationIssue:
     code: str
     path: str
     message: str
+
+
+@dataclass(frozen=True)
+class RegionValidationReport:
+    """Deterministic immutable collection of model-local region issues."""
+
+    issues: Tuple[RegionValidationIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        issues = tuple(self.issues)
+        if not all(type(issue) is RegionValidationIssue for issue in issues):
+            raise TypeError("issues must contain only RegionValidationIssue values")
+        object.__setattr__(self, "issues", issues)
+
+    def __iter__(self) -> Iterator[RegionValidationIssue]:
+        return iter(self.issues)
+
+    def __len__(self) -> int:
+        return len(self.issues)
+
+    def __bool__(self) -> bool:
+        return bool(self.issues)
 
 
 def _duplicate_values(values: Tuple[str, ...]) -> Tuple[str, ...]:
@@ -29,7 +57,7 @@ def _interface_path(interface: InputInterface | OutputInterface) -> str:
     return f"{direction}[{interface.port.id!r}]"
 
 
-def validate_region(region: DataflowRegion) -> Tuple[RegionValidationIssue, ...]:
+def validate_region(region: DataflowRegion) -> RegionValidationReport:
     """Return all independently detectable structural issues in stable order.
 
     This function implements only ``REGION.md`` section 5.1 and the output
@@ -40,8 +68,8 @@ def validate_region(region: DataflowRegion) -> Tuple[RegionValidationIssue, ...]
         region: Complete normalized region value to inspect.
 
     Returns:
-        A tuple of structural issues. An empty tuple denotes structural
-        well-formedness.
+        A nominal immutable report. An empty issue collection denotes
+        structural well-formedness.
     """
     if not isinstance(region, DataflowRegion):
         raise TypeError("region must be a DataflowRegion")
@@ -82,7 +110,7 @@ def validate_region(region: DataflowRegion) -> Tuple[RegionValidationIssue, ...]
         )
 
     # Conditions 3 and 4: operand declarations and derived beat-field domains.
-    operands_by_id = {}
+    operands_by_id: dict[str, Operand] = {}
     for interface in region.interfaces:
         path = _interface_path(interface)
         operand = interface.port.operand
@@ -228,7 +256,7 @@ def validate_region(region: DataflowRegion) -> Tuple[RegionValidationIssue, ...]
                 )
             )
 
-    return tuple(issues)
+    return RegionValidationReport(tuple(issues))
 
 
 def is_structurally_well_formed(region: DataflowRegion) -> bool:
