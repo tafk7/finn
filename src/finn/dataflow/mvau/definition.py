@@ -87,6 +87,7 @@ class MVAUComputeKernelPaths:
     ACTIVATION_ELEMENT_TYPE = QualifiedPath("problem.mvau.activation_element_type")
     WEIGHT_ELEMENT_TYPE = QualifiedPath("problem.mvau.weight_element_type")
     ACCUMULATOR_ELEMENT_TYPE = QualifiedPath("problem.mvau.accumulator_element_type")
+    ACCUMULATOR_TYPE_ANALYSIS_OWNER = QualifiedPath("problem.mvau.accumulator_type_analysis_owner")
     OUTPUT_ELEMENT_TYPE = QualifiedPath("problem.mvau.output_element_type")
     THRESHOLD_ELEMENT_TYPE = QualifiedPath("problem.mvau.threshold_element_type")
     THRESHOLD_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.threshold_initializer_available")
@@ -193,12 +194,14 @@ def _complete_numeric_element_type(value: object) -> bool:
 
 _INTEGER_SEMANTICS = ValueSemantics.immutable_nominal(int, name="integer")
 _BOOL_SEMANTICS = ValueSemantics.immutable_nominal(bool, name="boolean")
+_STRING_SEMANTICS = ValueSemantics.immutable_nominal(str, name="string")
 _ELEMENT_TYPE_SEMANTICS = ValueSemantics.immutable_nominal(
     NumericElementType, name="NumericElementType"
 )
 _REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _INTEGER_OBJECT_SEMANTICS = as_object_semantics(_INTEGER_SEMANTICS)
 _BOOL_OBJECT_SEMANTICS = as_object_semantics(_BOOL_SEMANTICS)
+_STRING_OBJECT_SEMANTICS = as_object_semantics(_STRING_SEMANTICS)
 _ELEMENT_TYPE_OBJECT_SEMANTICS = as_object_semantics(_ELEMENT_TYPE_SEMANTICS)
 
 
@@ -890,6 +893,13 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                     _ELEMENT_TYPE_OBJECT_SEMANTICS,
                     constraint=_complete_numeric_element_type,
                     constraint_description="must be a complete numeric element type",
+                ),
+                ProblemField(
+                    MVAUComputeKernelPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER,
+                    _STRING_OBJECT_SEMANTICS,
+                    required=False,
+                    constraint=lambda value: bool(value),
+                    constraint_description="must identify the accumulator analysis owner",
                 ),
                 ProblemField(
                     MVAUComputeKernelPaths.OUTPUT_ELEMENT_TYPE,
