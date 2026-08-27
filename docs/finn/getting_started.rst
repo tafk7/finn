@@ -112,6 +112,11 @@ The most relevant are summarized below:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") pass extra arguments to the ``docker run`` command when executing ``./run-docker.sh``
 * (optional) ``FINN_SKIP_DEP_REPOS`` (default "0") skips the download of FINN dependency repos (uses the ones already downloaded under deps/.
+* (optional) ``FINN_DOCKER_TARGET`` (default "build-xrt") selects the image tier: ``dev`` (no XRT, no Xilinx mount, no licence - suitable for a closed-network sandbox), ``build`` (adds finn-hlslib and board files for RTL/HLS work), or ``build-xrt`` (adds XRT for Vitis/Alveo/V80 targets).
+* (optional) ``FINN_DEPS`` (default "live") controls how qonnx, brevitas and finn-experimental resolve. ``live`` uses the checkouts under ``deps/``, so edits and branch switches take effect immediately. ``frozen`` uses the wheels baked into the image at the ``deps.env`` pins.
+* (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
+* (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
+* (optional) ``FINN_XRT_SHA256`` (default "") pins the sha256 of the downloaded XRT .deb. The build prints the observed checksum when this is unset.
 * (optional) ``DOCKER_BUILDKIT`` (default "1") enables `Docker BuildKit <https://docs.docker.com/develop/develop-images/build_enhancements/>`_ for faster Docker image rebuilding (recommended).
 * (optional) ``FINN_SINGULARITY`` (default "") points to a pre-built Singularity image to use instead of the Docker image. Singularity support is experimental and intended only for systems where Docker is unavailable.
 
