@@ -16,7 +16,10 @@ import json
 import warnings
 
 # Protobuf onnx graph node type
-from onnx import AttributeProto, NodeProto, mapping  # noqa
+# `mapping` was imported here but never used; onnx 1.22 renamed it to `_mapping`,
+# which turned the dead import into an ImportError that breaks collection of
+# every test module reaching this file.
+from onnx import AttributeProto, NodeProto  # noqa
 from qonnx.custom_op.registry import getCustomOp, is_custom_op
 from qonnx.transformation.base import Transformation
 
