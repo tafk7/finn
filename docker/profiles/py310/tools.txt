@@ -1,0 +1,33 @@
+# Interaction and test stack for Python 3.10.
+# Pins match the pre-redesign Dockerfile exactly.
+pygments==2.14.0
+ipykernel==6.21.2
+markupsafe==2.0.1
+netron
+pandas==1.5.3
+scikit-learn==1.2.1
+tqdm==4.64.1
+pyyaml==6.0.1
+
+# These versions of pytest and its plugins are what allow stable collection of
+# test reports and HTML coverage reports.
+pytest==6.2.5
+pytest-metadata==1.7.0
+pytest-html==3.0.0
+pytest-html-merger==0.0.8
+pytest-cov==4.1.0
+pytest-dependency==0.5.1
+pytest-xdist[setproctitle]==3.2.0
+pytest-parallel==0.1.1
+
+# Third-party requirements of the FINN dep repos. Pinned explicitly rather than
+# left to the dep wheels' unpinned install_requires, which resolve to latest -
+# that silently moved mip 1.13->2.0 and networkx 2.8->3.4 when they were dropped.
+deap==1.3.1
+mip==1.13.0
+networkx==2.8
+future-annotations==1.0.0
+dependencies==2.0.1
+tokenize-rt==4.2.1
+
+setuptools==68.2.2

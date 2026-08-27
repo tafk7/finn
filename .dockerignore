@@ -1,0 +1,20 @@
+# Build-context allowlist.
+#
+# Exclude everything, then re-include exactly what docker/Dockerfile.finn reads.
+# A denylist would silently regrow: deps/ alone is 1.2 GB and .git 97 MB, and
+# neither is used by the build - the image fetches its own pinned copies of the
+# Python deps rather than consuming the host checkout.
+#
+# FINN's own src/ is deliberately absent. It is never baked: the image ships the
+# dependency closure and console scripts, and $FINN_ROOT/src is resolved from the
+# mounted workspace at import time (see docker/finn_paths.py).
+*
+
+!requirements.txt
+!docker/
+!deps.env
+!fetch-repos.sh
+
+# XRT and v80++ packages, staged into the repo root by run-docker.sh when a
+# local copy is supplied instead of a download.
+!*.deb

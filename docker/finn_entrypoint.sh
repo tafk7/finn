@@ -1,5 +1,6 @@
 #!/bin/bash
 # Copyright (c) 2021, Xilinx
+# Copyright (C) 2022-2026, Advanced Micro Devices, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -27,17 +28,67 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# This entrypoint does only what genuinely depends on mounted state. Everything
+# that can be a cached image layer is one:
+#
+#   - the four `pip install -e` calls are gone; FINN and its deps resolve from
+#     $FINN_ROOT via finn_paths.py in site-packages (see docker/finn_paths.py)
+#   - the qonnx pyproject.toml mv/trap is gone with them; nothing here writes to
+#     the mounted workspace any more
+#   - finn_xsi compiles into $FINN_BUILD_DIR on demand, not into the source tree
+#     on every start
+#
+# What remains is sourcing the Xilinx tools, which depends on a read-only mount
+# that only exists at runtime.
 
-# Fail fast so a partial deps/ tree is caught early
 set -e
 
-export HOME=/tmp/home_dir
-export SHELL=/bin/bash
-export LANG="en_US.UTF-8"
-export LC_ALL="en_US.UTF-8"
-export LANGUAGE="en_US:en"
-# colorful terminal output
-export PS1='\[\033[1;36m\]\u\[\033[1;31m\]@\[\033[1;32m\]\h:\[\033[1;35m\]\w\[\033[1;31m\]\$\[\033[0m\] '
+# Respect an inherited HOME rather than overwriting it. sbxc's init-shim
+# provisions a writable HOME holding the harness's seeded agent config, and the
+# unconditional `export HOME=/tmp/home_dir` this used to do discarded it.
+#
+# "Respect" has to mean "if it is usable", not merely "if it is set". Docker
+# sets HOME=/ for a --user uid with no passwd entry, which is set but not
+# writable - and things that fall back to ~/.cache (torch.hub, HF, pip) then try
+# to create /.cache and fail with EACCES. Test writability, not definedness.
+if [ -z "$HOME" ] || [ "$HOME" = "/" ] || ! mkdir -p "$HOME" 2>/dev/null || [ ! -w "$HOME" ]; then
+  export HOME=/tmp/home_dir
+fi
+mkdir -p "$HOME" 2>/dev/null || true
+
+# Give the running uid a resolvable name.
+#
+# Dropping the baked useradd (identity is a runtime concern) also removed the
+# passwd entry it happened to provide, and `docker run --user 1234:1234` maps to
+# no entry at all. Anything calling getpass.getuser() then raises
+# "getpwuid(): uid not found" - which includes pytest's tmp_path fixture, so
+# every test using it fails.
+#
+# getpass consults LOGNAME/USER/LNAME/USERNAME before the passwd database, so
+# exporting a name is enough and needs no root. Prefer the real name when there
+# is an entry; fall back to a fixed one when there is not.
+if [ -z "$USER" ]; then
+  export USER="$(id -un 2>/dev/null || echo finn)"
+fi
+export LOGNAME="${LOGNAME:-$USER}"
+
+# LIMITATION(finn-root-absolute): FINN has no fixed workspace path, so the image
+# cannot know where the source will be until it is running. Derive rather than
+# require, so the same image works under host-path mirroring (run-docker.sh,
+# sbxc) and at a fixed path. See docker/finn_paths.py for the full statement of
+# the limitation and the migration if the path ever becomes fixed.
+export FINN_ROOT="${FINN_ROOT:-$PWD}"
+
+# Match the defaults finn.util.basic applies, so generated Tcl and g++ include
+# flags resolve even in a shell that never imports FINN. Already set as ENV in
+# the build/build-xrt tiers, where the data lives outside the workspace.
+export FINN_HLSLIB_PATH="${FINN_HLSLIB_PATH:-$FINN_ROOT/deps/finn-hlslib}"
+export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_files}"
+
+# colorful terminal output, only for interactive shells
+if [ -t 1 ]; then
+  export PS1='\[\033[1;36m\]\u\[\033[1;31m\]@\[\033[1;32m\]\h:\[\033[1;35m\]\w\[\033[1;31m\]\$\[\033[0m\] '
+fi
 
 YELLOW='\033[0;33m'
 GREEN='\033[0;32m'
@@ -56,29 +107,33 @@ recho () {
   echo -e "${RED}ERROR: $1${NC}"
 }
 
-# qonnx (using workaround for https://github.com/pypa/pip/issues/7953)
-# to be fixed in future Ubuntu versions (https://bugs.launchpad.net/ubuntu/+source/setuptools/+bug/1994016)
-# set -e propagates pip failures, so the trap covers only the qonnx-only swap.
-_qonnx_pyproj_toml="${FINN_ROOT}/deps/qonnx/pyproject.toml"
-_qonnx_pyproj_tmp="${FINN_ROOT}/deps/qonnx/pyproject.tmp"
-mv "$_qonnx_pyproj_toml" "$_qonnx_pyproj_tmp"
-trap 'mv "$_qonnx_pyproj_tmp" "$_qonnx_pyproj_toml" 2>/dev/null || true' EXIT
-pip install --user -e "${FINN_ROOT}/deps/qonnx"
-mv "$_qonnx_pyproj_tmp" "$_qonnx_pyproj_toml"
-trap - EXIT
-
-# finn-experimental
-pip install --user -e "${FINN_ROOT}/deps/finn-experimental"
-# brevitas
-pip install --user -e "${FINN_ROOT}/deps/brevitas"
-
-if [ -f "${FINN_ROOT}/setup.py" ];then
-  # run pip install for finn
-  pip install --user -e "${FINN_ROOT}"
-else
+if [ ! -d "${FINN_ROOT}/src/finn" ]; then
   recho "Unable to find FINN source code in ${FINN_ROOT}"
   recho "Ensure you have passed -v <path-to-finn-repo>:<path-to-finn-repo> to the docker run command"
-  exit -1
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Xilinx tools. Everything below depends on the read-only host mount, which is
+# why it cannot move into a layer.
+# ---------------------------------------------------------------------------
+
+# Workaround for a FlexLM issue, scoped to the case where a licensed tool is
+# actually going to run. See:
+# https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
+if [ -n "$VITIS_PATH" ] || [ -n "$VIVADO_PATH" ] || [ -n "$HLS_PATH" ]; then
+  export LD_PRELOAD="${LD_PRELOAD:-/lib/x86_64-linux-gnu/libudev.so.1}"
+fi
+
+# The dev tier deliberately has no Xilinx mount, so the detailed "did you mean
+# to set VITIS_PATH?" advice is noise there - and with the paths unset it used to
+# print "Unable to find /settings64.sh", which reads like a bug. Say it once.
+if [ -z "$VITIS_PATH" ] && [ -z "$VIVADO_PATH" ] && [ -z "$HLS_PATH" ]; then
+  gecho "No Xilinx tools configured. Vivado, Vitis, HLS and rtlsim are unavailable;"
+  gecho "everything else - transformations, ONNX execution, brevitas export, tests"
+  gecho "not marked vivado/vitis/board - works. Use the build tier if you need them."
+  export PATH=$PATH:$HOME/.local/bin
+  exec "$@"
 fi
 
 if [ -f "$VITIS_PATH/settings64.sh" ];then
@@ -94,7 +149,8 @@ if [ -f "$VITIS_PATH/settings64.sh" ];then
     gecho "Found XRT at $XILINX_XRT"
   else
     recho "XRT not found on $XILINX_XRT, did you skip the download or did the installation fail?"
-    exit -1
+    recho "Vitis flows need the build-xrt image tier; dev and build do not ship XRT."
+    exit 1
   fi
 else
   yecho "Unable to find $VITIS_PATH/settings64.sh"
@@ -115,20 +171,12 @@ fi
 if [ -z "${XILINX_VIVADO}" ]; then
   yecho "finnxsi will be unavailable since Vivado was not found"
 else
-  # Build finn_xsi using the new Python-based setup
-  if [ -f "${FINN_ROOT}/finn_xsi/xsi.so" ]; then
-    gecho "Found existing finn_xsi at ${FINN_ROOT}/finn_xsi/xsi.so"
-  else
-    gecho "Building finn_xsi using finn.xsi.setup..."
-    if python -m finn.xsi.setup --quiet; then
-      gecho "finn_xsi built successfully"
-    else
-      # finn_xsi is optional, so a failed build is non-fatal
-      recho "Failed to build finn_xsi"
-    fi
-  fi
   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/lib/x86_64-linux-gnu/:${XILINX_VIVADO}/lib/lnx64.o
 fi
+# finn_xsi is NOT compiled here. It is built on demand by finn.xsi.setup, into
+# $FINN_BUILD_DIR rather than into the source tree, so a container start no
+# longer deposits a build artifact in the mounted workspace - and no longer
+# pays for a compile it may never use.
 
 if [ -f "$HLS_PATH/settings64.sh" ];then
   # source Vitis HLS env.vars
@@ -141,7 +189,9 @@ else
   yecho "If you need Vitis HLS, ensure HLS_PATH is set correctly and mounted into the Docker container."
 fi
 
-if [ -d "$FINN_ROOT/.Xilinx" ]; then
+# Beta-device Tcl init scripts. Sentinel-guarded so repeated container starts
+# against the same HOME are a no-op instead of recopying every time.
+if [ -d "$FINN_ROOT/.Xilinx" ] && [ ! -f "$HOME/.Xilinx/.finn-seeded" ]; then
   mkdir -p "$HOME/.Xilinx"
   if [ -f "$FINN_ROOT/.Xilinx/HLS_init.tcl" ]; then
     cp "$FINN_ROOT/.Xilinx/HLS_init.tcl" "$HOME/.Xilinx/"
@@ -154,18 +204,14 @@ if [ -d "$FINN_ROOT/.Xilinx" ]; then
     mkdir -p "$HOME/.Xilinx/Vivado/"
     cp "$FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl" "$HOME/.Xilinx/Vivado/"
     gecho "Found Vivado_init.tcl and copied to $HOME/.Xilinx/Vivado/Vivado_init.tcl"
-
   else
     yecho "Unable to find $FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl"
   fi
-else
-  echo "If you need to enable a beta device, ensure .Xilinx/HLS_init.tcl and/or .Xilinx/Vivado/Vivado_init.tcl are set correctly and mounted"
-  echo "See https://docs.xilinx.com/r/en-US/ug835-vivado-tcl-commands/Tcl-Initialization-Scripts"
+  touch "$HOME/.Xilinx/.finn-seeded" 2>/dev/null || true
 fi
 
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$VITIS_PATH/lnx64/tools/fpo_v7_1:$HLS_PATH/lnx64/tools/fpo_v7_1"
 
 export PATH=$PATH:$HOME/.local/bin
 
-# execute the provided command(s) as root
 exec "$@"

@@ -1,0 +1,4 @@
+# Installed with --ignore-installed AFTER the main tool set: these fight
+# distro-provided copies, but must not precede the base requirements.
+jupyter==1.0.0
+matplotlib==3.7.0

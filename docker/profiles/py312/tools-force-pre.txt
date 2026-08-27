@@ -1,0 +1,7 @@
+# Installed with --ignore-installed BEFORE anything else.
+#
+# noble ships typing_extensions as a Debian package with no RECORD file, so pip
+# cannot uninstall it - and several requirements want a newer one, which makes
+# the whole resolve fail with "Cannot uninstall typing_extensions ... installed
+# by debian". Force-replacing it first with a pip-managed copy clears the way.
+typing_extensions

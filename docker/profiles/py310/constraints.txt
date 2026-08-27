@@ -1,0 +1,4 @@
+# Bounds that must hold across every install in this profile. See
+# docker/profiles/README.md for why these are load-bearing rather than defensive.
+numpy<2
+anyio<4.13

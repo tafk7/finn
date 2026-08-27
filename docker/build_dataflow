@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+# Console-script shim for FINN's build_dataflow entry point.
+#
+# Normally pip generates this when installing FINN. The image deliberately does
+# not install FINN - its source is resolved from the mounted workspace at import
+# time - so the shim is baked directly instead. Body matches what pip's
+# console_scripts template produces.
+import re
+import sys
+
+from finn.builder.build_dataflow import main
+
+if __name__ == "__main__":
+    sys.argv[0] = re.sub(r"(-script\.pyw|\.exe)?$", "", sys.argv[0])
+    sys.exit(main())
