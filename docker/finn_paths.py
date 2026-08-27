@@ -62,6 +62,7 @@ cheap and must never raise.
 
 import os
 import sys
+import tempfile
 
 # Dependency source layout, relative to the workspace root.
 #
@@ -79,11 +80,36 @@ DEP_SRC_DIRS = (
 def workspace_root():
     """The mounted FINN workspace, or None when there is no mount.
 
+    Resolution order, first hit wins:
+
+    ``FINN_ROOT``
+        Explicit, and what run-docker.sh and finn_entrypoint.sh set.
+    ``WORKSPACE_DIR``
+        What sbx sets. This matters because ``sbx exec`` starts a process
+        directly in the container and does NOT run the image ENTRYPOINT, so
+        nothing finn_entrypoint.sh exports is present in an exec session.
+        Without this fallback every such session fails at ``import finn``.
+    cwd containing ``src/finn``
+        Last resort, and only when it really looks like a FINN checkout, so a
+        stray cwd cannot silently point the shadowing machinery at nonsense.
+
+    FINN_ROOT is exported once resolved, so subprocesses FINN launches -
+    Vivado, Vitis HLS, g++ - and the generated Tcl that reads
+    ``$::env(FINN_ROOT)`` all agree with whatever Python resolved.
+
     LIMITATION(finn-root-absolute): this indirection is the whole reason this
     module exists. With a fixed workspace path it collapses to a constant and
     the module can be replaced by ordinary editable installs.
     """
-    return os.environ.get("FINN_ROOT") or None
+    root = os.environ.get("FINN_ROOT") or os.environ.get("WORKSPACE_DIR")
+    if not root:
+        cwd = os.getcwd()
+        if os.path.isdir(os.path.join(cwd, "src", "finn")):
+            root = cwd
+    if not root:
+        return None
+    os.environ.setdefault("FINN_ROOT", root)
+    return root
 
 
 def deps_are_live():
@@ -112,6 +138,29 @@ def source_dirs():
     return [os.path.join(root, rel) for rel in relative]
 
 
+def ensure_build_dir():
+    """Guarantee ``FINN_BUILD_DIR`` exists for sessions the entrypoint missed.
+
+    ``finn.util.basic`` reads it as a bare ``os.environ[...]``, so its absence
+    is a ``KeyError`` at first use rather than a diagnosable error. The
+    entrypoint defaults it, but ``sbx exec`` bypasses the ENTRYPOINT entirely,
+    so every exec session would otherwise fail the moment a test touches a
+    build directory.
+
+    Scoped per-uid under /tmp, matching the entrypoint's default. An explicit
+    value always wins, so run-docker.sh's mounted FINN_HOST_BUILD_DIR is
+    untouched.
+    """
+    if os.environ.get("FINN_BUILD_DIR"):
+        return
+    build_dir = os.path.join(tempfile.gettempdir(), "finn_build_%d" % os.getuid())
+    try:
+        os.makedirs(build_dir, exist_ok=True)
+    except OSError:
+        return
+    os.environ["FINN_BUILD_DIR"] = build_dir
+
+
 def install():
     """Prepend the workspace source directories to ``sys.path``."""
     # Insert at the front so the workspace shadows the baked wheels, matching
@@ -119,6 +168,7 @@ def install():
     for path in reversed(source_dirs()):
         if os.path.isdir(path) and path not in sys.path:
             sys.path.insert(0, path)
+    ensure_build_dir()
 
 
 try:

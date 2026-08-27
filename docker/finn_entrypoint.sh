@@ -77,7 +77,10 @@ export LOGNAME="${LOGNAME:-$USER}"
 # require, so the same image works under host-path mirroring (run-docker.sh,
 # sbx) and at a fixed path. See docker/finn_paths.py for the full statement of
 # the limitation and the migration if the path ever becomes fixed.
-export FINN_ROOT="${FINN_ROOT:-$PWD}"
+# WORKSPACE_DIR before $PWD: sbx sets it and starts PID 1 with cwd=/, so $PWD
+# alone resolves to the wrong place there. run-docker.sh sets neither and relies
+# on -w, which $PWD picks up.
+export FINN_ROOT="${FINN_ROOT:-${WORKSPACE_DIR:-$PWD}}"
 
 # Match the defaults finn.util.basic applies, so generated Tcl and g++ include
 # flags resolve even in a shell that never imports FINN. Already set as ENV in
@@ -119,10 +122,21 @@ recho () {
   echo -e "${RED}ERROR: $1${NC}"
 }
 
+# Missing FINN source is a WARNING, not a fatal error.
+#
+# FINN_ROOT is derived from $PWD, and not every launcher starts PID 1 in the
+# workspace: sbx starts the container detached with cwd=/, then lands its own
+# `exec` sessions in the workspace afterwards. Exiting here killed the container
+# before those sessions could ever run, which surfaced only as sbx's opaque
+# "failed to run sandbox container".
+#
+# So warn and carry on. The command still runs, `sbx exec` still lands in the
+# workspace with a correct FINN_ROOT, and a genuinely missing mount fails at the
+# first import with a clearer message than this check produced.
 if [ ! -d "${FINN_ROOT}/src/finn" ]; then
-  recho "Unable to find FINN source code in ${FINN_ROOT}"
-  recho "Ensure you have passed -v <path-to-finn-repo>:<path-to-finn-repo> to the docker run command"
-  exit 1
+  yecho "No FINN source at ${FINN_ROOT} (FINN_ROOT derived from \$PWD)."
+  yecho "If this is a docker run, pass -v <path-to-finn-repo>:<path-to-finn-repo> and -w the same path."
+  yecho "Under sbx this is expected at startup; exec sessions land in the workspace."
 fi
 
 # ---------------------------------------------------------------------------
@@ -225,5 +239,26 @@ fi
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$VITIS_PATH/lnx64/tools/fpo_v7_1:$HLS_PATH/lnx64/tools/fpo_v7_1"
 
 export PATH=$PATH:$HOME/.local/bin
+
+# Publish the resolved environment for sessions that never run this script.
+#
+# `sbx exec` starts a process directly in the container and does NOT go through
+# the image ENTRYPOINT, so everything derived above is invisible to it. sbx sets
+# BASH_ENV to this file precisely so a template can hand state to later
+# sessions, so write what cannot be baked as ENV.
+#
+# Best-effort: the file is root-owned and this may run unprivileged, in which
+# case Python still resolves correctly on its own (finn_paths.workspace_root
+# falls back to WORKSPACE_DIR), and only shell-level convenience is lost.
+if [ -w /etc/sandbox-persistent.sh ] 2>/dev/null; then
+  {
+    echo "# Written by finn_entrypoint.sh. Regenerated on every container start."
+    for v in FINN_ROOT FINN_BUILD_DIR FINN_HLSLIB_PATH FINN_BOARD_FILES_PATH \
+             XILINX_VIVADO XILINX_VITIS XILINX_HLS VIVADO_PATH VITIS_PATH HLS_PATH; do
+      eval "val=\${$v:-}"
+      [ -n "$val" ] && echo "export $v=\"$val\""
+    done
+  } > /etc/sandbox-persistent.sh 2>/dev/null || true
+fi
 
 exec "$@"

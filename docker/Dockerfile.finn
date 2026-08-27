@@ -354,8 +354,77 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
 # makes every unrelated process in the dev tier pay for it. The entrypoint sets
 # it when it actually finds Xilinx tools to source.
 
-ENTRYPOINT ["finn_entrypoint.sh"]
-CMD ["bash"]
+# The sbx (Docker Sandboxes) template contract.
+#
+# sbx boots a template as a microVM and then applies "kits" over it that write
+# the agent's configuration. Those kits assume a specific shape, so an image
+# that does not provide it fails at create with nothing more informative than
+# "failed to run sandbox container".
+#
+# Docker's supported route is to extend docker/sandbox-templates, which is NOT
+# open to FINN: those images are Ubuntu 26.04 on Python 3.14, and torch 2.8
+# publishes no cp314 wheel, so FINN's pinned stack cannot install there. The
+# build tiers are pinned to an LTS by XRT and Vivado regardless. So FINN owns
+# its base and reproduces the contract here.
+#
+# Each line below was established by bisecting real create failures against a
+# stock template, not from documentation:
+#
+#   agent uid 1000 + NOPASSWD sudo  - kits run as `agent` and need to write.
+#   /home/agent mode 755, with .claude/.local/.npm/.cache/workspace present
+#                                   - a bare 0750 home fails kit install with
+#                                     "cannot create .../settings.json:
+#                                     Permission denied". This one is in no
+#                                     documentation; it came from diffing a
+#                                     stock template.
+#   tini as PID 1                   - reaps zombies. Also what run-docker.sh's
+#                                     --init provides for Vivado, so on sbx
+#                                     that need is already covered.
+#   CMD that does not exit          - sbx starts the container detached. The
+#                                     previous CMD ["bash"] exited instantly
+#                                     with no TTY and took the sandbox with it.
+#   NO_PROXY / no_proxy             - without it loopback traffic is pushed
+#                                     through the egress proxy.
+#
+# This is reverse-engineered and therefore breakable by an sbx release; it is
+# verified by creating a sandbox from this image with plain `sbx`, no wrapper.
+RUN set -eu; \
+    useradd --create-home --uid 1000 --shell /bin/bash agent 2>/dev/null || true; \
+    usermod -aG sudo agent 2>/dev/null || true; \
+    echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
+    chmod 0440 /etc/sudoers.d/agent; \
+    touch /etc/sandbox-persistent.sh; \
+    chmod 0644 /etc/sandbox-persistent.sh; \
+    chmod 0755 /home/agent; \
+    mkdir -p /home/agent/.claude /home/agent/.local/bin /home/agent/.npm \
+             /home/agent/.cache /home/agent/workspace; \
+    chown -R agent:agent /home/agent; \
+    if ! command -v tini >/dev/null; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends tini && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
+#   NPM_CONFIG_PREFIX must be paired with its bin dir on PATH. Setting the
+#   prefix alone relocates `npm install -g` somewhere unreachable, so installing
+#   a CLI appears to succeed and then `command -v <cli>` fails with 127.
+ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
+    no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
+    BASH_ENV=/etc/sandbox-persistent.sh \
+    NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
+    PATH=/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/npm-global
+
+# tini is PID 1; finn_entrypoint.sh still runs and still execs the command.
+#
+# CMD is `sleep infinity`, not `bash`: sbx starts the container detached, and a
+# bash with no TTY exits immediately. run-docker.sh passes an explicit command
+# for every mode and is unaffected, but note that a bare
+# `docker run -it xilinx/finn` no longer lands in a shell - use
+# `./run-docker.sh` or pass `bash` explicitly.
+ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
+CMD ["sleep", "infinity"]
 
 
 # --- build: + the non-Python build data. Vivado / Vitis HLS flows. -----------
