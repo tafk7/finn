@@ -113,12 +113,15 @@ class MVAUProjectionContext:
 
     accumulator_type_analysis_owner: str
     fpga_part: str | None = None
+    clock_period_ns: float | None = None
     supports_initialized_uram: bool | None = None
     external_weight_sequence: BeatSequence | None = None
 
     def __post_init__(self) -> None:
         if not self.accumulator_type_analysis_owner:
             raise ValueError("accumulator_type_analysis_owner must not be empty")
+        if self.clock_period_ns is not None and self.clock_period_ns <= 0:
+            raise ValueError("clock_period_ns must be positive when supplied")
 
 
 @dataclass(frozen=True)
@@ -852,6 +855,10 @@ def project_mvau_source(
         )
     if context.external_weight_sequence is not None:
         problem[MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE] = context.external_weight_sequence
+    if context.fpga_part is not None:
+        problem[MVAUDataflowOpPaths.TARGET_FPGA_PART] = context.fpga_part
+    if context.clock_period_ns is not None:
+        problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS] = context.clock_period_ns
     assignments: dict[QualifiedPath, object] = {}
     if activation_type is not None and weight_type is not None:
         weights_narrow = _weights_are_narrow(

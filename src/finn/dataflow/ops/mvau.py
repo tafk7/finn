@@ -207,6 +207,8 @@ class MVAUDataflowOpPaths:
 
     SOURCE_DESCRIPTION = QualifiedPath("problem.mvau.source_description")
     EXTERNAL_WEIGHT_SEQUENCE = QualifiedPath("problem.mvau.external_weight_sequence")
+    TARGET_FPGA_PART = QualifiedPath("problem.target.fpga_part")
+    TARGET_CLOCK_PERIOD_NS = QualifiedPath("problem.target.clock_period_ns")
     PARAMETER_TOPOLOGY = QualifiedPath("mvau.op.parameter_topology")
     DELIVERY_PE = QualifiedPath("mvau.op.delivery.pe")
     DELIVERY_SIMD = QualifiedPath("mvau.op.delivery.simd")
@@ -237,6 +239,8 @@ class MVAUDataflowOpPaths:
 
 
 _INTEGER_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integer"))
+_FLOAT_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(float, name="float"))
+_STRING_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(str, name="string"))
 _BOOL_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
 _ELEMENT_TYPE_SEMANTICS = as_object_semantics(
     ValueSemantics.immutable_nominal(NumericElementType, name="NumericElementType")
@@ -304,6 +308,10 @@ def _source_description_valid(value: object) -> bool:
         and threshold_pair_valid
         and all(type(extent) is int and extent > 0 for extent in description.leading_shape)
     )
+
+
+def _positive_float(value: object) -> bool:
+    return type(value) is float and value > 0
 
 
 def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
@@ -957,6 +965,20 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                     MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
                     _BEAT_SEQUENCE_SEMANTICS,
                     required=False,
+                ),
+                ProblemField(
+                    MVAUDataflowOpPaths.TARGET_FPGA_PART,
+                    _STRING_SEMANTICS,
+                    required=False,
+                    constraint=lambda value: bool(value),
+                    constraint_description="must be a non-empty FPGA part identifier",
+                ),
+                ProblemField(
+                    MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
+                    _FLOAT_SEMANTICS,
+                    required=False,
+                    constraint=_positive_float,
+                    constraint_description="must be a positive clock period",
                 ),
             )
         ),
