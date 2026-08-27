@@ -16,6 +16,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
+from finn.dataflow.design import QualifiedPath
 from finn.dataflow.mvau.definition import (
     MVAUComputeBinding,
     MVAUComputeKernelPaths,
@@ -327,13 +328,17 @@ def test_saved_choices_reconstitute_identically_in_a_fresh_process(tmp_path: Pat
     assert "readiness" not in json.dumps(stored)
 
     code = """
+import json
 import sys
 from qonnx.core.modelwrapper import ModelWrapper
 from finn.dataflow.mvau.source import MVAUProjectionContext, reconstitute_mvau_selection
 model = ModelWrapper(sys.argv[1])
 context = MVAUProjectionContext('finn.MinimizeAccumulatorWidth', fpga_part=sys.argv[2])
 resolved = reconstitute_mvau_selection(model, 'mvau0', context)
-print(repr(resolved.result))
+print(json.dumps({
+    'result': repr(resolved.result),
+    'paths': sorted(str(path) for path in resolved.point.assignments),
+}, sort_keys=True))
 """
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -347,10 +352,124 @@ print(repr(resolved.result))
         env=environment,
     )
 
-    assert completed.stdout.strip() == repr(original.result)
+    subprocess_result = json.loads(completed.stdout)
+    assert subprocess_result == {
+        "paths": sorted(str(path) for path in original.point.assignments),
+        "result": repr(original.result),
+    }
     local_reload = reconstitute_mvau_selection(ModelWrapper(str(model_path)), NODE_ID, context)
     assert local_reload.result == original.result
     assert local_reload.point.assignments == original.point.assignments
+
+
+def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> None:
+    model = _make_mvau_model(
+        op_type="MVAU_rtl",
+        mem_mode="internal_decoupled",
+        interleave=2,
+    )
+    context = _context(VERSAL_PART)
+    projection = project_mvau_source(model, NODE_ID, context)
+    assignments: dict[QualifiedPath | str, object] = {
+        MVAUComputeKernelPaths.PE: 2,
+        MVAUComputeKernelPaths.SIMD: 2,
+        MVAUComputeKernelPaths.REGION_DECLARATION: (
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+        ),
+        MVAUComputeKernelPaths.INTERLEAVE: 2,
+        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
+        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: MVAUParameterTopology.CYCLIC,
+        MVAUDataflowOpPaths.DELIVERY_PE: 2,
+        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
+        MVAUDataflowOpPaths.DELIVERY_DECLARATION: (
+            MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
+        ),
+        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: MVAUConnectionTopology.ADAPTER,
+        CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
+        CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
+        CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+    }
+    original = start_mvau_projection(projection, assignments)
+    assert isinstance(original.result, NetworkRef)
+    save_mvau_selection(model, NODE_ID, original.point)
+    model_path = tmp_path / "adapter-selected.onnx"
+    model.save(model_path)
+
+    stored = json.loads(model.get_metadata_prop(f"finn.dataflow.mvau.selection:{NODE_ID}"))
+    stored_paths = {item["path"] for item in stored["assignments"]}
+    for path in (
+        MVAUComputeKernelPaths.PE,
+        MVAUComputeKernelPaths.SIMD,
+        MVAUComputeKernelPaths.REGION_DECLARATION,
+        MVAUDataflowOpPaths.DELIVERY_DECLARATION,
+        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
+    ):
+        assert str(path) in stored_paths
+    assert not any(
+        path.startswith(("semantic.", "binding.mvau.compute.selection", "constraint."))
+        for path in stored_paths
+    )
+
+    restored = reconstitute_mvau_selection(ModelWrapper(str(model_path)), NODE_ID, context)
+
+    assert restored.result == original.result
+    assert isinstance(restored.result, NetworkRef)
+    assert tuple(node.id for node in restored.result.network.nodes) == (
+        "compute",
+        "delivery",
+        "weight_adapter",
+    )
+    assert tuple(edge.id for edge in restored.result.network.edges) == (
+        "adapter_to_compute",
+        "delivery_to_adapter",
+    )
+    assert tuple(boundary.id for boundary in restored.result.network.boundaries) == (
+        "activation",
+        "output",
+    )
+    assert restored.result.source_association == original.result.source_association
+    assert all(path in restored.point.design_space.decisions for path in restored.point.assignments)
+
+
+@pytest.mark.parametrize("changed_fact", ["shape", "datatype", "target"])
+def test_reconstitution_rejects_each_relevant_problem_change(changed_fact: str) -> None:
+    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
+    context = _context()
+    original = start_mvau_projection(_project_preserving(model))
+    save_mvau_selection(model, NODE_ID, original.point)
+    changed = ModelWrapper(model.model, make_deepcopy=True)
+    changed_context = context
+    if changed_fact == "shape":
+        changed.set_tensor_shape("activation", [2, 4])
+        changed.set_tensor_shape("output", [2, 6])
+    elif changed_fact == "datatype":
+        changed.set_tensor_datatype("activation", DataType["INT4"])
+    else:
+        changed_context = _context(VERSAL_PART)
+
+    with pytest.raises(MVAUSourceAdapterError) as mismatch:
+        reconstitute_mvau_selection(changed, NODE_ID, changed_context)
+
+    assert {finding.code for finding in mismatch.value.findings} == {
+        "mvau-selection-problem-mismatch"
+    }
+
+
+def test_reconstitution_rejects_changed_declaration_family_version() -> None:
+    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
+    original = start_mvau_projection(_project_preserving(model))
+    save_mvau_selection(model, NODE_ID, original.point)
+    key = f"finn.dataflow.mvau.selection:{NODE_ID}"
+    payload = json.loads(model.get_metadata_prop(key))
+    payload["declaration_family_version"] = "obsolete-family"
+    model.set_metadata_prop(key, json.dumps(payload))
+
+    with pytest.raises(MVAUSourceAdapterError) as mismatch:
+        reconstitute_mvau_selection(model, NODE_ID, _context())
+
+    assert {finding.code for finding in mismatch.value.findings} == {
+        "mvau-selection-envelope-incompatible"
+    }
 
 
 def test_reconstitution_rejects_changed_problem_and_obsolete_choice(tmp_path: Path) -> None:
