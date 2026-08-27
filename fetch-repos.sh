@@ -32,41 +32,31 @@
 # `-u` is deliberately omitted: optional FINN_SKIP_BOARD_FILES flag may be unset.
 set -eo pipefail
 
-QONNX_COMMIT="f5c9819bd00f01f41e70639b8461c8e4b39432f7"
-FINN_EXP_COMMIT="0724be21111a21f0d81a072fccc1c446e053f851"
-BREVITAS_COMMIT="aad4d5a293db6f2ec622a92a5d3278e47072453e"
-HLSLIB_COMMIT="8d979e2bdced486dd25d26607d1ff5ae327ed6a8"
-AVNET_BDF_COMMIT="2d49cfc25766f07792c0b314489f21fe916b639b"
-XIL_BDF_COMMIT="8cf4bb674a919ac34e3d99d8d71a9e60af93d14e"
-RFSOC4x2_BDF_COMMIT="13fb6f6c02c7dfd7e4b336b18b959ad5115db696"
-KV260_BDF_COMMIT="98e0d3efc901f0b974006bc4370c2a7ad8856c79"
-EXP_BOARD_FILES_MD5="226ca927a16ea4ce579f1332675e9e9a"
-AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
-
-QONNX_URL="https://github.com/fastmachinelearning/qonnx.git"
-FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"
-BREVITAS_URL="https://github.com/Xilinx/brevitas.git"
-HLSLIB_URL="https://github.com/Xilinx/finn-hlslib.git"
-AVNET_BDF_URL="https://github.com/Avnet/bdf.git"
-XIL_BDF_URL="https://github.com/Xilinx/XilinxBoardStore.git"
-RFSOC4x2_BDF_URL="https://github.com/RealDigitalOrg/RFSoC4x2-BSP.git"
-KV260_BDF_URL="https://github.com/Xilinx/XilinxBoardStore.git"
-AUPZU3_BDF_URL="https://github.com/RealDigitalOrg/aup-zu3-bsp.git"
-
-QONNX_DIR="qonnx"
-FINN_EXP_DIR="finn-experimental"
-BREVITAS_DIR="brevitas"
-HLSLIB_DIR="finn-hlslib"
-AVNET_BDF_DIR="avnet-bdf"
-XIL_BDF_DIR="xil-bdf"
-RFSOC4x2_BDF_DIR="rfsoc4x2-bdf"
-KV260_SOM_BDF_DIR="kv260-som-bdf"
-AUPZU3_BDF_DIR="aupzu3-8gb-bdf"
-
 # absolute path to this script, e.g. /home/user/bin/foo.sh
 SCRIPT=$(readlink -f "$0")
 # absolute path this script is in, thus /home/user/bin
 SCRIPTPATH=$(dirname "$SCRIPT")
+
+# Pins live in deps.env so the Dockerfile's wheel build reads the same values;
+# see the header there for the env-override and branch-ref contract.
+# shellcheck source=deps.env
+. "$SCRIPTPATH/deps.env"
+
+# Which half of deps/ to fetch. `python` is the three importable packages,
+# `data` the HLS headers and board files that only the build image tiers use.
+FETCH_GROUP="${1:-all}"
+case "$FETCH_GROUP" in
+    all)    FETCH_NAMES="$FINN_DEP_GROUP_PYTHON $FINN_DEP_GROUP_DATA" ;;
+    python) FETCH_NAMES="$FINN_DEP_GROUP_PYTHON" ;;
+    data)   FETCH_NAMES="$FINN_DEP_GROUP_DATA" ;;
+    *)
+        echo "usage: $0 [all|python|data]" >&2
+        echo "  all     both groups (default)" >&2
+        echo "  python  qonnx, finn-experimental, brevitas" >&2
+        echo "  data    finn-hlslib and board files" >&2
+        exit 2
+        ;;
+esac
 
 # Retry a command with exponential back-off (github 5xx, DNS blips, rate-limit).
 retry() {
@@ -95,8 +85,8 @@ clone_repo() {
 fetch_repo() {
     # URL for git repo to be cloned
     local REPO_URL=$1
-    # commit hash for repo
-    local REPO_COMMIT=$2
+    # git ref for repo: a SHA, a tag, or a branch name
+    local REPO_REF=$2
     # directory to clone to under deps/
     local REPO_DIR=$3
     # absolute path for the repo local copy
@@ -108,20 +98,48 @@ fetch_repo() {
         retry clone_repo "$REPO_URL" "$CLONE_TO"
     fi
 
+    # Never move a dep out from under work in progress. qonnx and brevitas are
+    # co-developed often enough that a silent checkout here would discard real
+    # edits; warn and leave the tree exactly as the developer left it.
+    if [ -n "$(git -C "$CLONE_TO" status --porcelain)" ]; then
+        echo "fetch-repos: $REPO_DIR has uncommitted changes, leaving it untouched" >&2
+        echo "fetch-repos:   at $(git -C "$CLONE_TO" rev-parse --short HEAD), wanted $REPO_REF" >&2
+        echo "fetch-repos:   commit or stash them to let fetch-repos manage this dep again" >&2
+        return 0
+    fi
+
+    # Resolve the ref to a commit so branches and tags work, not just SHAs. A
+    # local resolve is tried first to keep the common no-op case offline; only
+    # an unknown ref costs a network round trip.
+    local WANT_COMMIT
+    if ! WANT_COMMIT=$(git -C "$CLONE_TO" rev-parse --verify --quiet "$REPO_REF^{commit}"); then
+        retry git -C "$CLONE_TO" fetch --tags --force
+        if ! WANT_COMMIT=$(git -C "$CLONE_TO" rev-parse --verify --quiet "$REPO_REF^{commit}"); then
+            echo "fetch-repos: ERROR: $REPO_DIR has no ref '$REPO_REF'" >&2
+            return 1
+        fi
+    fi
+
     local CURRENT_COMMIT
     CURRENT_COMMIT=$(git -C "$CLONE_TO" rev-parse HEAD)
-    if [ "$CURRENT_COMMIT" != "$REPO_COMMIT" ]; then
+    if [ "$CURRENT_COMMIT" != "$WANT_COMMIT" ]; then
         # fetch+checkout instead of pull: working copy is a detached HEAD.
         retry git -C "$CLONE_TO" fetch --tags --force
-        git -C "$CLONE_TO" checkout "$REPO_COMMIT"
+        # Re-resolve after fetching: a branch ref may now point further ahead.
+        WANT_COMMIT=$(git -C "$CLONE_TO" rev-parse --verify "$REPO_REF^{commit}")
+        git -C "$CLONE_TO" checkout "$WANT_COMMIT"
     fi
 
     CURRENT_COMMIT=$(git -C "$CLONE_TO" rev-parse HEAD)
-    if [ "$CURRENT_COMMIT" != "$REPO_COMMIT" ]; then
-        echo "fetch-repos: ERROR: $REPO_DIR is at $CURRENT_COMMIT, expected $REPO_COMMIT" >&2
+    if [ "$CURRENT_COMMIT" != "$WANT_COMMIT" ]; then
+        echo "fetch-repos: ERROR: $REPO_DIR is at $CURRENT_COMMIT, expected $WANT_COMMIT" >&2
         return 1
     fi
-    echo "Successfully checked out $REPO_DIR at commit $CURRENT_COMMIT"
+    if [ "$REPO_REF" = "$CURRENT_COMMIT" ]; then
+        echo "Successfully checked out $REPO_DIR at commit $CURRENT_COMMIT"
+    else
+        echo "Successfully checked out $REPO_DIR at $REPO_REF ($CURRENT_COMMIT)"
+    fi
 }
 
 fetch_board_files() {
@@ -141,15 +159,17 @@ fetch_board_files() {
     cd $OLD_PWD
 }
 
-fetch_repo $QONNX_URL $QONNX_COMMIT $QONNX_DIR
-fetch_repo $FINN_EXP_URL $FINN_EXP_COMMIT $FINN_EXP_DIR
-fetch_repo $BREVITAS_URL $BREVITAS_COMMIT $BREVITAS_DIR
-fetch_repo $HLSLIB_URL $HLSLIB_COMMIT $HLSLIB_DIR
-fetch_repo $AVNET_BDF_URL $AVNET_BDF_COMMIT $AVNET_BDF_DIR
-fetch_repo $XIL_BDF_URL $XIL_BDF_COMMIT $XIL_BDF_DIR
-fetch_repo $RFSOC4x2_BDF_URL $RFSOC4x2_BDF_COMMIT $RFSOC4x2_BDF_DIR
-fetch_repo $KV260_BDF_URL $KV260_BDF_COMMIT $KV260_SOM_BDF_DIR
-fetch_repo $AUPZU3_BDF_URL $AUPZU3_BDF_COMMIT $AUPZU3_BDF_DIR
+# Indirect through the group lists from deps.env so adding a dep means editing
+# one file, and so `python` / `data` stay in sync with what is fetched.
+for DEP in $FETCH_NAMES; do
+    eval "fetch_repo \"\$${DEP}_URL\" \"\$${DEP}_COMMIT\" \"\$${DEP}_DIR\""
+done
+
+# Board files are assembled from the BDF repos above, so they belong to the
+# data group and are skipped entirely when only Python deps were requested.
+if [ "$FETCH_GROUP" = "python" ]; then
+    exit 0
+fi
 
 # Can skip downloading of board files entirely if desired
 if [ "$FINN_SKIP_BOARD_FILES" = "1" ]; then
