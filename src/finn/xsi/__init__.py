@@ -19,10 +19,10 @@ Usage:
 """
 
 import logging
-import os
 import sys
-from pathlib import Path
 from typing import Any, Optional
+
+from finn.xsi.paths import find_xsi_so, xsi_source_dir
 
 
 def is_available() -> bool:
@@ -32,9 +32,7 @@ def is_available() -> bool:
         bool: True if finn_xsi can be imported, False otherwise
     """
     # Check if xsi.so exists
-    xsi_path = Path(os.environ["FINN_ROOT"]) / "finn_xsi"
-    xsi_so = xsi_path / "xsi.so"
-    if not xsi_so.exists():
+    if find_xsi_so() is None:
         return False
 
     # Try loading the modules (this will cache them if successful)
@@ -54,16 +52,18 @@ def _load_modules() -> bool:
     if _adapter_module is not None:
         return True
 
-    xsi_path = Path(os.environ["FINN_ROOT"]) / "finn_xsi"
-    xsi_so = xsi_path / "xsi.so"
-
-    if not xsi_so.exists():
+    xsi_so = find_xsi_so()
+    if xsi_so is None:
         return False
 
-    # Temporarily add to path for import
-    path_added = str(xsi_path) not in sys.path
-    if path_added:
-        sys.path.insert(0, str(xsi_path))
+    # The compiled `xsi` extension and the `finn_xsi` Python package now live in
+    # separate directories, so both have to be importable. When the artifact was
+    # found in its legacy in-tree location these two coincide, and the set
+    # collapses back to a single entry.
+    import_paths = [str(xsi_so.parent), str(xsi_source_dir())]
+    added_paths = [p for p in dict.fromkeys(import_paths) if p not in sys.path]
+    for p in reversed(added_paths):
+        sys.path.insert(0, p)
 
     try:
         # Imports must be inside function: modules require dynamic path setup
@@ -86,10 +86,10 @@ def _load_modules() -> bool:
         logging.warning(f"Unexpected error loading finn_xsi: {type(e).__name__}: {e}")
         return False
     finally:
-        # Remove from path if we added it
-        if path_added and str(xsi_path) in sys.path:
+        # Remove whatever we added, leaving any pre-existing entries alone
+        for p in added_paths:
             try:
-                sys.path.remove(str(xsi_path))
+                sys.path.remove(p)
             except ValueError:
                 pass  # Path was already removed somehow
 

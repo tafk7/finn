@@ -26,8 +26,9 @@ import shutil
 import subprocess
 import sys
 import sysconfig
-from pathlib import Path
 from typing import List, Tuple
+
+from finn.xsi.paths import find_xsi_so, xsi_artifact_dir, xsi_source_dir
 
 
 def get_build_paths() -> Tuple[List[str], str, List[str]]:
@@ -115,8 +116,8 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     Returns:
         bool: True if build successful
     """
-    finn_root = Path(os.environ["FINN_ROOT"])
-    xsi_path = finn_root / "finn_xsi"
+    xsi_path = xsi_source_dir()
+    out_dir = xsi_artifact_dir()
 
     if not xsi_path.exists():
         print(f"Error: finn_xsi source not found at {xsi_path}")
@@ -124,22 +125,25 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
 
     # Check if already built
     if not force:
-        xsi_so = xsi_path / "xsi.so"
-        if xsi_so.exists():
+        xsi_so = find_xsi_so()
+        if xsi_so is not None:
             # Try importing to see if it works
-            sys.path.insert(0, str(xsi_path))
+            sys.path.insert(0, str(xsi_so.parent))
             try:
                 import xsi
 
                 sys.path.pop(0)
                 if verbose:
-                    print("xsi.so is already built and working.")
+                    print(f"xsi.so is already built and working ({xsi_so}).")
                 return True
             except ImportError:
                 sys.path.pop(0)
                 if verbose:
                     print("xsi.so exists but failed to import, rebuilding...")
         # else: Need to build
+
+    # Never write the artifact into the mounted workspace; see finn.xsi.paths.
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
         print(f"Building finn_xsi in {xsi_path}...")
@@ -157,8 +161,8 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     for inc_dir in include_dirs:
         cmd.extend(["-I", inc_dir])
 
-    # Output file
-    cmd.extend(["-o", "xsi.so"])
+    # Output file, written outside the source tree
+    cmd.extend(["-o", str(out_dir / "xsi.so")])
 
     # Source files
     cmd.extend(source_files)
@@ -196,17 +200,16 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
 
 def verify_installation() -> bool:
     """Verify that finn_xsi can be imported and works."""
-    finn_root = Path(os.environ["FINN_ROOT"])
-    xsi_path = finn_root / "finn_xsi"
-
     # Check if xsi.so exists
-    xsi_so = xsi_path / "xsi.so"
-    if not xsi_so.exists():
-        print(f"\n✗ Compiled extension xsi.so not found at {xsi_so}")
+    xsi_so = find_xsi_so()
+    if xsi_so is None:
+        print(f"\n✗ Compiled extension xsi.so not found in {xsi_artifact_dir()}")
         return False
 
-    # Temporarily add to path
-    sys.path.insert(0, str(xsi_path))
+    # Temporarily add to path: the artifact and the Python package are in
+    # separate directories, so both are needed to import finn_xsi.adapter.
+    sys.path.insert(0, str(xsi_source_dir()))
+    sys.path.insert(0, str(xsi_so.parent))
 
     try:
         # Import the compiled C++ extension
@@ -234,24 +237,23 @@ def verify_installation() -> bool:
 
 def clean_build() -> bool:
     """Clean build artifacts."""
-    finn_root = Path(os.environ["FINN_ROOT"])
-    xsi_path = finn_root / "finn_xsi"
-
-    print(f"Cleaning build artifacts in {xsi_path}...")
-
-    # Remove xsi.so if it exists
-    xsi_so = xsi_path / "xsi.so"
-    if xsi_so.exists():
+    # Clean both the artifact directory and any legacy in-tree copy, so a stale
+    # xsi.so left in a workspace by an older FINN is removed too.
+    removed = False
+    for xsi_so in (xsi_artifact_dir() / "xsi.so", xsi_source_dir() / "xsi.so"):
+        if not xsi_so.exists():
+            continue
         try:
             xsi_so.unlink()
-            print("Removed xsi.so")
-            return True
+            print(f"Removed {xsi_so}")
+            removed = True
         except Exception as e:
-            print(f"Failed to remove xsi.so: {e}")
+            print(f"Failed to remove {xsi_so}: {e}")
             return False
-    else:
+
+    if not removed:
         print("No artifacts to clean.")
-        return True
+    return True
 
 
 def main() -> int:
