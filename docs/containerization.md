@@ -1,6 +1,6 @@
 # FINN containerization redesign — analysis and design
 
-Branch: `feature/sbx`. Status: **implemented.** §1–§3 are the original analysis
+Branch: `feature/sbx`. Status: **implemented and verified on docker and plain sbx.** §1–§3 are the original analysis
 and are unchanged. §4 records what was built and where it departs from the
 proposal; §5 answers the open questions with measurements.
 
@@ -617,6 +617,51 @@ other cannot become a silent unresolvable import.
   platform repos and a licence.
 
 - **Is `--init` still needed when the sandbox runtime supplies its own PID 1?**
-  Still open. It is retained
-  unchanged; answering it needs an empirical check on a long synthesis run, which
-  is the one thing that cannot be tested without the licence server.
+  Answered for sbx: the image now runs `tini` as PID 1, which is what stock sbx
+  templates do and what `--init` provides, so the reaping the Vivado hang needs
+  is present without the flag. `run-docker.sh` keeps passing `--init` on the
+  docker path, where the flag is free and the behaviour is long-established.
+
+## 7. The sbx template contract
+
+Making the image *sbx-shaped* (§3.4's environment tiering) was necessary but not
+sufficient. A stock `sbx create` against it failed with nothing but
+`ERROR: failed to run sandbox container`. The requirements below were each
+established by bisecting a real failure against a stock template.
+
+| Requirement | Symptom when absent |
+|---|---|
+| `agent` uid 1000, NOPASSWD sudo | kits run as `agent` and cannot write |
+| `/home/agent` **755**, with `.claude/ .local/bin .npm .cache workspace/` agent-owned | `cannot create .../settings.json: Permission denied` |
+| `tini` as PID 1 | no zombie reaping |
+| `CMD` that does not exit | container dies before setup; sbx reports only the opaque message above |
+| `NO_PROXY` / `no_proxy` | loopback pushed through the egress proxy |
+| `NPM_CONFIG_PREFIX` **and its bin dir on `PATH`** | `npm install -g` lands off `PATH`; a CLI installs "successfully" then `command -v` fails with 127 |
+
+The 755-plus-populated-home requirement is in no documentation; it came from
+diffing a stock template after the permission failure.
+
+**`sbx exec` does not run the ENTRYPOINT.** This is the subtle one. Everything
+`finn_entrypoint.sh` exports is absent from exec sessions, so path resolution
+cannot live in the shell. `finn_paths.workspace_root()` therefore falls back
+`FINN_ROOT` → `WORKSPACE_DIR` (set by sbx) → a cwd that actually contains
+`src/finn`, and `FINN_BUILD_DIR` is defaulted the same way. The entrypoint also
+writes what it resolved to `/etc/sandbox-persistent.sh` for shell sessions.
+
+**Why not extend `docker/sandbox-templates`.** That is Docker's supported route
+and it is closed to FINN: the images are Ubuntu 26.04 on Python 3.14, and
+`torch 2.8.0` publishes no `cp314` wheel. The build tiers are pinned to an LTS
+by XRT and Vivado regardless. If XRT ever ships a 26.04 package, a new profile
+can track it and this section can be reconsidered.
+
+**This is reverse-engineered and an sbx release can break it.** The check that
+matters is creating a sandbox from the image with plain `sbx` — no wrapper —
+and running a test inside it.
+
+**Egress is wider than the manifest asks for.** sbx's per-sandbox rules are
+*additive to a machine-level preset*, so a "closed" posture is not closed.
+Measured on a live sandbox: `pypi.org` (requested) 200, `example.com`
+(unrequested) blocked by policy — but `api.openai.com`, which no profile
+requested, also returns 401 rather than being blocked, because the machine
+preset grants ~195 hosts to every sandbox. Tightening that is a host-level
+decision (`sbx policy`), not something a profile can express.
