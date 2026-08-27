@@ -952,6 +952,30 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
     network_report_ref = DependencyRef.property(
         "report", MVAUDataflowOpPaths.NETWORK_VALIDATION, _NETWORK_REPORT_SEMANTICS
     )
+    compute_binding_constraints = next(
+        item.constraints
+        for item in MVAU_COMPUTE_KERNEL.spec.constraint_sets
+        if item.name == "binding_feasibility"
+    )
+    cyclic_binding_constraints = next(
+        item.constraints
+        for item in cyclic_definition.spec.constraint_sets
+        if item.name == "cyclic_binding_feasibility"
+    )
+    op_structural_constraints = (
+        MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
+        MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
+        MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
+        MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
+        MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
+        MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
+        MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
+    )
+    artifact_constraints = tuple(
+        dict.fromkeys(
+            (*compute_binding_constraints, *cyclic_binding_constraints, *op_structural_constraints)
+        )
+    )
     additions = DesignSpaceSpec(
         ProblemSchema(
             (
@@ -1201,15 +1225,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
         constraint_sets=(
             ConstraintSet(
                 "mvau_op_structural",
-                (
-                    MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
-                    MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
-                    MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
-                    MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
-                    MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
-                    MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
-                    MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
-                ),
+                op_structural_constraints,
             ),
         ),
         readiness_profiles=(
@@ -1246,6 +1262,31 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                     MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
                     MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
                 ),
+            ),
+            ReadinessProfile(
+                "artifact_inputs",
+                decisions=(
+                    *(item.path for item in MVAU_COMPUTE_KERNEL.spec.decisions),
+                    *(item.path for item in cyclic_definition.spec.decisions),
+                    MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
+                    MVAUDataflowOpPaths.DELIVERY_PE,
+                    MVAUDataflowOpPaths.DELIVERY_SIMD,
+                    MVAUDataflowOpPaths.DELIVERY_DECLARATION,
+                    MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
+                    MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
+                ),
+                properties=(
+                    MVAUComputeKernelPaths.REGION,
+                    MVAUComputeKernelPaths.BINDING_SELECTION,
+                    MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
+                    MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT,
+                    CyclicParameterKernelPaths.REGION,
+                    CyclicParameterKernelPaths.BINDING_SELECTION,
+                    MVAUDataflowOpPaths.WEIGHT_ADAPTER_REGION,
+                    MVAUDataflowOpPaths.NETWORK,
+                    MVAUDataflowOpPaths.RESULT,
+                ),
+                constraints=artifact_constraints,
             ),
         ),
     )

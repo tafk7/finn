@@ -64,7 +64,7 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v2"
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v3"
 
 
 class _DataTypeLike(Protocol):
