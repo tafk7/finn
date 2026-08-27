@@ -46,9 +46,11 @@ from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.ops.mvau import (
     DataflowOpResult,
     MVAU_DATAFLOW_OP_SPEC,
+    MVAUConnectionTopology,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     MVAUSourceDescription,
+    MVAUWeightDeliveryDeclaration,
 )
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterBinding,
@@ -62,7 +64,7 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v1"
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v2"
 
 
 class _DataTypeLike(Protocol):
@@ -478,6 +480,16 @@ def _legacy_assignments(
                 _attribute_value(node, "pumpedCompute", 0)
             )
     if topology is MVAUParameterTopology.CYCLIC:
+        assignments[MVAUDataflowOpPaths.DELIVERY_PE] = pe
+        assignments[MVAUDataflowOpPaths.DELIVERY_SIMD] = simd
+        assignments[MVAUDataflowOpPaths.DELIVERY_DECLARATION] = (
+            MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
+            if interleave > 1
+            else MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
+        )
+        if interleave > 1:
+            assignments[MVAUDataflowOpPaths.DELIVERY_INTERLEAVE] = interleave
+        assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY] = MVAUConnectionTopology.DIRECT
         assignments[CyclicParameterKernelPaths.BINDING] = CyclicParameterBinding.FINN_RTL_MEMSTREAM
         ram_style = cast(str, _attribute_value(node, "ram_style", "auto"))
         try:
@@ -955,6 +967,8 @@ _ENUM_ASSIGNMENTS: Mapping[QualifiedPath, type[Enum]] = {
     MVAUComputeKernelPaths.REGION_DECLARATION: MVAURegionDeclaration,
     MVAUComputeKernelPaths.BINDING: MVAUComputeBinding,
     MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: MVAUParameterTopology,
+    MVAUDataflowOpPaths.DELIVERY_DECLARATION: MVAUWeightDeliveryDeclaration,
+    MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: MVAUConnectionTopology,
     CyclicParameterKernelPaths.BINDING: CyclicParameterBinding,
     CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle,
 }
@@ -963,6 +977,9 @@ _INTEGER_ASSIGNMENTS = frozenset(
         MVAUComputeKernelPaths.PE,
         MVAUComputeKernelPaths.SIMD,
         MVAUComputeKernelPaths.INTERLEAVE,
+        MVAUDataflowOpPaths.DELIVERY_PE,
+        MVAUDataflowOpPaths.DELIVERY_SIMD,
+        MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
     }
 )
 _BOOLEAN_ASSIGNMENTS = frozenset(

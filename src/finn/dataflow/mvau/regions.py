@@ -154,6 +154,129 @@ def _standard_weight_requirements(
     return ScheduledInputRequirements(requirements)
 
 
+def _standard_weight_beats(
+    repetitions: int,
+    neuron_folds: int,
+    synapse_folds: int,
+    pe: int,
+    simd: int,
+) -> tuple[tuple[Coordinate, ...], ...]:
+    return tuple(
+        tuple(
+            (
+                neuron_fold * pe + pe_index,
+                synapse_fold * simd + lane,
+            )
+            for pe_index in range(pe)
+            for lane in range(simd)
+        )
+        for _repetition in range(repetitions)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+    )
+
+
+def _batch_interleaved_weight_beats(
+    batches: int,
+    neuron_folds: int,
+    synapse_folds: int,
+    pe: int,
+    simd: int,
+    interleave: int,
+) -> tuple[tuple[Coordinate, ...], ...]:
+    weight_fields = pe * simd // interleave
+    return tuple(
+        tuple(
+            (
+                neuron_fold * pe + (chunk * weight_fields + field) // simd,
+                synapse_fold * simd + (chunk * weight_fields + field) % simd,
+            )
+            for field in range(weight_fields)
+        )
+        for _batch in range(batches)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+        for chunk in range(interleave)
+    )
+
+
+def construct_standard_mvau_weight_port(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    weight_element_type: NumericElementType,
+    pe: int,
+    simd: int,
+) -> Port:
+    """Construct the standard full-tile MVAU weight boundary."""
+    _validate_common_arguments(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        weight_element_type,
+        weight_element_type,
+        weight_element_type,
+        pe,
+        simd,
+    )
+    neuron_folds = matrix_height // pe
+    synapse_folds = matrix_width // simd
+    return Port(
+        "weight",
+        _weight_operand(matrix_height, matrix_width, weight_element_type),
+        BeatSequence(
+            pe * simd,
+            _standard_weight_beats(repetitions, neuron_folds, synapse_folds, pe, simd),
+        ),
+    )
+
+
+def construct_batch_interleaved_mvau_weight_port(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    weight_element_type: NumericElementType,
+    pe: int,
+    simd: int,
+    interleave: int,
+) -> Port:
+    """Construct the chunked weight boundary used by batch-interleaved MVAU."""
+    _validate_common_arguments(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        weight_element_type,
+        weight_element_type,
+        weight_element_type,
+        pe,
+        simd,
+    )
+    if not _positive_integer(interleave) or interleave <= 1:
+        raise ValueError("interleave must be an integer greater than one")
+    if repetitions % interleave:
+        raise ValueError("interleave must divide repetitions exactly")
+    if (pe * simd) % interleave:
+        raise ValueError("interleave must divide PE * SIMD exactly")
+    batches = repetitions // interleave
+    neuron_folds = matrix_height // pe
+    synapse_folds = matrix_width // simd
+    return Port(
+        "weight",
+        _weight_operand(matrix_height, matrix_width, weight_element_type),
+        BeatSequence(
+            pe * simd // interleave,
+            _batch_interleaved_weight_beats(
+                batches,
+                neuron_folds,
+                synapse_folds,
+                pe,
+                simd,
+                interleave,
+            ),
+        ),
+    )
+
+
 def _standard_output_availability(
     repetitions: int, neuron_folds: int, synapse_folds: int, pe: int
 ) -> ScheduledOutputAvailability:
@@ -213,23 +336,17 @@ def _standard_region(
         )
     ]
     if streamed_weights:
-        weight = _weight_operand(matrix_height, matrix_width, weight_element_type)
-        weight_beats = tuple(
-            tuple(
-                (
-                    neuron_fold * pe + pe_index,
-                    synapse_fold * simd + lane,
-                )
-                for pe_index in range(pe)
-                for lane in range(simd)
-            )
-            for _repetition in range(repetitions)
-            for neuron_fold in range(neuron_folds)
-            for synapse_fold in range(synapse_folds)
+        weight_port = construct_standard_mvau_weight_port(
+            repetitions,
+            matrix_width,
+            matrix_height,
+            weight_element_type,
+            pe,
+            simd,
         )
         inputs.append(
             InputInterface(
-                Port("weight", weight, BeatSequence(pe * simd, weight_beats)),
+                weight_port,
                 _standard_weight_requirements(repetitions, neuron_folds, synapse_folds, pe, simd),
             )
         )
@@ -324,7 +441,6 @@ def construct_batch_interleaved_streamed_mvau_region(
     batches = repetitions // interleave
     neuron_folds = matrix_height // pe
     synapse_folds = matrix_width // simd
-    weight_fields = pe * simd // interleave
     schedule = LogicalSchedule(
         (
             ScheduleLevel("batch", batches),
@@ -334,7 +450,6 @@ def construct_batch_interleaved_streamed_mvau_region(
         )
     )
     activation = _activation_operand(repetitions, matrix_width, activation_element_type)
-    weight = _weight_operand(matrix_height, matrix_width, weight_element_type)
     output = _output_operand(repetitions, matrix_height, output_element_type)
 
     activation_requirements: dict[RequirementKey, int] = {}
@@ -371,18 +486,14 @@ def construct_batch_interleaved_streamed_mvau_region(
                         reuse_index,
                     )
 
-    weight_beats = tuple(
-        tuple(
-            (
-                neuron_fold * pe + (chunk * weight_fields + field) // simd,
-                synapse_fold * simd + (chunk * weight_fields + field) % simd,
-            )
-            for field in range(weight_fields)
-        )
-        for _batch in range(batches)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for chunk in range(interleave)
+    weight_port = construct_batch_interleaved_mvau_weight_port(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        weight_element_type,
+        pe,
+        simd,
+        interleave,
     )
     return DataflowRegion(
         schedule,
@@ -399,7 +510,7 @@ def construct_batch_interleaved_streamed_mvau_region(
                 ScheduledInputRequirements(activation_requirements),
             ),
             InputInterface(
-                Port("weight", weight, BeatSequence(weight_fields, weight_beats)),
+                weight_port,
                 ScheduledInputRequirements(weight_requirements),
             ),
         ),
@@ -476,9 +587,11 @@ def construct_streamed_weight_mvau_region(
 __all__ = [
     "MVAURegionDeclaration",
     "MVAUWeightInterface",
+    "construct_batch_interleaved_mvau_weight_port",
     "construct_batch_interleaved_streamed_mvau_region",
     "construct_mvau_compute_region",
     "construct_standard_embedded_mvau_region",
+    "construct_standard_mvau_weight_port",
     "construct_standard_streamed_mvau_region",
     "construct_streamed_weight_mvau_region",
 ]

@@ -27,10 +27,12 @@ from finn.dataflow.ops.mvau import (
     BindingLocalStateDestination,
     CoordinateMappingKind,
     MVAU_DATAFLOW_OP_SPEC,
+    MVAUConnectionTopology,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     MVAUSourceAssociation,
     MVAUSourceDescription,
+    MVAUWeightDeliveryDeclaration,
     NetworkRef,
     RegionRef,
     SemanticOperandDestination,
@@ -40,7 +42,8 @@ from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterKernelPaths,
     CyclicRamStyle,
 )
-from finn.dataflow.region import NumericElementType
+from finn.dataflow.region import NumericElementType, Port
+from finn.dataflow.selection import enumerate_feasible_points
 
 INT8 = NumericElementType("int", 8)
 INT16 = NumericElementType("int", 16)
@@ -122,12 +125,29 @@ def _compute_assignments(
     return assignments
 
 
-def _cyclic_assignments() -> dict[QualifiedPath, object]:
-    return {
+def _cyclic_assignments(
+    declaration: MVAURegionDeclaration = MVAURegionDeclaration.STANDARD_STREAMED,
+    *,
+    delivery_declaration: MVAUWeightDeliveryDeclaration | None = None,
+    connection_topology: MVAUConnectionTopology = MVAUConnectionTopology.DIRECT,
+) -> dict[QualifiedPath, object]:
+    selected_delivery = delivery_declaration or (
+        MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
+        if declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+        else MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
+    )
+    assignments: dict[QualifiedPath, object] = {
+        MVAUDataflowOpPaths.DELIVERY_PE: 2,
+        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
+        MVAUDataflowOpPaths.DELIVERY_DECLARATION: selected_delivery,
+        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: connection_topology,
         CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
         CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
         CyclicParameterKernelPaths.PUMPED_MEMORY: False,
     }
+    if selected_delivery is MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED:
+        assignments[MVAUDataflowOpPaths.DELIVERY_INTERLEAVE] = 2
+    return assignments
 
 
 @pytest.mark.parametrize(
@@ -164,7 +184,7 @@ def test_cyclic_topologies_resolve_to_structurally_valid_network_refs(
     engine, point = _started()
     assignments = {
         **_compute_assignments(compute_declaration, MVAUParameterTopology.CYCLIC),
-        **_cyclic_assignments(),
+        **_cyclic_assignments(compute_declaration),
     }
     point = engine.commit_assignments(point, assignments).point
     answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
@@ -175,6 +195,147 @@ def test_cyclic_topologies_resolve_to_structurally_valid_network_refs(
         NetworkValidationReport()
     )
     assert engine.check_readiness(point, "mvau_op_structural").ready is True
+
+
+def test_direct_cyclic_connection_contains_no_adapter_and_matches_exactly() -> None:
+    engine, point = _started()
+    assignments = {
+        **_compute_assignments(
+            MVAURegionDeclaration.STANDARD_STREAMED,
+            MVAUParameterTopology.CYCLIC,
+        ),
+        **_cyclic_assignments(),
+    }
+    point = engine.commit_assignments(point, assignments).point
+
+    producer = engine.query_property(point, MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT)
+    consumer = engine.query_property(point, MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT)
+    result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+
+    assert isinstance(producer, Decided)
+    assert isinstance(consumer, Decided)
+    assert isinstance(producer.value, Port)
+    assert isinstance(consumer.value, Port)
+    assert producer.value.beat_sequence == consumer.value.beat_sequence
+    assert isinstance(result, Decided)
+    assert isinstance(result.value, NetworkRef)
+    assert tuple(node.id for node in result.value.network.nodes) == ("compute", "delivery")
+    assert tuple(edge.id for edge in result.value.network.edges) == ("weight",)
+
+
+def test_full_tile_delivery_to_chunked_compute_uses_one_explicit_adapter_region() -> None:
+    engine, point = _started()
+    assignments = {
+        **_compute_assignments(
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            MVAUParameterTopology.CYCLIC,
+        ),
+        **_cyclic_assignments(
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            delivery_declaration=MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
+            connection_topology=MVAUConnectionTopology.ADAPTER,
+        ),
+    }
+    point = engine.commit_assignments(point, assignments).point
+
+    result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+    assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
+
+    assert isinstance(result, Decided)
+    assert isinstance(result.value, NetworkRef)
+    assert tuple(node.id for node in result.value.network.nodes) == (
+        "compute",
+        "delivery",
+        "weight_adapter",
+    )
+    assert tuple(edge.id for edge in result.value.network.edges) == (
+        "adapter_to_compute",
+        "delivery_to_adapter",
+    )
+    assert assessment.answers[MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED] == Decided(True)
+    assert engine.query_property(point, MVAUDataflowOpPaths.NETWORK_VALIDATION) == Decided(
+        NetworkValidationReport()
+    )
+
+
+def test_incompatible_direct_cyclic_connection_remains_infeasible() -> None:
+    engine, point = _started()
+    assignments = {
+        **_compute_assignments(
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            MVAUParameterTopology.CYCLIC,
+        ),
+        **_cyclic_assignments(
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            delivery_declaration=MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
+        ),
+    }
+    point = engine.commit_assignments(point, assignments).point
+
+    assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
+
+    assert assessment.answers[MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED] == Decided(False)
+    assert point.assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY] is (
+        MVAUConnectionTopology.DIRECT
+    )
+
+
+def test_joint_selection_finds_direct_and_explicit_adapter_mvau_compositions() -> None:
+    engine, point = _started()
+    fixed = {
+        **_compute_assignments(
+            MVAURegionDeclaration.STANDARD_STREAMED,
+            MVAUParameterTopology.CYCLIC,
+        ),
+        MVAUDataflowOpPaths.DELIVERY_PE: 2,
+        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
+        CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
+        CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
+        CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+    }
+    point = engine.commit_assignments(point, fixed).point
+    coordinated = (
+        MVAUDataflowOpPaths.DELIVERY_DECLARATION,
+        MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
+        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
+    )
+
+    forward = enumerate_feasible_points(
+        engine,
+        point,
+        coordinated,
+        constraint_set="mvau_op_structural",
+        traversal_order=coordinated,
+    )
+    reverse = enumerate_feasible_points(
+        engine,
+        point,
+        coordinated,
+        constraint_set="mvau_op_structural",
+        traversal_order=tuple(reversed(coordinated)),
+    )
+
+    def signatures(points: tuple[DesignPoint, ...]) -> set[tuple[object, object]]:
+        return {
+            (
+                candidate.assignments[MVAUDataflowOpPaths.DELIVERY_DECLARATION],
+                candidate.assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY],
+            )
+            for candidate in points
+        }
+
+    expected = {
+        (
+            MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
+            MVAUConnectionTopology.DIRECT,
+        ),
+        (
+            MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED,
+            MVAUConnectionTopology.ADAPTER,
+        ),
+    }
+    assert signatures(forward.points) == expected
+    assert signatures(reverse.points) == expected
 
 
 def test_source_association_records_flattening_transpose_and_fused_provenance() -> None:
@@ -243,7 +404,7 @@ def test_source_associations_are_topology_aware_and_qualified(
     engine, point = _started()
     assignments = _compute_assignments(declaration, topology)
     if topology is MVAUParameterTopology.CYCLIC:
-        assignments.update(_cyclic_assignments())
+        assignments.update(_cyclic_assignments(declaration))
     point = engine.commit_assignments(point, assignments).point
     association_answer = engine.query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION)
     result_answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
@@ -332,7 +493,7 @@ def test_topology_mismatch_is_an_explicit_constraint() -> None:
         **_compute_assignments(
             MVAURegionDeclaration.STANDARD_EMBEDDED, MVAUParameterTopology.CYCLIC
         ),
-        **_cyclic_assignments(),
+        **_cyclic_assignments(MVAURegionDeclaration.STANDARD_EMBEDDED),
     }
     point = engine.commit_assignments(point, assignments).point
     assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
@@ -346,7 +507,7 @@ def test_interleaved_compute_rejects_unvalidated_pumped_cyclic_delivery() -> Non
             MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
             MVAUParameterTopology.CYCLIC,
         ),
-        **_cyclic_assignments(),
+        **_cyclic_assignments(MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED),
         CyclicParameterKernelPaths.PUMPED_MEMORY: True,
     }
     point = engine.commit_assignments(point, assignments).point
@@ -364,7 +525,7 @@ def test_all_kernel_topology_and_spatialization_choices_can_commit_together() ->
             MVAUParameterTopology.CYCLIC,
         ),
         MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
-        **_cyclic_assignments(),
+        **_cyclic_assignments(MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED),
     }
     result = engine.commit_assignments(point, assignments)
     assert {item.disposition for item in result.outcomes} == {"committed"}

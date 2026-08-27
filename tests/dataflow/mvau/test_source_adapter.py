@@ -34,10 +34,12 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
 )
 from finn.dataflow.ops.mvau import (
+    MVAUConnectionTopology,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     NetworkRef,
     RegionRef,
+    MVAUWeightDeliveryDeclaration,
 )
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterBinding,
@@ -214,6 +216,15 @@ def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() ->
         CyclicRamStyle.BRAM
     )
     assert projection.imported_assignments[CyclicParameterKernelPaths.PUMPED_MEMORY] is True
+    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_PE] == 2
+    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_SIMD] == 2
+    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_DECLARATION] is (
+        MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
+    )
+    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_INTERLEAVE] == 2
+    assert projection.imported_assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY] is (
+        MVAUConnectionTopology.DIRECT
+    )
     assert projection.problem_data[CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES] == (
         CyclicTargetMemoryCapabilities(True)
     )
