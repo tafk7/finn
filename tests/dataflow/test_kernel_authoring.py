@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
 from finn.dataflow.design import (
@@ -14,6 +19,7 @@ from finn.dataflow.design import (
     DependencyView,
     DerivedProperty,
     DesignSpaceSpec,
+    DesignSpace,
     Engine,
     EvaluatorSpec,
     ProblemSchema,
@@ -43,6 +49,11 @@ from finn.dataflow.mvau.definition import (
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
     construct_standard_streamed_mvau_region,
+)
+from finn.dataflow.mvau.source import (
+    make_mvau_selection_envelope,
+    parse_mvau_selection_envelope,
+    reconstitute_mvau_point,
 )
 from finn.dataflow.parameters.cyclic.definition import (
     CYCLIC_PARAMETER_KERNEL,
@@ -221,6 +232,7 @@ def test_synthetic_third_kernel_uses_no_mvau_or_parameter_types() -> None:
     engine = Engine()
     space = engine.validate(definition.spec)
     point = engine.start(space, {})
+    assert definition.binding_decision_path is not None
     point = engine.commit_assignments(point, {definition.binding_decision_path: "only"}).point
     answer = instantiate_kernel(engine, definition, point)
     assert isinstance(answer, Decided)
@@ -308,6 +320,8 @@ def test_two_kernels_using_the_same_helper_do_not_share_decisions() -> None:
     spec = assemble_kernel_specs((left, right))
     engine = Engine()
     point = engine.start(engine.validate(spec), {})
+    assert left.binding_decision_path is not None
+    assert right.binding_decision_path is not None
     point = engine.commit_assignments(point, {left.binding_decision_path: "only"}).point
     assert left.binding_decision_path in point.assignments
     assert right.binding_decision_path not in point.assignments
@@ -366,6 +380,8 @@ def test_two_mvau_placements_are_independent_and_share_only_the_target_field() -
     assert left.path(MVAUComputeKernelPaths.PE) != right.path(MVAUComputeKernelPaths.PE)
     assert left.path(MVAUComputeKernelPaths.TARGET_DSP_BLOCK) == shared_target
     assert right.path(MVAUComputeKernelPaths.TARGET_DSP_BLOCK) == shared_target
+    assert left.binding_readiness_profile is not None
+    assert right.binding_readiness_profile is not None
     assert engine.check_readiness(point, left.binding_readiness_profile).ready is True
     assert engine.check_readiness(point, right.binding_readiness_profile).ready is True
     left_instance = instantiate_kernel(engine, left, point)
@@ -385,6 +401,100 @@ def test_two_mvau_placements_are_independent_and_share_only_the_target_field() -
     assert isinstance(target_answer, Unresolved)
     assert target_answer.findings[0].path == target_constraint
     assert target_answer.findings[0].trace == (shared_target,)
+
+
+def _two_placed_mvau_design() -> tuple[
+    DesignSpace,
+    dict[QualifiedPath, object],
+    dict[QualifiedPath, object],
+]:
+    shared_target = QualifiedPath("problem.target.dsp_block")
+    shared = {MVAUComputeKernelPaths.TARGET_DSP_BLOCK: shared_target}
+    left = MVAU_COMPUTE_KERNEL.place("op0", "graph.op0", shared_problem_paths=shared)
+    right = MVAU_COMPUTE_KERNEL.place("op1", "graph.op1", shared_problem_paths=shared)
+    target_field = next(
+        field
+        for field in MVAU_COMPUTE_KERNEL.spec.problem_schema.fields
+        if field.path == MVAUComputeKernelPaths.TARGET_DSP_BLOCK
+    )
+    spec = assemble_kernel_specs(
+        (left, right),
+        additions=DesignSpaceSpec(
+            problem_schema=ProblemSchema(
+                (
+                    type(target_field)(
+                        shared_target,
+                        target_field.value_semantics,
+                        target_field.required,
+                        target_field.constraint,
+                        target_field.constraint_description,
+                    ),
+                )
+            )
+        ),
+    )
+    problem: dict[QualifiedPath, object] = {shared_target: MVAUDspBlock.DSP58}
+    for placement in (left, right):
+        for local_path_text, value in _mvau_problem().items():
+            local_path = QualifiedPath(local_path_text)
+            if local_path != MVAUComputeKernelPaths.TARGET_DSP_BLOCK:
+                problem[placement.path(local_path)] = value
+    assignments: dict[QualifiedPath, object] = {}
+    for placement, pe in ((left, 1), (right, 2)):
+        for local_path, value in _mvau_assignments().items():
+            assignments[placement.path(local_path)] = (
+                pe if local_path == MVAUComputeKernelPaths.PE else value
+            )
+    engine = Engine()
+    return engine.validate(spec), problem, assignments
+
+
+def test_qualified_placed_mvau_paths_round_trip_across_processes(tmp_path: Path) -> None:
+    space, problem, assignments = _two_placed_mvau_design()
+    engine = Engine()
+    point = engine.commit_assignments(engine.start(space, problem), assignments).point
+    envelope = make_mvau_selection_envelope("graph.two_mvau", point)
+    envelope_path = tmp_path / "placed-selection.json"
+    envelope_path.write_text(envelope.to_json())
+
+    restored = reconstitute_mvau_point(
+        engine,
+        space,
+        problem,
+        parse_mvau_selection_envelope(envelope.to_json()),
+        source_scope_id="graph.two_mvau",
+    )
+    assert restored.assignments == point.assignments
+    assert all(path.value.startswith("graph.op") for path in restored.assignments)
+
+    code = """
+import sys
+from pathlib import Path
+from finn.dataflow.design import Engine
+from finn.dataflow.mvau.source import (
+    make_mvau_selection_envelope,
+    parse_mvau_selection_envelope,
+    reconstitute_mvau_point,
+)
+from dataflow.test_kernel_authoring import _two_placed_mvau_design
+space, problem, _assignments = _two_placed_mvau_design()
+engine = Engine()
+envelope = parse_mvau_selection_envelope(Path(sys.argv[1]).read_text())
+point = reconstitute_mvau_point(engine, space, problem, envelope, source_scope_id='graph.two_mvau')
+print(make_mvau_selection_envelope('graph.two_mvau', point).to_json())
+"""
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(Path.cwd() / "src"), str(Path.cwd() / "tests"), environment.get("PYTHONPATH", "")]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(envelope_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert completed.stdout.strip() == envelope.to_json()
 
 
 def test_public_kernel_specs_are_the_definition_specs() -> None:

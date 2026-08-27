@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from pathlib import Path
 
 import numpy as np  # type: ignore[import-not-found]
+import pytest
 from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
@@ -15,12 +17,16 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.mvau.artifacts import (
-    MVAUSourceFileOrigin,
+    MVAUArtifactError,
+    MVAUWeightPayloadKind,
     build_mvau_rtl_artifact,
     build_mvau_rtl_artifact_requirements,
     simulate_mvau_rtl_artifact,
 )
-from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
+from finn.dataflow.mvau.elaboration import (
+    elaborate_mvau_rtl_softvec,
+    mvau_elaboration_origin,
+)
 from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
 from finn.dataflow.mvau.source import (
@@ -37,7 +43,12 @@ PART = "xczu3eg-sbva484-1-e"
 CLOCK_NS = 5.0
 
 
-def _model(mem_mode: str) -> ModelWrapper:
+def _model(
+    mem_mode: str,
+    *,
+    with_initializer: bool = True,
+    runtime_writable: bool = False,
+) -> ModelWrapper:
     activation = helper.make_tensor_value_info("activation", TensorProto.FLOAT, [2, 4])
     weights = helper.make_tensor_value_info("weights", TensorProto.FLOAT, [4, 4])
     output = helper.make_tensor_value_info("output", TensorProto.FLOAT, [2, 4])
@@ -63,7 +74,7 @@ def _model(mem_mode: str) -> ModelWrapper:
         mem_mode=mem_mode,
         resType="dsp",
         ram_style="block",
-        runtime_writeable_weights=0,
+        runtime_writeable_weights=int(runtime_writable),
         pumpedMemory=0,
         pumpedCompute=0,
     )
@@ -81,19 +92,28 @@ def _model(mem_mode: str) -> ModelWrapper:
         ],
         dtype=np.float32,
     )
-    model.set_initializer("weights", weight_values)
+    if with_initializer:
+        model.set_initializer("weights", weight_values)
     return model
+
+
+def _context(
+    *,
+    clock_period_ns: float = CLOCK_NS,
+    accumulator_owner: str = "finn.MinimizeAccumulatorWidth",
+) -> MVAUProjectionContext:
+    return MVAUProjectionContext(
+        accumulator_owner,
+        fpga_part=PART,
+        clock_period_ns=clock_period_ns,
+    )
 
 
 def _selected(model: ModelWrapper) -> MVAUResolvedDesign:
     projection = project_mvau_source(
         model,
         NODE_ID,
-        MVAUProjectionContext(
-            "finn.MinimizeAccumulatorWidth",
-            fpga_part=PART,
-            clock_period_ns=CLOCK_NS,
-        ),
+        _context(),
         import_mode=MVAULegacyImportMode.PRESERVE_SPECIALIZATION,
     )
     return start_mvau_projection(projection)
@@ -132,6 +152,7 @@ def test_requirements_are_self_contained_and_match_legacy_generation(tmp_path: P
     )
 
     assert requirements.mem_mode == "external"
+    assert requirements.weight_payload_kind is MVAUWeightPayloadKind.INITIALIZER
     assert dict(requirements.parameters)["PE"] == 2
     assert {item.interface_name: item.physical_width_bits for item in requirements.interfaces} == {
         "in0_V": 16,
@@ -149,10 +170,11 @@ def test_requirements_are_self_contained_and_match_legacy_generation(tmp_path: P
     assert by_name["out0_V"].beat_sequence == (
         compute_region.output_interface("output").port.beat_sequence
     )
-    assert {item.origin for item in requirements.source_manifest} == {
-        MVAUSourceFileOrigin.GENERATED,
-        MVAUSourceFileOrigin.FINN_RTL_LIBRARY,
+    assert {item.id for item in requirements.source_dependencies} == {
+        "compute.template",
+        *(f"compute.library.{index}" for index in range(6)),
     }
+    assert {item.id for item in requirements.generated_outputs} == {"compute.wrapper"}
 
     # The downstream builder must not read the original node or model again.
     source_model.set_initializer("weights", np.zeros((4, 4), dtype=np.float32))
@@ -168,8 +190,10 @@ def test_requirements_are_self_contained_and_match_legacy_generation(tmp_path: P
     assert tuple(generated_operation.get_rtl_file_list(abspath=False)) == legacy_sources
     assert generated_operation.get_verilog_top_module_intf_names() == legacy_interfaces
     assert all(Path(path).is_file() for path in built.source_files)
+    assert all(Path(path).is_file() for path in built.generated_files)
 
     activation = np.asarray([[1, 2, 3, 4], [-2, 1, 0, 3]], dtype=np.float32)
+    assert requirements.weight_initializer is not None
     assert np.array_equal(
         simulate_mvau_rtl_artifact(built, activation, mode="cppsim"),
         np.matmul(activation, requirements.weight_initializer.as_array()),
@@ -190,7 +214,11 @@ def test_direct_cyclic_requirements_include_memstream_and_exact_weight_sequence(
     built = build_mvau_rtl_artifact(requirements, tmp_path / "cyclic")
 
     assert requirements.mem_mode == "internal_decoupled"
-    assert "delivery.wrapper" in {item.id for item in requirements.source_manifest}
+    assert "delivery.template" in {item.id for item in requirements.source_dependencies}
+    assert "delivery.library.2" in {item.id for item in requirements.source_dependencies}
+    assert {"delivery.wrapper", "delivery.initializer"}.issubset(
+        {item.id for item in requirements.generated_outputs}
+    )
     delivery_sequence = (
         selected.result.network.node("delivery")
         .region.output_interface("weight")
@@ -204,7 +232,8 @@ def test_direct_cyclic_requirements_include_memstream_and_exact_weight_sequence(
     assert (Path(built.output_directory) / "memblock.dat").is_file()
 
     evidence = collect_mvau_rtl_softvec_evidence(selected, elaboration, built)
-    assert evidence.semantic_contract_covered
+    assert evidence.static_correspondence_complete
+    assert not evidence.emitted_realization_observed
     assert evidence.weight_service.source_kind == "cyclic_delivery_region"
     assert len(evidence.weight_service.assignments) == (
         selected.result.network.node("compute")
@@ -227,11 +256,14 @@ def test_static_evidence_maps_every_requirement_and_exact_output_order(tmp_path:
     evidence = collect_mvau_rtl_softvec_evidence(selected, elaboration, built)
 
     region = selected.result.region
-    assert evidence.semantic_contract_covered
-    assert evidence.activation_service.source_kind == "activation_boundary_with_local_replay"
-    assert evidence.activation_service.replay_component_id == (
-        f"{NODE_ID}.compute.activation_replay"
-    )
+    assert evidence.static_correspondence_complete
+    assert not evidence.emitted_realization_observed
+    assert evidence.activation_service.source_kind == "activation_boundary_with_declared_replay"
+    assert dict(evidence.activation_service.implementation_parameters) == {
+        "LEN": 2,
+        "REP": 2,
+        "W": 16,
+    }
     assert len(evidence.activation_service.assignments) == (
         region.input_interface("activation").requirements.occurrence_count
     )
@@ -249,7 +281,180 @@ def test_static_evidence_maps_every_requirement_and_exact_output_order(tmp_path:
     assert evidence.output.output_sequence == region.output_interface("output").port.beat_sequence
     assert evidence.output.artifact_sequence == evidence.output.output_sequence
     assert evidence.associations.complete
+    assert evidence.generated_artifact.compute_parameters_match
+    assert evidence.generated_artifact.compute_wiring_match
+    assert evidence.generated_artifact.replay_instantiation_present
     assert evidence.cycles is None
+
+
+def test_external_runtime_weights_do_not_require_an_initializer(tmp_path: Path) -> None:
+    source_model = _model("external", with_initializer=False)
+    selected = _selected(source_model)
+    elaboration = elaborate_mvau_rtl_softvec(selected)
+
+    requirements = build_mvau_rtl_artifact_requirements(
+        selected, elaboration, source_model, Path.cwd()
+    )
+    artifact = build_mvau_rtl_artifact(requirements, tmp_path / "runtime-weights")
+    runtime_weights = np.eye(4, dtype=np.float32)
+    activation = np.asarray([[1, 2, 3, 4], [-2, 1, 0, 3]], dtype=np.float32)
+
+    assert requirements.weight_initializer is None
+    assert requirements.weight_payload_kind is MVAUWeightPayloadKind.EXTERNAL_RUNTIME
+    assert np.array_equal(
+        simulate_mvau_rtl_artifact(
+            artifact,
+            activation,
+            runtime_weights,
+            mode="cppsim",
+        ),
+        activation,
+    )
+
+
+def test_runtime_writable_cyclic_requirements_need_no_initial_image(tmp_path: Path) -> None:
+    source_model = _model(
+        "internal_decoupled",
+        with_initializer=False,
+        runtime_writable=True,
+    )
+    selected = _selected(source_model)
+    elaboration = elaborate_mvau_rtl_softvec(selected)
+
+    requirements = build_mvau_rtl_artifact_requirements(
+        selected, elaboration, source_model, Path.cwd()
+    )
+    artifact = build_mvau_rtl_artifact(requirements, tmp_path / "runtime-local-state")
+
+    assert requirements.weight_payload_kind is (MVAUWeightPayloadKind.RUNTIME_WRITABLE_LOCAL_STATE)
+    assert requirements.weight_initializer is None
+    assert {item.id for item in requirements.generated_outputs} == {
+        "compute.wrapper",
+        "delivery.wrapper",
+    }
+    memstream_wrapper = (
+        Path(artifact.output_directory) / f"{NODE_ID}_memstream_wrapper.v"
+    ).read_text()
+    assert 'parameter  INIT_FILE = ""' in memstream_wrapper
+
+
+def test_builder_rejects_an_incomplete_declared_source_set(tmp_path: Path) -> None:
+    source_model = _model("external")
+    selected = _selected(source_model)
+    elaboration = elaborate_mvau_rtl_softvec(selected)
+    requirements = build_mvau_rtl_artifact_requirements(
+        selected, elaboration, source_model, Path.cwd()
+    )
+    incomplete = replace(
+        requirements,
+        source_dependencies=requirements.source_dependencies[1:],
+    )
+
+    with pytest.raises(MVAUArtifactError) as error:
+        build_mvau_rtl_artifact(incomplete, tmp_path / "incomplete")
+
+    assert {finding.code for finding in error.value.findings} == {
+        "mvau-artifact-file-requirements-incomplete"
+    }
+
+
+def test_requirements_reject_weight_values_from_another_source_problem() -> None:
+    model = _model("external")
+    selected = _selected(model)
+    elaboration = elaborate_mvau_rtl_softvec(selected)
+    changed = ModelWrapper(model.model, make_deepcopy=True)
+    changed.set_initializer("weights", np.zeros((4, 4), dtype=np.float32))
+
+    with pytest.raises(MVAUArtifactError) as error:
+        build_mvau_rtl_artifact_requirements(
+            selected,
+            elaboration,
+            changed,
+            Path.cwd(),
+        )
+
+    assert {finding.code for finding in error.value.findings} == {
+        "mvau-artifact-weight-source-mismatch"
+    }
+
+
+def test_artifact_requirements_reject_elaboration_from_another_selected_point() -> None:
+    model = _model("external")
+    baseline = _selected(model)
+    elaboration = elaborate_mvau_rtl_softvec(baseline)
+    baseline_assignments: dict[QualifiedPath | str, object] = {
+        path: value for path, value in baseline.point.assignments.items()
+    }
+
+    binding_assignments = dict(baseline_assignments)
+    binding_assignments[MVAUComputeKernelPaths.BINDING] = MVAUComputeBinding.LEGACY_HLS_DSP
+    binding_assignments.pop(MVAUComputeKernelPaths.COMPUTE_PUMPING)
+    mismatched_binding = start_mvau_projection(
+        project_mvau_source(model, NODE_ID, _context()), binding_assignments
+    )
+
+    pumping_assignments = dict(baseline_assignments)
+    pumping_assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = True
+    mismatched_pumping = start_mvau_projection(
+        project_mvau_source(model, NODE_ID, _context()), pumping_assignments
+    )
+
+    mismatched_clock = start_mvau_projection(
+        project_mvau_source(model, NODE_ID, _context(clock_period_ns=3.0)),
+        baseline_assignments,
+    )
+    mismatched_problem = start_mvau_projection(
+        project_mvau_source(
+            model, NODE_ID, _context(accumulator_owner="another.AccumulatorAnalysis")
+        ),
+        baseline_assignments,
+    )
+
+    for mismatched in (
+        mismatched_binding,
+        mismatched_pumping,
+        mismatched_clock,
+        mismatched_problem,
+    ):
+        assert mismatched.result == baseline.result
+        with pytest.raises(MVAUArtifactError) as error:
+            build_mvau_rtl_artifact_requirements(
+                mismatched,
+                elaboration,
+                model,
+                Path.cwd(),
+            )
+        assert {finding.code for finding in error.value.findings} == {
+            "mvau-artifact-elaboration-origin-mismatch"
+        }
+
+
+def test_infeasible_but_ready_point_cannot_reach_artifact_requirements() -> None:
+    model = _model("external")
+    projection = project_mvau_source(model, NODE_ID, _context())
+    baseline = _selected(model)
+    assignments: dict[QualifiedPath | str, object] = {
+        path: value for path, value in baseline.point.assignments.items()
+    }
+    assignments[MVAUComputeKernelPaths.SIMD] = 1
+    assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = False
+    feasible = start_mvau_projection(projection, assignments)
+    elaboration = elaborate_mvau_rtl_softvec(feasible)
+
+    assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = True
+    infeasible = start_mvau_projection(projection, assignments)
+    assert infeasible.engine.check_readiness(infeasible.point, "artifact_inputs").ready is True
+    forged_origin = replace(elaboration, origin=mvau_elaboration_origin(infeasible))
+
+    with pytest.raises(MVAUArtifactError) as error:
+        build_mvau_rtl_artifact_requirements(
+            infeasible,
+            forged_origin,
+            model,
+            Path.cwd(),
+        )
+
+    assert "mvau-artifact-constraint-violated" in {finding.code for finding in error.value.findings}
 
 
 def test_softvec_and_packed_bindings_preserve_the_same_standard_region() -> None:

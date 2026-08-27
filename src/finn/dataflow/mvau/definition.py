@@ -93,6 +93,10 @@ class MVAUComputeKernelPaths:
     THRESHOLD_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.threshold_initializer_available")
     COMPUTATION_PROFILE = QualifiedPath("problem.mvau.computation_profile")
     WEIGHT_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.weight_initializer_available")
+    WEIGHT_INITIALIZER_FINGERPRINT = QualifiedPath("problem.mvau.weight_initializer_fingerprint")
+    THRESHOLD_INITIALIZER_FINGERPRINT = QualifiedPath(
+        "problem.mvau.threshold_initializer_fingerprint"
+    )
     TARGET_DSP_BLOCK = QualifiedPath("problem.target.dsp_block")
     WEIGHTS_NARROW = QualifiedPath("problem.mvau.weights_narrow")
 
@@ -923,6 +927,20 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                 ProblemField(
                     MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE,
                     _BOOL_OBJECT_SEMANTICS,
+                ),
+                ProblemField(
+                    MVAUComputeKernelPaths.WEIGHT_INITIALIZER_FINGERPRINT,
+                    _STRING_OBJECT_SEMANTICS,
+                    required=False,
+                    constraint=lambda value: bool(value),
+                    constraint_description="must be a non-empty initializer fingerprint",
+                ),
+                ProblemField(
+                    MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_FINGERPRINT,
+                    _STRING_OBJECT_SEMANTICS,
+                    required=False,
+                    constraint=lambda value: bool(value),
+                    constraint_description="must be a non-empty initializer fingerprint",
                 ),
                 ProblemField(
                     MVAUComputeKernelPaths.TARGET_DSP_BLOCK,

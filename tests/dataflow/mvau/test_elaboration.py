@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np  # type: ignore[import-not-found]
 import pytest
 from onnx import TensorProto, helper  # type: ignore[import-not-found]
@@ -19,11 +21,13 @@ from finn.dataflow.mvau.elaboration import (
 )
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.source import (
+    MVAU_DECLARATION_FAMILY_VERSION,
     MVAULegacyImportMode,
     MVAUProjectionContext,
     MVAUResolvedDesign,
     project_mvau_source,
     start_mvau_projection,
+    mvau_problem_fingerprint,
 )
 from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, MVAUParameterTopology, NetworkRef
 
@@ -99,9 +103,13 @@ def test_compute_only_softvec_elaboration_has_typed_components_and_interfaces() 
     assert dict(resolved.point.assignments) == original_assignments
     assert elaborated.target_fpga_part == PART
     assert elaborated.target_clock_period_ns == 5.0
+    assert elaborated.origin.declaration_family_version == MVAU_DECLARATION_FAMILY_VERSION
+    assert elaborated.origin.problem_fingerprint == mvau_problem_fingerprint(resolved.point.problem)
+    assert elaborated.origin.assignments == tuple(
+        sorted(resolved.point.assignments.items(), key=lambda item: item[0])
+    )
+    assert elaborated.origin.binding_ids == (MVAUComputeBinding.RTL_SOFTVEC.value,)
     assert tuple(component.id for component in elaborated.components) == (
-        f"{NODE_ID}.compute.activation_replay",
-        f"{NODE_ID}.compute.softvec_core",
         f"{NODE_ID}.compute.stream_shell",
         f"{NODE_ID}.compute.wrapper",
     )
@@ -115,9 +123,9 @@ def test_compute_only_softvec_elaboration_has_typed_components_and_interfaces() 
         "NARROW_WEIGHTS": False,
         "PE": 2,
         "PUMPED_COMPUTE": False,
+        "SEGMENTLEN": 1,
         "SIGNED_ACTIVATIONS": True,
         "SIMD": 2,
-        "TH": 1,
         "VERSION": 2,
         "WEIGHT_WIDTH": 8,
     }
@@ -130,6 +138,29 @@ def test_compute_only_softvec_elaboration_has_typed_components_and_interfaces() 
         f"{NODE_ID}.compute.wrapper.activation": (16, 16),
         f"{NODE_ID}.compute.wrapper.output": (32, 32),
         f"{NODE_ID}.compute.wrapper.weight": (32, 32),
+    }
+    shell_activation = next(
+        interface
+        for interface in elaborated.numeric_interfaces
+        if interface.id == f"{NODE_ID}.compute.stream_shell.activation"
+    )
+    assert (
+        shell_activation.data_signal,
+        shell_activation.valid_signal,
+        shell_activation.ready_signal,
+    ) == (
+        "s_axis_input_tdata",
+        "s_axis_input_tvalid",
+        "s_axis_input_tready",
+    )
+    shell = elaborated.component(f"{NODE_ID}.compute.stream_shell")
+    assert shell.parent_id == wrapper.id
+    assert {
+        name: value for name, value in shell.parameters if name.startswith("ACTIVATION_REPLAY_")
+    } == {
+        "ACTIVATION_REPLAY_LEN": 2,
+        "ACTIVATION_REPLAY_REP": 2,
+        "ACTIVATION_REPLAY_WIDTH": 16,
     }
     assert tuple(boundary.id for boundary in elaborated.boundaries) == (
         "activation",
@@ -154,13 +185,17 @@ def test_direct_cyclic_network_elaboration_preserves_two_regions_and_configurati
         "compute",
         "delivery",
     )
-    delivery = elaborated.component(f"{NODE_ID}.delivery.memstream")
-    assert delivery.implementation_id == "finn-rtllib.memstream.memstream"
+    delivery = elaborated.component(f"{NODE_ID}.delivery.wrapper")
+    assert delivery.implementation_id == "finn.rtl.memstream.generated_wrapper"
     assert dict(delivery.parameters) == {
+        "DEPTH": 4,
+        "INIT_FILE": "memblock.dat",
         "INITIALIZER_AVAILABLE": True,
         "PUMPED_MEMORY": False,
         "RAM_STYLE": "block",
         "RUNTIME_WRITABLE": True,
+        "SETS": 1,
+        "WIDTH": 32,
     }
     network_connection = next(
         item for item in elaborated.connections if item.id == "network.delivery_to_compute"
@@ -180,6 +215,34 @@ def test_direct_cyclic_network_elaboration_preserves_two_regions_and_configurati
     )
     assert delivery_association.semantic_region_ids == ("delivery",)
     assert delivery_association.binding_ids == ("finn_rtl_memstream",)
+
+
+def test_physical_validation_rejects_bad_parent_connection_and_semantic_reference() -> None:
+    elaborated = elaborate_mvau_rtl_softvec(_resolved("external"))
+    wrapper = elaborated.component(f"{NODE_ID}.compute.wrapper")
+    bad_parent = replace(wrapper, parent_id="missing")
+    with pytest.raises(ValueError, match="parent"):
+        replace(
+            elaborated,
+            components=tuple(
+                bad_parent if component.id == wrapper.id else component
+                for component in elaborated.components
+            ),
+        )
+    bad_connection = replace(elaborated.connections[0], interface_ids=("only_one",))
+    with pytest.raises(ValueError, match="connection"):
+        replace(elaborated, connections=(bad_connection, *elaborated.connections[1:]))
+    bad_interface = replace(
+        elaborated.numeric_interfaces[0],
+        semantic_ports=(
+            replace(elaborated.numeric_interfaces[0].semantic_ports[0], port_id="bad"),
+        ),
+    )
+    with pytest.raises(ValueError, match="semantic port"):
+        replace(
+            elaborated,
+            numeric_interfaces=(bad_interface, *elaborated.numeric_interfaces[1:]),
+        )
 
 
 def test_elaboration_rejects_unassigned_and_uncovered_binding_choices() -> None:

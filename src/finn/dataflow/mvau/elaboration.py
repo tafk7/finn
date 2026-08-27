@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import ceil, floor
 from typing import cast
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
@@ -18,6 +19,10 @@ from finn.dataflow.mvau.definition import (
 )
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.source import MVAUResolvedDesign
+from finn.dataflow.mvau.source import (
+    MVAU_DECLARATION_FAMILY_VERSION,
+    mvau_problem_fingerprint,
+)
 from finn.dataflow.network import DataflowNetwork, RegionEndpoint
 from finn.dataflow.ops.mvau import (
     MVAUConnectionTopology,
@@ -41,6 +46,10 @@ class MVAUPhysicalDirection(str, Enum):
     OUTPUT = "output"
 
 
+class MVAUPhysicalNumericProtocol(str, Enum):
+    AXI_STREAM = "axi_stream"
+
+
 class MVAUPhysicalControlKind(str, Enum):
     CLOCK = "clock"
     RESET = "reset"
@@ -54,6 +63,16 @@ PhysicalParameterValue = bool | int | float | str
 class MVAUSemanticPortRef:
     region_id: str
     port_id: str
+
+
+@dataclass(frozen=True)
+class MVAUElaborationOrigin:
+    """Exact selected-point identity from which physical elaboration was derived."""
+
+    declaration_family_version: str
+    problem_fingerprint: str
+    assignments: tuple[tuple[QualifiedPath, object], ...]
+    binding_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -72,6 +91,7 @@ class MVAUPhysicalNumericInterface:
     id: str
     component_id: str
     direction: MVAUPhysicalDirection
+    protocol: MVAUPhysicalNumericProtocol
     logical_width_bits: int
     physical_width_bits: int
     data_signal: str
@@ -118,6 +138,7 @@ class MVAUPhysicalElaboration:
     """Typed physical representation for the covered RTL MVAU slice."""
 
     source_scope_id: str
+    origin: MVAUElaborationOrigin
     semantic_result: RegionRef | NetworkRef
     target_fpga_part: str
     target_clock_period_ns: float
@@ -152,6 +173,41 @@ class MVAUPhysicalElaboration:
         ):
             raise ValueError("every physical interface must name a component")
         if any(
+            component.parent_id is not None and component.parent_id not in component_ids
+            for component in components
+        ):
+            raise ValueError("every physical component parent must name another component")
+        for component in components:
+            ancestors = set()
+            parent = component.parent_id
+            while parent is not None:
+                if parent == component.id or parent in ancestors:
+                    raise ValueError("physical component parent relationships must be acyclic")
+                ancestors.add(parent)
+                parent = next(item.parent_id for item in components if item.id == parent)
+        if any(
+            not isinstance(interface.direction, MVAUPhysicalDirection)
+            or interface.protocol is not MVAUPhysicalNumericProtocol.AXI_STREAM
+            or interface.logical_width_bits <= 0
+            or interface.physical_width_bits < interface.logical_width_bits
+            or interface.physical_width_bits % 8
+            or not interface.data_signal
+            or not interface.valid_signal
+            or not interface.ready_signal
+            for interface in numeric
+        ):
+            raise ValueError("numeric interfaces must have complete byte-aligned AXI-stream shapes")
+        if any(
+            not isinstance(interface.kind, MVAUPhysicalControlKind) or not interface.signal
+            for interface in controls
+        ):
+            raise ValueError("control interfaces must have a declared kind and signal")
+        if any(
+            len(item.interface_ids) != 2 or len(set(item.interface_ids)) != 2
+            for item in connections
+        ):
+            raise ValueError("physical connections must name exactly two distinct endpoints")
+        if any(
             endpoint not in interface_ids for item in connections for endpoint in item.interface_ids
         ):
             raise ValueError("every physical connection endpoint must name an interface")
@@ -159,6 +215,41 @@ class MVAUPhysicalElaboration:
             raise ValueError("every physical boundary must name an interface")
         if any(item.physical_id not in physical_ids for item in associations):
             raise ValueError("every physical association must name a physical object")
+        if isinstance(self.semantic_result, RegionRef):
+            semantic_regions = {self.semantic_result.region_id: self.semantic_result.region}
+            semantic_edges: set[str] = set()
+        else:
+            semantic_regions = {node.id: node.region for node in self.semantic_result.network.nodes}
+            semantic_edges = {edge.id for edge in self.semantic_result.network.edges}
+        semantic_ports = {
+            MVAUSemanticPortRef(region_id, interface.port.id)
+            for region_id, region in semantic_regions.items()
+            for interface in region.interfaces
+        }
+        if any(
+            port not in semantic_ports for interface in numeric for port in interface.semantic_ports
+        ):
+            raise ValueError("numeric interface references an unknown semantic port")
+        if any(boundary.semantic_port not in semantic_ports for boundary in boundaries):
+            raise ValueError("physical boundary references an unknown semantic port")
+        if any(
+            region_id not in semantic_regions
+            for association in associations
+            for region_id in association.semantic_region_ids
+        ):
+            raise ValueError("physical association references an unknown semantic region")
+        if any(
+            port not in semantic_ports
+            for association in associations
+            for port in association.semantic_ports
+        ):
+            raise ValueError("physical association references an unknown semantic port")
+        if any(
+            edge_id not in semantic_edges
+            for association in associations
+            for edge_id in association.semantic_edge_ids
+        ):
+            raise ValueError("physical association references an unknown semantic edge")
         object.__setattr__(self, "components", components)
         object.__setattr__(self, "numeric_interfaces", numeric)
         object.__setattr__(self, "control_interfaces", controls)
@@ -242,6 +333,49 @@ def _required_problem(resolved: MVAUResolvedDesign, path: QualifiedPath) -> obje
     return value
 
 
+def mvau_elaboration_origin(resolved: MVAUResolvedDesign) -> MVAUElaborationOrigin:
+    """Construct the exact immutable identity of an elaboration input point."""
+    compute = resolved.engine.query_property(
+        resolved.point, MVAUComputeKernelPaths.BINDING_SELECTION
+    )
+    if not isinstance(compute, Decided) or not isinstance(compute.value, MVAUBindingSelection):
+        findings = () if isinstance(compute, Decided) else compute.findings
+        raise MVAUElaborationError(
+            findings
+            or (
+                _finding(
+                    "mvau-elaboration-binding-selection-missing",
+                    "compute binding-selection metadata must resolve before elaboration",
+                ),
+            )
+        )
+    binding_ids = [compute.value.binding_id]
+    if isinstance(resolved.result, NetworkRef):
+        delivery = resolved.engine.query_property(
+            resolved.point, CyclicParameterKernelPaths.BINDING_SELECTION
+        )
+        if not isinstance(delivery, Decided) or not isinstance(
+            delivery.value, CyclicParameterBindingSelection
+        ):
+            findings = () if isinstance(delivery, Decided) else delivery.findings
+            raise MVAUElaborationError(
+                findings
+                or (
+                    _finding(
+                        "mvau-elaboration-delivery-selection-missing",
+                        "cyclic binding-selection metadata must resolve before elaboration",
+                    ),
+                )
+            )
+        binding_ids.append(delivery.value.binding_id)
+    return MVAUElaborationOrigin(
+        MVAU_DECLARATION_FAMILY_VERSION,
+        mvau_problem_fingerprint(resolved.point.problem),
+        tuple(sorted(resolved.point.assignments.items(), key=lambda item: item[0])),
+        tuple(binding_ids),
+    )
+
+
 def _padded_width(port: Port) -> int:
     logical = port.logical_beat_bits
     return ((logical + 7) // 8) * 8
@@ -253,17 +387,20 @@ def _numeric_interface(
     direction: MVAUPhysicalDirection,
     port: Port,
     semantic_region_id: str,
-    signal: str,
+    data_signal: str,
+    valid_signal: str,
+    ready_signal: str,
 ) -> MVAUPhysicalNumericInterface:
     return MVAUPhysicalNumericInterface(
         interface_id,
         component_id,
         direction,
+        MVAUPhysicalNumericProtocol.AXI_STREAM,
         port.logical_beat_bits,
         _padded_width(port),
-        f"{signal}_TDATA",
-        f"{signal}_TVALID",
-        f"{signal}_TREADY",
+        data_signal,
+        valid_signal,
+        ready_signal,
         (MVAUSemanticPortRef(semantic_region_id, port.id),),
     )
 
@@ -284,8 +421,6 @@ def _compute_physical_objects(
     prefix = f"{source_id}.compute"
     wrapper_id = f"{prefix}.wrapper"
     shell_id = f"{prefix}.stream_shell"
-    replay_id = f"{prefix}.activation_replay"
-    core_id = f"{prefix}.softvec_core"
     pe = cast(int, _required_assignment(resolved, MVAUComputeKernelPaths.PE))
     simd = cast(int, _required_assignment(resolved, MVAUComputeKernelPaths.SIMD))
     pumped = cast(bool, _required_assignment(resolved, MVAUComputeKernelPaths.COMPUTE_PUMPING))
@@ -309,7 +444,22 @@ def _compute_physical_objects(
         NumericElementType,
         resolved.point.problem[MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
-    parameters: tuple[tuple[str, PhysicalParameterValue], ...] = (
+    clock_period = cast(float, resolved.point.problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS])
+    reference_clock = clock_period / 2 if pumped else clock_period
+    if reference_clock <= 0.741:
+        raise MVAUElaborationError(
+            (
+                _finding(
+                    "mvau-elaboration-clock-infeasible",
+                    "selected clock period is below the covered RTL segment-delay bound",
+                    MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
+                ),
+            )
+        )
+    critical_path_dsps = floor((reference_clock - 0.741) / 0.605 + 1)
+    max_chain_length = ceil(simd / (6 if pumped else 3))
+    segment_length = min(critical_path_dsps, max_chain_length)
+    wrapper_parameters: tuple[tuple[str, PhysicalParameterValue], ...] = (
         ("ACCU_WIDTH", accumulator_type.bit_width),
         ("ACTIVATION_WIDTH", activation_type.bit_width),
         ("IS_MVU", True),
@@ -321,17 +471,30 @@ def _compute_physical_objects(
         ),
         ("PE", pe),
         ("PUMPED_COMPUTE", pumped),
-        ("SIMD", simd),
+        ("SEGMENTLEN", segment_length),
         ("SIGNED_ACTIVATIONS", activation_type.type_id == "int"),
-        ("TH", 1),
+        ("SIMD", simd),
         ("VERSION", version),
         ("WEIGHT_WIDTH", weight_type.bit_width),
     )
+    shell_parameters = (
+        *wrapper_parameters,
+        ("ACTIVATION_REPLAY_LEN", matrix_width // simd),
+        ("ACTIVATION_REPLAY_REP", matrix_height // pe),
+        ("ACTIVATION_REPLAY_WIDTH", simd * activation_type.bit_width),
+    )
     components = (
-        MVAUPhysicalComponent(wrapper_id, "finn.rtl.mvau.generated_wrapper", parameters=parameters),
-        MVAUPhysicalComponent(shell_id, "finn-rtllib.mvu.mvu_vvu_axi", wrapper_id, parameters),
-        MVAUPhysicalComponent(replay_id, "finn-rtllib.mvu.replay_buffer", shell_id),
-        MVAUPhysicalComponent(core_id, "finn-rtllib.mvu.mvu", shell_id),
+        MVAUPhysicalComponent(
+            wrapper_id,
+            "finn.rtl.mvau.generated_wrapper",
+            parameters=wrapper_parameters,
+        ),
+        MVAUPhysicalComponent(
+            shell_id,
+            "finn-rtllib.mvu.mvu_vvu_axi",
+            wrapper_id,
+            shell_parameters,
+        ),
     )
     interfaces = (
         _numeric_interface(
@@ -340,7 +503,9 @@ def _compute_physical_objects(
             MVAUPhysicalDirection.INPUT,
             activation,
             region_id,
-            "in0_V",
+            "in0_V_TDATA",
+            "in0_V_TVALID",
+            "in0_V_TREADY",
         ),
         _numeric_interface(
             f"{wrapper_id}.weight",
@@ -348,7 +513,9 @@ def _compute_physical_objects(
             MVAUPhysicalDirection.INPUT,
             weight,
             region_id,
-            "in1_V",
+            "in1_V_TDATA",
+            "in1_V_TVALID",
+            "in1_V_TREADY",
         ),
         _numeric_interface(
             f"{wrapper_id}.output",
@@ -356,7 +523,9 @@ def _compute_physical_objects(
             MVAUPhysicalDirection.OUTPUT,
             output,
             region_id,
-            "out0_V",
+            "out0_V_TDATA",
+            "out0_V_TVALID",
+            "out0_V_TREADY",
         ),
         _numeric_interface(
             f"{shell_id}.activation",
@@ -364,7 +533,9 @@ def _compute_physical_objects(
             MVAUPhysicalDirection.INPUT,
             activation,
             region_id,
-            "s_axis_input",
+            "s_axis_input_tdata",
+            "s_axis_input_tvalid",
+            "s_axis_input_tready",
         ),
         _numeric_interface(
             f"{shell_id}.weight",
@@ -372,7 +543,9 @@ def _compute_physical_objects(
             MVAUPhysicalDirection.INPUT,
             weight,
             region_id,
-            "s_axis_weights",
+            "s_axis_weights_tdata",
+            "s_axis_weights_tvalid",
+            "s_axis_weights_tready",
         ),
         _numeric_interface(
             f"{shell_id}.output",
@@ -380,37 +553,9 @@ def _compute_physical_objects(
             MVAUPhysicalDirection.OUTPUT,
             output,
             region_id,
-            "m_axis_output",
-        ),
-        _numeric_interface(
-            f"{replay_id}.input",
-            replay_id,
-            MVAUPhysicalDirection.INPUT,
-            activation,
-            region_id,
-            "input",
-        ),
-        _numeric_interface(
-            f"{replay_id}.output",
-            replay_id,
-            MVAUPhysicalDirection.OUTPUT,
-            activation,
-            region_id,
-            "output",
-        ),
-        _numeric_interface(
-            f"{core_id}.activation",
-            core_id,
-            MVAUPhysicalDirection.INPUT,
-            activation,
-            region_id,
-            "activation",
-        ),
-        _numeric_interface(
-            f"{core_id}.weight", core_id, MVAUPhysicalDirection.INPUT, weight, region_id, "weight"
-        ),
-        _numeric_interface(
-            f"{core_id}.output", core_id, MVAUPhysicalDirection.OUTPUT, output, region_id, "output"
+            "m_axis_output_tdata",
+            "m_axis_output_tvalid",
+            "m_axis_output_tready",
         ),
     )
     controls = tuple(
@@ -424,33 +569,20 @@ def _compute_physical_objects(
         )
         for component in components
     )
-    if pumped:
-        controls += (
-            MVAUPhysicalControlInterface(
-                f"{wrapper_id}.clock2x", wrapper_id, MVAUPhysicalControlKind.CLOCK, "ap_clk2x"
-            ),
-            MVAUPhysicalControlInterface(
-                f"{shell_id}.clock2x", shell_id, MVAUPhysicalControlKind.CLOCK, "ap_clk2x"
-            ),
-        )
+    controls += (
+        MVAUPhysicalControlInterface(
+            f"{wrapper_id}.clock2x", wrapper_id, MVAUPhysicalControlKind.CLOCK, "ap_clk2x"
+        ),
+        MVAUPhysicalControlInterface(
+            f"{shell_id}.clock2x", shell_id, MVAUPhysicalControlKind.CLOCK, "ap_clk2x"
+        ),
+    )
     connections = (
         MVAUPhysicalConnection(
             "compute.wrapper_activation", (f"{wrapper_id}.activation", f"{shell_id}.activation")
         ),
         MVAUPhysicalConnection(
-            "compute.activation_to_replay", (f"{shell_id}.activation", f"{replay_id}.input")
-        ),
-        MVAUPhysicalConnection(
-            "compute.replay_to_core", (f"{replay_id}.output", f"{core_id}.activation")
-        ),
-        MVAUPhysicalConnection(
             "compute.wrapper_weight", (f"{wrapper_id}.weight", f"{shell_id}.weight")
-        ),
-        MVAUPhysicalConnection(
-            "compute.weight_to_core", (f"{shell_id}.weight", f"{core_id}.weight")
-        ),
-        MVAUPhysicalConnection(
-            "compute.core_to_output", (f"{core_id}.output", f"{shell_id}.output")
         ),
         MVAUPhysicalConnection(
             "compute.wrapper_output", (f"{shell_id}.output", f"{wrapper_id}.output")
@@ -468,7 +600,7 @@ def _compute_physical_objects(
         MVAUComputeKernelPaths.COMPUTE_PUMPING,
     )
     port_refs = tuple(MVAUSemanticPortRef(region_id, port.id) for port in region_ports)
-    associations = tuple(
+    component_associations = tuple(
         MVAUPhysicalAssociation(
             component.id,
             owners,
@@ -478,7 +610,8 @@ def _compute_physical_objects(
             binding_ids=(MVAUComputeBinding.RTL_SOFTVEC.value,),
         )
         for component in components
-    ) + tuple(
+    )
+    interface_associations = tuple(
         MVAUPhysicalAssociation(
             interface.id,
             owners,
@@ -489,7 +622,29 @@ def _compute_physical_objects(
         )
         for interface in interfaces
     )
-    return components, interfaces, controls, connections, associations
+    connection_ports = {
+        "compute.wrapper_activation": (MVAUSemanticPortRef(region_id, activation.id),),
+        "compute.wrapper_weight": (MVAUSemanticPortRef(region_id, weight.id),),
+        "compute.wrapper_output": (MVAUSemanticPortRef(region_id, output.id),),
+    }
+    connection_associations = tuple(
+        MVAUPhysicalAssociation(
+            connection.id,
+            owners,
+            (region_id,),
+            connection_ports[connection.id],
+            decision_paths=decision_paths,
+            binding_ids=(MVAUComputeBinding.RTL_SOFTVEC.value,),
+        )
+        for connection in connections
+    )
+    return (
+        components,
+        interfaces,
+        controls,
+        connections,
+        component_associations + interface_associations + connection_associations,
+    )
 
 
 def _network_edge(network: DataflowNetwork, source: RegionEndpoint, sink: RegionEndpoint) -> str:
@@ -540,6 +695,7 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                 ),
             )
         )
+    origin = mvau_elaboration_origin(resolved)
     target_part = cast(str, _required_problem(resolved, MVAUDataflowOpPaths.TARGET_FPGA_PART))
     clock_period = cast(
         float, _required_problem(resolved, MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS)
@@ -580,22 +736,6 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                     ),
                 )
             )
-        cyclic_selection = resolved.engine.query_property(
-            resolved.point, CyclicParameterKernelPaths.BINDING_SELECTION
-        )
-        if not isinstance(cyclic_selection, Decided) or not isinstance(
-            cyclic_selection.value, CyclicParameterBindingSelection
-        ):
-            findings = () if isinstance(cyclic_selection, Decided) else cyclic_selection.findings
-            raise MVAUElaborationError(
-                findings
-                or (
-                    _finding(
-                        "mvau-elaboration-delivery-selection-missing",
-                        "cyclic binding-selection metadata must resolve before elaboration",
-                    ),
-                )
-            )
         compute_region_id = "compute"
         compute_region = result.network.node(compute_region_id).region
         network = result.network
@@ -625,7 +765,7 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
     else:
         delivery_region = network.node("delivery").region
         delivery_port = delivery_region.output_interface("weight").port
-        delivery_id = f"{source_id}.delivery.memstream"
+        delivery_id = f"{source_id}.delivery.wrapper"
         ram_style = _required_assignment(resolved, CyclicParameterKernelPaths.RAM_STYLE)
         pumped_memory = cast(
             bool, _required_assignment(resolved, CyclicParameterKernelPaths.PUMPED_MEMORY)
@@ -638,12 +778,20 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
         )
         delivery_component = MVAUPhysicalComponent(
             delivery_id,
-            "finn-rtllib.memstream.memstream",
+            "finn.rtl.memstream.generated_wrapper",
             parameters=(
+                (
+                    "DEPTH",
+                    delivery_port.operand.position_count
+                    // delivery_port.beat_sequence.elements_per_beat,
+                ),
+                ("INIT_FILE", "memblock.dat" if initializer_available else ""),
+                ("INITIALIZER_AVAILABLE", initializer_available),
                 ("PUMPED_MEMORY", pumped_memory),
                 ("RAM_STYLE", cast(Enum, ram_style).value),
                 ("RUNTIME_WRITABLE", runtime_writable),
-                ("INITIALIZER_AVAILABLE", initializer_available),
+                ("SETS", 1),
+                ("WIDTH", _padded_width(delivery_port)),
             ),
         )
         delivery_interface = _numeric_interface(
@@ -652,7 +800,9 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
             MVAUPhysicalDirection.OUTPUT,
             delivery_port,
             "delivery",
-            "m_axis_0",
+            "m_axis_0_tdata",
+            "m_axis_0_tvalid",
+            "m_axis_0_tready",
         )
         delivery_controls: tuple[MVAUPhysicalControlInterface, ...] = (
             MVAUPhysicalControlInterface(
@@ -662,24 +812,26 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                 f"{delivery_id}.reset", delivery_id, MVAUPhysicalControlKind.RESET, "ap_rst_n"
             ),
         )
-        if pumped_memory:
-            delivery_controls += (
-                MVAUPhysicalControlInterface(
-                    f"{delivery_id}.clock2x",
-                    delivery_id,
-                    MVAUPhysicalControlKind.CLOCK,
-                    "ap_clk2x",
-                ),
-            )
-        if runtime_writable:
-            delivery_controls += (
-                MVAUPhysicalControlInterface(
-                    f"{delivery_id}.configuration",
-                    delivery_id,
-                    MVAUPhysicalControlKind.CONFIGURATION,
-                    "s_axilite",
-                ),
-            )
+        delivery_controls += (
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.clock2x",
+                delivery_id,
+                MVAUPhysicalControlKind.CLOCK,
+                "ap_clk2x",
+            ),
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.configuration",
+                delivery_id,
+                MVAUPhysicalControlKind.CONFIGURATION,
+                "s_axilite",
+            ),
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.set_selector",
+                delivery_id,
+                MVAUPhysicalControlKind.CONFIGURATION,
+                "s_axis_0",
+            ),
+        )
         semantic_edge_id = _network_edge(
             network,
             RegionEndpoint("delivery", "weight"),
@@ -751,6 +903,7 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
         )
     return MVAUPhysicalElaboration(
         source_id,
+        origin,
         result,
         target_part,
         clock_period,
@@ -765,6 +918,7 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
 
 __all__ = [
     "MVAUElaborationError",
+    "MVAUElaborationOrigin",
     "MVAUPhysicalAssociation",
     "MVAUPhysicalBoundary",
     "MVAUPhysicalComponent",
@@ -774,6 +928,8 @@ __all__ = [
     "MVAUPhysicalDirection",
     "MVAUPhysicalElaboration",
     "MVAUPhysicalNumericInterface",
+    "MVAUPhysicalNumericProtocol",
     "MVAUSemanticPortRef",
     "elaborate_mvau_rtl_softvec",
+    "mvau_elaboration_origin",
 ]

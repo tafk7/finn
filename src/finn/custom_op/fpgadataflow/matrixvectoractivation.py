@@ -859,7 +859,10 @@ class MVAU(HWCustomOp):
                     weight_filename_rtl = "{}/memblock.dat".format(code_gen_dir)
                     self.make_weight_file(weights, "decoupled_verilog_dat", weight_filename_rtl)
         else:
-            if mem_mode not in ["external", "dynamic", "external_mem"]:
+            runtime_writable = self.get_nodeattr("runtime_writeable_weights")
+            if mem_mode not in ["external", "dynamic", "external_mem"] and not (
+                mem_mode == "internal_decoupled" and runtime_writable
+            ):
                 raise Exception(
                     """Invalid setting found, weight values not initialized,
                     but neither "external" case nor MLO."""

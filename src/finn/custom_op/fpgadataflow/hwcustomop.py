@@ -329,7 +329,9 @@ class HWCustomOp(CustomOp):
 
             ram_style = self.get_nodeattr("ram_style")
             init_file = code_gen_dir + "/memblock.dat"
-            if ram_style == "ultra" and not is_versal(fpgapart):
+            if not os.path.isfile(init_file) or (
+                ram_style == "ultra" and not is_versal(fpgapart)
+            ):
                 init_file = ""
             code_gen_dict = {
                 "$MODULE_NAME$": [mname],

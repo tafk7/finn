@@ -7,11 +7,15 @@ from collections import Counter
 
 import pytest
 
+from finn.dataflow.design import Decided, Engine
+from finn.dataflow.kernel import instantiate_kernel
 from finn.dataflow.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port,
     construct_standard_mvau_weight_port,
 )
 from finn.dataflow.mvau.weight_adapter import (
+    MVAU_WEIGHT_ADAPTER_KERNEL,
+    MVAUWeightAdapterKernelPaths,
     construct_weight_sequence_adapter_region,
     weight_sequence_adapter_applicable,
 )
@@ -136,3 +140,38 @@ def test_adapter_rejects_different_tensor_images() -> None:
     assert not weight_sequence_adapter_applicable(full, invalid)
     with pytest.raises(ValueError):
         construct_weight_sequence_adapter_region(full, invalid)
+
+
+def test_adapter_is_a_bindingless_reusable_kernel_definition() -> None:
+    full, chunked = _ports()
+    engine = Engine()
+    space = engine.validate(MVAU_WEIGHT_ADAPTER_KERNEL.spec)
+    point = engine.start(
+        space,
+        {
+            MVAUWeightAdapterKernelPaths.SOURCE_PORT: full,
+            MVAUWeightAdapterKernelPaths.SINK_PORT: chunked,
+        },
+    )
+
+    instance = instantiate_kernel(engine, MVAU_WEIGHT_ADAPTER_KERNEL, point)
+
+    assert isinstance(instance, Decided)
+    assert instance.value.definition_id == "mvau.weight_sequence_adapter"
+    assert instance.value.binding_id is None
+    assert instance.value.binding_selection is None
+    assert not validate_region(instance.value.region)
+
+    placement = MVAU_WEIGHT_ADAPTER_KERNEL.place("adapter0", "scope.adapter0")
+    placed_space = engine.validate(placement.spec)
+    placed = engine.start(
+        placed_space,
+        {
+            placement.path(MVAUWeightAdapterKernelPaths.SOURCE_PORT): full,
+            placement.path(MVAUWeightAdapterKernelPaths.SINK_PORT): chunked,
+        },
+    )
+    placed_instance = instantiate_kernel(engine, placement, placed)
+    assert isinstance(placed_instance, Decided)
+    assert placed_instance.value.instance_id == "adapter0"
+    assert placed_instance.value.region == instance.value.region

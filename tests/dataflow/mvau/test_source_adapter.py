@@ -431,7 +431,7 @@ def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> Non
     assert all(path in restored.point.design_space.decisions for path in restored.point.assignments)
 
 
-@pytest.mark.parametrize("changed_fact", ["shape", "datatype", "target"])
+@pytest.mark.parametrize("changed_fact", ["shape", "datatype", "weights", "target"])
 def test_reconstitution_rejects_each_relevant_problem_change(changed_fact: str) -> None:
     model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
     context = _context()
@@ -444,6 +444,8 @@ def test_reconstitution_rejects_each_relevant_problem_change(changed_fact: str) 
         changed.set_tensor_shape("output", [2, 6])
     elif changed_fact == "datatype":
         changed.set_tensor_datatype("activation", DataType["INT4"])
+    elif changed_fact == "weights":
+        changed.set_initializer("weights", np.zeros((4, 6), dtype=np.float32))
     else:
         changed_context = _context(VERSAL_PART)
 

@@ -1,15 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Named realizability evidence for the emitted RTL soft-vector MVAU slice."""
+"""Emitted-artifact evidence for the FINN RTL soft-vector MVAU slice."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
+import re
 from typing import cast
 
-from finn.dataflow.mvau.artifacts import MVAUBuiltRTLArtifact
+import numpy as np  # type: ignore[import-not-found]
+
+from finn.dataflow.mvau.artifacts import MVAUBuiltRTLArtifact, MVAURTLSimulationObservation
 from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
 from finn.dataflow.mvau.elaboration import MVAUPhysicalElaboration, MVAUSemanticPortRef
 from finn.dataflow.mvau.source import MVAUResolvedDesign
@@ -19,7 +23,7 @@ from finn.dataflow.region import BeatSequence, Coordinate, DataflowRegion, Input
 
 @dataclass(frozen=True, order=True)
 class MVAURequirementServiceAssignment:
-    """One declared requirement occurrence and the beat slot that serves it."""
+    """One declared requirement occurrence and its semantic source beat slot."""
 
     iteration: Coordinate
     operand_position: Coordinate
@@ -29,21 +33,22 @@ class MVAURequirementServiceAssignment:
 
 
 @dataclass(frozen=True)
-class MVAUInputServiceEvidence:
-    """Exact service mapping for one input of the covered MVAU realization."""
+class MVAUInputCorrespondenceEvidence:
+    """Static correspondence between requirements and a selected boundary sequence."""
 
     region_id: str
     port_id: str
     source_kind: str
     source_sequence: BeatSequence
     assignments: tuple[MVAURequirementServiceAssignment, ...]
-    replay_component_id: str | None
+    implementation_parameters: tuple[tuple[str, int], ...]
+    emitted_configuration_match: bool
     complete: bool
 
 
 @dataclass(frozen=True)
-class MVAUOutputEvidence:
-    """Exact final-availability and boundary-order evidence."""
+class MVAUOutputCorrespondenceEvidence:
+    """Static availability and generated-interface sequence correspondence."""
 
     region_id: str
     availability: tuple[tuple[Coordinate, Coordinate], ...]
@@ -55,7 +60,7 @@ class MVAUOutputEvidence:
 
 @dataclass(frozen=True)
 class MVAUAssociationEvidence:
-    """Coverage of semantic ports and edges by physical associations."""
+    """Coverage of semantic identities by the physical representation."""
 
     required_ports: tuple[MVAUSemanticPortRef, ...]
     missing_ports: tuple[MVAUSemanticPortRef, ...]
@@ -77,35 +82,71 @@ class MVAUAssociationEvidence:
 
 
 @dataclass(frozen=True)
+class MVAUGeneratedArtifactEvidence:
+    """Checks against generated wrappers, parameters, wiring, and weight data."""
+
+    compute_parameters: tuple[tuple[str, int], ...]
+    compute_parameters_match: bool
+    compute_wiring_match: bool
+    replay_instantiation_present: bool
+    memstream_parameters: tuple[tuple[str, int | str], ...] = ()
+    memstream_parameters_match: bool = True
+    initialized_weight_sequence_match: bool | None = None
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.compute_parameters_match
+            and self.compute_wiring_match
+            and self.replay_instantiation_present
+            and self.memstream_parameters_match
+            and self.initialized_weight_sequence_match is not False
+        )
+
+
+@dataclass(frozen=True)
 class MVAURTLCycleEvidence:
-    """Configuration-qualified empirical cycle observation."""
+    """A configuration-qualified observation, not a universal latency model."""
 
     oracle: str
     configuration: tuple[tuple[str, bool | float | int | str], ...]
     analytical_work_cycles: int
     measured_cycles: int
-    absolute_difference: int
-    within_legacy_tolerance: bool
+    measured_overhead_cycles: int
 
 
 @dataclass(frozen=True)
 class MVAURTLSoftvecEvidence:
-    """Evidence bundle scoped only to the emitted FINN RTL soft-vector path."""
+    """Evidence scoped only to the emitted FINN RTL soft-vector implementation."""
 
-    activation_service: MVAUInputServiceEvidence
-    weight_service: MVAUInputServiceEvidence
-    output: MVAUOutputEvidence
+    activation_service: MVAUInputCorrespondenceEvidence
+    weight_service: MVAUInputCorrespondenceEvidence
+    output: MVAUOutputCorrespondenceEvidence
     associations: MVAUAssociationEvidence
+    generated_artifact: MVAUGeneratedArtifactEvidence
+    simulation: MVAURTLSimulationObservation | None = None
     cycles: MVAURTLCycleEvidence | None = None
 
     @property
-    def semantic_contract_covered(self) -> bool:
+    def static_correspondence_complete(self) -> bool:
         return (
             self.activation_service.complete
+            and self.activation_service.emitted_configuration_match
             and self.weight_service.complete
             and self.output.every_final_output_available
             and self.output.field_and_beat_order_preserved
             and self.associations.complete
+            and self.generated_artifact.complete
+        )
+
+    @property
+    def emitted_realization_observed(self) -> bool:
+        return (
+            self.static_correspondence_complete
+            and self.simulation is not None
+            and self.simulation.numerical_match
+            and self.simulation.output_order_match
+            and self.cycles is not None
         )
 
 
@@ -117,12 +158,19 @@ def _slots(sequence: BeatSequence) -> dict[Coordinate, tuple[tuple[int, int], ..
     return {position: tuple(values) for position, values in slots.items()}
 
 
+def _integer_parameter(parameters: tuple[tuple[str, object], ...], name: str) -> int:
+    value = dict(parameters)[name]
+    if type(value) is not int:
+        raise TypeError(f"physical parameter {name} must be an integer")
+    return value
+
+
 def _activation_service(
     source_scope_id: str,
     region_id: str,
     interface: InputInterface,
     elaboration: MVAUPhysicalElaboration,
-) -> MVAUInputServiceEvidence:
+) -> MVAUInputCorrespondenceEvidence:
     slots = _slots(interface.port.beat_sequence)
     assignments = []
     complete = True
@@ -135,18 +183,29 @@ def _activation_service(
         assignments.append(
             MVAURequirementServiceAssignment(iteration, position, multiplicity, ordinal, field)
         )
-    replay_component_id = f"{source_scope_id}.compute.activation_replay"
-    replay_present = any(
-        component.id == replay_component_id for component in elaboration.components
+    shell = elaboration.component(f"{source_scope_id}.compute.stream_shell")
+    expected = (
+        (
+            "LEN",
+            interface.port.operand.shape[-1] // interface.port.beat_sequence.elements_per_beat,
+        ),
+        ("REP", max(1, len(assignments) // interface.port.operand.position_count)),
+        ("W", interface.port.logical_beat_bits),
     )
-    return MVAUInputServiceEvidence(
+    actual = (
+        ("LEN", _integer_parameter(shell.parameters, "ACTIVATION_REPLAY_LEN")),
+        ("REP", _integer_parameter(shell.parameters, "ACTIVATION_REPLAY_REP")),
+        ("W", _integer_parameter(shell.parameters, "ACTIVATION_REPLAY_WIDTH")),
+    )
+    return MVAUInputCorrespondenceEvidence(
         region_id,
         interface.port.id,
-        "activation_boundary_with_local_replay",
+        "activation_boundary_with_declared_replay",
         interface.port.beat_sequence,
         tuple(assignments),
-        replay_component_id,
-        replay_present and complete and len(assignments) == interface.requirements.occurrence_count,
+        actual,
+        actual == expected,
+        complete and len(assignments) == interface.requirements.occurrence_count,
     )
 
 
@@ -155,7 +214,7 @@ def _weight_service(
     interface: InputInterface,
     source_sequence: BeatSequence,
     source_kind: str,
-) -> MVAUInputServiceEvidence:
+) -> MVAUInputCorrespondenceEvidence:
     slots = _slots(source_sequence)
     next_slot: dict[Coordinate, int] = defaultdict(int)
     assignments = []
@@ -171,13 +230,14 @@ def _weight_service(
         assignments.append(
             MVAURequirementServiceAssignment(iteration, position, multiplicity, ordinal, field)
         )
-    return MVAUInputServiceEvidence(
+    return MVAUInputCorrespondenceEvidence(
         region_id,
         interface.port.id,
         source_kind,
         source_sequence,
         tuple(assignments),
-        None,
+        (),
+        True,
         complete and len(assignments) == interface.requirements.occurrence_count,
     )
 
@@ -192,12 +252,12 @@ def _output_evidence(
     region_id: str,
     region: DataflowRegion,
     artifact: MVAUBuiltRTLArtifact,
-) -> MVAUOutputEvidence:
+) -> MVAUOutputCorrespondenceEvidence:
     output = region.output_interface("output")
     artifact_output = next(
         item for item in artifact.requirements.interfaces if item.interface_name == "out0_V"
     )
-    return MVAUOutputEvidence(
+    return MVAUOutputCorrespondenceEvidence(
         region_id,
         output.availability.entries,
         output.port.beat_sequence,
@@ -264,12 +324,130 @@ def _association_evidence(
     )
 
 
+def _generated_file(artifact: MVAUBuiltRTLArtifact, output_id: str) -> Path:
+    requirement = next(
+        item for item in artifact.requirements.generated_outputs if item.id == output_id
+    )
+    return Path(artifact.output_directory) / requirement.relative_path
+
+
+def _source_dependency(artifact: MVAUBuiltRTLArtifact, source_id: str) -> Path:
+    requirement = next(
+        item for item in artifact.requirements.source_dependencies if item.id == source_id
+    )
+    return Path(artifact.output_directory) / "declared_sources" / requirement.relative_path
+
+
+def _verilog_parameter(text: str, name: str) -> str | None:
+    match = re.search(rf"parameter\s+{re.escape(name)}\s*=\s*([^,\n]+)", text)
+    return None if match is None else match.group(1).strip().strip('"')
+
+
+def _generated_artifact_evidence(
+    resolved: MVAUResolvedDesign,
+    elaboration: MVAUPhysicalElaboration,
+    artifact: MVAUBuiltRTLArtifact,
+) -> MVAUGeneratedArtifactEvidence:
+    wrapper_text = _generated_file(artifact, "compute.wrapper").read_text()
+    shell_text = _source_dependency(artifact, "compute.library.1").read_text()
+    wrapper = elaboration.component(
+        f"{resolved.result.source_association.source_node_id}.compute.wrapper"
+    )
+    parameter_names = {
+        "ACCU_WIDTH",
+        "ACTIVATION_WIDTH",
+        "MH",
+        "MW",
+        "PE",
+        "PUMPED_COMPUTE",
+        "SEGMENTLEN",
+        "SIMD",
+        "VERSION",
+        "WEIGHT_WIDTH",
+    }
+    expected_compute = tuple(
+        (name, int(value)) for name, value in wrapper.parameters if name in parameter_names
+    )
+    observed_compute = tuple(
+        (name, int(float(cast(str, _verilog_parameter(wrapper_text, name)))))
+        for name, _value in expected_compute
+        if _verilog_parameter(wrapper_text, name) is not None
+    )
+    compute_wiring = all(
+        fragment in wrapper_text
+        for fragment in (
+            ".s_axis_weights_tdata(in1_V_TDATA)",
+            ".s_axis_input_tdata(in0_V_TDATA)",
+            ".m_axis_output_tdata(out0_V_TDATA)",
+        )
+    )
+    replay_instantiation = all(
+        fragment in shell_text
+        for fragment in (
+            "replay_buffer #(.LEN(SF)",
+            ".REP(IS_MVU ? NF : 1)",
+            ".W($bits(mvu_flatin_t))",
+        )
+    )
+    memstream_parameters: tuple[tuple[str, int | str], ...] = ()
+    memstream_parameters_match = True
+    initialized_weight_sequence_match = None
+    if isinstance(resolved.result, NetworkRef):
+        delivery = elaboration.component(
+            f"{resolved.result.source_association.source_node_id}.delivery.wrapper"
+        )
+        memstream_names = {"DEPTH", "INIT_FILE", "PUMPED_MEMORY", "RAM_STYLE", "SETS", "WIDTH"}
+        expected_memstream = tuple(
+            (name, int(value) if type(value) is bool else cast(int | str, value))
+            for name, value in delivery.parameters
+            if name in memstream_names
+        )
+        memstream_text = _generated_file(artifact, "delivery.wrapper").read_text()
+        observed_values: list[tuple[str, int | str]] = []
+        for name, expected in expected_memstream:
+            raw = _verilog_parameter(memstream_text, name)
+            if raw is None:
+                continue
+            observed = int(raw) if type(expected) is int else raw
+            if name == "INIT_FILE":
+                observed = Path(cast(str, observed)).name
+            observed_values.append((name, observed))
+        memstream_parameters = tuple(observed_values)
+        memstream_parameters_match = memstream_parameters == expected_memstream
+        weight_data = artifact.requirements.weight_initializer
+        if weight_data is not None:
+            initializer_path = _generated_file(artifact, "delivery.simulation_weights")
+            sequence = (
+                resolved.result.network.node("delivery")
+                .region.output_interface("weight")
+                .port.beat_sequence
+            )
+            stored = np.load(initializer_path).reshape(-1, sequence.elements_per_beat)
+            repeats = sequence.beat_count // len(stored)
+            observed_sequence = np.tile(stored, (repeats, 1))
+            source_weights = weight_data.as_array()
+            expected_sequence = np.asarray(
+                [[source_weights[mw, mh] for mh, mw in beat] for beat in sequence.beats],
+                dtype=np.float32,
+            )
+            initialized_weight_sequence_match = np.array_equal(observed_sequence, expected_sequence)
+    return MVAUGeneratedArtifactEvidence(
+        observed_compute,
+        observed_compute == expected_compute,
+        compute_wiring,
+        replay_instantiation,
+        memstream_parameters,
+        memstream_parameters_match,
+        initialized_weight_sequence_match,
+    )
+
+
 def collect_mvau_rtl_softvec_evidence(
     resolved: MVAUResolvedDesign,
     elaboration: MVAUPhysicalElaboration,
     artifact: MVAUBuiltRTLArtifact,
     *,
-    measured_cycles: int | None = None,
+    simulation: MVAURTLSimulationObservation | None = None,
 ) -> MVAURTLSoftvecEvidence:
     """Collect evidence only for the emitted standard RTL soft-vector implementation."""
     if (
@@ -300,7 +478,7 @@ def collect_mvau_rtl_softvec_evidence(
         weight_source,
     )
     cycle_evidence = None
-    if measured_cycles is not None:
+    if simulation is not None:
         repetitions = cast(int, resolved.point.problem[MVAUComputeKernelPaths.REPETITIONS])
         matrix_width = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_WIDTH])
         matrix_height = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_HEIGHT])
@@ -317,28 +495,29 @@ def collect_mvau_rtl_softvec_evidence(
             ("repetitions", repetitions),
             ("simd", simd),
         )
-        configuration = tuple(sorted(unsorted_configuration))
         cycle_evidence = MVAURTLCycleEvidence(
-            "finn.xsi:MVAU_rtl.cycles_rtlsim",
-            configuration,
+            f"{simulation.oracle}:cycles_rtlsim",
+            tuple(sorted(unsorted_configuration)),
             analytical,
-            measured_cycles,
-            abs(measured_cycles - analytical),
-            abs(measured_cycles - analytical) <= 15,
+            simulation.measured_cycles,
+            simulation.measured_cycles - analytical,
         )
     return MVAURTLSoftvecEvidence(
         activation_evidence,
         weight_evidence,
         _output_evidence(compute_region_id, region, artifact),
         _association_evidence(resolved, elaboration, compute_region_id, region),
+        _generated_artifact_evidence(resolved, elaboration, artifact),
+        simulation,
         cycle_evidence,
     )
 
 
 __all__ = [
     "MVAUAssociationEvidence",
-    "MVAUInputServiceEvidence",
-    "MVAUOutputEvidence",
+    "MVAUGeneratedArtifactEvidence",
+    "MVAUInputCorrespondenceEvidence",
+    "MVAUOutputCorrespondenceEvidence",
     "MVAURequirementServiceAssignment",
     "MVAURTLCycleEvidence",
     "MVAURTLSoftvecEvidence",

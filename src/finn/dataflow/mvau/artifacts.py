@@ -12,6 +12,7 @@ from enum import Enum
 import importlib
 import os
 from pathlib import Path
+import shutil
 from typing import Iterator, cast
 
 import numpy as np  # type: ignore[import-not-found]
@@ -21,13 +22,18 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
-from finn.dataflow.design import Finding, FindingKind, QualifiedPath
+from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
 from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
 from finn.dataflow.mvau.elaboration import (
     MVAUPhysicalElaboration,
     MVAUPhysicalNumericInterface,
+    mvau_elaboration_origin,
 )
-from finn.dataflow.mvau.source import MVAUModelAccessor, MVAUResolvedDesign
+from finn.dataflow.mvau.source import (
+    MVAUModelAccessor,
+    MVAUResolvedDesign,
+    tensor_value_fingerprint,
+)
 from finn.dataflow.ops.mvau import NetworkRef, RegionRef
 from finn.dataflow.parameters.cyclic.definition import CyclicParameterKernelPaths
 from finn.dataflow.region import BeatSequence, NumericElementType
@@ -35,9 +41,10 @@ from finn.dataflow.region import BeatSequence, NumericElementType
 _ARTIFACT_PATH = QualifiedPath("artifact.mvau.rtl_softvec")
 
 
-class MVAUSourceFileOrigin(str, Enum):
-    GENERATED = "generated"
-    FINN_RTL_LIBRARY = "finn_rtl_library"
+class MVAUWeightPayloadKind(str, Enum):
+    INITIALIZER = "initializer"
+    EXTERNAL_RUNTIME = "external_runtime"
+    RUNTIME_WRITABLE_LOCAL_STATE = "runtime_writable_local_state"
 
 
 @dataclass(frozen=True)
@@ -54,8 +61,14 @@ class MVAUTensorData:
 @dataclass(frozen=True)
 class MVAURTLSourceRequirement:
     id: str
-    origin: MVAUSourceFileOrigin
-    path: str
+    source_path: str
+    relative_path: str
+
+
+@dataclass(frozen=True)
+class MVAURTLGeneratedOutput:
+    id: str
+    relative_path: str
 
 
 @dataclass(frozen=True)
@@ -91,10 +104,12 @@ class MVAURTLArtifactRequirements:
     weight_datatype: str
     accumulator_datatype: str
     output_datatype: str
-    weight_initializer: MVAUTensorData
+    weight_payload_kind: MVAUWeightPayloadKind
+    weight_initializer: MVAUTensorData | None
     parameters: tuple[tuple[str, bool | int | str], ...]
     interfaces: tuple[MVAURTLInterfaceRequirement, ...]
-    source_manifest: tuple[MVAURTLSourceRequirement, ...]
+    source_dependencies: tuple[MVAURTLSourceRequirement, ...]
+    generated_outputs: tuple[MVAURTLGeneratedOutput, ...]
     elaboration: MVAUPhysicalElaboration
 
     def __post_init__(self) -> None:
@@ -103,7 +118,14 @@ class MVAURTLArtifactRequirements:
             self, "interfaces", tuple(sorted(self.interfaces, key=lambda item: item.id))
         )
         object.__setattr__(
-            self, "source_manifest", tuple(sorted(self.source_manifest, key=lambda item: item.id))
+            self,
+            "source_dependencies",
+            tuple(sorted(self.source_dependencies, key=lambda item: item.id)),
+        )
+        object.__setattr__(
+            self,
+            "generated_outputs",
+            tuple(sorted(self.generated_outputs, key=lambda item: item.id)),
         )
 
 
@@ -114,7 +136,29 @@ class MVAUBuiltRTLArtifact:
     requirements: MVAURTLArtifactRequirements
     output_directory: str
     source_files: tuple[str, ...]
+    generated_files: tuple[str, ...]
     model: ModelWrapper
+
+
+@dataclass(frozen=True)
+class MVAURTLSimulationObservation:
+    """Numerical and transaction-order observations from one XSIM run."""
+
+    oracle: str
+    output_shape: tuple[int, ...]
+    output_values: tuple[float, ...]
+    expected_values: tuple[float, ...]
+    output_transactions: tuple[tuple[float, ...], ...]
+    expected_transactions: tuple[tuple[float, ...], ...]
+    measured_cycles: int
+
+    @property
+    def numerical_match(self) -> bool:
+        return self.output_values == self.expected_values
+
+    @property
+    def output_order_match(self) -> bool:
+        return self.output_transactions == self.expected_transactions
 
 
 class MVAUArtifactError(ValueError):
@@ -127,6 +171,33 @@ class MVAUArtifactError(ValueError):
 
 def _finding(code: str, message: str, path: QualifiedPath = _ARTIFACT_PATH) -> Finding:
     return Finding(FindingKind.REJECTION, code, path, message)
+
+
+def _require_feasible(resolved: MVAUResolvedDesign, constraint_set: str) -> None:
+    assessment = resolved.engine.evaluate_constraint_set(resolved.point, constraint_set)
+    if assessment.verdict is True:
+        return
+    findings: list[Finding] = []
+    for path, answer in assessment.answers.items():
+        if isinstance(answer, Decided) and answer.value is False:
+            findings.append(
+                _finding(
+                    "mvau-artifact-constraint-violated",
+                    f"artifact construction requires feasible {constraint_set!r} constraints",
+                    path,
+                )
+            )
+        elif isinstance(answer, (Absent, Unresolved)):
+            findings.extend(answer.findings)
+    raise MVAUArtifactError(
+        tuple(findings)
+        or (
+            _finding(
+                "mvau-artifact-feasibility-incomplete",
+                f"artifact construction could not establish {constraint_set!r} feasibility",
+            ),
+        )
+    )
 
 
 def _datatype_name(element_type: NumericElementType) -> str:
@@ -188,20 +259,20 @@ def _interface_requirement(
     )
 
 
-def _source_manifest(
-    finn_root: Path, module_name: str, *, cyclic: bool
-) -> tuple[MVAURTLSourceRequirement, ...]:
+def _artifact_file_requirements(
+    finn_root: Path, module_name: str, *, cyclic: bool, initialized: bool
+) -> tuple[tuple[MVAURTLSourceRequirement, ...], tuple[MVAURTLGeneratedOutput, ...]]:
     sources = [
         MVAURTLSourceRequirement(
-            "compute.wrapper",
-            MVAUSourceFileOrigin.GENERATED,
-            f"{module_name}_wrapper.v",
+            "compute.template",
+            str(finn_root / "finn-rtllib" / "mvu" / "mvu_vvu_axi_wrapper.v"),
+            "finn-rtllib/mvu/mvu_vvu_axi_wrapper.v",
         ),
         *(
             MVAURTLSourceRequirement(
                 f"compute.library.{index}",
-                MVAUSourceFileOrigin.FINN_RTL_LIBRARY,
                 str(finn_root / "finn-rtllib" / "mvu" / filename),
+                f"finn-rtllib/mvu/{filename}",
             )
             for index, filename in enumerate(
                 (
@@ -215,31 +286,84 @@ def _source_manifest(
             )
         ),
     ]
+    outputs = [MVAURTLGeneratedOutput("compute.wrapper", f"{module_name}_wrapper.v")]
     if cyclic:
         sources.extend(
             (
                 MVAURTLSourceRequirement(
-                    "delivery.wrapper",
-                    MVAUSourceFileOrigin.GENERATED,
-                    f"{module_name}_memstream_wrapper.v",
+                    "delivery.template",
+                    str(
+                        finn_root
+                        / "finn-rtllib"
+                        / "memstream"
+                        / "hdl"
+                        / "memstream_wrapper_template.v"
+                    ),
+                    "finn-rtllib/memstream/hdl/memstream_wrapper_template.v",
                 ),
                 MVAURTLSourceRequirement(
                     "delivery.library.0",
-                    MVAUSourceFileOrigin.FINN_RTL_LIBRARY,
                     str(finn_root / "finn-rtllib" / "memstream" / "hdl" / "memstream.sv"),
+                    "finn-rtllib/memstream/hdl/memstream.sv",
                 ),
                 MVAURTLSourceRequirement(
                     "delivery.library.1",
-                    MVAUSourceFileOrigin.FINN_RTL_LIBRARY,
                     str(finn_root / "finn-rtllib" / "memstream" / "hdl" / "memstream_axi.sv"),
+                    "finn-rtllib/memstream/hdl/memstream_axi.sv",
+                ),
+                MVAURTLSourceRequirement(
+                    "delivery.library.2",
+                    str(finn_root / "finn-rtllib" / "axi" / "hdl" / "axilite.sv"),
+                    "finn-rtllib/axi/hdl/axilite.sv",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.simulation_control",
+                    str(finn_root / "finn-rtllib" / "sim" / "hdl" / "sim_ctrl.v"),
+                    "finn-rtllib/sim/hdl/sim_ctrl.v",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.axi_info.component",
+                    str(finn_root / "finn-rtllib" / "axi_info" / "component.xml"),
+                    "finn-rtllib/axi_info/component.xml",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.axi_info.hdl",
+                    str(finn_root / "finn-rtllib" / "axi_info" / "hdl" / "axi_info.sv"),
+                    "finn-rtllib/axi_info/hdl/axi_info.sv",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.axi_info.top",
+                    str(finn_root / "finn-rtllib" / "axi_info" / "hdl" / "axi_info_top.sv"),
+                    "finn-rtllib/axi_info/hdl/axi_info_top.sv",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.axi_info.xgui",
+                    str(finn_root / "finn-rtllib" / "axi_info" / "xgui" / "axi_info_top_v1_0.tcl"),
+                    "finn-rtllib/axi_info/xgui/axi_info_top_v1_0.tcl",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.driver.mdd",
+                    str(finn_root / "src" / "finn" / "qnn-data" / "mdd-data" / "finn_design.mdd"),
+                    "src/finn/qnn-data/mdd-data/finn_design.mdd",
+                ),
+                MVAURTLSourceRequirement(
+                    "stitched.driver.tcl",
+                    str(finn_root / "src" / "finn" / "qnn-data" / "mdd-data" / "finn_design.tcl"),
+                    "src/finn/qnn-data/mdd-data/finn_design.tcl",
                 ),
             )
         )
-    missing = tuple(
-        item.path
-        for item in sources
-        if item.origin is MVAUSourceFileOrigin.FINN_RTL_LIBRARY and not Path(item.path).is_file()
-    )
+        outputs.append(
+            MVAURTLGeneratedOutput("delivery.wrapper", f"{module_name}_memstream_wrapper.v")
+        )
+        if initialized:
+            outputs.extend(
+                (
+                    MVAURTLGeneratedOutput("delivery.initializer", "memblock.dat"),
+                    MVAURTLGeneratedOutput("delivery.simulation_weights", "input_1.npy"),
+                )
+            )
+    missing = tuple(item.source_path for item in sources if not Path(item.source_path).is_file())
     if missing:
         raise MVAUArtifactError(
             (
@@ -252,7 +376,7 @@ def _source_manifest(
                 ),
             )
         )
-    return tuple(sources)
+    return tuple(sources), tuple(outputs)
 
 
 def build_mvau_rtl_artifact_requirements(
@@ -274,6 +398,15 @@ def build_mvau_rtl_artifact_requirements(
                 ),
             )
         )
+    if elaboration.origin != mvau_elaboration_origin(resolved):
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-elaboration-origin-mismatch",
+                    "physical elaboration was not produced from this exact selected point",
+                ),
+            )
+        )
     if elaboration.semantic_result != resolved.result:
         raise MVAUArtifactError(
             (
@@ -283,6 +416,10 @@ def build_mvau_rtl_artifact_requirements(
                 ),
             )
         )
+    _require_feasible(resolved, "mvau_op_structural")
+    _require_feasible(resolved, "binding_feasibility")
+    if isinstance(resolved.result, NetworkRef):
+        _require_feasible(resolved, "cyclic_binding_feasibility")
     source = resolved.result.source_association
     nodes = tuple(node for node in model.graph.node if node.name == source.source_node_id)
     if len(nodes) != 1:
@@ -299,23 +436,49 @@ def build_mvau_rtl_artifact_requirements(
         raise MVAUArtifactError(
             (_finding("mvau-artifact-source-description-missing", "source description is absent"),)
         )
+    cyclic = isinstance(resolved.result, NetworkRef)
     initializer = model.get_initializer(description.weight_operand_id)
-    if initializer is None:
+    expected_initializer_fingerprint = resolved.point.problem.get(
+        MVAUComputeKernelPaths.WEIGHT_INITIALIZER_FINGERPRINT
+    )
+    actual_initializer_fingerprint = (
+        None if initializer is None else tensor_value_fingerprint(initializer)
+    )
+    if actual_initializer_fingerprint != expected_initializer_fingerprint:
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-weight-source-mismatch",
+                    "weight values do not match the source problem used for selection",
+                ),
+            )
+        )
+    runtime_writable = cast(
+        bool, resolved.point.problem.get(CyclicParameterKernelPaths.RUNTIME_WRITABLE, False)
+    )
+    if initializer is None and cyclic and not runtime_writable:
         raise MVAUArtifactError(
             (
                 Finding(
                     FindingKind.LIMITATION,
                     "mvau-artifact-weight-values-missing",
                     MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE,
-                    "the covered RTL build requires concrete weight values",
+                    "cyclic local-state delivery requires initialized or runtime-writable weights",
                 ),
             )
         )
-    weight_array = np.asarray(initializer, dtype=np.float32)
     matrix_width = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_WIDTH])
     matrix_height = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_HEIGHT])
     expected_weight_shape = (matrix_width, matrix_height)
-    if tuple(weight_array.shape) != expected_weight_shape:
+    weight_array = None if initializer is None else np.asarray(initializer, dtype=np.float32)
+    weight_payload_kind = (
+        MVAUWeightPayloadKind.INITIALIZER
+        if weight_array is not None
+        else MVAUWeightPayloadKind.RUNTIME_WRITABLE_LOCAL_STATE
+        if cyclic
+        else MVAUWeightPayloadKind.EXTERNAL_RUNTIME
+    )
+    if weight_array is not None and tuple(weight_array.shape) != expected_weight_shape:
         raise MVAUArtifactError(
             (_finding("mvau-artifact-weight-shape-mismatch", "weight values do not match MW x MH"),)
         )
@@ -346,13 +509,12 @@ def build_mvau_rtl_artifact_requirements(
         raise MVAUArtifactError(
             (_finding("mvau-artifact-parameter-type", "covered RTL parameters must be scalar"),)
         )
+    parameters += (("TH", 1),)
     if isinstance(resolved.result, RegionRef):
         compute_region = resolved.result.region
-        cyclic = False
         mem_mode = "external"
     else:
         compute_region = resolved.result.network.node("compute").region
-        cyclic = True
         mem_mode = "internal_decoupled"
     activation_port = compute_region.input_interface("activation").port
     weight_port = compute_region.input_interface("weight").port
@@ -377,7 +539,7 @@ def build_mvau_rtl_artifact_requirements(
     if cyclic:
         network = cast(NetworkRef, resolved.result).network
         delivery_port = network.node("delivery").region.output_interface("weight").port
-        delivery_id = f"{source.source_node_id}.delivery.memstream"
+        delivery_id = f"{source.source_node_id}.delivery.wrapper"
         interfaces += (
             _interface_requirement(
                 _find_interface(elaboration, delivery_id, ".weight"),
@@ -392,13 +554,16 @@ def build_mvau_rtl_artifact_requirements(
         )
     ram_style = resolved.point.assignments.get(CyclicParameterKernelPaths.RAM_STYLE)
     pumped_memory = resolved.point.assignments.get(CyclicParameterKernelPaths.PUMPED_MEMORY)
-    runtime_writable = resolved.point.problem.get(
-        CyclicParameterKernelPaths.RUNTIME_WRITABLE, False
-    )
     parameters += (
         ("RAM_STYLE", "auto" if ram_style is None else cast(Enum, ram_style).value),
-        ("RUNTIME_WRITABLE", cast(bool, runtime_writable)),
+        ("RUNTIME_WRITABLE", runtime_writable),
         ("PUMPED_MEMORY", False if pumped_memory is None else cast(bool, pumped_memory)),
+    )
+    source_dependencies, generated_outputs = _artifact_file_requirements(
+        root,
+        source.source_node_id,
+        cyclic=cyclic,
+        initialized=weight_array is not None,
     )
     return MVAURTLArtifactRequirements(
         source.source_node_id,
@@ -417,10 +582,16 @@ def build_mvau_rtl_artifact_requirements(
         _datatype_name(weight_type),
         _datatype_name(accumulator_type),
         _datatype_name(output_type),
-        MVAUTensorData(expected_weight_shape, tuple(float(value) for value in weight_array.flat)),
+        weight_payload_kind,
+        None
+        if weight_array is None
+        else MVAUTensorData(
+            expected_weight_shape, tuple(float(value) for value in weight_array.flat)
+        ),
         parameters,
         interfaces,
-        _source_manifest(root, source.source_node_id, cyclic=cyclic),
+        source_dependencies,
+        generated_outputs,
         elaboration,
     )
 
@@ -486,11 +657,54 @@ def _materialize_model(requirements: MVAURTLArtifactRequirements) -> ModelWrappe
     )
     model.set_tensor_datatype(requirements.weight_tensor_id, DataType[requirements.weight_datatype])
     model.set_tensor_datatype(requirements.output_tensor_id, DataType[requirements.output_datatype])
-    if requirements.mem_mode == "internal_decoupled":
+    if (
+        requirements.mem_mode == "internal_decoupled"
+        and requirements.weight_initializer is not None
+    ):
         model.set_initializer(
             requirements.weight_tensor_id, requirements.weight_initializer.as_array()
         )
     return model
+
+
+def _stage_source_dependencies(
+    requirements: MVAURTLArtifactRequirements, staging_root: Path
+) -> tuple[str, ...]:
+    expected_sources, expected_outputs = _artifact_file_requirements(
+        Path(requirements.finn_root),
+        requirements.top_module_name,
+        cyclic=requirements.mem_mode == "internal_decoupled",
+        initialized=requirements.weight_initializer is not None,
+    )
+    expected_source_shape = tuple(
+        (item.id, item.source_path, item.relative_path)
+        for item in sorted(expected_sources, key=lambda item: item.id)
+    )
+    actual_source_shape = tuple(
+        (item.id, item.source_path, item.relative_path) for item in requirements.source_dependencies
+    )
+    expected_output_shape = tuple(
+        (item.id, item.relative_path) for item in sorted(expected_outputs, key=lambda item: item.id)
+    )
+    actual_output_shape = tuple(
+        (item.id, item.relative_path) for item in requirements.generated_outputs
+    )
+    if actual_source_shape != expected_source_shape or actual_output_shape != expected_output_shape:
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-file-requirements-incomplete",
+                    "source dependencies and generated outputs must match the covered builder",
+                ),
+            )
+        )
+    staged = []
+    for dependency in requirements.source_dependencies:
+        destination = staging_root / dependency.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dependency.source_path, destination)
+        staged.append(str(destination))
+    return tuple(staged)
 
 
 @contextmanager
@@ -515,10 +729,13 @@ def build_mvau_rtl_artifact(
     """Drive the existing RTL generator from requirements, not an ambient graph."""
     output = Path(output_directory).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    staged_root = output / "declared_sources"
+    source_files = _stage_source_dependencies(requirements, staged_root)
     model = _materialize_model(requirements)
     node = model.graph.node[0]
     with _declared_finn_root(requirements.finn_root):
         operation = getCustomOp(node)
+    with _declared_finn_root(str(staged_root)):
         operation.set_nodeattr("code_gen_dir_ipgen", str(output))
         operation.set_nodeattr("exec_mode", "rtlsim")
         operation.generate_hdl(
@@ -528,11 +745,10 @@ def build_mvau_rtl_artifact(
         )
         if prepare_rtlsim:
             operation.prepare_rtlsim(behav=True)
-    source_files = tuple(
-        str(output / item.path) if item.origin is MVAUSourceFileOrigin.GENERATED else item.path
-        for item in requirements.source_manifest
+    generated_files = tuple(
+        str(output / item.relative_path) for item in requirements.generated_outputs
     )
-    missing = tuple(path for path in source_files if not Path(path).is_file())
+    missing = tuple(path for path in generated_files if not Path(path).is_file())
     if missing:
         raise MVAUArtifactError(
             (
@@ -545,7 +761,7 @@ def build_mvau_rtl_artifact(
                 ),
             )
         )
-    return MVAUBuiltRTLArtifact(requirements, str(output), source_files, model)
+    return MVAUBuiltRTLArtifact(requirements, str(output), source_files, generated_files, model)
 
 
 def simulate_mvau_rtl_artifact(
@@ -559,8 +775,19 @@ def simulate_mvau_rtl_artifact(
     if mode not in {"cppsim", "rtlsim"}:
         raise ValueError("mode must be 'cppsim' or 'rtlsim'")
     requirements = artifact.requirements
+    if weights is None and requirements.weight_initializer is None:
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-runtime-weights-missing",
+                    "external delivery requires runtime weights when no initializer was captured",
+                ),
+            )
+        )
     selected_weights = (
-        requirements.weight_initializer.as_array() if weights is None else np.asarray(weights)
+        cast(MVAUTensorData, requirements.weight_initializer).as_array()
+        if weights is None
+        else np.asarray(weights)
     )
     context = {
         requirements.activation_tensor_id: np.asarray(activation, dtype=np.float32),
@@ -572,6 +799,68 @@ def simulate_mvau_rtl_artifact(
         operation.set_nodeattr("exec_mode", mode)
         operation.execute_node(context, artifact.model.graph)
     return cast(np.ndarray, context[requirements.output_tensor_id])
+
+
+def observe_mvau_rtl_artifact(
+    artifact: MVAUBuiltRTLArtifact,
+    activation: np.ndarray,
+    weights: np.ndarray | None = None,
+) -> MVAURTLSimulationObservation:
+    """Run XSIM and retain numerical output plus ordered output transactions."""
+    requirements = artifact.requirements
+    if weights is None and requirements.weight_initializer is None:
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-runtime-weights-missing",
+                    "an RTL observation requires concrete runtime weight values",
+                ),
+            )
+        )
+    selected_weights = (
+        cast(MVAUTensorData, requirements.weight_initializer).as_array()
+        if weights is None
+        else np.asarray(weights, dtype=np.float32)
+    )
+    activation_array = np.asarray(activation, dtype=np.float32)
+    output = simulate_mvau_rtl_artifact(
+        artifact,
+        activation_array,
+        selected_weights,
+        mode="rtlsim",
+    )
+    expected = np.matmul(activation_array, selected_weights).reshape(requirements.output_shape)
+    output_requirement = next(
+        item for item in requirements.interfaces if item.interface_name == "out0_V"
+    )
+    expected_matrix = expected.reshape(-1, requirements.output_shape[-1])
+    folded_output_path = Path(artifact.output_directory) / "output.npy"
+    if not folded_output_path.is_file():
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-output-transactions-missing",
+                    "RTL simulation did not emit its folded output transaction file",
+                ),
+            )
+        )
+    folded_output = np.load(folded_output_path).reshape(
+        -1, output_requirement.beat_sequence.elements_per_beat
+    )
+    output_transactions = tuple(tuple(float(value) for value in beat) for beat in folded_output)
+    expected_transactions = tuple(
+        tuple(float(expected_matrix[position]) for position in beat)
+        for beat in output_requirement.beat_sequence.beats
+    )
+    return MVAURTLSimulationObservation(
+        "finn.xsi:MVAU_rtl",
+        requirements.output_shape,
+        tuple(float(value) for value in output.flat),
+        tuple(float(value) for value in expected.flat),
+        output_transactions,
+        expected_transactions,
+        mvau_rtlsim_cycles(artifact),
+    )
 
 
 def simulate_mvau_cyclic_stitched_artifact(
@@ -589,8 +878,19 @@ def simulate_mvau_cyclic_stitched_artifact(
                 ),
             )
         )
+    if requirements.weight_initializer is None:
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-stitched-runtime-write-required",
+                    "stitched simulation needs a runtime AXI-lite write when no initializer exists",
+                ),
+            )
+        )
     build_root = Path(build_directory).resolve()
     build_root.mkdir(parents=True, exist_ok=True)
+    staged_root = build_root / "declared_sources"
+    _stage_source_dependencies(requirements, staged_root)
     model = _materialize_model(requirements)
     previous_build = os.environ.get("FINN_BUILD_DIR")
     os.environ["FINN_BUILD_DIR"] = str(build_root)
@@ -609,6 +909,7 @@ def simulate_mvau_cyclic_stitched_artifact(
                 "CreateStitchedIP",
             )
             onnx_exec = importlib.import_module("finn.core.onnx_exec")
+        with _declared_finn_root(str(staged_root)):
             model = model.transform(
                 prepare_ip(requirements.target_fpga_part, requirements.clock_period_ns)
             )
@@ -653,13 +954,16 @@ __all__ = [
     "MVAUArtifactError",
     "MVAUBuiltRTLArtifact",
     "MVAURTLArtifactRequirements",
+    "MVAURTLGeneratedOutput",
     "MVAURTLInterfaceRequirement",
+    "MVAURTLSimulationObservation",
     "MVAURTLSourceRequirement",
-    "MVAUSourceFileOrigin",
     "MVAUTensorData",
+    "MVAUWeightPayloadKind",
     "build_mvau_rtl_artifact",
     "build_mvau_rtl_artifact_requirements",
     "mvau_rtlsim_cycles",
+    "observe_mvau_rtl_artifact",
     "simulate_mvau_cyclic_stitched_artifact",
     "simulate_mvau_rtl_artifact",
 ]

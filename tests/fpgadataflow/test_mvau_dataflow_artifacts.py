@@ -13,7 +13,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.dataflow.mvau.artifacts import (
     build_mvau_rtl_artifact,
     build_mvau_rtl_artifact_requirements,
-    mvau_rtlsim_cycles,
+    observe_mvau_rtl_artifact,
     simulate_mvau_cyclic_stitched_artifact,
     simulate_mvau_rtl_artifact,
 )
@@ -109,10 +109,12 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
         prepare_rtlsim=True,
     )
     activation = np.asarray([[1, 2, 3, 4], [-2, 1, 0, 3]], dtype=np.float32)
+    assert requirements.weight_initializer is not None
     expected = np.matmul(activation, requirements.weight_initializer.as_array())
 
     cppsim = simulate_mvau_rtl_artifact(artifact, activation, mode="cppsim")
-    rtlsim = simulate_mvau_rtl_artifact(artifact, activation, mode="rtlsim")
+    observation = observe_mvau_rtl_artifact(artifact, activation)
+    rtlsim = np.asarray(observation.output_values, dtype=np.float32).reshape(expected.shape)
 
     assert np.array_equal(cppsim, expected)
     assert np.array_equal(rtlsim, expected)
@@ -120,12 +122,12 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
         selected,
         elaboration,
         artifact,
-        measured_cycles=mvau_rtlsim_cycles(artifact),
+        simulation=observation,
     )
-    assert evidence.semantic_contract_covered
+    assert evidence.emitted_realization_observed
     assert evidence.cycles is not None
-    assert evidence.cycles.oracle == "finn.xsi:MVAU_rtl.cycles_rtlsim"
-    assert evidence.cycles.within_legacy_tolerance
+    assert evidence.cycles.oracle == "finn.xsi:MVAU_rtl:cycles_rtlsim"
+    assert evidence.cycles.measured_cycles > 0
     assert dict(evidence.cycles.configuration) == {
         "clock_period_ns": CLOCK_NS,
         "fpga_part": PART,

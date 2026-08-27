@@ -51,7 +51,9 @@ from finn.dataflow.mvau.regions import (
     construct_standard_mvau_weight_port,
 )
 from finn.dataflow.mvau.weight_adapter import (
-    construct_weight_sequence_adapter_region,
+    MVAU_WEIGHT_ADAPTER_KERNEL,
+    MVAUWeightAdapterKernelPaths,
+    build_mvau_weight_adapter_kernel_spec,
     weight_sequence_adapter_applicable,
 )
 from finn.dataflow.network import (
@@ -218,7 +220,7 @@ class MVAUDataflowOpPaths:
 
     COMPUTE_WEIGHT_PORT = QualifiedPath("semantic.mvau.op.compute_weight_port")
     DELIVERY_WEIGHT_PORT = QualifiedPath("semantic.mvau.op.delivery_weight_port")
-    WEIGHT_ADAPTER_REGION = QualifiedPath("semantic.mvau.op.weight_adapter_region")
+    WEIGHT_ADAPTER_REGION = MVAUWeightAdapterKernelPaths.REGION
     SOURCE_ASSOCIATION = QualifiedPath("semantic.mvau.op.source_association")
     NETWORK = QualifiedPath("semantic.mvau.op.network")
     NETWORK_VALIDATION = QualifiedPath("semantic.mvau.op.network_validation")
@@ -564,25 +566,6 @@ def _adapter_family_supported(dependencies: DependencyView) -> bool:
         and compute_declaration is MVAURegionDeclaration.STANDARD_STREAMED
     )
     return same_base_tile and (full_to_chunked or chunked_to_full)
-
-
-def _derive_weight_adapter_region(dependencies: DependencyView) -> Answer[object]:
-    source = cast(Port, dependencies["delivery_weight_port"])
-    sink = cast(Port, dependencies["compute_weight_port"])
-    if not _adapter_family_supported(dependencies) or not weight_sequence_adapter_applicable(
-        source, sink
-    ):
-        return Absent(
-            (
-                Finding(
-                    FindingKind.REJECTION,
-                    "mvau-weight-adapter-not-applicable",
-                    MVAUDataflowOpPaths.WEIGHT_ADAPTER_REGION,
-                    "the first adapter covers only equal-base-tile full/chunked conversion",
-                ),
-            )
-        )
-    return Decided(construct_weight_sequence_adapter_region(source, sink))
 
 
 def _weight_connection_supported(dependencies: DependencyView) -> Answer[bool]:
@@ -937,6 +920,27 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
         "cyclic_model_structural",
         "cyclic_binding_feasibility",
     )
+    adapter_spec = build_mvau_weight_adapter_kernel_spec(
+        DependencyRef.property(
+            "source_port", MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT, _PORT_SEMANTICS
+        ),
+        DependencyRef.property(
+            "sink_port", MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT, _PORT_SEMANTICS
+        ),
+        problem_fields_required=False,
+    )
+    adapter_spec = gate_design_space_spec(adapter_spec, _ADAPTER_CONNECTION_APPLICABILITY)
+    adapter_definition = KernelDefinition(
+        MVAU_WEIGHT_ADAPTER_KERNEL.id,
+        adapter_spec,
+        MVAU_WEIGHT_ADAPTER_KERNEL.region_declarations,
+        (),
+        MVAUWeightAdapterKernelPaths.REGION,
+        None,
+        None,
+        "mvau_weight_adapter_structural",
+        None,
+    )
 
     source_description_ref = DependencyRef.problem(
         "source_description",
@@ -970,6 +974,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
         MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
         MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
         MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
+        MVAUWeightAdapterKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
     )
     artifact_constraints = tuple(
         dict.fromkeys(
@@ -1046,24 +1051,6 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
         properties=(
             compute_weight_port,
             delivery_weight_port,
-            DerivedProperty(
-                MVAUDataflowOpPaths.WEIGHT_ADAPTER_REGION,
-                _REGION_SEMANTICS,
-                EvaluatorSpec(
-                    (
-                        _DELIVERY_WEIGHT_PORT_REF,
-                        _COMPUTE_WEIGHT_PORT_REF,
-                        _DELIVERY_DECLARATION_REF,
-                        _REGION_DECLARATION_REF,
-                        _DELIVERY_PE_REF,
-                        _DELIVERY_SIMD_REF,
-                        _COMPUTE_PE_REF,
-                        _COMPUTE_SIMD_REF,
-                    ),
-                    _derive_weight_adapter_region,
-                ),
-                applies_if=_ADAPTER_CONNECTION_APPLICABILITY,
-            ),
             DerivedProperty(
                 MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
                 _SOURCE_ASSOCIATION_SEMANTICS,
@@ -1261,6 +1248,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                     MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
                     MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
                     MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
+                    MVAUWeightAdapterKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
                 ),
             ),
             ReadinessProfile(
@@ -1290,7 +1278,9 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
             ),
         ),
     )
-    return assemble_kernel_specs((MVAU_COMPUTE_KERNEL, cyclic_definition), additions=additions)
+    return assemble_kernel_specs(
+        (MVAU_COMPUTE_KERNEL, cyclic_definition, adapter_definition), additions=additions
+    )
 
 
 MVAU_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()

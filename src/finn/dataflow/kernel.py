@@ -104,10 +104,10 @@ class KernelDefinition:
     region_declarations: tuple[RegionDeclaration, ...]
     binding_definitions: tuple[BindingDefinition, ...]
     selected_region_path: QualifiedPath
-    binding_decision_path: QualifiedPath
-    binding_selection_path: QualifiedPath
+    binding_decision_path: QualifiedPath | None
+    binding_selection_path: QualifiedPath | None
     structural_readiness_profile: str
-    binding_readiness_profile: str
+    binding_readiness_profile: str | None
 
     def __post_init__(self) -> None:
         issues = []
@@ -145,22 +145,49 @@ class KernelDefinition:
                     "selected region path is not a derived property",
                 )
             )
-        if self.binding_selection_path not in declared_properties:
+        binding_paths = (self.binding_decision_path, self.binding_selection_path)
+        if (binding_paths[0] is None) != (binding_paths[1] is None):
             issues.append(
                 KernelAuthoringIssue(
-                    "binding-selection-path-missing",
-                    str(self.binding_selection_path),
-                    "binding selection path is not a derived property",
+                    "binding-path-pair-incomplete",
+                    self.id,
+                    "binding decision and selection paths must both be present or absent",
                 )
             )
-        if self.binding_decision_path not in declared_decisions:
-            issues.append(
-                KernelAuthoringIssue(
-                    "binding-decision-path-missing",
-                    str(self.binding_decision_path),
-                    "binding path is not a decision",
+        if self.binding_decision_path is None:
+            if self.binding_definitions:
+                issues.append(
+                    KernelAuthoringIssue(
+                        "bindingless-kernel-has-bindings",
+                        self.id,
+                        "a bindingless Kernel must not declare binding alternatives",
+                    )
                 )
-            )
+            if self.binding_readiness_profile is not None:
+                issues.append(
+                    KernelAuthoringIssue(
+                        "bindingless-kernel-has-readiness",
+                        self.id,
+                        "a bindingless Kernel must not declare binding readiness",
+                    )
+                )
+        else:
+            if self.binding_selection_path not in declared_properties:
+                issues.append(
+                    KernelAuthoringIssue(
+                        "binding-selection-path-missing",
+                        str(self.binding_selection_path),
+                        "binding selection path is not a derived property",
+                    )
+                )
+            if self.binding_decision_path not in declared_decisions:
+                issues.append(
+                    KernelAuthoringIssue(
+                        "binding-decision-path-missing",
+                        str(self.binding_decision_path),
+                        "binding path is not a decision",
+                    )
+                )
         for declaration in self.region_declarations:
             if declaration.property_path not in declared_properties:
                 issues.append(
@@ -171,10 +198,10 @@ class KernelDefinition:
                     )
                 )
         profile_names = {profile.name for profile in self.spec.readiness_profiles}
-        for profile_name, code in (
-            (self.structural_readiness_profile, "structural-readiness-profile-missing"),
-            (self.binding_readiness_profile, "binding-readiness-profile-missing"),
-        ):
+        profiles = [(self.structural_readiness_profile, "structural-readiness-profile-missing")]
+        if self.binding_readiness_profile is not None:
+            profiles.append((self.binding_readiness_profile, "binding-readiness-profile-missing"))
+        for profile_name, code in profiles:
             if profile_name not in profile_names:
                 issues.append(
                     KernelAuthoringIssue(
@@ -218,10 +245,10 @@ class KernelPlacement:
     region_declarations: tuple[RegionDeclaration, ...]
     binding_definitions: tuple[BindingDefinition, ...]
     selected_region_path: QualifiedPath
-    binding_decision_path: QualifiedPath
-    binding_selection_path: QualifiedPath
+    binding_decision_path: QualifiedPath | None
+    binding_selection_path: QualifiedPath | None
     structural_readiness_profile: str
-    binding_readiness_profile: str
+    binding_readiness_profile: str | None
 
     def path(self, definition_local_path: QualifiedPath | str) -> QualifiedPath:
         local = QualifiedPath.parse(definition_local_path)
@@ -240,8 +267,8 @@ class KernelInstance:
     instance_id: str
     point: DesignPoint
     region: DataflowRegion
-    binding_id: object
-    binding_selection: object
+    binding_id: object | None
+    binding_selection: object | None
 
 
 @dataclass(frozen=True)
@@ -324,6 +351,21 @@ def instantiate_kernel(
     region_answer = engine.query_property(point, definition.selected_region_path)
     if not isinstance(region_answer, Decided):
         return region_answer
+    if definition.binding_decision_path is None:
+        return Decided(
+            KernelInstance(
+                definition.id
+                if isinstance(definition, KernelDefinition)
+                else definition.definition_id,
+                definition.id
+                if isinstance(definition, KernelDefinition)
+                else definition.instance_id,
+                point,
+                cast(DataflowRegion, region_answer.value),
+                None,
+                None,
+            )
+        )
     binding = point.assignments.get(definition.binding_decision_path)
     if binding is None:
         return Unresolved(
@@ -336,6 +378,8 @@ def instantiate_kernel(
                 ),
             )
         )
+    if definition.binding_selection_path is None:
+        raise AssertionError("binding decision requires a binding-selection path")
     selection_answer = engine.query_property(point, definition.binding_selection_path)
     if not isinstance(selection_answer, Decided):
         return selection_answer
@@ -571,10 +615,16 @@ def _place_kernel_definition(
         ),
         definition.binding_definitions,
         path_mapping[definition.selected_region_path],
-        path_mapping[definition.binding_decision_path],
-        path_mapping[definition.binding_selection_path],
+        None
+        if definition.binding_decision_path is None
+        else path_mapping[definition.binding_decision_path],
+        None
+        if definition.binding_selection_path is None
+        else path_mapping[definition.binding_selection_path],
         f"{instance_id}.{definition.structural_readiness_profile}",
-        f"{instance_id}.{definition.binding_readiness_profile}",
+        None
+        if definition.binding_readiness_profile is None
+        else f"{instance_id}.{definition.binding_readiness_profile}",
     )
 
 

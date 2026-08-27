@@ -25,12 +25,14 @@ from math import prod
 from types import MappingProxyType
 from typing import Protocol, cast
 
+import numpy as np  # type: ignore[import-not-found]
 from onnx import AttributeProto, GraphProto, NodeProto  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import (
     Decided,
     DesignPoint,
+    DesignSpace,
     Engine,
     Finding,
     FindingKind,
@@ -64,7 +66,7 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v3"
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v5"
 
 
 class _DataTypeLike(Protocol):
@@ -142,7 +144,7 @@ MVAU_SOURCE_MAPPING = (
         "accumulator analysis owner", "problem.mvau.accumulator_type_analysis_owner", "problem"
     ),
     MVAUSourceMappingEntry(
-        "initializer and runtime-write availability",
+        "initializer availability, content fingerprints, and runtime-write requirements",
         "problem.mvau/problem.cyclic_parameter",
         "problem",
     ),
@@ -153,6 +155,16 @@ MVAU_SOURCE_MAPPING = (
     ),
     MVAUSourceMappingEntry("unknown or ambiguous legacy attributes", "Finding", "finding"),
 )
+
+
+def tensor_value_fingerprint(value: object) -> str:
+    """Return a deterministic digest for a concrete source tensor value."""
+    array = np.asarray(value)
+    digest = sha256()
+    digest.update(array.dtype.str.encode("ascii"))
+    digest.update(json.dumps(tuple(int(extent) for extent in array.shape)).encode("ascii"))
+    digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -680,6 +692,7 @@ def project_mvau_source(
     threshold_shape: tuple[int, ...] | None = None
     threshold_type: NumericElementType | None = None
     threshold_initialized: bool | None = None
+    threshold_initializer: object | None = None
     if threshold_id is not None:
         threshold_shape = _tensor_shape(
             model,
@@ -695,7 +708,8 @@ def project_mvau_source(
             "threshold",
             findings,
         )
-        threshold_initialized = model.get_initializer(threshold_id) is not None
+        threshold_initializer = model.get_initializer(threshold_id)
+        threshold_initialized = threshold_initializer is not None
         if threshold_shape is not None and (not threshold_shape or threshold_shape[0] != mh):
             findings.append(
                 _finding(
@@ -834,6 +848,15 @@ def project_mvau_source(
         CyclicParameterKernelPaths.INITIALIZER_AVAILABLE: weight_initialized,
         CyclicParameterKernelPaths.RUNTIME_WRITABLE: runtime_writable,
     }
+    weight_initializer = model.get_initializer(weight_id)
+    if weight_initializer is not None:
+        problem[MVAUComputeKernelPaths.WEIGHT_INITIALIZER_FINGERPRINT] = tensor_value_fingerprint(
+            weight_initializer
+        )
+    if threshold_initializer is not None:
+        problem[MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_FINGERPRINT] = (
+            tensor_value_fingerprint(threshold_initializer)
+        )
     if activation_type is not None:
         problem[MVAUComputeKernelPaths.ACTIVATION_ELEMENT_TYPE] = activation_type
     if weight_type is not None:
@@ -997,12 +1020,23 @@ _BOOLEAN_ASSIGNMENTS = frozenset(
 )
 
 
+def _local_assignment_path(path: QualifiedPath) -> QualifiedPath | None:
+    declared = (*_ENUM_ASSIGNMENTS, *_INTEGER_ASSIGNMENTS, *_BOOLEAN_ASSIGNMENTS)
+    matches = tuple(
+        candidate
+        for candidate in declared
+        if path == candidate or path.value.endswith(f".{candidate.value}")
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
 def _encode_assignment(path: QualifiedPath, value: object) -> object:
-    if path in _ENUM_ASSIGNMENTS and isinstance(value, Enum):
+    local = _local_assignment_path(path)
+    if local in _ENUM_ASSIGNMENTS and isinstance(value, Enum):
         return value.value
-    if path in _INTEGER_ASSIGNMENTS and type(value) is int:
+    if local in _INTEGER_ASSIGNMENTS and type(value) is int:
         return value
-    if path in _BOOLEAN_ASSIGNMENTS and type(value) is bool:
+    if local in _BOOLEAN_ASSIGNMENTS and type(value) is bool:
         return value
     raise MVAUSourceAdapterError(
         (
@@ -1017,15 +1051,16 @@ def _encode_assignment(path: QualifiedPath, value: object) -> object:
 
 
 def _decode_assignment(path: QualifiedPath, value: object) -> object:
-    enum_type = _ENUM_ASSIGNMENTS.get(path)
+    local = _local_assignment_path(path)
+    enum_type = None if local is None else _ENUM_ASSIGNMENTS.get(local)
     if enum_type is not None and isinstance(value, str):
         try:
             return enum_type(value)
         except ValueError:
             pass
-    if path in _INTEGER_ASSIGNMENTS and type(value) is int:
+    if local in _INTEGER_ASSIGNMENTS and type(value) is int:
         return value
-    if path in _BOOLEAN_ASSIGNMENTS and type(value) is bool:
+    if local in _BOOLEAN_ASSIGNMENTS and type(value) is bool:
         return value
     raise MVAUSourceAdapterError(
         (
@@ -1041,6 +1076,25 @@ def _decode_assignment(path: QualifiedPath, value: object) -> object:
 
 def _metadata_key(source_node_id: str) -> str:
     return f"finn.dataflow.mvau.selection:{source_node_id}"
+
+
+def make_mvau_selection_envelope(
+    source_scope_id: str,
+    point: DesignPoint,
+) -> MVAUSelectionEnvelope:
+    """Encode sparse MVAU choices, including qualified placed-Kernel paths."""
+    assignments = tuple(
+        (str(path), _encode_assignment(path, value))
+        for path, value in sorted(point.assignments.items(), key=lambda item: item[0])
+    )
+    return MVAUSelectionEnvelope(
+        _ADAPTER_KEY,
+        _FORMAT_VERSION,
+        MVAU_DECLARATION_FAMILY_VERSION,
+        source_scope_id,
+        mvau_problem_fingerprint(point.problem),
+        assignments,
+    )
 
 
 def save_mvau_selection(
@@ -1067,23 +1121,12 @@ def save_mvau_selection(
                 ),
             )
         )
-    assignments = tuple(
-        (str(path), _encode_assignment(path, value))
-        for path, value in sorted(point.assignments.items(), key=lambda item: item[0])
-    )
-    envelope = MVAUSelectionEnvelope(
-        _ADAPTER_KEY,
-        _FORMAT_VERSION,
-        MVAU_DECLARATION_FAMILY_VERSION,
-        source_node_id,
-        mvau_problem_fingerprint(point.problem),
-        assignments,
-    )
+    envelope = make_mvau_selection_envelope(source_node_id, point)
     model.set_metadata_prop(_metadata_key(source_node_id), envelope.to_json())
     return envelope
 
 
-def _parse_envelope(raw: str) -> MVAUSelectionEnvelope:
+def parse_mvau_selection_envelope(raw: str) -> MVAUSelectionEnvelope:
     try:
         payload = json.loads(raw)
         required = {
@@ -1129,30 +1172,20 @@ def _parse_envelope(raw: str) -> MVAUSelectionEnvelope:
         ) from exc
 
 
-def reconstitute_mvau_selection(
-    model: MVAUModelAccessor,
-    source_node_id: str,
-    context: MVAUProjectionContext,
-) -> MVAUResolvedDesign:
-    """Re-project current facts and replay saved choices through the engine."""
-    raw = model.get_metadata_prop(_metadata_key(source_node_id))
-    if raw is None:
-        raise MVAUSourceAdapterError(
-            (
-                _finding(
-                    FindingKind.BLOCKER,
-                    "mvau-selection-envelope-missing",
-                    _PERSISTENCE_PATH,
-                    "graph has no saved selection for the requested source scope",
-                ),
-            )
-        )
-    envelope = _parse_envelope(raw)
+def reconstitute_mvau_point(
+    engine: Engine,
+    design_space: DesignSpace,
+    problem: Mapping[QualifiedPath, object],
+    envelope: MVAUSelectionEnvelope,
+    *,
+    source_scope_id: str,
+) -> DesignPoint:
+    """Replay an envelope against an explicitly rebuilt MVAU-rooted design space."""
     expected_header = (
         _ADAPTER_KEY,
         _FORMAT_VERSION,
         MVAU_DECLARATION_FAMILY_VERSION,
-        source_node_id,
+        source_scope_id,
     )
     actual_header = (
         envelope.adapter_key,
@@ -1171,10 +1204,7 @@ def reconstitute_mvau_selection(
                 ),
             )
         )
-    projection = project_mvau_source(model, source_node_id, context)
-    if projection.blocking_findings:
-        raise MVAUSourceAdapterError(projection.blocking_findings)
-    if mvau_problem_fingerprint(projection.problem_data) != envelope.problem_fingerprint:
+    if mvau_problem_fingerprint(problem) != envelope.problem_fingerprint:
         raise MVAUSourceAdapterError(
             (
                 _finding(
@@ -1211,8 +1241,78 @@ def reconstitute_mvau_selection(
                     ),
                 )
             )
+        if path not in design_space.decisions:
+            raise MVAUSourceAdapterError(
+                (
+                    _finding(
+                        FindingKind.REJECTION,
+                        "mvau-saved-assignment-unknown-or-obsolete",
+                        path,
+                        "saved assignment path is not declared in the rebuilt design space",
+                    ),
+                )
+            )
         decoded[path] = _decode_assignment(path, value)
-    return start_mvau_projection(projection, decoded)
+    point = engine.start(design_space, problem)
+    committed = engine.commit_assignments(point, decoded)
+    failures = tuple(
+        finding
+        for outcome in committed.outcomes
+        if outcome.disposition not in {"committed", "unchanged"}
+        for finding in outcome.findings
+    )
+    if failures or any(
+        outcome.disposition not in {"committed", "unchanged"} for outcome in committed.outcomes
+    ):
+        raise MVAUSourceAdapterError(
+            failures
+            or (
+                _finding(
+                    FindingKind.REJECTION,
+                    "mvau-saved-assignment-rejected",
+                    _PERSISTENCE_PATH,
+                    "one or more saved assignments are incompatible with the rebuilt problem",
+                ),
+            )
+        )
+    return committed.point
+
+
+def reconstitute_mvau_selection(
+    model: MVAUModelAccessor,
+    source_node_id: str,
+    context: MVAUProjectionContext,
+) -> MVAUResolvedDesign:
+    """Re-project current facts and replay saved choices through the engine."""
+    raw = model.get_metadata_prop(_metadata_key(source_node_id))
+    if raw is None:
+        raise MVAUSourceAdapterError(
+            (
+                _finding(
+                    FindingKind.BLOCKER,
+                    "mvau-selection-envelope-missing",
+                    _PERSISTENCE_PATH,
+                    "graph has no saved selection for the requested source scope",
+                ),
+            )
+        )
+    envelope = parse_mvau_selection_envelope(raw)
+    projection = project_mvau_source(model, source_node_id, context)
+    if projection.blocking_findings:
+        raise MVAUSourceAdapterError(projection.blocking_findings)
+    engine = Engine()
+    space = engine.validate(MVAU_DATAFLOW_OP_SPEC)
+    point = reconstitute_mvau_point(
+        engine,
+        space,
+        projection.problem_data,
+        envelope,
+        source_scope_id=source_node_id,
+    )
+    result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+    if not isinstance(result, Decided):
+        raise MVAUSourceAdapterError(result.findings)
+    return MVAUResolvedDesign(engine, point, cast(DataflowOpResult, result.value), projection)
 
 
 __all__ = [
@@ -1227,8 +1327,12 @@ __all__ = [
     "MVAUSourceMappingEntry",
     "MVAUSourceProjection",
     "mvau_problem_fingerprint",
+    "make_mvau_selection_envelope",
+    "parse_mvau_selection_envelope",
     "project_mvau_source",
     "reconstitute_mvau_selection",
+    "reconstitute_mvau_point",
     "save_mvau_selection",
     "start_mvau_projection",
+    "tensor_value_fingerprint",
 ]
