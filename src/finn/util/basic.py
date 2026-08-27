@@ -41,6 +41,33 @@ from typing import Dict, Optional, Tuple
 
 from finn.util.data_packing import finnpy_to_packed_bytearray
 
+# Locations of the non-Python build dependencies: finn-hlslib's C++ headers and
+# the Vivado board definitions. These are data, never imported, and are reached
+# from generated Tcl and from g++ include flags rather than from Python.
+#
+# They default to the historical deps/ layout, so a checkout populated by
+# fetch-repos.sh behaves exactly as before. Making them overridable is what lets
+# the `build` and `build-xrt` images ship them outside the mounted workspace,
+# which in turn is what lets the `dev` image skip ~900 MB it can never use.
+#
+# setdefault (not assignment) at import time: any subprocess FINN launches -
+# Vivado, Vitis HLS, g++ - inherits the resolved values, so the generated Tcl
+# can reference $::env(...) without needing its own fallback logic.
+#
+# LIMITATION(finn-root-absolute): the defaults are relative to FINN_ROOT because
+# the workspace has no fixed path. With a fixed path these become constants and
+# the env vars are only needed for the build images, which relocate the data out
+# of the workspace entirely. See docker/finn_paths.py.
+def _default_dep_path(env_var: str, *relative_parts: str) -> str:
+    finn_root = os.environ.get("FINN_ROOT")
+    if finn_root:
+        os.environ.setdefault(env_var, os.path.join(finn_root, *relative_parts))
+    return os.environ.get(env_var, "")
+
+
+_default_dep_path("FINN_HLSLIB_PATH", "deps", "finn-hlslib")
+_default_dep_path("FINN_BOARD_FILES_PATH", "deps", "board_files")
+
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
 pynq_part_map["Ultra96"] = "xczu3eg-sbva484-1-e"

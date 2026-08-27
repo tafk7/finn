@@ -265,7 +265,7 @@ class HLSBackend(ABC):
         # to enable additional debug features please uncommand the next line
         # builder.append_includes("-DDEBUG")
         builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
-        builder.append_includes("-I$FINN_ROOT/deps/finn-hlslib")
+        builder.append_includes("-I$FINN_HLSLIB_PATH")
         builder.append_includes("-I$FINN_ROOT/custom_hls")
         builder.append_includes(f"-I{hls_path}/include")
         builder.append_includes("--std=c++17")
