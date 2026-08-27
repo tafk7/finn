@@ -43,9 +43,10 @@
 # which needs Vivado's xsim and never XRT.
 #
 # No image bakes an identity. Identity is a runtime concern: run-docker.sh
-# passes --user, and sbxc's init-shim provisions a passwd entry then drops
-# privileges. A per-user image would also make the tag a lie, since the tag
-# encodes only the git describe and the XRT version.
+# passes --user, and any orchestrator that runs this image is expected to
+# provision a passwd entry and drop privileges itself. A per-user image would
+# also make the tag a lie, since the tag encodes only the git describe and the
+# XRT version.
 # =============================================================================
 
 # Ubuntu base for every stage. For build-xrt this is not free to choose: it must
@@ -115,13 +116,9 @@ RUN apt-get update && \
     libgetdata-dev \
     g++-10 \
     cmake \
-    dtach \
     tcsh && \
     rm -rf /var/lib/apt/lists/*
 # tcsh: required by LSF esub scripts (they ship with a /bin/csh shebang).
-# dtach: sbxc runs its harness inside a dtach session so it survives detach;
-#        a template image has to provide it. Cheap, and makes any tier usable
-#        directly as an sbx/sbxc base.
 
 # ncurses 5 ABI, which Vivado links against.
 #
@@ -333,8 +330,9 @@ RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
               /usr/local/bin/build_dataflow
 
 # Static environment. Everything here used to be passed as -e on every docker
-# run, which meant it could not reach a backend with no create-time env
-# injection seam - the sbx microVM case. Only genuine host bindings
+# run, which meant it could not reach a runtime with no create-time env
+# injection seam - notably sbx, whose microVM create path has none. Only genuine
+# host bindings
 # (FINN_XILINX_PATH, VIVADO_PATH, FINN_BUILD_DIR, licences, ports) stay runtime.
 ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
     NUM_DEFAULT_WORKERS=4 \

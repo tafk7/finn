@@ -163,11 +163,9 @@ fi
 # side effects so the invocation is read-only.
 #
 # An optional tier argument lets a caller ask for a tier other than the one it
-# would run, without a second copy of the tag rule. sbxc's base_command uses
-# this to resolve the dev image:
+# would run, without a second copy of the tag rule:
 #
-#   [images.finn-dev]
-#   base_command = ["./run-docker.sh", "print-tag", "dev"]
+#   ./run-docker.sh print-tag dev
 if [ "$1" = "print-tag" ]; then
   if [ "$#" -gt 2 ]; then
     echo "Usage: $0 print-tag [dev|build|build-xrt]" >&2
@@ -228,8 +226,8 @@ if [ -n "$JENKINS_URL" ] && [ -n "$BUILD_NUMBER" ] \
   recho "Set FINN_CI_NFS_ROOT in the Jenkins job DSL to enable the shared cache."
 fi
 
-# `build` stops after producing the image. sbxc's base_command resolves a tag
-# but cannot build it, so the dev image has to exist beforehand:
+# `build` stops after producing the image, for callers that need the image to
+# exist without running anything in it:
 #
 #   FINN_DOCKER_TARGET=dev ./run-docker.sh build
 BUILD_ONLY="0"
@@ -421,7 +419,7 @@ if [ "$FINN_DOCKER_PREBUILT" = "0" ] && [ -z "$FINN_SINGULARITY" ]; then
   # Export DOCKER_BUILDKIT to enable BuildKit features
   export DOCKER_BUILDKIT
   # No identity build args. The image is user-agnostic: identity is applied at
-  # runtime via --user below, and by sbxc's init-shim under sbx. Baking a user
+  # runtime via --user below, or by whatever orchestrator runs it. Baking a user
   # made two developers produce materially different images under an identical
   # tag, which made every tag-keyed path - the Jenkins publish step,
   # FINN_DOCKER_SHARED_IMAGE_DIR, any registry push - unsound.
@@ -465,9 +463,9 @@ fi
 DOCKER_BASE="docker run -t --rm $DOCKER_INTERACTIVE --tty --init --hostname $DOCKER_INST_NAME "
 # Only genuine host bindings are passed as -e. SHELL, LOCALHOST_URL,
 # NUM_DEFAULT_WORKERS, XILINX_LOCAL_USER_DATA, VIVADO_IP_CACHE and the locale are
-# ENV in the image now. That is not cosmetic: the sbx backend has no create-time
-# env injection seam, so anything left in this tier simply cannot be delivered to
-# a microVM. LD_PRELOAD moved into the entrypoint, which applies it only when it
+# ENV in the image now. That is not cosmetic: sbx has no create-time env
+# injection seam, so anything left in this tier simply cannot be delivered to a
+# microVM. LD_PRELOAD moved into the entrypoint, which applies it only when it
 # has actually found Xilinx tools to source.
 # LIMITATION(finn-root-absolute): the workspace is mounted at its host path, so
 # FINN_ROOT differs per developer and cannot be baked. This mirrors what sbx

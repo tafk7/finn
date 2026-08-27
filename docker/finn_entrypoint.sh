@@ -43,8 +43,8 @@
 
 set -e
 
-# Respect an inherited HOME rather than overwriting it. sbxc's init-shim
-# provisions a writable HOME holding the harness's seeded agent config, and the
+# Respect an inherited HOME rather than overwriting it. An orchestrator may have
+# provisioned a writable HOME holding state it expects to find again, and the
 # unconditional `export HOME=/tmp/home_dir` this used to do discarded it.
 #
 # "Respect" has to mean "if it is usable", not merely "if it is set". Docker
@@ -75,7 +75,7 @@ export LOGNAME="${LOGNAME:-$USER}"
 # LIMITATION(finn-root-absolute): FINN has no fixed workspace path, so the image
 # cannot know where the source will be until it is running. Derive rather than
 # require, so the same image works under host-path mirroring (run-docker.sh,
-# sbxc) and at a fixed path. See docker/finn_paths.py for the full statement of
+# sbx) and at a fixed path. See docker/finn_paths.py for the full statement of
 # the limitation and the migration if the path ever becomes fixed.
 export FINN_ROOT="${FINN_ROOT:-$PWD}"
 
@@ -84,6 +84,18 @@ export FINN_ROOT="${FINN_ROOT:-$PWD}"
 # the build/build-xrt tiers, where the data lives outside the workspace.
 export FINN_HLSLIB_PATH="${FINN_HLSLIB_PATH:-$FINN_ROOT/deps/finn-hlslib}"
 export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_files}"
+
+# Scratch dir for generated HLS/Vivado projects. Derived for the same reason
+# FINN_ROOT is: requiring it makes `docker run <image> quicktest.sh` fail with
+# nothing but a KeyError, because finn.util.basic reads os.environ["FINN_BUILD_DIR"]
+# with no default and pytest turns that into 7 collection errors.
+#
+# run-docker.sh still passes an explicit FINN_HOST_BUILD_DIR and mounts it, so
+# artifacts survive the container there. This default only covers the bare
+# `docker run` / sbx case, where an in-container tmpdir is the right scope: a
+# build tree that outlives the sandbox has nowhere to live anyway.
+export FINN_BUILD_DIR="${FINN_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
+mkdir -p "$FINN_BUILD_DIR" 2>/dev/null || true
 
 # colorful terminal output, only for interactive shells
 if [ -t 1 ]; then

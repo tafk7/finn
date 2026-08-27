@@ -5,7 +5,7 @@ and are unchanged. §4 records what was built and where it departs from the
 proposal; §5 answers the open questions with measurements.
 
 Goal: rebuild FINN's container story around standard Docker practice, make the
-image usable as an `sbx`/`sbxc` base, and make it safe to hand a coding agent a
+image usable as an `sbx` base, and make it safe to hand a coding agent a
 fully sandboxed FINN working environment.
 
 ---
@@ -47,9 +47,9 @@ username that does not exist in the image. It is masked at runtime because
 `run-docker.sh` passes `--user $DOCKER_UID:$DOCKER_GID`, which overrides it. The
 bug is latent, not dormant: anything running the image without that flag breaks.
 
-Docker's convention is that identity is a **runtime** concern. sbxc already
-implements this correctly — its init-shim provisions the passwd entry and a
-writable HOME as root, then `setpriv`-drops and execs the original entrypoint.
+Docker's convention is that identity is a **runtime** concern, and sandbox
+tooling built on sbx follows it: a shim provisions the passwd entry and a
+writable HOME as root, then drops privileges and execs the original entrypoint.
 Build-time identity fights that machinery for no gain.
 
 ### 2.2 The entrypoint does build work on every start
@@ -79,9 +79,9 @@ Three distinct problems:
 export HOME=/tmp/home_dir
 ```
 
-Under sbxc this discards the HOME that the init-shim just provisioned, which is
-where the harness's seeded agent config lives. Result: `claude`/`opencode` lose
-their configuration, and `pip install --user` lands somewhere unexpected. The
+Under any runtime that provisions a HOME before exec, this discards it — taking
+with it whatever state was seeded there. Result: an agent CLI loses its
+configuration, and `pip install --user` lands somewhere unexpected. The
 same line makes the container hostile to any orchestrator with an opinion about
 HOME. `SHELL` and `PS1` are overwritten the same way.
 
@@ -135,7 +135,7 @@ several GB) sits mid-chain rather than early where it would be stable.
 `-v $SCRIPTPATH:$SCRIPTPATH` and `-v $FINN_XILINX_PATH:$FINN_XILINX_PATH` mount
 host paths at *identical* container paths, which is why `FINN_ROOT` must be
 passed explicitly and cannot be baked. Docker convention would be a fixed
-`/workspace`. Note this one happens to align with sbxc, which also mounts the
+`/workspace`. Note this one happens to align with sbx, which also mounts the
 workspace at its host path — so the fix is not to hardcode either, but to make
 `FINN_ROOT` *derived* (see §3.4).
 
@@ -190,9 +190,9 @@ Licensing is a **floating FLEXlm server**: `XILINXD_LICENSE_FILE=27034@licence-s
 which resolves to `10.x.x.x` — an RFC1918 address on internal
 infrastructure, spoken to over **raw TCP, not HTTP**.
 
-This is the binding constraint on sandboxed agent work. sbxc's egress control
-compiles domain ACLs into an HTTP/CONNECT proxy; it has no primitive for
-"allow one TCP host:port". So a Vivado-capable sandbox must run **open
+This is the binding constraint on sandboxed agent work. sbx's egress policy is
+domain-oriented and enforced by a host-side HTTP/CONNECT proxy; it has no
+primitive for "allow one TCP host:port". So a Vivado-capable sandbox must run **open
 posture** — full network reach, including the rest of `10.x.0.0/16`. An agent
 with a prompt-injection bug in that sandbox has a TCP path into the corporate
 network.
@@ -228,7 +228,7 @@ Delete `USERNAME`, `USER_UID`, `GROUP_ID`, `GROUPNAME`, the `useradd`/`groupadd`
 lines, and `USER`. The image ships as root; the runtime decides who it is:
 
 - `run-docker.sh` keeps passing `--user $UID:$GID` (already does)
-- sbxc's init-shim provisions identity and drops privileges (already does)
+- sbx-based sandbox tooling provisions identity and drops privileges at start
 
 One image, all users, tag means what it says.
 
@@ -263,7 +263,7 @@ Specifically removed:
 - **`ARG` at build:** XRT and optional-package inputs, unchanged
 - **Runtime only:** the host-binding tier from §2.4, plus ports and tunables
 - **`FINN_ROOT` derived from `$PWD`** when unset, so both host-path mirroring
-  (sbxc) and a fixed `/workspace` (plain docker) work with no configuration
+  (sbx) and a fixed `/workspace` (plain docker) work with no configuration
 
 The test of this design: `docker run <dev-image> quicktest.sh` should work with
 **zero `-e` flags**.
@@ -313,9 +313,11 @@ definition, so a dirty-tagged image rebuilds on the first edit. Keep the full
 
 ### 3.8 Agent sandbox profile
 
-With `dev` in place, the sbxc manifest reduces to: mount the repo read-write, no
+With `dev` in place, a sandbox profile reduces to: mount the repo read-write, no
 Xilinx mount, no license variable, network closed except PyPI and GitHub. No
-`overlay.Dockerfile` is needed, because §3.4 put the env in the image.
+image overlay is needed to carry configuration, because §3.4 put the static
+environment in the image — which is also what makes the profile expressible on
+sbx, whose create path has no env-injection seam.
 
 A separate opt-in `build` agent uses `full`, mounts only
 `$FINN_XILINX_PATH/<version>` read-only, sets `XILINXD_LICENSE_FILE`, and
@@ -346,7 +348,7 @@ them together would have forced ~1–2 GB of XRT onto every RTL developer.
 | `build-xrt` | XRT, v80++ | 1 version, ro | yes | open |
 
 `build` and `build-xrt` share a security posture — both need the FLEXlm server
-over raw TCP, which sbxc's HTTP/CONNECT proxy cannot express — so the only real
+over raw TCP, which sbx's domain-oriented egress policy cannot express — so the only real
 containment boundary is `dev` vs. the rest. The `build`/`build-xrt` split is a
 resource boundary, not an isolation one.
 
@@ -614,6 +616,7 @@ other cannot become a silent unresolvable import.
   it costs zero runnable coverage, because every XRT consumer also needs Vitis,
   platform repos and a licence.
 
-- **Is `--init` still needed under sbxc's init-shim?** Still open. It is retained
+- **Is `--init` still needed when the sandbox runtime supplies its own PID 1?**
+  Still open. It is retained
   unchanged; answering it needs an empirical check on a long synthesis run, which
   is the one thing that cannot be tested without the licence server.
