@@ -18,18 +18,13 @@ class MVAUComputationProfile(str, Enum):
 
 
 @dataclass(frozen=True)
-class MVAUBindingWitness:
-    """Named implementation mechanisms that witness one MVAU binding claim.
-
-    Feasibility is intentionally evaluated by separate constraints.  This value
-    records the association and the mechanisms whose correctness the binding
-    promises; it is not a structural-validation result.
-    """
+class MVAUBindingSelection:
+    """Resolved MVAU implementation association, independent of feasibility."""
 
     binding_id: str
     region_declaration_id: str
     computation_profile: MVAUComputationProfile
-    mechanisms: tuple[str, ...]
+    compute_pumping: bool | None
 
 
-__all__ = ["MVAUBindingWitness", "MVAUComputationProfile"]
+__all__ = ["MVAUBindingSelection", "MVAUComputationProfile"]

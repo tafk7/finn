@@ -13,7 +13,10 @@ region branches: `standard.embedded`, `standard.streamed`, and
 `(batch, nf, sf, t)`, exact activation and weight requirements, ordinary
 vector-major activation/output sequences, and a chunked weight sequence. The
 compatibility module `finn.dataflow.mvau_design` continues to expose the
-earlier constructor and specification names without retaining duplicate logic.
+earlier constructor and specification names without retaining duplicate region
+or validation logic. `MVAU_DESIGN_SPACE_SPEC` retains the original six-field
+problem schema and `mvau.pe`/`mvau.simd` paths; new integrations use
+`MVAU_COMPUTE_KERNEL_SPEC`.
 
 Computation profiles and implementation bindings are separate from region
 selection. The five initial binding identities distinguish legacy HLS LUT,
@@ -23,15 +26,33 @@ constraints; they are not inputs to any region constructor. Structural
 validation remains a separate derived report and constraint, so
 `model_structural` readiness never requires a binding.
 
+The current binding records are selections and conservative capability checks,
+not formal binding-realizability witnesses. A `KernelInstance` can therefore be
+constructed for a fully selected point whose separately queried binding
+constraint set is false; callers must not treat instance construction as
+buildability.
+
+`accumulator_element_type` is projected problem data computed by FINN's
+existing numeric-range analysis before this design-space query; it is not an
+independent design choice. Accumulator-output profiles require it to equal the
+selected output element type. Fused-threshold profiles additionally require a
+threshold source, its real shape, initializer availability, and a representation
+at least as wide as the accumulator.
+
 `CYCLIC_PARAMETER_KERNEL_SPEC` is the second concrete Kernel definition. It
-constructs a rank-zero local-state source whose output port exactly preserves
-the requested full-tile or chunked `BeatSequence`. RAM style, runtime
-writability, pumping, and implementation identity remain binding-owned.
+has one rank-zero local-state-source declaration parameterized by the exact
+requested output `Port`; full-tile versus chunked organization is therefore a
+property of that port rather than a label-only decision. RAM style, runtime
+writability, pumping, and implementation identity remain binding-owned and are
+applicable only to bindings that expose those choices.
 
 `finn.dataflow.kernel` contains the generic authoring layer extracted from those
 two definitions. It records Kernel, region-declaration, and binding identities,
-constructs `KernelInstance` values, and assembles ordinary flat
-`DesignSpaceSpec` values. It does not add a Kernel primitive to the engine.
+constructs resolved-selection `KernelInstance` values, supports deliberate
+path-prefixed placement with explicitly shared problem fields, and assembles
+ordinary flat `DesignSpaceSpec` values. A `KernelInstance` does not imply that
+the separately queried binding-feasibility constraints passed. The authoring
+layer does not add a Kernel primitive to the engine.
 
 `finn.dataflow.network` and `finn.dataflow.network_validation` implement the
 flat acyclic network contract with qualified endpoints, explicit tensor-position
@@ -41,9 +62,18 @@ foundation to select an embedded/direct `RegionRef` or a cyclic-delivery
 `NetworkRef`, while keeping source-to-region coordinate mappings outside the
 normalized region.
 
-The legacy MVAU cycle estimate now follows the selected logical work count for
-both standard and batch-interleaved execution: interleaving reorganizes the
-`R * NF * SF` points but does not multiply them by `TH`.
+MVAU source associations are topology-aware. Embedded weights identify
+compute-local binding state, direct weights identify the compute region's `W`
+operand, and cyclic weights identify delivery-local state while the network
+edge separately relates the delivery output to the compute input. Semantic
+destinations are region- or node-qualified; source identities never enter the
+normalized region.
+
+The legacy MVAU cycle estimate now follows the analytically derived logical work
+count for both standard and batch-interleaved execution: interleaving
+reorganizes the `R * NF * SF` points but does not multiply them by `TH`. The
+focused regression checks this formula; comparison against tiled RTL simulation
+remains deferred to hardware-enabled measurement work.
 
 Run the focused local verification with:
 

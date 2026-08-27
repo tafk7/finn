@@ -10,7 +10,9 @@ from enum import Enum
 from typing import TypeVar, cast
 
 from finn.dataflow.design import (
+    ABSENT,
     DATAFLOW_REGION_SEMANTICS,
+    AbsenceMode,
     Answer,
     Constraint,
     ConstraintSet,
@@ -22,10 +24,13 @@ from finn.dataflow.design import (
     DerivedProperty,
     DesignSpaceSpec,
     EvaluatorSpec,
+    Finding,
+    FindingKind,
     ProblemField,
     ProblemSchema,
     QualifiedPath,
     ReadinessProfile,
+    Unresolved,
     ValueSemantics,
     as_object_semantics,
 )
@@ -35,20 +40,10 @@ from finn.dataflow.kernel import (
     RegionDeclaration,
     build_kernel_semantic_declarations,
 )
-from finn.dataflow.parameters.cyclic.region import (
-    construct_chunked_cyclic_parameter_region,
-    construct_full_tile_cyclic_parameter_region,
-)
+from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from finn.dataflow.region import Port
 
 E = TypeVar("E", bound=Enum)
-
-
-class CyclicParameterRegionDeclaration(str, Enum):
-    """Stable identities for the two evidenced cyclic output contracts."""
-
-    FULL_TILE = "full_tile"
-    CHUNKED = "chunked"
 
 
 class CyclicParameterBinding(str, Enum):
@@ -59,7 +54,7 @@ class CyclicParameterBinding(str, Enum):
 
 
 class CyclicRamStyle(str, Enum):
-    """Binding-local on-chip memory implementation choice."""
+    """RAM implementations exposed by the FINN RTL memstream binding."""
 
     AUTO = "auto"
     BRAM = "block"
@@ -68,14 +63,19 @@ class CyclicRamStyle(str, Enum):
 
 
 @dataclass(frozen=True)
-class CyclicParameterBindingWitness:
-    """Binding-owned account of how the cyclic source realizes its region."""
+class CyclicTargetMemoryCapabilities:
+    """Target facts used by the current on-chip delivery constraints."""
+
+    supports_initialized_uram: bool
+
+
+@dataclass(frozen=True)
+class CyclicParameterBindingSelection:
+    """Resolved cyclic-memory association, independent of feasibility."""
 
     binding_id: str
-    region_declaration_id: str
-    ram_style: CyclicRamStyle
-    pumped_memory: bool
-    mechanisms: tuple[str, ...] = ("local_parameter_state", "cyclic_sequence_replay")
+    ram_style: CyclicRamStyle | None
+    pumped_memory: bool | None
 
 
 class CyclicParameterKernelPaths:
@@ -84,30 +84,40 @@ class CyclicParameterKernelPaths:
     OUTPUT_PORT = QualifiedPath("problem.cyclic_parameter.output_port")
     INITIALIZER_AVAILABLE = QualifiedPath("problem.cyclic_parameter.initializer_available")
     RUNTIME_WRITABLE = QualifiedPath("problem.cyclic_parameter.runtime_writable")
+    TARGET_MEMORY_CAPABILITIES = QualifiedPath(
+        "problem.target.cyclic_parameter_memory_capabilities"
+    )
 
-    REGION_DECLARATION = QualifiedPath("cyclic_parameter.region_declaration")
     BINDING = QualifiedPath("cyclic_parameter.binding")
     RAM_STYLE = QualifiedPath("cyclic_parameter.binding.ram_style")
     PUMPED_MEMORY = QualifiedPath("cyclic_parameter.binding.pumped_memory")
 
-    FULL_TILE_REGION = QualifiedPath("semantic.cyclic_parameter.region_declarations.full_tile")
-    CHUNKED_REGION = QualifiedPath("semantic.cyclic_parameter.region_declarations.chunked")
+    LOCAL_STATE_SOURCE_REGION = QualifiedPath(
+        "semantic.cyclic_parameter.region_declarations.local_state_source"
+    )
     REGION = QualifiedPath("semantic.cyclic_parameter.region")
     REGION_VALIDATION = QualifiedPath("semantic.cyclic_parameter.region_validation")
-    BINDING_WITNESS = QualifiedPath("binding.cyclic_parameter.witness")
+    BINDING_SELECTION = QualifiedPath("binding.cyclic_parameter.selection")
 
     REGION_STRUCTURALLY_WELL_FORMED = QualifiedPath(
         "constraint.cyclic_parameter.region_structurally_well_formed"
     )
     LOCAL_STATE_AVAILABLE = QualifiedPath("constraint.cyclic_parameter.local_state_available")
+    URAM_INITIALIZATION_SUPPORTED = QualifiedPath(
+        "constraint.cyclic_parameter.uram_initialization_supported"
+    )
     PUMPING_SUPPORTED = QualifiedPath("constraint.cyclic_parameter.pumping_supported")
 
 
 _BOOL_SEMANTICS = ValueSemantics.immutable_nominal(bool, name="boolean")
 _PORT_SEMANTICS = ValueSemantics.immutable_nominal(Port, name="Port")
+_TARGET_MEMORY_SEMANTICS = ValueSemantics.immutable_nominal(
+    CyclicTargetMemoryCapabilities, name="CyclicTargetMemoryCapabilities"
+)
 _REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _BOOL_OBJECT_SEMANTICS = as_object_semantics(_BOOL_SEMANTICS)
 _PORT_OBJECT_SEMANTICS = as_object_semantics(_PORT_SEMANTICS)
+_TARGET_MEMORY_OBJECT_SEMANTICS = as_object_semantics(_TARGET_MEMORY_SEMANTICS)
 
 
 def _enum_semantics(enum_type: type[E]) -> ValueSemantics[object]:
@@ -121,12 +131,11 @@ def _enum_semantics(enum_type: type[E]) -> ValueSemantics[object]:
     return as_object_semantics(semantics)
 
 
-_REGION_DECLARATION_SEMANTICS = _enum_semantics(CyclicParameterRegionDeclaration)
 _BINDING_SEMANTICS = _enum_semantics(CyclicParameterBinding)
 _RAM_STYLE_SEMANTICS = _enum_semantics(CyclicRamStyle)
-_WITNESS_SEMANTICS = as_object_semantics(
+_BINDING_SELECTION_SEMANTICS = as_object_semantics(
     ValueSemantics.immutable_nominal(
-        CyclicParameterBindingWitness, name="CyclicParameterBindingWitness"
+        CyclicParameterBindingSelection, name="CyclicParameterBindingSelection"
     )
 )
 
@@ -143,80 +152,96 @@ def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
     return DecisionDomain((), accepts, EvaluatorSpec((), candidates))
 
 
-_REGION_DECLARATION_REF = DependencyRef.decision(
-    "region_declaration",
-    CyclicParameterKernelPaths.REGION_DECLARATION,
-    _REGION_DECLARATION_SEMANTICS,
-)
 _BINDING_REF = DependencyRef.decision(
     "binding", CyclicParameterKernelPaths.BINDING, _BINDING_SEMANTICS
 )
 _RAM_STYLE_REF = DependencyRef.decision(
-    "ram_style", CyclicParameterKernelPaths.RAM_STYLE, _RAM_STYLE_SEMANTICS
+    "ram_style",
+    CyclicParameterKernelPaths.RAM_STYLE,
+    _RAM_STYLE_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
 )
 _PUMPED_MEMORY_REF = DependencyRef.decision(
-    "pumped_memory", CyclicParameterKernelPaths.PUMPED_MEMORY, _BOOL_OBJECT_SEMANTICS
+    "pumped_memory",
+    CyclicParameterKernelPaths.PUMPED_MEMORY,
+    _BOOL_OBJECT_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+_OUTPUT_PORT_REF = DependencyRef.problem(
+    "output_port", CyclicParameterKernelPaths.OUTPUT_PORT, _PORT_OBJECT_SEMANTICS
 )
 
 
-def _region_applies(
-    declaration: CyclicParameterRegionDeclaration,
-) -> EvaluatorSpec[Answer[bool]]:
+def _binding_applies(binding: CyclicParameterBinding) -> EvaluatorSpec[Answer[bool]]:
     def evaluate(dependencies: DependencyView) -> Answer[bool]:
-        return Decided(dependencies["region_declaration"] is declaration)
+        return Decided(dependencies["binding"] is binding)
 
-    return EvaluatorSpec((_REGION_DECLARATION_REF,), evaluate)
+    return EvaluatorSpec((_BINDING_REF,), evaluate)
 
 
-def _derive_full_tile_region(dependencies: DependencyView) -> Answer[object]:
+def _finn_rtl_uram_applies(dependencies: DependencyView) -> Answer[bool]:
     return Decided(
-        construct_full_tile_cyclic_parameter_region(cast(Port, dependencies["output_port"]))
+        dependencies["binding"] is CyclicParameterBinding.FINN_RTL_MEMSTREAM
+        and dependencies["ram_style"] is CyclicRamStyle.URAM
     )
 
 
-def _derive_chunked_region(dependencies: DependencyView) -> Answer[object]:
-    return Decided(
-        construct_chunked_cyclic_parameter_region(cast(Port, dependencies["output_port"]))
-    )
+def _derive_local_state_source_region(dependencies: DependencyView) -> Answer[object]:
+    return Decided(construct_cyclic_parameter_region(cast(Port, dependencies["output_port"])))
 
 
 _CYCLIC_REGION_DECLARATIONS = (
     RegionDeclaration(
-        CyclicParameterRegionDeclaration.FULL_TILE.value,
-        CyclicParameterKernelPaths.FULL_TILE_REGION,
-    ),
-    RegionDeclaration(
-        CyclicParameterRegionDeclaration.CHUNKED.value,
-        CyclicParameterKernelPaths.CHUNKED_REGION,
+        "local_state_source",
+        CyclicParameterKernelPaths.LOCAL_STATE_SOURCE_REGION,
     ),
 )
 
 
 def _local_state_available(dependencies: DependencyView) -> Answer[bool]:
-    return Decided(
-        cast(bool, dependencies["initializer_available"])
-        or cast(bool, dependencies["runtime_writable"])
-    )
+    binding = cast(CyclicParameterBinding, dependencies["binding"])
+    initialized = cast(bool, dependencies["initializer_available"])
+    runtime_writable = cast(bool, dependencies["runtime_writable"])
+    if binding is CyclicParameterBinding.FINNLIB_HLS_MEMSTREAM:
+        return Decided(initialized)
+    return Decided(initialized or runtime_writable)
+
+
+def _uram_initialization_supported(dependencies: DependencyView) -> Answer[bool]:
+    if cast(bool, dependencies["runtime_writable"]):
+        return Decided(True)
+    target = dependencies["target_memory_capabilities"]
+    if target is ABSENT:
+        return Unresolved(
+            (
+                Finding(
+                    FindingKind.LIMITATION,
+                    "cyclic-target-memory-capabilities-missing",
+                    CyclicParameterKernelPaths.URAM_INITIALIZATION_SUPPORTED,
+                    "initialized URAM requires target memory capabilities",
+                    trace=(CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES,),
+                ),
+            )
+        )
+    return Decided(cast(CyclicTargetMemoryCapabilities, target).supports_initialized_uram)
 
 
 def _pumping_supported(dependencies: DependencyView) -> Answer[bool]:
-    if not cast(bool, dependencies["pumped_memory"]):
+    pumped = dependencies["pumped_memory"]
+    if pumped is ABSENT or not cast(bool, pumped):
         return Decided(True)
-    return Decided(
-        dependencies["binding"] is CyclicParameterBinding.FINN_RTL_MEMSTREAM
-        and dependencies["region_declaration"] is CyclicParameterRegionDeclaration.FULL_TILE
-    )
+    output_port = cast(Port, dependencies["output_port"])
+    return Decided(output_port.beat_sequence.elements_per_beat > 1)
 
 
-def _derive_binding_witness(dependencies: DependencyView) -> Answer[object]:
-    binding = cast(CyclicParameterBinding, dependencies["binding"])
-    declaration = cast(CyclicParameterRegionDeclaration, dependencies["region_declaration"])
+def _derive_binding_selection(dependencies: DependencyView) -> Answer[object]:
+    ram_style = dependencies["ram_style"]
+    pumped_memory = dependencies["pumped_memory"]
     return Decided(
-        CyclicParameterBindingWitness(
-            binding.value,
-            declaration.value,
-            cast(CyclicRamStyle, dependencies["ram_style"]),
-            cast(bool, dependencies["pumped_memory"]),
+        CyclicParameterBindingSelection(
+            cast(CyclicParameterBinding, dependencies["binding"]).value,
+            None if ram_style is ABSENT else cast(CyclicRamStyle, ram_style),
+            None if pumped_memory is ABSENT else cast(bool, pumped_memory),
         )
     )
 
@@ -226,12 +251,7 @@ def build_cyclic_parameter_kernel_spec(
     *,
     problem_fields_required: bool = True,
 ) -> DesignSpaceSpec:
-    """Build a flat cyclic-delivery specification.
-
-    A standalone Kernel reads its exact output port from problem data.  A larger
-    scope may instead supply a property dependency, preserving the same output
-    region declarations without evaluating a nested design space.
-    """
+    """Build a flat cyclic local-state-source specification."""
     semantic = build_kernel_semantic_declarations(
         _CYCLIC_REGION_DECLARATIONS,
         selected_region_path=CyclicParameterKernelPaths.REGION,
@@ -240,11 +260,7 @@ def build_cyclic_parameter_kernel_spec(
     )
     output_port_fields: tuple[ProblemField, ...]
     if output_port_dependency is None:
-        output_port_dependency = DependencyRef.problem(
-            "output_port",
-            CyclicParameterKernelPaths.OUTPUT_PORT,
-            _PORT_OBJECT_SEMANTICS,
-        )
+        output_port_dependency = _OUTPUT_PORT_REF
         output_port_fields = (
             ProblemField(CyclicParameterKernelPaths.OUTPUT_PORT, _PORT_OBJECT_SEMANTICS),
         )
@@ -255,6 +271,8 @@ def build_cyclic_parameter_kernel_spec(
         if not output_port_dependency.value_semantics.is_compatible_with(_PORT_OBJECT_SEMANTICS):
             raise TypeError("output_port_dependency must carry Port values")
 
+    ram_applies = _binding_applies(CyclicParameterBinding.FINN_RTL_MEMSTREAM)
+    pumped_applies = _binding_applies(CyclicParameterBinding.FINN_RTL_MEMSTREAM)
     return DesignSpaceSpec(
         problem_schema=ProblemSchema(
             (
@@ -269,14 +287,14 @@ def build_cyclic_parameter_kernel_spec(
                     _BOOL_OBJECT_SEMANTICS,
                     required=problem_fields_required,
                 ),
+                ProblemField(
+                    CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES,
+                    _TARGET_MEMORY_OBJECT_SEMANTICS,
+                    required=False,
+                ),
             )
         ),
         decisions=(
-            Decision(
-                CyclicParameterKernelPaths.REGION_DECLARATION,
-                _REGION_DECLARATION_SEMANTICS,
-                _finite_domain(tuple(CyclicParameterRegionDeclaration)),
-            ),
             Decision(
                 CyclicParameterKernelPaths.BINDING,
                 _BINDING_SEMANTICS,
@@ -286,39 +304,29 @@ def build_cyclic_parameter_kernel_spec(
                 CyclicParameterKernelPaths.RAM_STYLE,
                 _RAM_STYLE_SEMANTICS,
                 _finite_domain(tuple(CyclicRamStyle)),
+                applies_if=ram_applies,
             ),
             Decision(
                 CyclicParameterKernelPaths.PUMPED_MEMORY,
                 _BOOL_OBJECT_SEMANTICS,
                 _finite_domain((False, True)),
+                applies_if=pumped_applies,
             ),
         ),
         properties=(
             DerivedProperty(
-                CyclicParameterKernelPaths.FULL_TILE_REGION,
+                CyclicParameterKernelPaths.LOCAL_STATE_SOURCE_REGION,
                 _REGION_SEMANTICS,
-                EvaluatorSpec((output_port_dependency,), _derive_full_tile_region),
-                applies_if=_region_applies(CyclicParameterRegionDeclaration.FULL_TILE),
-            ),
-            DerivedProperty(
-                CyclicParameterKernelPaths.CHUNKED_REGION,
-                _REGION_SEMANTICS,
-                EvaluatorSpec((output_port_dependency,), _derive_chunked_region),
-                applies_if=_region_applies(CyclicParameterRegionDeclaration.CHUNKED),
+                EvaluatorSpec((output_port_dependency,), _derive_local_state_source_region),
             ),
             semantic.selected_region,
             semantic.validation_report,
             DerivedProperty(
-                CyclicParameterKernelPaths.BINDING_WITNESS,
-                _WITNESS_SEMANTICS,
+                CyclicParameterKernelPaths.BINDING_SELECTION,
+                _BINDING_SELECTION_SEMANTICS,
                 EvaluatorSpec(
-                    (
-                        _BINDING_REF,
-                        _REGION_DECLARATION_REF,
-                        _RAM_STYLE_REF,
-                        _PUMPED_MEMORY_REF,
-                    ),
-                    _derive_binding_witness,
+                    (_BINDING_REF, _RAM_STYLE_REF, _PUMPED_MEMORY_REF),
+                    _derive_binding_selection,
                 ),
             ),
         ),
@@ -328,6 +336,7 @@ def build_cyclic_parameter_kernel_spec(
                 CyclicParameterKernelPaths.LOCAL_STATE_AVAILABLE,
                 EvaluatorSpec(
                     (
+                        _BINDING_REF,
                         DependencyRef.problem(
                             "initializer_available",
                             CyclicParameterKernelPaths.INITIALIZER_AVAILABLE,
@@ -343,11 +352,29 @@ def build_cyclic_parameter_kernel_spec(
                 ),
             ),
             Constraint(
-                CyclicParameterKernelPaths.PUMPING_SUPPORTED,
+                CyclicParameterKernelPaths.URAM_INITIALIZATION_SUPPORTED,
                 EvaluatorSpec(
-                    (_PUMPED_MEMORY_REF, _BINDING_REF, _REGION_DECLARATION_REF),
-                    _pumping_supported,
+                    (
+                        DependencyRef.problem(
+                            "runtime_writable",
+                            CyclicParameterKernelPaths.RUNTIME_WRITABLE,
+                            _BOOL_OBJECT_SEMANTICS,
+                        ),
+                        DependencyRef.problem(
+                            "target_memory_capabilities",
+                            CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES,
+                            _TARGET_MEMORY_OBJECT_SEMANTICS,
+                            absence=AbsenceMode.ALLOWS_ABSENT,
+                        ),
+                    ),
+                    _uram_initialization_supported,
                 ),
+                applies_if=EvaluatorSpec((_BINDING_REF, _RAM_STYLE_REF), _finn_rtl_uram_applies),
+            ),
+            Constraint(
+                CyclicParameterKernelPaths.PUMPING_SUPPORTED,
+                EvaluatorSpec((_PUMPED_MEMORY_REF, output_port_dependency), _pumping_supported),
+                applies_if=pumped_applies,
             ),
         ),
         constraint_sets=(
@@ -360,6 +387,7 @@ def build_cyclic_parameter_kernel_spec(
                 (
                     CyclicParameterKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
                     CyclicParameterKernelPaths.LOCAL_STATE_AVAILABLE,
+                    CyclicParameterKernelPaths.URAM_INITIALIZATION_SUPPORTED,
                     CyclicParameterKernelPaths.PUMPING_SUPPORTED,
                 ),
             ),
@@ -367,7 +395,6 @@ def build_cyclic_parameter_kernel_spec(
         readiness_profiles=(
             ReadinessProfile(
                 "cyclic_model_structural",
-                decisions=(CyclicParameterKernelPaths.REGION_DECLARATION,),
                 properties=(
                     CyclicParameterKernelPaths.REGION,
                     CyclicParameterKernelPaths.REGION_VALIDATION,
@@ -377,7 +404,6 @@ def build_cyclic_parameter_kernel_spec(
             ReadinessProfile(
                 "cyclic_binding_feasibility",
                 decisions=(
-                    CyclicParameterKernelPaths.REGION_DECLARATION,
                     CyclicParameterKernelPaths.BINDING,
                     CyclicParameterKernelPaths.RAM_STYLE,
                     CyclicParameterKernelPaths.PUMPED_MEMORY,
@@ -385,11 +411,12 @@ def build_cyclic_parameter_kernel_spec(
                 properties=(
                     CyclicParameterKernelPaths.REGION,
                     CyclicParameterKernelPaths.REGION_VALIDATION,
-                    CyclicParameterKernelPaths.BINDING_WITNESS,
+                    CyclicParameterKernelPaths.BINDING_SELECTION,
                 ),
                 constraints=(
                     CyclicParameterKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
                     CyclicParameterKernelPaths.LOCAL_STATE_AVAILABLE,
+                    CyclicParameterKernelPaths.URAM_INITIALIZATION_SUPPORTED,
                     CyclicParameterKernelPaths.PUMPING_SUPPORTED,
                 ),
             ),
@@ -406,7 +433,7 @@ CYCLIC_PARAMETER_KERNEL = KernelDefinition(
     ),
     selected_region_path=CyclicParameterKernelPaths.REGION,
     binding_decision_path=CyclicParameterKernelPaths.BINDING,
-    binding_witness_path=CyclicParameterKernelPaths.BINDING_WITNESS,
+    binding_selection_path=CyclicParameterKernelPaths.BINDING_SELECTION,
     structural_readiness_profile="cyclic_model_structural",
     binding_readiness_profile="cyclic_binding_feasibility",
 )
@@ -416,9 +443,9 @@ __all__ = [
     "CYCLIC_PARAMETER_KERNEL",
     "CYCLIC_PARAMETER_KERNEL_SPEC",
     "CyclicParameterBinding",
-    "CyclicParameterBindingWitness",
+    "CyclicParameterBindingSelection",
     "CyclicParameterKernelPaths",
-    "CyclicParameterRegionDeclaration",
     "CyclicRamStyle",
+    "CyclicTargetMemoryCapabilities",
     "build_cyclic_parameter_kernel_spec",
 ]

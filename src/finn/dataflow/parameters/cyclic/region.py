@@ -34,18 +34,4 @@ def construct_cyclic_parameter_region(output_port: Port) -> DataflowRegion:
     )
 
 
-def construct_full_tile_cyclic_parameter_region(output_port: Port) -> DataflowRegion:
-    """Construct the explicit full-tile cyclic-delivery declaration."""
-    return construct_cyclic_parameter_region(output_port)
-
-
-def construct_chunked_cyclic_parameter_region(output_port: Port) -> DataflowRegion:
-    """Construct the explicit chunked cyclic-delivery declaration."""
-    return construct_cyclic_parameter_region(output_port)
-
-
-__all__ = [
-    "construct_chunked_cyclic_parameter_region",
-    "construct_cyclic_parameter_region",
-    "construct_full_tile_cyclic_parameter_region",
-]
+__all__ = ["construct_cyclic_parameter_region"]

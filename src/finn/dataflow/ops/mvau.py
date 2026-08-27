@@ -61,7 +61,6 @@ from finn.dataflow.network_validation import NetworkValidationReport, validate_n
 from finn.dataflow.parameters.cyclic.definition import (
     CYCLIC_PARAMETER_KERNEL,
     CyclicParameterKernelPaths,
-    CyclicParameterRegionDeclaration,
     build_cyclic_parameter_kernel_spec,
 )
 from finn.dataflow.region import BeatSequence, DataflowRegion, Port
@@ -84,6 +83,25 @@ class CoordinateMappingKind(str, Enum):
 
 
 @dataclass(frozen=True)
+class SemanticOperandDestination:
+    """Qualified operand destination in a selected region or network node."""
+
+    owner_id: str
+    operand_id: str
+
+
+@dataclass(frozen=True)
+class BindingLocalStateDestination:
+    """Qualified binding-local state destination."""
+
+    owner_id: str
+    state_id: str
+
+
+SourceOperandDestination = SemanticOperandDestination | BindingLocalStateDestination
+
+
+@dataclass(frozen=True)
 class MVAUSourceDescription:
     """Compiler-owned source identities and shapes for one MVAU scope."""
 
@@ -94,10 +112,13 @@ class MVAUSourceDescription:
     leading_shape: tuple[int, ...]
     threshold_operand_id: str | None = None
     fused_source_node_ids: tuple[str, ...] = ()
+    threshold_shape: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "leading_shape", tuple(self.leading_shape))
         object.__setattr__(self, "fused_source_node_ids", tuple(self.fused_source_node_ids))
+        if self.threshold_shape is not None:
+            object.__setattr__(self, "threshold_shape", tuple(self.threshold_shape))
 
 
 @dataclass(frozen=True)
@@ -106,7 +127,7 @@ class SourceOperandAssociation:
 
     role: str
     source_operand_id: str
-    destination_id: str
+    destination: SourceOperandDestination
     mapping: CoordinateMappingKind
     source_shape: tuple[int, ...]
     destination_shape: tuple[int, ...]
@@ -135,6 +156,8 @@ class MVAUSourceAssociation:
 
     source_node_id: str
     fused_source_node_ids: tuple[str, ...]
+    region_declaration_id: str
+    parameter_topology: MVAUParameterTopology
     operands: tuple[SourceOperandAssociation, ...]
 
 
@@ -173,7 +196,9 @@ class MVAUDataflowOpPaths:
     RESULT = QualifiedPath("semantic.mvau.op.result")
 
     TOPOLOGY_MATCHES_REGION = QualifiedPath("constraint.mvau.op.topology_matches_region")
-    DELIVERY_MATCHES_REGION = QualifiedPath("constraint.mvau.op.delivery_matches_region")
+    CYCLIC_INTERLEAVED_PUMPING_SUPPORTED = QualifiedPath(
+        "constraint.mvau.op.cyclic_interleaved_pumping_supported"
+    )
     DIRECT_INTERLEAVED_SOURCE_AVAILABLE = QualifiedPath(
         "constraint.mvau.op.direct_interleaved_source_available"
     )
@@ -184,6 +209,7 @@ class MVAUDataflowOpPaths:
 
 
 _INTEGER_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integer"))
+_BOOL_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
 _COMPUTATION_SEMANTICS = as_object_semantics(
     ValueSemantics.immutable_nominal(MVAUComputationProfile, name="MVAUComputationProfile")
 )
@@ -226,9 +252,17 @@ def _source_description_valid(value: object) -> bool:
     threshold_valid = description.threshold_operand_id is None or (
         isinstance(description.threshold_operand_id, str) and bool(description.threshold_operand_id)
     )
+    threshold_shape_valid = description.threshold_shape is None or all(
+        type(extent) is int and extent > 0 for extent in description.threshold_shape
+    )
+    threshold_pair_valid = (description.threshold_operand_id is None) == (
+        description.threshold_shape is None
+    )
     return (
         all(isinstance(name, str) and bool(name) for name in names)
         and threshold_valid
+        and threshold_shape_valid
+        and threshold_pair_valid
         and all(type(extent) is int and extent > 0 for extent in description.leading_shape)
     )
 
@@ -261,10 +295,10 @@ _COMPUTE_REGION_DECLARATION_FOR_SCOPE_REF = DependencyRef.decision(
 _COMPUTE_REGION_REF = DependencyRef.property(
     "compute_region", MVAUComputeKernelPaths.REGION, _REGION_SEMANTICS
 )
-_DELIVERY_DECLARATION_REF = DependencyRef.decision(
-    "delivery_declaration",
-    CyclicParameterKernelPaths.REGION_DECLARATION,
-    build_cyclic_parameter_kernel_spec().decisions[0].value_semantics,
+_COMPUTATION_REF = DependencyRef.problem(
+    "computation_profile",
+    MVAUComputeKernelPaths.COMPUTATION_PROFILE,
+    _COMPUTATION_SEMANTICS,
 )
 _DELIVERY_REGION_REF = DependencyRef.property(
     "delivery_region",
@@ -315,50 +349,71 @@ def _derive_compute_weight_port(dependencies: DependencyView) -> Answer[object]:
 
 def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
     description = cast(MVAUSourceDescription, dependencies["source_description"])
+    topology = cast(MVAUParameterTopology, dependencies["op_topology"])
+    declaration = cast(MVAURegionDeclaration, dependencies["region_declaration"])
+    profile = cast(MVAUComputationProfile, dependencies["computation_profile"])
     repetitions = cast(int, dependencies["repetitions"])
     matrix_width = cast(int, dependencies["matrix_width"])
     matrix_height = cast(int, dependencies["matrix_height"])
+    compute_owner = "compute" if topology is MVAUParameterTopology.CYCLIC else "mvau.compute"
     operands = [
         SourceOperandAssociation(
             "activation",
             description.activation_operand_id,
-            "X",
+            SemanticOperandDestination(compute_owner, "X"),
             CoordinateMappingKind.FLATTEN_LEADING,
             (*description.leading_shape, matrix_width),
             (repetitions, matrix_width),
         ),
         SourceOperandAssociation(
-            "weight",
-            description.weight_operand_id,
-            "W",
-            CoordinateMappingKind.TRANSPOSE_2D,
-            (matrix_width, matrix_height),
-            (matrix_height, matrix_width),
-        ),
-        SourceOperandAssociation(
             "output",
             description.output_operand_id,
-            "Y",
+            SemanticOperandDestination(compute_owner, "Y"),
             CoordinateMappingKind.FLATTEN_LEADING,
             (*description.leading_shape, matrix_height),
             (repetitions, matrix_height),
         ),
     ]
-    if description.threshold_operand_id is not None:
+    if topology is MVAUParameterTopology.EMBEDDED:
+        weight_destination: SourceOperandDestination = BindingLocalStateDestination(
+            "mvau.compute", "weights"
+        )
+    elif topology is MVAUParameterTopology.DIRECT:
+        weight_destination = SemanticOperandDestination("mvau.compute", "W")
+    else:
+        weight_destination = BindingLocalStateDestination("delivery", "weights")
+    operands.insert(
+        1,
+        SourceOperandAssociation(
+            "weight",
+            description.weight_operand_id,
+            weight_destination,
+            CoordinateMappingKind.TRANSPOSE_2D,
+            (matrix_width, matrix_height),
+            (matrix_height, matrix_width),
+        ),
+    )
+    if (
+        profile is MVAUComputationProfile.FUSED_THRESHOLD
+        and description.threshold_operand_id is not None
+        and description.threshold_shape is not None
+    ):
         operands.append(
             SourceOperandAssociation(
                 "threshold",
                 description.threshold_operand_id,
-                "thresholds",
+                BindingLocalStateDestination(compute_owner, "thresholds"),
                 CoordinateMappingKind.BINDING_LOCAL_STATE,
-                (),
-                (),
+                description.threshold_shape,
+                description.threshold_shape,
             )
         )
     return Decided(
         MVAUSourceAssociation(
             description.source_node_id,
             description.fused_source_node_ids,
+            declaration.value,
+            topology,
             tuple(operands),
         )
     )
@@ -366,13 +421,47 @@ def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
 
 def _source_association_valid(dependencies: DependencyView) -> Answer[bool]:
     description = cast(MVAUSourceDescription, dependencies["source_description"])
+    association = cast(MVAUSourceAssociation, dependencies["source_association"])
+    topology = cast(MVAUParameterTopology, dependencies["op_topology"])
+    compute = cast(DataflowRegion, dependencies["compute_region"])
     repetitions = cast(int, dependencies["repetitions"])
     profile = cast(MVAUComputationProfile, dependencies["computation_profile"])
-    threshold_valid = (
-        profile is not MVAUComputationProfile.FUSED_THRESHOLD
-        or description.threshold_operand_id is not None
+    threshold_valid = profile is not MVAUComputationProfile.FUSED_THRESHOLD or (
+        description.threshold_operand_id is not None and description.threshold_shape is not None
     )
-    return Decided(prod(description.leading_shape) == repetitions and threshold_valid)
+    compute_operands = {interface.port.operand.id for interface in compute.interfaces}
+    semantic_destinations_valid = True
+    for operand in association.operands:
+        destination = operand.destination
+        if not isinstance(destination, SemanticOperandDestination):
+            continue
+        expected_owner = "compute" if topology is MVAUParameterTopology.CYCLIC else "mvau.compute"
+        if destination.owner_id != expected_owner or destination.operand_id not in compute_operands:
+            semantic_destinations_valid = False
+    local_destinations = {
+        operand.role: operand.destination
+        for operand in association.operands
+        if isinstance(operand.destination, BindingLocalStateDestination)
+    }
+    weight_destination_valid = (
+        (
+            topology is MVAUParameterTopology.EMBEDDED
+            and local_destinations.get("weight")
+            == BindingLocalStateDestination("mvau.compute", "weights")
+        )
+        or (topology is MVAUParameterTopology.DIRECT and "weight" not in local_destinations)
+        or (
+            topology is MVAUParameterTopology.CYCLIC
+            and local_destinations.get("weight")
+            == BindingLocalStateDestination("delivery", "weights")
+        )
+    )
+    return Decided(
+        prod(description.leading_shape) == repetitions
+        and threshold_valid
+        and semantic_destinations_valid
+        and weight_destination_valid
+    )
 
 
 def _topology_matches_region(dependencies: DependencyView) -> Answer[bool]:
@@ -383,15 +472,9 @@ def _topology_matches_region(dependencies: DependencyView) -> Answer[bool]:
     return Decided(declaration is not MVAURegionDeclaration.STANDARD_EMBEDDED)
 
 
-def _delivery_matches_region(dependencies: DependencyView) -> Answer[bool]:
-    compute = cast(MVAURegionDeclaration, dependencies["region_declaration"])
-    delivery = cast(CyclicParameterRegionDeclaration, dependencies["delivery_declaration"])
-    expected = (
-        CyclicParameterRegionDeclaration.CHUNKED
-        if compute is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
-        else CyclicParameterRegionDeclaration.FULL_TILE
-    )
-    return Decided(delivery is expected)
+def _cyclic_interleaved_pumping_supported(dependencies: DependencyView) -> Answer[bool]:
+    pumped = dependencies["pumped_memory"]
+    return Decided(pumped is ABSENT or not cast(bool, pumped))
 
 
 def _direct_interleaved_source_available(dependencies: DependencyView) -> Answer[bool]:
@@ -514,7 +597,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
         CYCLIC_PARAMETER_KERNEL.binding_definitions,
         CyclicParameterKernelPaths.REGION,
         CyclicParameterKernelPaths.BINDING,
-        CyclicParameterKernelPaths.BINDING_WITNESS,
+        CyclicParameterKernelPaths.BINDING_SELECTION,
         "cyclic_model_structural",
         "cyclic_binding_feasibility",
     )
@@ -564,6 +647,9 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                 EvaluatorSpec(
                     (
                         source_description_ref,
+                        _TOPOLOGY_REF,
+                        _REGION_DECLARATION_REF,
+                        _COMPUTATION_REF,
                         DependencyRef.problem(
                             "repetitions",
                             MVAUComputeKernelPaths.REPETITIONS,
@@ -615,12 +701,26 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                 EvaluatorSpec((_TOPOLOGY_REF, _REGION_DECLARATION_REF), _topology_matches_region),
             ),
             Constraint(
-                MVAUDataflowOpPaths.DELIVERY_MATCHES_REGION,
+                MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
                 EvaluatorSpec(
-                    (_REGION_DECLARATION_REF, _DELIVERY_DECLARATION_REF),
-                    _delivery_matches_region,
+                    (
+                        DependencyRef.decision(
+                            "pumped_memory",
+                            CyclicParameterKernelPaths.PUMPED_MEMORY,
+                            _BOOL_SEMANTICS,
+                            absence=AbsenceMode.ALLOWS_ABSENT,
+                        ),
+                    ),
+                    _cyclic_interleaved_pumping_supported,
                 ),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
+                applies_if=EvaluatorSpec(
+                    (_TOPOLOGY_REF, _REGION_DECLARATION_REF),
+                    lambda dependencies: Decided(
+                        dependencies["op_topology"] is MVAUParameterTopology.CYCLIC
+                        and dependencies["region_declaration"]
+                        is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+                    ),
+                ),
             ),
             Constraint(
                 MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
@@ -650,6 +750,9 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                 EvaluatorSpec(
                     (
                         source_description_ref,
+                        source_association_ref,
+                        _TOPOLOGY_REF,
+                        _COMPUTE_REGION_REF,
                         DependencyRef.problem(
                             "repetitions",
                             MVAUComputeKernelPaths.REPETITIONS,
@@ -676,7 +779,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                 (
                     MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
                     MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
-                    MVAUDataflowOpPaths.DELIVERY_MATCHES_REGION,
+                    MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
                     MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
                     MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
                     MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
@@ -692,7 +795,6 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                     MVAUComputeKernelPaths.REGION_DECLARATION,
                     MVAUComputeKernelPaths.INTERLEAVE,
                     MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
-                    CyclicParameterKernelPaths.REGION_DECLARATION,
                 ),
                 properties=(
                     MVAUComputeKernelPaths.REGION,
@@ -705,7 +807,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
                 constraints=(
                     MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
                     MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
-                    MVAUDataflowOpPaths.DELIVERY_MATCHES_REGION,
+                    MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
                     MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
                     MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
                     MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
@@ -719,6 +821,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
 MVAU_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()
 
 __all__ = [
+    "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "DataflowOpResult",
     "MVAU_DATAFLOW_OP_SPEC",
@@ -728,6 +831,8 @@ __all__ = [
     "MVAUSourceDescription",
     "NetworkRef",
     "RegionRef",
+    "SemanticOperandDestination",
     "SourceOperandAssociation",
+    "SourceOperandDestination",
     "build_mvau_dataflow_op_spec",
 ]

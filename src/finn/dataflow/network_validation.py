@@ -87,7 +87,9 @@ def _validate_position_map(
     entries = edge.sinks[sink_index].position_map.entries
     source_positions = tuple(position for position, _mapped in entries)
     sink_positions = tuple(mapped for _position, mapped in entries)
+    position_map_usable = True
     if len(source_positions) != len(set(source_positions)):
+        position_map_usable = False
         issues.append(
             NetworkValidationIssue(
                 "position_map.source_not_function",
@@ -96,6 +98,7 @@ def _validate_position_map(
             )
         )
     if len(sink_positions) != len(set(sink_positions)):
+        position_map_usable = False
         issues.append(
             NetworkValidationIssue(
                 "position_map.not_injective",
@@ -104,6 +107,7 @@ def _validate_position_map(
             )
         )
     if frozenset(source_positions) != source.beat_sequence.image:
+        position_map_usable = False
         issues.append(
             NetworkValidationIssue(
                 "position_map.source_domain_mismatch",
@@ -112,6 +116,7 @@ def _validate_position_map(
             )
         )
     if frozenset(sink_positions) != sink.beat_sequence.image:
+        position_map_usable = False
         issues.append(
             NetworkValidationIssue(
                 "position_map.sink_domain_mismatch",
@@ -127,7 +132,10 @@ def _validate_position_map(
                 "source and sink numeric element types differ",
             )
         )
-    if source.beat_sequence.elements_per_beat != sink.beat_sequence.elements_per_beat:
+    equal_field_count = (
+        source.beat_sequence.elements_per_beat == sink.beat_sequence.elements_per_beat
+    )
+    if not equal_field_count:
         issues.append(
             NetworkValidationIssue(
                 "edge.element_count_mismatch",
@@ -135,7 +143,8 @@ def _validate_position_map(
                 "source and sink elements-per-beat differ",
             )
         )
-    if source.beat_sequence.beat_count != sink.beat_sequence.beat_count:
+    equal_beat_count = source.beat_sequence.beat_count == sink.beat_sequence.beat_count
+    if not equal_beat_count:
         issues.append(
             NetworkValidationIssue(
                 "edge.beat_count_mismatch",
@@ -143,7 +152,7 @@ def _validate_position_map(
                 "source and sink beat counts differ",
             )
         )
-    if not issues:
+    if position_map_usable and equal_field_count and equal_beat_count:
         mapping = dict(entries)
         for ordinal, source_beat in enumerate(source.beat_sequence.beats):
             sink_beat = sink.beat_sequence.beats[ordinal]

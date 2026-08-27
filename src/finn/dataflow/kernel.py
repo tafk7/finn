@@ -11,18 +11,21 @@ definitions and provides deterministic flat-spec assembly for larger scopes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from collections.abc import Mapping
+from typing import TypeVar, cast
 
 from finn.dataflow.design import (
     ABSENT,
     DATAFLOW_REGION_SEMANTICS,
     REGION_VALIDATION_REPORT_SEMANTICS,
     AbsenceMode,
+    Absent,
     Answer,
     Constraint,
     ConstraintSet,
     Decided,
     Decision,
+    DecisionDomain,
     DependencyRef,
     DependencyView,
     DerivedProperty,
@@ -33,7 +36,9 @@ from finn.dataflow.design import (
     Finding,
     FindingKind,
     ProblemSchema,
+    ProblemField,
     QualifiedPath,
+    ReadinessProfile,
     Unresolved,
     as_object_semantics,
     validate_region,
@@ -43,6 +48,7 @@ from finn.dataflow.region_validation import RegionValidationReport
 
 _REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _REPORT_SEMANTICS = as_object_semantics(REGION_VALIDATION_REPORT_SEMANTICS)
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, order=True)
@@ -99,7 +105,7 @@ class KernelDefinition:
     binding_definitions: tuple[BindingDefinition, ...]
     selected_region_path: QualifiedPath
     binding_decision_path: QualifiedPath
-    binding_witness_path: QualifiedPath
+    binding_selection_path: QualifiedPath
     structural_readiness_profile: str
     binding_readiness_profile: str
 
@@ -139,12 +145,12 @@ class KernelDefinition:
                     "selected region path is not a derived property",
                 )
             )
-        if self.binding_witness_path not in declared_properties:
+        if self.binding_selection_path not in declared_properties:
             issues.append(
                 KernelAuthoringIssue(
-                    "binding-witness-path-missing",
-                    str(self.binding_witness_path),
-                    "binding witness path is not a derived property",
+                    "binding-selection-path-missing",
+                    str(self.binding_selection_path),
+                    "binding selection path is not a derived property",
                 )
             )
         if self.binding_decision_path not in declared_decisions:
@@ -180,16 +186,62 @@ class KernelDefinition:
         if issues:
             raise KernelAuthoringError(tuple(issues))
 
+    def place(
+        self,
+        instance_id: str,
+        prefix: QualifiedPath | str,
+        *,
+        shared_problem_paths: dict[QualifiedPath, QualifiedPath] | None = None,
+    ) -> KernelPlacement:
+        """Place this definition beneath an owning prefix.
+
+        Problem fields are instance-local unless the caller explicitly maps a
+        definition-local field to a shared outer-scope path.
+        """
+        return _place_kernel_definition(
+            self,
+            instance_id,
+            QualifiedPath.parse(prefix),
+            shared_problem_paths or {},
+        )
+
+
+@dataclass(frozen=True)
+class KernelPlacement:
+    """One path-rebased placement of a reusable Kernel definition."""
+
+    definition_id: str
+    instance_id: str
+    spec: DesignSpaceSpec
+    path_mapping: tuple[tuple[QualifiedPath, QualifiedPath], ...]
+    shared_problem_paths: tuple[QualifiedPath, ...]
+    region_declarations: tuple[RegionDeclaration, ...]
+    binding_definitions: tuple[BindingDefinition, ...]
+    selected_region_path: QualifiedPath
+    binding_decision_path: QualifiedPath
+    binding_selection_path: QualifiedPath
+    structural_readiness_profile: str
+    binding_readiness_profile: str
+
+    def path(self, definition_local_path: QualifiedPath | str) -> QualifiedPath:
+        local = QualifiedPath.parse(definition_local_path)
+        mapping = dict(self.path_mapping)
+        try:
+            return mapping[local]
+        except KeyError as exc:
+            raise KeyError(f"path {local} does not belong to this Kernel definition") from exc
+
 
 @dataclass(frozen=True)
 class KernelInstance:
     """One evaluated Kernel definition associated with selected semantics."""
 
     definition_id: str
+    instance_id: str
     point: DesignPoint
     region: DataflowRegion
     binding_id: object
-    binding_witness: object
+    binding_selection: object
 
 
 @dataclass(frozen=True)
@@ -262,10 +314,13 @@ def build_kernel_semantic_declarations(
     )
 
 
+KernelDefinitionOrPlacement = KernelDefinition | KernelPlacement
+
+
 def instantiate_kernel(
-    engine: Engine, definition: KernelDefinition, point: DesignPoint
+    engine: Engine, definition: KernelDefinitionOrPlacement, point: DesignPoint
 ) -> Answer[KernelInstance]:
-    """Construct a Kernel instance when region, binding, and witness are resolved."""
+    """Construct a resolved selection; feasibility remains a separate query."""
     region_answer = engine.query_property(point, definition.selected_region_path)
     if not isinstance(region_answer, Decided):
         return region_answer
@@ -281,16 +336,17 @@ def instantiate_kernel(
                 ),
             )
         )
-    witness_answer = engine.query_property(point, definition.binding_witness_path)
-    if not isinstance(witness_answer, Decided):
-        return witness_answer
+    selection_answer = engine.query_property(point, definition.binding_selection_path)
+    if not isinstance(selection_answer, Decided):
+        return selection_answer
     return Decided(
         KernelInstance(
-            definition.id,
+            definition.id if isinstance(definition, KernelDefinition) else definition.definition_id,
+            definition.id if isinstance(definition, KernelDefinition) else definition.instance_id,
             point,
             cast(DataflowRegion, region_answer.value),
             binding,
-            witness_answer.value,
+            selection_answer.value,
         )
     )
 
@@ -304,8 +360,226 @@ def _spec_declaration_paths(spec: DesignSpaceSpec) -> tuple[QualifiedPath, ...]:
     )
 
 
+def _prefixed(prefix: QualifiedPath, path: QualifiedPath) -> QualifiedPath:
+    return QualifiedPath(f"{prefix}.{path}")
+
+
+def _map_diagnostic_value(
+    value: object, path_mapping: dict[QualifiedPath, QualifiedPath]
+) -> object:
+    if isinstance(value, QualifiedPath):
+        return path_mapping.get(value, value)
+    if isinstance(value, tuple):
+        return tuple(_map_diagnostic_value(item, path_mapping) for item in value)
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted(
+                (
+                    str(name),
+                    _map_diagnostic_value(item, path_mapping),
+                )
+                for name, item in value.items()
+            )
+        )
+    return value
+
+
+def _map_answer_findings(
+    answer: Answer[T], path_mapping: dict[QualifiedPath, QualifiedPath]
+) -> Answer[T]:
+    if isinstance(answer, Decided):
+        return answer
+    findings = tuple(
+        Finding(
+            finding.kind,
+            finding.code,
+            path_mapping.get(finding.path, finding.path),
+            finding.message,
+            tuple(
+                (name, _map_diagnostic_value(value, path_mapping)) for name, value in finding.values
+            ),
+            tuple(path_mapping.get(path, path) for path in finding.trace),
+        )
+        for finding in answer.findings
+    )
+    if isinstance(answer, Absent):
+        return Absent(findings)
+    return Unresolved(findings)
+
+
+def _rebase_dependency(
+    dependency: DependencyRef, path_mapping: dict[QualifiedPath, QualifiedPath]
+) -> DependencyRef:
+    return DependencyRef(
+        dependency.name,
+        path_mapping.get(dependency.path, dependency.path),
+        dependency.kind,
+        dependency.value_semantics,
+        dependency.absence,
+    )
+
+
+def _rebase_evaluator(
+    evaluator: EvaluatorSpec[Answer[T]],
+    path_mapping: dict[QualifiedPath, QualifiedPath],
+) -> EvaluatorSpec[Answer[T]]:
+    def evaluate(values: DependencyView) -> Answer[T]:
+        return _map_answer_findings(evaluator.evaluator(values), path_mapping)
+
+    return EvaluatorSpec(
+        tuple(
+            _rebase_dependency(dependency, path_mapping) for dependency in evaluator.dependencies
+        ),
+        evaluate,
+    )
+
+
+def _place_kernel_definition(
+    definition: KernelDefinition,
+    instance_id: str,
+    prefix: QualifiedPath,
+    shared_problem_paths: dict[QualifiedPath, QualifiedPath],
+) -> KernelPlacement:
+    if not instance_id:
+        raise ValueError("Kernel instance id must not be empty")
+    declared_paths = _spec_declaration_paths(definition.spec)
+    problem_paths = {field.path for field in definition.spec.problem_schema.fields}
+    if not set(shared_problem_paths).issubset(problem_paths):
+        unknown = sorted(set(shared_problem_paths) - problem_paths)
+        raise KernelAuthoringError(
+            tuple(
+                KernelAuthoringIssue(
+                    "shared-problem-path-unknown",
+                    str(path),
+                    "shared path is not a problem field of this Kernel definition",
+                )
+                for path in unknown
+            )
+        )
+    path_mapping = {
+        path: shared_problem_paths.get(path, _prefixed(prefix, path)) for path in declared_paths
+    }
+
+    def evaluator(
+        value: EvaluatorSpec[Answer[bool]] | None,
+    ) -> EvaluatorSpec[Answer[bool]] | None:
+        if value is None:
+            return None
+        return cast(EvaluatorSpec[Answer[bool]], _rebase_evaluator(value, path_mapping))
+
+    fields = tuple(
+        ProblemField(
+            path_mapping[field.path],
+            field.value_semantics,
+            field.required,
+            field.constraint,
+            field.constraint_description,
+        )
+        for field in definition.spec.problem_schema.fields
+        if field.path not in shared_problem_paths
+    )
+    decisions = []
+    for decision in definition.spec.decisions:
+        domain_dependencies = tuple(
+            _rebase_dependency(dependency, path_mapping)
+            for dependency in decision.domain.dependencies
+        )
+
+        def accepts(
+            candidate: object,
+            values: DependencyView,
+            domain: DecisionDomain = decision.domain,
+        ) -> Answer[bool]:
+            return cast(
+                Answer[bool],
+                _map_answer_findings(domain.accepts(candidate, values), path_mapping),
+            )
+
+        candidates = (
+            None
+            if decision.domain.candidates is None
+            else _rebase_evaluator(decision.domain.candidates, path_mapping)
+        )
+        decisions.append(
+            Decision(
+                path_mapping[decision.path],
+                decision.value_semantics,
+                DecisionDomain(
+                    domain_dependencies,
+                    accepts,
+                    candidates,
+                ),
+                evaluator(decision.applies_if),
+                None
+                if decision.proposal is None
+                else _rebase_evaluator(decision.proposal, path_mapping),
+            )
+        )
+    properties = tuple(
+        DerivedProperty(
+            path_mapping[item.path],
+            item.value_semantics,
+            _rebase_evaluator(item.evaluator, path_mapping),
+            evaluator(item.applies_if),
+        )
+        for item in definition.spec.properties
+    )
+    constraints = tuple(
+        Constraint(
+            path_mapping[item.path],
+            cast(
+                EvaluatorSpec[Answer[bool]],
+                _rebase_evaluator(item.evaluator, path_mapping),
+            ),
+            evaluator(item.applies_if),
+        )
+        for item in definition.spec.constraints
+    )
+    constraint_sets = tuple(
+        ConstraintSet(
+            f"{instance_id}.{item.name}",
+            tuple(path_mapping[path] for path in item.constraints),
+        )
+        for item in definition.spec.constraint_sets
+    )
+    readiness_profiles = tuple(
+        ReadinessProfile(
+            f"{instance_id}.{item.name}",
+            tuple(path_mapping[path] for path in item.decisions),
+            tuple(path_mapping[path] for path in item.properties),
+            tuple(path_mapping[path] for path in item.constraints),
+        )
+        for item in definition.spec.readiness_profiles
+    )
+    spec = DesignSpaceSpec(
+        ProblemSchema(fields),
+        tuple(decisions),
+        properties,
+        constraints,
+        constraint_sets,
+        readiness_profiles,
+    )
+    return KernelPlacement(
+        definition.id,
+        instance_id,
+        spec,
+        tuple(sorted(path_mapping.items())),
+        tuple(sorted(shared_problem_paths.values())),
+        tuple(
+            RegionDeclaration(item.id, path_mapping[item.property_path])
+            for item in definition.region_declarations
+        ),
+        definition.binding_definitions,
+        path_mapping[definition.selected_region_path],
+        path_mapping[definition.binding_decision_path],
+        path_mapping[definition.binding_selection_path],
+        f"{instance_id}.{definition.structural_readiness_profile}",
+        f"{instance_id}.{definition.binding_readiness_profile}",
+    )
+
+
 def assemble_kernel_specs(
-    definitions: tuple[KernelDefinition, ...],
+    definitions: tuple[KernelDefinitionOrPlacement, ...],
     *,
     additions: DesignSpaceSpec = DesignSpaceSpec(),
 ) -> DesignSpaceSpec:
@@ -315,7 +589,11 @@ def assemble_kernel_specs(
     ``DesignSpaceSpec`` is still validated by the generic engine.
     """
     issues = []
-    for duplicate in _duplicate_values(tuple(definition.id for definition in definitions)):
+    identities = tuple(
+        definition.id if isinstance(definition, KernelDefinition) else definition.instance_id
+        for definition in definitions
+    )
+    for duplicate in _duplicate_values(identities):
         issues.append(
             KernelAuthoringIssue(
                 "kernel-id-duplicate",
@@ -442,6 +720,8 @@ __all__ = [
     "KernelAuthoringIssue",
     "KernelDefinition",
     "KernelInstance",
+    "KernelPlacement",
+    "KernelDefinitionOrPlacement",
     "KernelSemanticDeclarations",
     "RegionDeclaration",
     "assemble_kernel_specs",

@@ -8,7 +8,6 @@ from dataclasses import replace
 import pytest
 
 from finn.dataflow.design import (
-    Absent,
     Decided,
     DesignPoint,
     DesignSpaceSpec,
@@ -25,6 +24,7 @@ from finn.dataflow.mvau.regions import (
 )
 from finn.dataflow.network_validation import NetworkValidationReport
 from finn.dataflow.ops.mvau import (
+    BindingLocalStateDestination,
     CoordinateMappingKind,
     MVAU_DATAFLOW_OP_SPEC,
     MVAUDataflowOpPaths,
@@ -33,11 +33,11 @@ from finn.dataflow.ops.mvau import (
     MVAUSourceDescription,
     NetworkRef,
     RegionRef,
+    SemanticOperandDestination,
 )
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterBinding,
     CyclicParameterKernelPaths,
-    CyclicParameterRegionDeclaration,
     CyclicRamStyle,
 )
 from finn.dataflow.region import NumericElementType
@@ -55,6 +55,7 @@ def _source_description(*, fused: bool = False) -> MVAUSourceDescription:
         (2,),
         "source_thresholds" if fused else None,
         ("matmul", "threshold") if fused else ("matmul",),
+        (4, 3) if fused else None,
     )
 
 
@@ -65,6 +66,7 @@ def _problem(
     matrix_height: int = 4,
     source_description: MVAUSourceDescription | None = None,
     external_weight_sequence: object | None = None,
+    computation_profile: MVAUComputationProfile = MVAUComputationProfile.ACCUMULATOR_INTEGER,
 ) -> dict[str, object]:
     problem: dict[str, object] = {
         str(MVAUComputeKernelPaths.REPETITIONS): repetitions,
@@ -74,10 +76,9 @@ def _problem(
         str(MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE): INT8,
         str(MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE): INT16,
         str(MVAUComputeKernelPaths.OUTPUT_ELEMENT_TYPE): INT16,
-        str(MVAUComputeKernelPaths.COMPUTATION_PROFILE): (
-            MVAUComputationProfile.ACCUMULATOR_INTEGER
-        ),
+        str(MVAUComputeKernelPaths.COMPUTATION_PROFILE): computation_profile,
         str(MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE): True,
+        str(MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE): True,
         str(MVAUComputeKernelPaths.TARGET_DSP_BLOCK): MVAUDspBlock.DSP58,
         str(MVAUComputeKernelPaths.WEIGHTS_NARROW): True,
         str(CyclicParameterKernelPaths.INITIALIZER_AVAILABLE): True,
@@ -99,6 +100,7 @@ def _started(**overrides: object) -> tuple[Engine, DesignPoint]:
         "matrix_height": MVAUComputeKernelPaths.MATRIX_HEIGHT,
         "source_description": MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
         "external_weight_sequence": MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
+        "computation_profile": MVAUComputeKernelPaths.COMPUTATION_PROFILE,
     }
     for name, value in overrides.items():
         problem[str(override_paths[name])] = value
@@ -120,11 +122,8 @@ def _compute_assignments(
     return assignments
 
 
-def _cyclic_assignments(
-    declaration: CyclicParameterRegionDeclaration,
-) -> dict[QualifiedPath, object]:
+def _cyclic_assignments() -> dict[QualifiedPath, object]:
     return {
-        CyclicParameterKernelPaths.REGION_DECLARATION: declaration,
         CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
         CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
         CyclicParameterKernelPaths.PUMPED_MEMORY: False,
@@ -153,26 +152,19 @@ def test_embedded_and_direct_topologies_resolve_to_region_refs(
 
 
 @pytest.mark.parametrize(
-    "compute_declaration,delivery_declaration",
+    "compute_declaration",
     [
-        (
-            MVAURegionDeclaration.STANDARD_STREAMED,
-            CyclicParameterRegionDeclaration.FULL_TILE,
-        ),
-        (
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            CyclicParameterRegionDeclaration.CHUNKED,
-        ),
+        MVAURegionDeclaration.STANDARD_STREAMED,
+        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
     ],
 )
 def test_cyclic_topologies_resolve_to_structurally_valid_network_refs(
     compute_declaration: MVAURegionDeclaration,
-    delivery_declaration: CyclicParameterRegionDeclaration,
 ) -> None:
     engine, point = _started()
     assignments = {
         **_compute_assignments(compute_declaration, MVAUParameterTopology.CYCLIC),
-        **_cyclic_assignments(delivery_declaration),
+        **_cyclic_assignments(),
     }
     point = engine.commit_assignments(point, assignments).point
     answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
@@ -187,7 +179,10 @@ def test_cyclic_topologies_resolve_to_structurally_valid_network_refs(
 
 def test_source_association_records_flattening_transpose_and_fused_provenance() -> None:
     description = _source_description(fused=True)
-    engine, point = _started(source_description=description)
+    engine, point = _started(
+        source_description=description,
+        computation_profile=MVAUComputationProfile.FUSED_THRESHOLD,
+    )
     point = engine.commit_assignments(
         point,
         _compute_assignments(
@@ -202,11 +197,76 @@ def test_source_association_records_flattening_transpose_and_fused_provenance() 
     assert association.fused_source_node_ids == ("matmul", "threshold")
     by_role = {item.role: item for item in association.operands}
     assert by_role["activation"].mapping is CoordinateMappingKind.FLATTEN_LEADING
+    assert by_role["activation"].destination == SemanticOperandDestination("mvau.compute", "X")
     assert by_role["activation"].map_position((1, 3)) == (1, 3)
     assert by_role["weight"].mapping is CoordinateMappingKind.TRANSPOSE_2D
+    assert by_role["weight"].destination == BindingLocalStateDestination("mvau.compute", "weights")
     assert by_role["weight"].map_position((3, 2)) == (2, 3)
     assert by_role["output"].mapping is CoordinateMappingKind.FLATTEN_LEADING
     assert by_role["threshold"].mapping is CoordinateMappingKind.BINDING_LOCAL_STATE
+    assert by_role["threshold"].source_shape == (4, 3)
+    assert by_role["threshold"].destination == BindingLocalStateDestination(
+        "mvau.compute", "thresholds"
+    )
+
+
+@pytest.mark.parametrize(
+    "topology,weight_destination,semantic_owner",
+    [
+        (
+            MVAUParameterTopology.EMBEDDED,
+            BindingLocalStateDestination("mvau.compute", "weights"),
+            "mvau.compute",
+        ),
+        (
+            MVAUParameterTopology.DIRECT,
+            SemanticOperandDestination("mvau.compute", "W"),
+            "mvau.compute",
+        ),
+        (
+            MVAUParameterTopology.CYCLIC,
+            BindingLocalStateDestination("delivery", "weights"),
+            "compute",
+        ),
+    ],
+)
+def test_source_associations_are_topology_aware_and_qualified(
+    topology: MVAUParameterTopology,
+    weight_destination: object,
+    semantic_owner: str,
+) -> None:
+    declaration = (
+        MVAURegionDeclaration.STANDARD_EMBEDDED
+        if topology is MVAUParameterTopology.EMBEDDED
+        else MVAURegionDeclaration.STANDARD_STREAMED
+    )
+    engine, point = _started()
+    assignments = _compute_assignments(declaration, topology)
+    if topology is MVAUParameterTopology.CYCLIC:
+        assignments.update(_cyclic_assignments())
+    point = engine.commit_assignments(point, assignments).point
+    association_answer = engine.query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION)
+    result_answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+    assert isinstance(association_answer, Decided)
+    assert isinstance(result_answer, Decided)
+    association = association_answer.value
+    assert isinstance(association, MVAUSourceAssociation)
+    associations = {item.role: item for item in association.operands}
+    assert associations["weight"].destination == weight_destination
+    for role in ("activation", "output"):
+        destination = associations[role].destination
+        assert isinstance(destination, SemanticOperandDestination)
+        assert destination.owner_id == semantic_owner
+        if isinstance(result_answer.value, RegionRef):
+            assert destination.operand_id in {
+                interface.port.operand.id for interface in result_answer.value.region.interfaces
+            }
+        else:
+            assert isinstance(result_answer.value, NetworkRef)
+            node = result_answer.value.network.node(destination.owner_id)
+            assert destination.operand_id in {
+                interface.port.operand.id for interface in node.region.interfaces
+            }
 
 
 def test_source_association_rejects_incorrect_flattened_repetition_extent() -> None:
@@ -266,18 +326,34 @@ def test_direct_interleaved_missing_source_is_unresolved_but_region_is_resolved(
     assert isinstance(answer, Unresolved)
 
 
-def test_topology_and_delivery_declaration_mismatches_are_explicit_constraints() -> None:
+def test_topology_mismatch_is_an_explicit_constraint() -> None:
     engine, point = _started()
     assignments = {
         **_compute_assignments(
             MVAURegionDeclaration.STANDARD_EMBEDDED, MVAUParameterTopology.CYCLIC
         ),
-        **_cyclic_assignments(CyclicParameterRegionDeclaration.CHUNKED),
+        **_cyclic_assignments(),
     }
     point = engine.commit_assignments(point, assignments).point
     assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
     assert assessment.answers[MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION] == Decided(False)
-    assert isinstance(assessment.answers[MVAUDataflowOpPaths.DELIVERY_MATCHES_REGION], Absent)
+
+
+def test_interleaved_compute_rejects_unvalidated_pumped_cyclic_delivery() -> None:
+    engine, point = _started()
+    assignments = {
+        **_compute_assignments(
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            MVAUParameterTopology.CYCLIC,
+        ),
+        **_cyclic_assignments(),
+        CyclicParameterKernelPaths.PUMPED_MEMORY: True,
+    }
+    point = engine.commit_assignments(point, assignments).point
+    assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
+    assert assessment.answers[MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED] == Decided(
+        False
+    )
 
 
 def test_all_kernel_topology_and_spatialization_choices_can_commit_together() -> None:
@@ -288,8 +364,7 @@ def test_all_kernel_topology_and_spatialization_choices_can_commit_together() ->
             MVAUParameterTopology.CYCLIC,
         ),
         MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
-        MVAUComputeKernelPaths.COMPUTE_PUMPING: False,
-        **_cyclic_assignments(CyclicParameterRegionDeclaration.CHUNKED),
+        **_cyclic_assignments(),
     }
     result = engine.commit_assignments(point, assignments)
     assert {item.disposition for item in result.outcomes} == {"committed"}
@@ -315,7 +390,7 @@ def test_declaration_order_does_not_change_a_fully_committed_result() -> None:
         **_compute_assignments(
             MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.CYCLIC
         ),
-        **_cyclic_assignments(CyclicParameterRegionDeclaration.FULL_TILE),
+        **_cyclic_assignments(),
     }
     first_engine, first = _started()
     first = first_engine.commit_assignments(first, assignments).point

@@ -3,14 +3,17 @@
 
 """Compatibility facade for the MVAU compute Kernel authoring modules."""
 
-from finn.dataflow.mvau.computation import MVAUBindingWitness, MVAUComputationProfile
+from finn.dataflow.mvau.computation import MVAUBindingSelection, MVAUComputationProfile
 from finn.dataflow.mvau.definition import (
     MVAU_COMPUTE_KERNEL,
     MVAU_COMPUTE_KERNEL_SPEC,
+    MVAU_DESIGN_SPACE_SPEC,
     MVAUComputeBinding,
     MVAUComputeKernelPaths,
+    MVAUDesignPaths,
     MVAUDspBlock,
     build_mvau_compute_kernel_spec,
+    build_legacy_mvau_design_space_spec,
 )
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
@@ -22,15 +25,11 @@ from finn.dataflow.mvau.regions import (
     construct_streamed_weight_mvau_region,
 )
 
-# Compatibility names from the first public MVAU design-space slice.
-MVAUDesignPaths = MVAUComputeKernelPaths
-MVAU_DESIGN_SPACE_SPEC = MVAU_COMPUTE_KERNEL_SPEC
-
 __all__ = [
     "MVAU_COMPUTE_KERNEL",
     "MVAU_COMPUTE_KERNEL_SPEC",
     "MVAU_DESIGN_SPACE_SPEC",
-    "MVAUBindingWitness",
+    "MVAUBindingSelection",
     "MVAUComputationProfile",
     "MVAUComputeBinding",
     "MVAUComputeKernelPaths",
@@ -38,6 +37,7 @@ __all__ = [
     "MVAUDspBlock",
     "MVAURegionDeclaration",
     "MVAUWeightInterface",
+    "build_legacy_mvau_design_space_spec",
     "build_mvau_compute_kernel_spec",
     "construct_batch_interleaved_streamed_mvau_region",
     "construct_mvau_compute_region",

@@ -43,7 +43,7 @@ from finn.dataflow.kernel import (
     RegionDeclaration,
     build_kernel_semantic_declarations,
 )
-from finn.dataflow.mvau.computation import MVAUBindingWitness, MVAUComputationProfile
+from finn.dataflow.mvau.computation import MVAUBindingSelection, MVAUComputationProfile
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
     MVAUWeightInterface,
@@ -89,6 +89,7 @@ class MVAUComputeKernelPaths:
     ACCUMULATOR_ELEMENT_TYPE = QualifiedPath("problem.mvau.accumulator_element_type")
     OUTPUT_ELEMENT_TYPE = QualifiedPath("problem.mvau.output_element_type")
     THRESHOLD_ELEMENT_TYPE = QualifiedPath("problem.mvau.threshold_element_type")
+    THRESHOLD_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.threshold_initializer_available")
     COMPUTATION_PROFILE = QualifiedPath("problem.mvau.computation_profile")
     WEIGHT_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.weight_initializer_available")
     TARGET_DSP_BLOCK = QualifiedPath("problem.target.dsp_block")
@@ -119,7 +120,7 @@ class MVAUComputeKernelPaths:
     )
     REGION = QualifiedPath("semantic.mvau.compute.region")
     REGION_VALIDATION = QualifiedPath("semantic.mvau.compute.region_validation")
-    BINDING_WITNESS = QualifiedPath("binding.mvau.compute.witness")
+    BINDING_SELECTION = QualifiedPath("binding.mvau.compute.selection")
 
     REGION_STRUCTURALLY_WELL_FORMED = QualifiedPath(
         "constraint.mvau.compute.region_structurally_well_formed"
@@ -130,6 +131,12 @@ class MVAUComputeKernelPaths:
     )
     COMPUTATION_TYPES_SUPPORTED = QualifiedPath(
         "constraint.mvau.compute.computation_types_supported"
+    )
+    ACCUMULATOR_OUTPUT_TYPE_SUPPORTED = QualifiedPath(
+        "constraint.mvau.compute.accumulator_output_type_supported"
+    )
+    FUSED_THRESHOLD_SOURCE_SUPPORTED = QualifiedPath(
+        "constraint.mvau.compute.fused_threshold_source_supported"
     )
     BINDING_NUMERIC_SUPPORTED = QualifiedPath("constraint.mvau.compute.binding_numeric_supported")
     BINDING_TARGET_SUPPORTED = QualifiedPath("constraint.mvau.compute.binding_target_supported")
@@ -149,8 +156,30 @@ class MVAUComputeKernelPaths:
     BINDING_TILED_WIDTH_SUPPORTED = QualifiedPath(
         "constraint.mvau.compute.binding_tiled_width_supported"
     )
+    BINDING_RTL_WIDTH_SUPPORTED = QualifiedPath(
+        "constraint.mvau.compute.binding_rtl_width_supported"
+    )
     BINDING_COMPUTE_PUMPING_SUPPORTED = QualifiedPath(
         "constraint.mvau.compute.binding_compute_pumping_supported"
+    )
+
+
+class MVAUDesignPaths:
+    """Paths retained by the original streamed-weight compatibility spec."""
+
+    REPETITIONS = QualifiedPath("problem.mvau.r")
+    MATRIX_WIDTH = QualifiedPath("problem.mvau.mw")
+    MATRIX_HEIGHT = QualifiedPath("problem.mvau.mh")
+    ACTIVATION_ELEMENT_TYPE = QualifiedPath("problem.mvau.activation_element_type")
+    WEIGHT_ELEMENT_TYPE = QualifiedPath("problem.mvau.weight_element_type")
+    OUTPUT_ELEMENT_TYPE = QualifiedPath("problem.mvau.output_element_type")
+    PE = QualifiedPath("mvau.pe")
+    SIMD = QualifiedPath("mvau.simd")
+    STANDARD_STREAMED_REGION = QualifiedPath("semantic.mvau.region_declarations.standard_streamed")
+    REGION = QualifiedPath("semantic.mvau.region")
+    REGION_VALIDATION = QualifiedPath("semantic.mvau.region_validation")
+    REGION_STRUCTURALLY_WELL_FORMED = QualifiedPath(
+        "constraint.mvau.region_structurally_well_formed"
     )
 
 
@@ -204,8 +233,8 @@ _REGION_DECLARATION_SEMANTICS: ValueSemantics[object] = ValueSemantics(
 _COMPUTATION_SEMANTICS = _enum_semantics(MVAUComputationProfile)
 _BINDING_SEMANTICS = _enum_semantics(MVAUComputeBinding)
 _DSP_BLOCK_SEMANTICS = _enum_semantics(MVAUDspBlock)
-_WITNESS_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(MVAUBindingWitness, name="MVAUBindingWitness")
+_BINDING_SELECTION_SEMANTICS = as_object_semantics(
+    ValueSemantics.immutable_nominal(MVAUBindingSelection, name="MVAUBindingSelection")
 )
 
 
@@ -252,6 +281,7 @@ _COMPUTE_PUMPING_REF = DependencyRef.decision(
     "compute_pumping",
     MVAUComputeKernelPaths.COMPUTE_PUMPING,
     _BOOL_OBJECT_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
 )
 _ACTIVATION_TYPE_REF = DependencyRef.problem(
     "activation_element_type",
@@ -268,10 +298,21 @@ _ACCUMULATOR_TYPE_REF = DependencyRef.problem(
     MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE,
     _ELEMENT_TYPE_OBJECT_SEMANTICS,
 )
+_OUTPUT_TYPE_REF = DependencyRef.problem(
+    "output_element_type",
+    MVAUComputeKernelPaths.OUTPUT_ELEMENT_TYPE,
+    _ELEMENT_TYPE_OBJECT_SEMANTICS,
+)
 _THRESHOLD_TYPE_REF = DependencyRef.problem(
     "threshold_element_type",
     MVAUComputeKernelPaths.THRESHOLD_ELEMENT_TYPE,
     _ELEMENT_TYPE_OBJECT_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+_THRESHOLD_INITIALIZER_REF = DependencyRef.problem(
+    "threshold_initializer_available",
+    MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE,
+    _BOOL_OBJECT_SEMANTICS,
     absence=AbsenceMode.ALLOWS_ABSENT,
 )
 _COMPUTATION_REF = DependencyRef.problem(
@@ -388,6 +429,18 @@ def _binding_applies(*bindings: MVAUComputeBinding) -> EvaluatorSpec[Answer[bool
     return EvaluatorSpec((_BINDING_REF,), evaluate)
 
 
+def _standard_rtl_binding_applies(dependencies: DependencyView) -> Answer[bool]:
+    return Decided(
+        dependencies["binding"] in {MVAUComputeBinding.RTL_SOFTVEC, MVAUComputeBinding.RTL_PACKED}
+        and dependencies["region_declaration"] is MVAURegionDeclaration.STANDARD_STREAMED
+    )
+
+
+_STANDARD_RTL_BINDING_APPLICABILITY = EvaluatorSpec(
+    (_BINDING_REF, _REGION_DECLARATION_REF), _standard_rtl_binding_applies
+)
+
+
 def _binding_and_computation_apply(
     bindings: tuple[MVAUComputeBinding, ...],
     profiles: tuple[MVAUComputationProfile, ...],
@@ -402,6 +455,17 @@ def _binding_and_computation_apply(
         )
 
     return EvaluatorSpec((_BINDING_REF, _COMPUTATION_REF), evaluate)
+
+
+def _computation_applies(
+    *profiles: MVAUComputationProfile,
+) -> EvaluatorSpec[Answer[bool]]:
+    accepted = frozenset(profiles)
+
+    def evaluate(dependencies: DependencyView) -> Answer[bool]:
+        return Decided(dependencies["computation_profile"] in accepted)
+
+    return EvaluatorSpec((_COMPUTATION_REF,), evaluate)
 
 
 def _missing_problem(
@@ -574,6 +638,32 @@ def _computation_types_supported(dependencies: DependencyView) -> Answer[bool]:
     return Decided(activation.type_id != "binary" and weight.type_id != "binary")
 
 
+def _accumulator_output_type_supported(dependencies: DependencyView) -> Answer[bool]:
+    accumulator = cast(NumericElementType, dependencies["accumulator_element_type"])
+    output = cast(NumericElementType, dependencies["output_element_type"])
+    return Decided(accumulator == output)
+
+
+def _fused_threshold_source_supported(dependencies: DependencyView) -> Answer[bool]:
+    threshold = dependencies["threshold_element_type"]
+    initialized = dependencies["threshold_initializer_available"]
+    if threshold is ABSENT:
+        return _missing_problem(
+            MVAUComputeKernelPaths.FUSED_THRESHOLD_SOURCE_SUPPORTED,
+            MVAUComputeKernelPaths.THRESHOLD_ELEMENT_TYPE,
+            "mvau-threshold-type-missing",
+            "fused-threshold computation requires a threshold element type",
+        )
+    if initialized is ABSENT:
+        return _missing_problem(
+            MVAUComputeKernelPaths.FUSED_THRESHOLD_SOURCE_SUPPORTED,
+            MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE,
+            "mvau-threshold-initializer-fact-missing",
+            "fused-threshold computation requires an initializer-availability fact",
+        )
+    return Decided(cast(bool, initialized))
+
+
 def _binding_numeric_supported(dependencies: DependencyView) -> Answer[bool]:
     binding = cast(MVAUComputeBinding, dependencies["binding"])
     activation = cast(NumericElementType, dependencies["activation_element_type"])
@@ -609,6 +699,32 @@ def _binding_target_supported(dependencies: DependencyView) -> Answer[bool]:
     }:
         return Decided(dsp is MVAUDspBlock.DSP58)
     return Decided(dsp in frozenset(MVAUDspBlock))
+
+
+def _rtl_width_supported(dependencies: DependencyView) -> Answer[bool]:
+    target = dependencies["target_dsp_block"]
+    if target is ABSENT:
+        return _missing_problem(
+            MVAUComputeKernelPaths.BINDING_RTL_WIDTH_SUPPORTED,
+            MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
+            "mvau-target-dsp-missing",
+            "RTL width validation requires a target DSP block",
+        )
+    a_width, b_width, p_width = {
+        MVAUDspBlock.DSP48E1: (25, 18, 48),
+        MVAUDspBlock.DSP48E2: (27, 18, 48),
+        MVAUDspBlock.DSP58: (27, 24, 58),
+    }[cast(MVAUDspBlock, target)]
+    activation = cast(NumericElementType, dependencies["activation_element_type"])
+    weight = cast(NumericElementType, dependencies["weight_element_type"])
+    accumulator = cast(NumericElementType, dependencies["accumulator_element_type"])
+    output = cast(NumericElementType, dependencies["output_element_type"])
+    return Decided(
+        2 <= weight.bit_width <= a_width
+        and 2 <= activation.bit_width <= b_width
+        and accumulator.bit_width <= p_width
+        and output.bit_width <= p_width
+    )
 
 
 def _dsp48e1_narrow_supported(dependencies: DependencyView) -> Answer[bool]:
@@ -701,32 +817,25 @@ def _tiled_width_supported(dependencies: DependencyView) -> Answer[bool]:
 
 
 def _compute_pumping_supported(dependencies: DependencyView) -> Answer[bool]:
-    if not cast(bool, dependencies["compute_pumping"]):
-        return Decided(True)
-    binding = cast(MVAUComputeBinding, dependencies["binding"])
-    declaration = cast(MVAURegionDeclaration, dependencies["region_declaration"])
-    simd = cast(int, dependencies["simd"])
     return Decided(
-        declaration is MVAURegionDeclaration.STANDARD_STREAMED
-        and binding in {MVAUComputeBinding.RTL_SOFTVEC, MVAUComputeBinding.RTL_PACKED}
-        and simd > 1
+        not cast(bool, dependencies["compute_pumping"]) or cast(int, dependencies["simd"]) > 1
     )
 
 
-def _derive_binding_witness(dependencies: DependencyView) -> Answer[object]:
+def _derive_binding_selection(dependencies: DependencyView) -> Answer[object]:
     binding = cast(MVAUComputeBinding, dependencies["binding"])
     declaration = cast(MVAURegionDeclaration, dependencies["region_declaration"])
     profile = cast(MVAUComputationProfile, dependencies["computation_profile"])
-    mechanisms = ["activation_replay", "dot_product_accumulation"]
-    if declaration is MVAURegionDeclaration.STANDARD_EMBEDDED:
-        mechanisms.append("local_weight_state")
-    elif declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED:
-        mechanisms.extend(("weight_chunk_assembly_and_replay", "output_reorder"))
-    else:
-        mechanisms.append("streamed_full_weight_tiles")
-    if profile is MVAUComputationProfile.FUSED_THRESHOLD:
-        mechanisms.append("fused_threshold_state")
-    return Decided(MVAUBindingWitness(binding.value, declaration.value, profile, tuple(mechanisms)))
+    return Decided(
+        MVAUBindingSelection(
+            binding.value,
+            declaration.value,
+            profile,
+            None
+            if dependencies["compute_pumping"] is ABSENT
+            else cast(bool, dependencies["compute_pumping"]),
+        )
+    )
 
 
 def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
@@ -795,6 +904,11 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                     constraint=_complete_numeric_element_type,
                     constraint_description="must be a complete numeric element type",
                 ),
+                ProblemField(
+                    MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE,
+                    _BOOL_OBJECT_SEMANTICS,
+                    required=False,
+                ),
                 ProblemField(MVAUComputeKernelPaths.COMPUTATION_PROFILE, _COMPUTATION_SEMANTICS),
                 ProblemField(
                     MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE,
@@ -843,6 +957,7 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                 MVAUComputeKernelPaths.COMPUTE_PUMPING,
                 _BOOL_OBJECT_SEMANTICS,
                 _finite_domain((False, True)),
+                applies_if=_STANDARD_RTL_BINDING_APPLICABILITY,
             ),
         ),
         properties=(
@@ -929,11 +1044,16 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
             semantic.selected_region,
             semantic.validation_report,
             DerivedProperty(
-                MVAUComputeKernelPaths.BINDING_WITNESS,
-                _WITNESS_SEMANTICS,
+                MVAUComputeKernelPaths.BINDING_SELECTION,
+                _BINDING_SELECTION_SEMANTICS,
                 EvaluatorSpec(
-                    (_BINDING_REF, _REGION_DECLARATION_REF, _COMPUTATION_REF),
-                    _derive_binding_witness,
+                    (
+                        _BINDING_REF,
+                        _REGION_DECLARATION_REF,
+                        _COMPUTATION_REF,
+                        _COMPUTE_PUMPING_REF,
+                    ),
+                    _derive_binding_selection,
                 ),
             ),
         ),
@@ -955,6 +1075,25 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                 ),
             ),
             Constraint(
+                MVAUComputeKernelPaths.ACCUMULATOR_OUTPUT_TYPE_SUPPORTED,
+                EvaluatorSpec(
+                    (_ACCUMULATOR_TYPE_REF, _OUTPUT_TYPE_REF),
+                    _accumulator_output_type_supported,
+                ),
+                applies_if=_computation_applies(
+                    MVAUComputationProfile.ACCUMULATOR_INTEGER,
+                    MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR,
+                ),
+            ),
+            Constraint(
+                MVAUComputeKernelPaths.FUSED_THRESHOLD_SOURCE_SUPPORTED,
+                EvaluatorSpec(
+                    (_THRESHOLD_TYPE_REF, _THRESHOLD_INITIALIZER_REF),
+                    _fused_threshold_source_supported,
+                ),
+                applies_if=_computation_applies(MVAUComputationProfile.FUSED_THRESHOLD),
+            ),
+            Constraint(
                 MVAUComputeKernelPaths.BINDING_NUMERIC_SUPPORTED,
                 EvaluatorSpec(
                     (_BINDING_REF, _ACTIVATION_TYPE_REF, _WEIGHT_TYPE_REF),
@@ -964,6 +1103,20 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
             Constraint(
                 MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED,
                 EvaluatorSpec((_BINDING_REF, _TARGET_DSP_REF), _binding_target_supported),
+                applies_if=_binding_applies(*rtl_bindings),
+            ),
+            Constraint(
+                MVAUComputeKernelPaths.BINDING_RTL_WIDTH_SUPPORTED,
+                EvaluatorSpec(
+                    (
+                        _TARGET_DSP_REF,
+                        _ACTIVATION_TYPE_REF,
+                        _WEIGHT_TYPE_REF,
+                        _ACCUMULATOR_TYPE_REF,
+                        _OUTPUT_TYPE_REF,
+                    ),
+                    _rtl_width_supported,
+                ),
                 applies_if=_binding_applies(*rtl_bindings),
             ),
             Constraint(
@@ -1033,15 +1186,8 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
             ),
             Constraint(
                 MVAUComputeKernelPaths.BINDING_COMPUTE_PUMPING_SUPPORTED,
-                EvaluatorSpec(
-                    (
-                        _COMPUTE_PUMPING_REF,
-                        _BINDING_REF,
-                        _REGION_DECLARATION_REF,
-                        _SIMD_REF,
-                    ),
-                    _compute_pumping_supported,
-                ),
+                EvaluatorSpec((_COMPUTE_PUMPING_REF, _SIMD_REF), _compute_pumping_supported),
+                applies_if=_STANDARD_RTL_BINDING_APPLICABILITY,
             ),
         ),
         constraint_sets=(
@@ -1056,8 +1202,11 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                     MVAUComputeKernelPaths.BINDING_REGION_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_COMPUTATION_SUPPORTED,
                     MVAUComputeKernelPaths.COMPUTATION_TYPES_SUPPORTED,
+                    MVAUComputeKernelPaths.ACCUMULATOR_OUTPUT_TYPE_SUPPORTED,
+                    MVAUComputeKernelPaths.FUSED_THRESHOLD_SOURCE_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_NUMERIC_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED,
+                    MVAUComputeKernelPaths.BINDING_RTL_WIDTH_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_DSP48E1_NARROW_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_PACKED_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_HLS_PARTITION_SUPPORTED,
@@ -1096,15 +1245,18 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
                 properties=(
                     MVAUComputeKernelPaths.REGION,
                     MVAUComputeKernelPaths.REGION_VALIDATION,
-                    MVAUComputeKernelPaths.BINDING_WITNESS,
+                    MVAUComputeKernelPaths.BINDING_SELECTION,
                 ),
                 constraints=(
                     MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
                     MVAUComputeKernelPaths.BINDING_REGION_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_COMPUTATION_SUPPORTED,
                     MVAUComputeKernelPaths.COMPUTATION_TYPES_SUPPORTED,
+                    MVAUComputeKernelPaths.ACCUMULATOR_OUTPUT_TYPE_SUPPORTED,
+                    MVAUComputeKernelPaths.FUSED_THRESHOLD_SOURCE_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_NUMERIC_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED,
+                    MVAUComputeKernelPaths.BINDING_RTL_WIDTH_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_DSP48E1_NARROW_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_PACKED_SUPPORTED,
                     MVAUComputeKernelPaths.BINDING_HLS_PARTITION_SUPPORTED,
@@ -1118,6 +1270,140 @@ def build_mvau_compute_kernel_spec() -> DesignSpaceSpec:
     )
 
 
+def build_legacy_mvau_design_space_spec() -> DesignSpaceSpec:
+    """Build the original streamed-weight MVAU design-space API."""
+    region_declarations = (
+        RegionDeclaration("standard.streamed", MVAUDesignPaths.STANDARD_STREAMED_REGION),
+    )
+    semantic = build_kernel_semantic_declarations(
+        region_declarations,
+        selected_region_path=MVAUDesignPaths.REGION,
+        validation_report_path=MVAUDesignPaths.REGION_VALIDATION,
+        structural_constraint_path=MVAUDesignPaths.REGION_STRUCTURALLY_WELL_FORMED,
+    )
+    dependencies = (
+        DependencyRef.problem(
+            "repetitions", MVAUDesignPaths.REPETITIONS, _INTEGER_OBJECT_SEMANTICS
+        ),
+        DependencyRef.problem(
+            "matrix_width", MVAUDesignPaths.MATRIX_WIDTH, _INTEGER_OBJECT_SEMANTICS
+        ),
+        DependencyRef.problem(
+            "matrix_height", MVAUDesignPaths.MATRIX_HEIGHT, _INTEGER_OBJECT_SEMANTICS
+        ),
+        DependencyRef.problem(
+            "activation_element_type",
+            MVAUDesignPaths.ACTIVATION_ELEMENT_TYPE,
+            _ELEMENT_TYPE_OBJECT_SEMANTICS,
+        ),
+        DependencyRef.problem(
+            "weight_element_type",
+            MVAUDesignPaths.WEIGHT_ELEMENT_TYPE,
+            _ELEMENT_TYPE_OBJECT_SEMANTICS,
+        ),
+        DependencyRef.problem(
+            "output_element_type",
+            MVAUDesignPaths.OUTPUT_ELEMENT_TYPE,
+            _ELEMENT_TYPE_OBJECT_SEMANTICS,
+        ),
+        DependencyRef.decision("pe", MVAUDesignPaths.PE, _INTEGER_OBJECT_SEMANTICS),
+        DependencyRef.decision("simd", MVAUDesignPaths.SIMD, _INTEGER_OBJECT_SEMANTICS),
+    )
+
+    def derive_region(values: DependencyView) -> Answer[object]:
+        return Decided(
+            construct_standard_streamed_mvau_region(
+                cast(int, values["repetitions"]),
+                cast(int, values["matrix_width"]),
+                cast(int, values["matrix_height"]),
+                cast(NumericElementType, values["activation_element_type"]),
+                cast(NumericElementType, values["weight_element_type"]),
+                cast(NumericElementType, values["output_element_type"]),
+                cast(int, values["pe"]),
+                cast(int, values["simd"]),
+            )
+        )
+
+    return DesignSpaceSpec(
+        problem_schema=ProblemSchema(
+            (
+                ProblemField(
+                    MVAUDesignPaths.REPETITIONS,
+                    _INTEGER_OBJECT_SEMANTICS,
+                    constraint=_positive_integer,
+                    constraint_description="must be a positive integer",
+                ),
+                ProblemField(
+                    MVAUDesignPaths.MATRIX_WIDTH,
+                    _INTEGER_OBJECT_SEMANTICS,
+                    constraint=_positive_integer,
+                    constraint_description="must be a positive integer",
+                ),
+                ProblemField(
+                    MVAUDesignPaths.MATRIX_HEIGHT,
+                    _INTEGER_OBJECT_SEMANTICS,
+                    constraint=_positive_integer,
+                    constraint_description="must be a positive integer",
+                ),
+                ProblemField(
+                    MVAUDesignPaths.ACTIVATION_ELEMENT_TYPE,
+                    _ELEMENT_TYPE_OBJECT_SEMANTICS,
+                    constraint=_complete_numeric_element_type,
+                    constraint_description="must be a complete numeric element type",
+                ),
+                ProblemField(
+                    MVAUDesignPaths.WEIGHT_ELEMENT_TYPE,
+                    _ELEMENT_TYPE_OBJECT_SEMANTICS,
+                    constraint=_complete_numeric_element_type,
+                    constraint_description="must be a complete numeric element type",
+                ),
+                ProblemField(
+                    MVAUDesignPaths.OUTPUT_ELEMENT_TYPE,
+                    _ELEMENT_TYPE_OBJECT_SEMANTICS,
+                    constraint=_complete_numeric_element_type,
+                    constraint_description="must be a complete numeric element type",
+                ),
+            )
+        ),
+        decisions=(
+            Decision(
+                MVAUDesignPaths.PE,
+                _INTEGER_OBJECT_SEMANTICS,
+                _divisor_domain(MVAUDesignPaths.MATRIX_HEIGHT),
+            ),
+            Decision(
+                MVAUDesignPaths.SIMD,
+                _INTEGER_OBJECT_SEMANTICS,
+                _divisor_domain(MVAUDesignPaths.MATRIX_WIDTH),
+            ),
+        ),
+        properties=(
+            DerivedProperty(
+                MVAUDesignPaths.STANDARD_STREAMED_REGION,
+                _REGION_SEMANTICS,
+                EvaluatorSpec(dependencies, derive_region),
+            ),
+            semantic.selected_region,
+            semantic.validation_report,
+        ),
+        constraints=(semantic.structural_constraint,),
+        constraint_sets=(
+            ConstraintSet(
+                "model_structural",
+                (MVAUDesignPaths.REGION_STRUCTURALLY_WELL_FORMED,),
+            ),
+        ),
+        readiness_profiles=(
+            ReadinessProfile(
+                "model_structural",
+                decisions=(MVAUDesignPaths.PE, MVAUDesignPaths.SIMD),
+                properties=(MVAUDesignPaths.REGION, MVAUDesignPaths.REGION_VALIDATION),
+                constraints=(MVAUDesignPaths.REGION_STRUCTURALLY_WELL_FORMED,),
+            ),
+        ),
+    )
+
+
 MVAU_COMPUTE_KERNEL = KernelDefinition(
     id="mvau.compute",
     spec=build_mvau_compute_kernel_spec(),
@@ -1125,17 +1411,21 @@ MVAU_COMPUTE_KERNEL = KernelDefinition(
     binding_definitions=tuple(BindingDefinition(binding.value) for binding in MVAUComputeBinding),
     selected_region_path=MVAUComputeKernelPaths.REGION,
     binding_decision_path=MVAUComputeKernelPaths.BINDING,
-    binding_witness_path=MVAUComputeKernelPaths.BINDING_WITNESS,
+    binding_selection_path=MVAUComputeKernelPaths.BINDING_SELECTION,
     structural_readiness_profile="model_structural",
     binding_readiness_profile="binding_feasibility",
 )
 MVAU_COMPUTE_KERNEL_SPEC = MVAU_COMPUTE_KERNEL.spec
+MVAU_DESIGN_SPACE_SPEC = build_legacy_mvau_design_space_spec()
 
 __all__ = [
     "MVAU_COMPUTE_KERNEL",
     "MVAU_COMPUTE_KERNEL_SPEC",
+    "MVAU_DESIGN_SPACE_SPEC",
     "MVAUComputeBinding",
     "MVAUComputeKernelPaths",
+    "MVAUDesignPaths",
     "MVAUDspBlock",
     "build_mvau_compute_kernel_spec",
+    "build_legacy_mvau_design_space_spec",
 ]

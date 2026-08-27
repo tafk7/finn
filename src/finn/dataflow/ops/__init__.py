@@ -4,6 +4,7 @@
 """FINN dataflow-operation design-space assemblies."""
 
 from finn.dataflow.ops.mvau import (
+    BindingLocalStateDestination,
     MVAU_DATAFLOW_OP_SPEC,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
@@ -11,10 +12,12 @@ from finn.dataflow.ops.mvau import (
     MVAUSourceDescription,
     NetworkRef,
     RegionRef,
+    SemanticOperandDestination,
     build_mvau_dataflow_op_spec,
 )
 
 __all__ = [
+    "BindingLocalStateDestination",
     "MVAU_DATAFLOW_OP_SPEC",
     "MVAUDataflowOpPaths",
     "MVAUParameterTopology",
@@ -22,5 +25,6 @@ __all__ = [
     "MVAUSourceDescription",
     "NetworkRef",
     "RegionRef",
+    "SemanticOperandDestination",
     "build_mvau_dataflow_op_spec",
 ]

@@ -3,7 +3,7 @@
 
 """Concrete MVAU Kernel authoring support."""
 
-from finn.dataflow.mvau.computation import MVAUBindingWitness, MVAUComputationProfile
+from finn.dataflow.mvau.computation import MVAUBindingSelection, MVAUComputationProfile
 from finn.dataflow.mvau.definition import (
     MVAU_COMPUTE_KERNEL,
     MVAU_COMPUTE_KERNEL_SPEC,
@@ -25,7 +25,7 @@ from finn.dataflow.mvau.regions import (
 __all__ = [
     "MVAU_COMPUTE_KERNEL",
     "MVAU_COMPUTE_KERNEL_SPEC",
-    "MVAUBindingWitness",
+    "MVAUBindingSelection",
     "MVAUComputationProfile",
     "MVAUComputeBinding",
     "MVAUComputeKernelPaths",

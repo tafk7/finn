@@ -19,6 +19,7 @@ from finn.dataflow.design import (
     ProblemSchema,
     QualifiedPath,
     ReadinessProfile,
+    Unresolved,
     ValueSemantics,
     as_object_semantics,
 )
@@ -48,7 +49,6 @@ from finn.dataflow.parameters.cyclic.definition import (
     CYCLIC_PARAMETER_KERNEL_SPEC,
     CyclicParameterBinding,
     CyclicParameterKernelPaths,
-    CyclicParameterRegionDeclaration,
     CyclicRamStyle,
     build_cyclic_parameter_kernel_spec,
 )
@@ -71,6 +71,7 @@ def _mvau_problem() -> dict[str, object]:
             MVAUComputationProfile.ACCUMULATOR_INTEGER
         ),
         str(MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE): True,
+        str(MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE): True,
         str(MVAUComputeKernelPaths.TARGET_DSP_BLOCK): MVAUDspBlock.DSP58,
         str(MVAUComputeKernelPaths.WEIGHTS_NARROW): True,
     }
@@ -97,7 +98,6 @@ def _cyclic_problem() -> dict[str, object]:
 
 def _cyclic_assignments() -> dict[QualifiedPath, object]:
     return {
-        CyclicParameterKernelPaths.REGION_DECLARATION: (CyclicParameterRegionDeclaration.FULL_TILE),
         CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
         CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
         CyclicParameterKernelPaths.PUMPED_MEMORY: False,
@@ -157,7 +157,7 @@ def test_kernel_definitions_preserve_rebuilt_spec_behavior(
 def _synthetic_kernel(prefix: str) -> KernelDefinition:
     region_path = QualifiedPath(f"semantic.{prefix}.region")
     binding_path = QualifiedPath(f"{prefix}.binding")
-    witness_path = QualifiedPath(f"binding.{prefix}.witness")
+    selection_path = QualifiedPath(f"binding.{prefix}.selection")
     decision_semantics = as_object_semantics(
         ValueSemantics.immutable_nominal(str, name=f"{prefix} binding")
     )
@@ -187,7 +187,7 @@ def _synthetic_kernel(prefix: str) -> KernelDefinition:
         properties=(
             DerivedProperty(region_path, region_semantics, EvaluatorSpec((), region)),
             DerivedProperty(
-                witness_path,
+                selection_path,
                 decision_semantics,
                 EvaluatorSpec(
                     (binding_ref,), lambda dependencies: Decided(dependencies["binding"])
@@ -199,7 +199,7 @@ def _synthetic_kernel(prefix: str) -> KernelDefinition:
             ReadinessProfile(
                 f"{prefix}_binding_ready",
                 decisions=(binding_path,),
-                properties=(region_path, witness_path),
+                properties=(region_path, selection_path),
             ),
         ),
     )
@@ -210,7 +210,7 @@ def _synthetic_kernel(prefix: str) -> KernelDefinition:
         (BindingDefinition("only"),),
         region_path,
         binding_path,
-        witness_path,
+        selection_path,
         f"{prefix}_structural",
         f"{prefix}_binding_ready",
     )
@@ -225,6 +225,22 @@ def test_synthetic_third_kernel_uses_no_mvau_or_parameter_types() -> None:
     answer = instantiate_kernel(engine, definition, point)
     assert isinstance(answer, Decided)
     assert answer.value.region == DataflowRegion(LogicalSchedule(()), (), ())
+
+
+def test_kernel_instance_is_a_selection_not_a_feasibility_verdict() -> None:
+    engine = Engine()
+    space = engine.validate(MVAU_COMPUTE_KERNEL_SPEC)
+    problem = _mvau_problem()
+    problem[str(MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE)] = INT8
+    point = engine.start(space, problem)
+    assignments = _mvau_assignments()
+    assignments[MVAUComputeKernelPaths.BINDING] = MVAUComputeBinding.LEGACY_HLS_LUT
+    del assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING]
+    point = engine.commit_assignments(point, assignments).point
+
+    instance = instantiate_kernel(engine, MVAU_COMPUTE_KERNEL, point)
+    assert isinstance(instance, Decided)
+    assert engine.evaluate_constraint_set(point, "binding_feasibility").verdict is False
 
 
 def test_duplicate_kernel_and_declaration_paths_are_rejected_deterministically() -> None:
@@ -279,7 +295,7 @@ def test_duplicate_region_and_binding_ids_are_rejected(
             bindings,
             base.selected_region_path,
             base.binding_decision_path,
-            base.binding_witness_path,
+            base.binding_selection_path,
             base.structural_readiness_profile,
             base.binding_readiness_profile,
         )
@@ -295,6 +311,80 @@ def test_two_kernels_using_the_same_helper_do_not_share_decisions() -> None:
     point = engine.commit_assignments(point, {left.binding_decision_path: "only"}).point
     assert left.binding_decision_path in point.assignments
     assert right.binding_decision_path not in point.assignments
+
+
+def test_two_mvau_placements_are_independent_and_share_only_the_target_field() -> None:
+    shared_target = QualifiedPath("problem.target.dsp_block")
+    shared = {MVAUComputeKernelPaths.TARGET_DSP_BLOCK: shared_target}
+    left = MVAU_COMPUTE_KERNEL.place("op0", "op0", shared_problem_paths=shared)
+    right = MVAU_COMPUTE_KERNEL.place("op1", "op1", shared_problem_paths=shared)
+    target_field = next(
+        field
+        for field in MVAU_COMPUTE_KERNEL.spec.problem_schema.fields
+        if field.path == MVAUComputeKernelPaths.TARGET_DSP_BLOCK
+    )
+    spec = assemble_kernel_specs(
+        (left, right),
+        additions=DesignSpaceSpec(
+            problem_schema=ProblemSchema(
+                (
+                    type(target_field)(
+                        shared_target,
+                        target_field.value_semantics,
+                        target_field.required,
+                        target_field.constraint,
+                        target_field.constraint_description,
+                    ),
+                )
+            )
+        ),
+    )
+    engine = Engine()
+    space = engine.validate(spec)
+    problem: dict[str, object] = {str(shared_target): MVAUDspBlock.DSP58}
+    base_problem = _mvau_problem()
+    for placement in (left, right):
+        for local_path_text, value in base_problem.items():
+            local_path = QualifiedPath(local_path_text)
+            if local_path == MVAUComputeKernelPaths.TARGET_DSP_BLOCK:
+                continue
+            problem[str(placement.path(local_path))] = value
+    point = engine.start(space, problem)
+    assignments: dict[QualifiedPath, object] = {}
+    for placement, pe in ((left, 1), (right, 2)):
+        for local_path, value in _mvau_assignments().items():
+            assignments[placement.path(local_path)] = (
+                pe if local_path == MVAUComputeKernelPaths.PE else value
+            )
+    point = engine.commit_assignments(point, assignments).point
+
+    left_region = engine.query_property(point, left.selected_region_path)
+    right_region = engine.query_property(point, right.selected_region_path)
+    assert isinstance(left_region, Decided)
+    assert isinstance(right_region, Decided)
+    assert left_region.value != right_region.value
+    assert left.path(MVAUComputeKernelPaths.PE) != right.path(MVAUComputeKernelPaths.PE)
+    assert left.path(MVAUComputeKernelPaths.TARGET_DSP_BLOCK) == shared_target
+    assert right.path(MVAUComputeKernelPaths.TARGET_DSP_BLOCK) == shared_target
+    assert engine.check_readiness(point, left.binding_readiness_profile).ready is True
+    assert engine.check_readiness(point, right.binding_readiness_profile).ready is True
+    left_instance = instantiate_kernel(engine, left, point)
+    assert isinstance(left_instance, Decided)
+    assert left_instance.value.definition_id == MVAU_COMPUTE_KERNEL.id
+    assert left_instance.value.instance_id == "op0"
+
+    missing_target = dict(problem)
+    del missing_target[str(shared_target)]
+    unresolved = engine.start(space, missing_target)
+    left_assignments = {left.path(path): value for path, value in _mvau_assignments().items()}
+    unresolved = engine.commit_assignments(unresolved, left_assignments).point
+    target_constraint = left.path(MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED)
+    target_answer = engine.evaluate_constraints(unresolved, (target_constraint,)).answers[
+        target_constraint
+    ]
+    assert isinstance(target_answer, Unresolved)
+    assert target_answer.findings[0].path == target_constraint
+    assert target_answer.findings[0].trace == (shared_target,)
 
 
 def test_public_kernel_specs_are_the_definition_specs() -> None:
