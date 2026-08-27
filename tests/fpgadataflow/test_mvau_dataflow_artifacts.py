@@ -1,6 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +14,8 @@ from qonnx.util.basic import qonnx_make_model
 from finn.dataflow.mvau.artifacts import (
     build_mvau_rtl_artifact,
     build_mvau_rtl_artifact_requirements,
+    observe_mvau_cyclic_stitched_artifact,
     observe_mvau_rtl_artifact,
-    simulate_mvau_cyclic_stitched_artifact,
     simulate_mvau_rtl_artifact,
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
@@ -118,11 +119,27 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
 
     assert np.array_equal(cppsim, expected)
     assert np.array_equal(rtlsim, expected)
+    stitched_observation = None
+    if mem_mode == "internal_decoupled":
+        without_stitched = collect_mvau_rtl_softvec_evidence(
+            selected,
+            elaboration,
+            artifact,
+            simulation=observation,
+        )
+        assert not without_stitched.emitted_realization_observed
+        stitched_observation = observe_mvau_cyclic_stitched_artifact(
+            artifact,
+            activation,
+            tmp_path / "stitched",
+        )
+        assert stitched_observation.numerical_match
     evidence = collect_mvau_rtl_softvec_evidence(
         selected,
         elaboration,
         artifact,
         simulation=observation,
+        stitched_simulation=stitched_observation,
     )
     assert evidence.emitted_realization_observed
     assert evidence.cycles is not None
@@ -138,10 +155,11 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
         "repetitions": 2,
         "simd": 2,
     }
-    if mem_mode == "internal_decoupled":
-        stitched = simulate_mvau_cyclic_stitched_artifact(
-            requirements,
-            activation,
-            tmp_path / "stitched",
+    with pytest.raises(ValueError, match="another artifact"):
+        collect_mvau_rtl_softvec_evidence(
+            selected,
+            elaboration,
+            artifact,
+            simulation=replace(observation, artifact_identity="different"),
+            stitched_simulation=stitched_observation,
         )
-        assert np.array_equal(stitched, expected)

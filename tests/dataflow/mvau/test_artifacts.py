@@ -338,6 +338,37 @@ def test_runtime_writable_cyclic_requirements_need_no_initial_image(tmp_path: Pa
     assert 'parameter  INIT_FILE = ""' in memstream_wrapper
 
 
+def test_missing_memstream_initializer_requires_an_explicit_opt_in(tmp_path: Path) -> None:
+    model = _model(
+        "internal_decoupled",
+        with_initializer=False,
+        runtime_writable=True,
+    )
+    previous = os.environ.get("FINN_ROOT")
+    os.environ["FINN_ROOT"] = str(Path.cwd())
+    try:
+        operation = getCustomOp(model.graph.node[0])
+        default_dir = tmp_path / "default"
+        default_dir.mkdir()
+        operation.set_nodeattr("code_gen_dir_ipgen", str(default_dir))
+        operation.generate_hdl_memstream(PART)
+        default_wrapper = (default_dir / f"{NODE_ID}_memstream_wrapper.v").read_text()
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        operation.set_nodeattr("code_gen_dir_ipgen", str(allowed_dir))
+        operation.generate_hdl_memstream(PART, allow_missing_initializer=True)
+        allowed_wrapper = (allowed_dir / f"{NODE_ID}_memstream_wrapper.v").read_text()
+    finally:
+        if previous is None:
+            del os.environ["FINN_ROOT"]
+        else:
+            os.environ["FINN_ROOT"] = previous
+
+    assert f'parameter  INIT_FILE = "{default_dir}/memblock.dat"' in default_wrapper
+    assert 'parameter  INIT_FILE = ""' in allowed_wrapper
+
+
 def test_builder_rejects_an_incomplete_declared_source_set(tmp_path: Path) -> None:
     source_model = _model("external")
     selected = _selected(source_model)

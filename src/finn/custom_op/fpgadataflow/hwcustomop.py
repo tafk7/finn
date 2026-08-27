@@ -305,7 +305,9 @@ class HWCustomOp(CustomOp):
         out_width = self.get_outstream_width(ind=ind)
         return roundup_to_integer_multiple(out_width, 8)
 
-    def generate_hdl_memstream(self, fpgapart, pumped_memory=0):
+    def generate_hdl_memstream(
+        self, fpgapart, pumped_memory=0, allow_missing_initializer=False
+    ):
         """Helper function to generate verilog code for memstream component.
         Currently utilized by MVAU, VVAU and HLS Thresholding layer."""
         ops = ["MVAU_hls", "MVAU_rtl", "VVAU_hls", "VVAU_rtl", "Thresholding_hls"]
@@ -329,8 +331,8 @@ class HWCustomOp(CustomOp):
 
             ram_style = self.get_nodeattr("ram_style")
             init_file = code_gen_dir + "/memblock.dat"
-            if not os.path.isfile(init_file) or (
-                ram_style == "ultra" and not is_versal(fpgapart)
+            if (ram_style == "ultra" and not is_versal(fpgapart)) or (
+                allow_missing_initializer and not os.path.isfile(init_file)
             ):
                 init_file = ""
             code_gen_dict = {

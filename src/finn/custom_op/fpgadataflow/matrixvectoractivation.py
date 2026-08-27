@@ -1011,7 +1011,11 @@ class MVAU(HWCustomOp):
                     ), """Layer with URAM weights must have runtime_writeable_weights=1
                         if Ultrascale device is targeted."""
                 self.generate_hdl_memstream(
-                    fpgapart, pumped_memory=self.get_nodeattr("pumpedMemory")
+                    fpgapart,
+                    pumped_memory=self.get_nodeattr("pumpedMemory"),
+                    allow_missing_initializer=bool(
+                        self.get_nodeattr("runtime_writeable_weights")
+                    ),
                 )
 
     def code_generation_ipi(self):

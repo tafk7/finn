@@ -9,7 +9,9 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from hashlib import sha256
 import importlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -144,6 +146,7 @@ class MVAUBuiltRTLArtifact:
 class MVAURTLSimulationObservation:
     """Numerical and transaction-order observations from one XSIM run."""
 
+    artifact_identity: str
     oracle: str
     output_shape: tuple[int, ...]
     output_values: tuple[float, ...]
@@ -159,6 +162,22 @@ class MVAURTLSimulationObservation:
     @property
     def output_order_match(self) -> bool:
         return self.output_transactions == self.expected_transactions
+
+
+@dataclass(frozen=True)
+class MVAUStitchedSimulationObservation:
+    """Artifact-bound numerical observation of cyclic delivery plus compute."""
+
+    artifact_identity: str
+    oracle: str
+    semantic_edge_ids: tuple[str, ...]
+    output_shape: tuple[int, ...]
+    output_values: tuple[float, ...]
+    expected_values: tuple[float, ...]
+
+    @property
+    def numerical_match(self) -> bool:
+        return self.output_values == self.expected_values
 
 
 class MVAUArtifactError(ValueError):
@@ -764,6 +783,44 @@ def build_mvau_rtl_artifact(
     return MVAUBuiltRTLArtifact(requirements, str(output), source_files, generated_files, model)
 
 
+def _identity_value(value: object) -> object:
+    if value is None or type(value) in {bool, int, float, str}:
+        return value
+    if isinstance(value, Enum):
+        return {"enum": type(value).__qualname__, "value": value.value}
+    if isinstance(value, QualifiedPath):
+        return value.value
+    if isinstance(value, tuple):
+        return [_identity_value(item) for item in value]
+    raise TypeError(f"unsupported artifact identity value {type(value).__name__}")
+
+
+def mvau_built_artifact_identity(artifact: MVAUBuiltRTLArtifact) -> str:
+    """Fingerprint one generated artifact and the exact point that produced it."""
+    requirements = artifact.requirements
+    origin = requirements.elaboration.origin
+    payload = {
+        "assignments": [[path.value, _identity_value(value)] for path, value in origin.assignments],
+        "binding_ids": list(origin.binding_ids),
+        "clock_period_ns": requirements.clock_period_ns,
+        "declaration_family_version": origin.declaration_family_version,
+        "generated": [
+            [Path(path).name, sha256(Path(path).read_bytes()).hexdigest()]
+            for path in artifact.generated_files
+        ],
+        "problem_fingerprint": origin.problem_fingerprint,
+        "source_dependencies": [
+            [Path(path).name, sha256(Path(path).read_bytes()).hexdigest()]
+            for path in artifact.source_files
+        ],
+        "source_scope_id": requirements.source_scope_id,
+        "target_fpga_part": requirements.target_fpga_part,
+    }
+    return sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def simulate_mvau_rtl_artifact(
     artifact: MVAUBuiltRTLArtifact,
     activation: np.ndarray,
@@ -853,6 +910,7 @@ def observe_mvau_rtl_artifact(
         for beat in output_requirement.beat_sequence.beats
     )
     return MVAURTLSimulationObservation(
+        mvau_built_artifact_identity(artifact),
         "finn.xsi:MVAU_rtl",
         requirements.output_shape,
         tuple(float(value) for value in output.flat),
@@ -863,12 +921,13 @@ def observe_mvau_rtl_artifact(
     )
 
 
-def simulate_mvau_cyclic_stitched_artifact(
-    requirements: MVAURTLArtifactRequirements,
+def observe_mvau_cyclic_stitched_artifact(
+    artifact: MVAUBuiltRTLArtifact,
     activation: np.ndarray,
     build_directory: str | Path,
-) -> np.ndarray:
-    """Run the existing stitched-IP path including the selected cyclic memstream."""
+) -> MVAUStitchedSimulationObservation:
+    """Observe the stitched cyclic-delivery plus compute realization."""
+    requirements = artifact.requirements
     if requirements.mem_mode != "internal_decoupled":
         raise MVAUArtifactError(
             (
@@ -930,7 +989,43 @@ def simulate_mvau_cyclic_stitched_artifact(
             del os.environ["FINN_BUILD_DIR"]
         else:
             os.environ["FINN_BUILD_DIR"] = previous_build
-    return cast(np.ndarray, outputs[requirements.output_tensor_id])
+    output = cast(np.ndarray, outputs[requirements.output_tensor_id])
+    weights = requirements.weight_initializer.as_array()
+    expected = np.matmul(np.asarray(activation, dtype=np.float32), weights).reshape(
+        requirements.output_shape
+    )
+    semantic_result = requirements.elaboration.semantic_result
+    if not isinstance(semantic_result, NetworkRef):
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-cyclic-network-required",
+                    "stitched cyclic observation requires a selected semantic network",
+                ),
+            )
+        )
+    return MVAUStitchedSimulationObservation(
+        mvau_built_artifact_identity(artifact),
+        "finn.xsi:stitched_mvau_memstream",
+        tuple(edge.id for edge in semantic_result.network.edges),
+        requirements.output_shape,
+        tuple(float(value) for value in output.flat),
+        tuple(float(value) for value in expected.flat),
+    )
+
+
+def simulate_mvau_cyclic_stitched_artifact(
+    artifact: MVAUBuiltRTLArtifact,
+    activation: np.ndarray,
+    build_directory: str | Path,
+) -> np.ndarray:
+    """Return the numerical result from a stitched cyclic-network observation."""
+    observation = observe_mvau_cyclic_stitched_artifact(
+        artifact,
+        activation,
+        build_directory,
+    )
+    return np.asarray(observation.output_values, dtype=np.float32).reshape(observation.output_shape)
 
 
 def mvau_rtlsim_cycles(artifact: MVAUBuiltRTLArtifact) -> int:
@@ -958,11 +1053,14 @@ __all__ = [
     "MVAURTLInterfaceRequirement",
     "MVAURTLSimulationObservation",
     "MVAURTLSourceRequirement",
+    "MVAUStitchedSimulationObservation",
     "MVAUTensorData",
     "MVAUWeightPayloadKind",
     "build_mvau_rtl_artifact",
     "build_mvau_rtl_artifact_requirements",
+    "mvau_built_artifact_identity",
     "mvau_rtlsim_cycles",
+    "observe_mvau_cyclic_stitched_artifact",
     "observe_mvau_rtl_artifact",
     "simulate_mvau_cyclic_stitched_artifact",
     "simulate_mvau_rtl_artifact",

@@ -13,7 +13,12 @@ from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 
-from finn.dataflow.mvau.artifacts import MVAUBuiltRTLArtifact, MVAURTLSimulationObservation
+from finn.dataflow.mvau.artifacts import (
+    MVAUBuiltRTLArtifact,
+    MVAURTLSimulationObservation,
+    MVAUStitchedSimulationObservation,
+    mvau_built_artifact_identity,
+)
 from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
 from finn.dataflow.mvau.elaboration import MVAUPhysicalElaboration, MVAUSemanticPortRef
 from finn.dataflow.mvau.source import MVAUResolvedDesign
@@ -124,7 +129,9 @@ class MVAURTLSoftvecEvidence:
     output: MVAUOutputCorrespondenceEvidence
     associations: MVAUAssociationEvidence
     generated_artifact: MVAUGeneratedArtifactEvidence
+    requires_stitched_observation: bool
     simulation: MVAURTLSimulationObservation | None = None
+    stitched_simulation: MVAUStitchedSimulationObservation | None = None
     cycles: MVAURTLCycleEvidence | None = None
 
     @property
@@ -146,6 +153,13 @@ class MVAURTLSoftvecEvidence:
             and self.simulation is not None
             and self.simulation.numerical_match
             and self.simulation.output_order_match
+            and (
+                not self.requires_stitched_observation
+                or (
+                    self.stitched_simulation is not None
+                    and self.stitched_simulation.numerical_match
+                )
+            )
             and self.cycles is not None
         )
 
@@ -356,11 +370,14 @@ def _generated_artifact_evidence(
     parameter_names = {
         "ACCU_WIDTH",
         "ACTIVATION_WIDTH",
+        "IS_MVU",
         "MH",
         "MW",
+        "NARROW_WEIGHTS",
         "PE",
         "PUMPED_COMPUTE",
         "SEGMENTLEN",
+        "SIGNED_ACTIVATIONS",
         "SIMD",
         "VERSION",
         "WEIGHT_WIDTH",
@@ -376,9 +393,18 @@ def _generated_artifact_evidence(
     compute_wiring = all(
         fragment in wrapper_text
         for fragment in (
+            ".ap_clk(ap_clk)",
+            ".ap_clk2x(ap_clk2x)",
+            ".ap_rst_n(ap_rst_n)",
             ".s_axis_weights_tdata(in1_V_TDATA)",
+            ".s_axis_weights_tvalid(in1_V_TVALID)",
+            ".s_axis_weights_tready(in1_V_TREADY)",
             ".s_axis_input_tdata(in0_V_TDATA)",
+            ".s_axis_input_tvalid(in0_V_TVALID)",
+            ".s_axis_input_tready(in0_V_TREADY)",
             ".m_axis_output_tdata(out0_V_TDATA)",
+            ".m_axis_output_tvalid(out0_V_TVALID)",
+            ".m_axis_output_tready(out0_V_TREADY)",
         )
     )
     replay_instantiation = all(
@@ -448,6 +474,7 @@ def collect_mvau_rtl_softvec_evidence(
     artifact: MVAUBuiltRTLArtifact,
     *,
     simulation: MVAURTLSimulationObservation | None = None,
+    stitched_simulation: MVAUStitchedSimulationObservation | None = None,
 ) -> MVAURTLSoftvecEvidence:
     """Collect evidence only for the emitted standard RTL soft-vector implementation."""
     if (
@@ -455,6 +482,14 @@ def collect_mvau_rtl_softvec_evidence(
         or artifact.requirements.elaboration != elaboration
     ):
         raise ValueError("resolved point, elaboration, and artifact requirements must correspond")
+    artifact_identity = mvau_built_artifact_identity(artifact)
+    if simulation is not None and simulation.artifact_identity != artifact_identity:
+        raise ValueError("node-level simulation observation belongs to another artifact")
+    if (
+        stitched_simulation is not None
+        and stitched_simulation.artifact_identity != artifact_identity
+    ):
+        raise ValueError("stitched simulation observation belongs to another artifact")
     compute_region_id, region = _compute_region(resolved)
     activation = region.input_interface("activation")
     weight = region.input_interface("weight")
@@ -508,7 +543,9 @@ def collect_mvau_rtl_softvec_evidence(
         _output_evidence(compute_region_id, region, artifact),
         _association_evidence(resolved, elaboration, compute_region_id, region),
         _generated_artifact_evidence(resolved, elaboration, artifact),
+        isinstance(resolved.result, NetworkRef),
         simulation,
+        stitched_simulation,
         cycle_evidence,
     )
 
