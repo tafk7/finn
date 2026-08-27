@@ -21,6 +21,7 @@ from finn.dataflow.mvau.artifacts import (
     simulate_mvau_rtl_artifact,
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
+from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
 from finn.dataflow.mvau.source import (
     MVAULegacyImportMode,
@@ -201,6 +202,54 @@ def test_direct_cyclic_requirements_include_memstream_and_exact_weight_sequence(
     assert delivery_requirement.beat_sequence == delivery_sequence
     assert (Path(built.output_directory) / f"{NODE_ID}_memstream_wrapper.v").is_file()
     assert (Path(built.output_directory) / "memblock.dat").is_file()
+
+    evidence = collect_mvau_rtl_softvec_evidence(selected, elaboration, built)
+    assert evidence.semantic_contract_covered
+    assert evidence.weight_service.source_kind == "cyclic_delivery_region"
+    assert len(evidence.weight_service.assignments) == (
+        selected.result.network.node("compute")
+        .region.input_interface("weight")
+        .requirements.occurrence_count
+    )
+    assert evidence.associations.required_region_ids == ("compute", "delivery")
+
+
+def test_static_evidence_maps_every_requirement_and_exact_output_order(tmp_path: Path) -> None:
+    source_model = _model("external")
+    selected = _selected(source_model)
+    assert isinstance(selected.result, RegionRef)
+    elaboration = elaborate_mvau_rtl_softvec(selected)
+    requirements = build_mvau_rtl_artifact_requirements(
+        selected, elaboration, source_model, Path.cwd()
+    )
+    built = build_mvau_rtl_artifact(requirements, tmp_path / "evidence")
+
+    evidence = collect_mvau_rtl_softvec_evidence(selected, elaboration, built)
+
+    region = selected.result.region
+    assert evidence.semantic_contract_covered
+    assert evidence.activation_service.source_kind == "activation_boundary_with_local_replay"
+    assert evidence.activation_service.replay_component_id == (
+        f"{NODE_ID}.compute.activation_replay"
+    )
+    assert len(evidence.activation_service.assignments) == (
+        region.input_interface("activation").requirements.occurrence_count
+    )
+    assert len(
+        {
+            (assignment.beat_ordinal, assignment.field_ordinal)
+            for assignment in evidence.activation_service.assignments
+        }
+    ) < len(evidence.activation_service.assignments)
+    assert evidence.weight_service.source_kind == "direct_weight_boundary"
+    assert len(evidence.weight_service.assignments) == (
+        region.input_interface("weight").requirements.occurrence_count
+    )
+    assert evidence.output.availability == region.output_interface("output").availability.entries
+    assert evidence.output.output_sequence == region.output_interface("output").port.beat_sequence
+    assert evidence.output.artifact_sequence == evidence.output.output_sequence
+    assert evidence.associations.complete
+    assert evidence.cycles is None
 
 
 def test_softvec_and_packed_bindings_preserve_the_same_standard_region() -> None:

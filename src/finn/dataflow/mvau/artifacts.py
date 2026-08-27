@@ -573,6 +573,23 @@ def simulate_mvau_rtl_artifact(
     return cast(np.ndarray, context[requirements.output_tensor_id])
 
 
+def mvau_rtlsim_cycles(artifact: MVAUBuiltRTLArtifact) -> int:
+    """Return the cycle count recorded by the requirements-backed RTL simulation."""
+    with _declared_finn_root(artifact.requirements.finn_root):
+        operation = getCustomOp(artifact.model.graph.node[0])
+        cycles = operation.get_nodeattr("cycles_rtlsim")
+    if type(cycles) is not int or cycles <= 0:
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-cycle-measurement-missing",
+                    "RTL simulation has not recorded a positive cycle count",
+                ),
+            )
+        )
+    return cycles
+
+
 __all__ = [
     "MVAUArtifactError",
     "MVAUBuiltRTLArtifact",
@@ -583,5 +600,6 @@ __all__ = [
     "MVAUTensorData",
     "build_mvau_rtl_artifact",
     "build_mvau_rtl_artifact_requirements",
+    "mvau_rtlsim_cycles",
     "simulate_mvau_rtl_artifact",
 ]

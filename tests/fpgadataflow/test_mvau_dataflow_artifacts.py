@@ -13,9 +13,11 @@ from qonnx.util.basic import qonnx_make_model
 from finn.dataflow.mvau.artifacts import (
     build_mvau_rtl_artifact,
     build_mvau_rtl_artifact_requirements,
+    mvau_rtlsim_cycles,
     simulate_mvau_rtl_artifact,
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
+from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.mvau.source import (
     MVAULegacyImportMode,
     MVAUProjectionContext,
@@ -113,3 +115,23 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
 
     assert np.array_equal(cppsim, expected)
     assert np.array_equal(rtlsim, expected)
+    evidence = collect_mvau_rtl_softvec_evidence(
+        selected,
+        elaboration,
+        artifact,
+        measured_cycles=mvau_rtlsim_cycles(artifact),
+    )
+    assert evidence.semantic_contract_covered
+    assert evidence.cycles is not None
+    assert evidence.cycles.oracle == "finn.xsi:MVAU_rtl.cycles_rtlsim"
+    assert evidence.cycles.within_legacy_tolerance
+    assert dict(evidence.cycles.configuration) == {
+        "clock_period_ns": CLOCK_NS,
+        "fpga_part": PART,
+        "matrix_height": 4,
+        "matrix_width": 4,
+        "mem_mode": mem_mode,
+        "pe": 2,
+        "repetitions": 2,
+        "simd": 2,
+    }
