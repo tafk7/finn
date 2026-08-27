@@ -5,263 +5,500 @@ from __future__ import annotations
 
 import pytest
 
-import finn.dataflow.mvau_design as mvau_design
 from finn.dataflow._engine.conformance import MonotonicityHarness
 from finn.dataflow.design import (
+    Absent,
     Decided,
-    DecisionState,
     DesignPoint,
     Engine,
-    EvaluationError,
-    RegionValidationReport,
+    FindingKind,
+    QualifiedPath,
     RequestError,
     Unresolved,
-    validate_region,
 )
-from finn.dataflow.mvau_design import (
-    MVAU_DESIGN_SPACE_SPEC,
-    MVAUDesignPaths,
-    construct_streamed_weight_mvau_region,
+from finn.dataflow.mvau.computation import MVAUBindingWitness, MVAUComputationProfile
+from finn.dataflow.mvau.definition import (
+    MVAU_COMPUTE_KERNEL_SPEC,
+    MVAUComputeBinding,
+    MVAUComputeKernelPaths,
+    MVAUDspBlock,
 )
+from finn.dataflow.mvau.regions import (
+    MVAURegionDeclaration,
+    MVAUWeightInterface,
+    construct_batch_interleaved_streamed_mvau_region,
+    construct_standard_embedded_mvau_region,
+    construct_standard_streamed_mvau_region,
+)
+from finn.dataflow.mvau_design import MVAU_DESIGN_SPACE_SPEC, MVAUDesignPaths
 from finn.dataflow.region import DataflowRegion, NumericElementType
+from finn.dataflow.region_validation import RegionValidationReport
 
+INT2 = NumericElementType("int", 2)
 INT8 = NumericElementType("int", 8)
+INT9 = NumericElementType("int", 9)
 INT16 = NumericElementType("int", 16)
+FLOAT32 = NumericElementType("float", 32)
+_MISSING = object()
 
 
 def _problem(
     *,
-    repetitions: object = 2,
+    repetitions: object = 4,
     matrix_width: object = 4,
     matrix_height: object = 4,
     activation_type: object = INT8,
     weight_type: object = INT8,
+    accumulator_type: object = INT16,
     output_type: object = INT16,
+    threshold_type: object = _MISSING,
+    computation_profile: object = MVAUComputationProfile.ACCUMULATOR_INTEGER,
+    weight_initializer_available: object = True,
+    target_dsp: object = MVAUDspBlock.DSP58,
+    weights_narrow: object = True,
 ) -> dict[str, object]:
-    return {
-        str(MVAUDesignPaths.REPETITIONS): repetitions,
-        str(MVAUDesignPaths.MATRIX_WIDTH): matrix_width,
-        str(MVAUDesignPaths.MATRIX_HEIGHT): matrix_height,
-        str(MVAUDesignPaths.ACTIVATION_ELEMENT_TYPE): activation_type,
-        str(MVAUDesignPaths.WEIGHT_ELEMENT_TYPE): weight_type,
-        str(MVAUDesignPaths.OUTPUT_ELEMENT_TYPE): output_type,
+    problem = {
+        str(MVAUComputeKernelPaths.REPETITIONS): repetitions,
+        str(MVAUComputeKernelPaths.MATRIX_WIDTH): matrix_width,
+        str(MVAUComputeKernelPaths.MATRIX_HEIGHT): matrix_height,
+        str(MVAUComputeKernelPaths.ACTIVATION_ELEMENT_TYPE): activation_type,
+        str(MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE): weight_type,
+        str(MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE): accumulator_type,
+        str(MVAUComputeKernelPaths.OUTPUT_ELEMENT_TYPE): output_type,
+        str(MVAUComputeKernelPaths.COMPUTATION_PROFILE): computation_profile,
+        str(MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE): weight_initializer_available,
     }
+    if threshold_type is not _MISSING:
+        problem[str(MVAUComputeKernelPaths.THRESHOLD_ELEMENT_TYPE)] = threshold_type
+    if target_dsp is not _MISSING:
+        problem[str(MVAUComputeKernelPaths.TARGET_DSP_BLOCK)] = target_dsp
+    if weights_narrow is not _MISSING:
+        problem[str(MVAUComputeKernelPaths.WEIGHTS_NARROW)] = weights_narrow
+    return problem
 
 
-def _started() -> tuple[Engine, DesignPoint]:
+def _started(**overrides: object) -> tuple[Engine, DesignPoint]:
     engine = Engine()
-    space = engine.validate(MVAU_DESIGN_SPACE_SPEC)
-    return engine, engine.start(space, _problem())
+    space = engine.validate(MVAU_COMPUTE_KERNEL_SPEC)
+    return engine, engine.start(space, _problem(**overrides))
 
 
-def test_partial_point_progression_blocks_until_pe_and_simd_are_committed() -> None:
-    engine, point = _started()
-
-    pe_state = engine.decision_state(point, MVAUDesignPaths.PE)
-    simd_state = engine.decision_state(point, MVAUDesignPaths.SIMD)
-    assert pe_state == Decided(DecisionState(MVAUDesignPaths.PE, "unassigned"))
-    assert simd_state == Decided(DecisionState(MVAUDesignPaths.SIMD, "unassigned"))
-    assert isinstance(engine.query_property(point, MVAUDesignPaths.REGION), Unresolved)
-    assert engine.check_readiness(point, "model_structural").ready is None
-
-    with_pe = engine.commit_assignments(point, {MVAUDesignPaths.PE: 2})
-    assert isinstance(engine.query_property(with_pe.point, MVAUDesignPaths.REGION), Unresolved)
-
-    complete = engine.commit_assignments(with_pe.point, {MVAUDesignPaths.SIMD: 2})
-    region_answer = engine.query_property(complete.point, MVAUDesignPaths.REGION)
-    report_answer = engine.query_property(complete.point, MVAUDesignPaths.REGION_VALIDATION)
-    assessment = engine.evaluate_constraint_set(complete.point, "model_structural")
-
-    assert isinstance(region_answer, Decided)
-    assert isinstance(region_answer.value, DataflowRegion)
-    assert report_answer == Decided(RegionValidationReport())
-    assert assessment.answers[MVAUDesignPaths.REGION_STRUCTURALLY_WELL_FORMED] == Decided(True)
-    assert assessment.verdict is True
-    assert engine.check_readiness(complete.point, "model_structural").ready is True
+def _commit_region(
+    engine: Engine,
+    point: DesignPoint,
+    declaration: MVAURegionDeclaration | MVAUWeightInterface,
+    *,
+    pe: int = 2,
+    simd: int = 2,
+    interleave: int = 2,
+) -> DesignPoint:
+    assignments: dict[QualifiedPath, object] = {
+        MVAUComputeKernelPaths.PE: pe,
+        MVAUComputeKernelPaths.SIMD: simd,
+        MVAUComputeKernelPaths.REGION_DECLARATION: declaration,
+    }
+    if declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED:
+        assignments[MVAUComputeKernelPaths.INTERLEAVE] = interleave
+    return engine.commit_assignments(point, assignments).point
 
 
-def test_no_region_evaluator_runs_before_all_declared_dependencies_are_available(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-    original = mvau_design.construct_streamed_weight_mvau_region
-
-    def counted(
-        repetitions: int,
-        matrix_width: int,
-        matrix_height: int,
-        activation_element_type: NumericElementType,
-        weight_element_type: NumericElementType,
-        output_element_type: NumericElementType,
-        pe: int,
-        simd: int,
-    ) -> DataflowRegion:
-        nonlocal calls
-        calls += 1
-        return original(
-            repetitions,
-            matrix_width,
-            matrix_height,
-            activation_element_type,
-            weight_element_type,
-            output_element_type,
-            pe,
-            simd,
-        )
-
-    monkeypatch.setattr(mvau_design, "construct_streamed_weight_mvau_region", counted)
-    engine, point = _started()
-    assert isinstance(engine.query_property(point, MVAUDesignPaths.REGION), Unresolved)
-    with_pe = engine.commit_assignments(point, {MVAUDesignPaths.PE: 2}).point
-    assert isinstance(engine.query_property(with_pe, MVAUDesignPaths.REGION), Unresolved)
-    assert calls == 0
-    complete = engine.commit_assignments(with_pe, {MVAUDesignPaths.SIMD: 2}).point
-    assert isinstance(engine.query_property(complete, MVAUDesignPaths.REGION), Decided)
-    assert calls == 1
+def _commit_binding(
+    engine: Engine,
+    point: DesignPoint,
+    binding: MVAUComputeBinding,
+    *,
+    compute_pumping: bool = False,
+) -> DesignPoint:
+    return engine.commit_assignments(
+        point,
+        {
+            MVAUComputeKernelPaths.BINDING: binding,
+            MVAUComputeKernelPaths.COMPUTE_PUMPING: compute_pumping,
+        },
+    ).point
 
 
-def test_divisor_candidates_and_domain_rejections_are_exact() -> None:
-    engine, point = _started()
-    assert engine.enumerate_candidates(point, MVAUDesignPaths.PE) == Decided((1, 2, 4))
-    assert engine.enumerate_candidates(point, MVAUDesignPaths.SIMD) == Decided((1, 2, 4))
+def _region(engine: Engine, point: DesignPoint) -> DataflowRegion:
+    answer = engine.query_property(point, MVAUComputeKernelPaths.REGION)
+    assert isinstance(answer, Decided)
+    assert isinstance(answer.value, DataflowRegion)
+    return answer.value
 
-    for path, invalid in (
-        (MVAUDesignPaths.PE, 0),
-        (MVAUDesignPaths.PE, -1),
-        (MVAUDesignPaths.PE, 3),
-        (MVAUDesignPaths.PE, 2.0),
-        (MVAUDesignPaths.SIMD, 0),
-        (MVAUDesignPaths.SIMD, -1),
-        (MVAUDesignPaths.SIMD, 3),
-        (MVAUDesignPaths.SIMD, 2.0),
+
+def test_paths_and_compatibility_names_remain_available() -> None:
+    assert str(MVAUComputeKernelPaths.PE) == "mvau.compute.pe"
+    assert str(MVAUComputeKernelPaths.REGION_DECLARATION) == "mvau.compute.weight_interface"
+    assert MVAUComputeKernelPaths.WEIGHT_INTERFACE is MVAUComputeKernelPaths.REGION_DECLARATION
+    assert MVAUDesignPaths is MVAUComputeKernelPaths
+    assert MVAU_DESIGN_SPACE_SPEC is MVAU_COMPUTE_KERNEL_SPEC
+
+
+def test_standard_region_properties_are_explicit_and_preserve_old_construction() -> None:
+    for declaration, expected_constructor, candidate_path in (
+        (
+            MVAURegionDeclaration.STANDARD_EMBEDDED,
+            construct_standard_embedded_mvau_region,
+            MVAUComputeKernelPaths.STANDARD_EMBEDDED_REGION,
+        ),
+        (
+            MVAURegionDeclaration.STANDARD_STREAMED,
+            construct_standard_streamed_mvau_region,
+            MVAUComputeKernelPaths.STANDARD_STREAMED_REGION,
+        ),
     ):
-        result = engine.commit_assignments(point, {path: invalid})
-        assert result.point is point
-        assert result.outcomes[0].disposition == "rejected"
-    assert point.assignments == {}
+        engine, point = _started(target_dsp=_MISSING, weights_narrow=_MISSING)
+        point = _commit_region(engine, point, declaration)
+        expected = expected_constructor(4, 4, 4, INT8, INT8, INT16, 2, 2)
+        assert _region(engine, point) == expected
+        assert engine.query_property(point, candidate_path) == Decided(expected)
+        assert engine.check_readiness(point, "model_structural").ready is True
+        assert engine.check_readiness(point, "binding_feasibility").ready is None
 
 
-def test_independent_valid_assignments_commit_in_one_batch() -> None:
+def test_legacy_weight_interface_values_are_normalized_by_the_compatibility_path() -> None:
     engine, point = _started()
+    point = _commit_region(engine, point, MVAUWeightInterface.STREAMED)
+    assert point.assignments[MVAUComputeKernelPaths.REGION_DECLARATION] is (
+        MVAURegionDeclaration.STANDARD_STREAMED
+    )
+
+
+def test_interleave_is_branch_specific_and_has_exact_candidates() -> None:
+    engine, point = _started(repetitions=6, matrix_height=6)
+    point = engine.commit_assignments(
+        point,
+        {
+            MVAUComputeKernelPaths.REGION_DECLARATION: (
+                MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+            )
+        },
+    ).point
+    assert isinstance(
+        engine.enumerate_candidates(point, MVAUComputeKernelPaths.INTERLEAVE), Unresolved
+    )
+    point = engine.commit_assignments(
+        point,
+        {MVAUComputeKernelPaths.PE: 3, MVAUComputeKernelPaths.SIMD: 2},
+    ).point
+    assert engine.enumerate_candidates(point, MVAUComputeKernelPaths.INTERLEAVE) == Decided(
+        (2, 3, 6)
+    )
+
+    standard_engine, standard = _started()
+    standard = _commit_region(standard_engine, standard, MVAURegionDeclaration.STANDARD_STREAMED)
+    assert isinstance(
+        standard_engine.decision_state(standard, MVAUComputeKernelPaths.INTERLEAVE), Absent
+    )
+
+
+def test_invalid_interleave_reports_each_failed_domain_condition() -> None:
+    engine, point = _started(repetitions=5, matrix_height=4)
     result = engine.commit_assignments(
         point,
-        {MVAUDesignPaths.PE: 2, MVAUDesignPaths.SIMD: 4},
+        {
+            MVAUComputeKernelPaths.PE: 2,
+            MVAUComputeKernelPaths.SIMD: 2,
+            MVAUComputeKernelPaths.REGION_DECLARATION: (
+                MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+            ),
+            MVAUComputeKernelPaths.INTERLEAVE: 3,
+        },
     )
-    assert dict(result.point.assignments) == {
-        MVAUDesignPaths.PE: 2,
-        MVAUDesignPaths.SIMD: 4,
+    outcome = next(
+        item for item in result.outcomes if item.path == MVAUComputeKernelPaths.INTERLEAVE
+    )
+    assert outcome.disposition == "rejected"
+    assert {finding.code for finding in outcome.findings} == {
+        "mvau-interleave-does-not-divide-repetitions",
+        "mvau-interleave-does-not-divide-weight-tile",
     }
-    assert {outcome.disposition for outcome in result.outcomes} == {"committed"}
+
+
+def test_batch_interleaved_region_is_selected_and_structurally_ready_without_binding() -> None:
+    engine, point = _started(repetitions=6, matrix_height=6, target_dsp=_MISSING)
+    point = _commit_region(
+        engine,
+        point,
+        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+        pe=3,
+        simd=2,
+        interleave=3,
+    )
+    expected = construct_batch_interleaved_streamed_mvau_region(6, 4, 6, INT8, INT8, INT16, 3, 2, 3)
+    assert _region(engine, point) == expected
+    assert engine.query_property(point, MVAUComputeKernelPaths.REGION_VALIDATION) == Decided(
+        RegionValidationReport()
+    )
+    assert engine.check_readiness(point, "model_structural").ready is True
+
+
+def test_region_declarations_do_not_depend_on_binding_or_target_facts() -> None:
+    forbidden = {
+        MVAUComputeKernelPaths.BINDING,
+        MVAUComputeKernelPaths.COMPUTE_PUMPING,
+        MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
+        MVAUComputeKernelPaths.WEIGHTS_NARROW,
+    }
+    region_paths = {
+        MVAUComputeKernelPaths.STANDARD_EMBEDDED_REGION,
+        MVAUComputeKernelPaths.STANDARD_STREAMED_REGION,
+        MVAUComputeKernelPaths.BATCH_INTERLEAVED_REGION,
+        MVAUComputeKernelPaths.REGION,
+    }
+    for declaration in MVAU_COMPUTE_KERNEL_SPEC.properties:
+        if declaration.path not in region_paths:
+            continue
+        dependencies = {dependency.path for dependency in declaration.evaluator.dependencies}
+        assert dependencies.isdisjoint(forbidden)
+
+
+def test_tiled_binding_is_ready_only_after_all_binding_facts_are_present() -> None:
+    engine, point = _started(repetitions=6, matrix_height=6, target_dsp=_MISSING)
+    point = _commit_region(
+        engine,
+        point,
+        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+        pe=3,
+        interleave=3,
+    )
+    point = _commit_binding(engine, point, MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58)
+    assert engine.check_readiness(point, "binding_feasibility").ready is None
+
+    resolved_engine, resolved = _started(repetitions=6, matrix_height=6)
+    resolved = _commit_region(
+        resolved_engine,
+        resolved,
+        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+        pe=3,
+        interleave=3,
+    )
+    resolved = _commit_binding(
+        resolved_engine, resolved, MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58
+    )
+    assert resolved_engine.check_readiness(resolved, "binding_feasibility").ready is True
+    assert resolved_engine.evaluate_constraint_set(resolved, "binding_feasibility").verdict is True
 
 
 @pytest.mark.parametrize(
-    "problem",
+    "left,right",
     [
-        _problem(repetitions=0),
-        _problem(matrix_width=-1),
-        _problem(matrix_height=2.0),
-        _problem(activation_type=NumericElementType("", 8)),
-        _problem(weight_type=NumericElementType("int", 0)),
-        {
-            key: value
-            for key, value in _problem().items()
-            if key != str(MVAUDesignPaths.OUTPUT_ELEMENT_TYPE)
-        },
+        (MVAUComputeBinding.LEGACY_HLS_LUT, MVAUComputeBinding.LEGACY_HLS_DSP),
+        (MVAUComputeBinding.RTL_SOFTVEC, MVAUComputeBinding.RTL_PACKED),
     ],
 )
-def test_malformed_problem_input_is_a_request_error(problem: dict[str, object]) -> None:
-    engine = Engine()
-    space = engine.validate(MVAU_DESIGN_SPACE_SPEC)
-    with pytest.raises(RequestError):
-        engine.start(space, problem)
-
-
-def test_evaluator_exception_remains_contextual(monkeypatch: pytest.MonkeyPatch) -> None:
-    def broken(
-        _repetitions: int,
-        _matrix_width: int,
-        _matrix_height: int,
-        _activation_element_type: NumericElementType,
-        _weight_element_type: NumericElementType,
-        _output_element_type: NumericElementType,
-        _pe: int,
-        _simd: int,
-    ) -> DataflowRegion:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(mvau_design, "construct_streamed_weight_mvau_region", broken)
-    engine, point = _started()
-    complete = engine.commit_assignments(
-        point,
-        {MVAUDesignPaths.PE: 2, MVAUDesignPaths.SIMD: 2},
-    ).point
-    with pytest.raises(EvaluationError) as caught:
-        engine.query_property(complete, MVAUDesignPaths.REGION)
-    assert caught.value.owner == MVAUDesignPaths.REGION
-    assert caught.value.role == "property"
-    assert isinstance(caught.value.__cause__, RuntimeError)
-
-
-def test_queries_never_commit_decisions_or_proposals() -> None:
-    engine, point = _started()
-    engine.enumerate_candidates(point, MVAUDesignPaths.PE)
-    engine.query_property(point, MVAUDesignPaths.REGION)
-    engine.evaluate_constraints(point)
-    engine.check_readiness(point, "model_structural")
-    assert point.assignments == {}
-
-
-def test_derived_region_equals_direct_construction_and_changes_with_folding() -> None:
-    engine, point = _started()
-    first = engine.commit_assignments(
-        point,
-        {MVAUDesignPaths.PE: 2, MVAUDesignPaths.SIMD: 2},
-    ).point
-    first_answer = engine.query_property(first, MVAUDesignPaths.REGION)
-    assert isinstance(first_answer, Decided)
-    assert isinstance(first_answer.value, DataflowRegion)
-    direct = construct_streamed_weight_mvau_region(2, 4, 4, INT8, INT8, INT16, 2, 2)
-    assert first_answer.value == direct
-    assert validate_region(first_answer.value) == validate_region(direct)
-
-    second = engine.commit_assignments(
-        point,
-        {MVAUDesignPaths.PE: 1, MVAUDesignPaths.SIMD: 2},
-    ).point
-    second_answer = engine.query_property(second, MVAUDesignPaths.REGION)
-    assert isinstance(second_answer, Decided)
-    assert isinstance(second_answer.value, DataflowRegion)
-    assert second_answer.value != first_answer.value
-    assert second_answer.value.schedule.extents != first_answer.value.schedule.extents
-    assert (
-        second_answer.value.input_interface("weight").port.beat_sequence.elements_per_beat
-        != first_answer.value.input_interface("weight").port.beat_sequence.elements_per_beat
-    )
-
-
-def test_validation_is_derived_once_and_reused_by_constraint(
-    monkeypatch: pytest.MonkeyPatch,
+def test_binding_alternatives_preserve_the_standard_region(
+    left: MVAUComputeBinding, right: MVAUComputeBinding
 ) -> None:
-    calls = 0
-    original = mvau_design.validate_region  # type: ignore[attr-defined]
+    engine, root = _started()
+    model = _commit_region(engine, root, MVAURegionDeclaration.STANDARD_STREAMED)
+    expected = _region(engine, model)
+    assert _region(engine, _commit_binding(engine, model, left)) == expected
+    assert _region(engine, _commit_binding(engine, model, right)) == expected
 
-    def counted(region: DataflowRegion) -> RegionValidationReport:
-        nonlocal calls
-        calls += 1
-        return original(region)
 
-    monkeypatch.setattr(mvau_design, "validate_region", counted)
-    engine, point = _started()
-    complete = engine.commit_assignments(
+@pytest.mark.parametrize(
+    "binding,declaration,expected",
+    [
+        (MVAUComputeBinding.LEGACY_HLS_LUT, MVAURegionDeclaration.STANDARD_EMBEDDED, True),
+        (MVAUComputeBinding.LEGACY_HLS_DSP, MVAURegionDeclaration.STANDARD_STREAMED, True),
+        (MVAUComputeBinding.RTL_SOFTVEC, MVAURegionDeclaration.STANDARD_STREAMED, True),
+        (MVAUComputeBinding.RTL_PACKED, MVAURegionDeclaration.STANDARD_STREAMED, True),
+        (
+            MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            True,
+        ),
+        (MVAUComputeBinding.RTL_SOFTVEC, MVAURegionDeclaration.STANDARD_EMBEDDED, False),
+        (
+            MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
+            MVAURegionDeclaration.STANDARD_STREAMED,
+            False,
+        ),
+        (
+            MVAUComputeBinding.LEGACY_HLS_LUT,
+            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+            False,
+        ),
+    ],
+)
+def test_binding_region_compatibility_matrix(
+    binding: MVAUComputeBinding,
+    declaration: MVAURegionDeclaration,
+    expected: bool,
+) -> None:
+    overrides = {"repetitions": 6, "matrix_height": 6} if "interleaved" in declaration.value else {}
+    engine, point = _started(**overrides)
+    point = _commit_region(
+        engine,
         point,
-        {MVAUDesignPaths.PE: 2, MVAUDesignPaths.SIMD: 2},
-    ).point
-    assert engine.evaluate_constraint_set(complete, "model_structural").verdict is True
-    assert isinstance(
-        engine.query_property(complete, MVAUDesignPaths.REGION_VALIDATION),
-        Decided,
+        declaration,
+        pe=3 if overrides else 2,
+        interleave=3,
     )
-    assert calls == 1
+    point = _commit_binding(engine, point, binding)
+    assessment = engine.evaluate_constraint_set(point, "binding_feasibility")
+    assert assessment.answers[MVAUComputeKernelPaths.BINDING_REGION_SUPPORTED] == Decided(expected)
+
+
+@pytest.mark.parametrize(
+    "binding,profile,expected",
+    [
+        (MVAUComputeBinding.LEGACY_HLS_LUT, MVAUComputationProfile.FUSED_THRESHOLD, True),
+        (
+            MVAUComputeBinding.LEGACY_HLS_DSP,
+            MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR,
+            True,
+        ),
+        (MVAUComputeBinding.RTL_SOFTVEC, MVAUComputationProfile.FUSED_THRESHOLD, False),
+        (
+            MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
+            MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR,
+            False,
+        ),
+    ],
+)
+def test_computation_compatibility_is_separate_from_region_structure(
+    binding: MVAUComputeBinding,
+    profile: MVAUComputationProfile,
+    expected: bool,
+) -> None:
+    activation_type = INT8
+    weight_type = INT8
+    if profile is MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR:
+        activation_type = NumericElementType("bipolar", 1)
+        weight_type = NumericElementType("bipolar", 1)
+    engine, point = _started(
+        computation_profile=profile,
+        activation_type=activation_type,
+        weight_type=weight_type,
+        threshold_type=INT16,
+    )
+    point = _commit_region(engine, point, MVAURegionDeclaration.STANDARD_STREAMED)
+    point = _commit_binding(engine, point, binding)
+    assert engine.evaluate_constraint_set(point, "model_structural").verdict is True
+    assessment = engine.evaluate_constraint_set(point, "binding_feasibility")
+    assert assessment.answers[MVAUComputeKernelPaths.BINDING_COMPUTATION_SUPPORTED] == Decided(
+        expected
+    )
+
+
+def test_tiled_binding_constraints_are_binding_only_and_report_all_failures() -> None:
+    engine, point = _started(
+        activation_type=INT9,
+        weight_type=INT9,
+        computation_profile=MVAUComputationProfile.FUSED_THRESHOLD,
+        threshold_type=INT16,
+        target_dsp=MVAUDspBlock.DSP48E2,
+    )
+    point = _commit_region(engine, point, MVAURegionDeclaration.STANDARD_STREAMED)
+    point = _commit_binding(
+        engine,
+        point,
+        MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
+        compute_pumping=True,
+    )
+    assert engine.evaluate_constraint_set(point, "model_structural").verdict is True
+    assessment = engine.evaluate_constraint_set(point, "binding_feasibility")
+    false_paths = {path for path, answer in assessment.answers.items() if answer == Decided(False)}
+    assert {
+        MVAUComputeKernelPaths.BINDING_REGION_SUPPORTED,
+        MVAUComputeKernelPaths.BINDING_COMPUTATION_SUPPORTED,
+        MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED,
+        MVAUComputeKernelPaths.BINDING_TILED_WIDTH_SUPPORTED,
+        MVAUComputeKernelPaths.BINDING_COMPUTE_PUMPING_SUPPORTED,
+    } <= false_paths
+    assert assessment.verdict is False
+
+
+def test_missing_target_blocks_only_applicable_binding_constraints() -> None:
+    engine, point = _started(target_dsp=_MISSING, weights_narrow=_MISSING)
+    point = _commit_region(engine, point, MVAURegionDeclaration.STANDARD_STREAMED)
+    point = _commit_binding(engine, point, MVAUComputeBinding.RTL_SOFTVEC)
+    assert engine.check_readiness(point, "model_structural").ready is True
+    assessment = engine.evaluate_constraint_set(point, "binding_feasibility")
+    target = assessment.answers[MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED]
+    assert isinstance(target, Unresolved)
+    assert target.findings[0].kind is FindingKind.LIMITATION
+    assert engine.check_readiness(point, "binding_feasibility").ready is None
+
+    hls_engine, hls_point = _started(target_dsp=_MISSING, weights_narrow=_MISSING)
+    hls_point = _commit_region(hls_engine, hls_point, MVAURegionDeclaration.STANDARD_STREAMED)
+    hls_point = _commit_binding(hls_engine, hls_point, MVAUComputeBinding.LEGACY_HLS_LUT)
+    hls_assessment = hls_engine.evaluate_constraint_set(hls_point, "binding_feasibility")
+    assert isinstance(
+        hls_assessment.answers[MVAUComputeKernelPaths.BINDING_TARGET_SUPPORTED], Absent
+    )
+    assert hls_assessment.verdict is True
+
+
+def test_packed_binding_preserves_num_lanes_limit() -> None:
+    engine, point = _started(activation_type=INT2, weight_type=INT2)
+    point = _commit_region(engine, point, MVAURegionDeclaration.STANDARD_STREAMED)
+    point = _commit_binding(engine, point, MVAUComputeBinding.RTL_PACKED)
+    assessment = engine.evaluate_constraint_set(point, "binding_feasibility")
+    assert assessment.answers[MVAUComputeKernelPaths.BINDING_PACKED_SUPPORTED] == Decided(False)
+
+
+def test_fused_threshold_requires_compatible_threshold_representation() -> None:
+    engine, point = _started(
+        computation_profile=MVAUComputationProfile.FUSED_THRESHOLD,
+        threshold_type=_MISSING,
+    )
+    point = _commit_region(engine, point, MVAURegionDeclaration.STANDARD_EMBEDDED)
+    point = _commit_binding(engine, point, MVAUComputeBinding.LEGACY_HLS_LUT)
+    answer = engine.evaluate_constraint_set(point, "binding_feasibility").answers[
+        MVAUComputeKernelPaths.BINDING_HLS_THRESHOLD_SUPPORTED
+    ]
+    assert isinstance(answer, Unresolved)
+
+    wide_engine, wide_point = _started(
+        computation_profile=MVAUComputationProfile.FUSED_THRESHOLD,
+        threshold_type=INT16,
+    )
+    wide_point = _commit_region(wide_engine, wide_point, MVAURegionDeclaration.STANDARD_EMBEDDED)
+    wide_point = _commit_binding(wide_engine, wide_point, MVAUComputeBinding.LEGACY_HLS_LUT)
+    assert wide_engine.evaluate_constraint_set(wide_point, "binding_feasibility").verdict is True
+
+
+def test_binding_witness_records_mechanism_without_changing_the_region() -> None:
+    engine, point = _started(repetitions=6, matrix_height=6)
+    point = _commit_region(
+        engine,
+        point,
+        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
+        pe=3,
+        interleave=3,
+    )
+    region = _region(engine, point)
+    point = _commit_binding(engine, point, MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58)
+    witness = engine.query_property(point, MVAUComputeKernelPaths.BINDING_WITNESS)
+    assert isinstance(witness, Decided)
+    assert isinstance(witness.value, MVAUBindingWitness)
+    assert witness.value.mechanisms == (
+        "activation_replay",
+        "dot_product_accumulation",
+        "weight_chunk_assembly_and_replay",
+        "output_reorder",
+    )
+    assert _region(engine, point) == region
+
+
+def test_hls_partition_limit_is_a_binding_constraint() -> None:
+    engine, point = _started(matrix_width=2048)
+    point = _commit_region(engine, point, MVAURegionDeclaration.STANDARD_STREAMED, simd=1)
+    point = _commit_binding(engine, point, MVAUComputeBinding.LEGACY_HLS_DSP)
+    assessment = engine.evaluate_constraint_set(point, "binding_feasibility")
+    assert assessment.answers[MVAUComputeKernelPaths.BINDING_HLS_PARTITION_SUPPORTED] == Decided(
+        False
+    )
+    assert engine.evaluate_constraint_set(point, "model_structural").verdict is True
+
+
+def test_wrong_nominal_assignment_types_are_request_errors() -> None:
+    engine, point = _started()
+    with pytest.raises(RequestError) as caught:
+        engine.commit_assignments(point, {MVAUComputeKernelPaths.BINDING: "rtl_softvec"})
+    assert caught.value.findings[0].code == "assignment-type"
 
 
 def test_mvau_assignments_pass_the_monotonicity_harness() -> None:
@@ -269,10 +506,13 @@ def test_mvau_assignments_pass_the_monotonicity_harness() -> None:
     result = MonotonicityHarness(engine).verify(
         point,
         {
-            MVAUDesignPaths.PE: (1, 2, 4),
-            MVAUDesignPaths.SIMD: (1, 2, 4),
+            MVAUComputeKernelPaths.PE: (1, 2, 4),
+            MVAUComputeKernelPaths.SIMD: (1, 2, 4),
+            MVAUComputeKernelPaths.REGION_DECLARATION: tuple(MVAURegionDeclaration),
+            MVAUComputeKernelPaths.INTERLEAVE: (2, 4),
+            MVAUComputeKernelPaths.BINDING: tuple(MVAUComputeBinding),
+            MVAUComputeKernelPaths.COMPUTE_PUMPING: (False, True),
         },
     )
-    assert result.checked_successors == 6
     assert result.violations == ()
     assert result.conformant is True

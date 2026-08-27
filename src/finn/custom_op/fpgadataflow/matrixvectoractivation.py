@@ -490,15 +490,14 @@ class MVAU(HWCustomOp):
     def get_exp_cycles(self):
         pe = self.get_nodeattr("PE")
         simd = self.get_nodeattr("SIMD")
-        th = self.get_nodeattr("TH")
         num_inp_vec = self.get_nodeattr("numInputVectors")
         mh = self.get_nodeattr("MH")
         mw = self.get_nodeattr("MW")
         # since mmv != 1 is not supported yet, we set mmv for now to 1
         mmv = 1
-        # Tiling/systolic reduces throughput
-        # TH>1 (tiling) reduces throughput by factor TH (tinner = PE*SIMD/TH)
-        exp_cycles = (mh / pe) * (mw / simd) * np.prod(num_inp_vec) * th / mmv
+        # TH interleaves vectors but does not add compute iterations:
+        # (R / TH) * NF * SF * TH = R * NF * SF.
+        exp_cycles = (mh / pe) * (mw / simd) * np.prod(num_inp_vec) / mmv
         return int(exp_cycles)
 
     def minimize_accumulator_width(self, model):

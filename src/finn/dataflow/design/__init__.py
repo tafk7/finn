@@ -42,8 +42,16 @@ from finn.dataflow._engine import (
     as_object_semantics,
 )
 from finn.dataflow.design.region import (
+    DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,
+    NETWORK_VALIDATION_REPORT_SEMANTICS,
     REGION_VALIDATION_REPORT_SEMANTICS,
+)
+from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.network_validation import (
+    NetworkValidationIssue,
+    NetworkValidationReport,
+    validate_network,
 )
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import (
@@ -55,6 +63,8 @@ from finn.dataflow.region_validation import (
 __all__ = [
     "ABSENT",
     "DATAFLOW_REGION_SEMANTICS",
+    "DATAFLOW_NETWORK_SEMANTICS",
+    "NETWORK_VALIDATION_REPORT_SEMANTICS",
     "REGION_VALIDATION_REPORT_SEMANTICS",
     "AbsenceMode",
     "Absent",
@@ -64,6 +74,7 @@ __all__ = [
     "ConstraintAssessment",
     "ConstraintSet",
     "DataflowRegion",
+    "DataflowNetwork",
     "Decided",
     "Decision",
     "DecisionDomain",
@@ -80,6 +91,8 @@ __all__ = [
     "Finding",
     "FindingKind",
     "ItemOutcome",
+    "NetworkValidationIssue",
+    "NetworkValidationReport",
     "ProblemField",
     "ProblemSchema",
     "ProposalAdoptionMode",
@@ -95,4 +108,5 @@ __all__ = [
     "ValueSemantics",
     "as_object_semantics",
     "validate_region",
+    "validate_network",
 ]

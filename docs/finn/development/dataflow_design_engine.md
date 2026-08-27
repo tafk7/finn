@@ -6,11 +6,44 @@ The supported authoring surface for dataflow design spaces is
 uses only the Python standard library; region knowledge is confined to the
 public design adapter.
 
-The first connected specification is `finn.dataflow.mvau_design`. It derives a
-concrete streamed-weight MVAU `DataflowRegion` after the `mvau.pe` and
-`mvau.simd` decisions are committed. Structural validation is represented by a
-separate `RegionValidationReport` derived property and a Boolean constraint, so
-a failed constraint never discards the model-local issues that explain it.
+The first connected Kernel definitions are the MVAU compute Kernel and cyclic
+parameter-delivery Kernel. `MVAU_COMPUTE_KERNEL_SPEC` declares three complete
+region branches: `standard.embedded`, `standard.streamed`, and
+`batch_interleaved.streamed`. The interleaved branch has schedule
+`(batch, nf, sf, t)`, exact activation and weight requirements, ordinary
+vector-major activation/output sequences, and a chunked weight sequence. The
+compatibility module `finn.dataflow.mvau_design` continues to expose the
+earlier constructor and specification names without retaining duplicate logic.
+
+Computation profiles and implementation bindings are separate from region
+selection. The five initial binding identities distinguish legacy HLS LUT,
+legacy HLS DSP, RTL soft-vector, RTL packed, and RTL batch-interleaved DSP58
+implementations. Target, width, narrowing, and pumping rules are binding
+constraints; they are not inputs to any region constructor. Structural
+validation remains a separate derived report and constraint, so
+`model_structural` readiness never requires a binding.
+
+`CYCLIC_PARAMETER_KERNEL_SPEC` is the second concrete Kernel definition. It
+constructs a rank-zero local-state source whose output port exactly preserves
+the requested full-tile or chunked `BeatSequence`. RAM style, runtime
+writability, pumping, and implementation identity remain binding-owned.
+
+`finn.dataflow.kernel` contains the generic authoring layer extracted from those
+two definitions. It records Kernel, region-declaration, and binding identities,
+constructs `KernelInstance` values, and assembles ordinary flat
+`DesignSpaceSpec` values. It does not add a Kernel primitive to the engine.
+
+`finn.dataflow.network` and `finn.dataflow.network_validation` implement the
+flat acyclic network contract with qualified endpoints, explicit tensor-position
+maps, exact beat-sequence compatibility, exposed boundaries, and ordered
+channels without physical capacity fields. `finn.dataflow.ops.mvau` uses that
+foundation to select an embedded/direct `RegionRef` or a cyclic-delivery
+`NetworkRef`, while keeping source-to-region coordinate mappings outside the
+normalized region.
+
+The legacy MVAU cycle estimate now follows the selected logical work count for
+both standard and batch-interleaved execution: interleaving reorganizes the
+`R * NF * SF` points but does not multiply them by `TH`.
 
 Run the focused local verification with:
 

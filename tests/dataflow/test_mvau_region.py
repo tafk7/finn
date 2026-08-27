@@ -3,7 +3,7 @@
 
 import pytest
 
-from finn.dataflow.mvau_design import construct_streamed_weight_mvau_region
+from finn.dataflow.mvau_design import MVAUWeightInterface, construct_mvau_compute_region
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -27,7 +27,7 @@ def _mvau_region(
     output_field_order=None,
 ):
     element_type = NumericElementType("int", 8)
-    region = construct_streamed_weight_mvau_region(
+    region = construct_mvau_compute_region(
         repetitions,
         matrix_width,
         matrix_height,
@@ -36,6 +36,7 @@ def _mvau_region(
         element_type,
         pe,
         simd,
+        MVAUWeightInterface.STREAMED,
     )
     if weight_field_order is None and output_field_order is None:
         return region
@@ -123,6 +124,42 @@ def test_small_streamed_weight_mvau_region_matches_authoring_semantics():
                 assert output.availability.available_at(position) != iteration
 
     assert output.availability.domain == output.port.beat_sequence.image
+
+
+def test_embedded_weight_mvau_region_omits_only_the_weight_interface():
+    element_type = NumericElementType("int", 8)
+    streamed = construct_mvau_compute_region(
+        2,
+        4,
+        4,
+        element_type,
+        element_type,
+        element_type,
+        2,
+        2,
+        MVAUWeightInterface.STREAMED,
+    )
+    embedded = construct_mvau_compute_region(
+        2,
+        4,
+        4,
+        element_type,
+        element_type,
+        element_type,
+        2,
+        2,
+        MVAUWeightInterface.EMBEDDED,
+    )
+
+    assert validate_region(streamed).issues == ()
+    assert validate_region(embedded).issues == ()
+    assert tuple(interface.port.id for interface in streamed.inputs) == (
+        "activation",
+        "weight",
+    )
+    assert tuple(interface.port.id for interface in embedded.inputs) == ("activation",)
+    assert streamed.schedule == embedded.schedule
+    assert streamed.outputs == embedded.outputs
 
 
 def test_mvau_field_bijections_change_sequences_without_changing_widths_or_shapes():

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Compatibility facade for the MVAU compute Kernel authoring modules."""
+"""Concrete MVAU Kernel authoring support."""
 
 from finn.dataflow.mvau.computation import MVAUBindingWitness, MVAUComputationProfile
 from finn.dataflow.mvau.definition import (
@@ -22,19 +22,13 @@ from finn.dataflow.mvau.regions import (
     construct_streamed_weight_mvau_region,
 )
 
-# Compatibility names from the first public MVAU design-space slice.
-MVAUDesignPaths = MVAUComputeKernelPaths
-MVAU_DESIGN_SPACE_SPEC = MVAU_COMPUTE_KERNEL_SPEC
-
 __all__ = [
     "MVAU_COMPUTE_KERNEL",
     "MVAU_COMPUTE_KERNEL_SPEC",
-    "MVAU_DESIGN_SPACE_SPEC",
     "MVAUBindingWitness",
     "MVAUComputationProfile",
     "MVAUComputeBinding",
     "MVAUComputeKernelPaths",
-    "MVAUDesignPaths",
     "MVAUDspBlock",
     "MVAURegionDeclaration",
     "MVAUWeightInterface",

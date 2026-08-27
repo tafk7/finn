@@ -18,7 +18,9 @@ def _run_import_check(source: str) -> None:
 def test_public_design_api_is_deliberate_and_pinned() -> None:
     assert set(design.__all__) == {
         "ABSENT",
+        "DATAFLOW_NETWORK_SEMANTICS",
         "DATAFLOW_REGION_SEMANTICS",
+        "NETWORK_VALIDATION_REPORT_SEMANTICS",
         "REGION_VALIDATION_REPORT_SEMANTICS",
         "AbsenceMode",
         "Absent",
@@ -28,6 +30,7 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "ConstraintAssessment",
         "ConstraintSet",
         "DataflowRegion",
+        "DataflowNetwork",
         "Decided",
         "Decision",
         "DecisionDomain",
@@ -44,6 +47,8 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "Finding",
         "FindingKind",
         "ItemOutcome",
+        "NetworkValidationIssue",
+        "NetworkValidationReport",
         "ProblemField",
         "ProblemSchema",
         "ProposalAdoptionMode",
@@ -59,6 +64,7 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "ValueSemantics",
         "as_object_semantics",
         "validate_region",
+        "validate_network",
     }
 
 

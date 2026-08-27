@@ -1,0 +1,26 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""FINN dataflow-operation design-space assemblies."""
+
+from finn.dataflow.ops.mvau import (
+    MVAU_DATAFLOW_OP_SPEC,
+    MVAUDataflowOpPaths,
+    MVAUParameterTopology,
+    MVAUSourceAssociation,
+    MVAUSourceDescription,
+    NetworkRef,
+    RegionRef,
+    build_mvau_dataflow_op_spec,
+)
+
+__all__ = [
+    "MVAU_DATAFLOW_OP_SPEC",
+    "MVAUDataflowOpPaths",
+    "MVAUParameterTopology",
+    "MVAUSourceAssociation",
+    "MVAUSourceDescription",
+    "NetworkRef",
+    "RegionRef",
+    "build_mvau_dataflow_op_spec",
+]
