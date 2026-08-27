@@ -14,6 +14,7 @@ from finn.dataflow.mvau.artifacts import (
     build_mvau_rtl_artifact,
     build_mvau_rtl_artifact_requirements,
     mvau_rtlsim_cycles,
+    simulate_mvau_cyclic_stitched_artifact,
     simulate_mvau_rtl_artifact,
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
@@ -135,3 +136,10 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
         "repetitions": 2,
         "simd": 2,
     }
+    if mem_mode == "internal_decoupled":
+        stitched = simulate_mvau_cyclic_stitched_artifact(
+            requirements,
+            activation,
+            tmp_path / "stitched",
+        )
+        assert np.array_equal(stitched, expected)

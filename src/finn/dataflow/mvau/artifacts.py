@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+import importlib
 import os
 from pathlib import Path
 from typing import Iterator, cast
@@ -573,6 +574,64 @@ def simulate_mvau_rtl_artifact(
     return cast(np.ndarray, context[requirements.output_tensor_id])
 
 
+def simulate_mvau_cyclic_stitched_artifact(
+    requirements: MVAURTLArtifactRequirements,
+    activation: np.ndarray,
+    build_directory: str | Path,
+) -> np.ndarray:
+    """Run the existing stitched-IP path including the selected cyclic memstream."""
+    if requirements.mem_mode != "internal_decoupled":
+        raise MVAUArtifactError(
+            (
+                _finding(
+                    "mvau-artifact-cyclic-topology-required",
+                    "stitched cyclic simulation requires internal_decoupled delivery",
+                ),
+            )
+        )
+    build_root = Path(build_directory).resolve()
+    build_root.mkdir(parents=True, exist_ok=True)
+    model = _materialize_model(requirements)
+    previous_build = os.environ.get("FINN_BUILD_DIR")
+    os.environ["FINN_BUILD_DIR"] = str(build_root)
+    try:
+        with _declared_finn_root(requirements.finn_root):
+            prepare_ip = getattr(
+                importlib.import_module("finn.transformation.fpgadataflow.prepare_ip"),
+                "PrepareIP",
+            )
+            hls_synth_ip = getattr(
+                importlib.import_module("finn.transformation.fpgadataflow.hlssynth_ip"),
+                "HLSSynthIP",
+            )
+            create_stitched_ip = getattr(
+                importlib.import_module("finn.transformation.fpgadataflow.create_stitched_ip"),
+                "CreateStitchedIP",
+            )
+            onnx_exec = importlib.import_module("finn.core.onnx_exec")
+            model = model.transform(
+                prepare_ip(requirements.target_fpga_part, requirements.clock_period_ns)
+            )
+            model = model.transform(hls_synth_ip())
+            model = model.transform(
+                create_stitched_ip(
+                    requirements.target_fpga_part,
+                    requirements.clock_period_ns,
+                )
+            )
+            model.set_metadata_prop("exec_mode", "rtlsim")
+            outputs = onnx_exec.execute_onnx(
+                model,
+                {requirements.activation_tensor_id: np.asarray(activation, dtype=np.float32)},
+            )
+    finally:
+        if previous_build is None:
+            del os.environ["FINN_BUILD_DIR"]
+        else:
+            os.environ["FINN_BUILD_DIR"] = previous_build
+    return cast(np.ndarray, outputs[requirements.output_tensor_id])
+
+
 def mvau_rtlsim_cycles(artifact: MVAUBuiltRTLArtifact) -> int:
     """Return the cycle count recorded by the requirements-backed RTL simulation."""
     with _declared_finn_root(artifact.requirements.finn_root):
@@ -601,5 +660,6 @@ __all__ = [
     "build_mvau_rtl_artifact",
     "build_mvau_rtl_artifact_requirements",
     "mvau_rtlsim_cycles",
+    "simulate_mvau_cyclic_stitched_artifact",
     "simulate_mvau_rtl_artifact",
 ]
