@@ -40,12 +40,10 @@
 # WORKSPACE_DIR at interpreter startup. The kit makes them available to
 # non-Python consumers too.
 #
-# SCHEMA NOTE: the published docs describe `setup.install` / `setup.startup`,
-# but sbx v0.39.0 rejects a `setup:` key and requires `commands:`, with
-# `command` as an argv LIST and no `name` field. `sbx kit inspect` then
-# normalises its OUTPUT back to `setup:`. Input and output schemas differ -
-# validate against the binary, not the docs.
-schemaVersion: "1"
+# SCHEMA: kit schemaVersion 2 (sbx >= 0.36). v1 used `commands:`; v2 uses
+# `setup:`. Both are accepted, but v1 is the legacy path, so new kits use v2.
+# Grammars must not be mixed: v1 fields in a v2 spec are rejected at decode.
+schemaVersion: "2"
 kind: mixin
 name: finn
 
@@ -60,14 +58,19 @@ environment:
     # into the mounted workspace is what this redesign removed.
     FINN_BUILD_DIR: "/tmp/finn_build"
 
-commands:
+setup:
   startup:
-    # user: root because startup commands otherwise run as `agent` (uid 1000),
-    # and both of these touch root-owned paths. Note the dispatcher STOPS on a
-    # failed command, so a command that cannot succeed silently disables every
-    # one after it -- keep these unconditionally safe.
+    # user "0" because startup commands default to "1000" (agent) and both of
+    # these touch root-owned paths. Two other constraints from the kit
+    # reference, both learned the hard way here:
+    #   - the dispatcher STOPS on a failed command, so one that cannot succeed
+    #     silently disables every command after it;
+    #   - startup commands replay on every container restart, so they must be
+    #     idempotent. The toolchain block below writes a separate file and
+    #     sources it once, rather than appending to the sbx-managed file each
+    #     time.
     - command: ["sh", "-c", "mkdir -p /tmp/finn_build && chmod 1777 /tmp/finn_build"]
-      user: root
+      user: "0"
 
     # Publish the Xilinx toolchain environment to shell sessions.
     #
@@ -102,9 +105,11 @@ commands:
               eval "val=\${$v:-}"
               [ -n "$val" ] && printf 'export %s=%q\n' "$v" "$val"
             done
-          } >> /etc/sandbox-persistent.sh
+          } > /etc/finn-toolchain.sh
+          grep -q finn-toolchain /etc/sandbox-persistent.sh 2>/dev/null \
+            || echo ". /etc/finn-toolchain.sh" >> /etc/sandbox-persistent.sh
           # Explicit success. The block above ends on whatever the last test
           # returned, and the dispatcher STOPS the whole chain on a non-zero
           # exit -- which would silently disable any command added after this.
           exit 0
-      user: root
+      user: "0"
