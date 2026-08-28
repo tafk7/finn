@@ -27,6 +27,7 @@ from finn.dataflow.authoring.kernel_design import (
     SOURCE_ADMISSION,
     KernelDesign,
     declare_kernel,
+    declare_kernel_design,
     kernel_namespace,
 )
 from finn.dataflow.kernels import (
@@ -107,6 +108,7 @@ __all__ = [
     "build_kernel_semantic_declarations",
     "dataflow_problem_fingerprint",
     "declare_kernel",
+    "declare_kernel_design",
     "divisors_of",
     "domain",
     "enumerate_feasible_points",

@@ -389,6 +389,7 @@ class Scope:
         self._constraints: list[Constraint] = []
         self._sets: dict[str, list[QualifiedPath]] = {}
         self._profiles: list[ReadinessProfile] = []
+        self._handles: dict[str, Ref[object]] = {}
 
     # -- path allocation ---------------------------------------------------
 
@@ -422,7 +423,7 @@ class Scope:
         resolved = QualifiedPath.parse(path)
         self._problem.append(ProblemField(resolved, semantics, required, validate, description))
         handle: Ref[T] = Ref(resolved, DependencyKind.PROBLEM, semantics)
-        return handle
+        return self._remember(str(resolved), handle)
 
     def decision(
         self,
@@ -436,7 +437,7 @@ class Scope:
         path = self.local_path(name)
         self._decisions.append(Decision(path, semantics, domain(path), applies_if))
         handle: Ref[T] = Ref(path, DependencyKind.DECISION, semantics)
-        return handle
+        return self._remember(name, handle)
 
     def derived(
         self,
@@ -453,7 +454,7 @@ class Scope:
             DerivedProperty(path, semantics, evaluator(path, dependencies, evaluate), applies_if)
         )
         handle: Ref[T] = Ref(path, DependencyKind.PROPERTY, semantics)
-        return handle
+        return self._remember(name, handle)
 
     def constraint(
         self,
@@ -503,6 +504,36 @@ class Scope:
                 tuple(item.path for item in constraints),
             )
         )
+
+    # -- handles -----------------------------------------------------------
+
+    def _remember(self, name: str, handle: Ref[T]) -> Ref[T]:
+        self._handles[name] = cast("Ref[object]", handle)
+        return handle
+
+    def handle(self, name: str, value_type: type[T]) -> Ref[T]:
+        """The handle this scope declared under ``name``.
+
+        Wiring one scope's declaration into another needs the handle, not the
+        path, so that the dependency kind and value semantics travel with it.
+        The enclosing assembly is what does that wiring; this is how it reaches
+        in without reconstructing a path string.
+
+        ``value_type`` is checked against what was declared, so a lookup by
+        string cannot quietly hand back the wrong kind of value.
+        """
+
+        try:
+            found = self._handles[name]
+        except KeyError:
+            raise AuthoringError(
+                f"{self.namespace} declares no {name!r}; it declares {sorted(self._handles)}"
+            ) from None
+        if found.semantics.type_token is not value_type:
+            raise AuthoringError(
+                f"{self.namespace}.{name} is {found.semantics.name}, not {value_type.__name__}"
+            )
+        return cast("Ref[T]", found)
 
     # -- output ------------------------------------------------------------
 

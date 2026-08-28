@@ -284,7 +284,24 @@ def declare_kernel(
     *,
     provenance: ProblemProvenance | None = None,
 ) -> KernelDeclaration:
+    """Declare one Kernel and keep only its declarations."""
+
+    return declare_kernel_design(kernel, namespace, inputs, provenance=provenance)[0]
+
+
+def declare_kernel_design(
+    kernel: type[Kernel],
+    namespace: str,
+    inputs: object,
+    *,
+    provenance: ProblemProvenance | None = None,
+) -> tuple[KernelDeclaration, KernelDesign[object]]:
     """Run one Kernel subclass's ``define_design`` under ``namespace``.
+
+    Returns the scope alongside the declarations, so an operation that must
+    wire one Kernel's choice into another -- a downstream Kernel's folding
+    determining what an upstream one has to present -- can reach the handle
+    rather than rebuild its path.
 
     The operation that owns the pool calls this, because the operation is what
     knows the namespace and the wired inputs.  Placing the same subclass twice
@@ -312,7 +329,7 @@ def declare_kernel(
             for provider_id, version in design.declared_providers
         ),
         kernel,
-    )
+    ), design
 
 
 def kernel_namespace(pool: str, kernel_id: str) -> str:
@@ -328,5 +345,6 @@ __all__ = [
     "SOURCE_ADMISSION",
     "KernelDesign",
     "declare_kernel",
+    "declare_kernel_design",
     "kernel_namespace",
 ]
