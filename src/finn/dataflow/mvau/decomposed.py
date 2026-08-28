@@ -18,6 +18,8 @@ requires, and never the reverse.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+from math import ceil, floor
 
 from finn.dataflow.authoring.kernel_design import (
     KernelDesign,
@@ -25,14 +27,20 @@ from finn.dataflow.authoring.kernel_design import (
     kernel_namespace,
 )
 from finn.dataflow.authoring.op_design import ProblemProvenance
-from finn.dataflow.authoring.scope import Ref, divisors_of
-from finn.dataflow.kernels import Kernel, KernelDeclaration, KernelSelection
+from finn.dataflow.authoring.scope import Ref, divisors_of, finite, unresolved
+from finn.dataflow.kernels import Kernel, KernelSelection
 from finn.dataflow.mvau.regions import (
     construct_activation_replay_region,
     construct_dot_product_region,
     construct_standard_mvau_weight_port,
 )
-from finn.dataflow.mvau_problem import MVAU_PROBLEM, MVAUProblem
+from finn.dataflow.design import QualifiedPath
+from finn.dataflow.mvau_problem import (
+    MVAU_EFFECTIVE_NARROW_WEIGHTS,
+    MVAU_PROBLEM,
+    MVAUDspBlock,
+    MVAUProblem,
+)
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -60,6 +68,56 @@ DOT_PRODUCT_NODE = "compute"
 #: The single internal edge.
 ACTIVATION_EDGE = "activation_replay"
 
+#: The two providers this slice targets.
+REPLAY_PROVIDER = "finn.rtl.replay_buffer"
+DOT_PRODUCT_PROVIDER = "finnlib.rtl.dotp_axi"
+
+#: The DSP generation each target family selects in the RTL.
+_DSP_VERSION = {
+    MVAUDspBlock.DSP48E1: 1,
+    MVAUDspBlock.DSP48E2: 2,
+    MVAUDspBlock.DSP58: 3,
+}
+
+#: Per-DSP delay terms behind the segment-length derivation, in nanoseconds.
+#: Kept as named constants because they are a timing model, not magic numbers.
+_SEGMENT_BASE_DELAY_NS = 0.741
+_SEGMENT_STAGE_DELAY_NS = 0.605
+
+
+class ParameterOwnership(str, Enum):
+    """The four things a provider parameter is allowed to be.
+
+    Design note section 9.1: anything else is an undeclared derivation, which
+    is how ``SEGMENTLEN`` used to reach an artifact without ever appearing in
+    the design point.
+    """
+
+    PROBLEM = "projected problem data"
+    DECISION = "committed decision"
+    DERIVED = "derived property"
+    CONSTANT = "provider constant"
+
+
+@dataclass(frozen=True)
+class ProviderParameter:
+    """One RTL parameter and where its value is entitled to come from."""
+
+    name: str
+    ownership: ParameterOwnership
+    source: QualifiedPath | None = None
+    value: object | None = None
+    why: str = ""
+
+    def __post_init__(self) -> None:
+        constant = self.ownership is ParameterOwnership.CONSTANT
+        if constant and self.source is not None:
+            raise ValueError(f"{self.name} is a constant and cannot name a source path")
+        if not constant and self.source is None:
+            raise ValueError(f"{self.name} is {self.ownership.value} and must name a source path")
+        if constant and not self.why:
+            raise ValueError(f"{self.name} is a provider constant and must say why")
+
 
 @dataclass(frozen=True)
 class DotProductInputs:
@@ -71,6 +129,10 @@ class DotProductInputs:
     activation_element_type: Ref[NumericElementType]
     weight_element_type: Ref[NumericElementType]
     output_element_type: Ref[NumericElementType]
+    accumulator_element_type: Ref[NumericElementType]
+    target_dsp_block: Ref[MVAUDspBlock]
+    target_clock_period_ns: Ref[float]
+    narrow_weights: Ref[bool]
 
 
 @dataclass(frozen=True)
@@ -101,6 +163,37 @@ class DotProductKernel(Kernel):
         facts = design.inputs
         pe = design.choice("pe", int, domain=divisors_of(facts.matrix_height))
         simd = design.choice("simd", int, domain=divisors_of(facts.matrix_width))
+        pumping = design.choice("compute_pumping", bool, domain=finite((False, True)))
+
+        # Everything the provider needs that is neither projected nor decided
+        # is declared here, so no value reaches an artifact without appearing
+        # in the design point first.
+        version = design.derived(
+            "dsp_version",
+            int,
+            dependencies={"target": facts.target_dsp_block},
+            evaluate=lambda target: _DSP_VERSION[target],
+        )
+        signed_activations = design.derived(
+            "signed_activations",
+            bool,
+            dependencies={"activation": facts.activation_element_type},
+            evaluate=lambda activation: activation.type_id == "int",
+        )
+        segment_length = design.derived(
+            "segment_length",
+            int,
+            dependencies={
+                "clock_period_ns": facts.target_clock_period_ns,
+                "pumping": pumping,
+                "simd": simd,
+            },
+            evaluate=_segment_length,
+        )
+        design.export("dsp_version", version)
+        design.export("signed_activations", signed_activations)
+        design.export("segment_length", segment_length)
+        design.provider(DOT_PRODUCT_PROVIDER)
         design.region(
             dependencies={
                 "repetitions": facts.repetitions,
@@ -126,6 +219,84 @@ class DotProductKernel(Kernel):
             },
             evaluate=construct_standard_mvau_weight_port,
         )
+
+    @classmethod
+    def provider_parameters(
+        cls, design_paths: DotProductPaths, problem: MVAUProblem
+    ) -> tuple[ProviderParameter, ...]:
+        """Every ``dotp_axi`` parameter, audited against section 9.1."""
+
+        return (
+            ProviderParameter("PE", ParameterOwnership.DECISION, design_paths.pe),
+            ProviderParameter("SIMD", ParameterOwnership.DECISION, design_paths.simd),
+            ProviderParameter(
+                "PUMPED_COMPUTE", ParameterOwnership.DECISION, design_paths.compute_pumping
+            ),
+            ProviderParameter(
+                "ACTIVATION_WIDTH",
+                ParameterOwnership.PROBLEM,
+                problem.activation_element_type.path,
+            ),
+            ProviderParameter(
+                "WEIGHT_WIDTH", ParameterOwnership.PROBLEM, problem.weight_element_type.path
+            ),
+            ProviderParameter(
+                "ACCU_WIDTH", ParameterOwnership.PROBLEM, problem.accumulator_element_type.path
+            ),
+            ProviderParameter("MW", ParameterOwnership.PROBLEM, problem.matrix_width.path),
+            ProviderParameter("MH", ParameterOwnership.PROBLEM, problem.matrix_height.path),
+            ProviderParameter("VERSION", ParameterOwnership.DERIVED, design_paths.dsp_version),
+            ProviderParameter(
+                "SIGNED_ACTIVATIONS",
+                ParameterOwnership.DERIVED,
+                design_paths.signed_activations,
+            ),
+            ProviderParameter(
+                "SEGMENTLEN", ParameterOwnership.DERIVED, design_paths.segment_length
+            ),
+            ProviderParameter(
+                "NARROW_WEIGHTS",
+                ParameterOwnership.DERIVED,
+                MVAU_EFFECTIVE_NARROW_WEIGHTS.path,
+            ),
+            ProviderParameter(
+                "ACTIVATION_BROADCASTING",
+                ParameterOwnership.CONSTANT,
+                value=1,
+                why=(
+                    "this slice covers the MVU form only; the VVU form is a separate "
+                    "question that must not be decided from the Boolean alone"
+                ),
+            ),
+            ProviderParameter(
+                "FORCE_BEHAVIORAL",
+                ParameterOwnership.CONSTANT,
+                value=0,
+                why="synthesis uses the inferred implementation; behavioural is a debug aid",
+            ),
+        )
+
+
+def _segment_length(clock_period_ns: float, pumping: bool, simd: int) -> object:
+    """The DSP cascade length the target clock can carry.
+
+    Preserved verbatim from the elaborator it is being taken out of, because
+    the point of declaring it is to fix its *ownership*, not its value.  Do not
+    replace it with ``SEGMENTLEN = 0``: zero means ``SEGLEN = CHAINLEN``, the
+    longest cascade, which discards exactly the clock-driven shortening this
+    computes and quietly loses timing coverage at fast clocks.
+    """
+
+    reference_clock = clock_period_ns / 2 if pumping else clock_period_ns
+    if reference_clock <= _SEGMENT_BASE_DELAY_NS:
+        return unresolved(
+            "mvau-segment-length-clock-infeasible",
+            "the target clock period is below the covered RTL segment-delay bound",
+            values={"reference_clock_ns": reference_clock},
+        )
+    covered_stages = floor((reference_clock - _SEGMENT_BASE_DELAY_NS) / _SEGMENT_STAGE_DELAY_NS + 1)
+    longest_chain = ceil(simd / (6 if pumping else 3))
+    return min(covered_stages, longest_chain)
 
 
 class ActivationReplayKernel(Kernel):
@@ -153,6 +324,72 @@ class ActivationReplayKernel(Kernel):
             },
             evaluate=construct_activation_replay_region,
         )
+        # The buffer's three parameters are the folding restated in the RTL's
+        # own vocabulary, so they are derived, never decided.
+        design.export(
+            "buffer_length",
+            design.derived(
+                "buffer_length",
+                int,
+                dependencies={"matrix_width": facts.matrix_width, "simd": facts.simd},
+                evaluate=lambda matrix_width, simd: matrix_width // simd,
+            ),
+        )
+        design.export(
+            "buffer_repetitions",
+            design.derived(
+                "buffer_repetitions",
+                int,
+                dependencies={"matrix_height": facts.matrix_height, "pe": facts.pe},
+                evaluate=lambda matrix_height, pe: matrix_height // pe,
+            ),
+        )
+        design.export(
+            "buffer_width",
+            design.derived(
+                "buffer_width",
+                int,
+                dependencies={
+                    "activation_element_type": facts.activation_element_type,
+                    "simd": facts.simd,
+                },
+                evaluate=lambda activation_element_type, simd: (
+                    simd * activation_element_type.bit_width
+                ),
+            ),
+        )
+        design.provider(REPLAY_PROVIDER)
+
+    @classmethod
+    def provider_parameters(cls, design_paths: ReplayPaths) -> tuple[ProviderParameter, ...]:
+        """Every ``replay_buffer`` parameter, audited against section 9.1."""
+
+        return (
+            ProviderParameter("LEN", ParameterOwnership.DERIVED, design_paths.buffer_length),
+            ProviderParameter("REP", ParameterOwnership.DERIVED, design_paths.buffer_repetitions),
+            ProviderParameter("W", ParameterOwnership.DERIVED, design_paths.buffer_width),
+        )
+
+
+@dataclass(frozen=True)
+class DotProductPaths:
+    """Where each dot-product value lives, for the provider audit."""
+
+    pe: QualifiedPath
+    simd: QualifiedPath
+    compute_pumping: QualifiedPath
+    dsp_version: QualifiedPath
+    signed_activations: QualifiedPath
+    segment_length: QualifiedPath
+
+
+@dataclass(frozen=True)
+class ReplayPaths:
+    """Where each replay value lives, for the provider audit."""
+
+    buffer_length: QualifiedPath
+    buffer_repetitions: QualifiedPath
+    buffer_width: QualifiedPath
 
 
 @dataclass(frozen=True)
@@ -163,6 +400,19 @@ class DecomposedMVAUPools:
     activation_replay: KernelSelection
     pe: Ref[int]
     simd: Ref[int]
+    compute_pumping: Ref[bool]
+    dot_product_paths: DotProductPaths
+    replay_paths: ReplayPaths
+
+    def provider_parameters(
+        self, problem: MVAUProblem = MVAU_PROBLEM
+    ) -> tuple[ProviderParameter, ...]:
+        """Every parameter both providers consume, with its declared owner."""
+
+        return (
+            *DotProductKernel.provider_parameters(self.dot_product_paths, problem),
+            *ActivationReplayKernel.provider_parameters(self.replay_paths),
+        )
 
 
 def build_decomposed_mvau_pools(
@@ -187,12 +437,21 @@ def build_decomposed_mvau_pools(
             activation_element_type=problem.activation_element_type,
             weight_element_type=problem.weight_element_type,
             output_element_type=problem.output_element_type,
+            accumulator_element_type=problem.accumulator_element_type,
+            # Both are optional problem fields, but a provider parameter that
+            # needs the target cannot be derived without it.  Requiring them at
+            # the use site makes the engine answer Unresolved with the missing
+            # field in the trace, instead of an evaluator guessing.
+            target_dsp_block=problem.target_dsp_block,
+            target_clock_period_ns=problem.target_clock_period_ns,
+            narrow_weights=MVAU_EFFECTIVE_NARROW_WEIGHTS,
         ),
         provenance=provenance,
     )
     pe = dot_product_design.handle("pe", int)
     simd = dot_product_design.handle("simd", int)
-    replay: KernelDeclaration = declare_kernel_design(
+    pumping = dot_product_design.handle("compute_pumping", bool)
+    replay, replay_design = declare_kernel_design(
         ActivationReplayKernel,
         kernel_namespace(REPLAY_POOL, ActivationReplayKernel.id),
         ActivationReplayInputs(
@@ -204,12 +463,26 @@ def build_decomposed_mvau_pools(
             simd=simd,
         ),
         provenance=provenance,
-    )[0]
+    )
     return DecomposedMVAUPools(
         KernelSelection(DOT_PRODUCT_POOL, (dot_product,)),
         KernelSelection(REPLAY_POOL, (replay,)),
         pe,
         simd,
+        pumping,
+        DotProductPaths(
+            pe.path,
+            simd.path,
+            pumping.path,
+            dot_product_design.handle("dsp_version", int).path,
+            dot_product_design.handle("signed_activations", bool).path,
+            dot_product_design.handle("segment_length", int).path,
+        ),
+        ReplayPaths(
+            replay_design.handle("buffer_length", int).path,
+            replay_design.handle("buffer_repetitions", int).path,
+            replay_design.handle("buffer_width", int).path,
+        ),
     )
 
 
@@ -264,16 +537,22 @@ def construct_decomposed_mvau_network(
 
 __all__ = [
     "ACTIVATION_EDGE",
-    "DOT_PRODUCT_NODE",
-    "DOT_PRODUCT_POOL",
-    "REPLAY_NODE",
-    "REPLAY_POOL",
-    "WEIGHT_INTERFACE",
     "ActivationReplayInputs",
     "ActivationReplayKernel",
+    "DOT_PRODUCT_NODE",
+    "DOT_PRODUCT_POOL",
+    "DOT_PRODUCT_PROVIDER",
     "DecomposedMVAUPools",
     "DotProductInputs",
     "DotProductKernel",
+    "DotProductPaths",
+    "ParameterOwnership",
+    "ProviderParameter",
+    "REPLAY_NODE",
+    "REPLAY_POOL",
+    "REPLAY_PROVIDER",
+    "ReplayPaths",
+    "WEIGHT_INTERFACE",
     "build_decomposed_mvau_pools",
     "construct_decomposed_mvau_network",
 ]
