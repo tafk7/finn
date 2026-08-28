@@ -17,7 +17,6 @@ from finn.dataflow.design import (
     DesignSpace,
     DesignSpaceSpec,
     Engine,
-    ProblemSchema,
     QualifiedPath,
     Unresolved,
 )
@@ -28,24 +27,23 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_MVAU_KERNEL,
     SOFT_VECTOR_PATHS,
     MVAUComputeKernelId,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
 )
 from finn.dataflow.mvau.source import (
     make_mvau_selection_envelope,
     parse_mvau_selection_envelope,
     reconstitute_mvau_point,
 )
-from finn.dataflow.ops.mvau import MVAU_DATAFLOW_OP_SPEC, MVAUDataflowOpPaths
 from finn.dataflow.region import NumericElementType
 from finn.dataflow.spec_algebra import SpecAuthoringError, assemble_specs
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from dataflow.mvau_op_facts import compute_pool_context
 
 INT8 = NumericElementType("int", 8)
 INT16 = NumericElementType("int", 16)
 
 
 def _compute_problem() -> dict[QualifiedPath, object]:
-    P = MVAUComputeProblemPaths
+    P = MVAUProblemPaths
     return {
         P.REPETITIONS: 2,
         P.MATRIX_WIDTH: 4,
@@ -57,21 +55,15 @@ def _compute_problem() -> dict[QualifiedPath, object]:
         P.COMPUTATION_PROFILE: MVAUComputationProfile.ACCUMULATOR_INTEGER,
         P.WEIGHT_INITIALIZER_AVAILABLE: True,
         P.TARGET_DSP_BLOCK: MVAUDspBlock.DSP58,
-        P.WEIGHTS_NARROW: True,
+        P.INITIALIZER_EXCLUDES_MINIMUM: True,
+        P.RUNTIME_WRITABLE: False,
     }
 
 
-def _compute_problem_fields() -> ProblemSchema:
+def _compute_problem_fields() -> DesignSpaceSpec:
     """Declare exactly the operation-owned facts the compute pool reads."""
 
-    return ProblemSchema(
-        tuple(
-            field
-            for field in MVAU_DATAFLOW_OP_SPEC.problem_schema.fields
-            if str(field.path).startswith(("problem.mvau.", "problem.target."))
-            and field.path != MVAUDataflowOpPaths.SOURCE_DESCRIPTION
-        )
-    )
+    return compute_pool_context()
 
 
 def _placed_selection(instance_id: str) -> tuple[KernelSelection, Kernel]:
@@ -108,7 +100,7 @@ def test_two_placements_are_independent_and_share_only_the_target_field() -> Non
         (
             left.build_spec(),
             right.build_spec(),
-            DesignSpaceSpec(_compute_problem_fields()),
+            _compute_problem_fields(),
         )
     )
     engine = Engine()
@@ -137,11 +129,11 @@ def test_two_placements_are_independent_and_share_only_the_target_field() -> Non
 
 def test_a_shared_problem_field_reaches_every_placement() -> None:
     left, left_kernel = _placed_selection("op0")
-    shared_target = MVAUComputeProblemPaths.TARGET_DSP_BLOCK
+    shared_target = MVAUProblemPaths.TARGET_DSP_BLOCK
     spec = assemble_specs(
         (
             left.build_spec(),
-            DesignSpaceSpec(_compute_problem_fields()),
+            _compute_problem_fields(),
         )
     )
     engine = Engine()
@@ -181,7 +173,7 @@ def test_two_pools_using_the_same_kernel_do_not_share_decisions() -> None:
         (
             left.build_spec(),
             right.build_spec(),
-            DesignSpaceSpec(_compute_problem_fields()),
+            _compute_problem_fields(),
         )
     )
     engine = Engine()
@@ -202,7 +194,7 @@ def _two_placed_mvau_design() -> tuple[
         (
             left.build_spec(),
             right.build_spec(),
-            DesignSpaceSpec(_compute_problem_fields()),
+            _compute_problem_fields(),
         )
     )
     assignments: dict[QualifiedPath, object] = {}

@@ -47,8 +47,6 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PATHS,
     MVAUComputeKernelId,
     MVAUComputeKernelPathSet,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -67,19 +65,19 @@ from finn.dataflow.op import DataflowOpError, NodeAttributeType
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     MVAUWeightSupplyKernelId,
-    MVAUWeightSupplyProblemPaths,
     CyclicRamStyle,
     CyclicTargetMemoryCapabilities,
     WeightOrganization,
 )
 from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from finn.dataflow.region import BeatSequence, NumericElementType
 
 _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v6"
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v7"
 MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
     {
         "noActivation": ("i", False, 1, {0, 1}),
@@ -424,18 +422,18 @@ def project_mvau_build_problem(
     """Project MVAU target and invocation facts from explicit build context."""
 
     problem: dict[QualifiedPath, object] = {
-        MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE: runtime_writable_weights,
+        MVAUProblemPaths.RUNTIME_WRITABLE: runtime_writable_weights,
     }
     target = _dsp_block(context.fpga_part) if context.fpga_part is not None else None
     if target is not None:
-        problem[MVAUComputeProblemPaths.TARGET_DSP_BLOCK] = target
+        problem[MVAUProblemPaths.TARGET_DSP_BLOCK] = target
     capabilities = _supports_initialized_uram(context)
     if capabilities is not None:
-        problem[MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES] = (
-            CyclicTargetMemoryCapabilities(capabilities)
+        problem[MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES] = CyclicTargetMemoryCapabilities(
+            capabilities
         )
     if context.external_weight_sequence is not None:
-        problem[MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE] = context.external_weight_sequence
+        problem[MVAUProblemPaths.EXTERNAL_WEIGHT_SEQUENCE] = context.external_weight_sequence
     if context.fpga_part is not None:
         problem[MVAUDataflowOpPaths.TARGET_FPGA_PART] = context.fpga_part
     if context.clock_period_ns is not None:
@@ -443,26 +441,47 @@ def project_mvau_build_problem(
     return MappingProxyType(problem)
 
 
-def _weights_are_narrow(
+def _initializer_excludes_minimum(
     model: MVAUModelAccessor,
     weight_id: str,
     weight_type: NumericElementType,
     mem_mode: str,
-    runtime_writable: bool,
-) -> bool:
+) -> bool | None:
+    """Whether the governing initializer's values exclude the type minimum.
+
+    This is a graph-analysis fact and nothing else.  Whether it is the fact
+    that decides ``NARROW_WEIGHTS`` is the operation's question, answered by
+    the ``effective_narrow_weights`` property, which also weighs the caller's
+    runtime contract.  ``None`` means the graph cannot answer: there is no
+    initializer, or an imported delivery mode makes it not the value authority.
+    """
+
     initializer = model.get_initializer(weight_id)
-    if (
-        initializer is None
-        or runtime_writable
-        or mem_mode in {"external", "external_mem", "dynamic"}
-    ):
-        return False
+    if initializer is None or mem_mode in {"external", "external_mem", "dynamic"}:
+        return None
     try:
         minimum = float(cast(float, cast(_MinimumLike, initializer).min()))
     except (AttributeError, TypeError, ValueError):
-        return False
+        return None
     minimum_type_value = -(2 ** (weight_type.bit_width - 1)) if weight_type.type_id == "int" else 0
     return minimum != minimum_type_value
+
+
+def _effective_narrow_weights(
+    excludes_minimum: bool | None,
+    runtime_writable: bool,
+    runtime_range_contract: bool | None,
+) -> bool:
+    """The projection-time mirror of the operation's derived property.
+
+    Legacy import must classify a specialized node into the compute pool before
+    any design point exists, so it needs the same answer the engine will later
+    derive.  Both read the same three facts in the same order.
+    """
+
+    if runtime_writable:
+        return bool(runtime_range_contract)
+    return bool(excludes_minimum)
 
 
 def _legacy_compute_kernel(
@@ -672,42 +691,42 @@ def project_mvau_graph_source(
     activation_shape = _tensor_shape(
         model,
         activation_id,
-        MVAUComputeProblemPaths.MATRIX_WIDTH,
+        MVAUProblemPaths.MATRIX_WIDTH,
         "activation",
         findings,
     )
     weight_shape = _tensor_shape(
         model,
         weight_id,
-        MVAUComputeProblemPaths.MATRIX_HEIGHT,
+        MVAUProblemPaths.MATRIX_HEIGHT,
         "weight",
         findings,
     )
     output_shape = _tensor_shape(
         model,
         output_id,
-        MVAUComputeProblemPaths.MATRIX_HEIGHT,
+        MVAUProblemPaths.MATRIX_HEIGHT,
         "output",
         findings,
     )
     activation_type = _tensor_type(
         model,
         activation_id,
-        MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE,
+        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
         "activation",
         findings,
     )
     weight_type = _tensor_type(
         model,
         weight_id,
-        MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE,
+        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
         "weight",
         findings,
     )
     output_type = _tensor_type(
         model,
         output_id,
-        MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE,
+        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
         "output",
         findings,
     )
@@ -721,7 +740,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-source-accumulator-datatype-unknown",
-                MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
+                MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
                 "accDataType does not identify a supported numeric datatype",
                 value=str(accumulator_name),
             )
@@ -737,8 +756,8 @@ def project_mvau_graph_source(
         else cast(int, _attribute_value(node, "MH", 0))
     )
     dimensions = [
-        (mw, MVAUComputeProblemPaths.MATRIX_WIDTH, "MW"),
-        (mh, MVAUComputeProblemPaths.MATRIX_HEIGHT, "MH"),
+        (mw, MVAUProblemPaths.MATRIX_WIDTH, "MW"),
+        (mh, MVAUProblemPaths.MATRIX_HEIGHT, "MH"),
     ]
     if not logical_node:
         dimensions.extend(
@@ -771,7 +790,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.REJECTION,
                 "mvau-source-activation-dimension-inconsistent",
-                MVAUComputeProblemPaths.MATRIX_WIDTH,
+                MVAUProblemPaths.MATRIX_WIDTH,
                 "activation trailing dimension must equal MW",
                 actual=activation_shape[-1] if activation_shape else 0,
                 expected=mw,
@@ -782,7 +801,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.REJECTION,
                 "mvau-source-weight-dimensions-inconsistent",
-                MVAUComputeProblemPaths.MATRIX_HEIGHT,
+                MVAUProblemPaths.MATRIX_HEIGHT,
                 "weight shape must equal (MW, MH)",
                 actual=weight_shape,
                 expected=(mw, mh),
@@ -794,7 +813,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.REJECTION,
                 "mvau-source-output-dimensions-inconsistent",
-                MVAUComputeProblemPaths.MATRIX_HEIGHT,
+                MVAUProblemPaths.MATRIX_HEIGHT,
                 "output shape must preserve activation leading dimensions and end in MH",
                 actual=output_shape,
                 expected=(*leading_shape, mh),
@@ -809,14 +828,14 @@ def project_mvau_graph_source(
         threshold_shape = _tensor_shape(
             model,
             threshold_id,
-            MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE,
+            MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE,
             "threshold",
             findings,
         )
         threshold_type = _tensor_type(
             model,
             threshold_id,
-            MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE,
+            MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE,
             "threshold",
             findings,
         )
@@ -827,7 +846,7 @@ def project_mvau_graph_source(
                 _finding(
                     FindingKind.REJECTION,
                     "mvau-source-threshold-dimensions-inconsistent",
-                    MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE,
+                    MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE,
                     "threshold leading dimension must equal MH",
                     actual=threshold_shape,
                     expected_first=mh,
@@ -838,7 +857,7 @@ def project_mvau_graph_source(
                 _finding(
                     FindingKind.BLOCKER,
                     "mvau-source-threshold-initializer-missing",
-                    MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE,
+                    MVAUProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE,
                     "fused-threshold MVAU requires a threshold initializer",
                     tensor=threshold_id,
                 )
@@ -859,16 +878,16 @@ def project_mvau_graph_source(
                 mem_mode=mem_mode,
             )
         )
-    runtime_writable = (
-        False if logical_node else bool(_attribute_value(node, "runtime_writeable_weights", 0))
-    )
+    # Runtime writability is a build fact; the graph projection reads the
+    # legacy attribute only in ``project_mvau_source``, where build context is
+    # available to override it.
     weight_initialized = model.get_initializer(weight_id) is not None
     if not logical_node and mem_mode == "internal_embedded" and not weight_initialized:
         findings.append(
             _finding(
                 FindingKind.BLOCKER,
                 "mvau-source-weight-initializer-missing",
-                MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
+                MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
                 "embedded MVAU weights require an initializer",
                 tensor=weight_id,
             )
@@ -929,11 +948,11 @@ def project_mvau_graph_source(
     )
     problem: dict[QualifiedPath, object] = {
         MVAUDataflowOpPaths.SOURCE_DESCRIPTION: description,
-        MVAUComputeProblemPaths.REPETITIONS: prod(leading_shape),
-        MVAUComputeProblemPaths.MATRIX_WIDTH: mw,
-        MVAUComputeProblemPaths.MATRIX_HEIGHT: mh,
-        MVAUComputeProblemPaths.COMPUTATION_PROFILE: computation,
-        MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: weight_initialized,
+        MVAUProblemPaths.REPETITIONS: prod(leading_shape),
+        MVAUProblemPaths.MATRIX_WIDTH: mw,
+        MVAUProblemPaths.MATRIX_HEIGHT: mh,
+        MVAUProblemPaths.COMPUTATION_PROFILE: computation,
+        MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: weight_initialized,
     }
     weight_initializer = model.get_initializer(weight_id)
     if weight_initializer is not None:
@@ -945,26 +964,21 @@ def project_mvau_graph_source(
             threshold_initializer
         )
     if activation_type is not None:
-        problem[MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE] = activation_type
+        problem[MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE] = activation_type
     if weight_type is not None:
-        problem[MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE] = weight_type
+        problem[MVAUProblemPaths.WEIGHT_ELEMENT_TYPE] = weight_type
     if accumulator_type is not None:
-        problem[MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE] = accumulator_type
+        problem[MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE] = accumulator_type
     if output_type is not None:
-        problem[MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE] = output_type
+        problem[MVAUProblemPaths.OUTPUT_ELEMENT_TYPE] = output_type
     if threshold_type is not None:
-        problem[MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE] = threshold_type
+        problem[MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE] = threshold_type
     if threshold_initialized is not None:
-        problem[MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE] = threshold_initialized
+        problem[MVAUProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE] = threshold_initialized
     if activation_type is not None and weight_type is not None:
-        weights_narrow = _weights_are_narrow(
-            model,
-            weight_id,
-            weight_type,
-            mem_mode,
-            runtime_writable,
-        )
-        problem[MVAUComputeProblemPaths.WEIGHTS_NARROW] = weights_narrow
+        excludes_minimum = _initializer_excludes_minimum(model, weight_id, weight_type, mem_mode)
+        if excludes_minimum is not None:
+            problem[MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM] = excludes_minimum
     return MVAUSourceProjection(description, problem, {}, tuple(findings))
 
 
@@ -1012,7 +1026,7 @@ def project_mvau_source(
             _finding(
                 FindingKind.BLOCKER,
                 "mvau-source-cyclic-state-unavailable",
-                MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
+                MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
                 "cyclic delivery requires initialized or runtime-writable weights",
                 tensor=node.input[1],
             )
@@ -1024,7 +1038,7 @@ def project_mvau_source(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-target-part-unknown",
-                MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+                MVAUProblemPaths.TARGET_DSP_BLOCK,
                 "target FPGA part cannot be classified into a supported DSP family",
                 fpga_part=context.fpga_part,
             )
@@ -1040,7 +1054,7 @@ def project_mvau_source(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-source-interleave-target-unsupported",
-                MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+                MVAUProblemPaths.TARGET_DSP_BLOCK,
                 "batch-interleaved RTL MVAU requires a DSP58 target",
                 target=target.value,
             )
@@ -1056,18 +1070,19 @@ def project_mvau_source(
             runtime_writable_weights=runtime_writable,
         )
     )
-    activation_type = problem.get(MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE)
-    weight_type = problem.get(MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE)
+    activation_type = problem.get(MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE)
+    weight_type = problem.get(MVAUProblemPaths.WEIGHT_ELEMENT_TYPE)
+    excludes_minimum: bool | None = None
     if isinstance(activation_type, NumericElementType) and isinstance(
         weight_type, NumericElementType
     ):
-        problem[MVAUComputeProblemPaths.WEIGHTS_NARROW] = _weights_are_narrow(
-            model,
-            node.input[1],
-            weight_type,
-            mem_mode,
-            runtime_writable,
+        excludes_minimum = _initializer_excludes_minimum(
+            model, node.input[1], weight_type, mem_mode
         )
+        if excludes_minimum is None:
+            problem.pop(MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM, None)
+        else:
+            problem[MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM] = excludes_minimum
 
     assignments: dict[QualifiedPath, object] = {}
     if (
@@ -1082,7 +1097,14 @@ def project_mvau_source(
             target,
             activation_type,
             weight_type,
-            cast(bool, problem[MVAUComputeProblemPaths.WEIGHTS_NARROW]),
+            _effective_narrow_weights(
+                excludes_minimum,
+                runtime_writable,
+                cast(
+                    "bool | None",
+                    problem.get(MVAUProblemPaths.RUNTIME_WEIGHT_RANGE_CONTRACT),
+                ),
+            ),
             findings,
         )
     return MVAUSourceProjection(

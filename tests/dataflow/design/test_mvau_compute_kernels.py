@@ -16,7 +16,6 @@ from finn.dataflow.design import (
     DesignSpaceSpec,
     Engine,
     FindingKind,
-    ProblemSchema,
     QualifiedPath,
     RequestError,
     Unresolved,
@@ -34,8 +33,6 @@ from finn.dataflow.mvau.compute_kernels import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
     MVAUComputeKernelPathSet,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -45,10 +42,11 @@ from finn.dataflow.mvau.regions import (
     construct_standard_embedded_mvau_region,
     construct_standard_streamed_mvau_region,
 )
-from finn.dataflow.ops.mvau import MVAU_DATAFLOW_OP_SPEC, MVAUDataflowOpPaths
 from finn.dataflow.region import DataflowRegion, NumericElementType
 from finn.dataflow.region_validation import RegionValidationReport
 from finn.dataflow.spec_algebra import assemble_specs
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from dataflow.mvau_op_facts import compute_pool_context
 
 INT2 = NumericElementType("int", 2)
 INT8 = NumericElementType("int", 8)
@@ -72,16 +70,7 @@ def _spec() -> DesignSpaceSpec:
     return assemble_specs(
         (
             MVAU_COMPUTE_SELECTION.build_spec(),
-            DesignSpaceSpec(
-                ProblemSchema(
-                    tuple(
-                        field
-                        for field in MVAU_DATAFLOW_OP_SPEC.problem_schema.fields
-                        if str(field.path).startswith(("problem.mvau.", "problem.target."))
-                        and field.path != MVAUDataflowOpPaths.SOURCE_DESCRIPTION
-                    )
-                )
-            ),
+            compute_pool_context(),
         )
     )
 
@@ -100,9 +89,10 @@ def _problem(
     computation_profile: object = MVAUComputationProfile.ACCUMULATOR_INTEGER,
     weight_initializer_available: object = True,
     target_dsp: object = MVAUDspBlock.DSP58,
-    weights_narrow: object = True,
+    excludes_minimum: object = True,
+    runtime_writable: object = False,
 ) -> dict[QualifiedPath, object]:
-    P = MVAUComputeProblemPaths
+    P = MVAUProblemPaths
     problem: dict[QualifiedPath, object] = {
         P.REPETITIONS: repetitions,
         P.MATRIX_WIDTH: matrix_width,
@@ -113,6 +103,7 @@ def _problem(
         P.OUTPUT_ELEMENT_TYPE: output_type,
         P.COMPUTATION_PROFILE: computation_profile,
         P.WEIGHT_INITIALIZER_AVAILABLE: weight_initializer_available,
+        P.RUNTIME_WRITABLE: runtime_writable,
     }
     if threshold_initializer_available is not _MISSING:
         problem[P.THRESHOLD_INITIALIZER_AVAILABLE] = threshold_initializer_available
@@ -120,8 +111,8 @@ def _problem(
         problem[P.THRESHOLD_ELEMENT_TYPE] = threshold_type
     if target_dsp is not _MISSING:
         problem[P.TARGET_DSP_BLOCK] = target_dsp
-    if weights_narrow is not _MISSING:
-        problem[P.WEIGHTS_NARROW] = weights_narrow
+    if excludes_minimum is not _MISSING:
+        problem[P.INITIALIZER_EXCLUDES_MINIMUM] = excludes_minimum
     return problem
 
 
@@ -242,7 +233,7 @@ def test_legacy_hls_derives_both_of_its_region_forms(
     constructor: object,
     region_form: MVAURegionDeclaration,
 ) -> None:
-    engine, point = _started(target_dsp=_MISSING, weights_narrow=_MISSING)
+    engine, point = _started(target_dsp=_MISSING, excludes_minimum=_MISSING)
     point = _select(engine, point, MVAUComputeKernelId.LEGACY_HLS, weight_source=weight_source)
     assert _region(engine, point) == constructor(4, 4, 4, INT8, INT8, INT16, 2, 2)  # type: ignore[operator]
     assert engine.query_property(point, PATHS.export(REGION_FORM_EXPORT)) == Decided(region_form)
@@ -290,8 +281,8 @@ def test_invalid_former_region_binding_pairs_are_unrepresentable() -> None:
 
 def test_region_derivation_does_not_read_target_or_provider_facts() -> None:
     forbidden = {
-        MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
-        MVAUComputeProblemPaths.WEIGHTS_NARROW,
+        MVAUProblemPaths.TARGET_DSP_BLOCK,
+        MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM,
     }
     for kernel in MVAU_COMPUTE_SELECTION.kernels:
         region = next(item for item in kernel.spec.properties if item.path == kernel.region_path)
@@ -316,14 +307,14 @@ def test_region_validation_is_separate_from_kernel_feasibility() -> None:
 
 
 def test_a_missing_target_fact_leaves_only_the_applicable_constraint_unresolved() -> None:
-    engine, point = _started(target_dsp=_MISSING, weights_narrow=_MISSING)
+    engine, point = _started(target_dsp=_MISSING, excludes_minimum=_MISSING)
     point = _select(engine, point, MVAUComputeKernelId.SOFT_VECTOR)
     assessment = _feasibility(engine, point)
     target = assessment.answers[SOFT_VECTOR_PATHS.constraint("target_supported")]
     assert isinstance(target, Unresolved)
     assert target.findings[0].kind is FindingKind.LIMITATION
 
-    hls_engine, hls = _started(target_dsp=_MISSING, weights_narrow=_MISSING)
+    hls_engine, hls = _started(target_dsp=_MISSING, excludes_minimum=_MISSING)
     hls = _select(hls_engine, hls, MVAUComputeKernelId.LEGACY_HLS)
     hls_assessment = _feasibility(hls_engine, hls)
     assert hls_assessment.verdict is True

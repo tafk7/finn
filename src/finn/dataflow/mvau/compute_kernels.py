@@ -25,7 +25,6 @@ from typing import TypeVar, cast
 from finn.dataflow.design import (
     ABSENT,
     DATAFLOW_REGION_SEMANTICS,
-    AbsenceMode,
     Absent,
     Answer,
     Constraint,
@@ -44,6 +43,7 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
+from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.kernels import (
     Kernel,
     KernelDemand,
@@ -58,6 +58,11 @@ from finn.dataflow.mvau.regions import (
     construct_standard_embedded_mvau_region,
     construct_standard_mvau_weight_port,
     construct_standard_streamed_mvau_region,
+)
+from finn.dataflow.mvau_problem import (
+    MVAU_EFFECTIVE_NARROW_WEIGHTS,
+    MVAU_PROBLEM,
+    MVAUDspBlock,
 )
 from finn.dataflow.region import DataflowRegion, NumericElementType, Port
 
@@ -85,32 +90,6 @@ class MVAUWeightSource(str, Enum):
 
     EMBEDDED = "embedded"
     STREAMED = "streamed"
-
-
-class MVAUDspBlock(str, Enum):
-    """Target DSP capability consumed only by Kernel feasibility constraints."""
-
-    DSP48E1 = "DSP48E1"
-    DSP48E2 = "DSP48E2"
-    DSP58 = "DSP58"
-
-
-class MVAUComputeProblemPaths:
-    """Problem facts the compute pool reads but does not own."""
-
-    REPETITIONS = QualifiedPath("problem.mvau.r")
-    MATRIX_WIDTH = QualifiedPath("problem.mvau.mw")
-    MATRIX_HEIGHT = QualifiedPath("problem.mvau.mh")
-    ACTIVATION_ELEMENT_TYPE = QualifiedPath("problem.mvau.activation_element_type")
-    WEIGHT_ELEMENT_TYPE = QualifiedPath("problem.mvau.weight_element_type")
-    ACCUMULATOR_ELEMENT_TYPE = QualifiedPath("problem.mvau.accumulator_element_type")
-    OUTPUT_ELEMENT_TYPE = QualifiedPath("problem.mvau.output_element_type")
-    THRESHOLD_ELEMENT_TYPE = QualifiedPath("problem.mvau.threshold_element_type")
-    THRESHOLD_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.threshold_initializer_available")
-    COMPUTATION_PROFILE = QualifiedPath("problem.mvau.computation_profile")
-    WEIGHT_INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.weight_initializer_available")
-    TARGET_DSP_BLOCK = QualifiedPath("problem.target.dsp_block")
-    WEIGHTS_NARROW = QualifiedPath("problem.mvau.weights_narrow")
 
 
 #: The Kernel-pool selection name and its owned path root.
@@ -160,54 +139,28 @@ _HLS_RESOURCE = _enum_semantics(MVAUHlsResource)
 _WEIGHT_SOURCE = _enum_semantics(MVAUWeightSource)
 
 
-_ACTIVATION_TYPE = DependencyRef.problem(
-    "activation_element_type", MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE, _ELEMENT_TYPE
+# Every problem dependency below comes from the operation's declaration, not
+# from a path this module restates.  A Kernel reads a fact through the handle
+# the operation owns; the name on the left of each pair is only the evaluator
+# parameter it arrives under.
+_ACTIVATION_TYPE = MVAU_PROBLEM.activation_element_type.dependency("activation_element_type")
+_WEIGHT_TYPE = MVAU_PROBLEM.weight_element_type.dependency("weight_element_type")
+_ACCUMULATOR_TYPE = MVAU_PROBLEM.accumulator_element_type.dependency("accumulator_element_type")
+_OUTPUT_TYPE = MVAU_PROBLEM.output_element_type.dependency("output_element_type")
+_THRESHOLD_TYPE = MVAU_PROBLEM.threshold_element_type.allow_absent().dependency(
+    "threshold_element_type"
 )
-_WEIGHT_TYPE = DependencyRef.problem(
-    "weight_element_type", MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE, _ELEMENT_TYPE
+_THRESHOLD_INITIALIZER = MVAU_PROBLEM.threshold_initializer_available.allow_absent().dependency(
+    "threshold_initializer_available"
 )
-_ACCUMULATOR_TYPE = DependencyRef.problem(
-    "accumulator_element_type", MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE, _ELEMENT_TYPE
-)
-_OUTPUT_TYPE = DependencyRef.problem(
-    "output_element_type", MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE, _ELEMENT_TYPE
-)
-_THRESHOLD_TYPE = DependencyRef.problem(
-    "threshold_element_type",
-    MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE,
-    _ELEMENT_TYPE,
-    absence=AbsenceMode.ALLOWS_ABSENT,
-)
-_THRESHOLD_INITIALIZER = DependencyRef.problem(
-    "threshold_initializer_available",
-    MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE,
-    _BOOL,
-    absence=AbsenceMode.ALLOWS_ABSENT,
-)
-_COMPUTATION_PROFILE = DependencyRef.problem(
-    "computation_profile", MVAUComputeProblemPaths.COMPUTATION_PROFILE, _COMPUTATION
-)
-_TARGET_DSP = DependencyRef.problem(
-    "target_dsp_block",
-    MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
-    _DSP_BLOCK,
-    absence=AbsenceMode.ALLOWS_ABSENT,
-)
-_WEIGHTS_NARROW = DependencyRef.problem(
-    "weights_narrow",
-    MVAUComputeProblemPaths.WEIGHTS_NARROW,
-    _BOOL,
-    absence=AbsenceMode.ALLOWS_ABSENT,
-)
-_REPETITIONS = DependencyRef.problem("repetitions", MVAUComputeProblemPaths.REPETITIONS, _INTEGER)
-_MATRIX_WIDTH = DependencyRef.problem(
-    "matrix_width", MVAUComputeProblemPaths.MATRIX_WIDTH, _INTEGER
-)
-_MATRIX_HEIGHT = DependencyRef.problem(
-    "matrix_height", MVAUComputeProblemPaths.MATRIX_HEIGHT, _INTEGER
-)
-_WEIGHT_INITIALIZER = DependencyRef.problem(
-    "weight_initializer_available", MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE, _BOOL
+_COMPUTATION_PROFILE = MVAU_PROBLEM.computation_profile.dependency("computation_profile")
+_TARGET_DSP = MVAU_PROBLEM.target_dsp_block.allow_absent().dependency("target_dsp_block")
+_NARROW_WEIGHTS = MVAU_EFFECTIVE_NARROW_WEIGHTS.allow_absent().dependency("narrow_weights")
+_REPETITIONS = MVAU_PROBLEM.repetitions.dependency("repetitions")
+_MATRIX_WIDTH = MVAU_PROBLEM.matrix_width.dependency("matrix_width")
+_MATRIX_HEIGHT = MVAU_PROBLEM.matrix_height.dependency("matrix_height")
+_WEIGHT_INITIALIZER = MVAU_PROBLEM.weight_initializer_available.dependency(
+    "weight_initializer_available"
 )
 
 
@@ -223,8 +176,8 @@ def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
     return DecisionDomain((), accepts, EvaluatorSpec((), candidates))
 
 
-def _divisor_domain(dimension: QualifiedPath) -> DecisionDomain:
-    dependency = DependencyRef.problem("dimension", dimension, _INTEGER)
+def _divisor_domain(dimension: Ref[int]) -> DecisionDomain:
+    dependency = dimension.dependency("dimension")
 
     def accepts(value: object, dependencies: DependencyView) -> Answer[bool]:
         extent = cast(int, dependencies["dimension"])
@@ -357,14 +310,14 @@ def _fused_threshold_source_supported(
         if threshold is ABSENT:
             return _missing_problem(
                 owner,
-                MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE,
+                MVAU_PROBLEM.threshold_element_type.path,
                 "mvau-threshold-type-missing",
                 "fused-threshold computation requires a threshold element type",
             )
         if initialized is ABSENT:
             return _missing_problem(
                 owner,
-                MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE,
+                MVAU_PROBLEM.threshold_initializer_available.path,
                 "mvau-threshold-initializer-fact-missing",
                 "fused-threshold computation requires an initializer-availability fact",
             )
@@ -598,7 +551,7 @@ def _hls_threshold_supported(dependencies: DependencyView) -> Answer[bool]:
     if threshold is ABSENT:
         return _missing_problem(
             LEGACY_HLS_PATHS.constraint("threshold_representable"),
-            MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE,
+            MVAU_PROBLEM.threshold_element_type.path,
             "mvau-threshold-type-missing",
             "fused-threshold feasibility requires a threshold element type",
         )
@@ -618,8 +571,8 @@ def build_legacy_hls_mvau_kernel() -> Kernel:
     streamed_only: EvaluatorSpec[Answer[bool]] = EvaluatorSpec((weight_source_ref,), is_streamed)
     spec = DesignSpaceSpec(
         decisions=(
-            Decision(paths.pe, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_HEIGHT)),
-            Decision(paths.simd, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_WIDTH)),
+            Decision(paths.pe, _INTEGER, _divisor_domain(MVAU_PROBLEM.matrix_height)),
+            Decision(paths.simd, _INTEGER, _divisor_domain(MVAU_PROBLEM.matrix_width)),
             Decision(paths.resource, _HLS_RESOURCE, _finite_domain(tuple(MVAUHlsResource))),
             Decision(paths.weight_source, _WEIGHT_SOURCE, _legacy_hls_weight_source_domain()),
         ),
@@ -722,7 +675,7 @@ def _rtl_width_supported(owner: QualifiedPath) -> EvaluatorSpec[Answer[bool]]:
         if target is ABSENT:
             return _missing_problem(
                 owner,
-                MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+                MVAU_PROBLEM.target_dsp_block.path,
                 "mvau-target-dsp-missing",
                 "RTL width validation requires a target DSP block",
             )
@@ -753,7 +706,7 @@ def _dsp58_required(owner: QualifiedPath) -> EvaluatorSpec[Answer[bool]]:
         if target is ABSENT:
             return _missing_problem(
                 owner,
-                MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+                MVAU_PROBLEM.target_dsp_block.path,
                 "mvau-target-dsp-missing",
                 "this Kernel requires a target DSP block",
             )
@@ -768,7 +721,7 @@ def _any_dsp_required(owner: QualifiedPath) -> EvaluatorSpec[Answer[bool]]:
         if target is ABSENT:
             return _missing_problem(
                 owner,
-                MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+                MVAU_PROBLEM.target_dsp_block.path,
                 "mvau-target-dsp-missing",
                 "this Kernel requires a target DSP block",
             )
@@ -850,8 +803,8 @@ def _build_standard_rtl_kernel(
     pumping_ref = DependencyRef.decision("compute_pumping", paths.compute_pumping, _BOOL)
     spec = DesignSpaceSpec(
         decisions=(
-            Decision(paths.pe, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_HEIGHT)),
-            Decision(paths.simd, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_WIDTH)),
+            Decision(paths.pe, _INTEGER, _divisor_domain(MVAU_PROBLEM.matrix_height)),
+            Decision(paths.simd, _INTEGER, _divisor_domain(MVAU_PROBLEM.matrix_width)),
             Decision(paths.compute_pumping, _BOOL, _finite_domain((False, True))),
         ),
         properties=(
@@ -902,14 +855,14 @@ SOFT_VECTOR_PATHS = MVAUComputeKernelPathSet(MVAUComputeKernelId.SOFT_VECTOR.val
 
 def _dsp48e1_narrow_supported(dependencies: DependencyView) -> Answer[bool]:
     owner = SOFT_VECTOR_PATHS.constraint("dsp48e1_narrow_supported")
-    narrow = dependencies["weights_narrow"]
+    narrow = dependencies["narrow_weights"]
     if narrow is not ABSENT and cast(bool, narrow):
         return Decided(True)
     target = dependencies["target_dsp_block"]
     if target is ABSENT:
         return _missing_problem(
             owner,
-            MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+            MVAU_PROBLEM.target_dsp_block.path,
             "mvau-target-dsp-missing",
             "soft-vector feasibility requires a target DSP block",
         )
@@ -918,7 +871,7 @@ def _dsp48e1_narrow_supported(dependencies: DependencyView) -> Answer[bool]:
     if narrow is ABSENT:
         return _missing_problem(
             owner,
-            MVAUComputeProblemPaths.WEIGHTS_NARROW,
+            MVAU_EFFECTIVE_NARROW_WEIGHTS.path,
             "mvau-weights-narrow-missing",
             "DSP48E1 soft-vector feasibility requires a weights-narrow fact",
         )
@@ -938,7 +891,7 @@ def build_soft_vector_mvau_kernel() -> Kernel:
             ),
             Constraint(
                 paths.constraint("dsp48e1_narrow_supported"),
-                EvaluatorSpec((_TARGET_DSP, _WEIGHTS_NARROW), _dsp48e1_narrow_supported),
+                EvaluatorSpec((_TARGET_DSP, _NARROW_WEIGHTS), _dsp48e1_narrow_supported),
             ),
         ),
         extra_constraint_paths=(
@@ -962,11 +915,11 @@ def _packed_supported(dependencies: DependencyView) -> Answer[bool]:
     weight = cast(NumericElementType, dependencies["weight_element_type"])
     if weight.bit_width > 8 or activation.bit_width > 9:
         return Decided(False)
-    narrow = dependencies["weights_narrow"]
+    narrow = dependencies["narrow_weights"]
     if narrow is ABSENT:
         return _missing_problem(
             PACKED_DSP_PATHS.constraint("packing_supported"),
-            MVAUComputeProblemPaths.WEIGHTS_NARROW,
+            MVAU_EFFECTIVE_NARROW_WEIGHTS.path,
             "mvau-weights-narrow-missing",
             "packed-DSP feasibility requires a weights-narrow fact",
         )
@@ -994,7 +947,7 @@ def build_packed_dsp_mvau_kernel() -> Kernel:
             ),
             Constraint(
                 paths.constraint("packing_supported"),
-                EvaluatorSpec((_ACTIVATION_TYPE, _WEIGHT_TYPE, _WEIGHTS_NARROW), _packed_supported),
+                EvaluatorSpec((_ACTIVATION_TYPE, _WEIGHT_TYPE, _NARROW_WEIGHTS), _packed_supported),
             ),
         ),
         extra_constraint_paths=(
@@ -1118,8 +1071,8 @@ def build_batch_interleaved_dsp_mvau_kernel() -> Kernel:
     interleave_ref = DependencyRef.decision("interleave", paths.interleave, _INTEGER)
     spec = DesignSpaceSpec(
         decisions=(
-            Decision(paths.pe, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_HEIGHT)),
-            Decision(paths.simd, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_WIDTH)),
+            Decision(paths.pe, _INTEGER, _divisor_domain(MVAU_PROBLEM.matrix_height)),
+            Decision(paths.simd, _INTEGER, _divisor_domain(MVAU_PROBLEM.matrix_width)),
             Decision(paths.interleave, _INTEGER, _interleave_domain(paths)),
         ),
         properties=(
@@ -1207,7 +1160,6 @@ __all__ = [
     "MVAU_COMPUTE_SELECTION_NAME",
     "MVAUComputeKernelId",
     "MVAUComputeKernelPathSet",
-    "MVAUComputeProblemPaths",
     "MVAUDspBlock",
     "MVAUHlsResource",
     "MVAUWeightSource",

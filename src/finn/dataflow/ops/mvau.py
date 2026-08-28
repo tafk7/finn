@@ -35,8 +35,6 @@ from finn.dataflow.design import (
     EvaluatorSpec,
     Finding,
     FindingKind,
-    ProblemField,
-    ProblemSchema,
     QualifiedPath,
     ReadinessProfile,
     Unresolved,
@@ -56,11 +54,16 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAU_COMPUTE_SELECTION,
     REGION_FORM_EXPORT,
     WEIGHT_INTERFACE,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
 )
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.weight_adapter_kernel import build_mvau_weight_adapter_selection
+from finn.dataflow.mvau_problem import (
+    MVAU_PROBLEM,
+    MVAU_PROBLEM_SPEC,
+    MVAUDspBlock,
+    MVAUProblemPaths,
+    MVAUSourceDescription,
+)
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -75,7 +78,6 @@ from finn.dataflow.parameters.cyclic.definition import CyclicTargetMemoryCapabil
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     OUTPUT_PORT_EXPORT,
-    MVAUWeightSupplyProblemPaths,
     build_mvau_weight_supply_selection,
 )
 from finn.dataflow.region import BeatSequence, DataflowRegion, NumericElementType, Port
@@ -123,26 +125,6 @@ class BindingLocalStateDestination:
 
 
 SourceOperandDestination = SemanticOperandDestination | BindingLocalStateDestination
-
-
-@dataclass(frozen=True)
-class MVAUSourceDescription:
-    """Compiler-owned source identities and shapes for one MVAU scope."""
-
-    source_node_id: str
-    activation_operand_id: str
-    weight_operand_id: str
-    output_operand_id: str
-    leading_shape: tuple[int, ...]
-    threshold_operand_id: str | None = None
-    fused_source_node_ids: tuple[str, ...] = ()
-    threshold_shape: tuple[int, ...] | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "leading_shape", tuple(self.leading_shape))
-        object.__setattr__(self, "fused_source_node_ids", tuple(self.fused_source_node_ids))
-        if self.threshold_shape is not None:
-            object.__setattr__(self, "threshold_shape", tuple(self.threshold_shape))
 
 
 @dataclass(frozen=True)
@@ -208,15 +190,16 @@ DataflowOpResult = RegionRef | NetworkRef
 class MVAUDataflowOpPaths:
     """Stable paths owned by the MVAU source-operation assembly."""
 
-    SOURCE_DESCRIPTION = QualifiedPath("problem.mvau.source_description")
-    ACCUMULATOR_TYPE_ANALYSIS_OWNER = QualifiedPath("problem.mvau.accumulator_type_analysis_owner")
-    WEIGHT_INITIALIZER_FINGERPRINT = QualifiedPath("problem.mvau.weight_initializer_fingerprint")
-    THRESHOLD_INITIALIZER_FINGERPRINT = QualifiedPath(
-        "problem.mvau.threshold_initializer_fingerprint"
-    )
-    EXTERNAL_WEIGHT_SEQUENCE = QualifiedPath("problem.mvau.external_weight_sequence")
-    TARGET_FPGA_PART = QualifiedPath("problem.target.fpga_part")
-    TARGET_CLOCK_PERIOD_NS = QualifiedPath("problem.target.clock_period_ns")
+    # Problem paths are declared in ``finn.dataflow.mvau_problem`` and named
+    # here for the assembly's convenience; they are not a second definition.
+    SOURCE_DESCRIPTION = MVAUProblemPaths.SOURCE_DESCRIPTION
+    ACCUMULATOR_TYPE_ANALYSIS_OWNER = MVAUProblemPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER
+    WEIGHT_INITIALIZER_FINGERPRINT = MVAUProblemPaths.WEIGHT_INITIALIZER_FINGERPRINT
+    THRESHOLD_INITIALIZER_FINGERPRINT = MVAUProblemPaths.THRESHOLD_INITIALIZER_FINGERPRINT
+    EXTERNAL_WEIGHT_SEQUENCE = MVAUProblemPaths.EXTERNAL_WEIGHT_SEQUENCE
+    TARGET_FPGA_PART = MVAUProblemPaths.TARGET_FPGA_PART
+    TARGET_CLOCK_PERIOD_NS = MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS
+    EFFECTIVE_NARROW_WEIGHTS = MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS
 
     COMPUTE_KERNEL = MVAU_COMPUTE_SELECTION.paths.kernel
     COMPUTE_REGION = MVAU_COMPUTE_SELECTION.paths.region
@@ -287,47 +270,6 @@ def _enum_semantics(enum_type: type[Enum]) -> ValueSemantics[object]:
 
 _COMPUTATION = _enum_semantics(MVAUComputationProfile)
 _DSP_BLOCK = _enum_semantics(MVAUDspBlock)
-
-
-def _positive_integer(value: object) -> bool:
-    return type(value) is int and value > 0
-
-
-def _positive_float(value: object) -> bool:
-    return type(value) is float and value > 0
-
-
-def _complete_numeric_element_type(value: object) -> bool:
-    return type(value) is NumericElementType and bool(value.type_id) and value.bit_width > 0
-
-
-def _source_description_valid(value: object) -> bool:
-    if type(value) is not MVAUSourceDescription:
-        return False
-    description = value
-    names: tuple[object, ...] = (
-        description.source_node_id,
-        description.activation_operand_id,
-        description.weight_operand_id,
-        description.output_operand_id,
-        *description.fused_source_node_ids,
-    )
-    threshold_valid = description.threshold_operand_id is None or (
-        isinstance(description.threshold_operand_id, str) and bool(description.threshold_operand_id)
-    )
-    threshold_shape_valid = description.threshold_shape is None or all(
-        type(extent) is int and extent > 0 for extent in description.threshold_shape
-    )
-    threshold_pair_valid = (description.threshold_operand_id is None) == (
-        description.threshold_shape is None
-    )
-    return (
-        all(isinstance(name, str) and bool(name) for name in names)
-        and threshold_valid
-        and threshold_shape_valid
-        and threshold_pair_valid
-        and all(type(extent) is int and extent > 0 for extent in description.leading_shape)
-    )
 
 
 # -- selection wiring --------------------------------------------------------
@@ -431,18 +373,10 @@ _TOPOLOGY_REF = DependencyRef.property(
 _NETWORK_REF = DependencyRef.property(
     "network", MVAUDataflowOpPaths.NETWORK, _NETWORK, absence=AbsenceMode.ALLOWS_ABSENT
 )
-_REPETITIONS_REF = DependencyRef.problem(
-    "repetitions", MVAUComputeProblemPaths.REPETITIONS, _INTEGER
-)
-_MATRIX_WIDTH_REF = DependencyRef.problem(
-    "matrix_width", MVAUComputeProblemPaths.MATRIX_WIDTH, _INTEGER
-)
-_MATRIX_HEIGHT_REF = DependencyRef.problem(
-    "matrix_height", MVAUComputeProblemPaths.MATRIX_HEIGHT, _INTEGER
-)
-_COMPUTATION_REF = DependencyRef.problem(
-    "computation_profile", MVAUComputeProblemPaths.COMPUTATION_PROFILE, _COMPUTATION
-)
+_REPETITIONS_REF = MVAU_PROBLEM.repetitions.dependency("repetitions")
+_MATRIX_WIDTH_REF = MVAU_PROBLEM.matrix_width.dependency("matrix_width")
+_MATRIX_HEIGHT_REF = MVAU_PROBLEM.matrix_height.dependency("matrix_height")
+_COMPUTATION_REF = MVAU_PROBLEM.computation_profile.dependency("computation_profile")
 
 
 # -- derived assembly --------------------------------------------------------
@@ -741,93 +675,6 @@ def _derive_op_result(dependencies: DependencyView) -> Answer[object]:
     )
 
 
-def _problem_fields() -> tuple[ProblemField, ...]:
-    """Every fact the operation owns for its three Kernel pools."""
-
-    def numeric(path: QualifiedPath, *, required: bool = True) -> ProblemField:
-        return ProblemField(
-            path,
-            _ELEMENT_TYPE,
-            required=required,
-            constraint=_complete_numeric_element_type,
-            constraint_description="must be a complete numeric element type",
-        )
-
-    def extent(path: QualifiedPath) -> ProblemField:
-        return ProblemField(
-            path,
-            _INTEGER,
-            constraint=_positive_integer,
-            constraint_description="must be a positive integer",
-        )
-
-    return (
-        extent(MVAUComputeProblemPaths.REPETITIONS),
-        extent(MVAUComputeProblemPaths.MATRIX_WIDTH),
-        extent(MVAUComputeProblemPaths.MATRIX_HEIGHT),
-        numeric(MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE),
-        numeric(MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE),
-        numeric(MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE),
-        numeric(MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE),
-        numeric(MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE, required=False),
-        ProblemField(
-            MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER,
-            _STRING,
-            required=False,
-            constraint=lambda value: bool(value),
-            constraint_description="must identify the accumulator analysis owner",
-        ),
-        ProblemField(
-            MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE, _BOOL, required=False
-        ),
-        ProblemField(MVAUComputeProblemPaths.COMPUTATION_PROFILE, _COMPUTATION),
-        ProblemField(MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE, _BOOL),
-        ProblemField(
-            MVAUDataflowOpPaths.WEIGHT_INITIALIZER_FINGERPRINT,
-            _STRING,
-            required=False,
-            constraint=lambda value: bool(value),
-            constraint_description="must be a non-empty initializer fingerprint",
-        ),
-        ProblemField(
-            MVAUDataflowOpPaths.THRESHOLD_INITIALIZER_FINGERPRINT,
-            _STRING,
-            required=False,
-            constraint=lambda value: bool(value),
-            constraint_description="must be a non-empty initializer fingerprint",
-        ),
-        ProblemField(MVAUComputeProblemPaths.TARGET_DSP_BLOCK, _DSP_BLOCK, required=False),
-        ProblemField(MVAUComputeProblemPaths.WEIGHTS_NARROW, _BOOL, required=False),
-        ProblemField(MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE, _BOOL),
-        ProblemField(
-            MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES,
-            _TARGET_MEMORY,
-            required=False,
-        ),
-        ProblemField(
-            MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
-            _SOURCE_DESCRIPTION,
-            constraint=_source_description_valid,
-            constraint_description="must contain complete source identities and extents",
-        ),
-        ProblemField(MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE, _BEAT_SEQUENCE, required=False),
-        ProblemField(
-            MVAUDataflowOpPaths.TARGET_FPGA_PART,
-            _STRING,
-            required=False,
-            constraint=lambda value: bool(value),
-            constraint_description="must be a non-empty FPGA part identifier",
-        ),
-        ProblemField(
-            MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
-            _FLOAT,
-            required=False,
-            constraint=_positive_float,
-            constraint_description="must be a positive clock period",
-        ),
-    )
-
-
 _EXTERNAL_SEQUENCE_REF = DependencyRef.problem(
     "external_weight_sequence",
     MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
@@ -1058,7 +905,6 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
     """Build one flat MVAU operation-level design-space specification."""
 
     additions = DesignSpaceSpec(
-        ProblemSchema(_problem_fields()),
         properties=_op_properties(),
         constraints=_op_constraints(),
         constraint_sets=_op_constraint_sets(),
@@ -1069,6 +915,7 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
             MVAU_COMPUTE_SELECTION.build_spec(),
             MVAU_WEIGHT_SUPPLY_SELECTION.build_spec(),
             MVAU_WEIGHT_ADAPTER_SELECTION.build_spec(),
+            MVAU_PROBLEM_SPEC,
             additions,
         )
     )

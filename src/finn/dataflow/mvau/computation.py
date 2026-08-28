@@ -1,19 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MVAU-specific computation contracts kept separate from region structure."""
+"""MVAU-specific computation contracts kept separate from region structure.
+
+The profile itself is a graph fact the operation projects, so it is declared
+alongside the rest of the operation's problem in ``finn.dataflow.mvau_problem``
+and named here for the Kernel modules that read it.
+"""
 
 from __future__ import annotations
 
-from enum import Enum
-
-
-class MVAUComputationProfile(str, Enum):
-    """Evidenced source-computation profiles supported by MVAU bindings."""
-
-    ACCUMULATOR_INTEGER = "accumulator_integer"
-    BIPOLAR_XNOR_ACCUMULATOR = "bipolar_xnor_accumulator"
-    FUSED_THRESHOLD = "fused_threshold"
-
+from finn.dataflow.mvau_problem import MVAUComputationProfile
 
 __all__ = ["MVAUComputationProfile"]

@@ -12,9 +12,7 @@ from finn.dataflow.mvau import (
     SOFT_VECTOR_MVAU_KERNEL,
     MVAUComputationProfile,
     MVAUComputeKernelId,
-    MVAUComputeProblemPaths,
     MVAUDesignPaths,
-    MVAUDspBlock,
     MVAURegionDeclaration,
     MVAUWeightInterface,
     build_legacy_mvau_design_space_spec,
@@ -24,6 +22,7 @@ from finn.dataflow.mvau import (
     construct_standard_streamed_mvau_region,
     construct_streamed_weight_mvau_region,
 )
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 
 __all__ = [
     "BATCH_INTERLEAVED_DSP_MVAU_KERNEL",
@@ -32,7 +31,7 @@ __all__ = [
     "MVAU_DESIGN_SPACE_SPEC",
     "MVAUComputationProfile",
     "MVAUComputeKernelId",
-    "MVAUComputeProblemPaths",
+    "MVAUProblemPaths",
     "MVAUDesignPaths",
     "MVAUDspBlock",
     "MVAURegionDeclaration",

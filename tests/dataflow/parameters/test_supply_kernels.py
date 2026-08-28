@@ -38,13 +38,13 @@ from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     OUTPUT_PORT_EXPORT,
     MVAUWeightSupplyKernelId,
-    MVAUWeightSupplyProblemPaths,
     WeightOrganization,
     build_mvau_weight_supply_selection,
 )
 from finn.dataflow.region import DataflowRegion, NumericElementType, Port
 from finn.dataflow.region_validation import RegionValidationReport
 from finn.dataflow.spec_algebra import assemble_specs
+from finn.dataflow.mvau_problem import MVAUProblemPaths
 
 INT8 = NumericElementType("int", 8)
 INT16 = NumericElementType("int", 16)
@@ -98,10 +98,10 @@ def _spec() -> DesignSpaceSpec:
                     (
                         ProblemField(DEMAND, _PORT),
                         ProblemField(FULL_TILE, _PORT),
-                        ProblemField(MVAUWeightSupplyProblemPaths.INITIALIZER_AVAILABLE, _BOOL),
-                        ProblemField(MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE, _BOOL),
+                        ProblemField(MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE, _BOOL),
+                        ProblemField(MVAUProblemPaths.RUNTIME_WRITABLE, _BOOL),
                         ProblemField(
-                            MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES,
+                            MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES,
                             _CAPABILITIES,
                             required=False,
                         ),
@@ -125,11 +125,11 @@ def _started(
     problem: dict[QualifiedPath, object] = {
         DEMAND: demand or _weight_port(),
         FULL_TILE: full_tile or _weight_port(),
-        MVAUWeightSupplyProblemPaths.INITIALIZER_AVAILABLE: initializer_available,
-        MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE: runtime_writable,
+        MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: initializer_available,
+        MVAUProblemPaths.RUNTIME_WRITABLE: runtime_writable,
     }
     if target_capabilities is not _MISSING:
-        problem[MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES] = target_capabilities
+        problem[MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES] = target_capabilities
     return engine, engine.start(space, problem)
 
 

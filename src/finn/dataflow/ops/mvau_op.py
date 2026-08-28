@@ -27,7 +27,6 @@ from finn.dataflow.authoring import (
 )
 from finn.dataflow.design import DesignSpaceSpec, Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS
-from finn.dataflow.mvau.compute_kernels import MVAUComputeProblemPaths
 from finn.dataflow.mvau.source import (
     MVAU_LOGICAL_SOURCE_NODEATTRS,
     MVAUProjectionContext,
@@ -46,7 +45,7 @@ from finn.dataflow.ops.mvau import (
     MVAUDataflowOpPaths,
     MVAUSourceDescription,
 )
-from finn.dataflow.parameters.supply_kernels import MVAUWeightSupplyProblemPaths
+from finn.dataflow.mvau_problem import MVAU_PROBLEM_PROVENANCE, MVAUProblemPaths
 from finn.dataflow.region import BeatSequence
 
 MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v2"
@@ -125,7 +124,9 @@ class MvauDataflowOp(DataflowOp):
         return projection
 
     def project_graph_problem(self) -> Mapping[QualifiedPath, object]:
-        return self._graph_projection().problem_data
+        problem = self._graph_projection().problem_data
+        MVAU_PROBLEM_PROVENANCE.check_graph_projection(problem)
+        return problem
 
     @staticmethod
     def _context_parts(
@@ -173,7 +174,7 @@ class MvauDataflowOp(DataflowOp):
                     Finding(
                         FindingKind.LIMITATION,
                         "mvau-target-part-unknown",
-                        MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
+                        MVAUProblemPaths.TARGET_DSP_BLOCK,
                         "target FPGA part cannot be classified into a supported DSP family",
                         values=(("fpga_part", context.fpga_part),),
                     ),
@@ -186,17 +187,8 @@ class MvauDataflowOp(DataflowOp):
             )
         )
         problem[MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER] = owner
+        MVAU_PROBLEM_PROVENANCE.check_build_projection(problem)
         return problem
-
-    def combine_problem_data(
-        self,
-        graph_problem: Mapping[QualifiedPath, object],
-        build_problem: Mapping[QualifiedPath, object],
-    ) -> Mapping[QualifiedPath, object]:
-        combined = dict(super().combine_problem_data(graph_problem, build_problem))
-        if cast(bool, combined[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE]):
-            combined[MVAUComputeProblemPaths.WEIGHTS_NARROW] = False
-        return combined
 
     def resolve_dataflow(self, config: DataflowBuildConfigView) -> MVAUResolvedDesign:
         point = self.hydrate_dataflow_point(config)

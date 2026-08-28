@@ -34,7 +34,6 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PATHS,
     MVAUComputeKernelId,
     MVAUComputeKernelPathSet,
-    MVAUComputeProblemPaths,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -49,7 +48,7 @@ from finn.dataflow.mvau.source import (
     project_mvau_source,
     start_mvau_projection,
 )
-from finn.dataflow.op import DataflowOpError
+from finn.dataflow.op import DataflowBuildConfigView, DataflowOpError
 from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.ops.mvau import (
     MVAU_COMPUTE_SELECTION,
@@ -66,11 +65,11 @@ from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,
     MVAUWeightSupplyKernelId,
-    MVAUWeightSupplyProblemPaths,
     WeightOrganization,
 )
 from finn.dataflow.region import BeatSequence, NumericElementType
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
+from finn.dataflow.mvau_problem import MVAUProblemPaths
 
 NODE_ID = "logical_mvau0"
 PART = "xczu3eg-sbva484-1-e"
@@ -304,7 +303,7 @@ def test_logical_source_attributes_use_declared_defaults_and_reject_invalid_valu
     operation = _wrapped(_model(no_activation_attribute=None))
     assert operation.get_nodeattr("noActivation") == 1
     assert (
-        operation.problem_instance(_context())[MVAUComputeProblemPaths.COMPUTATION_PROFILE]
+        operation.problem_instance(_context())[MVAUProblemPaths.COMPUTATION_PROFILE]
         is MVAUComputationProfile.ACCUMULATOR_INTEGER
     )
 
@@ -320,6 +319,15 @@ def test_logical_source_attributes_use_declared_defaults_and_reject_invalid_valu
         }
 
 
+def _narrow_weights(operation: MvauDataflowOp, context: DataflowBuildConfigView) -> object:
+    """Ask the operation for its narrow-weight decision, as elaboration does."""
+
+    point = operation.hydrate_dataflow_point(context)
+    answer = Engine().query_property(point, MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS)
+    assert isinstance(answer, Decided)
+    return answer.value
+
+
 def test_graph_and_build_projection_keep_fact_ownership_explicit() -> None:
     model = _model(with_initializer=False)
     operation = _wrapped(model)
@@ -330,11 +338,15 @@ def test_graph_and_build_projection_keep_fact_ownership_explicit() -> None:
 
     assert MVAUDataflowOpPaths.TARGET_FPGA_PART not in graph_problem
     assert MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS not in graph_problem
-    assert MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE not in graph_problem
+    assert MVAUProblemPaths.RUNTIME_WRITABLE not in graph_problem
     assert build_problem[MVAUDataflowOpPaths.TARGET_FPGA_PART] == VERSAL_PART
     assert build_problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS] == 3.0
-    assert build_problem[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE] is True
-    assert problem[MVAUComputeProblemPaths.WEIGHTS_NARROW] is False
+    assert build_problem[MVAUProblemPaths.RUNTIME_WRITABLE] is True
+    # Runtime-writable weights are governed by the caller's contract, and none
+    # was declared, so the property is False without any projection overwriting
+    # the graph's own analysis.
+    assert MVAUProblemPaths.RUNTIME_WEIGHT_RANGE_CONTRACT not in problem
+    assert _narrow_weights(operation, context) is False
     attribute_names = {attribute.name for attribute in operation.onnx_node.attribute}
     assert not attribute_names & {
         "MW",
@@ -515,7 +527,7 @@ def test_runtime_writable_policy_is_projected_from_build_context() -> None:
     resolved = operation.resolve_dataflow(context)
     elaboration = elaborate_mvau_rtl_softvec(resolved)
     requirements = build_mvau_rtl_artifact_requirements(resolved, elaboration, model, Path.cwd())
-    assert resolved.point.problem[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE] is True
+    assert resolved.point.problem[MVAUProblemPaths.RUNTIME_WRITABLE] is True
     assert requirements.weight_payload_kind is MVAUWeightPayloadKind.RUNTIME_WRITABLE_LOCAL_STATE
     assert requirements.weight_initializer is None
 

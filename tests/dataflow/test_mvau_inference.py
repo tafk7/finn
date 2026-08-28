@@ -23,7 +23,6 @@ from finn.dataflow.mvau.compute_kernels import (
     LEGACY_HLS_PATHS,
     MVAU_COMPUTE_SELECTION,
     MVAUComputeKernelId,
-    MVAUComputeProblemPaths,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -37,6 +36,7 @@ from finn.transformation.fpgadataflow.infer_mvau_dataflow import (
     recognize_mvau_candidates,
     source_nodes_of,
 )
+from finn.dataflow.mvau_problem import MVAUProblemPaths
 
 PART = "xczu3eg-sbva484-1-e"
 
@@ -448,7 +448,7 @@ def test_an_xnor_popcount_source_is_recognized_and_marked() -> None:
     assert isinstance(operation, MvauDataflowOp)
     assert operation.get_nodeattr("binaryXnorMode") == 1
     problem = operation.problem_instance(_context())
-    profile = problem[MVAUComputeProblemPaths.COMPUTATION_PROFILE]
+    profile = problem[MVAUProblemPaths.COMPUTATION_PROFILE]
     assert profile is MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR
 
 

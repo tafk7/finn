@@ -12,8 +12,6 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_MVAU_KERNEL,
     MVAUComputeKernelId,
     MVAUComputeKernelPathSet,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -52,9 +50,7 @@ __all__ = [
     "MVAUComputationProfile",
     "MVAUComputeKernelId",
     "MVAUComputeKernelPathSet",
-    "MVAUComputeProblemPaths",
     "MVAUDesignPaths",
-    "MVAUDspBlock",
     "MVAUHlsResource",
     "MVAURegionDeclaration",
     "MVAUWeightInterface",

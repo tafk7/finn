@@ -25,7 +25,6 @@ from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.mvau.compute_kernels import MVAUComputeProblemPaths
 from finn.dataflow.mvau.elaboration import (
     MVAUPhysicalElaboration,
     MVAUPhysicalNumericInterface,
@@ -45,8 +44,8 @@ from finn.dataflow.ops.mvau import (
 )
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
-    MVAUWeightSupplyProblemPaths,
 )
+from finn.dataflow.mvau_problem import MVAUProblemPaths
 from finn.dataflow.region import BeatSequence, NumericElementType
 
 _ARTIFACT_PATH = QualifiedPath("artifact.mvau.rtl_softvec")
@@ -497,7 +496,7 @@ def build_mvau_rtl_artifact_requirements(
             )
         )
     runtime_writable = cast(
-        bool, resolved.point.problem.get(MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE, False)
+        bool, resolved.point.problem.get(MVAUProblemPaths.RUNTIME_WRITABLE, False)
     )
     if initializer is None and cyclic and not runtime_writable:
         raise MVAUArtifactError(
@@ -505,13 +504,13 @@ def build_mvau_rtl_artifact_requirements(
                 Finding(
                     FindingKind.LIMITATION,
                     "mvau-artifact-weight-values-missing",
-                    MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
+                    MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
                     "cyclic local-state delivery requires initialized or runtime-writable weights",
                 ),
             )
         )
-    matrix_width = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_WIDTH])
-    matrix_height = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_HEIGHT])
+    matrix_width = cast(int, resolved.point.problem[MVAUProblemPaths.MATRIX_WIDTH])
+    matrix_height = cast(int, resolved.point.problem[MVAUProblemPaths.MATRIX_HEIGHT])
     expected_weight_shape = (matrix_width, matrix_height)
     weight_array = None if initializer is None else np.asarray(initializer, dtype=np.float32)
     weight_payload_kind = (
@@ -527,19 +526,19 @@ def build_mvau_rtl_artifact_requirements(
         )
     activation_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE],
     )
     weight_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.WEIGHT_ELEMENT_TYPE],
     )
     accumulator_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
     output_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.OUTPUT_ELEMENT_TYPE],
     )
     wrapper_id = f"{source.source_node_id}.compute.wrapper"
     wrapper = elaboration.component(wrapper_id)

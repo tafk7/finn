@@ -22,8 +22,6 @@ from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_PATHS,
     LEGACY_HLS_PATHS,
     MVAUComputeKernelId,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -52,10 +50,10 @@ from finn.dataflow.parameters.supply_kernels import (
     CyclicRamStyle,
     CyclicTargetMemoryCapabilities,
     MVAUWeightSupplyKernelId,
-    MVAUWeightSupplyProblemPaths,
     WeightOrganization,
 )
 from finn.dataflow.region import NumericElementType
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 
 NODE_ID = "mvau0"
 ULTRASCALE_PART = "xczu3eg-sbva484-1-e"
@@ -155,14 +153,14 @@ def test_real_standard_embedded_node_projects_facts_and_explicit_choices() -> No
     projection = _project_preserving(model)
 
     assert projection.blocking_findings == ()
-    assert projection.problem_data[MVAUComputeProblemPaths.REPETITIONS] == 4
-    assert projection.problem_data[MVAUComputeProblemPaths.MATRIX_WIDTH] == 4
-    assert projection.problem_data[MVAUComputeProblemPaths.MATRIX_HEIGHT] == 6
+    assert projection.problem_data[MVAUProblemPaths.REPETITIONS] == 4
+    assert projection.problem_data[MVAUProblemPaths.MATRIX_WIDTH] == 4
+    assert projection.problem_data[MVAUProblemPaths.MATRIX_HEIGHT] == 6
     assert (
         projection.problem_data[MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER]
         == "finn.MinimizeAccumulatorWidth"
     )
-    assert projection.problem_data[MVAUComputeProblemPaths.TARGET_DSP_BLOCK] is MVAUDspBlock.DSP48E2
+    assert projection.problem_data[MVAUProblemPaths.TARGET_DSP_BLOCK] is MVAUDspBlock.DSP48E2
     assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
         MVAUComputeKernelId.LEGACY_HLS.value
     )
@@ -191,7 +189,9 @@ def test_real_standard_direct_node_projects_soft_vector_binding() -> None:
         MVAUComputeKernelId.SOFT_VECTOR.value
     )
     assert projection.imported_assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] == NO_KERNEL
-    assert projection.problem_data[MVAUComputeProblemPaths.WEIGHTS_NARROW] is False
+    # External delivery means the initializer does not govern the delivered
+    # values, so the graph analysis declines rather than answering False.
+    assert MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM not in projection.problem_data
 
 
 def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() -> None:
@@ -221,7 +221,7 @@ def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() ->
     )
     assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.pumped_memory] is True
     assert projection.imported_assignments[MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel] == NO_KERNEL
-    assert projection.problem_data[MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES] == (
+    assert projection.problem_data[MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES] == (
         CyclicTargetMemoryCapabilities(True)
     )
     resolved = start_mvau_projection(projection)
@@ -239,10 +239,10 @@ def test_fused_threshold_projection_preserves_real_tensor_contract() -> None:
     assert description is not None
     assert description.threshold_operand_id == "thresholds"
     assert description.threshold_shape == (6, 3)
-    threshold_type = projection.problem_data[MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE]
+    threshold_type = projection.problem_data[MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE]
     assert isinstance(threshold_type, NumericElementType)
     assert threshold_type.bit_width == 16
-    assert projection.problem_data[MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE] is True
+    assert projection.problem_data[MVAUProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE] is True
 
 
 def test_projection_is_deterministic_and_project_only_imports_no_choices() -> None:

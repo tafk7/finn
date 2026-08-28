@@ -28,8 +28,6 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PATHS,
     MVAUComputeKernelId,
     MVAUComputeKernelPathSet,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -56,11 +54,11 @@ from finn.dataflow.parameters.supply_kernels import (
     FINNLIB_MEMSTREAM_PATHS,
     FINN_RTL_MEMSTREAM_PATHS,
     MVAUWeightSupplyKernelId,
-    MVAUWeightSupplyProblemPaths,
     WeightOrganization,
 )
 from finn.dataflow.region import NumericElementType, Port
 from finn.dataflow.selection import enumerate_feasible_points
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 
 INT8 = NumericElementType("int", 8)
 INT16 = NumericElementType("int", 16)
@@ -99,7 +97,7 @@ def _problem(
     external_weight_sequence: object | None = None,
     computation_profile: MVAUComputationProfile = MVAUComputationProfile.ACCUMULATOR_INTEGER,
 ) -> dict[QualifiedPath, object]:
-    P = MVAUComputeProblemPaths
+    P = MVAUProblemPaths
     problem: dict[QualifiedPath, object] = {
         P.REPETITIONS: repetitions,
         P.MATRIX_WIDTH: matrix_width,
@@ -112,8 +110,8 @@ def _problem(
         P.WEIGHT_INITIALIZER_AVAILABLE: True,
         P.THRESHOLD_INITIALIZER_AVAILABLE: True,
         P.TARGET_DSP_BLOCK: MVAUDspBlock.DSP58,
-        P.WEIGHTS_NARROW: True,
-        MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE: False,
+        P.INITIALIZER_EXCLUDES_MINIMUM: True,
+        MVAUProblemPaths.RUNTIME_WRITABLE: False,
         MVAUDataflowOpPaths.SOURCE_DESCRIPTION: source_description or _source_description(),
     }
     if external_weight_sequence is not None:
@@ -358,7 +356,7 @@ def test_a_supplier_failure_can_veto_a_point_without_rewriting_compute() -> None
         infeasible_engine.validate(MVAU_DATAFLOW_OP_SPEC),
         {
             **_problem(),
-            MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: False,
+            MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: False,
         },
     )
     infeasible = infeasible_engine.commit_assignments(

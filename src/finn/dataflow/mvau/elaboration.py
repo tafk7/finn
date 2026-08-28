@@ -16,8 +16,6 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PATHS,
     SOFT_VECTOR_PROVIDER_ID,
     MVAUComputeKernelId,
-    MVAUComputeProblemPaths,
-    MVAUDspBlock,
 )
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.source import MVAUResolvedDesign
@@ -39,9 +37,9 @@ from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     MEMSTREAM_PROVIDER_ID,
     MVAUWeightSupplyKernelId,
-    MVAUWeightSupplyProblemPaths,
 )
 
+from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from finn.dataflow.region import NumericElementType, Port
 
 _ELABORATION_PATH = QualifiedPath("elaboration.mvau")
@@ -425,6 +423,32 @@ def _numeric_interface(
     )
 
 
+def _effective_narrow_weights(resolved: MVAUResolvedDesign) -> bool:
+    """Read the operation's narrow-weight decision rather than a problem field.
+
+    ``NARROW_WEIGHTS`` is a promise about the values reaching the RTL, and the
+    operation decides which fact carries that promise.  Elaboration asks for
+    the answer; it does not re-derive it from the initializer.
+    """
+
+    answer = resolved.engine.query_property(
+        resolved.point, MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS
+    )
+    if not isinstance(answer, Decided) or not isinstance(answer.value, bool):
+        findings = () if isinstance(answer, Decided) else answer.findings
+        raise MVAUElaborationError(
+            findings
+            or (
+                _finding(
+                    "mvau-elaboration-narrow-weights-unresolved",
+                    "the effective narrow-weight property must resolve before elaboration",
+                    MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS,
+                ),
+            )
+        )
+    return answer.value
+
+
 def _compute_physical_objects(
     resolved: MVAUResolvedDesign,
     region_id: str,
@@ -444,9 +468,9 @@ def _compute_physical_objects(
     pe = cast(int, _required_assignment(resolved, SOFT_VECTOR_PATHS.pe))
     simd = cast(int, _required_assignment(resolved, SOFT_VECTOR_PATHS.simd))
     pumped = cast(bool, _required_assignment(resolved, SOFT_VECTOR_PATHS.compute_pumping))
-    matrix_width = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_WIDTH])
-    matrix_height = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_HEIGHT])
-    target = cast(MVAUDspBlock, resolved.point.problem[MVAUComputeProblemPaths.TARGET_DSP_BLOCK])
+    matrix_width = cast(int, resolved.point.problem[MVAUProblemPaths.MATRIX_WIDTH])
+    matrix_height = cast(int, resolved.point.problem[MVAUProblemPaths.MATRIX_HEIGHT])
+    target = cast(MVAUDspBlock, resolved.point.problem[MVAUProblemPaths.TARGET_DSP_BLOCK])
     version = {
         MVAUDspBlock.DSP48E1: 1,
         MVAUDspBlock.DSP48E2: 2,
@@ -454,15 +478,15 @@ def _compute_physical_objects(
     }[target]
     activation_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE],
     )
     weight_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.WEIGHT_ELEMENT_TYPE],
     )
     accumulator_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
+        resolved.point.problem[MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
     clock_period = cast(float, resolved.point.problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS])
     reference_clock = clock_period / 2 if pumped else clock_period
@@ -485,10 +509,7 @@ def _compute_physical_objects(
         ("IS_MVU", True),
         ("MH", matrix_height),
         ("MW", matrix_width),
-        (
-            "NARROW_WEIGHTS",
-            cast(bool, resolved.point.problem[MVAUComputeProblemPaths.WEIGHTS_NARROW]),
-        ),
+        ("NARROW_WEIGHTS", _effective_narrow_weights(resolved)),
         ("PE", pe),
         ("PUMPED_COMPUTE", pumped),
         ("SEGMENTLEN", segment_length),
@@ -801,11 +822,9 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
         pumped_memory = cast(
             bool, _required_assignment(resolved, FINN_RTL_MEMSTREAM_PATHS.pumped_memory)
         )
-        runtime_writable = cast(
-            bool, resolved.point.problem[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE]
-        )
+        runtime_writable = cast(bool, resolved.point.problem[MVAUProblemPaths.RUNTIME_WRITABLE])
         initializer_available = cast(
-            bool, resolved.point.problem[MVAUWeightSupplyProblemPaths.INITIALIZER_AVAILABLE]
+            bool, resolved.point.problem[MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE]
         )
         delivery_component = MVAUPhysicalComponent(
             delivery_id,

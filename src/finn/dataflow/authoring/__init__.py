@@ -3,6 +3,24 @@
 
 """Public FINN dataflow authoring surface."""
 
+from finn.dataflow.authoring.op_design import (
+    BUILD_OWNED,
+    GRAPH_OWNED,
+    OpDesign,
+    ProblemProvenance,
+    Provenance,
+)
+from finn.dataflow.authoring.scope import (
+    AuthoringError,
+    ConstraintRef,
+    Ref,
+    Scope,
+    divisors_of,
+    domain,
+    finite,
+    reject,
+    unresolved,
+)
 from finn.dataflow.kernel import RegionDeclaration, build_kernel_semantic_declarations
 from finn.dataflow.kernels import (
     NO_KERNEL,
@@ -38,12 +56,16 @@ from finn.dataflow.spec_algebra import (
 
 __all__ = [
     "AssignmentMapping",
+    "AuthoringError",
+    "BUILD_OWNED",
+    "ConstraintRef",
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
     "DataflowOp",
     "DataflowOpError",
     "DataflowOpResult",
     "FiniteSelectionResult",
+    "GRAPH_OWNED",
     "Kernel",
     "KernelDemand",
     "KernelExport",
@@ -54,10 +76,15 @@ __all__ = [
     "NetworkRef",
     "NodeAttrCodec",
     "NodeAttributeType",
+    "OpDesign",
+    "ProblemProvenance",
+    "Provenance",
+    "Ref",
     "RegionDeclaration",
     "RegionRef",
     "ResolvedDataflowOp",
     "SELECTED_KERNEL_SEMANTICS",
+    "Scope",
     "SelectedKernel",
     "SpecAuthoringError",
     "SpecAuthoringIssue",
@@ -65,7 +92,12 @@ __all__ = [
     "assemble_specs",
     "build_kernel_semantic_declarations",
     "dataflow_problem_fingerprint",
+    "divisors_of",
+    "domain",
     "enumerate_feasible_points",
+    "finite",
     "gate_spec",
+    "reject",
     "selected_kernel",
+    "unresolved",
 ]
