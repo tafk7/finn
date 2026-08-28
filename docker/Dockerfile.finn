@@ -156,6 +156,29 @@ RUN set -eu; \
         { echo "ERROR: libtinfo.so.5 missing after install" >&2; exit 1; }; \
     echo "ncurses 5 ABI present: $(readlink -f /usr/lib/$(uname -m)-linux-gnu/libtinfo.so.5)"
 
+# LSB loader for Xilinx's LSB-linked binaries.
+#
+# lmutil and several tool wrappers request the interpreter
+# /lib64/ld-lsb-x86-64.so.3. Without it they fail to exec with "No such file or
+# directory" naming a file that plainly exists -- the classic missing-ELF-
+# interpreter error, and a confusing one to chase.
+#
+# The original Dockerfile got this from `lsb-core`, which no longer exists on
+# noble, so this image installs `lsb-release` (metadata only) and creates the
+# loader symlink directly. It is only ever an alias for the normal loader.
+# Note the naming mismatch that makes this fiddly: `uname -m` reports x86_64
+# with an underscore, while the loader is ld-linux-x86-64.so.2 with a hyphen.
+# Xilinx tooling is amd64-only, so this resolves the real loader by glob rather
+# than by constructing the name.
+RUN set -eu; \
+    loader=$(ls /lib/*-linux-gnu/ld-linux-x86-64.so.2 2>/dev/null | head -1); \
+    [ -n "$loader" ] || { echo "ERROR: no ld-linux-x86-64.so.2 found" >&2; exit 1; }; \
+    mkdir -p /lib64; \
+    ln -sf "$loader" /lib64/ld-lsb-x86-64.so.3; \
+    test -e /lib64/ld-lsb-x86-64.so.3 || \
+        { echo "ERROR: LSB loader symlink dangling; Xilinx lmutil will not exec" >&2; exit 1; }; \
+    echo "LSB loader: $(readlink -f /lib64/ld-lsb-x86-64.so.3)"
+
 RUN echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
 RUN locale-gen "en_US.UTF-8"
 
