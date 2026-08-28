@@ -18,16 +18,17 @@ export PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
 "$PYTHON_BIN" -m pytest -q --confcutdir=tests/dataflow tests/dataflow
 "$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_mvau_cycle_estimate.py
 
-"$RUFF_BIN" format --check \
-    src/finn/analysis/verify_custom_nodes.py \
-    src/finn/dataflow \
-    tests/dataflow \
+DATAFLOW_SOURCES=(
+    src/finn/analysis/verify_custom_nodes.py
+    src/finn/dataflow
+    src/finn/transformation/fpgadataflow/infer_mvau_dataflow.py
+    src/finn/transformation/fpgadataflow/select_dataflow_design.py
+    tests/dataflow
     tests/fpgadataflow/test_mvau_cycle_estimate.py
-"$RUFF_BIN" check \
-    src/finn/analysis/verify_custom_nodes.py \
-    src/finn/dataflow \
-    tests/dataflow \
-    tests/fpgadataflow/test_mvau_cycle_estimate.py
+)
+
+"$RUFF_BIN" format --check "${DATAFLOW_SOURCES[@]}"
+"$RUFF_BIN" check "${DATAFLOW_SOURCES[@]}"
 
 MYPYPATH=src:tests "$MYPY_BIN" \
     --strict \
@@ -43,6 +44,8 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/region_profiles.py \
     src/finn/dataflow/region_validation.py \
     src/finn/dataflow/kernel.py \
+    src/finn/dataflow/kernels.py \
+    src/finn/dataflow/spec_algebra.py \
     src/finn/dataflow/network.py \
     src/finn/dataflow/network_validation.py \
     src/finn/dataflow/mvau \
@@ -50,6 +53,8 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/ops \
     src/finn/dataflow/mvau_design.py \
     src/finn/custom_op/dataflow \
+    src/finn/transformation/fpgadataflow/infer_mvau_dataflow.py \
+    src/finn/transformation/fpgadataflow/select_dataflow_design.py \
     tests/dataflow/engine \
     tests/dataflow/design \
     tests/dataflow/mvau \
@@ -59,4 +64,7 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/test_kernel_authoring.py \
     tests/dataflow/test_network.py \
     tests/dataflow/test_network_validation.py \
-    tests/dataflow/test_mvau_op.py
+    tests/dataflow/test_mvau_op.py \
+    tests/dataflow/test_kernel_pool.py \
+    tests/dataflow/test_mvau_inference.py \
+    tests/dataflow/test_dataflow_selection.py

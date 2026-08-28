@@ -9,10 +9,12 @@ from finn.dataflow.kernels import (
     SELECTED_KERNEL_SEMANTICS,
     Kernel,
     KernelDemand,
+    KernelExport,
     KernelProvider,
     KernelSelection,
     KernelSelectionPaths,
     SelectedKernel,
+    admissible_kernels,
     selected_kernel,
 )
 from finn.dataflow.op import (
@@ -44,6 +46,7 @@ __all__ = [
     "FiniteSelectionResult",
     "Kernel",
     "KernelDemand",
+    "KernelExport",
     "KernelProvider",
     "KernelSelection",
     "KernelSelectionPaths",
@@ -58,6 +61,7 @@ __all__ = [
     "SelectedKernel",
     "SpecAuthoringError",
     "SpecAuthoringIssue",
+    "admissible_kernels",
     "assemble_specs",
     "build_kernel_semantic_declarations",
     "dataflow_problem_fingerprint",
