@@ -60,6 +60,7 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/mvau \
     tests/dataflow/parameters \
     tests/dataflow/synthetic_op.py \
+    tests/dataflow/test_authoring_scope.py \
     tests/dataflow/test_dataflow_op.py \
     tests/dataflow/test_kernel_authoring.py \
     tests/dataflow/test_network.py \

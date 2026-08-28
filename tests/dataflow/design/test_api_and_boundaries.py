@@ -35,6 +35,7 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "Decision",
         "DecisionDomain",
         "DecisionState",
+        "DependencyKind",
         "DependencyRef",
         "DependencyView",
         "DerivedProperty",

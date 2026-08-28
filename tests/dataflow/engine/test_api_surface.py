@@ -24,6 +24,7 @@ def test_package_root_is_a_deliberate_primary_api() -> None:
         "Decision",
         "DecisionDomain",
         "DecisionState",
+        "DependencyKind",
         "DependencyRef",
         "DependencyView",
         "DerivedProperty",
