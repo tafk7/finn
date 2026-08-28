@@ -649,11 +649,34 @@ fi
 if [ "$FINN_SBX_MODE" = "1" ]; then
   command -v sbx >/dev/null || { recho "sbx not found on PATH"; exit 1; }
 
+  # Every sbx query is wrapped in a timeout and announced before it runs.
+  #
+  # sbx talks to a daemon, and a wedged daemon makes `sbx ls` spin instead of
+  # failing -- which, in an unguarded pipeline, hangs this script with no output
+  # at all after the docker build. A timeout turns that into a diagnosable error.
+  : ${FINN_SBX_TIMEOUT:=60}
+  # Diagnostics go to STDERR and the caller checks the status: a pipeline runs
+  # this in a subshell, where an `exit` would kill only that subshell and any
+  # message on stdout would be swallowed by the next stage. Callers must
+  # therefore capture the output first, never pipe this directly.
+  sbx_q () {
+    timeout "$FINN_SBX_TIMEOUT" sbx "$@" 2>/dev/null
+    local rc=$?
+    if [ "$rc" -eq 124 ]; then
+      recho "\`sbx $*\` timed out after ${FINN_SBX_TIMEOUT}s." >&2
+      recho "The sbx daemon may be wedged. Try: sbx daemon restart" >&2
+      recho "(raise FINN_SBX_TIMEOUT if your machine is merely slow)" >&2
+    fi
+    return $rc
+  }
+
   # One sandbox per (tier, checkout). Lowercased; sbx requires it.
   SBX_NAME=${FINN_SBX_NAME:-"finn-$FINN_DOCKER_TARGET-$(basename "$SCRIPTPATH")"}
   SBX_NAME=$(echo "$SBX_NAME" | tr '[:upper:]' '[:lower:]')
 
-  if sbx ls 2>/dev/null | awk '{print $1}' | grep -qx "$SBX_NAME"; then
+  gecho "Checking for an existing sandbox named $SBX_NAME"
+  SBX_LS=$(sbx_q ls); [ $? -eq 124 ] && exit 1
+  if echo "$SBX_LS" | awk '{print $1}' | grep -qx "$SBX_NAME"; then
     if [ "$FINN_SBX_RECREATE" = "1" ]; then
       gecho "Removing existing sandbox $SBX_NAME (FINN_SBX_RECREATE=1)"
       sbx rm --force "$SBX_NAME" >/dev/null 2>&1
@@ -667,11 +690,14 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   # sbx keeps its own image store and cannot see the local docker one, so the
   # image has to be exported and loaded. Skipped when the tag is already there,
   # which is what makes repeat runs fast -- only a new tag pays the ~2 min.
-  if sbx template ls 2>/dev/null | awk '{print $1":"$2}' | grep -qx "docker.io/$FINN_DOCKER_TAG"; then
+  gecho "Checking the sbx template store for $FINN_DOCKER_TAG"
+  SBX_TPL=$(sbx_q template ls); [ $? -eq 124 ] && exit 1
+  if echo "$SBX_TPL" | awk '{print $1":"$2}' | grep -qx "docker.io/$FINN_DOCKER_TAG"; then
     gecho "Template $FINN_DOCKER_TAG already loaded"
   else
     gecho "Loading $FINN_DOCKER_TAG into the sbx template store (first time is slow)"
     SBX_TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
+    gecho "  exporting the image (silent, a few minutes for the build tiers)"
     docker save -o "$SBX_TAR" "$FINN_DOCKER_TAG" || { recho "docker save failed"; rm -f "$SBX_TAR"; exit 1; }
     sbx template load "$SBX_TAR" || { recho "sbx template load failed"; rm -f "$SBX_TAR"; exit 1; }
     rm -f "$SBX_TAR"
@@ -717,7 +743,15 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
     --template "$FINN_DOCKER_TAG" \
     --kit "$SCRIPTPATH/docker/finn.kit" \
     --no-share-skills \
-    "${SBX_ENV[@]}" || { recho "sbx create failed"; exit 1; }
+    "${SBX_ENV[@]}" || {
+      # A racing or missed existence check should not be fatal: the sandbox we
+      # wanted is right there.
+      if sbx_q ls | awk '{print $1}' | grep -qx "$SBX_NAME"; then
+        gecho "Sandbox $SBX_NAME already exists; attaching"
+        exec sbx run --name "$SBX_NAME"
+      fi
+      recho "sbx create failed"; exit 1
+    }
 
   # A floating licence needs raw TCP egress to PORT@HOST. sbx grants that
   # narrowly, per sandbox, so this does not require an open posture.
