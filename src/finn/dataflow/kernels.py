@@ -634,6 +634,7 @@ class KernelSelection:
                 ),
                 self._selected_kernel_property(paths),
                 *(self._demand_property(paths, interface) for interface in self.demand_interfaces),
+                *(self._export_property(paths, name) for name in self.export_names),
             ),
             constraints=(
                 Constraint(

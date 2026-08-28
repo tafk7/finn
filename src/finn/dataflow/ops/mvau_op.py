@@ -27,7 +27,7 @@ from finn.dataflow.authoring import (
 )
 from finn.dataflow.design import DesignSpaceSpec, Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS
-from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
+from finn.dataflow.mvau.compute_kernels import MVAUComputeProblemPaths
 from finn.dataflow.mvau.source import (
     MVAU_LOGICAL_SOURCE_NODEATTRS,
     MVAUProjectionContext,
@@ -44,10 +44,10 @@ from finn.dataflow.ops.mvau import (
     MVAUDataflowOpPaths,
     MVAUSourceDescription,
 )
-from finn.dataflow.parameters.cyclic.definition import CyclicParameterKernelPaths
+from finn.dataflow.parameters.supply_kernels import MVAUWeightSupplyProblemPaths
 from finn.dataflow.region import BeatSequence
 
-MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v1"
+MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v2"
 
 
 @dataclass(frozen=True)
@@ -155,7 +155,7 @@ class MvauDataflowOp(DataflowOp):
                     Finding(
                         FindingKind.LIMITATION,
                         "mvau-target-part-unknown",
-                        MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
+                        MVAUComputeProblemPaths.TARGET_DSP_BLOCK,
                         "target FPGA part cannot be classified into a supported DSP family",
                         values=(("fpga_part", context.fpga_part),),
                     ),
@@ -167,7 +167,7 @@ class MvauDataflowOp(DataflowOp):
                 runtime_writable_weights=runtime_writable,
             )
         )
-        problem[MVAUComputeKernelPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER] = owner
+        problem[MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER] = owner
         return problem
 
     def combine_problem_data(
@@ -176,8 +176,8 @@ class MvauDataflowOp(DataflowOp):
         build_problem: Mapping[QualifiedPath, object],
     ) -> Mapping[QualifiedPath, object]:
         combined = dict(super().combine_problem_data(graph_problem, build_problem))
-        if cast(bool, combined[CyclicParameterKernelPaths.RUNTIME_WRITABLE]):
-            combined[MVAUComputeKernelPaths.WEIGHTS_NARROW] = False
+        if cast(bool, combined[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE]):
+            combined[MVAUComputeProblemPaths.WEIGHTS_NARROW] = False
         return combined
 
     def resolve_dataflow(self, config: DataflowBuildConfigView) -> MVAUResolvedDesign:

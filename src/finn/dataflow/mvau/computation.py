@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 
 
@@ -17,14 +16,4 @@ class MVAUComputationProfile(str, Enum):
     FUSED_THRESHOLD = "fused_threshold"
 
 
-@dataclass(frozen=True)
-class MVAUBindingSelection:
-    """Resolved MVAU implementation association, independent of feasibility."""
-
-    binding_id: str
-    region_declaration_id: str
-    computation_profile: MVAUComputationProfile
-    compute_pumping: bool | None
-
-
-__all__ = ["MVAUBindingSelection", "MVAUComputationProfile"]
+__all__ = ["MVAUComputationProfile"]

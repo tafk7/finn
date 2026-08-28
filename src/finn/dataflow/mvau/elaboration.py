@@ -11,10 +11,11 @@ from math import ceil, floor
 from typing import cast
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.mvau.computation import MVAUBindingSelection
-from finn.dataflow.mvau.definition import (
-    MVAUComputeBinding,
-    MVAUComputeKernelPaths,
+from finn.dataflow.kernels import NO_KERNEL, SelectedKernel
+from finn.dataflow.mvau.compute_kernels import (
+    SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId,
+    MVAUComputeProblemPaths,
     MVAUDspBlock,
 )
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
@@ -25,20 +26,27 @@ from finn.dataflow.mvau.source import (
 )
 from finn.dataflow.network import DataflowNetwork, RegionEndpoint
 from finn.dataflow.ops.mvau import (
-    MVAUConnectionTopology,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_WEIGHT_ADAPTER_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     NetworkRef,
     RegionRef,
 )
-from finn.dataflow.parameters.cyclic.definition import (
-    CyclicParameterBinding,
-    CyclicParameterBindingSelection,
-    CyclicParameterKernelPaths,
+from finn.dataflow.parameters.supply_kernels import (
+    FINN_RTL_MEMSTREAM_PATHS,
+    MVAUWeightSupplyKernelId,
+    MVAUWeightSupplyProblemPaths,
 )
+
 from finn.dataflow.region import NumericElementType, Port
 
 _ELABORATION_PATH = QualifiedPath("elaboration.mvau")
+
+#: The providers this module implements, each for exactly one Kernel.
+SOFT_VECTOR_PROVIDER_ID = "finn.rtl.mvu_vvu_axi"
+MEMSTREAM_PROVIDER_ID = "finn.rtl.memstream"
 
 
 class MVAUPhysicalDirection(str, Enum):
@@ -72,7 +80,8 @@ class MVAUElaborationOrigin:
     declaration_family_version: str
     problem_fingerprint: str
     assignments: tuple[tuple[QualifiedPath, object], ...]
-    binding_ids: tuple[str, ...]
+    kernel_ids: tuple[str, ...]
+    provider_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,7 +139,8 @@ class MVAUPhysicalAssociation:
     semantic_ports: tuple[MVAUSemanticPortRef, ...] = ()
     semantic_edge_ids: tuple[str, ...] = ()
     decision_paths: tuple[QualifiedPath, ...] = ()
-    binding_ids: tuple[str, ...] = ()
+    kernel_ids: tuple[str, ...] = ()
+    provider_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -333,46 +343,44 @@ def _required_problem(resolved: MVAUResolvedDesign, path: QualifiedPath) -> obje
     return value
 
 
+def _selected_kernel_id(
+    resolved: MVAUResolvedDesign, path: QualifiedPath, code: str, message: str
+) -> str:
+    answer = resolved.engine.query_property(resolved.point, path)
+    if not isinstance(answer, Decided) or not isinstance(answer.value, SelectedKernel):
+        findings = () if isinstance(answer, Decided) else answer.findings
+        raise MVAUElaborationError(findings or (_finding(code, message),))
+    return answer.value.kernel_id
+
+
 def mvau_elaboration_origin(resolved: MVAUResolvedDesign) -> MVAUElaborationOrigin:
     """Construct the exact immutable identity of an elaboration input point."""
-    compute = resolved.engine.query_property(
-        resolved.point, MVAUComputeKernelPaths.BINDING_SELECTION
-    )
-    if not isinstance(compute, Decided) or not isinstance(compute.value, MVAUBindingSelection):
-        findings = () if isinstance(compute, Decided) else compute.findings
-        raise MVAUElaborationError(
-            findings
-            or (
-                _finding(
-                    "mvau-elaboration-binding-selection-missing",
-                    "compute binding-selection metadata must resolve before elaboration",
-                ),
-            )
+
+    kernel_ids = [
+        _selected_kernel_id(
+            resolved,
+            MVAU_COMPUTE_SELECTION.paths.selected_kernel,
+            "mvau-elaboration-compute-kernel-missing",
+            "the selected compute Kernel must resolve before elaboration",
         )
-    binding_ids = [compute.value.binding_id]
+    ]
+    provider_ids = [SOFT_VECTOR_PROVIDER_ID]
     if isinstance(resolved.result, NetworkRef):
-        delivery = resolved.engine.query_property(
-            resolved.point, CyclicParameterKernelPaths.BINDING_SELECTION
-        )
-        if not isinstance(delivery, Decided) or not isinstance(
-            delivery.value, CyclicParameterBindingSelection
-        ):
-            findings = () if isinstance(delivery, Decided) else delivery.findings
-            raise MVAUElaborationError(
-                findings
-                or (
-                    _finding(
-                        "mvau-elaboration-delivery-selection-missing",
-                        "cyclic binding-selection metadata must resolve before elaboration",
-                    ),
-                )
+        kernel_ids.append(
+            _selected_kernel_id(
+                resolved,
+                MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
+                "mvau-elaboration-supply-kernel-missing",
+                "the selected supplier Kernel must resolve before elaboration",
             )
-        binding_ids.append(delivery.value.binding_id)
+        )
+        provider_ids.append(MEMSTREAM_PROVIDER_ID)
     return MVAUElaborationOrigin(
         MVAU_DECLARATION_FAMILY_VERSION,
         mvau_problem_fingerprint(resolved.point.problem),
         tuple(sorted(resolved.point.assignments.items(), key=lambda item: item[0])),
-        tuple(binding_ids),
+        tuple(kernel_ids),
+        tuple(provider_ids),
     )
 
 
@@ -421,12 +429,12 @@ def _compute_physical_objects(
     prefix = f"{source_id}.compute"
     wrapper_id = f"{prefix}.wrapper"
     shell_id = f"{prefix}.stream_shell"
-    pe = cast(int, _required_assignment(resolved, MVAUComputeKernelPaths.PE))
-    simd = cast(int, _required_assignment(resolved, MVAUComputeKernelPaths.SIMD))
-    pumped = cast(bool, _required_assignment(resolved, MVAUComputeKernelPaths.COMPUTE_PUMPING))
-    matrix_width = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_WIDTH])
-    matrix_height = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_HEIGHT])
-    target = cast(MVAUDspBlock, resolved.point.problem[MVAUComputeKernelPaths.TARGET_DSP_BLOCK])
+    pe = cast(int, _required_assignment(resolved, SOFT_VECTOR_PATHS.pe))
+    simd = cast(int, _required_assignment(resolved, SOFT_VECTOR_PATHS.simd))
+    pumped = cast(bool, _required_assignment(resolved, SOFT_VECTOR_PATHS.compute_pumping))
+    matrix_width = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_WIDTH])
+    matrix_height = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_HEIGHT])
+    target = cast(MVAUDspBlock, resolved.point.problem[MVAUComputeProblemPaths.TARGET_DSP_BLOCK])
     version = {
         MVAUDspBlock.DSP48E1: 1,
         MVAUDspBlock.DSP48E2: 2,
@@ -434,15 +442,15 @@ def _compute_physical_objects(
     }[target]
     activation_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.ACTIVATION_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE],
     )
     weight_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE],
     )
     accumulator_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
     clock_period = cast(float, resolved.point.problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS])
     reference_clock = clock_period / 2 if pumped else clock_period
@@ -467,7 +475,7 @@ def _compute_physical_objects(
         ("MW", matrix_width),
         (
             "NARROW_WEIGHTS",
-            cast(bool, resolved.point.problem[MVAUComputeKernelPaths.WEIGHTS_NARROW]),
+            cast(bool, resolved.point.problem[MVAUComputeProblemPaths.WEIGHTS_NARROW]),
         ),
         ("PE", pe),
         ("PUMPED_COMPUTE", pumped),
@@ -593,11 +601,10 @@ def _compute_physical_objects(
         *resolved.result.source_association.fused_source_node_ids,
     )
     decision_paths = (
-        MVAUComputeKernelPaths.PE,
-        MVAUComputeKernelPaths.SIMD,
-        MVAUComputeKernelPaths.REGION_DECLARATION,
-        MVAUComputeKernelPaths.BINDING,
-        MVAUComputeKernelPaths.COMPUTE_PUMPING,
+        MVAU_COMPUTE_SELECTION.paths.kernel,
+        SOFT_VECTOR_PATHS.pe,
+        SOFT_VECTOR_PATHS.simd,
+        SOFT_VECTOR_PATHS.compute_pumping,
     )
     port_refs = tuple(MVAUSemanticPortRef(region_id, port.id) for port in region_ports)
     component_associations = tuple(
@@ -607,7 +614,8 @@ def _compute_physical_objects(
             (region_id,),
             port_refs,
             decision_paths=decision_paths,
-            binding_ids=(MVAUComputeBinding.RTL_SOFTVEC.value,),
+            kernel_ids=(MVAUComputeKernelId.SOFT_VECTOR.value,),
+            provider_ids=(SOFT_VECTOR_PROVIDER_ID,),
         )
         for component in components
     )
@@ -618,7 +626,8 @@ def _compute_physical_objects(
             (region_id,),
             interface.semantic_ports,
             decision_paths=decision_paths,
-            binding_ids=(MVAUComputeBinding.RTL_SOFTVEC.value,),
+            kernel_ids=(MVAUComputeKernelId.SOFT_VECTOR.value,),
+            provider_ids=(SOFT_VECTOR_PROVIDER_ID,),
         )
         for interface in interfaces
     )
@@ -634,7 +643,8 @@ def _compute_physical_objects(
             (region_id,),
             connection_ports[connection.id],
             decision_paths=decision_paths,
-            binding_ids=(MVAUComputeBinding.RTL_SOFTVEC.value,),
+            kernel_ids=(MVAUComputeKernelId.SOFT_VECTOR.value,),
+            provider_ids=(SOFT_VECTOR_PROVIDER_ID,),
         )
         for connection in connections
     )
@@ -664,34 +674,26 @@ def _network_edge(network: DataflowNetwork, source: RegionEndpoint, sink: Region
 def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboration:
     """Elaborate the first selected RTL soft-vector MVAU slice without choices."""
     _require_constraints(resolved, "mvau_op_structural")
-    _require_constraints(resolved, "binding_feasibility")
-    binding = _required_assignment(resolved, MVAUComputeKernelPaths.BINDING)
-    declaration = _required_assignment(resolved, MVAUComputeKernelPaths.REGION_DECLARATION)
+    _require_constraints(resolved, MVAU_COMPUTE_SELECTION.feasibility_constraint_set)
+    kernel_id = _selected_kernel_id(
+        resolved,
+        MVAU_COMPUTE_SELECTION.paths.selected_kernel,
+        "mvau-elaboration-compute-kernel-missing",
+        "the selected compute Kernel must resolve before elaboration",
+    )
+    region_form = resolved.engine.query_property(
+        resolved.point, MVAUDataflowOpPaths.COMPUTE_REGION_FORM
+    )
     if (
-        binding is not MVAUComputeBinding.RTL_SOFTVEC
-        or declaration is not MVAURegionDeclaration.STANDARD_STREAMED
+        kernel_id != MVAUComputeKernelId.SOFT_VECTOR.value
+        or not isinstance(region_form, Decided)
+        or region_form.value is not MVAURegionDeclaration.STANDARD_STREAMED
     ):
         raise MVAUElaborationError(
             (
                 _finding(
                     "mvau-elaboration-slice-unsupported",
-                    "the first elaborator supports only standard.streamed RTL soft-vector MVAU",
-                ),
-            )
-        )
-    binding_answer = resolved.engine.query_property(
-        resolved.point, MVAUComputeKernelPaths.BINDING_SELECTION
-    )
-    if not isinstance(binding_answer, Decided) or not isinstance(
-        binding_answer.value, MVAUBindingSelection
-    ):
-        findings = () if isinstance(binding_answer, Decided) else binding_answer.findings
-        raise MVAUElaborationError(
-            findings
-            or (
-                _finding(
-                    "mvau-elaboration-binding-selection-missing",
-                    "compute binding-selection metadata must resolve before elaboration",
+                    "this provider implements only the standard.streamed soft-vector Kernel",
                 ),
             )
         )
@@ -715,24 +717,29 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
         compute_region = result.region
         network = None
     else:
-        topology = _required_assignment(resolved, MVAUDataflowOpPaths.CONNECTION_TOPOLOGY)
-        if topology is not MVAUConnectionTopology.DIRECT:
+        adapter = resolved.point.assignments.get(MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel)
+        if adapter not in (None, NO_KERNEL):
             raise MVAUElaborationError(
                 (
                     _finding(
                         "mvau-elaboration-network-topology-unsupported",
-                        "the first network elaboration slice requires a direct semantic edge",
+                        "this provider requires a direct supplier-to-compute semantic edge",
                     ),
                 )
             )
-        _require_constraints(resolved, "cyclic_binding_feasibility")
-        cyclic_binding = _required_assignment(resolved, CyclicParameterKernelPaths.BINDING)
-        if cyclic_binding is not CyclicParameterBinding.FINN_RTL_MEMSTREAM:
+        _require_constraints(resolved, MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set)
+        supply_kernel_id = _selected_kernel_id(
+            resolved,
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
+            "mvau-elaboration-supply-kernel-missing",
+            "the selected supplier Kernel must resolve before elaboration",
+        )
+        if supply_kernel_id != MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value:
             raise MVAUElaborationError(
                 (
                     _finding(
-                        "mvau-elaboration-delivery-binding-unsupported",
-                        "the first network elaborator supports FINN RTL memstream delivery",
+                        "mvau-elaboration-supply-kernel-unsupported",
+                        "this provider implements only the FINN RTL memstream Kernel",
                     ),
                 )
             )
@@ -766,15 +773,15 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
         delivery_region = network.node("delivery").region
         delivery_port = delivery_region.output_interface("weight").port
         delivery_id = f"{source_id}.delivery.wrapper"
-        ram_style = _required_assignment(resolved, CyclicParameterKernelPaths.RAM_STYLE)
+        ram_style = _required_assignment(resolved, FINN_RTL_MEMSTREAM_PATHS.ram_style)
         pumped_memory = cast(
-            bool, _required_assignment(resolved, CyclicParameterKernelPaths.PUMPED_MEMORY)
+            bool, _required_assignment(resolved, FINN_RTL_MEMSTREAM_PATHS.pumped_memory)
         )
         runtime_writable = cast(
-            bool, resolved.point.problem[CyclicParameterKernelPaths.RUNTIME_WRITABLE]
+            bool, resolved.point.problem[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE]
         )
         initializer_available = cast(
-            bool, resolved.point.problem[CyclicParameterKernelPaths.INITIALIZER_AVAILABLE]
+            bool, resolved.point.problem[MVAUWeightSupplyProblemPaths.INITIALIZER_AVAILABLE]
         )
         delivery_component = MVAUPhysicalComponent(
             delivery_id,
@@ -843,13 +850,11 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
             (semantic_edge_id,),
         )
         delivery_decisions = (
-            MVAUDataflowOpPaths.DELIVERY_PE,
-            MVAUDataflowOpPaths.DELIVERY_SIMD,
-            MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-            MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
-            CyclicParameterKernelPaths.BINDING,
-            CyclicParameterKernelPaths.RAM_STYLE,
-            CyclicParameterKernelPaths.PUMPED_MEMORY,
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel,
+            MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel,
+            FINN_RTL_MEMSTREAM_PATHS.organization,
+            FINN_RTL_MEMSTREAM_PATHS.ram_style,
+            FINN_RTL_MEMSTREAM_PATHS.pumped_memory,
         )
         delivery_associations = (
             MVAUPhysicalAssociation(
@@ -858,7 +863,8 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                 ("delivery",),
                 (MVAUSemanticPortRef("delivery", "weight"),),
                 decision_paths=delivery_decisions,
-                binding_ids=(CyclicParameterBinding.FINN_RTL_MEMSTREAM.value,),
+                kernel_ids=(MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,),
+                provider_ids=(MEMSTREAM_PROVIDER_ID,),
             ),
             MVAUPhysicalAssociation(
                 delivery_interface.id,
@@ -866,7 +872,8 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                 ("delivery",),
                 delivery_interface.semantic_ports,
                 decision_paths=delivery_decisions,
-                binding_ids=(CyclicParameterBinding.FINN_RTL_MEMSTREAM.value,),
+                kernel_ids=(MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,),
+                provider_ids=(MEMSTREAM_PROVIDER_ID,),
             ),
             MVAUPhysicalAssociation(
                 delivery_connection.id,
@@ -879,9 +886,10 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                 (semantic_edge_id,),
                 delivery_decisions,
                 (
-                    CyclicParameterBinding.FINN_RTL_MEMSTREAM.value,
-                    MVAUComputeBinding.RTL_SOFTVEC.value,
+                    MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,
+                    MVAUComputeKernelId.SOFT_VECTOR.value,
                 ),
+                (MEMSTREAM_PROVIDER_ID, SOFT_VECTOR_PROVIDER_ID),
             ),
         )
         components += (delivery_component,)

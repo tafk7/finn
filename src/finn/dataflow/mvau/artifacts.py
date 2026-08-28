@@ -25,7 +25,7 @@ from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
+from finn.dataflow.mvau.compute_kernels import MVAUComputeProblemPaths
 from finn.dataflow.mvau.elaboration import (
     MVAUPhysicalElaboration,
     MVAUPhysicalNumericInterface,
@@ -36,8 +36,11 @@ from finn.dataflow.mvau.source import (
     MVAUResolvedDesign,
     tensor_value_fingerprint,
 )
-from finn.dataflow.ops.mvau import NetworkRef, RegionRef
-from finn.dataflow.parameters.cyclic.definition import CyclicParameterKernelPaths
+from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, NetworkRef, RegionRef
+from finn.dataflow.parameters.supply_kernels import (
+    FINN_RTL_MEMSTREAM_PATHS,
+    MVAUWeightSupplyProblemPaths,
+)
 from finn.dataflow.region import BeatSequence, NumericElementType
 
 _ARTIFACT_PATH = QualifiedPath("artifact.mvau.rtl_softvec")
@@ -473,7 +476,7 @@ def build_mvau_rtl_artifact_requirements(
     cyclic = isinstance(resolved.result, NetworkRef)
     initializer = model.get_initializer(description.weight_operand_id)
     expected_initializer_fingerprint = resolved.point.problem.get(
-        MVAUComputeKernelPaths.WEIGHT_INITIALIZER_FINGERPRINT
+        MVAUDataflowOpPaths.WEIGHT_INITIALIZER_FINGERPRINT
     )
     actual_initializer_fingerprint = (
         None if initializer is None else tensor_value_fingerprint(initializer)
@@ -488,7 +491,7 @@ def build_mvau_rtl_artifact_requirements(
             )
         )
     runtime_writable = cast(
-        bool, resolved.point.problem.get(CyclicParameterKernelPaths.RUNTIME_WRITABLE, False)
+        bool, resolved.point.problem.get(MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE, False)
     )
     if initializer is None and cyclic and not runtime_writable:
         raise MVAUArtifactError(
@@ -496,13 +499,13 @@ def build_mvau_rtl_artifact_requirements(
                 Finding(
                     FindingKind.LIMITATION,
                     "mvau-artifact-weight-values-missing",
-                    MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE,
+                    MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
                     "cyclic local-state delivery requires initialized or runtime-writable weights",
                 ),
             )
         )
-    matrix_width = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_WIDTH])
-    matrix_height = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_HEIGHT])
+    matrix_width = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_WIDTH])
+    matrix_height = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_HEIGHT])
     expected_weight_shape = (matrix_width, matrix_height)
     weight_array = None if initializer is None else np.asarray(initializer, dtype=np.float32)
     weight_payload_kind = (
@@ -518,19 +521,19 @@ def build_mvau_rtl_artifact_requirements(
         )
     activation_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.ACTIVATION_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE],
     )
     weight_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE],
     )
     accumulator_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
     output_type = cast(
         NumericElementType,
-        resolved.point.problem[MVAUComputeKernelPaths.OUTPUT_ELEMENT_TYPE],
+        resolved.point.problem[MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE],
     )
     wrapper_id = f"{source.source_node_id}.compute.wrapper"
     wrapper = elaboration.component(wrapper_id)
@@ -586,8 +589,8 @@ def build_mvau_rtl_artifact_requirements(
         raise MVAUArtifactError(
             (_finding("mvau-artifact-root-missing", "the declared FINN source root is absent"),)
         )
-    ram_style = resolved.point.assignments.get(CyclicParameterKernelPaths.RAM_STYLE)
-    pumped_memory = resolved.point.assignments.get(CyclicParameterKernelPaths.PUMPED_MEMORY)
+    ram_style = resolved.point.assignments.get(FINN_RTL_MEMSTREAM_PATHS.ram_style)
+    pumped_memory = resolved.point.assignments.get(FINN_RTL_MEMSTREAM_PATHS.pumped_memory)
     parameters += (
         ("RAM_STYLE", "auto" if ram_style is None else cast(Enum, ram_style).value),
         ("RUNTIME_WRITABLE", runtime_writable),
@@ -816,7 +819,8 @@ def mvau_built_artifact_identity(artifact: MVAUBuiltRTLArtifact) -> str:
     origin = requirements.elaboration.origin
     payload = {
         "assignments": [[path.value, _identity_value(value)] for path, value in origin.assignments],
-        "binding_ids": list(origin.binding_ids),
+        "kernel_ids": list(origin.kernel_ids),
+        "provider_ids": list(origin.provider_ids),
         "clock_period_ns": requirements.clock_period_ns,
         "declaration_family_version": origin.declaration_family_version,
         "generated": [

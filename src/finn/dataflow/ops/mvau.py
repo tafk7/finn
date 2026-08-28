@@ -1,13 +1,20 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Flat MVAU ``DataflowOp`` assembly over compute and cyclic-delivery Kernels."""
+"""MVAU ``DataflowOp`` assembly over compute, supply, and adapter Kernel pools.
+
+The operation class owns the source semantics, the problem facts, and three
+static Kernel pools.  A design point selects one compute Kernel, optionally one
+supplier Kernel, and optionally one adapter Kernel; the selected Kernels derive
+their own Regions and demands, and assembly composes them.  Nothing here
+re-decides a Region form, an implementation binding, or a delivery tile.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import gcd, prod
+from math import prod
 from typing import cast
 
 from finn.dataflow.design import (
@@ -21,8 +28,6 @@ from finn.dataflow.design import (
     Constraint,
     ConstraintSet,
     Decided,
-    Decision,
-    DecisionDomain,
     DependencyRef,
     DependencyView,
     DerivedProperty,
@@ -38,24 +43,24 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
-from finn.dataflow.kernel import (
-    KernelDefinition,
-    assemble_kernel_specs,
-    gate_design_space_spec,
+from finn.dataflow.kernels import (
+    KERNEL_ID_SEMANTICS,
+    NO_KERNEL,
+    SELECTED_KERNEL_SEMANTICS,
+    KernelSelection,
+    SelectedKernel,
 )
 from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.definition import MVAU_COMPUTE_KERNEL, MVAUComputeKernelPaths
-from finn.dataflow.mvau.regions import (
-    MVAURegionDeclaration,
-    construct_batch_interleaved_mvau_weight_port,
-    construct_standard_mvau_weight_port,
+from finn.dataflow.mvau.compute_kernels import (
+    FULL_TILE_WEIGHT_EXPORT,
+    MVAU_COMPUTE_SELECTION,
+    REGION_FORM_EXPORT,
+    WEIGHT_INTERFACE,
+    MVAUComputeProblemPaths,
+    MVAUDspBlock,
 )
-from finn.dataflow.mvau.weight_adapter import (
-    MVAU_WEIGHT_ADAPTER_KERNEL,
-    MVAUWeightAdapterKernelPaths,
-    build_mvau_weight_adapter_kernel_spec,
-    weight_sequence_adapter_applicable,
-)
+from finn.dataflow.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.mvau.weight_adapter_kernel import build_mvau_weight_adapter_selection
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -66,10 +71,12 @@ from finn.dataflow.network import (
     SinkContract,
 )
 from finn.dataflow.network_validation import NetworkValidationReport, validate_network
-from finn.dataflow.parameters.cyclic.definition import (
-    CYCLIC_PARAMETER_KERNEL,
-    CyclicParameterKernelPaths,
-    build_cyclic_parameter_kernel_spec,
+from finn.dataflow.parameters.cyclic.definition import CyclicTargetMemoryCapabilities
+from finn.dataflow.parameters.supply_kernels import (
+    FINN_RTL_MEMSTREAM_PATHS,
+    OUTPUT_PORT_EXPORT,
+    MVAUWeightSupplyProblemPaths,
+    build_mvau_weight_supply_selection,
 )
 from finn.dataflow.region import BeatSequence, DataflowRegion, NumericElementType, Port
 from finn.dataflow.resolution import (
@@ -77,28 +84,18 @@ from finn.dataflow.resolution import (
     NetworkRef as GenericNetworkRef,
     RegionRef as GenericRegionRef,
 )
+from finn.dataflow.spec_algebra import assemble_specs
 
 
 class MVAUParameterTopology(str, Enum):
-    """Initial op-level parameter-delivery topology alternatives."""
+    """The derived shape of one resolved parameter supply arrangement.
+
+    This is a reading of the selected Kernels, not a choice made beside them.
+    """
 
     EMBEDDED = "embedded"
     DIRECT = "direct"
     CYCLIC = "cyclic"
-
-
-class MVAUWeightDeliveryDeclaration(str, Enum):
-    """Independently selected cyclic-delivery weight boundaries."""
-
-    STANDARD_FULL_TILE = "standard.full_tile"
-    BATCH_INTERLEAVED_CHUNKED = "batch_interleaved.chunked"
-
-
-class MVAUConnectionTopology(str, Enum):
-    """Semantic connection alternatives between delivery and compute."""
-
-    DIRECT = "direct"
-    ADAPTER = "adapter"
 
 
 class CoordinateMappingKind(str, Enum):
@@ -186,6 +183,9 @@ class MVAUSourceAssociation:
     region_declaration_id: str
     parameter_topology: MVAUParameterTopology
     operands: tuple[SourceOperandAssociation, ...]
+    compute_kernel_id: str = ""
+    supply_kernel_id: str | None = None
+    adapter_kernel_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -209,73 +209,96 @@ class MVAUDataflowOpPaths:
     """Stable paths owned by the MVAU source-operation assembly."""
 
     SOURCE_DESCRIPTION = QualifiedPath("problem.mvau.source_description")
+    ACCUMULATOR_TYPE_ANALYSIS_OWNER = QualifiedPath("problem.mvau.accumulator_type_analysis_owner")
+    WEIGHT_INITIALIZER_FINGERPRINT = QualifiedPath("problem.mvau.weight_initializer_fingerprint")
+    THRESHOLD_INITIALIZER_FINGERPRINT = QualifiedPath(
+        "problem.mvau.threshold_initializer_fingerprint"
+    )
     EXTERNAL_WEIGHT_SEQUENCE = QualifiedPath("problem.mvau.external_weight_sequence")
     TARGET_FPGA_PART = QualifiedPath("problem.target.fpga_part")
     TARGET_CLOCK_PERIOD_NS = QualifiedPath("problem.target.clock_period_ns")
-    PARAMETER_TOPOLOGY = QualifiedPath("mvau.op.parameter_topology")
-    DELIVERY_PE = QualifiedPath("mvau.op.delivery.pe")
-    DELIVERY_SIMD = QualifiedPath("mvau.op.delivery.simd")
-    DELIVERY_DECLARATION = QualifiedPath("mvau.op.delivery.weight_sequence")
-    DELIVERY_INTERLEAVE = QualifiedPath("mvau.op.delivery.interleave")
-    CONNECTION_TOPOLOGY = QualifiedPath("mvau.op.weight_connection")
 
-    COMPUTE_WEIGHT_PORT = QualifiedPath("semantic.mvau.op.compute_weight_port")
-    DELIVERY_WEIGHT_PORT = QualifiedPath("semantic.mvau.op.delivery_weight_port")
-    WEIGHT_ADAPTER_REGION = MVAUWeightAdapterKernelPaths.REGION
+    COMPUTE_KERNEL = MVAU_COMPUTE_SELECTION.paths.kernel
+    COMPUTE_REGION = MVAU_COMPUTE_SELECTION.paths.region
+    COMPUTE_SELECTED_KERNEL = MVAU_COMPUTE_SELECTION.paths.selected_kernel
+    COMPUTE_WEIGHT_PORT = MVAU_COMPUTE_SELECTION.paths.demand(WEIGHT_INTERFACE)
+    COMPUTE_REGION_FORM = MVAU_COMPUTE_SELECTION.paths.export(REGION_FORM_EXPORT)
+    COMPUTE_FULL_TILE_WEIGHT_PORT = MVAU_COMPUTE_SELECTION.paths.export(FULL_TILE_WEIGHT_EXPORT)
+
+    PARAMETER_TOPOLOGY = QualifiedPath("semantic.mvau.op.parameter_topology")
     SOURCE_ASSOCIATION = QualifiedPath("semantic.mvau.op.source_association")
     NETWORK = QualifiedPath("semantic.mvau.op.network")
     NETWORK_VALIDATION = QualifiedPath("semantic.mvau.op.network_validation")
     RESULT = QualifiedPath("semantic.mvau.op.result")
 
-    TOPOLOGY_MATCHES_REGION = QualifiedPath("constraint.mvau.op.topology_matches_region")
-    CYCLIC_INTERLEAVED_PUMPING_SUPPORTED = QualifiedPath(
-        "constraint.mvau.op.cyclic_interleaved_pumping_supported"
-    )
-    DIRECT_INTERLEAVED_SOURCE_AVAILABLE = QualifiedPath(
-        "constraint.mvau.op.direct_interleaved_source_available"
-    )
     WEIGHT_CONNECTION_SUPPORTED = QualifiedPath("constraint.mvau.op.weight_connection_supported")
+    EXPOSED_WEIGHT_SOURCE_AVAILABLE = QualifiedPath(
+        "constraint.mvau.op.exposed_weight_source_available"
+    )
+    INTERLEAVED_PUMPING_SUPPORTED = QualifiedPath(
+        "constraint.mvau.op.interleaved_pumping_supported"
+    )
     SOURCE_ASSOCIATION_VALID = QualifiedPath("constraint.mvau.op.source_association_valid")
     NETWORK_STRUCTURALLY_WELL_FORMED = QualifiedPath(
         "constraint.mvau.op.network_structurally_well_formed"
     )
 
 
-_INTEGER_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integer"))
-_FLOAT_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(float, name="float"))
-_STRING_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(str, name="string"))
-_BOOL_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
-_ELEMENT_TYPE_SEMANTICS = as_object_semantics(
+_INTEGER = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integer"))
+_FLOAT = as_object_semantics(ValueSemantics.immutable_nominal(float, name="float"))
+_STRING = as_object_semantics(ValueSemantics.immutable_nominal(str, name="string"))
+_BOOL = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
+_ELEMENT_TYPE = as_object_semantics(
     ValueSemantics.immutable_nominal(NumericElementType, name="NumericElementType")
 )
-_COMPUTATION_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(MVAUComputationProfile, name="MVAUComputationProfile")
-)
-_SOURCE_DESCRIPTION_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(MVAUSourceDescription, name="MVAUSourceDescription")
-)
-_SOURCE_ASSOCIATION_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(MVAUSourceAssociation, name="MVAUSourceAssociation")
-)
-_PORT_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
-_BEAT_SEQUENCE_SEMANTICS = as_object_semantics(
+_PORT = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
+_BEAT_SEQUENCE = as_object_semantics(
     ValueSemantics.immutable_nominal(BeatSequence, name="BeatSequence")
 )
-_REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
-_NETWORK_SEMANTICS = as_object_semantics(DATAFLOW_NETWORK_SEMANTICS)
-_NETWORK_REPORT_SEMANTICS = as_object_semantics(NETWORK_VALIDATION_REPORT_SEMANTICS)
-_RESULT_SEMANTICS = DATAFLOW_OP_RESULT_SEMANTICS
-_TOPOLOGY_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(MVAUParameterTopology, name="MVAUParameterTopology")
-)
-_DELIVERY_DECLARATION_SEMANTICS = as_object_semantics(
+_REGION = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
+_NETWORK = as_object_semantics(DATAFLOW_NETWORK_SEMANTICS)
+_NETWORK_REPORT = as_object_semantics(NETWORK_VALIDATION_REPORT_SEMANTICS)
+_TARGET_MEMORY = as_object_semantics(
     ValueSemantics.immutable_nominal(
-        MVAUWeightDeliveryDeclaration, name="MVAUWeightDeliveryDeclaration"
+        CyclicTargetMemoryCapabilities, name="CyclicTargetMemoryCapabilities"
     )
 )
-_CONNECTION_TOPOLOGY_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(MVAUConnectionTopology, name="MVAUConnectionTopology")
+_SOURCE_DESCRIPTION = as_object_semantics(
+    ValueSemantics.immutable_nominal(MVAUSourceDescription, name="MVAUSourceDescription")
 )
+_SOURCE_ASSOCIATION = as_object_semantics(
+    ValueSemantics.immutable_nominal(MVAUSourceAssociation, name="MVAUSourceAssociation")
+)
+_TOPOLOGY = as_object_semantics(
+    ValueSemantics.immutable_nominal(MVAUParameterTopology, name="MVAUParameterTopology")
+)
+
+
+def _enum_semantics(enum_type: type[Enum]) -> ValueSemantics[object]:
+    semantics: ValueSemantics[Enum] = ValueSemantics(
+        enum_type,
+        enum_type.__name__,
+        lambda value: type(value) is enum_type,
+        lambda left, right: left is right,
+        lambda value: value,
+    )
+    return as_object_semantics(semantics)
+
+
+_COMPUTATION = _enum_semantics(MVAUComputationProfile)
+_DSP_BLOCK = _enum_semantics(MVAUDspBlock)
+
+
+def _positive_integer(value: object) -> bool:
+    return type(value) is int and value > 0
+
+
+def _positive_float(value: object) -> bool:
+    return type(value) is float and value > 0
+
+
+def _complete_numeric_element_type(value: object) -> bool:
+    return type(value) is NumericElementType and bool(value.type_id) and value.bit_width > 0
 
 
 def _source_description_valid(value: object) -> bool:
@@ -307,281 +330,183 @@ def _source_description_valid(value: object) -> bool:
     )
 
 
-def _positive_float(value: object) -> bool:
-    return type(value) is float and value > 0
+# -- selection wiring --------------------------------------------------------
 
-
-def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
-    allowed = frozenset(values)
-
-    def accepts(value: object, _dependencies: DependencyView) -> Answer[bool]:
-        return Decided(value in allowed)
-
-    def candidates(_dependencies: DependencyView) -> Answer[tuple[object, ...]]:
-        return Decided(values)
-
-    return DecisionDomain((), accepts, EvaluatorSpec((), candidates))
-
-
-def _divisor_domain(dimension: QualifiedPath) -> DecisionDomain:
-    dependency = DependencyRef.problem("dimension", dimension, _INTEGER_SEMANTICS)
-
-    def accepts(value: object, dependencies: DependencyView) -> Answer[bool]:
-        extent = cast(int, dependencies["dimension"])
-        return Decided(type(value) is int and value > 0 and extent % value == 0)
-
-    def candidates(dependencies: DependencyView) -> Answer[tuple[object, ...]]:
-        extent = cast(int, dependencies["dimension"])
-        return Decided(tuple(value for value in range(1, extent + 1) if extent % value == 0))
-
-    return DecisionDomain((dependency,), accepts, EvaluatorSpec((dependency,), candidates))
-
-
-_TOPOLOGY_REF = DependencyRef.decision(
-    "op_topology", MVAUDataflowOpPaths.PARAMETER_TOPOLOGY, _TOPOLOGY_SEMANTICS
-)
-_DELIVERY_PE_REF = DependencyRef.decision(
-    "delivery_pe", MVAUDataflowOpPaths.DELIVERY_PE, _INTEGER_SEMANTICS
-)
-_DELIVERY_SIMD_REF = DependencyRef.decision(
-    "delivery_simd", MVAUDataflowOpPaths.DELIVERY_SIMD, _INTEGER_SEMANTICS
-)
-_DELIVERY_DECLARATION_REF = DependencyRef.decision(
-    "delivery_declaration",
-    MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-    _DELIVERY_DECLARATION_SEMANTICS,
-)
-_DELIVERY_INTERLEAVE_REF = DependencyRef.decision(
-    "delivery_interleave",
-    MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
-    _INTEGER_SEMANTICS,
-    absence=AbsenceMode.ALLOWS_ABSENT,
-)
-_CONNECTION_TOPOLOGY_REF = DependencyRef.decision(
-    "connection_topology",
-    MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
-    _CONNECTION_TOPOLOGY_SEMANTICS,
-)
-_REGION_DECLARATION_REF = DependencyRef.decision(
-    "region_declaration",
-    MVAUComputeKernelPaths.REGION_DECLARATION,
-    MVAU_COMPUTE_KERNEL.spec.decisions[2].value_semantics,
-)
-_COMPUTE_PE_REF = DependencyRef.decision(
-    "compute_pe", MVAUComputeKernelPaths.PE, _INTEGER_SEMANTICS
-)
-_COMPUTE_SIMD_REF = DependencyRef.decision(
-    "compute_simd", MVAUComputeKernelPaths.SIMD, _INTEGER_SEMANTICS
-)
-_COMPUTE_INTERLEAVE_REF = DependencyRef.decision(
-    "compute_interleave",
-    MVAUComputeKernelPaths.INTERLEAVE,
-    _INTEGER_SEMANTICS,
-    absence=AbsenceMode.ALLOWS_ABSENT,
-)
-_COMPUTE_REGION_DECLARATION_FOR_SCOPE_REF = DependencyRef.decision(
-    "compute_region_declaration",
-    MVAUComputeKernelPaths.REGION_DECLARATION,
-    MVAU_COMPUTE_KERNEL.spec.decisions[2].value_semantics,
-)
 _COMPUTE_REGION_REF = DependencyRef.property(
-    "compute_region", MVAUComputeKernelPaths.REGION, _REGION_SEMANTICS
+    "compute_region", MVAUDataflowOpPaths.COMPUTE_REGION, _REGION
 )
 _COMPUTE_WEIGHT_PORT_REF = DependencyRef.property(
-    "compute_weight_port", MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT, _PORT_SEMANTICS
-)
-_DELIVERY_WEIGHT_PORT_REF = DependencyRef.property(
-    "delivery_weight_port", MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT, _PORT_SEMANTICS
-)
-_COMPUTATION_REF = DependencyRef.problem(
-    "computation_profile",
-    MVAUComputeKernelPaths.COMPUTATION_PROFILE,
-    _COMPUTATION_SEMANTICS,
-)
-_DELIVERY_REGION_REF = DependencyRef.property(
-    "delivery_region",
-    CyclicParameterKernelPaths.REGION,
-    _REGION_SEMANTICS,
+    "compute_weight_port",
+    MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT,
+    _PORT,
     absence=AbsenceMode.ALLOWS_ABSENT,
 )
-_NETWORK_REF = DependencyRef.property(
-    "network",
-    MVAUDataflowOpPaths.NETWORK,
-    _NETWORK_SEMANTICS,
+_COMPUTE_REGION_FORM_REF = DependencyRef.property(
+    "region_form", MVAUDataflowOpPaths.COMPUTE_REGION_FORM, _enum_semantics(MVAURegionDeclaration)
+)
+_COMPUTE_SELECTED_REF = DependencyRef.property(
+    "compute_kernel", MVAUDataflowOpPaths.COMPUTE_SELECTED_KERNEL, SELECTED_KERNEL_SEMANTICS
+)
+
+
+def _weight_is_streamed(dependencies: DependencyView) -> Answer[bool]:
+    return Decided(dependencies["region_form"] is not MVAURegionDeclaration.STANDARD_EMBEDDED)
+
+
+#: The supply pool is applicable exactly when the selected compute Kernel has
+#: published a weight demand.  Initializer presence never activates it.
+_SUPPLY_APPLIES = EvaluatorSpec((_COMPUTE_REGION_FORM_REF,), _weight_is_streamed)
+
+MVAU_WEIGHT_SUPPLY_SELECTION = build_mvau_weight_supply_selection(
+    DependencyRef.property("demand", MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT, _PORT),
+    DependencyRef.property("full_tile", MVAUDataflowOpPaths.COMPUTE_FULL_TILE_WEIGHT_PORT, _PORT),
+    applies_if=_SUPPLY_APPLIES,
+)
+
+_SUPPLY_PATHS = MVAU_WEIGHT_SUPPLY_SELECTION.paths
+_SUPPLY_KERNEL_REF = DependencyRef.decision(
+    "supply_kernel",
+    _SUPPLY_PATHS.kernel,
+    KERNEL_ID_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+_SUPPLY_REGION_REF = DependencyRef.property(
+    "supply_region", _SUPPLY_PATHS.region, _REGION, absence=AbsenceMode.ALLOWS_ABSENT
+)
+_SUPPLY_OUTPUT_PORT_REF = DependencyRef.property(
+    "supply_output_port",
+    _SUPPLY_PATHS.export(OUTPUT_PORT_EXPORT),
+    _PORT,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+_SUPPLY_SELECTED_REF = DependencyRef.property(
+    "supply_selected",
+    _SUPPLY_PATHS.selected_kernel,
+    SELECTED_KERNEL_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+
+
+def _supplier_selected(dependencies: DependencyView) -> Answer[bool]:
+    value = dependencies["supply_kernel"]
+    return Decided(value is not ABSENT and value != NO_KERNEL)
+
+
+#: The adapter pool is applicable exactly when a supplier is producing a
+#: sequence that has to reach the compute demand.
+_ADAPTER_APPLIES = EvaluatorSpec((_SUPPLY_KERNEL_REF,), _supplier_selected)
+
+MVAU_WEIGHT_ADAPTER_SELECTION = build_mvau_weight_adapter_selection(
+    DependencyRef.property("source_port", _SUPPLY_PATHS.export(OUTPUT_PORT_EXPORT), _PORT),
+    DependencyRef.property("sink_port", MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT, _PORT),
+    applies_if=_ADAPTER_APPLIES,
+)
+
+_ADAPTER_PATHS = MVAU_WEIGHT_ADAPTER_SELECTION.paths
+_ADAPTER_KERNEL_REF = DependencyRef.decision(
+    "adapter_kernel",
+    _ADAPTER_PATHS.kernel,
+    KERNEL_ID_SEMANTICS,
     absence=AbsenceMode.ALLOWS_ABSENT,
 )
 _ADAPTER_REGION_REF = DependencyRef.property(
-    "adapter_region",
-    MVAUDataflowOpPaths.WEIGHT_ADAPTER_REGION,
-    _REGION_SEMANTICS,
+    "adapter_region", _ADAPTER_PATHS.region, _REGION, absence=AbsenceMode.ALLOWS_ABSENT
+)
+_ADAPTER_SELECTED_REF = DependencyRef.property(
+    "adapter_selected",
+    _ADAPTER_PATHS.selected_kernel,
+    SELECTED_KERNEL_SEMANTICS,
     absence=AbsenceMode.ALLOWS_ABSENT,
 )
 
-
-def _topology_applies(topology: MVAUParameterTopology) -> EvaluatorSpec[Answer[bool]]:
-    def evaluate(dependencies: DependencyView) -> Answer[bool]:
-        return Decided(dependencies["op_topology"] is topology)
-
-    return EvaluatorSpec((_TOPOLOGY_REF,), evaluate)
-
-
-def _cyclic_streamed_region_applies(dependencies: DependencyView) -> Answer[bool]:
-    return Decided(
-        dependencies["op_topology"] is MVAUParameterTopology.CYCLIC
-        and dependencies["compute_region_declaration"]
-        is not MVAURegionDeclaration.STANDARD_EMBEDDED
-    )
-
-
-_CYCLIC_STREAMED_REGION_APPLICABILITY = EvaluatorSpec(
-    (_TOPOLOGY_REF, _COMPUTE_REGION_DECLARATION_FOR_SCOPE_REF),
-    _cyclic_streamed_region_applies,
+_SOURCE_DESCRIPTION_REF = DependencyRef.problem(
+    "source_description", MVAUDataflowOpPaths.SOURCE_DESCRIPTION, _SOURCE_DESCRIPTION
+)
+_SOURCE_ASSOCIATION_REF = DependencyRef.property(
+    "source_association", MVAUDataflowOpPaths.SOURCE_ASSOCIATION, _SOURCE_ASSOCIATION
+)
+_TOPOLOGY_REF = DependencyRef.property(
+    "parameter_topology", MVAUDataflowOpPaths.PARAMETER_TOPOLOGY, _TOPOLOGY
+)
+_NETWORK_REF = DependencyRef.property(
+    "network", MVAUDataflowOpPaths.NETWORK, _NETWORK, absence=AbsenceMode.ALLOWS_ABSENT
+)
+_REPETITIONS_REF = DependencyRef.problem(
+    "repetitions", MVAUComputeProblemPaths.REPETITIONS, _INTEGER
+)
+_MATRIX_WIDTH_REF = DependencyRef.problem(
+    "matrix_width", MVAUComputeProblemPaths.MATRIX_WIDTH, _INTEGER
+)
+_MATRIX_HEIGHT_REF = DependencyRef.problem(
+    "matrix_height", MVAUComputeProblemPaths.MATRIX_HEIGHT, _INTEGER
+)
+_COMPUTATION_REF = DependencyRef.problem(
+    "computation_profile", MVAUComputeProblemPaths.COMPUTATION_PROFILE, _COMPUTATION
 )
 
 
-def _delivery_chunked_applies(dependencies: DependencyView) -> Answer[bool]:
-    return Decided(
-        dependencies["op_topology"] is MVAUParameterTopology.CYCLIC
-        and dependencies["compute_region_declaration"]
-        is not MVAURegionDeclaration.STANDARD_EMBEDDED
-        and dependencies["delivery_declaration"]
-        is MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
-    )
+# -- derived assembly --------------------------------------------------------
 
 
-_DELIVERY_CHUNKED_APPLICABILITY = EvaluatorSpec(
-    (
-        _TOPOLOGY_REF,
-        _COMPUTE_REGION_DECLARATION_FOR_SCOPE_REF,
-        _DELIVERY_DECLARATION_REF,
-    ),
-    _delivery_chunked_applies,
-)
-
-
-def _connection_applies(topology: MVAUConnectionTopology) -> EvaluatorSpec[Answer[bool]]:
-    def evaluate(dependencies: DependencyView) -> Answer[bool]:
-        return Decided(
-            dependencies["op_topology"] is MVAUParameterTopology.CYCLIC
-            and dependencies["compute_region_declaration"]
-            is not MVAURegionDeclaration.STANDARD_EMBEDDED
-            and dependencies["connection_topology"] is topology
-        )
-
-    return EvaluatorSpec(
-        (
-            _TOPOLOGY_REF,
-            _COMPUTE_REGION_DECLARATION_FOR_SCOPE_REF,
-            _CONNECTION_TOPOLOGY_REF,
-        ),
-        evaluate,
-    )
-
-
-_ADAPTER_CONNECTION_APPLICABILITY = _connection_applies(MVAUConnectionTopology.ADAPTER)
-
-
-def _delivery_interleave_domain() -> DecisionDomain:
-    repetitions = DependencyRef.problem(
-        "repetitions", MVAUComputeKernelPaths.REPETITIONS, _INTEGER_SEMANTICS
-    )
-
-    def accepts(value: object, dependencies: DependencyView) -> Answer[bool]:
-        if type(value) is not int or value <= 1:
-            return Decided(False)
-        repeated = cast(int, dependencies["repetitions"])
-        tile = cast(int, dependencies["delivery_pe"]) * cast(int, dependencies["delivery_simd"])
-        return Decided(repeated % value == 0 and tile % value == 0)
-
-    def candidates(dependencies: DependencyView) -> Answer[tuple[object, ...]]:
-        repeated = cast(int, dependencies["repetitions"])
-        tile = cast(int, dependencies["delivery_pe"]) * cast(int, dependencies["delivery_simd"])
-        limit = gcd(repeated, tile)
-        return Decided(tuple(value for value in range(2, limit + 1) if limit % value == 0))
-
-    dependencies = (repetitions, _DELIVERY_PE_REF, _DELIVERY_SIMD_REF)
-    return DecisionDomain(dependencies, accepts, EvaluatorSpec(dependencies, candidates))
-
-
-def _direct_interleaved_applies(dependencies: DependencyView) -> Answer[bool]:
-    return Decided(
-        dependencies["op_topology"] is MVAUParameterTopology.DIRECT
-        and dependencies["region_declaration"] is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
-    )
-
-
-def _derive_compute_weight_port(dependencies: DependencyView) -> Answer[object]:
-    region = cast(DataflowRegion, dependencies["compute_region"])
-    return Decided(region.input_interface("weight").port)
-
-
-def _derive_delivery_weight_port(dependencies: DependencyView) -> Answer[object]:
-    declaration = cast(MVAUWeightDeliveryDeclaration, dependencies["delivery_declaration"])
-    repetitions = cast(int, dependencies["repetitions"])
-    matrix_width = cast(int, dependencies["matrix_width"])
-    matrix_height = cast(int, dependencies["matrix_height"])
-    weight_type = cast(NumericElementType, dependencies["weight_element_type"])
-    pe = cast(int, dependencies["delivery_pe"])
-    simd = cast(int, dependencies["delivery_simd"])
-    if declaration is MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE:
-        return Decided(
-            construct_standard_mvau_weight_port(
-                repetitions, matrix_width, matrix_height, weight_type, pe, simd
-            )
-        )
-    interleave = dependencies["delivery_interleave"]
-    if interleave is ABSENT:
-        raise AssertionError("chunked delivery requires an interleave decision")
-    return Decided(
-        construct_batch_interleaved_mvau_weight_port(
-            repetitions,
-            matrix_width,
-            matrix_height,
-            weight_type,
-            pe,
-            simd,
-            cast(int, interleave),
-        )
-    )
-
-
-def _adapter_family_supported(dependencies: DependencyView) -> bool:
-    delivery_declaration = cast(MVAUWeightDeliveryDeclaration, dependencies["delivery_declaration"])
-    compute_declaration = cast(MVAURegionDeclaration, dependencies["region_declaration"])
-    same_base_tile = (
-        dependencies["delivery_pe"] == dependencies["compute_pe"]
-        and dependencies["delivery_simd"] == dependencies["compute_simd"]
-    )
-    full_to_chunked = (
-        delivery_declaration is MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
-        and compute_declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
-    )
-    chunked_to_full = (
-        delivery_declaration is MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
-        and compute_declaration is MVAURegionDeclaration.STANDARD_STREAMED
-    )
-    return same_base_tile and (full_to_chunked or chunked_to_full)
+def _derive_parameter_topology(dependencies: DependencyView) -> Answer[object]:
+    if dependencies["region_form"] is MVAURegionDeclaration.STANDARD_EMBEDDED:
+        return Decided(MVAUParameterTopology.EMBEDDED)
+    supply = dependencies["supply_kernel"]
+    if supply is not ABSENT and supply != NO_KERNEL:
+        return Decided(MVAUParameterTopology.CYCLIC)
+    return Decided(MVAUParameterTopology.DIRECT)
 
 
 def _weight_connection_supported(dependencies: DependencyView) -> Answer[bool]:
-    source = cast(Port, dependencies["delivery_weight_port"])
+    source = cast(Port, dependencies["supply_output_port"])
     sink = cast(Port, dependencies["compute_weight_port"])
-    topology = cast(MVAUConnectionTopology, dependencies["connection_topology"])
-    if topology is MVAUConnectionTopology.DIRECT:
+    adapter = dependencies["adapter_kernel"]
+    if adapter is ABSENT or adapter == NO_KERNEL:
+        # Direct connection requires exact endpoint compatibility, never a
+        # width-only rule.
         return Decided(
-            source.operand.element_type == sink.operand.element_type
-            and source.beat_sequence.image == sink.beat_sequence.image
-            and source.beat_sequence == sink.beat_sequence
+            source.operand == sink.operand and source.beat_sequence == sink.beat_sequence
         )
-    return Decided(
-        _adapter_family_supported(dependencies) and weight_sequence_adapter_applicable(source, sink)
-    )
+    return Decided(dependencies["adapter_region"] is not ABSENT)
+
+
+def _exposed_weight_source_available(dependencies: DependencyView) -> Answer[bool]:
+    """An unsupplied streamed weight boundary must be servable by the graph.
+
+    A batch-interleaved compute Kernel demands a chunked sequence no ordinary
+    graph edge produces, so leaving it exposed requires an explicit external
+    sequence that matches it exactly.
+    """
+
+    external = dependencies["external_weight_sequence"]
+    port = cast(Port, dependencies["compute_weight_port"])
+    if external is ABSENT:
+        if dependencies["region_form"] is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED:
+            return Unresolved(
+                (
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "mvau-exposed-interleaved-source-missing",
+                        MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE,
+                        "an exposed batch-interleaved weight boundary requires an "
+                        "external weight sequence",
+                        trace=(MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,),
+                    ),
+                )
+            )
+        return Decided(True)
+    return Decided(cast(BeatSequence, external) == port.beat_sequence)
+
+
+def _interleaved_pumping_supported(dependencies: DependencyView) -> Answer[bool]:
+    pumped = dependencies["pumped_memory"]
+    return Decided(pumped is ABSENT or not cast(bool, pumped))
 
 
 def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
     description = cast(MVAUSourceDescription, dependencies["source_description"])
-    topology = cast(MVAUParameterTopology, dependencies["op_topology"])
-    declaration = cast(MVAURegionDeclaration, dependencies["region_declaration"])
+    topology = cast(MVAUParameterTopology, dependencies["parameter_topology"])
+    region_form = cast(MVAURegionDeclaration, dependencies["region_form"])
     profile = cast(MVAUComputationProfile, dependencies["computation_profile"])
     repetitions = cast(int, dependencies["repetitions"])
     matrix_width = cast(int, dependencies["matrix_width"])
@@ -639,13 +564,18 @@ def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
                 description.threshold_shape,
             )
         )
+    supply = dependencies["supply_selected"]
+    adapter = dependencies["adapter_selected"]
     return Decided(
         MVAUSourceAssociation(
             description.source_node_id,
             description.fused_source_node_ids,
-            declaration.value,
+            region_form.value,
             topology,
             tuple(operands),
+            cast(SelectedKernel, dependencies["compute_kernel"]).kernel_id,
+            None if supply is ABSENT else cast(SelectedKernel, supply).kernel_id,
+            None if adapter is ABSENT else cast(SelectedKernel, adapter).kernel_id,
         )
     )
 
@@ -653,7 +583,7 @@ def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
 def _source_association_valid(dependencies: DependencyView) -> Answer[bool]:
     description = cast(MVAUSourceDescription, dependencies["source_description"])
     association = cast(MVAUSourceAssociation, dependencies["source_association"])
-    topology = cast(MVAUParameterTopology, dependencies["op_topology"])
+    topology = cast(MVAUParameterTopology, dependencies["parameter_topology"])
     compute = cast(DataflowRegion, dependencies["compute_region"])
     repetitions = cast(int, dependencies["repetitions"])
     profile = cast(MVAUComputationProfile, dependencies["computation_profile"])
@@ -695,48 +625,16 @@ def _source_association_valid(dependencies: DependencyView) -> Answer[bool]:
     )
 
 
-def _topology_matches_region(dependencies: DependencyView) -> Answer[bool]:
-    topology = cast(MVAUParameterTopology, dependencies["op_topology"])
-    declaration = cast(MVAURegionDeclaration, dependencies["region_declaration"])
-    if topology is MVAUParameterTopology.EMBEDDED:
-        return Decided(declaration is MVAURegionDeclaration.STANDARD_EMBEDDED)
-    return Decided(declaration is not MVAURegionDeclaration.STANDARD_EMBEDDED)
-
-
-def _cyclic_interleaved_pumping_supported(dependencies: DependencyView) -> Answer[bool]:
-    pumped = dependencies["pumped_memory"]
-    return Decided(pumped is ABSENT or not cast(bool, pumped))
-
-
-def _direct_interleaved_source_available(dependencies: DependencyView) -> Answer[bool]:
-    external = dependencies["external_weight_sequence"]
-    if external is ABSENT:
-        return Unresolved(
-            (
-                Finding(
-                    FindingKind.LIMITATION,
-                    "mvau-direct-interleaved-source-missing",
-                    MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
-                    "direct interleaved MVAU requires an external weight sequence",
-                    trace=(MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,),
-                ),
-            )
-        )
-    port = cast(Port, dependencies["compute_weight_port"])
-    return Decided(cast(BeatSequence, external) == port.beat_sequence)
-
-
 def _construct_network(
     delivery: DataflowRegion,
     compute: DataflowRegion,
-    topology: MVAUConnectionTopology,
     adapter: DataflowRegion | None,
 ) -> DataflowNetwork:
     delivery_port = delivery.output_interface("weight").port
     compute_port = compute.input_interface("weight").port
     nodes: tuple[NetworkNode, ...]
     edges: tuple[Edge, ...]
-    if topology is MVAUConnectionTopology.DIRECT:
+    if adapter is None:
         nodes = (NetworkNode("delivery", delivery), NetworkNode("compute", compute))
         edges = (
             Edge(
@@ -751,8 +649,6 @@ def _construct_network(
             ),
         )
     else:
-        if adapter is None:
-            raise ValueError("adapter connection requires an adapter region")
         nodes = (
             NetworkNode("delivery", delivery),
             NetworkNode("weight_adapter", adapter),
@@ -799,25 +695,12 @@ def _construct_network(
 
 
 def _derive_network(dependencies: DependencyView) -> Answer[object]:
-    topology = cast(MVAUConnectionTopology, dependencies["connection_topology"])
-    adapter_value = dependencies["adapter_region"]
-    if topology is MVAUConnectionTopology.ADAPTER and adapter_value is ABSENT:
-        return Absent(
-            (
-                Finding(
-                    FindingKind.REJECTION,
-                    "mvau-weight-adapter-unavailable",
-                    MVAUDataflowOpPaths.NETWORK,
-                    "adapter topology selected without an applicable adapter region",
-                ),
-            )
-        )
+    adapter = dependencies["adapter_region"]
     return Decided(
         _construct_network(
-            cast(DataflowRegion, dependencies["delivery_region"]),
+            cast(DataflowRegion, dependencies["supply_region"]),
             cast(DataflowRegion, dependencies["compute_region"]),
-            topology,
-            None if adapter_value is ABSENT else cast(DataflowRegion, adapter_value),
+            None if adapter is ABSENT else cast(DataflowRegion, adapter),
         )
     )
 
@@ -831,7 +714,7 @@ def _network_is_structurally_well_formed(dependencies: DependencyView) -> Answer
 
 
 def _derive_op_result(dependencies: DependencyView) -> Answer[object]:
-    topology = cast(MVAUParameterTopology, dependencies["op_topology"])
+    topology = cast(MVAUParameterTopology, dependencies["parameter_topology"])
     association = cast(MVAUSourceAssociation, dependencies["source_association"])
     if topology is MVAUParameterTopology.CYCLIC:
         network = dependencies["network"]
@@ -840,457 +723,373 @@ def _derive_op_result(dependencies: DependencyView) -> Answer[object]:
                 (
                     Finding(
                         FindingKind.REJECTION,
-                        "mvau-cyclic-topology-has-no-network",
+                        "mvau-supplied-topology-has-no-network",
                         MVAUDataflowOpPaths.RESULT,
-                        "cyclic topology requires a streamed compute region",
+                        "a selected supplier requires an assembled network",
                     ),
                 )
             )
         return Decided(NetworkRef("mvau", cast(DataflowNetwork, network), association))
     return Decided(
-        RegionRef(
-            "mvau.compute",
-            cast(DataflowRegion, dependencies["compute_region"]),
-            association,
+        RegionRef("mvau.compute", cast(DataflowRegion, dependencies["compute_region"]), association)
+    )
+
+
+def _problem_fields() -> tuple[ProblemField, ...]:
+    """Every fact the operation owns for its three Kernel pools."""
+
+    def numeric(path: QualifiedPath, *, required: bool = True) -> ProblemField:
+        return ProblemField(
+            path,
+            _ELEMENT_TYPE,
+            required=required,
+            constraint=_complete_numeric_element_type,
+            constraint_description="must be a complete numeric element type",
         )
+
+    def extent(path: QualifiedPath) -> ProblemField:
+        return ProblemField(
+            path,
+            _INTEGER,
+            constraint=_positive_integer,
+            constraint_description="must be a positive integer",
+        )
+
+    return (
+        extent(MVAUComputeProblemPaths.REPETITIONS),
+        extent(MVAUComputeProblemPaths.MATRIX_WIDTH),
+        extent(MVAUComputeProblemPaths.MATRIX_HEIGHT),
+        numeric(MVAUComputeProblemPaths.ACTIVATION_ELEMENT_TYPE),
+        numeric(MVAUComputeProblemPaths.WEIGHT_ELEMENT_TYPE),
+        numeric(MVAUComputeProblemPaths.ACCUMULATOR_ELEMENT_TYPE),
+        numeric(MVAUComputeProblemPaths.OUTPUT_ELEMENT_TYPE),
+        numeric(MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE, required=False),
+        ProblemField(
+            MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER,
+            _STRING,
+            required=False,
+            constraint=lambda value: bool(value),
+            constraint_description="must identify the accumulator analysis owner",
+        ),
+        ProblemField(
+            MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE, _BOOL, required=False
+        ),
+        ProblemField(MVAUComputeProblemPaths.COMPUTATION_PROFILE, _COMPUTATION),
+        ProblemField(MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE, _BOOL),
+        ProblemField(
+            MVAUDataflowOpPaths.WEIGHT_INITIALIZER_FINGERPRINT,
+            _STRING,
+            required=False,
+            constraint=lambda value: bool(value),
+            constraint_description="must be a non-empty initializer fingerprint",
+        ),
+        ProblemField(
+            MVAUDataflowOpPaths.THRESHOLD_INITIALIZER_FINGERPRINT,
+            _STRING,
+            required=False,
+            constraint=lambda value: bool(value),
+            constraint_description="must be a non-empty initializer fingerprint",
+        ),
+        ProblemField(MVAUComputeProblemPaths.TARGET_DSP_BLOCK, _DSP_BLOCK, required=False),
+        ProblemField(MVAUComputeProblemPaths.WEIGHTS_NARROW, _BOOL, required=False),
+        ProblemField(MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE, _BOOL),
+        ProblemField(
+            MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES,
+            _TARGET_MEMORY,
+            required=False,
+        ),
+        ProblemField(
+            MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
+            _SOURCE_DESCRIPTION,
+            constraint=_source_description_valid,
+            constraint_description="must contain complete source identities and extents",
+        ),
+        ProblemField(MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE, _BEAT_SEQUENCE, required=False),
+        ProblemField(
+            MVAUDataflowOpPaths.TARGET_FPGA_PART,
+            _STRING,
+            required=False,
+            constraint=lambda value: bool(value),
+            constraint_description="must be a non-empty FPGA part identifier",
+        ),
+        ProblemField(
+            MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
+            _FLOAT,
+            required=False,
+            constraint=_positive_float,
+            constraint_description="must be a positive clock period",
+        ),
+    )
+
+
+_EXTERNAL_SEQUENCE_REF = DependencyRef.problem(
+    "external_weight_sequence",
+    MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
+    _BEAT_SEQUENCE,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+_PUMPED_MEMORY_REF = DependencyRef.decision(
+    "pumped_memory",
+    FINN_RTL_MEMSTREAM_PATHS.pumped_memory,
+    _BOOL,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+
+
+def _weight_is_supplied(dependencies: DependencyView) -> Answer[bool]:
+    value = dependencies["supply_kernel"]
+    return Decided(value is not ABSENT and value != NO_KERNEL)
+
+
+def _weight_is_exposed(dependencies: DependencyView) -> Answer[bool]:
+    if dependencies["region_form"] is MVAURegionDeclaration.STANDARD_EMBEDDED:
+        return Decided(False)
+    value = dependencies["supply_kernel"]
+    return Decided(value is ABSENT or value == NO_KERNEL)
+
+
+_SUPPLIED = EvaluatorSpec((_SUPPLY_KERNEL_REF,), _weight_is_supplied)
+_EXPOSED = EvaluatorSpec((_COMPUTE_REGION_FORM_REF, _SUPPLY_KERNEL_REF), _weight_is_exposed)
+
+
+def _interleaved_supply(dependencies: DependencyView) -> Answer[bool]:
+    value = dependencies["supply_kernel"]
+    return Decided(
+        value is not ABSENT
+        and value != NO_KERNEL
+        and dependencies["region_form"] is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+    )
+
+
+def _op_properties() -> tuple[DerivedProperty, ...]:
+    return (
+        DerivedProperty(
+            MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
+            _TOPOLOGY,
+            EvaluatorSpec(
+                (_COMPUTE_REGION_FORM_REF, _SUPPLY_KERNEL_REF), _derive_parameter_topology
+            ),
+        ),
+        DerivedProperty(
+            MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
+            _SOURCE_ASSOCIATION,
+            EvaluatorSpec(
+                (
+                    _SOURCE_DESCRIPTION_REF,
+                    _TOPOLOGY_REF,
+                    _COMPUTE_REGION_FORM_REF,
+                    _COMPUTATION_REF,
+                    _REPETITIONS_REF,
+                    _MATRIX_WIDTH_REF,
+                    _MATRIX_HEIGHT_REF,
+                    _COMPUTE_SELECTED_REF,
+                    _SUPPLY_SELECTED_REF,
+                    _ADAPTER_SELECTED_REF,
+                ),
+                _derive_source_association,
+            ),
+        ),
+        DerivedProperty(
+            MVAUDataflowOpPaths.NETWORK,
+            _NETWORK,
+            EvaluatorSpec(
+                (_SUPPLY_REGION_REF, _COMPUTE_REGION_REF, _ADAPTER_REGION_REF), _derive_network
+            ),
+            applies_if=_SUPPLIED,
+        ),
+        DerivedProperty(
+            MVAUDataflowOpPaths.NETWORK_VALIDATION,
+            _NETWORK_REPORT,
+            EvaluatorSpec(
+                (DependencyRef.property("network", MVAUDataflowOpPaths.NETWORK, _NETWORK),),
+                _derive_network_validation,
+            ),
+            applies_if=_SUPPLIED,
+        ),
+        DerivedProperty(
+            MVAUDataflowOpPaths.RESULT,
+            DATAFLOW_OP_RESULT_SEMANTICS,
+            EvaluatorSpec(
+                (_TOPOLOGY_REF, _COMPUTE_REGION_REF, _NETWORK_REF, _SOURCE_ASSOCIATION_REF),
+                _derive_op_result,
+            ),
+        ),
+    )
+
+
+def _op_constraints() -> tuple[Constraint, ...]:
+    return (
+        Constraint(
+            MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
+            EvaluatorSpec(
+                (
+                    _SUPPLY_OUTPUT_PORT_REF,
+                    _COMPUTE_WEIGHT_PORT_REF,
+                    _ADAPTER_KERNEL_REF,
+                    _ADAPTER_REGION_REF,
+                ),
+                _weight_connection_supported,
+            ),
+            applies_if=_SUPPLIED,
+        ),
+        Constraint(
+            MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE,
+            EvaluatorSpec(
+                (_EXTERNAL_SEQUENCE_REF, _COMPUTE_WEIGHT_PORT_REF, _COMPUTE_REGION_FORM_REF),
+                _exposed_weight_source_available,
+            ),
+            applies_if=_EXPOSED,
+        ),
+        Constraint(
+            MVAUDataflowOpPaths.INTERLEAVED_PUMPING_SUPPORTED,
+            EvaluatorSpec((_PUMPED_MEMORY_REF,), _interleaved_pumping_supported),
+            applies_if=EvaluatorSpec(
+                (_SUPPLY_KERNEL_REF, _COMPUTE_REGION_FORM_REF), _interleaved_supply
+            ),
+        ),
+        Constraint(
+            MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
+            EvaluatorSpec(
+                (
+                    _SOURCE_DESCRIPTION_REF,
+                    _SOURCE_ASSOCIATION_REF,
+                    _TOPOLOGY_REF,
+                    _COMPUTE_REGION_REF,
+                    _REPETITIONS_REF,
+                    _COMPUTATION_REF,
+                ),
+                _source_association_valid,
+            ),
+        ),
+        Constraint(
+            MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
+            EvaluatorSpec(
+                (
+                    DependencyRef.property(
+                        "report", MVAUDataflowOpPaths.NETWORK_VALIDATION, _NETWORK_REPORT
+                    ),
+                ),
+                _network_is_structurally_well_formed,
+            ),
+            applies_if=_SUPPLIED,
+        ),
+    )
+
+
+_OP_STRUCTURAL_CONSTRAINTS = (
+    MVAU_COMPUTE_SELECTION.paths.region_structurally_well_formed,
+    MVAU_WEIGHT_SUPPLY_SELECTION.paths.region_structurally_well_formed,
+    MVAU_WEIGHT_ADAPTER_SELECTION.paths.region_structurally_well_formed,
+    MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
+    MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE,
+    MVAUDataflowOpPaths.INTERLEAVED_PUMPING_SUPPORTED,
+    MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
+    MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
+)
+
+_OP_FEASIBILITY_CONSTRAINTS = tuple(
+    dict.fromkeys(
+        (
+            *MVAU_COMPUTE_SELECTION.feasibility_constraints(),
+            *MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraints(),
+            *MVAU_WEIGHT_ADAPTER_SELECTION.feasibility_constraints(),
+            *_OP_STRUCTURAL_CONSTRAINTS,
+        )
+    )
+)
+
+_OP_DECISIONS = (
+    MVAU_COMPUTE_SELECTION.paths.kernel,
+    *(item.path for kernel in MVAU_COMPUTE_SELECTION.kernels for item in kernel.spec.decisions),
+    MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel,
+    *(
+        item.path
+        for kernel in MVAU_WEIGHT_SUPPLY_SELECTION.kernels
+        for item in kernel.spec.decisions
+    ),
+    MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel,
+)
+
+_OP_PROPERTIES = (
+    MVAU_COMPUTE_SELECTION.paths.region,
+    MVAU_COMPUTE_SELECTION.paths.selected_kernel,
+    MVAUDataflowOpPaths.COMPUTE_REGION_FORM,
+    MVAU_WEIGHT_SUPPLY_SELECTION.paths.region,
+    MVAU_WEIGHT_ADAPTER_SELECTION.paths.region,
+    MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
+    MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
+    MVAUDataflowOpPaths.NETWORK,
+    MVAUDataflowOpPaths.NETWORK_VALIDATION,
+    MVAUDataflowOpPaths.RESULT,
+)
+
+
+def _op_constraint_sets() -> tuple[ConstraintSet, ...]:
+    return (
+        ConstraintSet("mvau_op_structural", _OP_STRUCTURAL_CONSTRAINTS),
+        ConstraintSet("mvau_op_feasibility", _OP_FEASIBILITY_CONSTRAINTS),
+    )
+
+
+def _op_readiness_profiles() -> tuple[ReadinessProfile, ...]:
+    return (
+        ReadinessProfile(
+            "mvau_op_structural",
+            decisions=_OP_DECISIONS,
+            properties=_OP_PROPERTIES,
+            constraints=_OP_STRUCTURAL_CONSTRAINTS,
+        ),
+        ReadinessProfile(
+            "artifact_inputs",
+            decisions=_OP_DECISIONS,
+            properties=_OP_PROPERTIES,
+            constraints=_OP_FEASIBILITY_CONSTRAINTS,
+        ),
     )
 
 
 def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
     """Build one flat MVAU operation-level design-space specification."""
-    compute_weight_port = DerivedProperty(
-        MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT,
-        _PORT_SEMANTICS,
-        EvaluatorSpec((_COMPUTE_REGION_REF,), _derive_compute_weight_port),
-        applies_if=EvaluatorSpec(
-            (_REGION_DECLARATION_REF,),
-            lambda dependencies: Decided(
-                dependencies["region_declaration"] is not MVAURegionDeclaration.STANDARD_EMBEDDED
-            ),
-        ),
-    )
-    delivery_weight_port = DerivedProperty(
-        MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT,
-        _PORT_SEMANTICS,
-        EvaluatorSpec(
-            (
-                _DELIVERY_DECLARATION_REF,
-                _DELIVERY_PE_REF,
-                _DELIVERY_SIMD_REF,
-                _DELIVERY_INTERLEAVE_REF,
-                DependencyRef.problem(
-                    "repetitions", MVAUComputeKernelPaths.REPETITIONS, _INTEGER_SEMANTICS
-                ),
-                DependencyRef.problem(
-                    "matrix_width", MVAUComputeKernelPaths.MATRIX_WIDTH, _INTEGER_SEMANTICS
-                ),
-                DependencyRef.problem(
-                    "matrix_height", MVAUComputeKernelPaths.MATRIX_HEIGHT, _INTEGER_SEMANTICS
-                ),
-                DependencyRef.problem(
-                    "weight_element_type",
-                    MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE,
-                    _ELEMENT_TYPE_SEMANTICS,
-                ),
-            ),
-            _derive_delivery_weight_port,
-        ),
-        applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-    )
-    cyclic_spec = build_cyclic_parameter_kernel_spec(
-        DependencyRef.property(
-            "output_port", MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT, _PORT_SEMANTICS
-        ),
-        problem_fields_required=False,
-    )
-    cyclic_spec = gate_design_space_spec(cyclic_spec, _CYCLIC_STREAMED_REGION_APPLICABILITY)
-    cyclic_definition = KernelDefinition(
-        "mvau.parameter.cyclic",
-        cyclic_spec,
-        CYCLIC_PARAMETER_KERNEL.region_declarations,
-        CYCLIC_PARAMETER_KERNEL.binding_definitions,
-        CyclicParameterKernelPaths.REGION,
-        CyclicParameterKernelPaths.BINDING,
-        CyclicParameterKernelPaths.BINDING_SELECTION,
-        "cyclic_model_structural",
-        "cyclic_binding_feasibility",
-    )
-    adapter_spec = build_mvau_weight_adapter_kernel_spec(
-        DependencyRef.property(
-            "source_port", MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT, _PORT_SEMANTICS
-        ),
-        DependencyRef.property(
-            "sink_port", MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT, _PORT_SEMANTICS
-        ),
-        problem_fields_required=False,
-    )
-    adapter_spec = gate_design_space_spec(adapter_spec, _ADAPTER_CONNECTION_APPLICABILITY)
-    adapter_definition = KernelDefinition(
-        MVAU_WEIGHT_ADAPTER_KERNEL.id,
-        adapter_spec,
-        MVAU_WEIGHT_ADAPTER_KERNEL.region_declarations,
-        (),
-        MVAUWeightAdapterKernelPaths.REGION,
-        None,
-        None,
-        "mvau_weight_adapter_structural",
-        None,
-    )
 
-    source_description_ref = DependencyRef.problem(
-        "source_description",
-        MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
-        _SOURCE_DESCRIPTION_SEMANTICS,
-    )
-    source_association_ref = DependencyRef.property(
-        "source_association",
-        MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
-        _SOURCE_ASSOCIATION_SEMANTICS,
-    )
-    network_ref = DependencyRef.property("network", MVAUDataflowOpPaths.NETWORK, _NETWORK_SEMANTICS)
-    network_report_ref = DependencyRef.property(
-        "report", MVAUDataflowOpPaths.NETWORK_VALIDATION, _NETWORK_REPORT_SEMANTICS
-    )
-    compute_binding_constraints = next(
-        item.constraints
-        for item in MVAU_COMPUTE_KERNEL.spec.constraint_sets
-        if item.name == "binding_feasibility"
-    )
-    cyclic_binding_constraints = next(
-        item.constraints
-        for item in cyclic_definition.spec.constraint_sets
-        if item.name == "cyclic_binding_feasibility"
-    )
-    op_structural_constraints = (
-        MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
-        MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
-        MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
-        MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
-        MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
-        MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
-        MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
-        MVAUWeightAdapterKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
-    )
-    artifact_constraints = tuple(
-        dict.fromkeys(
-            (*compute_binding_constraints, *cyclic_binding_constraints, *op_structural_constraints)
-        )
-    )
     additions = DesignSpaceSpec(
-        ProblemSchema(
-            (
-                ProblemField(
-                    MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
-                    _SOURCE_DESCRIPTION_SEMANTICS,
-                    constraint=_source_description_valid,
-                    constraint_description="must contain complete source identities and extents",
-                ),
-                ProblemField(
-                    MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
-                    _BEAT_SEQUENCE_SEMANTICS,
-                    required=False,
-                ),
-                ProblemField(
-                    MVAUDataflowOpPaths.TARGET_FPGA_PART,
-                    _STRING_SEMANTICS,
-                    required=False,
-                    constraint=lambda value: bool(value),
-                    constraint_description="must be a non-empty FPGA part identifier",
-                ),
-                ProblemField(
-                    MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
-                    _FLOAT_SEMANTICS,
-                    required=False,
-                    constraint=_positive_float,
-                    constraint_description="must be a positive clock period",
-                ),
-            )
-        ),
-        decisions=(
-            Decision(
-                MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
-                _TOPOLOGY_SEMANTICS,
-                _finite_domain(tuple(MVAUParameterTopology)),
-            ),
-            Decision(
-                MVAUDataflowOpPaths.DELIVERY_PE,
-                _INTEGER_SEMANTICS,
-                _divisor_domain(MVAUComputeKernelPaths.MATRIX_HEIGHT),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-            Decision(
-                MVAUDataflowOpPaths.DELIVERY_SIMD,
-                _INTEGER_SEMANTICS,
-                _divisor_domain(MVAUComputeKernelPaths.MATRIX_WIDTH),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-            Decision(
-                MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-                _DELIVERY_DECLARATION_SEMANTICS,
-                _finite_domain(tuple(MVAUWeightDeliveryDeclaration)),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-            Decision(
-                MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
-                _INTEGER_SEMANTICS,
-                _delivery_interleave_domain(),
-                applies_if=_DELIVERY_CHUNKED_APPLICABILITY,
-            ),
-            Decision(
-                MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
-                _CONNECTION_TOPOLOGY_SEMANTICS,
-                _finite_domain(tuple(MVAUConnectionTopology)),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-        ),
-        properties=(
-            compute_weight_port,
-            delivery_weight_port,
-            DerivedProperty(
-                MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
-                _SOURCE_ASSOCIATION_SEMANTICS,
-                EvaluatorSpec(
-                    (
-                        source_description_ref,
-                        _TOPOLOGY_REF,
-                        _REGION_DECLARATION_REF,
-                        _COMPUTATION_REF,
-                        DependencyRef.problem(
-                            "repetitions",
-                            MVAUComputeKernelPaths.REPETITIONS,
-                            _INTEGER_SEMANTICS,
-                        ),
-                        DependencyRef.problem(
-                            "matrix_width",
-                            MVAUComputeKernelPaths.MATRIX_WIDTH,
-                            _INTEGER_SEMANTICS,
-                        ),
-                        DependencyRef.problem(
-                            "matrix_height",
-                            MVAUComputeKernelPaths.MATRIX_HEIGHT,
-                            _INTEGER_SEMANTICS,
-                        ),
-                    ),
-                    _derive_source_association,
-                ),
-            ),
-            DerivedProperty(
-                MVAUDataflowOpPaths.NETWORK,
-                _NETWORK_SEMANTICS,
-                EvaluatorSpec(
-                    (
-                        _DELIVERY_REGION_REF,
-                        _COMPUTE_REGION_REF,
-                        _CONNECTION_TOPOLOGY_REF,
-                        _ADAPTER_REGION_REF,
-                    ),
-                    _derive_network,
-                ),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-            DerivedProperty(
-                MVAUDataflowOpPaths.NETWORK_VALIDATION,
-                _NETWORK_REPORT_SEMANTICS,
-                EvaluatorSpec((network_ref,), _derive_network_validation),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-            DerivedProperty(
-                MVAUDataflowOpPaths.RESULT,
-                _RESULT_SEMANTICS,
-                EvaluatorSpec(
-                    (
-                        _TOPOLOGY_REF,
-                        _COMPUTE_REGION_REF,
-                        _NETWORK_REF,
-                        source_association_ref,
-                    ),
-                    _derive_op_result,
-                ),
-            ),
-        ),
-        constraints=(
-            Constraint(
-                MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
-                EvaluatorSpec((_TOPOLOGY_REF, _REGION_DECLARATION_REF), _topology_matches_region),
-            ),
-            Constraint(
-                MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
-                EvaluatorSpec(
-                    (
-                        DependencyRef.decision(
-                            "pumped_memory",
-                            CyclicParameterKernelPaths.PUMPED_MEMORY,
-                            _BOOL_SEMANTICS,
-                            absence=AbsenceMode.ALLOWS_ABSENT,
-                        ),
-                    ),
-                    _cyclic_interleaved_pumping_supported,
-                ),
-                applies_if=EvaluatorSpec(
-                    (_TOPOLOGY_REF, _REGION_DECLARATION_REF),
-                    lambda dependencies: Decided(
-                        dependencies["op_topology"] is MVAUParameterTopology.CYCLIC
-                        and dependencies["region_declaration"]
-                        is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
-                    ),
-                ),
-            ),
-            Constraint(
-                MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
-                EvaluatorSpec(
-                    (
-                        DependencyRef.problem(
-                            "external_weight_sequence",
-                            MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
-                            _BEAT_SEQUENCE_SEMANTICS,
-                            absence=AbsenceMode.ALLOWS_ABSENT,
-                        ),
-                        DependencyRef.property(
-                            "compute_weight_port",
-                            MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT,
-                            _PORT_SEMANTICS,
-                        ),
-                    ),
-                    _direct_interleaved_source_available,
-                ),
-                applies_if=EvaluatorSpec(
-                    (_TOPOLOGY_REF, _REGION_DECLARATION_REF),
-                    _direct_interleaved_applies,
-                ),
-            ),
-            Constraint(
-                MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
-                EvaluatorSpec(
-                    (
-                        _DELIVERY_WEIGHT_PORT_REF,
-                        _COMPUTE_WEIGHT_PORT_REF,
-                        _CONNECTION_TOPOLOGY_REF,
-                        _DELIVERY_DECLARATION_REF,
-                        _REGION_DECLARATION_REF,
-                        _DELIVERY_PE_REF,
-                        _DELIVERY_SIMD_REF,
-                        _COMPUTE_PE_REF,
-                        _COMPUTE_SIMD_REF,
-                    ),
-                    _weight_connection_supported,
-                ),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-            Constraint(
-                MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
-                EvaluatorSpec(
-                    (
-                        source_description_ref,
-                        source_association_ref,
-                        _TOPOLOGY_REF,
-                        _COMPUTE_REGION_REF,
-                        DependencyRef.problem(
-                            "repetitions",
-                            MVAUComputeKernelPaths.REPETITIONS,
-                            _INTEGER_SEMANTICS,
-                        ),
-                        DependencyRef.problem(
-                            "computation_profile",
-                            MVAUComputeKernelPaths.COMPUTATION_PROFILE,
-                            _COMPUTATION_SEMANTICS,
-                        ),
-                    ),
-                    _source_association_valid,
-                ),
-            ),
-            Constraint(
-                MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
-                EvaluatorSpec((network_report_ref,), _network_is_structurally_well_formed),
-                applies_if=_CYCLIC_STREAMED_REGION_APPLICABILITY,
-            ),
-        ),
-        constraint_sets=(
-            ConstraintSet(
-                "mvau_op_structural",
-                op_structural_constraints,
-            ),
-        ),
-        readiness_profiles=(
-            ReadinessProfile(
-                "mvau_op_structural",
-                decisions=(
-                    MVAUComputeKernelPaths.PE,
-                    MVAUComputeKernelPaths.SIMD,
-                    MVAUComputeKernelPaths.REGION_DECLARATION,
-                    MVAUComputeKernelPaths.INTERLEAVE,
-                    MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
-                    MVAUDataflowOpPaths.DELIVERY_PE,
-                    MVAUDataflowOpPaths.DELIVERY_SIMD,
-                    MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-                    MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
-                    MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
-                ),
-                properties=(
-                    MVAUComputeKernelPaths.REGION,
-                    MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
-                    MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT,
-                    CyclicParameterKernelPaths.REGION,
-                    MVAUDataflowOpPaths.WEIGHT_ADAPTER_REGION,
-                    MVAUDataflowOpPaths.NETWORK,
-                    MVAUDataflowOpPaths.NETWORK_VALIDATION,
-                    MVAUDataflowOpPaths.RESULT,
-                ),
-                constraints=(
-                    MVAUComputeKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
-                    MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION,
-                    MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED,
-                    MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE,
-                    MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
-                    MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
-                    MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
-                    MVAUWeightAdapterKernelPaths.REGION_STRUCTURALLY_WELL_FORMED,
-                ),
-            ),
-            ReadinessProfile(
-                "artifact_inputs",
-                decisions=(
-                    *(item.path for item in MVAU_COMPUTE_KERNEL.spec.decisions),
-                    *(item.path for item in cyclic_definition.spec.decisions),
-                    MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
-                    MVAUDataflowOpPaths.DELIVERY_PE,
-                    MVAUDataflowOpPaths.DELIVERY_SIMD,
-                    MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-                    MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
-                    MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
-                ),
-                properties=(
-                    MVAUComputeKernelPaths.REGION,
-                    MVAUComputeKernelPaths.BINDING_SELECTION,
-                    MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
-                    MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT,
-                    CyclicParameterKernelPaths.REGION,
-                    CyclicParameterKernelPaths.BINDING_SELECTION,
-                    MVAUDataflowOpPaths.WEIGHT_ADAPTER_REGION,
-                    MVAUDataflowOpPaths.NETWORK,
-                    MVAUDataflowOpPaths.RESULT,
-                ),
-                constraints=artifact_constraints,
-            ),
-        ),
+        ProblemSchema(_problem_fields()),
+        properties=_op_properties(),
+        constraints=_op_constraints(),
+        constraint_sets=_op_constraint_sets(),
+        readiness_profiles=_op_readiness_profiles(),
     )
-    return assemble_kernel_specs(
-        (MVAU_COMPUTE_KERNEL, cyclic_definition, adapter_definition), additions=additions
+    return assemble_specs(
+        (
+            MVAU_COMPUTE_SELECTION.build_spec(),
+            MVAU_WEIGHT_SUPPLY_SELECTION.build_spec(),
+            MVAU_WEIGHT_ADAPTER_SELECTION.build_spec(),
+            additions,
+        )
     )
 
 
 MVAU_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()
 
+MVAU_SELECTIONS: tuple[KernelSelection, ...] = (
+    MVAU_COMPUTE_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
+    MVAU_WEIGHT_ADAPTER_SELECTION,
+)
+
+
 __all__ = [
     "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "DataflowOpResult",
+    "MVAU_COMPUTE_SELECTION",
     "MVAU_DATAFLOW_OP_SPEC",
-    "MVAUConnectionTopology",
+    "MVAU_SELECTIONS",
+    "MVAU_WEIGHT_ADAPTER_SELECTION",
+    "MVAU_WEIGHT_SUPPLY_SELECTION",
     "MVAUDataflowOpPaths",
     "MVAUParameterTopology",
     "MVAUSourceAssociation",
     "MVAUSourceDescription",
-    "MVAUWeightDeliveryDeclaration",
     "NetworkRef",
     "RegionRef",
     "SemanticOperandDestination",

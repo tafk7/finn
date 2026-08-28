@@ -19,7 +19,7 @@ from finn.dataflow.mvau.artifacts import (
     MVAUStitchedSimulationObservation,
     mvau_built_artifact_identity,
 )
-from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
+from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PATHS, MVAUComputeProblemPaths
 from finn.dataflow.mvau.elaboration import MVAUPhysicalElaboration, MVAUSemanticPortRef
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau import NetworkRef, RegionRef
@@ -514,11 +514,11 @@ def collect_mvau_rtl_softvec_evidence(
     )
     cycle_evidence = None
     if simulation is not None:
-        repetitions = cast(int, resolved.point.problem[MVAUComputeKernelPaths.REPETITIONS])
-        matrix_width = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_WIDTH])
-        matrix_height = cast(int, resolved.point.problem[MVAUComputeKernelPaths.MATRIX_HEIGHT])
-        pe = cast(int, resolved.point.assignments[MVAUComputeKernelPaths.PE])
-        simd = cast(int, resolved.point.assignments[MVAUComputeKernelPaths.SIMD])
+        repetitions = cast(int, resolved.point.problem[MVAUComputeProblemPaths.REPETITIONS])
+        matrix_width = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_WIDTH])
+        matrix_height = cast(int, resolved.point.problem[MVAUComputeProblemPaths.MATRIX_HEIGHT])
+        pe = cast(int, resolved.point.assignments[SOFT_VECTOR_PATHS.pe])
+        simd = cast(int, resolved.point.assignments[SOFT_VECTOR_PATHS.simd])
         analytical = repetitions * (matrix_height // pe) * (matrix_width // simd)
         unsorted_configuration: tuple[tuple[str, bool | float | int | str], ...] = (
             ("clock_period_ns", elaboration.target_clock_period_ns),

@@ -40,6 +40,11 @@ from finn.dataflow.design import (
     as_object_semantics,
 )
 from finn.dataflow.kernels import Kernel, KernelExport, KernelProvider, KernelSelection
+from finn.dataflow.parameters.cyclic.definition import (
+    CyclicParameterKernelPaths,
+    CyclicRamStyle,
+    CyclicTargetMemoryCapabilities,
+)
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from finn.dataflow.region import Port
 
@@ -51,15 +56,6 @@ class MVAUWeightSupplyKernelId(str, Enum):
 
     FINN_RTL_MEMSTREAM = "finn_rtl_memstream"
     FINNLIB_HLS_MEMSTREAM = "finnlib_hls_memstream"
-
-
-class CyclicRamStyle(str, Enum):
-    """RAM implementations exposed by the FINN RTL memstream Kernel."""
-
-    AUTO = "auto"
-    BRAM = "block"
-    LUTRAM = "distributed"
-    URAM = "ultra"
 
 
 class WeightOrganization(str, Enum):
@@ -79,11 +75,11 @@ OUTPUT_PORT_EXPORT = "output_port"
 class MVAUWeightSupplyProblemPaths:
     """Problem facts the supply pool reads but does not own."""
 
+    #: Initializer presence is one graph fact; the supply pool reads the same
+    #: field the compute pool does rather than restating it.
     INITIALIZER_AVAILABLE = QualifiedPath("problem.mvau.weight_initializer_available")
-    RUNTIME_WRITABLE = QualifiedPath("problem.cyclic_parameter.runtime_writable")
-    TARGET_MEMORY_CAPABILITIES = QualifiedPath(
-        "problem.target.cyclic_parameter_memory_capabilities"
-    )
+    RUNTIME_WRITABLE = CyclicParameterKernelPaths.RUNTIME_WRITABLE
+    TARGET_MEMORY_CAPABILITIES = CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES
 
 
 _BOOL = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
@@ -113,29 +109,10 @@ _RUNTIME_WRITABLE = DependencyRef.problem(
 )
 
 
-class SupportsInitializedUram:
-    """Target capability fact consumed by the FINN RTL memstream Kernel."""
-
-    __slots__ = ("supports_initialized_uram",)
-
-    def __init__(self, supports_initialized_uram: bool) -> None:
-        self.supports_initialized_uram = supports_initialized_uram
-
-    def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, SupportsInitializedUram)
-            and other.supports_initialized_uram == self.supports_initialized_uram
-        )
-
-    def __hash__(self) -> int:
-        return hash(self.supports_initialized_uram)
-
-    def __repr__(self) -> str:
-        return f"SupportsInitializedUram({self.supports_initialized_uram!r})"
-
-
 _TARGET_MEMORY = as_object_semantics(
-    ValueSemantics.immutable_nominal(SupportsInitializedUram, name="SupportsInitializedUram")
+    ValueSemantics.immutable_nominal(
+        CyclicTargetMemoryCapabilities, name="CyclicTargetMemoryCapabilities"
+    )
 )
 _TARGET_MEMORY_REF = DependencyRef.problem(
     "target_memory_capabilities",
@@ -272,7 +249,7 @@ def _uram_initialization_supported(
                     ),
                 )
             )
-        return Decided(cast(SupportsInitializedUram, target).supports_initialized_uram)
+        return Decided(cast(CyclicTargetMemoryCapabilities, target).supports_initialized_uram)
 
     return EvaluatorSpec((ram_ref, _RUNTIME_WRITABLE, _TARGET_MEMORY_REF), evaluate)
 
@@ -394,7 +371,7 @@ __all__ = [
     "MVAUWeightSupplyProblemPaths",
     "OUTPUT_PORT_EXPORT",
     "CyclicRamStyle",
-    "SupportsInitializedUram",
+    "CyclicTargetMemoryCapabilities",
     "WeightOrganization",
     "build_finn_rtl_memstream_kernel",
     "build_finnlib_memstream_kernel",
