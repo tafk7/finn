@@ -13,6 +13,17 @@ from finn.dataflow.kernel import (
     build_kernel_semantic_declarations,
     gate_design_space_spec,
 )
+from finn.dataflow.kernels import (
+    NO_KERNEL,
+    SELECTED_KERNEL_SEMANTICS,
+    Kernel,
+    KernelDemand,
+    KernelProvider,
+    KernelSelection,
+    KernelSelectionPaths,
+    SelectedKernel,
+    selected_kernel,
+)
 from finn.dataflow.op import (
     AssignmentMapping,
     DataflowAssignmentCommit,
@@ -25,28 +36,47 @@ from finn.dataflow.op import (
 )
 from finn.dataflow.resolution import DataflowOpResult, NetworkRef, RegionRef, ResolvedDataflowOp
 from finn.dataflow.selection import FiniteSelectionResult, enumerate_feasible_points
+from finn.dataflow.spec_algebra import (
+    SpecAuthoringError,
+    SpecAuthoringIssue,
+    assemble_specs,
+    gate_spec,
+)
 
 __all__ = [
-    "BindingDefinition",
     "AssignmentMapping",
+    "BindingDefinition",
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
     "DataflowOp",
     "DataflowOpError",
     "DataflowOpResult",
     "FiniteSelectionResult",
+    "Kernel",
     "KernelDefinition",
+    "KernelDemand",
     "KernelInstance",
     "KernelPlacement",
+    "KernelProvider",
+    "KernelSelection",
+    "KernelSelectionPaths",
+    "NO_KERNEL",
     "NetworkRef",
     "NodeAttrCodec",
     "NodeAttributeType",
     "RegionDeclaration",
     "RegionRef",
     "ResolvedDataflowOp",
+    "SELECTED_KERNEL_SEMANTICS",
+    "SelectedKernel",
+    "SpecAuthoringError",
+    "SpecAuthoringIssue",
     "assemble_kernel_specs",
+    "assemble_specs",
     "build_kernel_semantic_declarations",
     "dataflow_problem_fingerprint",
     "enumerate_feasible_points",
     "gate_design_space_spec",
+    "gate_spec",
+    "selected_kernel",
 ]

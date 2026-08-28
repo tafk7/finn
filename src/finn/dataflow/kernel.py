@@ -11,7 +11,6 @@ definitions and provides deterministic flat-spec assembly for larger scopes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping
 from typing import TypeVar, cast
 
 from finn.dataflow.design import (
@@ -19,13 +18,9 @@ from finn.dataflow.design import (
     DATAFLOW_REGION_SEMANTICS,
     REGION_VALIDATION_REPORT_SEMANTICS,
     AbsenceMode,
-    Absent,
     Answer,
     Constraint,
-    ConstraintSet,
     Decided,
-    Decision,
-    DecisionDomain,
     DependencyRef,
     DependencyView,
     DerivedProperty,
@@ -35,16 +30,23 @@ from finn.dataflow.design import (
     EvaluatorSpec,
     Finding,
     FindingKind,
-    ProblemSchema,
-    ProblemField,
     QualifiedPath,
-    ReadinessProfile,
     Unresolved,
     as_object_semantics,
     validate_region,
 )
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import RegionValidationReport
+from finn.dataflow.spec_algebra import (
+    SpecAuthoringError,
+    SpecAuthoringIssue,
+    assemble_specs,
+    duplicate_values,
+    gate_spec,
+    prefixed,
+    rebase_spec,
+    spec_declaration_paths,
+)
 
 _REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _REPORT_SEMANTICS = as_object_semantics(REGION_VALIDATION_REPORT_SEMANTICS)
@@ -74,25 +76,10 @@ class BindingDefinition:
             raise ValueError("binding definition id must not be empty")
 
 
-@dataclass(frozen=True)
-class KernelAuthoringIssue:
-    """One deterministic error in Kernel authoring metadata or assembly."""
-
-    code: str
-    path: str
-    message: str
-
-
-class KernelAuthoringError(ValueError):
-    """Raised when Kernel metadata cannot form an unambiguous flat scope."""
-
-    def __init__(self, issues: tuple[KernelAuthoringIssue, ...]) -> None:
-        self.issues = tuple(sorted(issues, key=lambda issue: (issue.path, issue.code)))
-        super().__init__(f"Kernel authoring failed with {len(self.issues)} issue(s)")
-
-
-def _duplicate_values(values: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(sorted(value for value in set(values) if values.count(value) > 1))
+# Kernel authoring reuses the generic flat-spec authoring diagnostics.
+KernelAuthoringIssue = SpecAuthoringIssue
+KernelAuthoringError = SpecAuthoringError
+_duplicate_values = duplicate_values
 
 
 @dataclass(frozen=True)
@@ -395,89 +382,6 @@ def instantiate_kernel(
     )
 
 
-def _spec_declaration_paths(spec: DesignSpaceSpec) -> tuple[QualifiedPath, ...]:
-    return tuple(
-        [field.path for field in spec.problem_schema.fields]
-        + [decision.path for decision in spec.decisions]
-        + [prop.path for prop in spec.properties]
-        + [constraint.path for constraint in spec.constraints]
-    )
-
-
-def _prefixed(prefix: QualifiedPath, path: QualifiedPath) -> QualifiedPath:
-    return QualifiedPath(f"{prefix}.{path}")
-
-
-def _map_diagnostic_value(
-    value: object, path_mapping: dict[QualifiedPath, QualifiedPath]
-) -> object:
-    if isinstance(value, QualifiedPath):
-        return path_mapping.get(value, value)
-    if isinstance(value, tuple):
-        return tuple(_map_diagnostic_value(item, path_mapping) for item in value)
-    if isinstance(value, Mapping):
-        return tuple(
-            sorted(
-                (
-                    str(name),
-                    _map_diagnostic_value(item, path_mapping),
-                )
-                for name, item in value.items()
-            )
-        )
-    return value
-
-
-def _map_answer_findings(
-    answer: Answer[T], path_mapping: dict[QualifiedPath, QualifiedPath]
-) -> Answer[T]:
-    if isinstance(answer, Decided):
-        return answer
-    findings = tuple(
-        Finding(
-            finding.kind,
-            finding.code,
-            path_mapping.get(finding.path, finding.path),
-            finding.message,
-            tuple(
-                (name, _map_diagnostic_value(value, path_mapping)) for name, value in finding.values
-            ),
-            tuple(path_mapping.get(path, path) for path in finding.trace),
-        )
-        for finding in answer.findings
-    )
-    if isinstance(answer, Absent):
-        return Absent(findings)
-    return Unresolved(findings)
-
-
-def _rebase_dependency(
-    dependency: DependencyRef, path_mapping: dict[QualifiedPath, QualifiedPath]
-) -> DependencyRef:
-    return DependencyRef(
-        dependency.name,
-        path_mapping.get(dependency.path, dependency.path),
-        dependency.kind,
-        dependency.value_semantics,
-        dependency.absence,
-    )
-
-
-def _rebase_evaluator(
-    evaluator: EvaluatorSpec[Answer[T]],
-    path_mapping: dict[QualifiedPath, QualifiedPath],
-) -> EvaluatorSpec[Answer[T]]:
-    def evaluate(values: DependencyView) -> Answer[T]:
-        return _map_answer_findings(evaluator.evaluator(values), path_mapping)
-
-    return EvaluatorSpec(
-        tuple(
-            _rebase_dependency(dependency, path_mapping) for dependency in evaluator.dependencies
-        ),
-        evaluate,
-    )
-
-
 def _place_kernel_definition(
     definition: KernelDefinition,
     instance_id: str,
@@ -486,7 +390,7 @@ def _place_kernel_definition(
 ) -> KernelPlacement:
     if not instance_id:
         raise ValueError("Kernel instance id must not be empty")
-    declared_paths = _spec_declaration_paths(definition.spec)
+    declared_paths = spec_declaration_paths(definition.spec)
     problem_paths = {field.path for field in definition.spec.problem_schema.fields}
     if not set(shared_problem_paths).issubset(problem_paths):
         unknown = sorted(set(shared_problem_paths) - problem_paths)
@@ -501,107 +405,13 @@ def _place_kernel_definition(
             )
         )
     path_mapping = {
-        path: shared_problem_paths.get(path, _prefixed(prefix, path)) for path in declared_paths
+        path: shared_problem_paths.get(path, prefixed(prefix, path)) for path in declared_paths
     }
-
-    def evaluator(
-        value: EvaluatorSpec[Answer[bool]] | None,
-    ) -> EvaluatorSpec[Answer[bool]] | None:
-        if value is None:
-            return None
-        return cast(EvaluatorSpec[Answer[bool]], _rebase_evaluator(value, path_mapping))
-
-    fields = tuple(
-        ProblemField(
-            path_mapping[field.path],
-            field.value_semantics,
-            field.required,
-            field.constraint,
-            field.constraint_description,
-        )
-        for field in definition.spec.problem_schema.fields
-        if field.path not in shared_problem_paths
-    )
-    decisions = []
-    for decision in definition.spec.decisions:
-        domain_dependencies = tuple(
-            _rebase_dependency(dependency, path_mapping)
-            for dependency in decision.domain.dependencies
-        )
-
-        def accepts(
-            candidate: object,
-            values: DependencyView,
-            domain: DecisionDomain = decision.domain,
-        ) -> Answer[bool]:
-            return cast(
-                Answer[bool],
-                _map_answer_findings(domain.accepts(candidate, values), path_mapping),
-            )
-
-        candidates = (
-            None
-            if decision.domain.candidates is None
-            else _rebase_evaluator(decision.domain.candidates, path_mapping)
-        )
-        decisions.append(
-            Decision(
-                path_mapping[decision.path],
-                decision.value_semantics,
-                DecisionDomain(
-                    domain_dependencies,
-                    accepts,
-                    candidates,
-                ),
-                evaluator(decision.applies_if),
-                None
-                if decision.proposal is None
-                else _rebase_evaluator(decision.proposal, path_mapping),
-            )
-        )
-    properties = tuple(
-        DerivedProperty(
-            path_mapping[item.path],
-            item.value_semantics,
-            _rebase_evaluator(item.evaluator, path_mapping),
-            evaluator(item.applies_if),
-        )
-        for item in definition.spec.properties
-    )
-    constraints = tuple(
-        Constraint(
-            path_mapping[item.path],
-            cast(
-                EvaluatorSpec[Answer[bool]],
-                _rebase_evaluator(item.evaluator, path_mapping),
-            ),
-            evaluator(item.applies_if),
-        )
-        for item in definition.spec.constraints
-    )
-    constraint_sets = tuple(
-        ConstraintSet(
-            f"{instance_id}.{item.name}",
-            tuple(path_mapping[path] for path in item.constraints),
-        )
-        for item in definition.spec.constraint_sets
-    )
-    readiness_profiles = tuple(
-        ReadinessProfile(
-            f"{instance_id}.{item.name}",
-            tuple(path_mapping[path] for path in item.decisions),
-            tuple(path_mapping[path] for path in item.properties),
-            tuple(path_mapping[path] for path in item.constraints),
-        )
-        for item in definition.spec.readiness_profiles
-    )
-    spec = DesignSpaceSpec(
-        ProblemSchema(fields),
-        tuple(decisions),
-        properties,
-        constraints,
-        constraint_sets,
-        readiness_profiles,
+    spec = rebase_spec(
+        definition.spec,
+        path_mapping,
+        name_prefix=instance_id,
+        dropped_problem_paths=frozenset(shared_problem_paths),
     )
     return KernelPlacement(
         definition.id,
@@ -638,91 +448,26 @@ def assemble_kernel_specs(
     The function performs only FINN authoring checks.  The returned ordinary
     ``DesignSpaceSpec`` is still validated by the generic engine.
     """
-    issues = []
     identities = tuple(
         definition.id if isinstance(definition, KernelDefinition) else definition.instance_id
         for definition in definitions
     )
-    for duplicate in _duplicate_values(identities):
-        issues.append(
-            KernelAuthoringIssue(
-                "kernel-id-duplicate",
-                duplicate,
-                f"Kernel id {duplicate!r} is duplicated",
-            )
+    issues = [
+        KernelAuthoringIssue(
+            "kernel-id-duplicate",
+            duplicate,
+            f"Kernel id {duplicate!r} is duplicated",
         )
+        for duplicate in duplicate_values(identities)
+    ]
     all_specs = tuple(definition.spec for definition in definitions) + (additions,)
-    path_values = tuple(str(path) for spec in all_specs for path in _spec_declaration_paths(spec))
-    for duplicate in _duplicate_values(path_values):
-        issues.append(
-            KernelAuthoringIssue(
-                "declaration-path-duplicate",
-                duplicate,
-                f"declaration path {duplicate!r} is duplicated",
-            )
-        )
-    constraint_set_names = tuple(item.name for spec in all_specs for item in spec.constraint_sets)
-    for duplicate in _duplicate_values(constraint_set_names):
-        issues.append(
-            KernelAuthoringIssue(
-                "constraint-set-name-duplicate",
-                duplicate,
-                f"constraint-set name {duplicate!r} is duplicated",
-            )
-        )
-    readiness_names = tuple(item.name for spec in all_specs for item in spec.readiness_profiles)
-    for duplicate in _duplicate_values(readiness_names):
-        issues.append(
-            KernelAuthoringIssue(
-                "readiness-profile-name-duplicate",
-                duplicate,
-                f"readiness-profile name {duplicate!r} is duplicated",
-            )
-        )
+    try:
+        assembled = assemble_specs(all_specs)
+    except SpecAuthoringError as exc:
+        raise KernelAuthoringError(tuple(issues) + exc.issues) from exc
     if issues:
         raise KernelAuthoringError(tuple(issues))
-    return DesignSpaceSpec(
-        ProblemSchema(tuple(field for spec in all_specs for field in spec.problem_schema.fields)),
-        tuple(decision for spec in all_specs for decision in spec.decisions),
-        tuple(prop for spec in all_specs for prop in spec.properties),
-        tuple(constraint for spec in all_specs for constraint in spec.constraints),
-        tuple(group for spec in all_specs for group in spec.constraint_sets),
-        tuple(profile for spec in all_specs for profile in spec.readiness_profiles),
-    )
-
-
-def _combined_applicability(
-    outer: EvaluatorSpec[Answer[bool]],
-    inner: EvaluatorSpec[Answer[bool]] | None,
-) -> EvaluatorSpec[Answer[bool]]:
-    dependencies = outer.dependencies + (() if inner is None else inner.dependencies)
-    names = tuple(dependency.name for dependency in dependencies)
-    if len(names) != len(set(names)):
-        raise KernelAuthoringError(
-            (
-                KernelAuthoringIssue(
-                    "applicability-dependency-name-duplicate",
-                    "applicability",
-                    "combined applicability dependencies must have unique names",
-                ),
-            )
-        )
-
-    def evaluate(values: DependencyView) -> Answer[bool]:
-        outer_values = DependencyView(
-            {dependency.name: values[dependency.name] for dependency in outer.dependencies}
-        )
-        outer_answer = outer.evaluator(outer_values)
-        if not isinstance(outer_answer, Decided) or not outer_answer.value:
-            return outer_answer
-        if inner is None:
-            return Decided(True)
-        inner_values = DependencyView(
-            {dependency.name: values[dependency.name] for dependency in inner.dependencies}
-        )
-        return inner.evaluator(inner_values)
-
-    return EvaluatorSpec(dependencies, evaluate)
+    return assembled
 
 
 def gate_design_space_spec(
@@ -730,38 +475,7 @@ def gate_design_space_spec(
     applies_if: EvaluatorSpec[Answer[bool]],
 ) -> DesignSpaceSpec:
     """Compose an outer scope's applicability into every executable declaration."""
-    return DesignSpaceSpec(
-        spec.problem_schema,
-        tuple(
-            Decision(
-                item.path,
-                item.value_semantics,
-                item.domain,
-                _combined_applicability(applies_if, item.applies_if),
-                item.proposal,
-            )
-            for item in spec.decisions
-        ),
-        tuple(
-            DerivedProperty(
-                item.path,
-                item.value_semantics,
-                item.evaluator,
-                _combined_applicability(applies_if, item.applies_if),
-            )
-            for item in spec.properties
-        ),
-        tuple(
-            Constraint(
-                item.path,
-                item.evaluator,
-                _combined_applicability(applies_if, item.applies_if),
-            )
-            for item in spec.constraints
-        ),
-        tuple(ConstraintSet(item.name, item.constraints) for item in spec.constraint_sets),
-        spec.readiness_profiles,
-    )
+    return gate_spec(spec, applies_if)
 
 
 __all__ = [
