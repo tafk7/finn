@@ -641,6 +641,34 @@ established by bisecting a real failure against a stock template.
 The 755-plus-populated-home requirement is in no documentation; it came from
 diffing a stock template after the permission failure.
 
+**Environment is delivered by a kit, not the entrypoint.** `docker/finn.kit`
+sets `FINN_ROOT: "${WORKSPACE_DIR}"` (sbx interpolates it at create) and
+`FINN_BUILD_DIR`. `environment.variables` becomes *real process env*, so unlike
+`/etc/sandbox-persistent.sh` it reaches every invocation style:
+
+| Mechanism | `bash -c` | `sh -c` | bare exec |
+|---|---|---|---|
+| kit `environment.variables` | yes | yes | yes |
+| `/etc/sandbox-persistent.sh` | yes | no | no |
+
+`/etc/sandbox-persistent.sh` is **sbx-managed** — the image must not write it.
+An earlier revision had the entrypoint do so and it was dead code: the file
+reads 0 bytes in a live sandbox because sbx replaces it after the entrypoint
+runs. Anything needing to be computed at start belongs in the kit's
+`commands.startup`, which may write that file.
+
+Kit schema drift worth knowing: the published docs describe `setup.install` /
+`setup.startup`, but v0.39.0 rejects a `setup:` key and requires `commands:`,
+with `command` as an argv **list** and no `name` field — and `kit inspect` then
+normalises its *output* back to `setup:`. Input and output schemas differ, the
+same asymmetry as the `caps` -> `permissions` rename. Validate against the
+binary, not the docs.
+
+**sbx substitutes its own CMD.** PID 1 in a sandbox is
+`tini -- finn_entrypoint.sh sh -c 'trap ...; sleep infinity & wait'`, so the
+image's `CMD` is irrelevant there and stays `["bash"]` for docker's interactive
+default. What kills a sandbox is the ENTRYPOINT *exiting*, not the CMD.
+
 **`sbx exec` does not run the ENTRYPOINT.** This is the subtle one. Everything
 `finn_entrypoint.sh` exports is absent from exec sessions, so path resolution
 cannot live in the shell. `finn_paths.workspace_root()` therefore falls back
