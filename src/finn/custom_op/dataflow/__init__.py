@@ -3,6 +3,14 @@
 
 """Logical FINN dataflow custom-operation domain."""
 
-from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.dataflow.ops.mvau_op import (
+    MVAU_DATAFLOW_OP_FAMILY_VERSION,
+    MVAUDataflowBuildContext,
+    MvauDataflowOp,
+)
 
-__all__ = ["MVAUDataflowBuildContext", "MvauDataflowOp"]
+__all__ = [
+    "MVAU_DATAFLOW_OP_FAMILY_VERSION",
+    "MVAUDataflowBuildContext",
+    "MvauDataflowOp",
+]

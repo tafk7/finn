@@ -18,7 +18,7 @@ import shutil
 from typing import Iterator, cast
 
 import numpy as np  # type: ignore[import-not-found]
-from onnx import TensorProto, helper  # type: ignore[import-not-found]
+from onnx import AttributeProto, NodeProto, TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-found]
@@ -41,12 +41,25 @@ from finn.dataflow.parameters.cyclic.definition import CyclicParameterKernelPath
 from finn.dataflow.region import BeatSequence, NumericElementType
 
 _ARTIFACT_PATH = QualifiedPath("artifact.mvau.rtl_softvec")
+_DATAFLOW_SCOPE_ID_ATTR = "dataflow_scope_id"
 
 
 class MVAUWeightPayloadKind(str, Enum):
     INITIALIZER = "initializer"
     EXTERNAL_RUNTIME = "external_runtime"
     RUNTIME_WRITABLE_LOCAL_STATE = "runtime_writable_local_state"
+
+
+def _source_scope_matches(node: NodeProto, source_scope_id: str) -> bool:
+    if node.name == source_scope_id:
+        return True
+    attribute = next(
+        (item for item in node.attribute if item.name == _DATAFLOW_SCOPE_ID_ATTR),
+        None,
+    )
+    if attribute is None or attribute.type != AttributeProto.STRING:
+        return False
+    return cast(bytes, attribute.s).decode("utf-8") == source_scope_id
 
 
 @dataclass(frozen=True)
@@ -440,7 +453,9 @@ def build_mvau_rtl_artifact_requirements(
     if isinstance(resolved.result, NetworkRef):
         _require_feasible(resolved, "cyclic_binding_feasibility")
     source = resolved.result.source_association
-    nodes = tuple(node for node in model.graph.node if node.name == source.source_node_id)
+    nodes = tuple(
+        node for node in model.graph.node if _source_scope_matches(node, source.source_node_id)
+    )
     if len(nodes) != 1:
         raise MVAUArtifactError(
             (

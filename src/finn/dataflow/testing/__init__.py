@@ -26,6 +26,7 @@ class DataflowOpConformanceCase:
     """Inputs for the shared node lifecycle conformance check."""
 
     model: ModelWrapper
+    node_name: str
     operation_type: type[DataflowOp]
     config: DataflowBuildConfigView
     complete_assignments: AssignmentMapping
@@ -58,7 +59,9 @@ def assert_dataflow_op_conforms(
 ) -> DataflowOpConformanceResult:
     """Exercise the common model-aware projection and persistence lifecycle."""
 
-    node = case.model.graph.node[0]
+    nodes = tuple(node for node in case.model.graph.node if node.name == case.node_name)
+    assert len(nodes) == 1
+    node = nodes[0]
     operation = case.model.get_customop_wrapper(node)
     assert isinstance(operation, case.operation_type)
     assert isinstance(operation, DataflowOp)
@@ -91,7 +94,8 @@ def assert_dataflow_op_conforms(
     assert 0 < len(partial.assignments) < len(assignment_items)
     case.model.save(case.reload_path)
     reloaded_model = ModelWrapper(str(case.reload_path))
-    reloaded = reloaded_model.get_customop_wrapper(reloaded_model.graph.node[0])
+    reloaded_node = next(node for node in reloaded_model.graph.node if node.name == case.node_name)
+    reloaded = reloaded_model.get_customop_wrapper(reloaded_node)
     assert isinstance(reloaded, case.operation_type)
     assert reloaded.hydrate_dataflow_point(case.config).assignments == partial.assignments
 
@@ -100,7 +104,8 @@ def assert_dataflow_op_conforms(
     assert isinstance(original.result, (RegionRef, NetworkRef))
     reloaded_model.save(case.reload_path)
     final_model = ModelWrapper(str(case.reload_path))
-    final_operation = final_model.get_customop_wrapper(final_model.graph.node[0])
+    final_node = next(node for node in final_model.graph.node if node.name == case.node_name)
+    final_operation = final_model.get_customop_wrapper(final_node)
     assert isinstance(final_operation, case.operation_type)
     restored = final_operation.resolve_dataflow(case.config)
     assert restored.point.assignments == original.point.assignments
@@ -117,7 +122,8 @@ def assert_dataflow_op_conforms(
     if case.mutate_graph_problem is not None:
         stale_model = ModelWrapper(final_model.model, make_deepcopy=True)
         case.mutate_graph_problem(stale_model)
-        stale_operation = stale_model.get_customop_wrapper(stale_model.graph.node[0])
+        stale_node = next(node for node in stale_model.graph.node if node.name == case.node_name)
+        stale_operation = stale_model.get_customop_wrapper(stale_node)
         assert isinstance(stale_operation, case.operation_type)
         _expects_dataflow_error(
             lambda: stale_operation.hydrate_dataflow_point(case.config),

@@ -57,7 +57,7 @@ from finn.dataflow.ops.mvau import (
     MVAUWeightDeliveryDeclaration,
 )
 from finn.dataflow.resolution import ResolvedDataflowOp
-from finn.dataflow.op import DataflowOpError
+from finn.dataflow.op import DataflowOpError, NodeAttributeType
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterBinding,
     CyclicParameterKernelPaths,
@@ -71,6 +71,14 @@ _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
 MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v5"
+MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
+    {
+        "noActivation": ("i", False, 1, {0, 1}),
+        "binaryXnorMode": ("i", False, 0, {0, 1}),
+        "accDataType": ("s", False, "INT32", None),
+        "ActVal": ("i", False, 0, None),
+    }
+)
 
 
 class _DataTypeLike(Protocol):
@@ -279,6 +287,32 @@ def _attribute(node: NodeProto, name: str) -> tuple[object | None, bool]:
 def _attribute_value(node: NodeProto, name: str, default: object) -> object:
     value, present = _attribute(node, name)
     return value if present else default
+
+
+def _logical_source_attributes(
+    node: NodeProto,
+    findings: list[Finding],
+) -> Mapping[str, object]:
+    values: dict[str, object] = {}
+    for name, (storage_type, _required, default, allowed) in MVAU_LOGICAL_SOURCE_NODEATTRS.items():
+        value, present = _attribute(node, name)
+        value = value if present else default
+        valid_type = (storage_type == "i" and type(value) is int) or (
+            storage_type == "s" and type(value) is str
+        )
+        if not valid_type or (allowed is not None and value not in allowed):
+            findings.append(
+                _finding(
+                    FindingKind.REJECTION,
+                    "mvau-logical-source-attribute-invalid",
+                    MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
+                    "logical MVAU source attribute is malformed or outside its domain",
+                    attribute=name,
+                )
+            )
+            continue
+        values[name] = value
+    return MappingProxyType(values)
 
 
 def _numeric_element_type(datatype: object) -> NumericElementType | None:
@@ -561,16 +595,13 @@ def _legacy_assignments(
     return assignments
 
 
-def project_mvau_source(
+def project_mvau_graph_source(
     model: MVAUModelAccessor,
     source_node_id: str,
-    context: MVAUProjectionContext,
     *,
-    import_mode: MVAULegacyImportMode = MVAULegacyImportMode.PROJECT_ONLY,
+    source_scope_id: str | None = None,
 ) -> MVAUSourceProjection:
-    """Project one real FINN MVAU node into the existing op design space."""
-    if not isinstance(import_mode, MVAULegacyImportMode):
-        raise TypeError("import_mode must be an MVAULegacyImportMode")
+    """Project graph-owned facts for one real FINN MVAU source node."""
     findings: list[Finding] = []
     node = _find_source_node(model, source_node_id)
     if node is None:
@@ -596,7 +627,16 @@ def project_mvau_source(
             )
         )
         return MVAUSourceProjection(None, {}, {}, tuple(findings))
-    no_activation = bool(_attribute_value(node, "noActivation", 0))
+    logical_attributes = _logical_source_attributes(node, findings) if logical_node else {}
+    if logical_node and len(logical_attributes) != len(MVAU_LOGICAL_SOURCE_NODEATTRS):
+        return MVAUSourceProjection(None, {}, {}, tuple(findings))
+
+    def source_attribute(name: str, legacy_default: object) -> object:
+        if logical_node:
+            return logical_attributes[name]
+        return _attribute_value(node, name, legacy_default)
+
+    no_activation = bool(source_attribute("noActivation", 0))
     expected_inputs = 2 if no_activation else 3
     if len(node.input) != expected_inputs or len(node.output) != 1:
         findings.append(
@@ -656,7 +696,7 @@ def project_mvau_source(
         "output",
         findings,
     )
-    accumulator_name = _attribute_value(node, "accDataType", "INT32")
+    accumulator_name = source_attribute("accDataType", "INT32")
     try:
         accumulator_type = _numeric_element_type(DataType[cast(str, accumulator_name)])
     except (KeyError, TypeError, ValueError):
@@ -801,9 +841,7 @@ def project_mvau_source(
             )
         )
     runtime_writable = (
-        bool(_attribute_value(node, "runtime_writeable_weights", 0))
-        if context.runtime_writable_weights is None
-        else context.runtime_writable_weights
+        False if logical_node else bool(_attribute_value(node, "runtime_writeable_weights", 0))
     )
     weight_initialized = model.get_initializer(weight_id) is not None
     if not logical_node and mem_mode == "internal_embedded" and not weight_initialized:
@@ -813,20 +851,6 @@ def project_mvau_source(
                 "mvau-source-weight-initializer-missing",
                 MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE,
                 "embedded MVAU weights require an initializer",
-                tensor=weight_id,
-            )
-        )
-    if (
-        not logical_node
-        and mem_mode == "internal_decoupled"
-        and not (weight_initialized or runtime_writable)
-    ):
-        findings.append(
-            _finding(
-                FindingKind.BLOCKER,
-                "mvau-source-cyclic-state-unavailable",
-                CyclicParameterKernelPaths.INITIALIZER_AVAILABLE,
-                "cyclic delivery requires initialized or runtime-writable weights",
                 tensor=weight_id,
             )
         )
@@ -866,41 +890,15 @@ def project_mvau_source(
             )
         )
 
-    target = _dsp_block(context.fpga_part) if context.fpga_part is not None else None
-    if context.fpga_part is not None and target is None:
-        findings.append(
-            _finding(
-                FindingKind.LIMITATION,
-                "mvau-target-part-unknown",
-                MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
-                "target FPGA part cannot be classified into a supported DSP family",
-                fpga_part=context.fpga_part,
-            )
-        )
-    if (
-        not logical_node
-        and interleave > 1
-        and target is not None
-        and target is not MVAUDspBlock.DSP58
-    ):
-        findings.append(
-            _finding(
-                FindingKind.LIMITATION,
-                "mvau-source-interleave-target-unsupported",
-                MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
-                "batch-interleaved RTL MVAU requires a DSP58 target",
-                target=target.value,
-            )
-        )
     computation = (
         MVAUComputationProfile.FUSED_THRESHOLD
         if not no_activation
         else MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR
-        if bool(_attribute_value(node, "binaryXnorMode", 0))
+        if bool(source_attribute("binaryXnorMode", 0))
         else MVAUComputationProfile.ACCUMULATOR_INTEGER
     )
     description = MVAUSourceDescription(
-        source_node_id,
+        source_scope_id or source_node_id,
         activation_id,
         weight_id,
         output_id,
@@ -916,9 +914,6 @@ def project_mvau_source(
         MVAUComputeKernelPaths.MATRIX_HEIGHT: mh,
         MVAUComputeKernelPaths.COMPUTATION_PROFILE: computation,
         MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE: weight_initialized,
-        MVAUComputeKernelPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER: (
-            context.accumulator_type_analysis_owner
-        ),
         CyclicParameterKernelPaths.INITIALIZER_AVAILABLE: weight_initialized,
     }
     weight_initializer = model.get_initializer(weight_id)
@@ -942,13 +937,6 @@ def project_mvau_source(
         problem[MVAUComputeKernelPaths.THRESHOLD_ELEMENT_TYPE] = threshold_type
     if threshold_initialized is not None:
         problem[MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE] = threshold_initialized
-    problem.update(
-        project_mvau_build_problem(
-            context,
-            runtime_writable_weights=runtime_writable,
-        )
-    )
-    assignments: dict[QualifiedPath, object] = {}
     if activation_type is not None and weight_type is not None:
         weights_narrow = _weights_are_narrow(
             model,
@@ -958,17 +946,132 @@ def project_mvau_source(
             runtime_writable,
         )
         problem[MVAUComputeKernelPaths.WEIGHTS_NARROW] = weights_narrow
-        if not logical_node and import_mode is MVAULegacyImportMode.PRESERVE_SPECIALIZATION:
-            assignments = _legacy_assignments(
-                node,
-                mem_mode,
-                target,
-                activation_type,
-                weight_type,
-                weights_narrow,
-                findings,
+    return MVAUSourceProjection(description, problem, {}, tuple(findings))
+
+
+def project_mvau_source(
+    model: MVAUModelAccessor,
+    source_node_id: str,
+    context: MVAUProjectionContext,
+    *,
+    import_mode: MVAULegacyImportMode = MVAULegacyImportMode.PROJECT_ONLY,
+    source_scope_id: str | None = None,
+) -> MVAUSourceProjection:
+    """Compose graph-owned and build-owned facts for one MVAU problem."""
+
+    if not isinstance(import_mode, MVAULegacyImportMode):
+        raise TypeError("import_mode must be an MVAULegacyImportMode")
+    graph_projection = project_mvau_graph_source(
+        model,
+        source_node_id,
+        source_scope_id=source_scope_id,
+    )
+    node = _find_source_node(model, source_node_id)
+    if node is None or graph_projection.source_description is None:
+        return graph_projection
+    logical_node = node.op_type == "MvauDataflowOp" and node.domain == "finn.custom_op.dataflow"
+    findings = list(graph_projection.findings)
+    runtime_writable = (
+        False
+        if logical_node and context.runtime_writable_weights is None
+        else bool(_attribute_value(node, "runtime_writeable_weights", 0))
+        if context.runtime_writable_weights is None
+        else context.runtime_writable_weights
+    )
+    weight_initialized = model.get_initializer(node.input[1]) is not None
+    mem_mode = (
+        "logical"
+        if logical_node
+        else cast(str, _attribute_value(node, "mem_mode", "internal_decoupled"))
+    )
+    if (
+        not logical_node
+        and mem_mode == "internal_decoupled"
+        and not (weight_initialized or runtime_writable)
+    ):
+        findings.append(
+            _finding(
+                FindingKind.BLOCKER,
+                "mvau-source-cyclic-state-unavailable",
+                CyclicParameterKernelPaths.INITIALIZER_AVAILABLE,
+                "cyclic delivery requires initialized or runtime-writable weights",
+                tensor=node.input[1],
             )
-    return MVAUSourceProjection(description, problem, assignments, tuple(findings))
+        )
+
+    target = _dsp_block(context.fpga_part) if context.fpga_part is not None else None
+    if context.fpga_part is not None and target is None:
+        findings.append(
+            _finding(
+                FindingKind.LIMITATION,
+                "mvau-target-part-unknown",
+                MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
+                "target FPGA part cannot be classified into a supported DSP family",
+                fpga_part=context.fpga_part,
+            )
+        )
+    interleave = 1 if logical_node else cast(int, _attribute_value(node, "TH", 1))
+    if (
+        not logical_node
+        and interleave > 1
+        and target is not None
+        and target is not MVAUDspBlock.DSP58
+    ):
+        findings.append(
+            _finding(
+                FindingKind.LIMITATION,
+                "mvau-source-interleave-target-unsupported",
+                MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
+                "batch-interleaved RTL MVAU requires a DSP58 target",
+                target=target.value,
+            )
+        )
+
+    problem = dict(graph_projection.problem_data)
+    problem[MVAUComputeKernelPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER] = (
+        context.accumulator_type_analysis_owner
+    )
+    problem.update(
+        project_mvau_build_problem(
+            context,
+            runtime_writable_weights=runtime_writable,
+        )
+    )
+    activation_type = problem.get(MVAUComputeKernelPaths.ACTIVATION_ELEMENT_TYPE)
+    weight_type = problem.get(MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE)
+    if isinstance(activation_type, NumericElementType) and isinstance(
+        weight_type, NumericElementType
+    ):
+        problem[MVAUComputeKernelPaths.WEIGHTS_NARROW] = _weights_are_narrow(
+            model,
+            node.input[1],
+            weight_type,
+            mem_mode,
+            runtime_writable,
+        )
+
+    assignments: dict[QualifiedPath, object] = {}
+    if (
+        not logical_node
+        and import_mode is MVAULegacyImportMode.PRESERVE_SPECIALIZATION
+        and isinstance(activation_type, NumericElementType)
+        and isinstance(weight_type, NumericElementType)
+    ):
+        assignments = _legacy_assignments(
+            node,
+            mem_mode,
+            target,
+            activation_type,
+            weight_type,
+            cast(bool, problem[MVAUComputeKernelPaths.WEIGHTS_NARROW]),
+            findings,
+        )
+    return MVAUSourceProjection(
+        graph_projection.source_description,
+        problem,
+        assignments,
+        tuple(findings),
+    )
 
 
 def start_mvau_projection(
@@ -1360,6 +1463,7 @@ def reconstitute_mvau_selection(
 
 __all__ = [
     "MVAU_DECLARATION_FAMILY_VERSION",
+    "MVAU_LOGICAL_SOURCE_NODEATTRS",
     "MVAU_SOURCE_MAPPING",
     "MVAULegacyImportMode",
     "MVAUModelAccessor",
@@ -1373,6 +1477,7 @@ __all__ = [
     "mvau_problem_fingerprint",
     "make_mvau_selection_envelope",
     "parse_mvau_selection_envelope",
+    "project_mvau_graph_source",
     "project_mvau_source",
     "project_mvau_build_problem",
     "reconstitute_mvau_selection",

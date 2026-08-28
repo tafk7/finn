@@ -29,14 +29,14 @@ from finn.dataflow.design import DesignSpaceSpec, Engine, Finding, FindingKind, 
 from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS
 from finn.dataflow.mvau.definition import MVAUComputeKernelPaths
 from finn.dataflow.mvau.source import (
-    MVAU_DECLARATION_FAMILY_VERSION,
+    MVAU_LOGICAL_SOURCE_NODEATTRS,
     MVAUProjectionContext,
     MVAUResolvedDesign,
     MVAUSourceAdapterError,
     MVAUSourceProjection,
     classify_mvau_dsp_block,
     project_mvau_build_problem,
-    project_mvau_source,
+    project_mvau_graph_source,
     resolve_mvau_point,
 )
 from finn.dataflow.ops.mvau import (
@@ -46,6 +46,8 @@ from finn.dataflow.ops.mvau import (
 )
 from finn.dataflow.parameters.cyclic.definition import CyclicParameterKernelPaths
 from finn.dataflow.region import BeatSequence
+
+MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v1"
 
 
 @dataclass(frozen=True)
@@ -72,7 +74,7 @@ class MvauDataflowOp(DataflowOp):
 
     @classmethod
     def dataflow_family_version(cls) -> str:
-        return MVAU_DECLARATION_FAMILY_VERSION
+        return MVAU_DATAFLOW_OP_FAMILY_VERSION
 
     @classmethod
     def build_design_space_spec(cls) -> DesignSpaceSpec:
@@ -88,43 +90,24 @@ class MvauDataflowOp(DataflowOp):
 
     @classmethod
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:
-        return {
-            "noActivation": ("i", False, 1, {0, 1}),
-            "binaryXnorMode": ("i", False, 0, {0, 1}),
-            "accDataType": ("s", False, "INT32", None),
-            "ActVal": ("i", False, 0, None),
-        }
+        return MVAU_LOGICAL_SOURCE_NODEATTRS
 
     @classmethod
     def decision_nodeattrs(cls) -> Mapping[QualifiedPath, NodeAttrCodec]:
         return MVAU_DECISION_NODEATTRS
 
     def _graph_projection(self) -> MVAUSourceProjection:
-        projection = project_mvau_source(
+        projection = project_mvau_graph_source(
             self._attached_model(),
             self.onnx_node.name,
-            MVAUProjectionContext(
-                "finn.MinimizeAccumulatorWidth",
-                runtime_writable_weights=False,
-            ),
+            source_scope_id=self.dataflow_scope_id(),
         )
         if projection.blocking_findings:
             raise MVAUSourceAdapterError(projection.blocking_findings)
         return projection
 
     def project_graph_problem(self) -> Mapping[QualifiedPath, object]:
-        problem = dict(self._graph_projection().problem_data)
-        for path in (
-            CyclicParameterKernelPaths.RUNTIME_WRITABLE,
-            MVAUComputeKernelPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER,
-            MVAUComputeKernelPaths.TARGET_DSP_BLOCK,
-            CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES,
-            MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
-            MVAUDataflowOpPaths.TARGET_FPGA_PART,
-            MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
-        ):
-            problem.pop(path, None)
-        return problem
+        return self._graph_projection().problem_data
 
     @staticmethod
     def _context_parts(
@@ -208,7 +191,7 @@ class MvauDataflowOp(DataflowOp):
             Engine(),
             point,
             projection,
-            source_scope_id=self._resolution_scope_id(point.problem),
+            source_scope_id=self.dataflow_scope_id(),
         )
 
     def make_shape_compatible_op(self, model: ModelWrapper) -> NodeProto:
@@ -265,4 +248,8 @@ class MvauDataflowOp(DataflowOp):
         self._graph_projection()
 
 
-__all__ = ["MVAUDataflowBuildContext", "MvauDataflowOp"]
+__all__ = [
+    "MVAU_DATAFLOW_OP_FAMILY_VERSION",
+    "MVAUDataflowBuildContext",
+    "MvauDataflowOp",
+]

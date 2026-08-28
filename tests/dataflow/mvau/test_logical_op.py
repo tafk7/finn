@@ -16,13 +16,16 @@ import pytest
 from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
+from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
+from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow.design import Decided, Engine, QualifiedPath
 from finn.dataflow.mvau.artifacts import (
     MVAUWeightPayloadKind,
     build_mvau_rtl_artifact_requirements,
 )
+from finn.dataflow.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.mvau.regions import (
@@ -75,6 +78,8 @@ def _model(
     repetitions: int = 4,
     fused: bool = False,
     with_initializer: bool = True,
+    no_activation_attribute: int | None = None,
+    binary_xnor_attribute: int | None = 0,
 ) -> ModelWrapper:
     matrix_width = 4
     matrix_height = 4
@@ -91,16 +96,24 @@ def _model(
     output = helper.make_tensor_value_info(
         "output", TensorProto.FLOAT, [repetitions, matrix_height]
     )
+    attributes: dict[str, object] = {
+        "accDataType": "INT16",
+        "ActVal": 0,
+    }
+    if no_activation_attribute is not None:
+        attributes["noActivation"] = no_activation_attribute
+    elif fused:
+        attributes["noActivation"] = 0
+    if binary_xnor_attribute is not None:
+        attributes["binaryXnorMode"] = binary_xnor_attribute
     node = helper.make_node(
         "MvauDataflowOp",
         inputs,
         ["output"],
         name=NODE_ID,
         domain="finn.custom_op.dataflow",
-        noActivation=0 if fused else 1,
-        binaryXnorMode=0,
-        accDataType="INT16",
-        ActVal=0,
+        dataflow_scope_id=f"{NODE_ID}_scope",
+        **attributes,
     )
     model = ModelWrapper(
         qonnx_make_model(
@@ -213,6 +226,7 @@ def _standalone(
             external_weight_sequence=context.external_weight_sequence,
             runtime_writable_weights=context.runtime_writable_weights,
         ),
+        source_scope_id=f"{NODE_ID}_scope",
     )
     return start_mvau_projection(projection, assignments)
 
@@ -247,12 +261,33 @@ def test_logical_mvau_registration_static_spec_and_problem_projection_parity() -
             clock_period_ns=5.0,
             runtime_writable_weights=False,
         ),
+        source_scope_id=operation.dataflow_scope_id(),
     )
 
     assert operation._attached_model() is model
     assert type(operation).build_design_space_spec() is MVAU_DATAFLOW_OP_SPEC
     assert operation.problem_instance(context) == expected.problem_data
     assert operation.read_assignments() == {}
+
+
+def test_logical_source_attributes_use_declared_defaults_and_reject_invalid_values() -> None:
+    operation = _wrapped(_model(no_activation_attribute=None))
+    assert operation.get_nodeattr("noActivation") == 1
+    assert (
+        operation.problem_instance(_context())[MVAUComputeKernelPaths.COMPUTATION_PROFILE]
+        is MVAUComputationProfile.ACCUMULATOR_INTEGER
+    )
+
+    for name in ("noActivation", "binaryXnorMode"):
+        invalid = _model(
+            no_activation_attribute=2 if name == "noActivation" else 1,
+            binary_xnor_attribute=2 if name == "binaryXnorMode" else 0,
+        )
+        with pytest.raises(DataflowOpError) as malformed:
+            _wrapped(invalid).problem_instance(_context())
+        assert {finding.code for finding in malformed.value.findings} == {
+            "mvau-logical-source-attribute-invalid"
+        }
 
 
 def test_graph_and_build_projection_keep_fact_ownership_explicit() -> None:
@@ -344,6 +379,7 @@ def test_logical_mvau_region_topologies_match_standalone_resolution(
             clock_period_ns=5.0,
             runtime_writable_weights=False,
         ),
+        source_scope_id=operation.dataflow_scope_id(),
     )
     assert isinstance(resolved, MVAUResolvedDesign)
     assert isinstance(resolved.result, expected_type)
@@ -541,6 +577,24 @@ print(json.dumps({
     }
 
 
+def test_logical_mvau_node_rename_preserves_scope_selection_and_provider_lookup() -> None:
+    model = _model()
+    operation = _wrapped(model)
+    operation.commit_dataflow_assignments(
+        _context(),
+        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
+    )
+    original = operation.resolve_dataflow(_context())
+    operation.onnx_node.name = "renamed_mvau"
+
+    renamed = operation.resolve_dataflow(_context())
+    assert renamed.source_scope_id == original.source_scope_id
+    assert renamed.result == original.result
+    elaboration = elaborate_mvau_rtl_softvec(renamed)
+    requirements = build_mvau_rtl_artifact_requirements(renamed, elaboration, model, Path.cwd())
+    assert requirements.source_scope_id == original.source_scope_id
+
+
 def test_logical_mvau_reference_execution() -> None:
     model = _model(repetitions=2)
     operation = _wrapped(model)
@@ -554,6 +608,17 @@ def test_logical_mvau_reference_execution() -> None:
     }
     operation.execute_node(context, model.graph)
     np.testing.assert_array_equal(context["output"], np.matmul(activation, weights))
+
+
+def test_logical_mvau_executes_and_verifies_through_normal_model_consumers() -> None:
+    model = _model(repetitions=2)
+    activation = np.asarray([[1, 2, 3, 4], [-1, 0, 1, 2]], dtype=np.float32)
+    weights = model.get_initializer("weights")
+    assert weights is not None
+
+    output = execute_onnx(model, {"activation": activation})
+    np.testing.assert_array_equal(output["output"], np.matmul(activation, weights))
+    assert model.analysis(verify_nodes) == {"MvauDataflowOp": None}
 
 
 def test_logical_mvau_shape_datatype_and_verification_follow_source_semantics() -> None:
@@ -605,6 +670,7 @@ def test_logical_mvau_passes_shared_operation_conformance_harness(tmp_path: Path
     result = assert_dataflow_op_conforms(
         DataflowOpConformanceCase(
             model=_model(),
+            node_name=NODE_ID,
             operation_type=MvauDataflowOp,
             config=_context(),
             complete_assignments=assignments,

@@ -130,6 +130,7 @@ def _logical_selected(model: ModelWrapper, mem_mode: str):
             helper.make_attribute("noActivation", 1),
             helper.make_attribute("binaryXnorMode", 0),
             helper.make_attribute("accDataType", "INT16"),
+            helper.make_attribute("dataflow_scope_id", f"{NODE_ID}_scope"),
         ]
     )
     model.model.opset_import.append(helper.make_opsetid("finn.custom_op.dataflow", 1))

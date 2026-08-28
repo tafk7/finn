@@ -19,6 +19,72 @@ explicit mapping from persistent decision paths to ONNX attributes. The MVAU
 reference implementation is ``finn.dataflow.ops.mvau_op.MvauDataflowOp`` and
 is registered in the ``finn.custom_op.dataflow`` ONNX domain.
 
+A minimal complete subclass has this shape. ``TINY_SPEC`` and ``TinyPaths``
+are ordinary declarations built with ``finn.dataflow.design``; the result
+property must produce a ``RegionRef`` or ``NetworkRef``.
+
+.. code-block:: python
+
+   class TinyDataflowOp(DataflowOp):
+       @classmethod
+       def dataflow_family_id(cls):
+           return "example.tiny"
+
+       @classmethod
+       def dataflow_family_version(cls):
+           return "1"
+
+       @classmethod
+       def build_design_space_spec(cls):
+           return TINY_SPEC
+
+       @classmethod
+       def result_path(cls):
+           return TinyPaths.RESULT
+
+       @classmethod
+       def source_association_path(cls):
+           return TinyPaths.SOURCE_ASSOCIATION
+
+       @classmethod
+       def decision_nodeattrs(cls):
+           return {TinyPaths.LANES: NodeAttrCodec.integer("dataflow_lanes")}
+
+       def project_graph_problem(self):
+           model = self._attached_model()
+           return {TinyPaths.SHAPE: tuple(model.get_tensor_shape(self.onnx_node.input[0]))}
+
+       def project_build_problem(self, config):
+           return {TinyPaths.CLOCK_NS: float(config.synth_clk_period_ns)}
+
+       def make_shape_compatible_op(self, model):
+           return self.make_const_shape_op(model.get_tensor_shape(self.onnx_node.input[0]))
+
+       def infer_node_datatype(self, model):
+           model.set_tensor_datatype(
+               self.onnx_node.output[0],
+               model.get_tensor_datatype(self.onnx_node.input[0]),
+           )
+
+       def execute_node(self, context, graph):
+           context[self.onnx_node.output[0]] = context[self.onnx_node.input[0]].copy()
+
+       def verify_node(self):
+           if len(self.onnx_node.input) != 1 or len(self.onnx_node.output) != 1:
+               raise ValueError("TinyDataflowOp requires one input and one output")
+
+Register it through the custom domain's public export list:
+
+.. code-block:: python
+
+   # finn/custom_op/dataflow/__init__.py
+   from my_package.tiny import TinyDataflowOp
+
+   __all__ = ["TinyDataflowOp"]
+
+The ONNX ``op_type`` must match the class name and the node domain must resolve
+to that Python package.
+
 Model-aware construction
 ------------------------
 
@@ -82,6 +148,15 @@ old choices against a different problem. Regions, networks, constraints,
 readiness results, elaborations, and artifacts are always recomputed and are
 never stored as node attributes.
 
+Scope identity exists independently of selection. A lowering pass should put a
+new ``dataflow_scope_id`` on the node when it creates the logical operation, or
+call ``initialize_dataflow_scope_id`` explicitly before evaluation. Clearing or
+replacing choices preserves that ID. An ordinary protobuf copy intentionally
+retains the same identity; a rewrite that creates a semantically distinct clone
+must call ``renew_dataflow_scope_id``, which assigns a fresh ID and clears the
+copied selection. Renaming ``node.name`` does not change the scope identity or
+invalidate a selection.
+
 MVAU build context
 ------------------
 
@@ -115,6 +190,26 @@ save/reload hydration, stale-problem rejection, and
 ``RegionRef | NetworkRef`` result discipline. A new operation should run this
 harness in addition to operation-specific exact schedule, requirement,
 availability, and ``BeatSequence`` tests.
+
+.. code-block:: python
+
+   from finn.dataflow.testing import (
+       DataflowOpConformanceCase,
+       assert_dataflow_op_conforms,
+   )
+
+   result = assert_dataflow_op_conforms(
+       DataflowOpConformanceCase(
+           model=model,
+           node_name="tiny0",
+           operation_type=TinyDataflowOp,
+           config=build_config,
+           complete_assignments={TinyPaths.LANES: 4},
+           rejected_assignments={TinyPaths.LANES: 3},
+           reload_path=tmp_path / "tiny.onnx",
+           stale_config=changed_build_config,
+       )
+   )
 
 Standard ONNX lowering, fusion discovery, Kernel binding contributions, and
 implementation providers are separate extension points. A ``DataflowOp`` must

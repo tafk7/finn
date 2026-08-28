@@ -23,16 +23,22 @@ from finn.dataflow.authoring import DataflowOpError, NodeAttrCodec
 from finn.dataflow.resolution import RegionRef
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
 
-from dataflow.synthetic_op import SyntheticDataflowOp, SyntheticMode, SyntheticPaths
+from dataflow.synthetic_op import (
+    SyntheticDataflowOp,
+    SyntheticMode,
+    SyntheticPaths,
+    ZeroDecisionDataflowOp,
+)
 
 
-def _model(extent: int = 4) -> ModelWrapper:
+def _model(extent: int = 4, op_type: str = "SyntheticDataflowOp") -> ModelWrapper:
     node = helper.make_node(
-        "SyntheticDataflowOp",
+        op_type,
         ["x"],
         ["y"],
         name="synthetic0",
         domain="dataflow.synthetic_op",
+        dataflow_scope_id="synthetic-scope",
     )
     graph = helper.make_graph(
         [node],
@@ -175,7 +181,7 @@ def test_scalar_codecs_partial_and_complete_reload(tmp_path: Path) -> None:
     assert complete.point.assignments == _complete_assignments()
     resolved = partial_reloaded.resolve_dataflow(_config())
     assert isinstance(resolved.result, RegionRef)
-    assert resolved.source_association == "synthetic0"
+    assert resolved.source_association == "synthetic-scope"
     complete_path = tmp_path / "complete.onnx"
     partial_reloaded._attached_model().save(complete_path)
     restored = _wrapped(ModelWrapper(str(complete_path))).resolve_dataflow(_config())
@@ -242,12 +248,54 @@ def test_raw_decision_attribute_without_identity_metadata_is_not_trusted() -> No
 
 
 def test_scope_identity_is_stored_independently_of_node_name() -> None:
-    wrapped = _wrapped(_model())
-    wrapped.commit_dataflow_assignments(_config(), {SyntheticPaths.LANES: 2})
-    scope_id = wrapped.get_nodeattr(wrapped.SCOPE_ID_ATTR)
+    model = _model()
+    wrapped = _wrapped(model)
+    wrapped.commit_dataflow_assignments(_config(), _complete_assignments())
+    original = wrapped.resolve_dataflow(_config())
+    scope_id = wrapped.dataflow_scope_id()
     assert isinstance(scope_id, str) and scope_id
+    wrapped.clear_dataflow_assignments()
+    assert wrapped.dataflow_scope_id() == scope_id
+    wrapped.commit_dataflow_assignments(_config(), _complete_assignments())
+    assert wrapped.dataflow_scope_id() == scope_id
     wrapped.onnx_node.name = "renamed"
-    assert wrapped.get_nodeattr(wrapped.SCOPE_ID_ATTR) == scope_id
+    assert wrapped.dataflow_scope_id() == scope_id
+    renamed = wrapped.resolve_dataflow(_config())
+    assert renamed.result == original.result
+
+    cloned_model = ModelWrapper(model.model, make_deepcopy=True)
+    cloned = _wrapped(cloned_model)
+    assert cloned.dataflow_scope_id() == scope_id
+    renewed = cloned.renew_dataflow_scope_id()
+    assert renewed != scope_id
+    assert cloned.dataflow_scope_id() == renewed
+    assert cloned.read_assignments() == {}
+
+
+def test_zero_decision_operation_resolves_with_operation_owned_scope() -> None:
+    model = _model(op_type="ZeroDecisionDataflowOp")
+    operation = model.get_customop_wrapper(model.graph.node[0])
+    assert isinstance(operation, ZeroDecisionDataflowOp)
+    resolved = operation.resolve_dataflow(_config())
+    assert resolved.point.assignments == {}
+    assert resolved.source_scope_id == "synthetic-scope"
+
+
+def test_scope_identity_can_be_initialized_before_any_assignment() -> None:
+    model = _model()
+    node = model.graph.node[0]
+    scope_attribute = next(
+        attribute for attribute in node.attribute if attribute.name == "dataflow_scope_id"
+    )
+    node.attribute.remove(scope_attribute)
+    operation = _wrapped(model)
+    with pytest.raises(DataflowOpError) as missing:
+        operation.dataflow_scope_id()
+    assert {finding.code for finding in missing.value.findings} == {"dataflow-scope-id-missing"}
+    assert operation.initialize_dataflow_scope_id("created-before-selection") == (
+        "created-before-selection"
+    )
+    assert operation.read_assignments() == {}
 
 
 def test_unknown_attributes_are_not_assignments_and_clear_and_replace_are_exact() -> None:
@@ -295,6 +343,7 @@ def test_reference_execution_remains_normal_customop_behavior() -> None:
 def test_synthetic_operation_passes_shared_conformance_harness(tmp_path: Path) -> None:
     case = DataflowOpConformanceCase(
         model=_model(),
+        node_name="synthetic0",
         operation_type=SyntheticDataflowOp,
         config=_config(),
         complete_assignments=_complete_assignments(),

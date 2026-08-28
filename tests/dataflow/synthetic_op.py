@@ -46,7 +46,7 @@ from finn.dataflow.region import (
 )
 from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, RegionRef
 
-__all__ = ["SyntheticDataflowOp"]
+__all__ = ["SyntheticDataflowOp", "ZeroDecisionDataflowOp"]
 
 
 class SyntheticMode(str, Enum):
@@ -90,13 +90,7 @@ def _derive_association(dependencies: DependencyView) -> Answer[object]:
     return Decided(cast(str, dependencies["source_id"]))
 
 
-def _derive_region(dependencies: DependencyView) -> Answer[object]:
-    extent = cast(int, dependencies["extent"])
-    # Read every decision so the synthetic result exercises every codec.
-    cast(int, dependencies["lanes"])
-    cast(bool, dependencies["enabled"])
-    cast(str, dependencies["label"])
-    cast(SyntheticMode, dependencies["mode"])
+def _region(extent: int) -> DataflowRegion:
     element_type = NumericElementType("int", 8)
     source = Operand("x", element_type, (extent,))
     result = Operand("y", element_type, (extent,))
@@ -108,21 +102,29 @@ def _derive_region(dependencies: DependencyView) -> Answer[object]:
     availability: dict[tuple[int, ...], tuple[int, ...]] = {
         (index,): (index,) for index in range(extent)
     }
-    return Decided(
-        DataflowRegion(
-            schedule,
-            (
-                InputInterface(
-                    Port("input", source, beats), ScheduledInputRequirements(requirements)
-                ),
+    return DataflowRegion(
+        schedule,
+        (InputInterface(Port("input", source, beats), ScheduledInputRequirements(requirements)),),
+        (
+            OutputInterface(
+                Port("output", result, beats), ScheduledOutputAvailability(availability)
             ),
-            (
-                OutputInterface(
-                    Port("output", result, beats), ScheduledOutputAvailability(availability)
-                ),
-            ),
-        )
+        ),
     )
+
+
+def _derive_region(dependencies: DependencyView) -> Answer[object]:
+    extent = cast(int, dependencies["extent"])
+    # Read every decision so the synthetic result exercises every codec.
+    cast(int, dependencies["lanes"])
+    cast(bool, dependencies["enabled"])
+    cast(str, dependencies["label"])
+    cast(SyntheticMode, dependencies["mode"])
+    return Decided(_region(extent))
+
+
+def _derive_fixed_region(dependencies: DependencyView) -> Answer[object]:
+    return Decided(_region(cast(int, dependencies["extent"])))
 
 
 def _derive_result(dependencies: DependencyView) -> Answer[object]:
@@ -181,6 +183,39 @@ def build_synthetic_spec() -> DesignSpaceSpec:
     )
 
 
+def build_zero_decision_spec() -> DesignSpaceSpec:
+    source_ref = DependencyRef.problem("source_id", SyntheticPaths.SOURCE_ID, _STR)
+    extent_ref = DependencyRef.problem("extent", SyntheticPaths.EXTENT, _INT)
+    association_ref = DependencyRef.property("association", SyntheticPaths.ASSOCIATION, _STR)
+    region_ref = DependencyRef.property("region", SyntheticPaths.REGION, _REGION)
+    return DesignSpaceSpec(
+        ProblemSchema(
+            (
+                ProblemField(SyntheticPaths.SOURCE_ID, _STR),
+                ProblemField(SyntheticPaths.EXTENT, _INT),
+                ProblemField(SyntheticPaths.CLOCK, _FLOAT),
+            )
+        ),
+        properties=(
+            DerivedProperty(
+                SyntheticPaths.ASSOCIATION,
+                _STR,
+                EvaluatorSpec((source_ref,), _derive_association),
+            ),
+            DerivedProperty(
+                SyntheticPaths.REGION,
+                _REGION,
+                EvaluatorSpec((extent_ref,), _derive_fixed_region),
+            ),
+            DerivedProperty(
+                SyntheticPaths.RESULT,
+                DATAFLOW_OP_RESULT_SEMANTICS,
+                EvaluatorSpec((region_ref, association_ref), _derive_result),
+            ),
+        ),
+    )
+
+
 class SyntheticDataflowOp(DataflowOp):
     """Identity operation used to exercise the generic node lifecycle."""
 
@@ -226,7 +261,7 @@ class SyntheticDataflowOp(DataflowOp):
         if shape is None or len(shape) != 1 or shape[0] <= 0:
             raise ValueError("synthetic input requires one positive dimension")
         return {
-            SyntheticPaths.SOURCE_ID: self.onnx_node.name,
+            SyntheticPaths.SOURCE_ID: self.dataflow_scope_id(),
             SyntheticPaths.EXTENT: int(shape[0]),
         }
 
@@ -250,3 +285,19 @@ class SyntheticDataflowOp(DataflowOp):
     def verify_node(self) -> None:
         if len(self.onnx_node.input) != 1 or len(self.onnx_node.output) != 1:
             raise ValueError("SyntheticDataflowOp requires one input and one output")
+
+
+class ZeroDecisionDataflowOp(SyntheticDataflowOp):
+    """Complete logical operation whose static family has no decisions."""
+
+    @classmethod
+    def dataflow_family_id(cls) -> str:
+        return "test.synthetic.zero_decision"
+
+    @classmethod
+    def build_design_space_spec(cls) -> DesignSpaceSpec:
+        return build_zero_decision_spec()
+
+    @classmethod
+    def decision_nodeattrs(cls) -> Mapping[QualifiedPath, NodeAttrCodec]:
+        return {}

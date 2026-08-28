@@ -11,6 +11,10 @@ The model-aware source-operation surface is `finn.dataflow.authoring`.
 `ModelWrapper.get_customop_wrapper`, project live graph and build facts into a
 problem instance, and persist only explicitly committed decisions as node
 attributes. See `../implementation/dataflow-op.rst` for the contributor guide.
+The implementation began from reviewed FINN baseline
+`28ed4d9736b2447471995f139db8f3e068d262ce`. Its model-aware QONNX dependency
+is pinned to `tafk7/qonnx` commit
+`46b69021e3a38b57c636f6941a52d809c8928a7b`.
 
 The first connected Kernel definitions are the MVAU compute Kernel and cyclic
 parameter-delivery Kernel. `MVAU_COMPUTE_KERNEL_SPEC` declares three complete

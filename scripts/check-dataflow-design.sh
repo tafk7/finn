@@ -19,10 +19,12 @@ export PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
 "$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_mvau_cycle_estimate.py
 
 "$RUFF_BIN" format --check \
+    src/finn/analysis/verify_custom_nodes.py \
     src/finn/dataflow \
     tests/dataflow \
     tests/fpgadataflow/test_mvau_cycle_estimate.py
 "$RUFF_BIN" check \
+    src/finn/analysis/verify_custom_nodes.py \
     src/finn/dataflow \
     tests/dataflow \
     tests/fpgadataflow/test_mvau_cycle_estimate.py
@@ -30,6 +32,7 @@ export PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
 MYPYPATH=src:tests "$MYPY_BIN" \
     --strict \
     --explicit-package-bases \
+    src/finn/analysis/verify_custom_nodes.py \
     src/finn/dataflow/_engine \
     src/finn/dataflow/design \
     src/finn/dataflow/authoring \

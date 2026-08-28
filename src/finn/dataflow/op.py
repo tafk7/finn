@@ -477,19 +477,55 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
             )
         return value
 
+    def dataflow_scope_id(self) -> str:
+        """Return the stable operation-scope identity stored on the node."""
+
+        value = self._metadata_value(self.SCOPE_ID_ATTR)
+        if value is None:
+            raise DataflowOpError(
+                (
+                    _finding(
+                        FindingKind.REJECTION,
+                        "dataflow-scope-id-missing",
+                        "logical dataflow nodes require a stable scope identity",
+                    ),
+                )
+            )
+        return value
+
+    def initialize_dataflow_scope_id(self, scope_id: str | None = None) -> str:
+        """Create the operation identity explicitly, independently of selection."""
+
+        existing = self._metadata_value(self.SCOPE_ID_ATTR)
+        if existing is not None:
+            return existing
+        value = scope_id or f"dataflow_{uuid4().hex}"
+        if not isinstance(value, str) or not value:
+            raise ValueError("scope_id must be a non-empty string")
+        self.set_nodeattr(self.SCOPE_ID_ATTR, value)
+        return value
+
+    def renew_dataflow_scope_id(self) -> str:
+        """Give a semantic clone a fresh identity and clear copied selections."""
+
+        self.clear_dataflow_assignments()
+        value = f"dataflow_{uuid4().hex}"
+        self.set_nodeattr(self.SCOPE_ID_ATTR, value)
+        return value
+
     def _selection_metadata(
         self, problem: Mapping[QualifiedPath, object], *, require_present: bool
     ) -> tuple[str, str, str, str] | None:
-        values = tuple(
+        scope_id = self._metadata_value(self.SCOPE_ID_ATTR)
+        selection_values = tuple(
             self._metadata_value(name)
             for name in (
-                self.SCOPE_ID_ATTR,
                 self.FAMILY_ID_ATTR,
                 self.FAMILY_VERSION_ATTR,
                 self.PROBLEM_FINGERPRINT_ATTR,
             )
         )
-        if all(value is None for value in values):
+        if all(value is None for value in selection_values):
             if require_present:
                 raise DataflowOpError(
                     (
@@ -501,7 +537,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                     )
                 )
             return None
-        if any(value is None for value in values):
+        if scope_id is None or any(value is None for value in selection_values):
             raise DataflowOpError(
                 (
                     _finding(
@@ -511,7 +547,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                     ),
                 )
             )
-        scope_id, family_id, family_version, fingerprint = cast(tuple[str, str, str, str], values)
+        family_id, family_version, fingerprint = cast(tuple[str, str, str], selection_values)
         if (family_id, family_version) != (
             type(self).dataflow_family_id(),
             type(self).dataflow_family_version(),
@@ -589,11 +625,6 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
 
         return self._hydrate_problem(self.problem_instance(config))
 
-    def _resolution_scope_id(self, problem: Mapping[QualifiedPath, object]) -> str:
-        metadata = self._selection_metadata(problem, require_present=True)
-        assert metadata is not None
-        return metadata[0]
-
     def resolve_dataflow(self, config: DataflowBuildConfigView) -> ResolvedDataflowOp:
         """Hydrate the point and require a selected logical result and association."""
 
@@ -634,7 +665,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
             point,
             selected,
             association.value,
-            self._resolution_scope_id(point.problem),
+            self.dataflow_scope_id(),
         )
 
     def _encode_assignments(
@@ -679,8 +710,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         replace: bool,
     ) -> None:
         encoded = self._encode_assignments(assignments)
-        existing_scope = self._metadata_value(self.SCOPE_ID_ATTR)
-        scope_id = existing_scope or uuid4().hex
+        scope_id = self.dataflow_scope_id()
         metadata = {
             self.SCOPE_ID_ATTR: scope_id,
             self.FAMILY_ID_ATTR: type(self).dataflow_family_id(),
@@ -769,9 +799,13 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         return self._commit_replacement(config, assignments, replace=True)
 
     def clear_dataflow_assignments(self) -> None:
-        """Remove persistent decisions and their identity metadata."""
+        """Remove choices and selection metadata while preserving scope identity."""
 
-        names = set(self.RESERVED_NODEATTRS)
+        names = {
+            self.FAMILY_ID_ATTR,
+            self.FAMILY_VERSION_ATTR,
+            self.PROBLEM_FINGERPRINT_ATTR,
+        }
         names.update(codec.attribute_name for codec in type(self).decision_nodeattrs().values())
         kept = [attribute for attribute in self.onnx_node.attribute if attribute.name not in names]
         del self.onnx_node.attribute[:]
