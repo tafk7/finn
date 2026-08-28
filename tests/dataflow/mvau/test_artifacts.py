@@ -520,7 +520,7 @@ def test_soft_vector_and_packed_kernels_preserve_the_same_standard_region() -> N
     selected = _selected(model)
     assert isinstance(selected.result, RegionRef)
     original_region = selected.result.region
-    shared = {
+    shared: dict[QualifiedPath | str, object] = {
         path: value
         for path, value in selected.point.assignments.items()
         if not str(path).startswith("mvau.compute.")

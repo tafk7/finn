@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import inspect
-from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 import pytest
@@ -18,7 +17,7 @@ from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Decided, Engine
-from finn.dataflow.kernels import Kernel, KernelSelection, admissible_kernels
+from finn.dataflow.kernels import KernelSelection, admissible_kernels
 from finn.dataflow.mvau.compute_kernels import (
     LEGACY_HLS_PATHS,
     MVAU_COMPUTE_SELECTION,
@@ -256,7 +255,7 @@ def test_adding_and_removing_a_kernel_moves_admission_without_touching_the_pass(
 
     with_soft_vector: KernelSelection = replace(
         packed_only,
-        kernels=(*packed_only.kernels, cast(Kernel, SOFT_VECTOR_MVAU_KERNEL)),
+        kernels=(*packed_only.kernels, SOFT_VECTOR_MVAU_KERNEL),
     )
     assert admissible_kernels(engine, with_soft_vector, point) == (
         MVAUComputeKernelId.SOFT_VECTOR.value,

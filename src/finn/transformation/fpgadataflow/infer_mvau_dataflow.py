@@ -152,7 +152,7 @@ def recognize_mvau_candidates(model: ModelWrapper) -> tuple[MVAUSourceCandidate,
 
 def _is_bipolar_xnor(model: ModelWrapper, candidate: MVAUSourceCandidate) -> bool:
     bipolar = DataType["BIPOLAR"]
-    return (
+    return bool(
         model.get_tensor_datatype(candidate.activation) == bipolar
         and model.get_tensor_datatype(candidate.weight) == bipolar
     )
@@ -306,7 +306,7 @@ def source_nodes_of(operation: MvauDataflowOp) -> tuple[str, ...]:
     """Return the original source nodes a lowering consumed, in order."""
 
     value = operation.get_nodeattr(SOURCE_NODES_ATTR)
-    text = cast(str, value) if isinstance(value, str) else ""
+    text = value if isinstance(value, str) else ""
     return tuple(item for item in text.split(",") if item)
 
 

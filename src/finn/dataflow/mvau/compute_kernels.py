@@ -606,10 +606,11 @@ def build_legacy_hls_mvau_kernel() -> Kernel:
 
     paths = LEGACY_HLS_PATHS
     weight_source_ref = DependencyRef.decision("weight_source", paths.weight_source, _WEIGHT_SOURCE)
-    streamed_only = EvaluatorSpec(
-        (weight_source_ref,),
-        lambda dependencies: Decided(dependencies["weight_source"] is MVAUWeightSource.STREAMED),
-    )
+
+    def is_streamed(dependencies: DependencyView) -> Answer[bool]:
+        return Decided(dependencies["weight_source"] is MVAUWeightSource.STREAMED)
+
+    streamed_only: EvaluatorSpec[Answer[bool]] = EvaluatorSpec((weight_source_ref,), is_streamed)
     spec = DesignSpaceSpec(
         decisions=(
             Decision(paths.pe, _INTEGER, _divisor_domain(MVAUComputeProblemPaths.MATRIX_HEIGHT)),
@@ -1059,7 +1060,14 @@ def _tiled_width_supported(dependencies: DependencyView) -> Answer[bool]:
 def _batch_interleaved_region(dependencies: DependencyView) -> Answer[object]:
     return Decided(
         construct_batch_interleaved_streamed_mvau_region(
-            *_standard_region_arguments(dependencies),  # type: ignore[arg-type]
+            cast(int, dependencies["repetitions"]),
+            cast(int, dependencies["matrix_width"]),
+            cast(int, dependencies["matrix_height"]),
+            cast(NumericElementType, dependencies["activation_element_type"]),
+            cast(NumericElementType, dependencies["weight_element_type"]),
+            cast(NumericElementType, dependencies["output_element_type"]),
+            cast(int, dependencies["pe"]),
+            cast(int, dependencies["simd"]),
             cast(int, dependencies["interleave"]),
         )
     )

@@ -10,6 +10,7 @@ import pytest
 from finn.dataflow._engine.conformance import MonotonicityHarness
 from finn.dataflow.design import (
     Absent,
+    ConstraintAssessment,
     Decided,
     DesignPoint,
     DesignSpaceSpec,
@@ -164,7 +165,7 @@ def _region(engine: Engine, point: DesignPoint) -> DataflowRegion:
     return answer.value
 
 
-def _feasibility(engine: Engine, point: DesignPoint) -> object:
+def _feasibility(engine: Engine, point: DesignPoint) -> ConstraintAssessment:
     return engine.evaluate_constraint_set(point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set)
 
 

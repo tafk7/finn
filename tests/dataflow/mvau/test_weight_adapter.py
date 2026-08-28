@@ -183,6 +183,7 @@ def test_the_adapter_is_an_ordinary_optional_kernel() -> None:
     ).point
     region = engine.query_property(selected, selection.paths.region)
     assert isinstance(region, Decided)
+    assert isinstance(region.value, DataflowRegion)
     assert not validate_region(region.value)
     assert engine.query_property(selected, selection.paths.selected_kernel) == Decided(
         SelectedKernel(selection.name, FULL_TILE_TO_CHUNKED, "1")
