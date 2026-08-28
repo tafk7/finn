@@ -71,6 +71,11 @@ MVAU_WEIGHT_SUPPLY_SELECTION_NAME = "mvau.weight_supply"
 #: The name under which every supplier exports its produced boundary Port.
 OUTPUT_PORT_EXPORT = "output_port"
 
+#: The RTL generator that realizes the FINN memstream Kernel.  FinnLib has no
+#: provider yet, so it declares none: an inventory that lists an unimplemented
+#: provider is worse than an empty one.
+MEMSTREAM_PROVIDER_ID = "finn.rtl.memstream"
+
 
 class MVAUWeightSupplyProblemPaths:
     """Problem facts the supply pool reads but does not own."""
@@ -294,7 +299,7 @@ def build_finn_rtl_memstream_kernel(
         ),
         source_admission_constraints=(paths.constraint("local_state_available"),),
         exports=(KernelExport(OUTPUT_PORT_EXPORT, paths.output_port, _PORT),),
-        providers=(KernelProvider("finn.rtl.memstream", paths.kernel_id),),
+        providers=(KernelProvider(MEMSTREAM_PROVIDER_ID, paths.kernel_id),),
     )
 
 
@@ -332,7 +337,7 @@ def build_finnlib_memstream_kernel(
         feasibility_constraints=(paths.constraint("local_state_available"),),
         source_admission_constraints=(paths.constraint("local_state_available"),),
         exports=(KernelExport(OUTPUT_PORT_EXPORT, paths.output_port, _PORT),),
-        providers=(KernelProvider("finnlib.hls.memstream", paths.kernel_id),),
+        providers=(),
     )
 
 
@@ -365,6 +370,7 @@ FINNLIB_MEMSTREAM_PATHS = MVAUWeightSupplyKernelPathSet(
 __all__ = [
     "FINNLIB_MEMSTREAM_PATHS",
     "FINN_RTL_MEMSTREAM_PATHS",
+    "MEMSTREAM_PROVIDER_ID",
     "MVAU_WEIGHT_SUPPLY_SELECTION_NAME",
     "MVAUWeightSupplyKernelId",
     "MVAUWeightSupplyKernelPathSet",

@@ -17,6 +17,7 @@ from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import (
     LEGACY_HLS_PATHS,
     SOFT_VECTOR_PATHS,
+    SOFT_VECTOR_PROVIDER_ID,
     MVAUComputeKernelId,
     MVAUHlsResource,
     MVAUWeightSource,
@@ -35,13 +36,16 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
     mvau_problem_fingerprint,
 )
-from finn.dataflow.mvau.elaboration import MEMSTREAM_PROVIDER_ID, SOFT_VECTOR_PROVIDER_ID
+
 from finn.dataflow.ops.mvau import (
     MVAU_COMPUTE_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     NetworkRef,
 )
-from finn.dataflow.parameters.supply_kernels import MVAUWeightSupplyKernelId
+from finn.dataflow.parameters.supply_kernels import (
+    MEMSTREAM_PROVIDER_ID,
+    MVAUWeightSupplyKernelId,
+)
 
 NODE_ID = "mvau_elaboration"
 PART = "xczu3eg-sbva484-1-e"

@@ -175,6 +175,7 @@ class Kernel:
                         "the Kernel does not declare this constraint",
                     )
                 )
+        issues.extend(self._source_admission_issues())
         for duplicate in duplicate_values(tuple(item.interface for item in self.demands)):
             issues.append(
                 SpecAuthoringIssue(
@@ -220,6 +221,35 @@ class Kernel:
                 )
         if issues:
             raise SpecAuthoringError(tuple(issues))
+
+    def _source_admission_issues(self) -> list[SpecAuthoringIssue]:
+        """Source admission must be answerable from problem data alone.
+
+        Admission is asked before anything is decided, so a constraint that
+        reads one of this Kernel's own decisions could never be more than a
+        guess.  Such a constraint belongs in full feasibility instead.
+        """
+
+        own_decisions = {item.path for item in self.spec.decisions}
+        by_path = {item.path: item for item in self.spec.constraints}
+        issues: list[SpecAuthoringIssue] = []
+        for path in self.source_admission_constraints:
+            constraint = by_path.get(path)
+            if constraint is None:
+                continue
+            dependencies = list(constraint.evaluator.dependencies)
+            if constraint.applies_if is not None:
+                dependencies.extend(constraint.applies_if.dependencies)
+            for dependency in dependencies:
+                if dependency.path in own_decisions:
+                    issues.append(
+                        SpecAuthoringIssue(
+                            "source-admission-reads-a-decision",
+                            str(path),
+                            f"source admission cannot depend on {dependency.path}",
+                        )
+                    )
+        return issues
 
     @property
     def demand_interfaces(self) -> tuple[str, ...]:
@@ -699,12 +729,14 @@ class KernelSelection:
 def admissible_kernels(
     engine: Engine, selection: KernelSelection, point: DesignPoint
 ) -> tuple[str, ...]:
-    """Return the pool members whose source-admission constraints can still hold.
+    """Return the pool members whose source-admission constraints hold.
 
-    Admission is existential and decision-free: a Kernel is admitted unless one
-    of its own source-admission constraints is already decidedly false for this
-    problem.  Full target feasibility remains a selection-time query, so an
-    unresolved constraint does not exclude a candidate here.
+    Every source-admission constraint is decision-free by construction (see
+    ``Kernel._source_admission_issues``), so evaluating them against the
+    problem is the whole existential question -- there is no local completion
+    left to witness.  Target feasibility is deliberately not asked here; it is
+    a selection-time query, and asking it now would make inference coverage
+    depend on the board.
     """
 
     admitted: list[str] = []
@@ -725,6 +757,21 @@ def admissible_kernels(
         if not refused:
             admitted.append(kernel.id)
     return tuple(admitted)
+
+
+def provider_of(
+    selection: KernelSelection, kernel_id: str, provider_id: str
+) -> KernelProvider | None:
+    """Look one provider up in the Kernel's own inventory.
+
+    Elaboration dispatches through this so the inventory is the single answer
+    to "what can build this Kernel".  A miss is an ordinary negative answer --
+    that Kernel simply has no such realization path -- so the caller decides
+    how to report it.
+    """
+
+    kernel = selection.kernel(kernel_id)
+    return next((item for item in kernel.providers if item.id == provider_id), None)
 
 
 def selected_kernel(
@@ -752,5 +799,6 @@ __all__ = [
     "KernelSelectionPaths",
     "SelectedKernel",
     "admissible_kernels",
+    "provider_of",
     "selected_kernel",
 ]

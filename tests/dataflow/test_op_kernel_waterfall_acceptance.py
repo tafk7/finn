@@ -30,14 +30,11 @@ from finn.dataflow.mvau.artifacts import build_mvau_rtl_artifact_requirements
 from finn.dataflow.mvau.compute_kernels import (
     MVAU_COMPUTE_SELECTION,
     SOFT_VECTOR_PATHS,
+    SOFT_VECTOR_PROVIDER_ID,
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.elaboration import (
-    MEMSTREAM_PROVIDER_ID,
-    SOFT_VECTOR_PROVIDER_ID,
-    elaborate_mvau_rtl_softvec,
-)
+from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_ADAPTER_SELECTION,
@@ -50,6 +47,7 @@ from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
+    MEMSTREAM_PROVIDER_ID,
     MVAUWeightSupplyKernelId,
     WeightOrganization,
 )

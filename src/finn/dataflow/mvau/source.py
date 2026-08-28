@@ -79,7 +79,7 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v5"
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v6"
 MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
     {
         "noActivation": ("i", False, 1, {0, 1}),

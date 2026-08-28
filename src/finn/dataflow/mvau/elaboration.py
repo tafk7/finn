@@ -11,9 +11,10 @@ from math import ceil, floor
 from typing import cast
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.kernels import NO_KERNEL, SelectedKernel
+from finn.dataflow.kernels import NO_KERNEL, KernelSelection, SelectedKernel, provider_of
 from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PATHS,
+    SOFT_VECTOR_PROVIDER_ID,
     MVAUComputeKernelId,
     MVAUComputeProblemPaths,
     MVAUDspBlock,
@@ -36,6 +37,7 @@ from finn.dataflow.ops.mvau import (
 )
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
+    MEMSTREAM_PROVIDER_ID,
     MVAUWeightSupplyKernelId,
     MVAUWeightSupplyProblemPaths,
 )
@@ -44,9 +46,8 @@ from finn.dataflow.region import NumericElementType, Port
 
 _ELABORATION_PATH = QualifiedPath("elaboration.mvau")
 
-#: The providers this module implements, each for exactly one Kernel.
-SOFT_VECTOR_PROVIDER_ID = "finn.rtl.mvu_vvu_axi"
-MEMSTREAM_PROVIDER_ID = "finn.rtl.memstream"
+# The provider identities are owned by the Kernels this module implements, so
+# they are imported rather than restated here.
 
 
 class MVAUPhysicalDirection(str, Enum):
@@ -343,6 +344,19 @@ def _required_problem(resolved: MVAUResolvedDesign, path: QualifiedPath) -> obje
     return value
 
 
+def _declared_providers(selection: KernelSelection, kernel_id: str) -> tuple[str, ...]:
+    """The provider inventory the selected Kernel itself declares."""
+
+    return tuple(item.id for item in selection.kernel(kernel_id).providers)
+
+
+def _require_provider(
+    selection: KernelSelection, kernel_id: str, provider_id: str, message: str
+) -> None:
+    if provider_of(selection, kernel_id, provider_id) is None:
+        raise MVAUElaborationError((_finding("mvau-elaboration-provider-unavailable", message),))
+
+
 def _selected_kernel_id(
     resolved: MVAUResolvedDesign, path: QualifiedPath, code: str, message: str
 ) -> str:
@@ -356,25 +370,23 @@ def _selected_kernel_id(
 def mvau_elaboration_origin(resolved: MVAUResolvedDesign) -> MVAUElaborationOrigin:
     """Construct the exact immutable identity of an elaboration input point."""
 
-    kernel_ids = [
-        _selected_kernel_id(
-            resolved,
-            MVAU_COMPUTE_SELECTION.paths.selected_kernel,
-            "mvau-elaboration-compute-kernel-missing",
-            "the selected compute Kernel must resolve before elaboration",
-        )
-    ]
-    provider_ids = [SOFT_VECTOR_PROVIDER_ID]
+    compute_kernel_id = _selected_kernel_id(
+        resolved,
+        MVAU_COMPUTE_SELECTION.paths.selected_kernel,
+        "mvau-elaboration-compute-kernel-missing",
+        "the selected compute Kernel must resolve before elaboration",
+    )
+    kernel_ids = [compute_kernel_id]
+    provider_ids = list(_declared_providers(MVAU_COMPUTE_SELECTION, compute_kernel_id))
     if isinstance(resolved.result, NetworkRef):
-        kernel_ids.append(
-            _selected_kernel_id(
-                resolved,
-                MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
-                "mvau-elaboration-supply-kernel-missing",
-                "the selected supplier Kernel must resolve before elaboration",
-            )
+        supply_kernel_id = _selected_kernel_id(
+            resolved,
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
+            "mvau-elaboration-supply-kernel-missing",
+            "the selected supplier Kernel must resolve before elaboration",
         )
-        provider_ids.append(MEMSTREAM_PROVIDER_ID)
+        kernel_ids.append(supply_kernel_id)
+        provider_ids.extend(_declared_providers(MVAU_WEIGHT_SUPPLY_SELECTION, supply_kernel_id))
     return MVAUElaborationOrigin(
         MVAU_DECLARATION_FAMILY_VERSION,
         mvau_problem_fingerprint(resolved.point.problem),
@@ -697,6 +709,12 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
                 ),
             )
         )
+    _require_provider(
+        MVAU_COMPUTE_SELECTION,
+        kernel_id,
+        SOFT_VECTOR_PROVIDER_ID,
+        "the selected compute Kernel does not declare this RTL provider",
+    )
     origin = mvau_elaboration_origin(resolved)
     target_part = cast(str, _required_problem(resolved, MVAUDataflowOpPaths.TARGET_FPGA_PART))
     clock_period = cast(
@@ -733,6 +751,12 @@ def elaborate_mvau_rtl_softvec(resolved: MVAUResolvedDesign) -> MVAUPhysicalElab
             MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
             "mvau-elaboration-supply-kernel-missing",
             "the selected supplier Kernel must resolve before elaboration",
+        )
+        _require_provider(
+            MVAU_WEIGHT_SUPPLY_SELECTION,
+            supply_kernel_id,
+            MEMSTREAM_PROVIDER_ID,
+            "the selected supplier Kernel does not declare this RTL provider",
         )
         if supply_kernel_id != MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value:
             raise MVAUElaborationError(

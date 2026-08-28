@@ -15,7 +15,7 @@ no integer width, signedness, target, or implementation language appears here.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import cast
 from uuid import uuid4
 
@@ -48,6 +48,11 @@ class MVAUSourceCandidate:
     activation: str
     weight: str
     output: str
+    #: The output bias the fused activation applies, in the one representation
+    #: the logical operation can reproduce.  Zero when nothing is fused.
+    activation_bias: int = 0
+    #: True when the source operator is XNOR-popcount rather than MatMul.
+    xnor_popcount: bool = False
 
     @property
     def source_nodes(self) -> tuple[NodeProto, ...]:
@@ -67,20 +72,27 @@ class MVAUInferenceReport:
     findings: tuple[Finding, ...] = field(default_factory=tuple)
 
 
-def _quantized(model: ModelWrapper, tensor: str) -> bool:
-    datatype = model.get_tensor_datatype(tensor)
-    return datatype is not None and datatype != DataType["FLOAT32"]
+#: Source operators whose tensor function is a dense matrix product.
+_MATRIX_PRODUCT_OPS = {"MatMul": False, "XnorPopcountMatMul": True}
 
 
 def _dense_matmul_candidate(model: ModelWrapper, node: NodeProto) -> MVAUSourceCandidate | None:
-    """Recognize a dense quantized MatMul with an initialized weight operand."""
+    """Recognize a dense matrix product over a streamed activation.
 
-    if node.op_type != "MatMul" or len(node.input) != 2 or len(node.output) != 1:
+    Only the source form is decided here: the operator, its arity, and that the
+    shapes are a consistent dense product over a streamed left operand.  Element
+    datatypes and how the weight operand is supplied are coverage questions, and
+    coverage belongs to the Kernel pool.
+    """
+
+    if node.op_type not in _MATRIX_PRODUCT_OPS:
+        return None
+    if len(node.input) != 2 or len(node.output) != 1:
         return None
     activation, weight = node.input
     output = node.output[0]
-    if model.get_initializer(weight) is None:
-        return None
+    # The left operand is the streamed one; a constant there is a foldable
+    # product, not a matrix-vector unit.
     if model.get_initializer(activation) is not None:
         return None
     weight_shape = model.get_tensor_shape(weight)
@@ -94,9 +106,39 @@ def _dense_matmul_candidate(model: ModelWrapper, node: NodeProto) -> MVAUSourceC
         return None
     if tuple(output_shape[:-1]) != tuple(activation_shape[:-1]):
         return None
-    if not (_quantized(model, activation) and _quantized(model, weight)):
+    return MVAUSourceCandidate(
+        node,
+        None,
+        activation,
+        weight,
+        output,
+        xnor_popcount=_MATRIX_PRODUCT_OPS[node.op_type],
+    )
+
+
+def _float_attribute(node: NodeProto, name: str, default: float) -> float:
+    attribute = next((item for item in node.attribute if item.name == name), None)
+    return default if attribute is None else float(attribute.f)
+
+
+def _representable_activation_bias(
+    model: ModelWrapper, consumer: NodeProto, output: str
+) -> int | None:
+    """Return the bias the logical operation reproduces, or None if it cannot.
+
+    ``MvauDataflowOp`` applies one of exactly two thresholding conventions: a
+    bipolar output at scale two and bias minus one, or unit scale with an
+    integer bias it carries as ``ActVal``.  Any other scale or a fractional
+    bias is a different function, so it is not this source form.
+    """
+
+    scale = _float_attribute(consumer, "out_scale", 1.0)
+    bias = _float_attribute(consumer, "out_bias", 0.0)
+    if model.get_tensor_datatype(output) == DataType["BIPOLAR"]:
+        return 0 if (scale, bias) == (2.0, -1.0) else None
+    if scale != 1.0 or bias != int(bias):
         return None
-    return MVAUSourceCandidate(node, None, activation, weight, output)
+    return int(bias)
 
 
 def _fused_candidate(
@@ -123,12 +165,19 @@ def _fused_candidate(
         return None
     if len(threshold_shape) != 2 or threshold_shape[0] != weight_shape[1]:
         return None
+    bias = _representable_activation_bias(model, consumer, consumer.output[0])
+    if bias is None:
+        # The fusion would change the function.  The bare matrix product is
+        # still a source form, so fall back to it rather than refusing both.
+        return None
     return MVAUSourceCandidate(
         candidate.matmul,
         consumer,
         candidate.activation,
         candidate.weight,
         consumer.output[0],
+        activation_bias=bias,
+        xnor_popcount=candidate.xnor_popcount,
     )
 
 
@@ -151,6 +200,10 @@ def recognize_mvau_candidates(model: ModelWrapper) -> tuple[MVAUSourceCandidate,
 
 
 def _is_bipolar_xnor(model: ModelWrapper, candidate: MVAUSourceCandidate) -> bool:
+    """Whether the source computes an XNOR-popcount product."""
+
+    if candidate.xnor_popcount:
+        return True
     bipolar = DataType["BIPOLAR"]
     return bool(
         model.get_tensor_datatype(candidate.activation) == bipolar
@@ -176,7 +229,7 @@ def _logical_node(model: ModelWrapper, candidate: MVAUSourceCandidate, scope_id:
         "noActivation": 1 if candidate.threshold is None else 0,
         "binaryXnorMode": 1 if _is_bipolar_xnor(model, candidate) else 0,
         "accDataType": _accumulator_name(model, candidate),
-        "ActVal": 0,
+        "ActVal": candidate.activation_bias,
         "dataflow_scope_id": scope_id,
         SOURCE_NODES_ATTR: ",".join(candidate.source_node_names),
     }
@@ -293,12 +346,11 @@ def _relocate(trial: ModelWrapper, candidate: MVAUSourceCandidate) -> MVAUSource
     by_name = {node.name: node for node in trial.graph.node}
     if any(name not in by_name for name in candidate.source_node_names):
         return None
-    return MVAUSourceCandidate(
-        by_name[candidate.matmul.name],
-        None if candidate.threshold is None else by_name[candidate.threshold.name],
-        candidate.activation,
-        candidate.weight,
-        candidate.output,
+    # replace() so every recognized fact survives the move, not just the nodes.
+    return replace(
+        candidate,
+        matmul=by_name[candidate.matmul.name],
+        threshold=None if candidate.threshold is None else by_name[candidate.threshold.name],
     )
 
 

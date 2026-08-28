@@ -122,6 +122,11 @@ REGION_FORM_EXPORT = "region_form"
 #: The parameter interface every streamed compute Kernel demands.
 WEIGHT_INTERFACE = "weight"
 
+#: The RTL generator that realizes the soft-vector Kernel.  A provider is
+#: declared here, on the Kernel it implements, so the inventory is the single
+#: answer to "what can build this".
+SOFT_VECTOR_PROVIDER_ID = "finn.rtl.mvu_vvu_axi"
+
 #: The name under which a compute Kernel exports its natural full-tile weight
 #: contract.  A supplier that organizes its output independently of the demand
 #: produces this sequence instead, which is what makes an adapter necessary.
@@ -796,10 +801,24 @@ def _rtl_shared_constraint_paths(
     paths: MVAUComputeKernelPathSet,
 ) -> tuple[QualifiedPath, ...]:
     return (
+        *_rtl_source_admission_paths(paths),
+        paths.constraint("width_supported"),
+    )
+
+
+def _rtl_source_admission_paths(
+    paths: MVAUComputeKernelPathSet,
+) -> tuple[QualifiedPath, ...]:
+    """The RTL constraints a source graph alone can answer.
+
+    Datapath width and DSP block are target facts, so they stay out of
+    admission and are asked at selection time instead.
+    """
+
+    return (
         *_shared_source_constraint_paths(paths),
         paths.constraint("numeric_supported"),
         paths.constraint("computation_supported"),
-        paths.constraint("width_supported"),
     )
 
 
@@ -855,7 +874,7 @@ def _build_standard_rtl_kernel(
             ),
         ),
     )
-    source_admission = (*_rtl_shared_constraint_paths(paths), *extra_source_admission)
+    source_admission = (*_rtl_source_admission_paths(paths), *extra_source_admission)
     return Kernel(
         kernel_id,
         "1",
@@ -926,11 +945,10 @@ def build_soft_vector_mvau_kernel() -> Kernel:
             paths.constraint("target_supported"),
             paths.constraint("dsp48e1_narrow_supported"),
         ),
-        extra_source_admission=(
-            paths.constraint("target_supported"),
-            paths.constraint("dsp48e1_narrow_supported"),
-        ),
-        providers=(),
+        # Both remaining constraints read the target DSP block, so neither is
+        # a source-admission question.
+        extra_source_admission=(),
+        providers=(KernelProvider(SOFT_VECTOR_PROVIDER_ID, paths.kernel_id),),
     )
 
 
@@ -983,10 +1001,9 @@ def build_packed_dsp_mvau_kernel() -> Kernel:
             paths.constraint("target_supported"),
             paths.constraint("packing_supported"),
         ),
-        extra_source_admission=(
-            paths.constraint("target_supported"),
-            paths.constraint("packing_supported"),
-        ),
+        # Packing is decidable from the source element types alone; requiring
+        # DSP58 is not, so only the former is a source-admission question.
+        extra_source_admission=(paths.constraint("packing_supported"),),
         providers=(),
     )
 
@@ -1051,6 +1068,23 @@ def _interleave_domain(paths: MVAUComputeKernelPathSet) -> DecisionDomain:
     return DecisionDomain(dependencies, accepts, EvaluatorSpec(dependencies, candidates))
 
 
+def _interleave_available(dependencies: DependencyView) -> Answer[bool]:
+    """Whether any batch interleave greater than one could ever be chosen.
+
+    The interleave must exceed one and divide both the repetition extent and
+    PE * SIMD.  PE * SIMD is at most the whole matrix, so this is the exact
+    existence question the source graph can answer on its own.
+    """
+
+    return Decided(
+        gcd(
+            cast(int, dependencies["repetitions"]),
+            cast(int, dependencies["matrix_width"]) * cast(int, dependencies["matrix_height"]),
+        )
+        > 1
+    )
+
+
 def _tiled_width_supported(dependencies: DependencyView) -> Answer[bool]:
     activation = cast(NumericElementType, dependencies["activation_element_type"])
     weight = cast(NumericElementType, dependencies["weight_element_type"])
@@ -1112,19 +1146,27 @@ def build_batch_interleaved_dsp_mvau_kernel() -> Kernel:
                 paths.constraint("tiled_width_supported"),
                 EvaluatorSpec((_ACTIVATION_TYPE, _WEIGHT_TYPE), _tiled_width_supported),
             ),
+            Constraint(
+                paths.constraint("interleave_available"),
+                EvaluatorSpec((_REPETITIONS, _MATRIX_WIDTH, _MATRIX_HEIGHT), _interleave_available),
+            ),
         ),
     )
     source_admission = (
-        *_rtl_shared_constraint_paths(paths),
-        paths.constraint("target_supported"),
+        *_rtl_source_admission_paths(paths),
         paths.constraint("tiled_width_supported"),
+        paths.constraint("interleave_available"),
     )
     return Kernel(
         paths.kernel_id,
         "1",
         spec,
         paths.region,
-        feasibility_constraints=source_admission,
+        feasibility_constraints=(
+            *source_admission,
+            paths.constraint("width_supported"),
+            paths.constraint("target_supported"),
+        ),
         source_admission_constraints=source_admission,
         demands=(KernelDemand(WEIGHT_INTERFACE, paths.weight_demand),),
         exports=(
@@ -1174,6 +1216,7 @@ __all__ = [
     "REGION_FORM_EXPORT",
     "SOFT_VECTOR_MVAU_KERNEL",
     "SOFT_VECTOR_PATHS",
+    "SOFT_VECTOR_PROVIDER_ID",
     "WEIGHT_INTERFACE",
     "build_batch_interleaved_dsp_mvau_kernel",
     "build_legacy_hls_mvau_kernel",
