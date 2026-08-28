@@ -194,13 +194,32 @@ Licensing takes one of two forms, and `XILINXD_LICENSE_FILE` accepts either:
   HTTP**. In a corporate deployment that host is typically on internal RFC1918
   space.
 
-The floating case is the binding constraint on sandboxed agent work. sbx's
-egress policy is domain-oriented and enforced by a host-side HTTP/CONNECT proxy;
-it has no primitive for "allow one TCP host:port". So a Vivado-capable sandbox
-using a floating licence must run **open posture** — full network reach,
-including whatever else is routable on that internal network. An agent
-with a prompt-injection bug in that sandbox has a TCP path into the corporate
-network.
+A floating licence needs raw TCP egress, and **sbx grants that narrowly — open
+posture is not required.** `sbx policy allow network` accepts hostnames,
+domains, IP addresses and an optional port suffix, scoped per sandbox:
+
+```
+sbx policy allow network --sandbox <name> licence-server.internal:27034
+```
+
+Measured on a live sandbox, with a Python socket rather than the CLI so the
+result is not an artifact of the HTTP proxy:
+
+- before the rule, the licence host fails to resolve (`gaierror`) — enforcement
+  is at **DNS**;
+- after it, a raw TCP connection to the licence port is established;
+- an allowed host reached over a plain socket completes a full TLS handshake
+  (`pypi.org:443`), confirming raw TCP genuinely flows and is not merely
+  proxied HTTP.
+
+**Caveat on the port suffix.** Whether it narrows *below* host granularity could
+not be determined. sbx's user-mode network stack accepts connections
+optimistically: a port with certainly nothing listening still reports a
+successful `connect()`, so connect-based probes cannot distinguish "port
+allowed" from "port filtered". Only data flow is a reliable signal, and FLEXlm
+returns nothing unprompted. Treat the grant as **host-level** until proven
+otherwise, and size the blast radius accordingly: one internal host, not the
+whole routable range.
 
 The conclusion drives the design: **an agent editing FINN's Python does not
 need Vivado, XRT, or the license.** `quicktest.sh` is already defined as the
@@ -706,10 +725,11 @@ sbx create claude <repo> <xilinx-version-dir>:ro <licence-dir>:ro \
     --kit docker/finn.kit -e XILINXD_LICENSE_FILE=/path/to.lic
 ```
 
-Only the floating form needs egress, and only the floating form forces open
-posture. **A node-locked licence is strictly better for sandboxed agent work**:
-it needs no network reach at all, so a build-capable sandbox can keep a closed
-posture that a floating licence would rule out.
+Only the floating form needs egress, and it does **not** force open posture — a
+per-sandbox `sbx policy allow network` rule for the licence host is enough (see
+above). A node-locked licence still needs no network reach at all, so it remains
+the tighter option where it is available, but both forms are supported and
+neither requires giving up a closed posture.
 
 **Egress is wider than the manifest asks for.** sbx's per-sandbox rules are
 *additive to a machine-level preset*, so a "closed" posture is not closed.
