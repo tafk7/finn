@@ -9,6 +9,24 @@
 #   sbx create claude <repo> --template $(./run-docker.sh print-tag dev) \
 #       --kit docker/finn.kit
 #
+# LICENSING (build tiers)
+#
+# XILINXD_LICENSE_FILE takes either form, and both are passed with -e:
+#
+#   PORT@HOST     floating FLEXlm server. Nothing to mount, but the sandbox
+#                 needs raw TCP egress to that host:port - which a
+#                 domain-oriented egress policy cannot express, so this
+#                 requires open posture. See docs/containerization.md.
+#   /path/to.lic  node-locked. sbx mounts extra host paths POSITIONALLY, so
+#                 mount the containing directory read-only at its own path and
+#                 the variable needs no rewriting:
+#
+#   sbx create claude <repo> <xilinx-version-dir>:ro <licence-dir>:ro \
+#       --kit docker/finn.kit -e XILINXD_LICENSE_FILE=/path/to.lic ...
+#
+# The directory rather than the file: some licences have sibling lock/state
+# files that Vivado writes next to them.
+#
 # WHY A KIT AND NOT THE ENTRYPOINT
 #
 # `sbx exec` starts a process directly in the container and does not go through

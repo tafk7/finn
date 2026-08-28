@@ -186,14 +186,19 @@ The Xilinx install is **267 GB** (127 GB for 2025.2, 135 GB for 2026.1) and is
 mounted from the host — it cannot be baked, and mounting both versions when one
 is needed doubles the exposure for nothing.
 
-Licensing is a **floating FLEXlm server**: `XILINXD_LICENSE_FILE=27034@licence-server.internal`,
-which resolves to `10.x.x.x` — an RFC1918 address on internal
-infrastructure, spoken to over **raw TCP, not HTTP**.
+Licensing takes one of two forms, and `XILINXD_LICENSE_FILE` accepts either:
 
-This is the binding constraint on sandboxed agent work. sbx's egress policy is
-domain-oriented and enforced by a host-side HTTP/CONNECT proxy; it has no
-primitive for "allow one TCP host:port". So a Vivado-capable sandbox must run **open
-posture** — full network reach, including the rest of `10.x.0.0/16`. An agent
+- **node-locked** — a path to a `.lic` file, which must be readable *inside* the
+  sandbox;
+- **floating** — `PORT@HOST`, a FLEXlm server spoken to over **raw TCP, not
+  HTTP**. In a corporate deployment that host is typically on internal RFC1918
+  space.
+
+The floating case is the binding constraint on sandboxed agent work. sbx's
+egress policy is domain-oriented and enforced by a host-side HTTP/CONNECT proxy;
+it has no primitive for "allow one TCP host:port". So a Vivado-capable sandbox
+using a floating licence must run **open posture** — full network reach,
+including whatever else is routable on that internal network. An agent
 with a prompt-injection bug in that sandbox has a TCP path into the corporate
 network.
 
@@ -685,6 +690,26 @@ can track it and this section can be reconsidered.
 **This is reverse-engineered and an sbx release can break it.** The check that
 matters is creating a sandbox from the image with plain `sbx` — no wrapper —
 and running a test inside it.
+
+**Licensing: both forms are supported.** `XILINXD_LICENSE_FILE` (and the older
+`LM_LICENSE_FILE`) take a colon-separated list whose entries are either
+`PORT@HOST` or a path to a `.lic`. `run-docker.sh` passes the variable through
+verbatim and mounts read-only, at its own host path, the *directory* containing
+each path-form entry — the directory rather than the file, because Vivado writes
+sibling lock/state files next to some licences. Mounting at the host path means
+the variable's value never needs rewriting.
+
+On sbx the same split applies, with the mount expressed positionally:
+
+```
+sbx create claude <repo> <xilinx-version-dir>:ro <licence-dir>:ro \
+    --kit docker/finn.kit -e XILINXD_LICENSE_FILE=/path/to.lic
+```
+
+Only the floating form needs egress, and only the floating form forces open
+posture. **A node-locked licence is strictly better for sandboxed agent work**:
+it needs no network reach at all, so a build-capable sandbox can keep a closed
+posture that a floating licence would rule out.
 
 **Egress is wider than the manifest asks for.** sbx's per-sandbox rules are
 *additive to a machine-level preset*, so a "closed" posture is not closed.

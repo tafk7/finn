@@ -549,6 +549,44 @@ if [ ! -z "$FINN_XILINX_PATH" ] && [ "$FINN_DOCKER_TARGET" != "dev" ];then
   fi
 fi
 
+# Licensing. Previously not passed at all, so a container could find the tools
+# and then fail to check out a licence.
+#
+# XILINXD_LICENSE_FILE (and the older LM_LICENSE_FILE) accept a colon-separated
+# list whose entries are either form:
+#
+#   PORT@HOST   a floating FLEXlm server. Nothing to mount; the sandbox needs
+#               raw TCP egress to that host:port. Note that is NOT expressible
+#               in a domain-oriented egress policy - see docs/containerization.md.
+#   /path/to.lic  a node-locked file, which must be readable INSIDE the
+#               container. Mounted read-only at its own host path, so the
+#               variable's value needs no rewriting.
+#
+# Both forms are passed through verbatim; only the path form implies a mount.
+finn_license_mounts () {
+  local var_value=$1 entry dir
+  local IFS=':'
+  for entry in $var_value; do
+    case "$entry" in
+      ''|*@*) continue ;;          # empty, or PORT@HOST - server, no mount
+    esac
+    # Mount the containing directory rather than the file: Vivado writes
+    # sibling lock/state files next to some licences, and a single-file bind
+    # mount cannot accommodate that.
+    dir=$(dirname "$entry")
+    [ -d "$dir" ] || { yecho "licence path $entry not found on the host; not mounted"; continue; }
+    printf -- '-v %s:%s:ro ' "$dir" "$dir"
+  done
+}
+
+for _lic_var in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
+  eval "_lic_val=\${$_lic_var:-}"
+  [ -z "$_lic_val" ] && continue
+  DOCKER_EXEC+="-e $_lic_var=$_lic_val "
+  DOCKER_EXEC+="$(finn_license_mounts "$_lic_val")"
+done
+unset _lic_var _lic_val
+
 # This part is used for internal ci for finn-examples
 # if using build verification for finn-examples ci, set up the necessary Docker variables
 if [ "$VERIFICATION_EN" = 1 ]; then
