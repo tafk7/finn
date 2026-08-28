@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import inspect
 from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
@@ -19,12 +20,16 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.kernels import Kernel, KernelSelection, admissible_kernels
 from finn.dataflow.mvau.compute_kernels import (
+    LEGACY_HLS_PATHS,
     MVAU_COMPUTE_SELECTION,
     SOFT_VECTOR_MVAU_KERNEL,
     MVAUComputeKernelId,
+    MVAUHlsResource,
+    MVAUWeightSource,
 )
 from finn.dataflow.ops.mvau import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.transformation.fpgadataflow import infer_mvau_dataflow
 from finn.transformation.fpgadataflow.infer_mvau_dataflow import (
     SOURCE_NODES_ATTR,
     InferMVAUDataflowOp,
@@ -259,10 +264,6 @@ def test_adding_and_removing_a_kernel_moves_admission_without_touching_the_pass(
 
 
 def test_the_transform_declares_no_datatype_or_target_switch() -> None:
-    import inspect
-
-    from finn.transformation.fpgadataflow import infer_mvau_dataflow
-
     source = inspect.getsource(infer_mvau_dataflow)
     for forbidden in ("bit_width", "DSP", "INT8", "resType", "mem_mode", "hls", "rtl"):
         assert forbidden not in source, forbidden
@@ -292,9 +293,6 @@ def test_xnor_sources_are_recognized_and_marked() -> None:
 
 
 def test_a_lowered_node_still_resolves_once_kernels_are_selected() -> None:
-    from finn.dataflow.mvau.compute_kernels import LEGACY_HLS_PATHS, MVAUHlsResource
-    from finn.dataflow.mvau.compute_kernels import MVAUWeightSource
-
     lowered, _ = _lower(_model())
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
