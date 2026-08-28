@@ -36,7 +36,13 @@ from finn.dataflow.mvau.source import (
     MVAUResolvedDesign,
     tensor_value_fingerprint,
 )
-from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, NetworkRef, RegionRef
+from finn.dataflow.ops.mvau import (
+    MVAU_COMPUTE_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
+    MVAUDataflowOpPaths,
+    NetworkRef,
+    RegionRef,
+)
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     MVAUWeightSupplyProblemPaths,
@@ -452,9 +458,9 @@ def build_mvau_rtl_artifact_requirements(
             )
         )
     _require_feasible(resolved, "mvau_op_structural")
-    _require_feasible(resolved, "binding_feasibility")
+    _require_feasible(resolved, MVAU_COMPUTE_SELECTION.feasibility_constraint_set)
     if isinstance(resolved.result, NetworkRef):
-        _require_feasible(resolved, "cyclic_binding_feasibility")
+        _require_feasible(resolved, MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set)
     source = resolved.result.source_association
     nodes = tuple(
         node for node in model.graph.node if _source_scope_matches(node, source.source_node_id)

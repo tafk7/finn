@@ -17,12 +17,17 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.mvau.definition import (
-    MVAUComputeBinding,
-    MVAUComputeKernelPaths,
+from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.mvau.compute_kernels import (
+    BATCH_INTERLEAVED_PATHS,
+    LEGACY_HLS_PATHS,
+    MVAUComputeKernelId,
+    MVAUComputeProblemPaths,
     MVAUDspBlock,
+    MVAUHlsResource,
+    MVAUWeightSource,
 )
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.mvau.source import (
     MVAU_SOURCE_MAPPING,
     MVAULegacyImportMode,
@@ -35,18 +40,20 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
 )
 from finn.dataflow.ops.mvau import (
-    MVAUConnectionTopology,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_WEIGHT_ADAPTER_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
-    MVAUParameterTopology,
     NetworkRef,
     RegionRef,
-    MVAUWeightDeliveryDeclaration,
 )
-from finn.dataflow.parameters.cyclic.definition import (
-    CyclicParameterBinding,
-    CyclicParameterKernelPaths,
+from finn.dataflow.parameters.supply_kernels import (
+    FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,
     CyclicTargetMemoryCapabilities,
+    MVAUWeightSupplyKernelId,
+    MVAUWeightSupplyProblemPaths,
+    WeightOrganization,
 )
 from finn.dataflow.region import NumericElementType
 
@@ -148,23 +155,25 @@ def test_real_standard_embedded_node_projects_facts_and_explicit_choices() -> No
     projection = _project_preserving(model)
 
     assert projection.blocking_findings == ()
-    assert projection.problem_data[MVAUComputeKernelPaths.REPETITIONS] == 4
-    assert projection.problem_data[MVAUComputeKernelPaths.MATRIX_WIDTH] == 4
-    assert projection.problem_data[MVAUComputeKernelPaths.MATRIX_HEIGHT] == 6
+    assert projection.problem_data[MVAUComputeProblemPaths.REPETITIONS] == 4
+    assert projection.problem_data[MVAUComputeProblemPaths.MATRIX_WIDTH] == 4
+    assert projection.problem_data[MVAUComputeProblemPaths.MATRIX_HEIGHT] == 6
     assert (
-        projection.problem_data[MVAUComputeKernelPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER]
+        projection.problem_data[MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER]
         == "finn.MinimizeAccumulatorWidth"
     )
-    assert projection.problem_data[MVAUComputeKernelPaths.TARGET_DSP_BLOCK] is MVAUDspBlock.DSP48E2
-    assert projection.imported_assignments[MVAUComputeKernelPaths.REGION_DECLARATION] is (
-        MVAURegionDeclaration.STANDARD_EMBEDDED
+    assert projection.problem_data[MVAUComputeProblemPaths.TARGET_DSP_BLOCK] is MVAUDspBlock.DSP48E2
+    assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
+        MVAUComputeKernelId.LEGACY_HLS.value
     )
-    assert projection.imported_assignments[MVAUDataflowOpPaths.PARAMETER_TOPOLOGY] is (
-        MVAUParameterTopology.EMBEDDED
+    assert projection.imported_assignments[LEGACY_HLS_PATHS.weight_source] is (
+        MVAUWeightSource.EMBEDDED
     )
-    assert projection.imported_assignments[MVAUComputeKernelPaths.BINDING] is (
-        MVAUComputeBinding.LEGACY_HLS_LUT
-    )
+    assert projection.imported_assignments[LEGACY_HLS_PATHS.resource] is MVAUHlsResource.LUT
+    # An embedded weight source leaves the supply pool inapplicable entirely.
+    assert MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel not in projection.imported_assignments
+    # The topology is derived from those selections, never imported beside them.
+    assert MVAUDataflowOpPaths.PARAMETER_TOPOLOGY not in projection.imported_assignments
     resolved = start_mvau_projection(projection)
     assert isinstance(resolved.result, RegionRef)
     assert tuple(interface.port.id for interface in resolved.result.region.inputs) == (
@@ -178,16 +187,11 @@ def test_real_standard_direct_node_projects_soft_vector_binding() -> None:
     projection = _project_preserving(model)
 
     assert projection.blocking_findings == ()
-    assert projection.imported_assignments[MVAUComputeKernelPaths.REGION_DECLARATION] is (
-        MVAURegionDeclaration.STANDARD_STREAMED
+    assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
+        MVAUComputeKernelId.SOFT_VECTOR.value
     )
-    assert projection.imported_assignments[MVAUDataflowOpPaths.PARAMETER_TOPOLOGY] is (
-        MVAUParameterTopology.DIRECT
-    )
-    assert projection.imported_assignments[MVAUComputeKernelPaths.BINDING] is (
-        MVAUComputeBinding.RTL_SOFTVEC
-    )
-    assert projection.problem_data[MVAUComputeKernelPaths.WEIGHTS_NARROW] is False
+    assert projection.imported_assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] == NO_KERNEL
+    assert projection.problem_data[MVAUComputeProblemPaths.WEIGHTS_NARROW] is False
 
 
 def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() -> None:
@@ -200,33 +204,24 @@ def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() ->
     projection = _project_preserving(model, VERSAL_PART)
 
     assert projection.blocking_findings == ()
-    assert projection.imported_assignments[MVAUComputeKernelPaths.REGION_DECLARATION] is (
-        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+    assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
+        MVAUComputeKernelId.BATCH_INTERLEAVED_DSP.value
     )
-    assert projection.imported_assignments[MVAUComputeKernelPaths.INTERLEAVE] == 2
-    assert projection.imported_assignments[MVAUDataflowOpPaths.PARAMETER_TOPOLOGY] is (
-        MVAUParameterTopology.CYCLIC
+    assert projection.imported_assignments[BATCH_INTERLEAVED_PATHS.interleave] == 2
+    assert projection.imported_assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] == (
+        MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
     )
-    assert projection.imported_assignments[MVAUComputeKernelPaths.BINDING] is (
-        MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58
+    # The supplier serves the compute demand exactly, so no delivery tile and
+    # no adapter is imported.
+    assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.organization] is (
+        WeightOrganization.AS_DEMANDED
     )
-    assert projection.imported_assignments[CyclicParameterKernelPaths.BINDING] is (
-        CyclicParameterBinding.FINN_RTL_MEMSTREAM
-    )
-    assert projection.imported_assignments[CyclicParameterKernelPaths.RAM_STYLE] is (
+    assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.ram_style] is (
         CyclicRamStyle.BRAM
     )
-    assert projection.imported_assignments[CyclicParameterKernelPaths.PUMPED_MEMORY] is True
-    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_PE] == 2
-    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_SIMD] == 2
-    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_DECLARATION] is (
-        MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
-    )
-    assert projection.imported_assignments[MVAUDataflowOpPaths.DELIVERY_INTERLEAVE] == 2
-    assert projection.imported_assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY] is (
-        MVAUConnectionTopology.DIRECT
-    )
-    assert projection.problem_data[CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES] == (
+    assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.pumped_memory] is True
+    assert projection.imported_assignments[MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel] == NO_KERNEL
+    assert projection.problem_data[MVAUWeightSupplyProblemPaths.TARGET_MEMORY_CAPABILITIES] == (
         CyclicTargetMemoryCapabilities(True)
     )
     resolved = start_mvau_projection(projection)
@@ -244,10 +239,10 @@ def test_fused_threshold_projection_preserves_real_tensor_contract() -> None:
     assert description is not None
     assert description.threshold_operand_id == "thresholds"
     assert description.threshold_shape == (6, 3)
-    threshold_type = projection.problem_data[MVAUComputeKernelPaths.THRESHOLD_ELEMENT_TYPE]
+    threshold_type = projection.problem_data[MVAUComputeProblemPaths.THRESHOLD_ELEMENT_TYPE]
     assert isinstance(threshold_type, NumericElementType)
     assert threshold_type.bit_width == 16
-    assert projection.problem_data[MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE] is True
+    assert projection.problem_data[MVAUComputeProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE] is True
 
 
 def test_projection_is_deterministic_and_project_only_imports_no_choices() -> None:
@@ -298,8 +293,8 @@ def test_unsupported_and_ambiguous_legacy_attributes_are_explicit() -> None:
         resource_type="auto",
     )
     projection = _project_preserving(ambiguous)
-    assert {finding.code for finding in projection.findings} == {"mvau-legacy-binding-ambiguous"}
-    assert MVAUComputeKernelPaths.BINDING not in projection.imported_assignments
+    assert {finding.code for finding in projection.findings} == {"mvau-legacy-resource-ambiguous"}
+    assert LEGACY_HLS_PATHS.resource not in projection.imported_assignments
 
 
 def test_saved_choices_reconstitute_identically_in_a_fresh_process(tmp_path: Path) -> None:
@@ -371,23 +366,17 @@ def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> Non
     context = _context(VERSAL_PART)
     projection = project_mvau_source(model, NODE_ID, context)
     assignments: dict[QualifiedPath | str, object] = {
-        MVAUComputeKernelPaths.PE: 2,
-        MVAUComputeKernelPaths.SIMD: 2,
-        MVAUComputeKernelPaths.REGION_DECLARATION: (
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.BATCH_INTERLEAVED_DSP.value,
+        BATCH_INTERLEAVED_PATHS.pe: 2,
+        BATCH_INTERLEAVED_PATHS.simd: 2,
+        BATCH_INTERLEAVED_PATHS.interleave: 2,
+        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
+            MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
         ),
-        MVAUComputeKernelPaths.INTERLEAVE: 2,
-        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
-        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: MVAUParameterTopology.CYCLIC,
-        MVAUDataflowOpPaths.DELIVERY_PE: 2,
-        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
-        MVAUDataflowOpPaths.DELIVERY_DECLARATION: (
-            MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
-        ),
-        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: MVAUConnectionTopology.ADAPTER,
-        CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
-        CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
-        CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+        FINN_RTL_MEMSTREAM_PATHS.organization: WeightOrganization.STANDARD_FULL_TILE,
+        FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
+        FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
+        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: FULL_TILE_TO_CHUNKED,
     }
     original = start_mvau_projection(projection, assignments)
     assert isinstance(original.result, NetworkRef)
@@ -398,17 +387,15 @@ def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> Non
     stored = json.loads(model.get_metadata_prop(f"finn.dataflow.mvau.selection:{NODE_ID}"))
     stored_paths = {item["path"] for item in stored["assignments"]}
     for path in (
-        MVAUComputeKernelPaths.PE,
-        MVAUComputeKernelPaths.SIMD,
-        MVAUComputeKernelPaths.REGION_DECLARATION,
-        MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
+        MVAU_COMPUTE_SELECTION.paths.kernel,
+        BATCH_INTERLEAVED_PATHS.pe,
+        BATCH_INTERLEAVED_PATHS.simd,
+        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel,
+        FINN_RTL_MEMSTREAM_PATHS.organization,
+        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel,
     ):
         assert str(path) in stored_paths
-    assert not any(
-        path.startswith(("semantic.", "binding.mvau.compute.selection", "constraint."))
-        for path in stored_paths
-    )
+    assert not any(path.startswith(("semantic.", "constraint.")) for path in stored_paths)
 
     restored = reconstitute_mvau_selection(ModelWrapper(str(model_path)), NODE_ID, context)
 

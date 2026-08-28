@@ -20,8 +20,8 @@ from finn.dataflow.mvau.artifacts import (
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
-from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PATHS, MVAUComputeKernelId
 from finn.dataflow.mvau.source import (
     MVAULegacyImportMode,
     MVAUProjectionContext,
@@ -29,16 +29,16 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
 )
 from finn.dataflow.ops.mvau import (
-    MVAUConnectionTopology,
-    MVAUDataflowOpPaths,
-    MVAUParameterTopology,
-    MVAUWeightDeliveryDeclaration,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_WEIGHT_ADAPTER_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
 )
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
-from finn.dataflow.parameters.cyclic.definition import (
-    CyclicParameterBinding,
-    CyclicParameterKernelPaths,
+from finn.dataflow.parameters.supply_kernels import (
+    FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,
+    MVAUWeightSupplyKernelId,
+    WeightOrganization,
 )
 
 NODE_ID = "mvau_artifact"
@@ -137,31 +137,25 @@ def _logical_selected(model: ModelWrapper, mem_mode: str):
     operation = model.get_customop_wrapper(node)
     assert isinstance(operation, MvauDataflowOp)
     assignments = {
-        MVAUComputeKernelPaths.PE: 2,
-        MVAUComputeKernelPaths.SIMD: 2,
-        MVAUComputeKernelPaths.REGION_DECLARATION: MVAURegionDeclaration.STANDARD_STREAMED,
-        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_SOFTVEC,
-        MVAUComputeKernelPaths.COMPUTE_PUMPING: False,
-        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: (
-            MVAUParameterTopology.CYCLIC
-            if mem_mode == "internal_decoupled"
-            else MVAUParameterTopology.DIRECT
-        ),
+        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
+        SOFT_VECTOR_PATHS.pe: 2,
+        SOFT_VECTOR_PATHS.simd: 2,
+        SOFT_VECTOR_PATHS.compute_pumping: False,
     }
     if mem_mode == "internal_decoupled":
         assignments.update(
             {
-                MVAUDataflowOpPaths.DELIVERY_PE: 2,
-                MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
-                MVAUDataflowOpPaths.DELIVERY_DECLARATION: (
-                    MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
+                MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
+                    MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
                 ),
-                MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: MVAUConnectionTopology.DIRECT,
-                CyclicParameterKernelPaths.BINDING: (CyclicParameterBinding.FINN_RTL_MEMSTREAM),
-                CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
-                CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+                FINN_RTL_MEMSTREAM_PATHS.organization: WeightOrganization.AS_DEMANDED,
+                FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
+                FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
+                MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: NO_KERNEL,
             }
         )
+    else:
+        assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] = NO_KERNEL
     context = MVAUDataflowBuildContext(_BuildConfig())
     operation.commit_dataflow_assignments(context, assignments)
     return operation.resolve_dataflow(context)

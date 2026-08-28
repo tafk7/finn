@@ -26,7 +26,18 @@ from finn.dataflow.mvau.artifacts import (
     build_mvau_rtl_artifact_requirements,
 )
 from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
+from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.mvau.compute_kernels import (
+    BATCH_INTERLEAVED_PATHS,
+    LEGACY_HLS_PATHS,
+    PACKED_DSP_PATHS,
+    SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId,
+    MVAUComputeKernelPathSet,
+    MVAUComputeProblemPaths,
+    MVAUHlsResource,
+    MVAUWeightSource,
+)
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
@@ -39,20 +50,24 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
 )
 from finn.dataflow.op import DataflowOpError
+from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.ops.mvau import (
+    MVAU_COMPUTE_SELECTION,
     MVAU_DATAFLOW_OP_SPEC,
-    MVAUConnectionTopology,
+    MVAU_WEIGHT_ADAPTER_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
-    MVAUWeightDeliveryDeclaration,
     NetworkRef,
     RegionRef,
 )
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
-from finn.dataflow.parameters.cyclic.definition import (
-    CyclicParameterBinding,
-    CyclicParameterKernelPaths,
+from finn.dataflow.parameters.supply_kernels import (
+    FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,
+    MVAUWeightSupplyKernelId,
+    MVAUWeightSupplyProblemPaths,
+    WeightOrganization,
 )
 from finn.dataflow.region import BeatSequence, NumericElementType
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
@@ -170,43 +185,58 @@ def _context(
     )
 
 
+_KERNEL_PATHS: dict[MVAUComputeKernelId, MVAUComputeKernelPathSet] = {
+    MVAUComputeKernelId.LEGACY_HLS: LEGACY_HLS_PATHS,
+    MVAUComputeKernelId.SOFT_VECTOR: SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId.PACKED_DSP: PACKED_DSP_PATHS,
+    MVAUComputeKernelId.BATCH_INTERLEAVED_DSP: BATCH_INTERLEAVED_PATHS,
+}
+
+
 def _compute(
     declaration: MVAURegionDeclaration,
     topology: MVAUParameterTopology,
     *,
-    binding: MVAUComputeBinding = MVAUComputeBinding.RTL_SOFTVEC,
+    kernel: MVAUComputeKernelId = MVAUComputeKernelId.SOFT_VECTOR,
 ) -> dict[QualifiedPath | str, object]:
+    """Select one compute Kernel; the topology follows from the supply pool."""
+
+    paths = _KERNEL_PATHS[kernel]
     assignments: dict[QualifiedPath | str, object] = {
-        MVAUComputeKernelPaths.PE: 2,
-        MVAUComputeKernelPaths.SIMD: 2,
-        MVAUComputeKernelPaths.REGION_DECLARATION: declaration,
-        MVAUComputeKernelPaths.BINDING: binding,
-        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: topology,
+        MVAU_COMPUTE_SELECTION.paths.kernel: kernel.value,
+        paths.pe: 2,
+        paths.simd: 2,
     }
-    if declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED:
-        assignments[MVAUComputeKernelPaths.INTERLEAVE] = 2
-    if binding in {MVAUComputeBinding.RTL_SOFTVEC, MVAUComputeBinding.RTL_PACKED}:
-        assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = False
+    if kernel is MVAUComputeKernelId.LEGACY_HLS:
+        assignments[paths.resource] = MVAUHlsResource.LUT
+        assignments[paths.weight_source] = (
+            MVAUWeightSource.EMBEDDED
+            if declaration is MVAURegionDeclaration.STANDARD_EMBEDDED
+            else MVAUWeightSource.STREAMED
+        )
+    if kernel is MVAUComputeKernelId.BATCH_INTERLEAVED_DSP:
+        assignments[paths.interleave] = 2
+    if kernel in {MVAUComputeKernelId.SOFT_VECTOR, MVAUComputeKernelId.PACKED_DSP}:
+        assignments[paths.compute_pumping] = False
+    if topology is MVAUParameterTopology.DIRECT:
+        assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] = NO_KERNEL
     return assignments
 
 
 def _cyclic(
     *,
-    delivery: MVAUWeightDeliveryDeclaration = MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
-    connection: MVAUConnectionTopology = MVAUConnectionTopology.DIRECT,
+    organization: WeightOrganization = WeightOrganization.AS_DEMANDED,
+    adapter: str = NO_KERNEL,
 ) -> dict[QualifiedPath | str, object]:
-    assignments: dict[QualifiedPath | str, object] = {
-        MVAUDataflowOpPaths.DELIVERY_PE: 2,
-        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
-        MVAUDataflowOpPaths.DELIVERY_DECLARATION: delivery,
-        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: connection,
-        CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
-        CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
-        CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+    return {
+        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
+            MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
+        ),
+        FINN_RTL_MEMSTREAM_PATHS.organization: organization,
+        FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
+        FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
+        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: adapter,
     }
-    if delivery is MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED:
-        assignments[MVAUDataflowOpPaths.DELIVERY_INTERLEAVE] = 2
-    return assignments
 
 
 def _standalone(
@@ -239,7 +269,7 @@ def _assert_resolution_parity(
     assert current.point.assignments == expected.point.assignments
     assert current.result == expected.result
     assert current.source_association == expected.source_association
-    for set_name in ("mvau_op_structural", "binding_feasibility"):
+    for set_name in ("mvau_op_structural", MVAU_COMPUTE_SELECTION.feasibility_constraint_set):
         assert current.engine.evaluate_constraint_set(
             current.point, set_name
         ) == expected.engine.evaluate_constraint_set(expected.point, set_name)
@@ -274,7 +304,7 @@ def test_logical_source_attributes_use_declared_defaults_and_reject_invalid_valu
     operation = _wrapped(_model(no_activation_attribute=None))
     assert operation.get_nodeattr("noActivation") == 1
     assert (
-        operation.problem_instance(_context())[MVAUComputeKernelPaths.COMPUTATION_PROFILE]
+        operation.problem_instance(_context())[MVAUComputeProblemPaths.COMPUTATION_PROFILE]
         is MVAUComputationProfile.ACCUMULATOR_INTEGER
     )
 
@@ -300,11 +330,11 @@ def test_graph_and_build_projection_keep_fact_ownership_explicit() -> None:
 
     assert MVAUDataflowOpPaths.TARGET_FPGA_PART not in graph_problem
     assert MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS not in graph_problem
-    assert CyclicParameterKernelPaths.RUNTIME_WRITABLE not in graph_problem
+    assert MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE not in graph_problem
     assert build_problem[MVAUDataflowOpPaths.TARGET_FPGA_PART] == VERSAL_PART
     assert build_problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS] == 3.0
-    assert build_problem[CyclicParameterKernelPaths.RUNTIME_WRITABLE] is True
-    assert problem[MVAUComputeKernelPaths.WEIGHTS_NARROW] is False
+    assert build_problem[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE] is True
+    assert problem[MVAUComputeProblemPaths.WEIGHTS_NARROW] is False
     attribute_names = {attribute.name for attribute in operation.onnx_node.attribute}
     assert not attribute_names & {
         "MW",
@@ -362,12 +392,12 @@ def test_logical_mvau_region_topologies_match_standalone_resolution(
 ) -> None:
     model = _model()
     operation = _wrapped(model)
-    binding = (
-        MVAUComputeBinding.LEGACY_HLS_LUT
+    kernel = (
+        MVAUComputeKernelId.LEGACY_HLS
         if declaration is MVAURegionDeclaration.STANDARD_EMBEDDED
-        else MVAUComputeBinding.RTL_SOFTVEC
+        else MVAUComputeKernelId.SOFT_VECTOR
     )
-    assignments = _compute(declaration, topology, binding=binding)
+    assignments = _compute(declaration, topology, kernel=kernel)
     committed = operation.commit_dataflow_assignments(_context(), assignments)
     resolved = operation.resolve_dataflow(_context())
     expected = project_mvau_source(
@@ -404,7 +434,7 @@ def test_batch_interleaved_external_contract_resolves_directly(tmp_path: Path) -
     assignments = _compute(
         MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
         MVAUParameterTopology.DIRECT,
-        binding=MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
+        kernel=MVAUComputeKernelId.BATCH_INTERLEAVED_DSP,
     )
     operation.commit_dataflow_assignments(context, assignments)
     resolved = operation.resolve_dataflow(context)
@@ -432,17 +462,15 @@ def test_cyclic_network_and_adapter_topologies_round_trip(tmp_path: Path, adapte
         **_compute(
             compute_declaration,
             MVAUParameterTopology.CYCLIC,
-            binding=(
-                MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58
+            kernel=(
+                MVAUComputeKernelId.BATCH_INTERLEAVED_DSP
                 if adapter
-                else MVAUComputeBinding.RTL_SOFTVEC
+                else MVAUComputeKernelId.SOFT_VECTOR
             ),
         ),
         **_cyclic(
-            delivery=MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
-            connection=(
-                MVAUConnectionTopology.ADAPTER if adapter else MVAUConnectionTopology.DIRECT
-            ),
+            organization=WeightOrganization.STANDARD_FULL_TILE,
+            adapter=FULL_TILE_TO_CHUNKED if adapter else NO_KERNEL,
         ),
     }
     operation.commit_dataflow_assignments(context, assignments)
@@ -487,7 +515,7 @@ def test_runtime_writable_policy_is_projected_from_build_context() -> None:
     resolved = operation.resolve_dataflow(context)
     elaboration = elaborate_mvau_rtl_softvec(resolved)
     requirements = build_mvau_rtl_artifact_requirements(resolved, elaboration, model, Path.cwd())
-    assert resolved.point.problem[CyclicParameterKernelPaths.RUNTIME_WRITABLE] is True
+    assert resolved.point.problem[MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE] is True
     assert requirements.weight_payload_kind is MVAUWeightPayloadKind.RUNTIME_WRITABLE_LOCAL_STATE
     assert requirements.weight_initializer is None
 
@@ -653,7 +681,13 @@ def test_logical_mvau_fused_threshold_reference_execution() -> None:
 
 def test_partial_mvau_point_exposes_readiness_without_forcing_resolution() -> None:
     operation = _wrapped(_model())
-    operation.commit_dataflow_assignments(_context(), {MVAUComputeKernelPaths.PE: 2})
+    operation.commit_dataflow_assignments(
+        _context(),
+        {
+            MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
+            SOFT_VECTOR_PATHS.pe: 2,
+        },
+    )
     point = operation.hydrate_dataflow_point(_context())
     engine = Engine()
     readiness = engine.check_readiness(point, "mvau_op_structural")
@@ -674,7 +708,7 @@ def test_logical_mvau_passes_shared_operation_conformance_harness(tmp_path: Path
             operation_type=MvauDataflowOp,
             config=_context(),
             complete_assignments=assignments,
-            rejected_assignments={MVAUComputeKernelPaths.PE: 3},
+            rejected_assignments={SOFT_VECTOR_PATHS.pe: 3},
             reload_path=tmp_path / "mvau-conformance.onnx",
             stale_config=_context(clock=3.0),
             mutate_graph_problem=_change_mvau_shape,

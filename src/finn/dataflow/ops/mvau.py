@@ -458,16 +458,22 @@ def _derive_parameter_topology(dependencies: DependencyView) -> Answer[object]:
 
 
 def _weight_connection_supported(dependencies: DependencyView) -> Answer[bool]:
+    """Test exact endpoint compatibility first, then declared adapters.
+
+    Exact compatibility is the direct connection, never a width-only rule.  An
+    adapter that is not needed is not merely wasteful, it is a second answer to
+    a question already settled, so it is rejected.
+    """
+
     source = cast(Port, dependencies["supply_output_port"])
     sink = cast(Port, dependencies["compute_weight_port"])
+    directly_compatible = (
+        source.operand == sink.operand and source.beat_sequence == sink.beat_sequence
+    )
     adapter = dependencies["adapter_kernel"]
     if adapter is ABSENT or adapter == NO_KERNEL:
-        # Direct connection requires exact endpoint compatibility, never a
-        # width-only rule.
-        return Decided(
-            source.operand == sink.operand and source.beat_sequence == sink.beat_sequence
-        )
-    return Decided(dependencies["adapter_region"] is not ABSENT)
+        return Decided(directly_compatible)
+    return Decided(not directly_compatible and dependencies["adapter_region"] is not ABSENT)
 
 
 def _exposed_weight_source_available(dependencies: DependencyView) -> Answer[bool]:

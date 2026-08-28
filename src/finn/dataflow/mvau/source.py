@@ -601,7 +601,9 @@ def _legacy_assignments(
             )
         assignments[supply.pumped_memory] = bool(_attribute_value(node, "pumpedMemory", 0))
         assignments[MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel] = NO_KERNEL
-    elif mem_mode in {"internal_embedded", "external"}:
+    elif mem_mode == "external":
+        # An embedded weight source leaves the supply pool inapplicable, so
+        # there is nothing to record there.
         assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] = NO_KERNEL
     return assignments
 

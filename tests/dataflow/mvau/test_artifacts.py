@@ -28,7 +28,15 @@ from finn.dataflow.mvau.elaboration import (
     mvau_elaboration_origin,
 )
 from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
-from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
+from finn.dataflow.mvau.compute_kernels import (
+    LEGACY_HLS_PATHS,
+    PACKED_DSP_PATHS,
+    SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId,
+    MVAUHlsResource,
+    MVAUWeightSource,
+)
+from finn.dataflow.ops.mvau import MVAU_COMPUTE_SELECTION
 from finn.dataflow.mvau.source import (
     MVAULegacyImportMode,
     MVAUProjectionContext,
@@ -417,15 +425,22 @@ def test_artifact_requirements_reject_elaboration_from_another_selected_point() 
         path: value for path, value in baseline.point.assignments.items()
     }
 
-    binding_assignments = dict(baseline_assignments)
-    binding_assignments[MVAUComputeKernelPaths.BINDING] = MVAUComputeBinding.LEGACY_HLS_DSP
-    binding_assignments.pop(MVAUComputeKernelPaths.COMPUTE_PUMPING)
+    kernel_assignments = {
+        path: value
+        for path, value in baseline_assignments.items()
+        if not str(path).startswith(str(SOFT_VECTOR_PATHS.pe).rsplit(".", 1)[0])
+    }
+    kernel_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] = MVAUComputeKernelId.LEGACY_HLS.value
+    kernel_assignments[LEGACY_HLS_PATHS.pe] = 2
+    kernel_assignments[LEGACY_HLS_PATHS.simd] = 2
+    kernel_assignments[LEGACY_HLS_PATHS.resource] = MVAUHlsResource.DSP
+    kernel_assignments[LEGACY_HLS_PATHS.weight_source] = MVAUWeightSource.STREAMED
     mismatched_binding = start_mvau_projection(
-        project_mvau_source(model, NODE_ID, _context()), binding_assignments
+        project_mvau_source(model, NODE_ID, _context()), kernel_assignments
     )
 
     pumping_assignments = dict(baseline_assignments)
-    pumping_assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = True
+    pumping_assignments[SOFT_VECTOR_PATHS.compute_pumping] = True
     mismatched_pumping = start_mvau_projection(
         project_mvau_source(model, NODE_ID, _context()), pumping_assignments
     )
@@ -441,13 +456,25 @@ def test_artifact_requirements_reject_elaboration_from_another_selected_point() 
         baseline_assignments,
     )
 
+    # Selecting another compute Kernel keeps the Region but not the identity.
+    assert isinstance(mismatched_binding.result, RegionRef)
+    assert isinstance(baseline.result, RegionRef)
+    assert mismatched_binding.result.region == baseline.result.region
+    assert mismatched_binding.result.source_association != baseline.result.source_association
+
+    for mismatched in (
+        mismatched_pumping,
+        mismatched_clock,
+        mismatched_problem,
+    ):
+        assert mismatched.result == baseline.result
+
     for mismatched in (
         mismatched_binding,
         mismatched_pumping,
         mismatched_clock,
         mismatched_problem,
     ):
-        assert mismatched.result == baseline.result
         with pytest.raises(MVAUArtifactError) as error:
             build_mvau_rtl_artifact_requirements(
                 mismatched,
@@ -467,12 +494,12 @@ def test_infeasible_but_ready_point_cannot_reach_artifact_requirements() -> None
     assignments: dict[QualifiedPath | str, object] = {
         path: value for path, value in baseline.point.assignments.items()
     }
-    assignments[MVAUComputeKernelPaths.SIMD] = 1
-    assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = False
+    assignments[SOFT_VECTOR_PATHS.simd] = 1
+    assignments[SOFT_VECTOR_PATHS.compute_pumping] = False
     feasible = start_mvau_projection(projection, assignments)
     elaboration = elaborate_mvau_rtl_softvec(feasible)
 
-    assignments[MVAUComputeKernelPaths.COMPUTE_PUMPING] = True
+    assignments[SOFT_VECTOR_PATHS.compute_pumping] = True
     infeasible = start_mvau_projection(projection, assignments)
     assert infeasible.engine.check_readiness(infeasible.point, "artifact_inputs").ready is True
     forged_origin = replace(elaboration, origin=mvau_elaboration_origin(infeasible))
@@ -488,18 +515,16 @@ def test_infeasible_but_ready_point_cannot_reach_artifact_requirements() -> None
     assert "mvau-artifact-constraint-violated" in {finding.code for finding in error.value.findings}
 
 
-def test_softvec_and_packed_bindings_preserve_the_same_standard_region() -> None:
+def test_soft_vector_and_packed_kernels_preserve_the_same_standard_region() -> None:
     model = _model("external")
     selected = _selected(model)
     assert isinstance(selected.result, RegionRef)
     original_region = selected.result.region
-    assignments: dict[QualifiedPath | str, object] = {
-        path: value for path, value in selected.point.assignments.items()
+    shared = {
+        path: value
+        for path, value in selected.point.assignments.items()
+        if not str(path).startswith("mvau.compute.")
     }
-    assignments.pop(next(path for path in assignments if str(path) == "mvau.compute.binding"))
-    assignments.pop(
-        next(path for path in assignments if str(path) == "mvau.compute.binding.compute_pumping")
-    )
     projection = project_mvau_source(
         model,
         NODE_ID,
@@ -509,11 +534,13 @@ def test_softvec_and_packed_bindings_preserve_the_same_standard_region() -> None
             clock_period_ns=CLOCK_NS,
         ),
     )
-    # A fresh target problem is used because packed RTL is a DSP58 implementation.
-    packed_assignments = {
-        **assignments,
-        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_PACKED,
-        MVAUComputeKernelPaths.COMPUTE_PUMPING: False,
+    # A fresh target problem is used because the packed Kernel needs DSP58.
+    packed_assignments: dict[QualifiedPath | str, object] = {
+        **shared,
+        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.PACKED_DSP.value,
+        PACKED_DSP_PATHS.pe: 2,
+        PACKED_DSP_PATHS.simd: 2,
+        PACKED_DSP_PATHS.compute_pumping: False,
     }
     packed = start_mvau_projection(projection, packed_assignments)
     assert isinstance(packed.result, RegionRef)

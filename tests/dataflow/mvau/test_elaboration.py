@@ -13,13 +13,19 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
+from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.mvau.compute_kernels import (
+    LEGACY_HLS_PATHS,
+    SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId,
+    MVAUHlsResource,
+    MVAUWeightSource,
+)
 from finn.dataflow.mvau.elaboration import (
     MVAUElaborationError,
     MVAUPhysicalControlKind,
     elaborate_mvau_rtl_softvec,
 )
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     MVAULegacyImportMode,
@@ -29,7 +35,13 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
     mvau_problem_fingerprint,
 )
-from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, MVAUParameterTopology, NetworkRef
+from finn.dataflow.mvau.elaboration import MEMSTREAM_PROVIDER_ID, SOFT_VECTOR_PROVIDER_ID
+from finn.dataflow.ops.mvau import (
+    MVAU_COMPUTE_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
+    NetworkRef,
+)
+from finn.dataflow.parameters.supply_kernels import MVAUWeightSupplyKernelId
 
 NODE_ID = "mvau_elaboration"
 PART = "xczu3eg-sbva484-1-e"
@@ -108,7 +120,8 @@ def test_compute_only_softvec_elaboration_has_typed_components_and_interfaces() 
     assert elaborated.origin.assignments == tuple(
         sorted(resolved.point.assignments.items(), key=lambda item: item[0])
     )
-    assert elaborated.origin.binding_ids == (MVAUComputeBinding.RTL_SOFTVEC.value,)
+    assert elaborated.origin.kernel_ids == (MVAUComputeKernelId.SOFT_VECTOR.value,)
+    assert elaborated.origin.provider_ids == (SOFT_VECTOR_PROVIDER_ID,)
     assert tuple(component.id for component in elaborated.components) == (
         f"{NODE_ID}.compute.stream_shell",
         f"{NODE_ID}.compute.wrapper",
@@ -168,7 +181,7 @@ def test_compute_only_softvec_elaboration_has_typed_components_and_interfaces() 
         "weight",
     )
     assert all(
-        association.binding_ids == (MVAUComputeBinding.RTL_SOFTVEC.value,)
+        association.kernel_ids == (MVAUComputeKernelId.SOFT_VECTOR.value,)
         for association in elaborated.associations
         if association.physical_id.startswith(f"{NODE_ID}.compute")
     )
@@ -214,7 +227,8 @@ def test_direct_cyclic_network_elaboration_preserves_two_regions_and_configurati
         item for item in elaborated.associations if item.physical_id == delivery.id
     )
     assert delivery_association.semantic_region_ids == ("delivery",)
-    assert delivery_association.binding_ids == ("finn_rtl_memstream",)
+    assert delivery_association.kernel_ids == (MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,)
+    assert delivery_association.provider_ids == (MEMSTREAM_PROVIDER_ID,)
 
 
 def test_physical_validation_rejects_bad_parent_connection_and_semantic_reference() -> None:
@@ -245,26 +259,32 @@ def test_physical_validation_rejects_bad_parent_connection_and_semantic_referenc
         )
 
 
-def test_elaboration_rejects_unassigned_and_uncovered_binding_choices() -> None:
+def test_elaboration_rejects_an_unselected_or_uncovered_kernel() -> None:
     model = _model(mem_mode="external")
     projection = project_mvau_source(model, NODE_ID, _context())
-    semantic_only: dict[QualifiedPath | str, object] = {
-        MVAUComputeKernelPaths.PE: 2,
-        MVAUComputeKernelPaths.SIMD: 2,
-        MVAUComputeKernelPaths.REGION_DECLARATION: MVAURegionDeclaration.STANDARD_STREAMED,
-        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: MVAUParameterTopology.DIRECT,
+    incomplete: dict[QualifiedPath | str, object] = {
+        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
+        SOFT_VECTOR_PATHS.pe: 2,
+        SOFT_VECTOR_PATHS.simd: 2,
+        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
     }
-    unresolved = start_mvau_projection(projection, semantic_only)
+    unresolved = start_mvau_projection(projection, incomplete)
     with pytest.raises(MVAUElaborationError):
         elaborate_mvau_rtl_softvec(unresolved)
 
-    packed_assignments = {
-        **semantic_only,
-        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.LEGACY_HLS_DSP,
-    }
-    packed = start_mvau_projection(projection, packed_assignments)
+    other_kernel = start_mvau_projection(
+        projection,
+        {
+            MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.LEGACY_HLS.value,
+            LEGACY_HLS_PATHS.pe: 2,
+            LEGACY_HLS_PATHS.simd: 2,
+            LEGACY_HLS_PATHS.resource: MVAUHlsResource.DSP,
+            LEGACY_HLS_PATHS.weight_source: MVAUWeightSource.STREAMED,
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+        },
+    )
     with pytest.raises(MVAUElaborationError) as unsupported:
-        elaborate_mvau_rtl_softvec(packed)
+        elaborate_mvau_rtl_softvec(other_kernel)
     assert {finding.code for finding in unsupported.value.findings} == {
         "mvau-elaboration-slice-unsupported"
     }

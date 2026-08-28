@@ -1,6 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
+"""Phase 5 gate: MVAU composition is selected Kernels, not a choice grid."""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -8,6 +10,7 @@ from dataclasses import replace
 import pytest
 
 from finn.dataflow.design import (
+    Absent,
     Decided,
     DesignPoint,
     DesignSpaceSpec,
@@ -16,37 +19,62 @@ from finn.dataflow.design import (
     RequestError,
     Unresolved,
 )
+from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths, MVAUDspBlock
-from finn.dataflow.mvau.regions import (
-    MVAURegionDeclaration,
-    construct_batch_interleaved_streamed_mvau_region,
+from finn.dataflow.mvau.compute_kernels import (
+    BATCH_INTERLEAVED_PATHS,
+    LEGACY_HLS_PATHS,
+    PACKED_DSP_PATHS,
+    SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId,
+    MVAUComputeKernelPathSet,
+    MVAUComputeProblemPaths,
+    MVAUDspBlock,
+    MVAUHlsResource,
+    MVAUWeightSource,
 )
+from finn.dataflow.mvau.regions import construct_batch_interleaved_streamed_mvau_region
+from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.network_validation import NetworkValidationReport
 from finn.dataflow.ops.mvau import (
+    MVAU_COMPUTE_SELECTION,
+    MVAU_DATAFLOW_OP_SPEC,
+    MVAU_WEIGHT_ADAPTER_SELECTION,
+    MVAU_WEIGHT_SUPPLY_SELECTION,
     BindingLocalStateDestination,
     CoordinateMappingKind,
-    MVAU_DATAFLOW_OP_SPEC,
-    MVAUConnectionTopology,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     MVAUSourceAssociation,
     MVAUSourceDescription,
-    MVAUWeightDeliveryDeclaration,
     NetworkRef,
     RegionRef,
     SemanticOperandDestination,
 )
-from finn.dataflow.parameters.cyclic.definition import (
-    CyclicParameterBinding,
-    CyclicParameterKernelPaths,
-    CyclicRamStyle,
+from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
+from finn.dataflow.parameters.supply_kernels import (
+    FINNLIB_MEMSTREAM_PATHS,
+    FINN_RTL_MEMSTREAM_PATHS,
+    MVAUWeightSupplyKernelId,
+    MVAUWeightSupplyProblemPaths,
+    WeightOrganization,
 )
 from finn.dataflow.region import NumericElementType, Port
 from finn.dataflow.selection import enumerate_feasible_points
 
 INT8 = NumericElementType("int", 8)
 INT16 = NumericElementType("int", 16)
+
+COMPUTE = MVAU_COMPUTE_SELECTION.paths
+SUPPLY = MVAU_WEIGHT_SUPPLY_SELECTION.paths
+ADAPTER = MVAU_WEIGHT_ADAPTER_SELECTION.paths
+
+KERNEL_PATHS: dict[MVAUComputeKernelId, MVAUComputeKernelPathSet] = {
+    MVAUComputeKernelId.LEGACY_HLS: LEGACY_HLS_PATHS,
+    MVAUComputeKernelId.SOFT_VECTOR: SOFT_VECTOR_PATHS,
+    MVAUComputeKernelId.PACKED_DSP: PACKED_DSP_PATHS,
+    MVAUComputeKernelId.BATCH_INTERLEAVED_DSP: BATCH_INTERLEAVED_PATHS,
+}
 
 
 def _source_description(*, fused: bool = False) -> MVAUSourceDescription:
@@ -70,126 +98,122 @@ def _problem(
     source_description: MVAUSourceDescription | None = None,
     external_weight_sequence: object | None = None,
     computation_profile: MVAUComputationProfile = MVAUComputationProfile.ACCUMULATOR_INTEGER,
-) -> dict[str, object]:
-    problem: dict[str, object] = {
-        str(MVAUComputeKernelPaths.REPETITIONS): repetitions,
-        str(MVAUComputeKernelPaths.MATRIX_WIDTH): matrix_width,
-        str(MVAUComputeKernelPaths.MATRIX_HEIGHT): matrix_height,
-        str(MVAUComputeKernelPaths.ACTIVATION_ELEMENT_TYPE): INT8,
-        str(MVAUComputeKernelPaths.WEIGHT_ELEMENT_TYPE): INT8,
-        str(MVAUComputeKernelPaths.ACCUMULATOR_ELEMENT_TYPE): INT16,
-        str(MVAUComputeKernelPaths.OUTPUT_ELEMENT_TYPE): INT16,
-        str(MVAUComputeKernelPaths.COMPUTATION_PROFILE): computation_profile,
-        str(MVAUComputeKernelPaths.WEIGHT_INITIALIZER_AVAILABLE): True,
-        str(MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE): True,
-        str(MVAUComputeKernelPaths.TARGET_DSP_BLOCK): MVAUDspBlock.DSP58,
-        str(MVAUComputeKernelPaths.WEIGHTS_NARROW): True,
-        str(CyclicParameterKernelPaths.INITIALIZER_AVAILABLE): True,
-        str(CyclicParameterKernelPaths.RUNTIME_WRITABLE): False,
-        str(MVAUDataflowOpPaths.SOURCE_DESCRIPTION): source_description or _source_description(),
+) -> dict[QualifiedPath, object]:
+    P = MVAUComputeProblemPaths
+    problem: dict[QualifiedPath, object] = {
+        P.REPETITIONS: repetitions,
+        P.MATRIX_WIDTH: matrix_width,
+        P.MATRIX_HEIGHT: matrix_height,
+        P.ACTIVATION_ELEMENT_TYPE: INT8,
+        P.WEIGHT_ELEMENT_TYPE: INT8,
+        P.ACCUMULATOR_ELEMENT_TYPE: INT16,
+        P.OUTPUT_ELEMENT_TYPE: INT16,
+        P.COMPUTATION_PROFILE: computation_profile,
+        P.WEIGHT_INITIALIZER_AVAILABLE: True,
+        P.THRESHOLD_INITIALIZER_AVAILABLE: True,
+        P.TARGET_DSP_BLOCK: MVAUDspBlock.DSP58,
+        P.WEIGHTS_NARROW: True,
+        MVAUWeightSupplyProblemPaths.RUNTIME_WRITABLE: False,
+        MVAUDataflowOpPaths.SOURCE_DESCRIPTION: source_description or _source_description(),
     }
     if external_weight_sequence is not None:
-        problem[str(MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE)] = external_weight_sequence
+        problem[MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE] = external_weight_sequence
     return problem
 
 
 def _started(**overrides: object) -> tuple[Engine, DesignPoint]:
     engine = Engine()
     space = engine.validate(MVAU_DATAFLOW_OP_SPEC)
-    problem = _problem()
-    override_paths = {
-        "repetitions": MVAUComputeKernelPaths.REPETITIONS,
-        "matrix_width": MVAUComputeKernelPaths.MATRIX_WIDTH,
-        "matrix_height": MVAUComputeKernelPaths.MATRIX_HEIGHT,
-        "source_description": MVAUDataflowOpPaths.SOURCE_DESCRIPTION,
-        "external_weight_sequence": MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE,
-        "computation_profile": MVAUComputeKernelPaths.COMPUTATION_PROFILE,
-    }
-    for name, value in overrides.items():
-        problem[str(override_paths[name])] = value
-    return engine, engine.start(space, problem)
+    return engine, engine.start(space, _problem(**overrides))  # type: ignore[arg-type]
 
 
-def _compute_assignments(
-    declaration: MVAURegionDeclaration,
-    topology: MVAUParameterTopology,
-) -> dict[QualifiedPath, object]:
-    assignments: dict[QualifiedPath, object] = {
-        MVAUComputeKernelPaths.PE: 2,
-        MVAUComputeKernelPaths.SIMD: 2,
-        MVAUComputeKernelPaths.REGION_DECLARATION: declaration,
-        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: topology,
-    }
-    if declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED:
-        assignments[MVAUComputeKernelPaths.INTERLEAVE] = 2
-    return assignments
-
-
-def _cyclic_assignments(
-    declaration: MVAURegionDeclaration = MVAURegionDeclaration.STANDARD_STREAMED,
+def _compute(
+    kernel: MVAUComputeKernelId,
     *,
-    delivery_declaration: MVAUWeightDeliveryDeclaration | None = None,
-    connection_topology: MVAUConnectionTopology = MVAUConnectionTopology.DIRECT,
+    pe: int = 2,
+    simd: int = 2,
+    interleave: int = 2,
+    weight_source: MVAUWeightSource = MVAUWeightSource.STREAMED,
 ) -> dict[QualifiedPath, object]:
-    selected_delivery = delivery_declaration or (
-        MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED
-        if declaration is MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
-        else MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
-    )
+    paths = KERNEL_PATHS[kernel]
     assignments: dict[QualifiedPath, object] = {
-        MVAUDataflowOpPaths.DELIVERY_PE: 2,
-        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
-        MVAUDataflowOpPaths.DELIVERY_DECLARATION: selected_delivery,
-        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: connection_topology,
-        CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
-        CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
-        CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+        COMPUTE.kernel: kernel.value,
+        paths.pe: pe,
+        paths.simd: simd,
     }
-    if selected_delivery is MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED:
-        assignments[MVAUDataflowOpPaths.DELIVERY_INTERLEAVE] = 2
+    if kernel is MVAUComputeKernelId.LEGACY_HLS:
+        assignments[paths.resource] = MVAUHlsResource.LUT
+        assignments[paths.weight_source] = weight_source
+    if kernel is MVAUComputeKernelId.BATCH_INTERLEAVED_DSP:
+        assignments[paths.interleave] = interleave
+    if kernel in {MVAUComputeKernelId.SOFT_VECTOR, MVAUComputeKernelId.PACKED_DSP}:
+        assignments[paths.compute_pumping] = False
     return assignments
+
+
+def _supply(
+    *,
+    organization: WeightOrganization = WeightOrganization.AS_DEMANDED,
+    pumped_memory: bool = False,
+    adapter: str = NO_KERNEL,
+) -> dict[QualifiedPath, object]:
+    return {
+        SUPPLY.kernel: MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,
+        FINN_RTL_MEMSTREAM_PATHS.organization: organization,
+        FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
+        FINN_RTL_MEMSTREAM_PATHS.pumped_memory: pumped_memory,
+        ADAPTER.kernel: adapter,
+    }
+
+
+def _unsupplied() -> dict[QualifiedPath, object]:
+    return {SUPPLY.kernel: NO_KERNEL}
+
+
+# -- assembly shapes ---------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "declaration,topology",
+    "assignments,topology",
     [
-        (MVAURegionDeclaration.STANDARD_EMBEDDED, MVAUParameterTopology.EMBEDDED),
-        (MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
+        (
+            {**_compute(MVAUComputeKernelId.LEGACY_HLS, weight_source=MVAUWeightSource.EMBEDDED)},
+            MVAUParameterTopology.EMBEDDED,
+        ),
+        (
+            {**_compute(MVAUComputeKernelId.SOFT_VECTOR), **_unsupplied()},
+            MVAUParameterTopology.DIRECT,
+        ),
     ],
 )
-def test_embedded_and_direct_topologies_resolve_to_region_refs(
-    declaration: MVAURegionDeclaration, topology: MVAUParameterTopology
+def test_an_unsupplied_weight_path_resolves_to_a_region_ref(
+    assignments: dict[QualifiedPath, object], topology: MVAUParameterTopology
 ) -> None:
     engine, point = _started()
-    point = engine.commit_assignments(point, _compute_assignments(declaration, topology)).point
+    point = engine.commit_assignments(point, assignments).point
     answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
     assert isinstance(answer, Decided)
     assert isinstance(answer.value, RegionRef)
-    region_answer = engine.query_property(point, MVAUComputeKernelPaths.REGION)
-    assert isinstance(region_answer, Decided)
-    assert answer.value.region == region_answer.value
+    assert answer.value.source_association.parameter_topology is topology
+    region = engine.query_property(point, COMPUTE.region)
+    assert isinstance(region, Decided)
+    assert answer.value.region == region.value
     assert engine.check_readiness(point, "mvau_op_structural").ready is True
 
 
 @pytest.mark.parametrize(
-    "compute_declaration",
-    [
-        MVAURegionDeclaration.STANDARD_STREAMED,
-        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-    ],
+    "kernel",
+    [MVAUComputeKernelId.SOFT_VECTOR, MVAUComputeKernelId.BATCH_INTERLEAVED_DSP],
 )
-def test_cyclic_topologies_resolve_to_structurally_valid_network_refs(
-    compute_declaration: MVAURegionDeclaration,
+def test_a_selected_supplier_resolves_to_a_valid_network_ref(
+    kernel: MVAUComputeKernelId,
 ) -> None:
     engine, point = _started()
-    assignments = {
-        **_compute_assignments(compute_declaration, MVAUParameterTopology.CYCLIC),
-        **_cyclic_assignments(compute_declaration),
-    }
-    point = engine.commit_assignments(point, assignments).point
+    point = engine.commit_assignments(point, {**_compute(kernel), **_supply()}).point
     answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
     assert isinstance(answer, Decided)
     assert isinstance(answer.value, NetworkRef)
+    assert answer.value.source_association.parameter_topology is MVAUParameterTopology.CYCLIC
     assert tuple(node.id for node in answer.value.network.nodes) == ("compute", "delivery")
     assert engine.query_property(point, MVAUDataflowOpPaths.NETWORK_VALIDATION) == Decided(
         NetworkValidationReport()
@@ -197,52 +221,46 @@ def test_cyclic_topologies_resolve_to_structurally_valid_network_refs(
     assert engine.check_readiness(point, "mvau_op_structural").ready is True
 
 
-def test_direct_cyclic_connection_contains_no_adapter_and_matches_exactly() -> None:
-    engine, point = _started()
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.STANDARD_STREAMED,
-            MVAUParameterTopology.CYCLIC,
-        ),
-        **_cyclic_assignments(),
-    }
-    point = engine.commit_assignments(point, assignments).point
+def test_the_topology_is_derived_from_the_selected_kernels_not_decided() -> None:
+    decisions = {str(item.path) for item in MVAU_DATAFLOW_OP_SPEC.decisions}
+    assert str(MVAUDataflowOpPaths.PARAMETER_TOPOLOGY) not in decisions
+    assert not any("connection_topology" in path for path in decisions)
+    assert not any("delivery" in path and path.endswith((".pe", ".simd")) for path in decisions)
+    properties = {str(item.path) for item in MVAU_DATAFLOW_OP_SPEC.properties}
+    assert str(MVAUDataflowOpPaths.PARAMETER_TOPOLOGY) in properties
 
-    producer = engine.query_property(point, MVAUDataflowOpPaths.DELIVERY_WEIGHT_PORT)
+
+def test_a_direct_connection_has_no_adapter_and_matches_exactly() -> None:
+    engine, point = _started()
+    point = engine.commit_assignments(
+        point, {**_compute(MVAUComputeKernelId.SOFT_VECTOR), **_supply()}
+    ).point
+    producer = engine.query_property(point, SUPPLY.export("output_port"))
     consumer = engine.query_property(point, MVAUDataflowOpPaths.COMPUTE_WEIGHT_PORT)
     result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
-
-    assert isinstance(producer, Decided)
-    assert isinstance(consumer, Decided)
-    assert isinstance(producer.value, Port)
-    assert isinstance(consumer.value, Port)
+    assert isinstance(producer, Decided) and isinstance(consumer, Decided)
+    assert isinstance(producer.value, Port) and isinstance(consumer.value, Port)
     assert producer.value.beat_sequence == consumer.value.beat_sequence
-    assert isinstance(result, Decided)
-    assert isinstance(result.value, NetworkRef)
-    assert tuple(node.id for node in result.value.network.nodes) == ("compute", "delivery")
+    assert isinstance(result, Decided) and isinstance(result.value, NetworkRef)
     assert tuple(edge.id for edge in result.value.network.edges) == ("weight",)
+    assert result.value.source_association.adapter_kernel_id is None
 
 
-def test_full_tile_delivery_to_chunked_compute_uses_one_explicit_adapter_region() -> None:
+def test_an_independently_organized_supplier_uses_one_explicit_adapter_region() -> None:
     engine, point = _started()
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.CYCLIC,
-        ),
-        **_cyclic_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            delivery_declaration=MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
-            connection_topology=MVAUConnectionTopology.ADAPTER,
-        ),
-    }
-    point = engine.commit_assignments(point, assignments).point
-
+    point = engine.commit_assignments(
+        point,
+        {
+            **_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP),
+            **_supply(
+                organization=WeightOrganization.STANDARD_FULL_TILE,
+                adapter=FULL_TILE_TO_CHUNKED,
+            ),
+        },
+    ).point
     result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
     assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
-
-    assert isinstance(result, Decided)
-    assert isinstance(result.value, NetworkRef)
+    assert isinstance(result, Decided) and isinstance(result.value, NetworkRef)
     assert tuple(node.id for node in result.value.network.nodes) == (
         "compute",
         "delivery",
@@ -252,53 +270,48 @@ def test_full_tile_delivery_to_chunked_compute_uses_one_explicit_adapter_region(
         "adapter_to_compute",
         "delivery_to_adapter",
     )
+    assert result.value.source_association.adapter_kernel_id == FULL_TILE_TO_CHUNKED
     assert assessment.answers[MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED] == Decided(True)
     assert engine.query_property(point, MVAUDataflowOpPaths.NETWORK_VALIDATION) == Decided(
         NetworkValidationReport()
     )
 
 
-def test_incompatible_direct_cyclic_connection_remains_infeasible() -> None:
+def test_an_unadapted_mismatch_remains_infeasible() -> None:
     engine, point = _started()
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.CYCLIC,
-        ),
-        **_cyclic_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            delivery_declaration=MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
-        ),
-    }
-    point = engine.commit_assignments(point, assignments).point
-
+    point = engine.commit_assignments(
+        point,
+        {
+            **_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP),
+            **_supply(organization=WeightOrganization.STANDARD_FULL_TILE),
+        },
+    ).point
     assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
-
     assert assessment.answers[MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED] == Decided(False)
-    assert point.assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY] is (
-        MVAUConnectionTopology.DIRECT
-    )
+    assert point.assignments[ADAPTER.kernel] == NO_KERNEL
 
 
-def test_joint_selection_finds_direct_and_explicit_adapter_mvau_compositions() -> None:
+def test_joint_selection_finds_both_direct_and_adapter_compositions() -> None:
     engine, point = _started()
-    fixed = {
-        **_compute_assignments(
-            MVAURegionDeclaration.STANDARD_STREAMED,
-            MVAUParameterTopology.CYCLIC,
-        ),
-        MVAUDataflowOpPaths.DELIVERY_PE: 2,
-        MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
-        CyclicParameterKernelPaths.BINDING: CyclicParameterBinding.FINN_RTL_MEMSTREAM,
-        CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
-        CyclicParameterKernelPaths.PUMPED_MEMORY: False,
-    }
-    point = engine.commit_assignments(point, fixed).point
-    coordinated = (
-        MVAUDataflowOpPaths.DELIVERY_DECLARATION,
-        MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
-        MVAUDataflowOpPaths.CONNECTION_TOPOLOGY,
-    )
+    point = engine.commit_assignments(
+        point,
+        {
+            **_compute(MVAUComputeKernelId.SOFT_VECTOR),
+            SUPPLY.kernel: MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,
+            FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
+            FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
+        },
+    ).point
+    coordinated = (FINN_RTL_MEMSTREAM_PATHS.organization, ADAPTER.kernel)
+
+    def signatures(points: tuple[DesignPoint, ...]) -> set[tuple[object, object]]:
+        return {
+            (
+                candidate.assignments[FINN_RTL_MEMSTREAM_PATHS.organization],
+                candidate.assignments[ADAPTER.kernel],
+            )
+            for candidate in points
+        }
 
     forward = enumerate_feasible_points(
         engine,
@@ -314,28 +327,59 @@ def test_joint_selection_finds_direct_and_explicit_adapter_mvau_compositions() -
         constraint_set="mvau_op_structural",
         traversal_order=tuple(reversed(coordinated)),
     )
-
-    def signatures(points: tuple[DesignPoint, ...]) -> set[tuple[object, object]]:
-        return {
-            (
-                candidate.assignments[MVAUDataflowOpPaths.DELIVERY_DECLARATION],
-                candidate.assignments[MVAUDataflowOpPaths.CONNECTION_TOPOLOGY],
-            )
-            for candidate in points
-        }
-
+    # Both organizations produce the same sequence for a standard-streamed
+    # demand, so both connect directly and neither needs the adapter.
     expected = {
-        (
-            MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE,
-            MVAUConnectionTopology.DIRECT,
-        ),
-        (
-            MVAUWeightDeliveryDeclaration.BATCH_INTERLEAVED_CHUNKED,
-            MVAUConnectionTopology.ADAPTER,
-        ),
+        (WeightOrganization.AS_DEMANDED, NO_KERNEL),
+        (WeightOrganization.STANDARD_FULL_TILE, NO_KERNEL),
     }
     assert signatures(forward.points) == expected
     assert signatures(reverse.points) == expected
+
+
+def test_a_supplier_failure_can_veto_a_point_without_rewriting_compute() -> None:
+    engine, point = _started()
+    compute = _compute(MVAUComputeKernelId.SOFT_VECTOR)
+    region_before = engine.query_property(
+        engine.commit_assignments(point, {**compute, **_unsupplied()}).point, COMPUTE.region
+    )
+    vetoed = engine.commit_assignments(
+        point,
+        {
+            **compute,
+            SUPPLY.kernel: MVAUWeightSupplyKernelId.FINNLIB_HLS_MEMSTREAM.value,
+            FINNLIB_MEMSTREAM_PATHS.organization: WeightOrganization.AS_DEMANDED,
+            ADAPTER.kernel: NO_KERNEL,
+        },
+    ).point
+    # FinnLib is feasible here; make it infeasible by removing the initializer.
+    infeasible_engine, infeasible = _started()
+    infeasible = infeasible_engine.start(
+        infeasible_engine.validate(MVAU_DATAFLOW_OP_SPEC),
+        {
+            **_problem(),
+            MVAUComputeProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: False,
+        },
+    )
+    infeasible = infeasible_engine.commit_assignments(
+        infeasible,
+        {
+            **compute,
+            SUPPLY.kernel: MVAUWeightSupplyKernelId.FINNLIB_HLS_MEMSTREAM.value,
+            FINNLIB_MEMSTREAM_PATHS.organization: WeightOrganization.AS_DEMANDED,
+            ADAPTER.kernel: NO_KERNEL,
+        },
+    ).point
+    assert (
+        infeasible_engine.evaluate_constraint_set(infeasible, "mvau_op_feasibility").verdict
+        is False
+    )
+    # The compute Region is untouched by the supplier's failure.
+    assert infeasible_engine.query_property(infeasible, COMPUTE.region) == region_before
+    assert engine.query_property(vetoed, COMPUTE.region) == region_before
+
+
+# -- source association ------------------------------------------------------
 
 
 def test_source_association_records_flattening_transpose_and_fused_provenance() -> None:
@@ -346,9 +390,7 @@ def test_source_association_records_flattening_transpose_and_fused_provenance() 
     )
     point = engine.commit_assignments(
         point,
-        _compute_assignments(
-            MVAURegionDeclaration.STANDARD_EMBEDDED, MVAUParameterTopology.EMBEDDED
-        ),
+        _compute(MVAUComputeKernelId.LEGACY_HLS, weight_source=MVAUWeightSource.EMBEDDED),
     ).point
     answer = engine.query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION)
     assert isinstance(answer, Decided)
@@ -356,6 +398,8 @@ def test_source_association_records_flattening_transpose_and_fused_provenance() 
     assert isinstance(association, MVAUSourceAssociation)
     assert association.source_node_id == "node0"
     assert association.fused_source_node_ids == ("matmul", "threshold")
+    assert association.compute_kernel_id == MVAUComputeKernelId.LEGACY_HLS.value
+    assert association.supply_kernel_id is None
     by_role = {item.role: item for item in association.operands}
     assert by_role["activation"].mapping is CoordinateMappingKind.FLATTEN_LEADING
     assert by_role["activation"].destination == SemanticOperandDestination("mvau.compute", "X")
@@ -396,15 +440,15 @@ def test_source_associations_are_topology_aware_and_qualified(
     weight_destination: object,
     semantic_owner: str,
 ) -> None:
-    declaration = (
-        MVAURegionDeclaration.STANDARD_EMBEDDED
-        if topology is MVAUParameterTopology.EMBEDDED
-        else MVAURegionDeclaration.STANDARD_STREAMED
-    )
     engine, point = _started()
-    assignments = _compute_assignments(declaration, topology)
-    if topology is MVAUParameterTopology.CYCLIC:
-        assignments.update(_cyclic_assignments(declaration))
+    if topology is MVAUParameterTopology.EMBEDDED:
+        assignments = _compute(
+            MVAUComputeKernelId.LEGACY_HLS, weight_source=MVAUWeightSource.EMBEDDED
+        )
+    elif topology is MVAUParameterTopology.DIRECT:
+        assignments = {**_compute(MVAUComputeKernelId.SOFT_VECTOR), **_unsupplied()}
+    else:
+        assignments = {**_compute(MVAUComputeKernelId.SOFT_VECTOR), **_supply()}
     point = engine.commit_assignments(point, assignments).point
     association_answer = engine.query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION)
     result_answer = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
@@ -435,24 +479,43 @@ def test_source_association_rejects_incorrect_flattened_repetition_extent() -> N
     engine, point = _started(source_description=description)
     point = engine.commit_assignments(
         point,
-        _compute_assignments(
-            MVAURegionDeclaration.STANDARD_EMBEDDED, MVAUParameterTopology.EMBEDDED
-        ),
+        _compute(MVAUComputeKernelId.LEGACY_HLS, weight_source=MVAUWeightSource.EMBEDDED),
     ).point
     assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
     assert assessment.answers[MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID] == Decided(False)
 
 
-def test_direct_interleaved_requires_the_exact_external_weight_sequence() -> None:
+def test_the_association_records_every_selected_kernel_identity() -> None:
+    engine, point = _started()
+    point = engine.commit_assignments(
+        point,
+        {
+            **_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP),
+            **_supply(
+                organization=WeightOrganization.STANDARD_FULL_TILE,
+                adapter=FULL_TILE_TO_CHUNKED,
+            ),
+        },
+    ).point
+    answer = engine.query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION)
+    assert isinstance(answer, Decided)
+    association = answer.value
+    assert isinstance(association, MVAUSourceAssociation)
+    assert association.compute_kernel_id == MVAUComputeKernelId.BATCH_INTERLEAVED_DSP.value
+    assert association.supply_kernel_id == MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
+    assert association.adapter_kernel_id == FULL_TILE_TO_CHUNKED
+
+
+# -- exposed boundaries ------------------------------------------------------
+
+
+def test_an_exposed_interleaved_boundary_requires_the_exact_external_sequence() -> None:
     compute = construct_batch_interleaved_streamed_mvau_region(2, 4, 4, INT8, INT8, INT16, 2, 2, 2)
     expected = compute.input_interface("weight").port.beat_sequence
     engine, point = _started(external_weight_sequence=expected)
     point = engine.commit_assignments(
         point,
-        _compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.DIRECT,
-        ),
+        {**_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP), **_unsupplied()},
     ).point
     assert engine.evaluate_constraint_set(point, "mvau_op_structural").verdict is True
 
@@ -460,82 +523,67 @@ def test_direct_interleaved_requires_the_exact_external_weight_sequence() -> Non
     wrong_engine, wrong_point = _started(external_weight_sequence=wrong)
     wrong_point = wrong_engine.commit_assignments(
         wrong_point,
-        _compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.DIRECT,
-        ),
+        {**_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP), **_unsupplied()},
     ).point
     assessment = wrong_engine.evaluate_constraint_set(wrong_point, "mvau_op_structural")
-    assert assessment.answers[MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE] == Decided(
-        False
-    )
+    assert assessment.answers[MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE] == Decided(False)
 
 
-def test_direct_interleaved_missing_source_is_unresolved_but_region_is_resolved() -> None:
+def test_an_exposed_interleaved_boundary_without_a_source_is_unresolved() -> None:
     engine, point = _started()
     point = engine.commit_assignments(
         point,
-        _compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.DIRECT,
-        ),
+        {**_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP), **_unsupplied()},
     ).point
-    assert isinstance(engine.query_property(point, MVAUComputeKernelPaths.REGION), Decided)
+    assert isinstance(engine.query_property(point, COMPUTE.region), Decided)
     answer = engine.evaluate_constraint_set(point, "mvau_op_structural").answers[
-        MVAUDataflowOpPaths.DIRECT_INTERLEAVED_SOURCE_AVAILABLE
+        MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE
     ]
     assert isinstance(answer, Unresolved)
 
 
-def test_topology_mismatch_is_an_explicit_constraint() -> None:
+def test_an_embedded_region_makes_the_supply_pool_inapplicable() -> None:
     engine, point = _started()
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.STANDARD_EMBEDDED, MVAUParameterTopology.CYCLIC
-        ),
-        **_cyclic_assignments(MVAURegionDeclaration.STANDARD_EMBEDDED),
-    }
-    point = engine.commit_assignments(point, assignments).point
-    assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
-    assert assessment.answers[MVAUDataflowOpPaths.TOPOLOGY_MATCHES_REGION] == Decided(False)
+    point = engine.commit_assignments(
+        point,
+        _compute(MVAUComputeKernelId.LEGACY_HLS, weight_source=MVAUWeightSource.EMBEDDED),
+    ).point
+    assert isinstance(engine.decision_state(point, SUPPLY.kernel), Absent)
+    assert isinstance(engine.query_property(point, SUPPLY.region), Absent)
 
 
-def test_interleaved_compute_rejects_unvalidated_pumped_cyclic_delivery() -> None:
+def test_interleaved_compute_rejects_unvalidated_pumped_supply() -> None:
     engine, point = _started()
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.CYCLIC,
-        ),
-        **_cyclic_assignments(MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED),
-        CyclicParameterKernelPaths.PUMPED_MEMORY: True,
-    }
-    point = engine.commit_assignments(point, assignments).point
+    point = engine.commit_assignments(
+        point,
+        {
+            **_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP),
+            **_supply(pumped_memory=True),
+        },
+    ).point
     assessment = engine.evaluate_constraint_set(point, "mvau_op_structural")
-    assert assessment.answers[MVAUDataflowOpPaths.CYCLIC_INTERLEAVED_PUMPING_SUPPORTED] == Decided(
-        False
+    assert assessment.answers[MVAUDataflowOpPaths.INTERLEAVED_PUMPING_SUPPORTED] == Decided(False)
+
+
+# -- commitment and order ----------------------------------------------------
+
+
+def test_every_pool_and_local_choice_can_commit_together() -> None:
+    engine, point = _started()
+    result = engine.commit_assignments(
+        point,
+        {**_compute(MVAUComputeKernelId.BATCH_INTERLEAVED_DSP), **_supply()},
     )
-
-
-def test_all_kernel_topology_and_spatialization_choices_can_commit_together() -> None:
-    engine, point = _started()
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-            MVAUParameterTopology.CYCLIC,
-        ),
-        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_BATCH_INTERLEAVED_DSP58,
-        **_cyclic_assignments(MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED),
-    }
-    result = engine.commit_assignments(point, assignments)
     assert {item.disposition for item in result.outcomes} == {"committed"}
     assert engine.check_readiness(result.point, "mvau_op_structural").ready is True
 
 
-def test_dynamic_is_not_smuggled_in_as_a_legacy_topology_value() -> None:
+def test_an_unknown_kernel_identity_is_rejected() -> None:
     engine, point = _started()
+    outcome = engine.commit_assignments(point, {COMPUTE.kernel: "dynamic"}).outcomes[0]
+    assert outcome.disposition not in {"committed", "unchanged"}
     with pytest.raises(RequestError):
-        engine.commit_assignments(point, {MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: "dynamic"})
+        engine.commit_assignments(point, {COMPUTE.kernel: 3})
 
 
 def test_declaration_order_does_not_change_a_fully_committed_result() -> None:
@@ -547,12 +595,7 @@ def test_declaration_order_does_not_change_a_fully_committed_result() -> None:
         tuple(reversed(MVAU_DATAFLOW_OP_SPEC.constraint_sets)),
         tuple(reversed(MVAU_DATAFLOW_OP_SPEC.readiness_profiles)),
     )
-    assignments = {
-        **_compute_assignments(
-            MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.CYCLIC
-        ),
-        **_cyclic_assignments(),
-    }
+    assignments = {**_compute(MVAUComputeKernelId.SOFT_VECTOR), **_supply()}
     first_engine, first = _started()
     first = first_engine.commit_assignments(first, assignments).point
     second_engine = Engine()
