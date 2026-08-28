@@ -696,6 +696,37 @@ class KernelSelection:
         )
 
 
+def admissible_kernels(
+    engine: Engine, selection: KernelSelection, point: DesignPoint
+) -> tuple[str, ...]:
+    """Return the pool members whose source-admission constraints can still hold.
+
+    Admission is existential and decision-free: a Kernel is admitted unless one
+    of its own source-admission constraints is already decidedly false for this
+    problem.  Full target feasibility remains a selection-time query, so an
+    unresolved constraint does not exclude a candidate here.
+    """
+
+    admitted: list[str] = []
+    for kernel in selection.kernels:
+        if not kernel.source_admission_constraints:
+            admitted.append(kernel.id)
+            continue
+        result = engine.commit_assignments(point, {selection.paths.kernel: kernel.id})
+        if any(
+            outcome.disposition not in {"committed", "unchanged"} for outcome in result.outcomes
+        ):
+            continue
+        assessment = engine.evaluate_constraints(result.point, kernel.source_admission_constraints)
+        refused = any(
+            isinstance(answer, Decided) and answer.value is False
+            for answer in assessment.answers.values()
+        )
+        if not refused:
+            admitted.append(kernel.id)
+    return tuple(admitted)
+
+
 def selected_kernel(
     engine: Engine, selection: KernelSelection, point: DesignPoint
 ) -> Answer[SelectedKernel]:
@@ -720,5 +751,6 @@ __all__ = [
     "KernelSelection",
     "KernelSelectionPaths",
     "SelectedKernel",
+    "admissible_kernels",
     "selected_kernel",
 ]

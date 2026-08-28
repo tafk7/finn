@@ -86,6 +86,8 @@ MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyTyp
         "binaryXnorMode": ("i", False, 0, {0, 1}),
         "accDataType": ("s", False, "INT32", None),
         "ActVal": ("i", False, 0, None),
+        # Durable provenance: every original source node a lowering consumed.
+        "dataflow_source_nodes": ("s", False, "", None),
     }
 )
 
@@ -914,6 +916,7 @@ def project_mvau_graph_source(
         if bool(source_attribute("binaryXnorMode", 0))
         else MVAUComputationProfile.ACCUMULATOR_INTEGER
     )
+    provenance = cast(str, source_attribute("dataflow_source_nodes", ""))
     description = MVAUSourceDescription(
         source_scope_id or source_node_id,
         activation_id,
@@ -921,7 +924,7 @@ def project_mvau_graph_source(
         output_id,
         leading_shape,
         threshold_id,
-        (),
+        tuple(item for item in provenance.split(",") if item),
         threshold_shape,
     )
     problem: dict[QualifiedPath, object] = {
