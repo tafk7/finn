@@ -499,7 +499,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         existing = self._metadata_value(self.SCOPE_ID_ATTR)
         if existing is not None:
             return existing
-        value = scope_id or f"dataflow_{uuid4().hex}"
+        value = f"dataflow_{uuid4().hex}" if scope_id is None else scope_id
         if not isinstance(value, str) or not value:
             raise ValueError("scope_id must be a non-empty string")
         self.set_nodeattr(self.SCOPE_ID_ATTR, value)

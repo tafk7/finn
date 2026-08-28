@@ -88,10 +88,11 @@ def assert_dataflow_op_conforms(
     assert node.SerializeToString(deterministic=True) == node_before
 
     assignment_items = tuple(case.complete_assignments.items())
-    assert assignment_items
-    operation.commit_dataflow_assignments(case.config, dict(assignment_items[:1]))
+    split = max(1, len(assignment_items) // 2) if assignment_items else 0
+    if split:
+        operation.commit_dataflow_assignments(case.config, dict(assignment_items[:split]))
     partial = operation.hydrate_dataflow_point(case.config)
-    assert 0 < len(partial.assignments) < len(assignment_items)
+    assert len(partial.assignments) == split
     case.model.save(case.reload_path)
     reloaded_model = ModelWrapper(str(case.reload_path))
     reloaded_node = next(node for node in reloaded_model.graph.node if node.name == case.node_name)
@@ -99,7 +100,8 @@ def assert_dataflow_op_conforms(
     assert isinstance(reloaded, case.operation_type)
     assert reloaded.hydrate_dataflow_point(case.config).assignments == partial.assignments
 
-    reloaded.commit_dataflow_assignments(case.config, dict(assignment_items[1:]))
+    if split < len(assignment_items):
+        reloaded.commit_dataflow_assignments(case.config, dict(assignment_items[split:]))
     original = reloaded.resolve_dataflow(case.config)
     assert isinstance(original.result, (RegionRef, NetworkRef))
     reloaded_model.save(case.reload_path)

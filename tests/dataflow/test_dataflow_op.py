@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
+from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 import pytest
@@ -298,6 +299,19 @@ def test_scope_identity_can_be_initialized_before_any_assignment() -> None:
     assert operation.read_assignments() == {}
 
 
+@pytest.mark.parametrize("invalid_scope", ["", 0, False])
+def test_scope_identity_rejects_explicit_invalid_values(invalid_scope: object) -> None:
+    model = _model()
+    node = model.graph.node[0]
+    scope_attribute = next(
+        attribute for attribute in node.attribute if attribute.name == "dataflow_scope_id"
+    )
+    node.attribute.remove(scope_attribute)
+    operation = _wrapped(model)
+    with pytest.raises(ValueError, match="non-empty string"):
+        operation.initialize_dataflow_scope_id(cast(str, invalid_scope))
+
+
 def test_unknown_attributes_are_not_assignments_and_clear_and_replace_are_exact() -> None:
     model = _model()
     wrapped = _wrapped(model)
@@ -353,6 +367,22 @@ def test_synthetic_operation_passes_shared_conformance_harness(tmp_path: Path) -
         mutate_graph_problem=_change_synthetic_shape,
     )
     result = assert_dataflow_op_conforms(case)
+    assert isinstance(result.original.result, RegionRef)
+
+
+def test_zero_decision_operation_passes_shared_conformance_harness(tmp_path: Path) -> None:
+    result = assert_dataflow_op_conforms(
+        DataflowOpConformanceCase(
+            model=_model(op_type="ZeroDecisionDataflowOp"),
+            node_name="synthetic0",
+            operation_type=ZeroDecisionDataflowOp,
+            config=_config(),
+            complete_assignments={},
+            rejected_assignments={SyntheticPaths.LANES: 1},
+            reload_path=tmp_path / "zero-decision-conformance.onnx",
+        )
+    )
+    assert result.original.point.assignments == {}
     assert isinstance(result.original.result, RegionRef)
 
 
