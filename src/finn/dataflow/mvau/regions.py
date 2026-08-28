@@ -30,6 +30,9 @@ class MVAURegionDeclaration(str, Enum):
     STANDARD_EMBEDDED = "standard.embedded"
     STANDARD_STREAMED = "standard.streamed"
     BATCH_INTERLEAVED_STREAMED = "batch_interleaved.streamed"
+    #: The two halves the standard streamed form decomposes into.
+    ACTIVATION_REPLAY = "activation_replay"
+    DOT_PRODUCT_STREAMED = "dot_product.streamed"
 
 
 class MVAUWeightInterface(str, Enum):
@@ -105,6 +108,25 @@ def _compact_activation_beats(
     return tuple(
         tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
         for repetition in range(repetitions)
+        for synapse_fold in range(synapse_folds)
+    )
+
+
+def _expanded_activation_beats(
+    repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
+) -> tuple[tuple[Coordinate, ...], ...]:
+    """The activation sequence a dot-product core actually consumes.
+
+    Each synapse fold is presented once per neuron fold, because every output
+    neuron group must see the whole input row.  The compact sequence presents
+    it once; something has to multiply the occurrences, and in the monolithic
+    Region that something was hidden inside the schedule.
+    """
+
+    return tuple(
+        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
+        for repetition in range(repetitions)
+        for _neuron_fold in range(neuron_folds)
         for synapse_fold in range(synapse_folds)
     )
 
@@ -292,6 +314,121 @@ def _standard_output_availability(
     return ScheduledOutputAvailability(availability)
 
 
+def _replay_output_availability(
+    repetitions: int, synapse_folds: int, simd: int
+) -> ScheduledOutputAvailability:
+    """When each activation position first becomes available on the output.
+
+    A position occurs ``NF`` times in the expanded sequence; availability is
+    keyed by position, so it records the first occurrence -- at ``nf = 0``.
+    """
+
+    availability: dict[Coordinate, Coordinate] = {}
+    for repetition in range(repetitions):
+        for synapse_fold in range(synapse_folds):
+            for lane in range(simd):
+                position = (repetition, synapse_fold * simd + lane)
+                availability[position] = (repetition, 0, synapse_fold)
+    return ScheduledOutputAvailability(availability)
+
+
+def construct_activation_replay_region(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    activation_element_type: NumericElementType,
+    pe: int,
+    simd: int,
+) -> DataflowRegion:
+    """Expand a compact activation sequence to one presentation per neuron fold.
+
+    ``R x SF`` beats in, ``R x NF x SF`` beats out, same operand, same position
+    image, same elements per beat.  This is the replay the monolithic MVAU
+    Region performed implicitly by scheduling its activation input across
+    ``nf``; naming it as a Region makes it a composable unit and leaves the
+    dot-product half with nothing but arithmetic.
+    """
+
+    _validate_common_arguments(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        activation_element_type,
+        activation_element_type,
+        activation_element_type,
+        pe,
+        simd,
+    )
+    synapse_folds = matrix_width // simd
+    neuron_folds = matrix_height // pe
+    schedule = LogicalSchedule(
+        (
+            ScheduleLevel("rep", repetitions),
+            ScheduleLevel("nf", neuron_folds),
+            ScheduleLevel("sf", synapse_folds),
+        )
+    )
+    activation = _activation_operand(repetitions, matrix_width, activation_element_type)
+    return DataflowRegion(
+        schedule,
+        (
+            InputInterface(
+                Port(
+                    "activation_in",
+                    activation,
+                    BeatSequence(simd, _compact_activation_beats(repetitions, synapse_folds, simd)),
+                ),
+                _standard_activation_requirements(repetitions, neuron_folds, synapse_folds, simd),
+            ),
+        ),
+        (
+            OutputInterface(
+                Port(
+                    "activation_out",
+                    activation,
+                    BeatSequence(
+                        simd,
+                        _expanded_activation_beats(repetitions, neuron_folds, synapse_folds, simd),
+                    ),
+                ),
+                _replay_output_availability(repetitions, synapse_folds, simd),
+            ),
+        ),
+    )
+
+
+def construct_dot_product_region(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    activation_element_type: NumericElementType,
+    weight_element_type: NumericElementType,
+    output_element_type: NumericElementType,
+    pe: int,
+    simd: int,
+) -> DataflowRegion:
+    """The standard streamed MVAU Region over an already-expanded activation.
+
+    Exactly ``construct_standard_streamed_mvau_region`` with the activation
+    boundary sequence swapped compact to expanded.  Requirements, the weight
+    interface, the output interface, and the schedule are untouched, which is
+    the evidence that replay is the only thing being factored out.
+    """
+
+    return _standard_region(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        activation_element_type,
+        weight_element_type,
+        output_element_type,
+        pe,
+        simd,
+        streamed_weights=True,
+        expanded_activation=True,
+    )
+
+
 def _standard_region(
     repetitions: int,
     matrix_width: int,
@@ -303,6 +440,7 @@ def _standard_region(
     simd: int,
     *,
     streamed_weights: bool,
+    expanded_activation: bool = False,
 ) -> DataflowRegion:
     _validate_common_arguments(
         repetitions,
@@ -325,13 +463,14 @@ def _standard_region(
     )
     activation = _activation_operand(repetitions, matrix_width, activation_element_type)
     output = _output_operand(repetitions, matrix_height, output_element_type)
+    activation_beats = (
+        _expanded_activation_beats(repetitions, neuron_folds, synapse_folds, simd)
+        if expanded_activation
+        else _compact_activation_beats(repetitions, synapse_folds, simd)
+    )
     inputs = [
         InputInterface(
-            Port(
-                "activation",
-                activation,
-                BeatSequence(simd, _compact_activation_beats(repetitions, synapse_folds, simd)),
-            ),
+            Port("activation", activation, BeatSequence(simd, activation_beats)),
             _standard_activation_requirements(repetitions, neuron_folds, synapse_folds, simd),
         )
     ]
@@ -587,8 +726,10 @@ def construct_streamed_weight_mvau_region(
 __all__ = [
     "MVAURegionDeclaration",
     "MVAUWeightInterface",
+    "construct_activation_replay_region",
     "construct_batch_interleaved_mvau_weight_port",
     "construct_batch_interleaved_streamed_mvau_region",
+    "construct_dot_product_region",
     "construct_mvau_compute_region",
     "construct_standard_embedded_mvau_region",
     "construct_standard_mvau_weight_port",
