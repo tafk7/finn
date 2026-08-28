@@ -24,12 +24,11 @@ def test_jenkinsfile_stage_choices_match_python_source():
     assert match is not None, "could not locate STAGES choice block in Jenkinsfile"
     choices = re.findall(r"""['"]([^'"]+)['"]""", match.group(1))
     expected = config.jenkins_stage_choices()
-    assert choices == expected, (
-        "Jenkinsfile STAGES choices %r drifted from finn_ci.config.jenkins_stage_choices() %r"
-        % (
-            choices,
-            expected,
-        )
+    assert (
+        choices == expected
+    ), "Jenkinsfile STAGES choices %r drifted from finn_ci.config.jenkins_stage_choices() %r" % (
+        choices,
+        expected,
     )
 
 
@@ -39,12 +38,11 @@ def test_readme_stages_table_matches_python_source():
     # Parse the values column of the "| STAGES value | ... |" table.
     table_rows = re.findall(r"^\|\s*`([a-z0-9_]+)`(?:\s*\(default\))?\s*\|", text, re.MULTILINE)
     expected = config.jenkins_stage_choices()
-    assert table_rows == expected, (
-        "README STAGES table %r drifted from finn_ci.config.jenkins_stage_choices() %r"
-        % (
-            table_rows,
-            expected,
-        )
+    assert (
+        table_rows == expected
+    ), "README STAGES table %r drifted from finn_ci.config.jenkins_stage_choices() %r" % (
+        table_rows,
+        expected,
     )
 
 
@@ -57,10 +55,9 @@ def test_board_harness_packaging_skip_prefix_matches_python_source():
     text = open(harness).read()
     match = re.search(r"""^packaging_skip_prefix\s*=\s*['"]([^'"]+)['"]""", text, re.MULTILINE)
     assert match is not None, "could not locate packaging_skip_prefix in ci/test_bnn_hw_pytest.py"
-    assert match.group(1) == hw.PACKAGING_SKIP_PREFIX, (
-        "harness packaging_skip_prefix %r drifted from finn_ci.hw.PACKAGING_SKIP_PREFIX %r"
-        % (
-            match.group(1),
-            hw.PACKAGING_SKIP_PREFIX,
-        )
+    assert (
+        match.group(1) == hw.PACKAGING_SKIP_PREFIX
+    ), "harness packaging_skip_prefix %r drifted from finn_ci.hw.PACKAGING_SKIP_PREFIX %r" % (
+        match.group(1),
+        hw.PACKAGING_SKIP_PREFIX,
     )

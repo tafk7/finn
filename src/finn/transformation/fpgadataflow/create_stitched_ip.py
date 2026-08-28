@@ -430,9 +430,9 @@ class CreateStitchedIP(Transformation):
                 )
         for node in model.graph.node:
             # ensure that all nodes are fpgadataflow, and that IPs are generated
-            assert is_hls_node(node) or is_rtl_node(node), (
-                "All nodes must be FINN fpgadataflow nodes."
-            )
+            assert is_hls_node(node) or is_rtl_node(
+                node
+            ), "All nodes must be FINN fpgadataflow nodes."
             node_inst = getCustomOp(node)
             ip_dir_value = node_inst.get_nodeattr("ip_path")
             assert os.path.isdir(ip_dir_value), "IP generation directory doesn't exist."
@@ -632,13 +632,15 @@ class CreateStitchedIP(Transformation):
             # remove all files from synthesis and sim groups
             # we'll replace with DCP, stub, and xdc
             tcl.append(
-                "ipx::remove_all_file [ipx::get_file_groups xilinx_anylanguagebehavioralsimulation]"
+                "ipx::remove_all_file "
+                "[ipx::get_file_groups xilinx_anylanguagebehavioralsimulation]"
             )
-            tcl.append("ipx::remove_all_file [ipx::get_file_groups xilinx_anylanguagesynthesis]")
+            tcl.append("ipx::remove_all_file " "[ipx::get_file_groups xilinx_anylanguagesynthesis]")
             tcl.append(
-                "ipx::remove_file_group xilinx_anylanguagebehavioralsimulation [ipx::current_core]"
+                "ipx::remove_file_group "
+                "xilinx_anylanguagebehavioralsimulation [ipx::current_core]"
             )
-            tcl.append("ipx::remove_file_group xilinx_anylanguagesynthesis [ipx::current_core]")
+            tcl.append("ipx::remove_file_group " "xilinx_anylanguagesynthesis [ipx::current_core]")
             # remove sim and src folders
             tcl.append("file delete -force %s/ip/sim" % vivado_stitch_proj_dir)
             tcl.append("file delete -force %s/ip/src" % vivado_stitch_proj_dir)
@@ -657,7 +659,7 @@ class CreateStitchedIP(Transformation):
                 "[ipx::get_files impl/%s.xdc "
                 "-of_objects [ipx::get_file_groups xilinx_implementation]]" % block_name
             )
-            tcl.append("ipx::add_file_group xilinx_synthesischeckpoint [ipx::current_core]")
+            tcl.append("ipx::add_file_group " "xilinx_synthesischeckpoint [ipx::current_core]")
             tcl.append(
                 "ipx::add_file dcp/%s.dcp "
                 "[ipx::get_file_groups xilinx_synthesischeckpoint]" % block_name

@@ -498,9 +498,9 @@ def test_fpgadataflow_mvau_rtlsim(mem_mode, idt, wdt, act, nf, sf, mw, mh, pumpe
         y_produced_stitch = oxe.execute_onnx(model, {model.get_first_global_in(): x})[
             model.get_first_global_out()
         ]
-        assert (y_produced_stitch.reshape(y_expected.shape) == y_expected).all(), (
-            "stitched-IP rtlsim failed"
-        )
+        assert (
+            y_produced_stitch.reshape(y_expected.shape) == y_expected
+        ).all(), "stitched-IP rtlsim failed"
 
 
 # mem_mode: internal_embedded or internal_decoupled
@@ -675,9 +675,9 @@ def test_fpgadataflow_mvau_large_depth_decoupled_mode_rtlsim(
     else:
         output_mvau_rtl_stitch = oxe.execute_onnx(model, exec_ctx_dict)["global_out"]
 
-    assert (y_expected == output_mvau_rtl_stitch).all(), (
-        "Output of ONNX model not matching output of stitched-IP RTL model!"
-    )
+    assert (
+        y_expected == output_mvau_rtl_stitch
+    ).all(), "Output of ONNX model not matching output of stitched-IP RTL model!"
 
 
 # mem_mode: internal_embedded or internal_decoupled
@@ -887,9 +887,9 @@ def test_fpgadataflow_rtl_mvau(
     # Verify the folding config was actually applied to the node
     inst = getCustomOp(model.graph.node[0])
     for attr, expected in folding_config["MVAU_rtl_0"].items():
-        assert inst.get_nodeattr(attr) == expected, (
-            f"Config not applied: {attr}={inst.get_nodeattr(attr)}, expected {expected}"
-        )
+        assert (
+            inst.get_nodeattr(attr) == expected
+        ), f"Config not applied: {attr}={inst.get_nodeattr(attr)}, expected {expected}"
     model = model.transform(MinimizeWeightBitWidth())
     model = model.transform(MinimizeAccumulatorWidth())
     # make sure the changed datatypes are propagated through the network
@@ -900,9 +900,9 @@ def test_fpgadataflow_rtl_mvau(
     model = model.transform(PrepareCppSim())
     model = model.transform(CompileCppSim())
     output_mvau_hls = oxe.execute_onnx(model, input_dict)["global_out"]
-    assert (output_matmul == output_mvau_hls).all(), (
-        "Output of ONNX model not matching output of node-by-node CPPsim!"
-    )
+    assert (
+        output_matmul == output_mvau_hls
+    ).all(), "Output of ONNX model not matching output of node-by-node CPPsim!"
 
     # Run node-by-node RTLsim
     model = model.transform(SetExecMode("rtlsim"))
@@ -910,9 +910,9 @@ def test_fpgadataflow_rtl_mvau(
     model = model.transform(HLSSynthIP())
     model = model.transform(PrepareRTLSim())
     output_mvau_rtl = oxe.execute_onnx(model, input_dict)["global_out"]
-    assert (output_matmul == output_mvau_rtl).all(), (
-        "Output of ONNX model not matching output of node-by-node RTLsim!"
-    )
+    assert (
+        output_matmul == output_mvau_rtl
+    ).all(), "Output of ONNX model not matching output of node-by-node RTLsim!"
 
     # Run stitched-ip RTLsim
     model = model.transform(InsertAndSetFIFODepths(part, clk_ns))
@@ -923,9 +923,9 @@ def test_fpgadataflow_rtl_mvau(
     model.set_metadata_prop("exec_mode", "rtlsim")
     output_mvau_rtl_stitch = oxe.execute_onnx(model, input_dict)["global_out"]
 
-    assert (output_matmul == output_mvau_rtl_stitch).all(), (
-        "Output of ONNX model not matching output of stitched-IP RTL model!"
-    )
+    assert (
+        output_matmul == output_mvau_rtl_stitch
+    ).all(), "Output of ONNX model not matching output of stitched-IP RTL model!"
 
 
 @pytest.mark.parametrize("mh", [32])
@@ -993,7 +993,8 @@ def test_fpgadataflow_rtl_dynamic_mvau(mh, mw, n_vectors, pe, simd, idt_wdt, par
     # Apply folding (i.e. specify to use DSPs)
     folding_config = {
         "Defaults": {},
-        "MVAU_%s_0" % impl_style: {
+        "MVAU_%s_0"
+        % impl_style: {
             "PE": pe,
             "SIMD": simd,
             "resType": "auto",
@@ -1010,9 +1011,9 @@ def test_fpgadataflow_rtl_dynamic_mvau(mh, mw, n_vectors, pe, simd, idt_wdt, par
     model = model.transform(PrepareCppSim())
     model = model.transform(CompileCppSim())
     output_mvau_hls = oxe.execute_onnx(model, input_dict)[outp_name]
-    assert (output_matmul == output_mvau_hls).all(), (
-        "Output of ONNX model not matching output of node-by-node CPPsim!"
-    )
+    assert (
+        output_matmul == output_mvau_hls
+    ).all(), "Output of ONNX model not matching output of node-by-node CPPsim!"
 
     # Run node-by-node RTLsim
     model = model.transform(SetExecMode("rtlsim"))
@@ -1020,9 +1021,9 @@ def test_fpgadataflow_rtl_dynamic_mvau(mh, mw, n_vectors, pe, simd, idt_wdt, par
     model = model.transform(HLSSynthIP())
     model = model.transform(PrepareRTLSim())
     output_mvau_rtl = oxe.execute_onnx(model, input_dict)[outp_name]
-    assert (output_matmul == output_mvau_rtl).all(), (
-        "Output of ONNX model not matching output of node-by-node RTLsim!"
-    )
+    assert (
+        output_matmul == output_mvau_rtl
+    ).all(), "Output of ONNX model not matching output of node-by-node RTLsim!"
 
     # Run stitched-ip RTLsim
     model = model.transform(InsertAndSetFIFODepths(part, clk_ns))
@@ -1035,9 +1036,9 @@ def test_fpgadataflow_rtl_dynamic_mvau(mh, mw, n_vectors, pe, simd, idt_wdt, par
     model.set_metadata_prop("exec_mode", "rtlsim")
     output_mvau_rtl_stitch = oxe.execute_onnx(model, input_dict)[outp_name]
 
-    assert (output_matmul == output_mvau_rtl_stitch).all(), (
-        "Output of ONNX model not matching output of stitched-IP RTL model!"
-    )
+    assert (
+        output_matmul == output_mvau_rtl_stitch
+    ).all(), "Output of ONNX model not matching output of stitched-IP RTL model!"
 
 
 @pytest.mark.fpgadataflow
@@ -1117,9 +1118,9 @@ def test_fpgadataflow_mvau_hls_threshold_width_cppsim():
     y_max_produced = oxe.execute_onnx(model, {"inp": x_max})["outp"]
     y_min_produced = oxe.execute_onnx(model, {"inp": x_min})["outp"]
 
-    assert np.allclose(y_max_produced, y_max_expected), (
-        f"Max input test failed: expected {y_max_expected}, got {y_max_produced}"
-    )
-    assert np.allclose(y_min_produced, y_min_expected), (
-        f"Min input test failed: expected {y_min_expected}, got {y_min_produced}"
-    )
+    assert np.allclose(
+        y_max_produced, y_max_expected
+    ), f"Max input test failed: expected {y_max_expected}, got {y_max_produced}"
+    assert np.allclose(
+        y_min_produced, y_min_expected
+    ), f"Min input test failed: expected {y_min_expected}, got {y_min_produced}"

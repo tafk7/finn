@@ -47,8 +47,12 @@ test_fpga_part = "xczu3eg-sbva484-1-e"
 def check_two_dict_for_equality(dict1, dict2):
     for key in dict1:
         assert key in dict2, "Key: {} is not in both dictionaries".format(key)
-        assert dict1[key] == dict2[key], """Values for key {} are not the same
-        in both dictionaries""".format(key)
+        assert (
+            dict1[key] == dict2[key]
+        ), """Values for key {} are not the same
+        in both dictionaries""".format(
+            key
+        )
 
     return True
 

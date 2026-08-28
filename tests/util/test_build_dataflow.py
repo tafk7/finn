@@ -89,14 +89,14 @@ def test_end2end_build_dataflow_directory():
     assert rtlsim_perf["stable_throughput[images/s]"] == pytest.approx(expected_stable_throughput)
 
     # Verify OOC P&R flow results are present in report directory
-    assert os.path.isfile(output_dir + "/report/ooc_synth_and_timing.json"), (
-        "OOC P&R results not found in report directory"
-    )
+    assert os.path.isfile(
+        output_dir + "/report/ooc_synth_and_timing.json"
+    ), "OOC P&R results not found in report directory"
 
     # Also verify the raw Vivado reports are in stitched_ip
-    assert os.path.isfile(output_dir + "/stitched_ip/ooc_utilization.rpt"), (
-        "OOC utilization report not found in stitched_ip directory"
-    )
+    assert os.path.isfile(
+        output_dir + "/stitched_ip/ooc_utilization.rpt"
+    ), "OOC utilization report not found in stitched_ip directory"
     assert os.path.isfile(output_dir + "/bitfile/finn-accel.bit")
     assert os.path.isfile(output_dir + "/bitfile/finn-accel.hwh")
     assert os.path.isfile(output_dir + "/report/post_synth_resources.xml")
@@ -126,9 +126,9 @@ def test_end2end_build_dataflow_directory():
         for node in model.graph.node:
             if node.op_type.startswith("StreamingFIFO"):
                 continue
-            assert os.path.isfile(node_waveform_dir + f"/{node.name}_rtlsim_{i}.wdb"), (
-                f"Missing waveform for node {node.name} in batch {i}"
-            )
+            assert os.path.isfile(
+                node_waveform_dir + f"/{node.name}_rtlsim_{i}.wdb"
+            ), f"Missing waveform for node {node.name} in batch {i}"
 
     # Check debug_fifo log files were created (enabled in dataflow_build_config.json)
     fifo_log_base = output_dir + "/debug/fifo_logs"

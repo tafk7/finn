@@ -222,12 +222,10 @@ def test_infer_duplicatestreams(split_source, num_successors, num_global_outputs
         for i in range(num_successors):
             const_val = gen_finn_dt_tensor(idt, shape)
             const_values_list.append(const_val)
-            const = helper.make_tensor(
-                f"const{i + 1}", TensorProto.FLOAT, shape, const_val.flatten()
-            )
+            const = helper.make_tensor(f"const{i+1}", TensorProto.FLOAT, shape, const_val.flatten())
             initializers.append(const)
 
-            add_node = helper.make_node("Add", ["add0_out", f"const{i + 1}"], [f"out{i}"])
+            add_node = helper.make_node("Add", ["add0_out", f"const{i+1}"], [f"out{i}"])
             nodes.append(add_node)
 
             out_info = helper.make_tensor_value_info(f"out{i}", TensorProto.FLOAT, shape)
@@ -280,9 +278,9 @@ def test_infer_duplicatestreams(split_source, num_successors, num_global_outputs
 
         if num_global_outputs > 0:
             # First output should be add0_out
-            assert (output_dict[model.graph.output[0].name] == add0_result).all(), (
-                "add0_out global output incorrect"
-            )
+            assert (
+                output_dict[model.graph.output[0].name] == add0_result
+            ).all(), "add0_out global output incorrect"
 
         # Remaining outputs are the successor results
         for i in range(num_successors):

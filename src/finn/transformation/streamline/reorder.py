@@ -1011,9 +1011,9 @@ class MoveMaxPoolPastMultiThreshold(Transformation):
                     # otherwise we cannot do the reordering
                     T = model.get_initializer(consumer.input[1])
                     T_sorted = np.sort(T, axis=1)
-                    assert (T == T_sorted).all(), (
-                        "MultiThreshold must have non-decreasing thresholds"
-                    )
+                    assert (
+                        T == T_sorted
+                    ).all(), "MultiThreshold must have non-decreasing thresholds"
                     mt_inst = getCustomOp(consumer)
                     if mt_inst.get_nodeattr("out_scale") < 0:
                         warnings.warn("Skipping MultiThreshold with negative out_scale")

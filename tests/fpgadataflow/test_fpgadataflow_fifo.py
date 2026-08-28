@@ -104,6 +104,8 @@ def test_fpgadataflow_fifo_rtlsim(Shape, folded_shape, depth, finn_dtype):
     model = model.transform(HLSSynthIP())
     model = model.transform(PrepareRTLSim())
     y = oxe.execute_onnx(model, input_dict)["outp"]
-    assert (y == x).all(), """The output values are not the same as the
+    assert (
+        y == x
+    ).all(), """The output values are not the same as the
        input values anymore."""
     assert y.shape == tuple(Shape), """The output shape is incorrect."""

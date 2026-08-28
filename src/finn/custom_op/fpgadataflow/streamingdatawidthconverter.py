@@ -90,7 +90,9 @@ class StreamingDataWidthConverter(HWCustomOp):
         ishape = self.get_normal_input_shape()
         dummy_t = np.random.randn(*ishape)
         ibits = self.get_input_datatype().bitwidth()
-        assert iwidth % ibits == 0, """DWC input width must be divisible by
+        assert (
+            iwidth % ibits == 0
+        ), """DWC input width must be divisible by
         input element bitwidth"""
         ielems = int(iwidth // ibits)
         ichannels = ishape[-1]
@@ -108,7 +110,9 @@ class StreamingDataWidthConverter(HWCustomOp):
         oshape = self.get_normal_output_shape()
         dummy_t = np.random.randn(*oshape)
         obits = self.get_output_datatype().bitwidth()
-        assert owidth % obits == 0, """DWC output width must be divisible by
+        assert (
+            owidth % obits == 0
+        ), """DWC output width must be divisible by
         input element bitwidth"""
         oelems = int(owidth // obits)
         ochannels = oshape[-1]

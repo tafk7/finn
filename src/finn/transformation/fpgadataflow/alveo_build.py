@@ -60,9 +60,9 @@ from . import templates
 def _check_vitis_envvars():
     assert "VITIS_PATH" in os.environ, "VITIS_PATH must be set for Vitis"
     assert "PLATFORM_REPO_PATHS" in os.environ, "PLATFORM_REPO_PATHS must be set for Vitis"
-    assert "XILINX_XRT" in os.environ, (
-        "XILINX_XRT must be set for Vitis, ensure the XRT env is sourced"
-    )
+    assert (
+        "XILINX_XRT" in os.environ
+    ), "XILINX_XRT must be set for Vitis, ensure the XRT env is sourced"
 
 
 _SLASH_ALLOWED_AXILITE_STEMS = {"s_axi_control"}
@@ -598,16 +598,16 @@ class SlashLink(Transformation):
         with open(log_path, "w") as log_file:
             subprocess.run(command, check=True, stdout=log_file, stderr=log_file)
 
-        assert vbin_path.is_file(), (
-            f"SLASH linking failed, no bitfile generated. Check {log_path} for details."
-        )
+        assert (
+            vbin_path.is_file()
+        ), f"SLASH linking failed, no bitfile generated. Check {log_path} for details."
         model.set_metadata_prop("bitfile", str(vbin_path))
 
         if self.build_hardware:
             report_path = link_dir / "finn.vbin.prj" / "report_utilization_finn.xml"
-            assert report_path.is_file(), (
-                f"SLASH linking failed, no report generated. Check {log_path} for details."
-            )
+            assert (
+                report_path.is_file()
+            ), f"SLASH linking failed, no report generated. Check {log_path} for details."
             model.set_metadata_prop("slash_report", str(report_path))
 
         return (model, False)

@@ -73,9 +73,9 @@ def test_get_first_global_in_out(input_name, output_name):
     assert isinstance(result_out, str), "get_first_global_out() should return a string"
 
     # Verify backward compatibility with deprecated pattern
-    assert model.get_first_global_in() == model.graph.input[0].name, (
-        "get_first_global_in() does not match deprecated .graph.input[0].name"
-    )
-    assert model.get_first_global_out() == model.graph.output[0].name, (
-        "get_first_global_out() does not match deprecated .graph.output[0].name"
-    )
+    assert (
+        model.get_first_global_in() == model.graph.input[0].name
+    ), "get_first_global_in() does not match deprecated .graph.input[0].name"
+    assert (
+        model.get_first_global_out() == model.graph.output[0].name
+    ), "get_first_global_out() does not match deprecated .graph.output[0].name"

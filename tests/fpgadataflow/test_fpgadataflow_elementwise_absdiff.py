@@ -126,9 +126,9 @@ def test_fpgadataflow_elementwise_absdiff(dt0, dt1, ch, fold, exec_mode):
 
     y_produced = execute_onnx(model, idict)["out0"]
     if dt0 in [DataType["FLOAT32"], DataType["FLOAT16"]]:
-        assert np.allclose(y_produced, y_expected, rtol=1e-3, atol=1e-5), (
-            "HW layer execution failed"
-        )
+        assert np.allclose(
+            y_produced, y_expected, rtol=1e-3, atol=1e-5
+        ), "HW layer execution failed"
     else:
         assert (y_produced == y_expected).all(), "HW layer execution failed"
 

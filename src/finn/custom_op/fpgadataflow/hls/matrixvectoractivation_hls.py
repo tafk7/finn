@@ -426,7 +426,7 @@ class MVAU_hls(MVAU, HLSBackend):
             # the weight tensor is ap_uint<simd*prec> [PE][WMEM]
             # partition for parallel access along the PE dimension (dim 1)
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=weights.m_weights complete dim=1")
+                ("#pragma HLS ARRAY_PARTITION variable=weights.m_weights " "complete dim=1")
             )
         elif mem_mode in ["internal_decoupled", "external", "external_mem", "dynamic"]:
             self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE axis port=in1_V")
@@ -443,19 +443,19 @@ class MVAU_hls(MVAU, HLSBackend):
         if self.calc_tmem() != 0:
             # TODO find a better way of checking for no pregenerated thresholds
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=1")
+                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=1")
             )
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=3")
+                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=3")
             )
             # add resource pragma for thresholds if set
             if ram_style_thresholds == "distributed":
                 self.code_gen_dict["$PRAGMAS$"].append(
-                    ("#pragma HLS RESOURCE variable=threshs.m_thresholds core=ROM_2P_LUTRAM")
+                    ("#pragma HLS RESOURCE variable=threshs.m_thresholds " "core=ROM_2P_LUTRAM")
                 )
             elif ram_style_thresholds == "block":
                 self.code_gen_dict["$PRAGMAS$"].append(
-                    ("#pragma HLS RESOURCE variable=threshs.m_thresholds core=ROM_2P_BRAM")
+                    ("#pragma HLS RESOURCE variable=threshs.m_thresholds " "core=ROM_2P_BRAM")
                 )
             elif ram_style_thresholds == "auto":
                 # no pragma needed
@@ -490,14 +490,18 @@ class MVAU_hls(MVAU, HLSBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )
 
         # create a npy file fore each input of the node (in_ind is input index)
         for in_ind, inputs in enumerate(node.input):
             # it is assumed that the first input of the node is the data input
             # the second input are the weights
-            assert str(context[inputs].dtype) == "float32", """Input datatype is
+            assert (
+                str(context[inputs].dtype) == "float32"
+            ), """Input datatype is
             not float32 as expected."""
 
             if in_ind == 0:
@@ -534,9 +538,9 @@ class MVAU_hls(MVAU, HLSBackend):
                 out = context[node.output[0]]
                 out = 2 * out - 1
                 context[node.output[0]] = out
-            assert context[node.output[0]].shape == self.get_normal_output_shape(), (
-                "cppsim did not produce expected output shape"
-            )
+            assert (
+                context[node.output[0]].shape == self.get_normal_output_shape()
+            ), "cppsim did not produce expected output shape"
         elif mode == "rtlsim":
             sim = self.get_rtlsim()
             nbits = self.get_instream_width(0)
@@ -585,7 +589,9 @@ class MVAU_hls(MVAU, HLSBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )
 
     def minimize_weight_bit_width(self, model):
@@ -634,9 +640,9 @@ class MVAU_hls(MVAU, HLSBackend):
 
                 # Verify thresholds can be expressed with the chosen type
                 threshold_tensor = self.get_hw_compatible_threshold_tensor(thresholds)
-                assert np.vectorize(tdt.allowed)(threshold_tensor).all(), (
-                    "Thresholds can't be expressed with type %s" % str(tdt)
-                )
+                assert np.vectorize(tdt.allowed)(
+                    threshold_tensor
+                ).all(), "Thresholds can't be expressed with type %s" % str(tdt)
 
                 # Update threshold datatype
                 model.set_tensor_datatype(self.onnx_node.input[2], tdt)

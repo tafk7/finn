@@ -130,9 +130,9 @@ def test_validate_dataflow_conversion_scenarios():
     print(f"Valid: {result['valid']}")
     print(f"Message: {result['message']}")
 
-    assert result["valid"] is False, (
-        "Expected validation to fail with non-contiguous dataflow block"
-    )
+    assert (
+        result["valid"] is False
+    ), "Expected validation to fail with non-contiguous dataflow block"
     assert "Non-contiguous dataflow block detected" in result["message"]
 
     # Scenario 3: Convert layer 3 (Mul) and layer 1 (MatMul) → [non, fpga, fpga, fpga, fpga]

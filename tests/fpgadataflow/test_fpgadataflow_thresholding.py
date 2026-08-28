@@ -438,9 +438,9 @@ def test_fpgadataflow_thresholding_stitched_ip(
 
     y_produced = oxe.execute_onnx(model, exec_ctx_dict)["global_out"]
 
-    assert (y_expected == y_produced).all(), (
-        "Output of ONNX model not matching output of stitched-IP RTL model!"
-    )
+    assert (
+        y_expected == y_produced
+    ).all(), "Output of ONNX model not matching output of stitched-IP RTL model!"
 
 
 @pytest.mark.parametrize("num_input_channels", [6, 16])

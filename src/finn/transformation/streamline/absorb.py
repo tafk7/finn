@@ -413,7 +413,9 @@ class Absorb1BitMulIntoMatMul(Transformation):
                     is_1bit = model.get_tensor_datatype(mul_weight_name).bitwidth() == 1
                     if is_1bit:
                         Wnew = A * W
-                        assert Wnew.shape == W.shape, """Shape of new weights is not
+                        assert (
+                            Wnew.shape == W.shape
+                        ), """Shape of new weights is not
                         the same as the shape of the weight matrix before."""
                         check_fxn = np.vectorize(lambda x: Wdt.allowed(x))
                         # only absorb if permitted by W datatype
@@ -456,7 +458,9 @@ class Absorb1BitMulIntoConv(Transformation):
                         # move the mul to the OFM position, since the mul is
                         # applied on the outputs channelwise or as scalar
                         Wnew = A.reshape(-1, 1, 1, 1) * W
-                        assert Wnew.shape == W.shape, """Shape of new weights is not
+                        assert (
+                            Wnew.shape == W.shape
+                        ), """Shape of new weights is not
                         the same as the shape of the conv weights before."""
                         check_fxn = np.vectorize(lambda x: Wdt.allowed(x))
                         # only absorb if permitted by W datatype
@@ -484,7 +488,8 @@ class AbsorbTransposeIntoMultiThreshold(Transformation):
                 if perms == [0, 3, 1, 2]:
                     mt_cand = model.find_consumer(n.output[0])
                     if (
-                        mt_cand is not None and mt_cand.op_type == "MultiThreshold"
+                        mt_cand is not None
+                        and mt_cand.op_type == "MultiThreshold"
                         # and not model.is_fork_node(mt_cand)
                     ):
                         mt_cand_orig_output = mt_cand.output[0]

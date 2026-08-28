@@ -267,12 +267,16 @@ def _make_vvau_mvau_model(wdt: DataType, idt: DataType, tdt: Optional[DataType] 
         n_steps: int = idt.get_num_possible_values() - 1
         thresholds: Optional[np.ndarray] = np.random.randint(
             tdt.min(), tdt.max() - 1, (32, n_steps)
-        ).astype(np.float32)  # generate thresholds for the activations
+        ).astype(
+            np.float32
+        )  # generate thresholds for the activations
         thresholds = np.sort(thresholds, axis=1)  # provide non-decreasing thresholds
         model.set_initializer("thresh0", thresholds)
         thresholds: Optional[np.ndarray] = np.random.randint(
             tdt.min(), tdt.max() - 1, (64, n_steps)
-        ).astype(np.float32)  # generate thresholds for the activations
+        ).astype(
+            np.float32
+        )  # generate thresholds for the activations
         thresholds = np.sort(thresholds, axis=1)  # provide non-decreasing thresholds
         model.set_initializer("thresh1", thresholds)
     return model
@@ -466,13 +470,13 @@ def test_minimize_accumulator_width(
             # if there is no activation, outputDataType = accDataType and if it is the last node
             # it needs to be divisible by 8
             if inst.get_nodeattr("noActivation"):
-                assert cur_adt.bitwidth() == cur_odt.bitwidth(), (
-                    "outputDataType and accDataType should be equal"
-                )
+                assert (
+                    cur_adt.bitwidth() == cur_odt.bitwidth()
+                ), "outputDataType and accDataType should be equal"
                 if model.find_direct_successors(inst.onnx_node) is None:
-                    assert (cur_adt.bitwidth() % 8) == 0, (
-                        "bit width of last node needs to be divisible by 8"
-                    )
+                    assert (
+                        cur_adt.bitwidth() % 8
+                    ) == 0, "bit width of last node needs to be divisible by 8"
 
 
 @pytest.mark.parametrize("tdt", [DataType["INT16"], DataType["INT24"], DataType["INT32"]])
@@ -609,9 +613,9 @@ def test_minimize_accumulator_width_independent_of_thresholds(wdt: DataType, idt
     adt_last = DataType[inst_last.get_nodeattr("accDataType")]
 
     # Verify that last node gets rounded to multiple of 8
-    assert adt_last.bitwidth() % 8 == 0, (
-        f"Last node should have accumulator rounded to multiple of 8, got {adt_last}"
-    )
+    assert (
+        adt_last.bitwidth() % 8 == 0
+    ), f"Last node should have accumulator rounded to multiple of 8, got {adt_last}"
 
     # Critical assertion: accumulator widths should be IDENTICAL
     # Thresholds should NOT influence accumulator datatype
@@ -669,23 +673,23 @@ def test_minimize_accumulator_width_mvau_threshold_boundary_values(tdt: DataType
 
     # Verify accumulator datatype is reasonable (not expanded to accommodate thresholds)
     # For INT8 x INT8, accumulator should be around INT16-INT18, NOT INT24/INT32
-    assert result_adt.bitwidth() < 20, (
-        f"Accumulator too wide ({result_adt}), likely incorrectly expanded for thresholds"
-    )
+    assert (
+        result_adt.bitwidth() < 20
+    ), f"Accumulator too wide ({result_adt}), likely incorrectly expanded for thresholds"
 
     model = model.transform(RoundAndClipThresholds())
 
     # Verify thresholds were clipped to accumulator range
     final_thresholds = model.get_initializer("thresh")
     assert final_thresholds.min() >= result_adt.min(), "Thresholds not clipped to accumulator min"
-    assert final_thresholds.max() <= result_adt.max() + 1, (
-        "Thresholds not clipped to accumulator max"
-    )
+    assert (
+        final_thresholds.max() <= result_adt.max() + 1
+    ), "Thresholds not clipped to accumulator max"
 
     # Verify all thresholds are integers (rounded up)
-    assert all(x.is_integer() for x in final_thresholds.flatten()), (
-        "Thresholds not rounded to integers"
-    )
+    assert all(
+        x.is_integer() for x in final_thresholds.flatten()
+    ), "Thresholds not rounded to integers"
 
     # Verify threshold datatype was set correctly (one bit wider than accumulator)
     final_thresh_dt = model.get_tensor_datatype("thresh")
@@ -694,9 +698,9 @@ def test_minimize_accumulator_width_mvau_threshold_boundary_values(tdt: DataType
     else:
         expected_thresh_dt = DataType.get_smallest_possible(-(result_adt.max() + 1) - 1)
 
-    assert final_thresh_dt == expected_thresh_dt, (
-        f"Threshold datatype {final_thresh_dt} should be {expected_thresh_dt}"
-    )
+    assert (
+        final_thresh_dt == expected_thresh_dt
+    ), f"Threshold datatype {final_thresh_dt} should be {expected_thresh_dt}"
 
 
 @pytest.mark.fpgadataflow
@@ -770,9 +774,9 @@ def test_full_bit_width_optimization_pipeline():
     wdt_after_first = DataType[inst.get_nodeattr("weightDataType")]
 
     # Weight datatype should be minimized
-    assert wdt_after_first.bitwidth() < DataType["INT32"].bitwidth(), (
-        "Weight datatype should be minimized in first pass"
-    )
+    assert (
+        wdt_after_first.bitwidth() < DataType["INT32"].bitwidth()
+    ), "Weight datatype should be minimized in first pass"
     assert wdt_after_first == wdt, f"Expected {wdt}, got {wdt_after_first}"
 
     # Step 2: MinimizeAccumulatorWidth
@@ -782,15 +786,15 @@ def test_full_bit_width_optimization_pipeline():
     acc_dt = DataType[inst.get_nodeattr("accDataType")]
 
     # Accumulator should be minimized (not INT32)
-    assert acc_dt.bitwidth() < DataType["INT32"].bitwidth(), (
-        f"Accumulator datatype should be minimized, got {acc_dt}"
-    )
+    assert (
+        acc_dt.bitwidth() < DataType["INT32"].bitwidth()
+    ), f"Accumulator datatype should be minimized, got {acc_dt}"
 
     # Thresholds should NOT have been modified yet
     current_thresholds = model.get_initializer("thresh")
-    assert np.allclose(current_thresholds, original_thresholds), (
-        "Thresholds should not be modified by MinimizeAccumulatorWidth"
-    )
+    assert np.allclose(
+        current_thresholds, original_thresholds
+    ), "Thresholds should not be modified by MinimizeAccumulatorWidth"
 
     # Step 3: RoundAndClipThresholds
     model = model.transform(RoundAndClipThresholds())
@@ -798,9 +802,9 @@ def test_full_bit_width_optimization_pipeline():
     rounded_thresholds = model.get_initializer("thresh")
 
     # Verify thresholds are rounded up (ceil)
-    assert all(x.is_integer() for x in rounded_thresholds.flatten()), (
-        "All thresholds should be integers after rounding"
-    )
+    assert all(
+        x.is_integer() for x in rounded_thresholds.flatten()
+    ), "All thresholds should be integers after rounding"
 
     # Verify rounding was up (ceil), not nearest
     for i in range(len(original_thresholds.flatten())):
@@ -810,19 +814,19 @@ def test_full_bit_width_optimization_pipeline():
             assert rounded == np.ceil(orig), f"Expected ceil({orig})={np.ceil(orig)}, got {rounded}"
 
     # Verify thresholds are clipped to accumulator range
-    assert rounded_thresholds.min() >= acc_dt.min(), (
-        f"Min threshold {rounded_thresholds.min()} below accumulator min {acc_dt.min()}"
-    )
-    assert rounded_thresholds.max() <= acc_dt.max() + 1, (
-        f"Max threshold {rounded_thresholds.max()} above accumulator max+1 {acc_dt.max() + 1}"
-    )
+    assert (
+        rounded_thresholds.min() >= acc_dt.min()
+    ), f"Min threshold {rounded_thresholds.min()} below accumulator min {acc_dt.min()}"
+    assert (
+        rounded_thresholds.max() <= acc_dt.max() + 1
+    ), f"Max threshold {rounded_thresholds.max()} above accumulator max+1 {acc_dt.max() + 1}"
 
     # Verify threshold datatype is set (one bit wider than accumulator)
     thresh_dt_after_round = model.get_tensor_datatype("thresh")
     expected_thresh_dt = DataType.get_smallest_possible(-(acc_dt.max() + 1) - 1)
-    assert thresh_dt_after_round == expected_thresh_dt, (
-        f"Expected threshold datatype {expected_thresh_dt}, got {thresh_dt_after_round}"
-    )
+    assert (
+        thresh_dt_after_round == expected_thresh_dt
+    ), f"Expected threshold datatype {expected_thresh_dt}, got {thresh_dt_after_round}"
 
     # Step 4: MinimizeWeightBitWidth (second pass) - minimize threshold datatypes
     model = model.transform(MinimizeWeightBitWidth())
@@ -830,18 +834,18 @@ def test_full_bit_width_optimization_pipeline():
     final_thresh_dt = model.get_tensor_datatype("thresh")
 
     # Threshold datatype might be further minimized based on actual rounded values
-    assert final_thresh_dt.bitwidth() <= thresh_dt_after_round.bitwidth(), (
-        "Second MinimizeWeightBitWidth pass should not increase threshold datatype"
-    )
+    assert (
+        final_thresh_dt.bitwidth() <= thresh_dt_after_round.bitwidth()
+    ), "Second MinimizeWeightBitWidth pass should not increase threshold datatype"
 
     # Verify thresholds can be represented in final datatype
     final_thresholds = model.get_initializer("thresh")
-    assert final_thresholds.min() >= final_thresh_dt.min(), (
-        f"Min threshold {final_thresholds.min()} cannot be represented in {final_thresh_dt}"
-    )
-    assert final_thresholds.max() <= final_thresh_dt.max(), (
-        f"Max threshold {final_thresholds.max()} cannot be represented in {final_thresh_dt}"
-    )
+    assert (
+        final_thresholds.min() >= final_thresh_dt.min()
+    ), f"Min threshold {final_thresholds.min()} cannot be represented in {final_thresh_dt}"
+    assert (
+        final_thresholds.max() <= final_thresh_dt.max()
+    ), f"Max threshold {final_thresholds.max()} cannot be represented in {final_thresh_dt}"
 
     # Overall verification: all datatypes should be optimized
     final_wdt = DataType[inst.get_nodeattr("weightDataType")]
@@ -849,6 +853,6 @@ def test_full_bit_width_optimization_pipeline():
 
     assert final_wdt.bitwidth() <= DataType["INT32"].bitwidth(), "Weight datatype optimized"
     assert final_acc_dt.bitwidth() <= DataType["INT32"].bitwidth(), "Accumulator datatype optimized"
-    assert final_thresh_dt.bitwidth() <= DataType["INT32"].bitwidth(), (
-        "Threshold datatype optimized"
-    )
+    assert (
+        final_thresh_dt.bitwidth() <= DataType["INT32"].bitwidth()
+    ), "Threshold datatype optimized"

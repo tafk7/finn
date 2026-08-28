@@ -298,9 +298,9 @@ static inline T clip(T const x, TLo const lo, THi const hi) {
             self.npy_to_dynamic_output(context)
             for o, outp in enumerate(node.output):
                 exp_oshape = tuple(self.get_normal_output_shape(o))
-                assert context[outp].shape == exp_oshape, (
-                    "cppsim did not produce expected output shape"
-                )
+                assert (
+                    context[outp].shape == exp_oshape
+                ), "cppsim did not produce expected output shape"
                 if self.get_output_datatype(o) == DataType["BIPOLAR"]:
                     out = context[outp]
                     out = 2 * out - 1
@@ -333,6 +333,6 @@ static inline T clip(T const x, TLo const lo, THi const hi) {
             output = np.asarray([output], dtype=np.float32).reshape(*exp_oshape)
             context[node.output[0]] = output
 
-            assert context[node.output[0]].shape == exp_oshape, (
-                "Output shape doesn't match expected shape."
-            )
+            assert (
+                context[node.output[0]].shape == exp_oshape
+            ), "Output shape doesn't match expected shape."

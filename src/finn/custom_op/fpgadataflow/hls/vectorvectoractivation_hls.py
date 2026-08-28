@@ -140,7 +140,9 @@ class VVAU_hls(VVAU, HLSBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )
 
         # create a npy file fore each input of the node (in_ind is input index)
@@ -150,7 +152,9 @@ class VVAU_hls(VVAU, HLSBackend):
             # the second input are the weights
             # the third input are the thresholds
             if in_ind == 0:
-                assert str(context[inputs].dtype) == "float32", """Input datatype is
+                assert (
+                    str(context[inputs].dtype) == "float32"
+                ), """Input datatype is
                 not float32 as expected."""
                 expected_inp_shape = self.get_folded_input_shape()
                 reshaped_input = context[inputs].reshape(expected_inp_shape)
@@ -180,9 +184,9 @@ class VVAU_hls(VVAU, HLSBackend):
                 out = context[node.output[0]]
                 out = 2 * out - 1
                 context[node.output[0]] = out
-            assert context[node.output[0]].shape == self.get_normal_output_shape(), (
-                "cppsim did not produce expected output shape"
-            )
+            assert (
+                context[node.output[0]].shape == self.get_normal_output_shape()
+            ), "cppsim did not produce expected output shape"
         elif mode == "rtlsim":
             sim = self.get_rtlsim()
             nbits = self.get_instream_width(0)
@@ -227,7 +231,9 @@ class VVAU_hls(VVAU, HLSBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )
 
     def code_generation_ipgen(self, model, fpgapart, clk):
@@ -492,7 +498,7 @@ class VVAU_hls(VVAU, HLSBackend):
             # the weight tensor is ap_uint<ch*prec> [PE][WMEM]
             # partition for parallel access along the PE dimension (dim 1)
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=weights.m_weights complete dim=1")
+                ("#pragma HLS ARRAY_PARTITION variable=weights.m_weights " "complete dim=1")
             )
         elif mem_mode == "internal_decoupled" or mem_mode == "external":
             self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE axis port=in1_V")
@@ -505,10 +511,10 @@ class VVAU_hls(VVAU, HLSBackend):
         if self.calc_tmem() != 0:
             # TODO find a better way of checking for no pregenerated thresholds
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=1")
+                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=1")
             )
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=3")
+                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=3")
             )
 
     def minimize_weight_bit_width(self, model):
@@ -557,9 +563,9 @@ class VVAU_hls(VVAU, HLSBackend):
 
                 # Verify thresholds can be expressed with the chosen type
                 threshold_tensor = self.get_hw_compatible_threshold_tensor(thresholds)
-                assert np.vectorize(tdt.allowed)(threshold_tensor).all(), (
-                    "Thresholds can't be expressed with type %s" % str(tdt)
-                )
+                assert np.vectorize(tdt.allowed)(
+                    threshold_tensor
+                ).all(), "Thresholds can't be expressed with type %s" % str(tdt)
 
                 # Update threshold datatype
                 model.set_tensor_datatype(self.onnx_node.input[2], tdt)

@@ -77,7 +77,11 @@ def test_brevitas_act_export_qhardtanh_scaled(
     if scaling_impl_type == ScalingImplType.PARAMETER:
         checkpoint = {
             "act_quant_proxy.fused_activation_quant_proxy.\
-tensor_quant.scaling_impl.learned_value": torch.tensor(0.49).type(torch.FloatTensor)
+tensor_quant.scaling_impl.learned_value": torch.tensor(
+                0.49
+            ).type(
+                torch.FloatTensor
+            )
         }
         b_act.load_state_dict(checkpoint)
     build_dir = make_build_dir(prefix="test_brevitas_act_export_qhardtanh_scaled")

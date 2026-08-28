@@ -177,9 +177,9 @@ def test_requant_rtl(abits, ishape, per_channel, part, pe, exec_mode):
         model = model.transform(PrepareCppSim())
         model = model.transform(CompileCppSim())
         y_sim = oxe.execute_onnx(model, input_dict)[model.graph.output[0].name]
-        assert np.allclose(y_golden, y_sim, atol=quant_step), (
-            f"cppsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
-        )
+        assert np.allclose(
+            y_golden, y_sim, atol=quant_step
+        ), f"cppsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
     else:
         # Node-by-node rtlsim
         model = model.transform(PrepareIP(part, target_clk_ns))
@@ -187,9 +187,9 @@ def test_requant_rtl(abits, ishape, per_channel, part, pe, exec_mode):
         model = model.transform(PrepareRTLSim())
 
         y_sim = oxe.execute_onnx(model, input_dict)[model.graph.output[0].name]
-        assert np.allclose(y_golden, y_sim, atol=quant_step), (
-            f"rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
-        )
+        assert np.allclose(
+            y_golden, y_sim, atol=quant_step
+        ), f"rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
 
         # Verify cycle estimation
         node = model.get_nodes_by_op_type("Requant_rtl")[0]
@@ -219,9 +219,9 @@ def test_requant_rtl(abits, ishape, per_channel, part, pe, exec_mode):
 
             model.set_metadata_prop("exec_mode", "rtlsim")
             y_stitched = oxe.execute_onnx(model, input_dict)[model.graph.output[0].name]
-            assert np.allclose(y_golden, y_stitched, atol=quant_step), (
-                f"stitched rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_stitched))}"
-            )
+            assert np.allclose(
+                y_golden, y_stitched, atol=quant_step
+            ), f"stitched rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_stitched))}"
 
 
 # =============================================================================
@@ -295,9 +295,9 @@ def test_requant_hls(abits, ishape, per_channel, input_dtype, pe, exec_mode):
         model = model.transform(PrepareCppSim())
         model = model.transform(CompileCppSim())
         y_sim = oxe.execute_onnx(model, input_dict)[model.graph.output[0].name]
-        assert np.allclose(y_golden, y_sim, atol=quant_step), (
-            f"cppsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
-        )
+        assert np.allclose(
+            y_golden, y_sim, atol=quant_step
+        ), f"cppsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
     else:
         # Node-by-node rtlsim
         model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
@@ -305,9 +305,9 @@ def test_requant_hls(abits, ishape, per_channel, input_dtype, pe, exec_mode):
         model = model.transform(PrepareRTLSim())
 
         y_sim = oxe.execute_onnx(model, input_dict)[model.graph.output[0].name]
-        assert np.allclose(y_golden, y_sim, atol=quant_step), (
-            f"rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
-        )
+        assert np.allclose(
+            y_golden, y_sim, atol=quant_step
+        ), f"rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_sim))}"
 
         # Verify cycle estimation
         node = model.get_nodes_by_op_type("Requant_hls")[0]
@@ -337,9 +337,9 @@ def test_requant_hls(abits, ishape, per_channel, input_dtype, pe, exec_mode):
 
             model.set_metadata_prop("exec_mode", "rtlsim")
             y_stitched = oxe.execute_onnx(model, input_dict)[model.graph.output[0].name]
-            assert np.allclose(y_golden, y_stitched, atol=quant_step), (
-                f"stitched rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_stitched))}"
-            )
+            assert np.allclose(
+                y_golden, y_stitched, atol=quant_step
+            ), f"stitched rtlsim mismatch: max diff = {np.max(np.abs(y_golden - y_stitched))}"
 
 
 # =============================================================================
@@ -482,12 +482,12 @@ def test_infer_requant_from_quant(channelwise, pe, need_extraction_scale, need_e
     expected_add_after = 1 if need_extraction_zeropt else 0
 
     assert len(model.get_nodes_by_op_type("Requant")) == 1, "Requant should remain"
-    assert len(model.get_nodes_by_op_type("ElementwiseMul")) == expected_mul_after, (
-        "Only ElementwiseMul after Requant should remain"
-    )
-    assert len(model.get_nodes_by_op_type("ElementwiseAdd")) == expected_add_after, (
-        "Only ElementwiseAdd after Requant should remain"
-    )
+    assert (
+        len(model.get_nodes_by_op_type("ElementwiseMul")) == expected_mul_after
+    ), "Only ElementwiseMul after Requant should remain"
+    assert (
+        len(model.get_nodes_by_op_type("ElementwiseAdd")) == expected_add_after
+    ), "Only ElementwiseAdd after Requant should remain"
 
     # Verify inputDataType was updated to match the new input
     requant_node = model.get_nodes_by_op_type("Requant")[0]

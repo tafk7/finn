@@ -173,16 +173,16 @@ class ElementwiseBinaryOperation(HWCustomOp):
         # There must be exactly two inputs to the binary operation
         assert len(node.input) == 2, f"Binary operation {node.name} requires exactly two inputs"
         # Validate input shapes match what is stored as attributes
-        assert model.get_tensor_shape(node.input[0]) == self.lhs_shape, (
-            f"Input shape mismatch: {node.name} {node.input[0]}"
-        )
-        assert model.get_tensor_shape(node.input[1]) == self.rhs_shape, (
-            f"Input shape mismatch: {node.name} {node.input[1]}"
-        )
+        assert (
+            model.get_tensor_shape(node.input[0]) == self.lhs_shape
+        ), f"Input shape mismatch: {node.name} {node.input[0]}"
+        assert (
+            model.get_tensor_shape(node.input[1]) == self.rhs_shape
+        ), f"Input shape mismatch: {node.name} {node.input[1]}"
         # Validate broadcasting of inputs to the output shape
-        assert list(np.broadcast_shapes(self.lhs_shape, self.rhs_shape)) == self.out_shape, (
-            f"Shape broadcast mismatch: {node.name}"
-        )
+        assert (
+            list(np.broadcast_shapes(self.lhs_shape, self.rhs_shape)) == self.out_shape
+        ), f"Shape broadcast mismatch: {node.name}"
         # Simulate behavior via the standard ONNX add operation
         return oh.make_node("Add", node.input, node.output)
 
@@ -312,9 +312,9 @@ class ElementwiseBinaryOperation(HWCustomOp):
         if not all([self.lhs_dtype.is_integer(), self.rhs_dtype.is_integer()]):
             # Check the annotated tensor data type corresponds to the stored
             # attribute
-            assert model.get_tensor_datatype(self.onnx_node.output[0]) == self.out_dtype, (
-                f"Output type mismatch for {self.onnx_node.name}"
-            )
+            assert (
+                model.get_tensor_datatype(self.onnx_node.output[0]) == self.out_dtype
+            ), f"Output type mismatch for {self.onnx_node.name}"
             # Exit here, returning the not-minimized data type
             return self.out_dtype
         # Call the output type derivation specialized by the concrete operator
@@ -974,4 +974,4 @@ class ElementwiseMax(ElementwiseBinaryOperation):
                 else:
                     rhs_intbits = self.rhs_dtype.bitwidth()
                 out_intbits = max(lhs_intbits, rhs_intbits)
-                return DataType[f"FIXED<{out_fracbits + out_intbits},{out_intbits}>"]
+                return DataType[f"FIXED<{out_fracbits+out_intbits},{out_intbits}>"]
