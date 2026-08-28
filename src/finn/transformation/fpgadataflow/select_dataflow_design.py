@@ -4,10 +4,18 @@
 """Commit Kernel and local design choices under a replaceable policy.
 
 The engine owns decisions, constraints, points, and enumeration.  It does not
-own preference, so preference lives here and only here.  A policy receives
-complete coherent candidate points and returns the assignments to commit; it
-never constructs a point one greedy decision at a time, and it never mutates a
-node class or domain to express a specialization.
+own preference, so preference lives here and only here.
+
+A policy sees the whole model and every operation scope in one call, because
+the choices are not independent: a later graph-global policy has to weigh one
+scope's Kernel against another's.  It receives complete coherent candidate
+points, never a point built one greedy decision at a time, and it never
+mutates a node class or domain to express a specialization.
+
+The transform itself is operation-generic.  Each ``DataflowOp`` family names
+its own Kernel pools, constraint set, and readiness profiles, so heterogeneous
+operations can be selected in one pass and no caller has to know that MVAU
+exists.
 """
 
 from __future__ import annotations
@@ -44,11 +52,13 @@ class DataflowSelectionContext:
     engine: Engine
     point: DesignPoint
     decision_paths: tuple[QualifiedPath, ...]
-    constraint_set: str
+    constraint_set: str | None
 
     def feasible_points(self) -> tuple[DesignPoint, ...]:
         """Enumerate coherent complete points, never one decision at a time."""
 
+        if self.constraint_set is None:
+            return ()
         return enumerate_feasible_points(
             self.engine,
             self.point,
@@ -61,8 +71,14 @@ class DataflowSelectionPolicy(ABC):
     """A replaceable preference over feasible design points."""
 
     @abstractmethod
-    def select(self, context: DataflowSelectionContext) -> Mapping[QualifiedPath, object] | None:
-        """Return the assignments to commit, or None to leave the scope alone."""
+    def select(
+        self, model: ModelWrapper, contexts: Sequence[DataflowSelectionContext]
+    ) -> Mapping[str, Mapping[QualifiedPath, object]]:
+        """Return the assignments to commit, keyed by operation scope.
+
+        Every scope in the model is offered at once so a policy may coordinate
+        across them.  Omitting a scope leaves it untouched.
+        """
 
 
 class ExplicitAssignmentsPolicy(DataflowSelectionPolicy):
@@ -71,23 +87,37 @@ class ExplicitAssignmentsPolicy(DataflowSelectionPolicy):
     def __init__(self, assignments: Mapping[str, Mapping[QualifiedPath, object]]) -> None:
         self._assignments = {scope: dict(items) for scope, items in assignments.items()}
 
-    def select(self, context: DataflowSelectionContext) -> Mapping[QualifiedPath, object] | None:
-        return self._assignments.get(context.scope_id)
+    def select(
+        self, model: ModelWrapper, contexts: Sequence[DataflowSelectionContext]
+    ) -> Mapping[str, Mapping[QualifiedPath, object]]:
+        del model
+        return {
+            context.scope_id: self._assignments[context.scope_id]
+            for context in contexts
+            if context.scope_id in self._assignments
+        }
 
 
 class FirstFeasiblePolicy(DataflowSelectionPolicy):
     """A deterministic reference policy, not a default and not a ranking.
 
     It exists so the seam can be exercised end to end.  It takes the first
-    point in the enumeration's stable assignment order; that order is a
-    tie-break, not a statement that the point is preferable.
+    point in each scope's stable assignment order; that order is a tie-break,
+    not a statement that the point is preferable.  It also makes no attempt to
+    coordinate across scopes, which is exactly the limitation a real
+    graph-global policy would exist to remove.
     """
 
-    def select(self, context: DataflowSelectionContext) -> Mapping[QualifiedPath, object] | None:
-        points = context.feasible_points()
-        if not points:
-            return None
-        return dict(points[0].assignments)
+    def select(
+        self, model: ModelWrapper, contexts: Sequence[DataflowSelectionContext]
+    ) -> Mapping[str, Mapping[QualifiedPath, object]]:
+        del model
+        selected: dict[str, Mapping[QualifiedPath, object]] = {}
+        for context in contexts:
+            points = context.feasible_points()
+            if points:
+                selected[context.scope_id] = dict(points[0].assignments)
+        return selected
 
 
 @dataclass(frozen=True)
@@ -115,9 +145,8 @@ class DataflowSelectionReport:
 class SelectDataflowDesign(Transformation):  # type: ignore[misc]
     """Apply one selection policy to every attached logical dataflow operation.
 
-    The transform is operation-generic: it knows the ``DataflowOp`` boundary and
-    nothing about MVAU.  Every commitment goes through the transactional
-    assignment API, so invalid policy output leaves the node byte identical.
+    Every commitment goes through the transactional assignment API, so invalid
+    policy output leaves the node byte identical.
     """
 
     def __init__(
@@ -125,64 +154,92 @@ class SelectDataflowDesign(Transformation):  # type: ignore[misc]
         policy: DataflowSelectionPolicy,
         config: DataflowBuildConfigView,
         *,
-        constraint_set: str,
-        structural_profile: str | None = None,
-        artifact_profile: str | None = None,
-        feasibility_sets: Iterable[str] = (),
         replace: bool = False,
     ) -> None:
         super().__init__()
         self.policy = policy
         self.config = config
-        self.constraint_set = constraint_set
-        self.structural_profile = structural_profile
-        self.artifact_profile = artifact_profile
-        self.feasibility_sets = tuple(feasibility_sets)
         self.replace = replace
         self.report = DataflowSelectionReport()
+
+    def _context(self, operation: DataflowOp) -> DataflowSelectionContext:
+        family = type(operation)
+        return DataflowSelectionContext(
+            operation.dataflow_scope_id(),
+            operation,
+            Engine(),
+            operation.hydrate_dataflow_point(self.config),
+            tuple(sorted(family.decision_nodeattrs())),
+            family.selection_constraint_set(),
+        )
 
     def _scope_report(
         self, operation: DataflowOp, scope_id: str, committed: tuple[QualifiedPath, ...]
     ) -> DataflowScopeReport:
+        family = type(operation)
         engine = Engine()
         point = operation.hydrate_dataflow_point(self.config)
-        feasibility = {
-            name: engine.evaluate_constraint_set(point, name) for name in self.feasibility_sets
-        }
+        structural = family.structural_readiness_profile()
+        artifact = family.artifact_readiness_profile()
         return DataflowScopeReport(
             scope_id,
             committed,
-            None
-            if self.structural_profile is None
-            else engine.check_readiness(point, self.structural_profile),
-            None
-            if self.artifact_profile is None
-            else engine.check_readiness(point, self.artifact_profile),
-            feasibility,
+            None if structural is None else engine.check_readiness(point, structural),
+            None if artifact is None else engine.check_readiness(point, artifact),
+            {
+                name: engine.evaluate_constraint_set(point, name)
+                for name in family.feasibility_constraint_sets()
+            },
         )
 
-    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        scopes: list[DataflowScopeReport] = []
-        for node in list(model.graph.node):
-            operation = _attached_dataflow_op(model, node)
-            if operation is None:
-                continue
-            scope_id = operation.dataflow_scope_id()
-            engine = Engine()
-            point = operation.hydrate_dataflow_point(self.config)
-            context = DataflowSelectionContext(
-                scope_id,
-                operation,
-                engine,
-                point,
-                tuple(sorted(type(operation).decision_nodeattrs())),
-                self.constraint_set,
+    def _commit(
+        self,
+        operation: DataflowOp,
+        scope_id: str,
+        assignments: Mapping[QualifiedPath, object],
+    ) -> DataflowScopeReport:
+        node = operation.onnx_node
+        snapshot = node.SerializeToString(deterministic=True)
+        try:
+            commit = (
+                operation.replace_dataflow_assignments(self.config, assignments)
+                if self.replace
+                else operation.commit_dataflow_assignments(self.config, assignments)
             )
-            assignments = self.policy.select(context)
+        except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+            restored = type(node)()
+            restored.ParseFromString(snapshot)
+            node.CopyFrom(restored)
+            return DataflowScopeReport(
+                scope_id,
+                (),
+                findings=(
+                    Finding(
+                        FindingKind.REJECTION,
+                        "dataflow-selection-commit-failed",
+                        _SELECTION_PATH,
+                        str(exc),
+                        (("scope_id", scope_id),),
+                    ),
+                ),
+            )
+        return self._scope_report(operation, scope_id, tuple(sorted(commit.point.assignments)))
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        operations = [
+            operation
+            for node in list(model.graph.node)
+            if (operation := _attached_dataflow_op(model, node)) is not None
+        ]
+        contexts = [self._context(operation) for operation in operations]
+        selected = self.policy.select(model, contexts)
+        scopes: list[DataflowScopeReport] = []
+        for context in contexts:
+            assignments = selected.get(context.scope_id)
             if assignments is None:
                 scopes.append(
                     DataflowScopeReport(
-                        scope_id,
+                        context.scope_id,
                         (),
                         findings=(
                             Finding(
@@ -190,42 +247,13 @@ class SelectDataflowDesign(Transformation):  # type: ignore[misc]
                                 "dataflow-selection-no-point",
                                 _SELECTION_PATH,
                                 "the policy returned no assignments for this scope",
-                                (("scope_id", scope_id),),
+                                (("scope_id", context.scope_id),),
                             ),
                         ),
                     )
                 )
                 continue
-            snapshot = node.SerializeToString(deterministic=True)
-            try:
-                commit = (
-                    operation.replace_dataflow_assignments(self.config, assignments)
-                    if self.replace
-                    else operation.commit_dataflow_assignments(self.config, assignments)
-                )
-            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
-                restored = type(node)()
-                restored.ParseFromString(snapshot)
-                node.CopyFrom(restored)
-                scopes.append(
-                    DataflowScopeReport(
-                        scope_id,
-                        (),
-                        findings=(
-                            Finding(
-                                FindingKind.REJECTION,
-                                "dataflow-selection-commit-failed",
-                                _SELECTION_PATH,
-                                str(exc),
-                                (("scope_id", scope_id),),
-                            ),
-                        ),
-                    )
-                )
-                continue
-            scopes.append(
-                self._scope_report(operation, scope_id, tuple(sorted(commit.point.assignments)))
-            )
+            scopes.append(self._commit(context.operation, context.scope_id, assignments))
         self.report = DataflowSelectionReport(tuple(scopes))
         return model, False
 

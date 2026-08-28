@@ -114,7 +114,13 @@ class KernelExport:
 
 @dataclass(frozen=True)
 class SelectedKernel:
-    """The committed identity of one Kernel inside one selection."""
+    """The committed *identity* of one Kernel inside one selection.
+
+    This is the small durable value: what a design point records and what
+    provenance and evidence quote.  It is deliberately not the working object
+    -- for the Kernel as selected and configured in one operation, with its
+    Region, demands, and providers attached, see :class:`KernelInstance`.
+    """
 
     selection: str
     kernel_id: str
@@ -726,6 +732,81 @@ class KernelSelection:
         )
 
 
+@dataclass(frozen=True)
+class KernelInstance:
+    """One Kernel as selected and configured in one operation scope.
+
+    This is the operation-bound view the design calls a Kernel instance: the
+    static Kernel it was selected from, the local choices that configured it,
+    the one Region it derives, what it demands, and who can build it.  It is
+    derived from a design point, never selected -- there is exactly one
+    identity axis, and :class:`SelectedKernel` names it.
+    """
+
+    kernel: Kernel
+    selection: str
+    point: DesignPoint
+    assignments: Mapping[QualifiedPath, object]
+    region: DataflowRegion
+    demands: Mapping[str, Port]
+    exports: Mapping[str, object]
+
+    @property
+    def id(self) -> str:
+        return self.kernel.id
+
+    @property
+    def version(self) -> str:
+        return self.kernel.version
+
+    @property
+    def providers(self) -> tuple[KernelProvider, ...]:
+        return self.kernel.providers
+
+    @property
+    def identity(self) -> SelectedKernel:
+        """The durable identity this instance persists as."""
+
+        return SelectedKernel(self.selection, self.id, self.version)
+
+
+def kernel_instance(
+    engine: Engine, selection: KernelSelection, point: DesignPoint
+) -> Answer[KernelInstance]:
+    """Bind the selected Kernel of one pool to everything it derived."""
+
+    identity = selected_kernel(engine, selection, point)
+    if not isinstance(identity, Decided):
+        return identity
+    kernel = selection.kernel(identity.value.kernel_id)
+    paths = selection.paths
+    region = engine.query_property(point, paths.region)
+    if not isinstance(region, Decided):
+        return region
+    demands: dict[str, Port] = {}
+    for interface in kernel.demand_interfaces:
+        answer = engine.query_property(point, paths.demand(interface))
+        if isinstance(answer, Decided):
+            demands[interface] = cast(Port, answer.value)
+    exports: dict[str, object] = {}
+    for name in kernel.export_names:
+        answer = engine.query_property(point, paths.export(name))
+        if isinstance(answer, Decided):
+            exports[name] = answer.value
+    own = {item.path for item in kernel.spec.decisions}
+    return Decided(
+        KernelInstance(
+            kernel,
+            selection.name,
+            point,
+            {path: value for path, value in point.assignments.items() if path in own},
+            cast(DataflowRegion, region.value),
+            demands,
+            exports,
+        )
+    )
+
+
 def admissible_kernels(
     engine: Engine, selection: KernelSelection, point: DesignPoint
 ) -> tuple[str, ...]:
@@ -793,12 +874,14 @@ __all__ = [
     "SELECTED_KERNEL_SEMANTICS",
     "Kernel",
     "KernelDemand",
+    "KernelInstance",
     "KernelExport",
     "KernelProvider",
     "KernelSelection",
     "KernelSelectionPaths",
     "SelectedKernel",
     "admissible_kernels",
+    "kernel_instance",
     "provider_of",
     "selected_kernel",
 ]

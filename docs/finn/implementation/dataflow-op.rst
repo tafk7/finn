@@ -176,9 +176,14 @@ weight ``BeatSequence``, or an explicit initialized-URAM capability override:
    )
    resolved = op.resolve_dataflow(context)
 
-These values remain problem facts. PE, SIMD, region declaration, parameter
-topology, binding, pumping, RAM style, and connection topology remain explicit
-decisions stored through the MVAU codec inventory.
+These values remain problem facts. The explicit decisions stored through the
+MVAU codec inventory are the three Kernel-pool identities -- compute, weight
+supply, and weight adapter -- and the local choices owned by whichever Kernel
+each pool selected: PE, SIMD, the legacy HLS arithmetic resource and weight
+source, batch interleave, compute pumping, supplier organization, RAM style,
+and memory pumping. The parameter topology and the connection shape are not
+stored, because they are read back from the selected Kernels rather than
+chosen beside them.
 
 Testing a contribution
 ----------------------
@@ -211,7 +216,43 @@ availability, and ``BeatSequence`` tests.
        )
    )
 
-Standard ONNX lowering, fusion discovery, Kernel binding contributions, and
-implementation providers are separate extension points. A ``DataflowOp`` must
-not import legacy hardware operations, vendor tools, elaborators, or artifact
-builders.
+Declaring the selection contract
+--------------------------------
+
+A ``DataflowOp`` family names its own Kernel pools and the constraint set and
+readiness profiles a caller should ask about, so the generic selection
+transform needs no per-operation configuration:
+
+.. code-block:: python
+
+   @classmethod
+   def kernel_selections(cls) -> tuple[KernelSelection, ...]:
+       return (TINY_COMPUTE_SELECTION,)
+
+   @classmethod
+   def selection_constraint_set(cls) -> str | None:
+       return "tiny_op_feasibility"
+
+   @classmethod
+   def structural_readiness_profile(cls) -> str | None:
+       return "tiny_op_structural"
+
+``feasibility_constraint_sets`` defaults to one set per declared pool, so a
+report keeps each pool's answer separate.
+
+Adding a Kernel
+---------------
+
+A new Kernel is justified by a meaningfully different microarchitectural
+organization, interface demand, scheduling mechanism, or local decision set --
+not by a parameter value, and not by a different source language or generator.
+A second way to build the same Kernel is a provider, declared on that Kernel.
+
+Source-admission constraints must be answerable from problem data alone;
+``Kernel`` refuses one that reads any of that Kernel's own decisions. Target
+facts therefore belong in ``feasibility_constraints``, not in admission, so
+that inference coverage does not depend on the board.
+
+Standard ONNX lowering, fusion discovery, and implementation providers are
+separate extension points. A ``DataflowOp`` must not import legacy hardware
+operations, vendor tools, elaborators, or artifact builders.

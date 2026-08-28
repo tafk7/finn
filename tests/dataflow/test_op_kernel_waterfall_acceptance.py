@@ -145,13 +145,6 @@ def test_the_waterfall_runs_from_source_matmul_to_artifact_requirements(
     selection = SelectDataflowDesign(
         policy,
         _context(),
-        constraint_set="mvau_op_feasibility",
-        structural_profile="mvau_op_structural",
-        artifact_profile="artifact_inputs",
-        feasibility_sets=(
-            MVAU_COMPUTE_SELECTION.feasibility_constraint_set,
-            MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set,
-        ),
     )
     model = model.transform(selection, cleanup=False)
     report = selection.report.scope(scope_id)

@@ -31,6 +31,7 @@ from finn.dataflow.design import (
     QualifiedPath,
     RequestError,
 )
+from finn.dataflow.kernels import KernelSelection
 from finn.dataflow.resolution import NetworkRef, RegionRef, ResolvedDataflowOp
 
 if TYPE_CHECKING:
@@ -276,6 +277,44 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     @abstractmethod
     def decision_nodeattrs(cls) -> Mapping[QualifiedPath, NodeAttrCodec]:
         """Map every persistent decision to one stable node attribute."""
+
+    # -- selection contract ------------------------------------------------
+    #
+    # A selection policy must not have to know which operation it is looking
+    # at.  These classmethods are how an operation family names its own
+    # Kernel pools and the constraint sets and readiness profiles a caller
+    # should ask about, so the generic selection transform needs no
+    # per-operation configuration.
+
+    @classmethod
+    def kernel_selections(cls) -> tuple[KernelSelection, ...]:
+        """Return the static Kernel pools this operation family declares."""
+
+        return ()
+
+    @classmethod
+    def selection_constraint_set(cls) -> str | None:
+        """Return the constraint set a complete design point must satisfy."""
+
+        return None
+
+    @classmethod
+    def structural_readiness_profile(cls) -> str | None:
+        """Return the profile answering whether the semantic result is ready."""
+
+        return None
+
+    @classmethod
+    def artifact_readiness_profile(cls) -> str | None:
+        """Return the profile answering whether artifacts can be built."""
+
+        return None
+
+    @classmethod
+    def feasibility_constraint_sets(cls) -> tuple[str, ...]:
+        """Return the per-pool feasibility sets, reported separately."""
+
+        return tuple(selection.feasibility_constraint_set for selection in cls.kernel_selections())
 
     @classmethod
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:

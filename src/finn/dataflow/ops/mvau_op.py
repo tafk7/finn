@@ -39,8 +39,10 @@ from finn.dataflow.mvau.source import (
     project_mvau_graph_source,
     resolve_mvau_point,
 )
+from finn.dataflow.kernels import KernelSelection
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
+    MVAU_SELECTIONS,
     MVAUDataflowOpPaths,
     MVAUSourceDescription,
 )
@@ -87,6 +89,22 @@ class MvauDataflowOp(DataflowOp):
     @classmethod
     def source_association_path(cls) -> QualifiedPath:
         return MVAUDataflowOpPaths.SOURCE_ASSOCIATION
+
+    @classmethod
+    def kernel_selections(cls) -> tuple[KernelSelection, ...]:
+        return MVAU_SELECTIONS
+
+    @classmethod
+    def selection_constraint_set(cls) -> str | None:
+        return "mvau_op_feasibility"
+
+    @classmethod
+    def structural_readiness_profile(cls) -> str | None:
+        return "mvau_op_structural"
+
+    @classmethod
+    def artifact_readiness_profile(cls) -> str | None:
+        return "artifact_inputs"
 
     @classmethod
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,13 +157,6 @@ def _run(
     transform = SelectDataflowDesign(
         policy,
         _context(),
-        constraint_set="mvau_op_feasibility",
-        structural_profile="mvau_op_structural",
-        artifact_profile="artifact_inputs",
-        feasibility_sets=(
-            MVAU_COMPUTE_SELECTION.feasibility_constraint_set,
-            MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set,
-        ),
     )
     target = model or _model()
     return target.transform(transform, cleanup=False), transform
@@ -234,9 +228,12 @@ def test_readiness_and_feasibility_are_reported_separately() -> None:
     report = transform.report.scope(SCOPE)
     assert report.structural_readiness is not None
     assert report.artifact_readiness is not None
+    # One feasibility set per declared pool, named by the operation itself.
+    assert set(report.feasibility) == set(MvauDataflowOp.feasibility_constraint_sets())
     assert set(report.feasibility) == {
         MVAU_COMPUTE_SELECTION.feasibility_constraint_set,
         MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set,
+        MVAU_WEIGHT_ADAPTER_SELECTION.feasibility_constraint_set,
     }
 
 
@@ -305,6 +302,38 @@ def test_committed_choices_survive_save_and_reload(tmp_path: Path) -> None:
     assert identities[MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel] == (
         MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
     )
+
+
+def test_the_transform_needs_no_operation_specific_configuration() -> None:
+    """The operation names its own contract, so the caller supplies none."""
+
+    assert MvauDataflowOp.selection_constraint_set() == "mvau_op_feasibility"
+    assert MvauDataflowOp.structural_readiness_profile() == "mvau_op_structural"
+    assert MvauDataflowOp.artifact_readiness_profile() == "artifact_inputs"
+    assert MvauDataflowOp.kernel_selections() == (
+        MVAU_COMPUTE_SELECTION,
+        MVAU_WEIGHT_SUPPLY_SELECTION,
+        MVAU_WEIGHT_ADAPTER_SELECTION,
+    )
+
+
+def test_a_policy_sees_every_scope_in_one_call() -> None:
+    """Coordination across scopes is possible because the policy sees them all."""
+
+    seen: list[tuple[str, ...]] = []
+
+    class _Recording(DataflowSelectionPolicy):
+        def select(
+            self,
+            model: ModelWrapper,
+            contexts: "Sequence[DataflowSelectionContext]",
+        ) -> dict[str, dict[QualifiedPath, object]]:
+            assert model is not None
+            seen.append(tuple(item.scope_id for item in contexts))
+            return {}
+
+    _run(_Recording())
+    assert seen == [(SCOPE,)]
 
 
 def test_selection_does_not_mutate_the_node_class_or_domain() -> None:

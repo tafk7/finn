@@ -16,31 +16,36 @@ The implementation began from reviewed FINN baseline
 is pinned to `tafk7/qonnx` commit
 `46b69021e3a38b57c636f6941a52d809c8928a7b`.
 
-The first connected Kernel definitions are the MVAU compute Kernel and cyclic
-parameter-delivery Kernel. `MVAU_COMPUTE_KERNEL_SPEC` declares three complete
-region branches: `standard.embedded`, `standard.streamed`, and
-`batch_interleaved.streamed`. The interleaved branch has schedule
-`(batch, nf, sf, t)`, exact activation and weight requirements, ordinary
-vector-major activation/output sequences, and a chunked weight sequence. The
-compatibility module `finn.dataflow.mvau_design` continues to expose the
-earlier constructor and specification names without retaining duplicate region
-or validation logic. `MVAU_DESIGN_SPACE_SPEC` retains the original six-field
-problem schema and `mvau.pe`/`mvau.simd` paths; new integrations use
-`MVAU_COMPUTE_KERNEL_SPEC`.
+A concrete microarchitecture is selected once, as a Kernel. `MVAU_COMPUTE_SELECTION`
+is the compute pool and holds four: `legacy_hls`, `rtl_softvec`, `rtl_packed`,
+and `rtl_batch_interleaved_dsp58`. Each derives exactly one Region per complete
+set of its own local choices, so there is no Region-declaration choice above the
+Kernels and no binding choice below them. The batch-interleaved Kernel derives
+the `(batch, nf, sf, t)` schedule with exact activation and weight requirements,
+ordinary vector-major activation/output sequences, and a chunked weight
+sequence. Legacy HLS keeps embedded versus streamed weights as one local
+boundary choice, because its generated unit reads the weight array inside its
+own schedule either way.
 
-Computation profiles and implementation bindings are separate from region
-selection. The five initial binding identities distinguish legacy HLS LUT,
-legacy HLS DSP, RTL soft-vector, RTL packed, and RTL batch-interleaved DSP58
-implementations. Target, width, narrowing, and pumping rules are binding
-constraints; they are not inputs to any region constructor. Structural
-validation remains a separate derived report and constraint, so
-`model_structural` readiness never requires a binding.
+Several Kernels may derive equal Regions: soft-vector and packed DSP do, for
+equal semantic choices. Region equality deliberately does not erase Kernel
+identity, constraints, cost, or provider inventory.
 
-The current binding records are selections and conservative capability checks,
-not formal binding-realizability witnesses. A `KernelInstance` can therefore be
-constructed for a fully selected point whose separately queried binding
-constraint set is false; callers must not treat instance construction as
-buildability.
+PE, SIMD, interleave, compute pumping, and the legacy HLS arithmetic resource
+are Kernel-local decisions, owned by the Kernel that uses them. Structural
+validation remains a separate derived report and constraint, so structural
+readiness never requires any feasibility answer.
+
+Kernel feasibility records conservative capability checks, not formal
+realizability witnesses. A `KernelInstance` can therefore be constructed for a
+fully selected point whose separately queried feasibility constraint set is
+false; callers must not treat instance construction as buildability.
+
+The compatibility module `finn.dataflow.mvau_design` continues to expose the
+earlier constructor names, and `MVAU_DESIGN_SPACE_SPEC` in
+`finn.dataflow.mvau.legacy_design` retains the original six-field problem
+schema and `mvau.pe`/`mvau.simd` paths as a standalone fixture. It is not part
+of the Kernel pool.
 
 `accumulator_element_type` is projected problem data computed by FINN's
 existing numeric-range analysis before this design-space query; it is not an
@@ -49,28 +54,58 @@ selected output element type. Fused-threshold profiles additionally require a
 threshold source, its real shape, initializer availability, and a representation
 at least as wide as the accumulator.
 
-`CYCLIC_PARAMETER_KERNEL_SPEC` is the second concrete Kernel definition. It
-has one rank-zero local-state-source declaration parameterized by the exact
-requested output `Port`; full-tile versus chunked organization is therefore a
-property of that port rather than a label-only decision. RAM style, runtime
-writability, pumping, and implementation identity remain binding-owned and are
-applicable only to bindings that expose those choices.
+`finn.dataflow.parameters.supply_kernels` holds the weight-supply pool:
+`finn_rtl_memstream` and `finnlib_hls_memstream`. Each derives a rank-zero
+local-state source from the demand the selected compute Kernel published, so
+there is no duplicated delivery tile. One supplier-local choice remains because
+it is a real alternative: serve the demand exactly, or emit the natural
+full-tile sequence and require the separately selected adapter Kernel. RAM
+style, memory pumping, and initialization rules belong to the supplier that
+exposes them.
 
-`finn.dataflow.kernel` contains the generic authoring layer extracted from those
-two definitions. It records Kernel, region-declaration, and binding identities,
-constructs resolved-selection `KernelInstance` values, supports deliberate
-path-prefixed placement with explicitly shared problem fields, and assembles
-ordinary flat `DesignSpaceSpec` values. A `KernelInstance` does not imply that
-the separately queried binding-feasibility constraints passed. The authoring
-layer does not add a Kernel primitive to the engine.
+`finn.dataflow.kernels` is the public Kernel authoring surface. A `Kernel`
+declares one microarchitecture family with its local decisions, feasibility and
+source-admission constraints, Region derivation, interface demands, exports,
+and provider inventory. A `KernelSelection` is one static Op-class-owned pool
+behind a single identity decision; `SelectedKernel` is the durable identity a
+design point records, and `KernelInstance` is the operation-bound view binding
+that Kernel to its local assignments, Region, demands, and providers. An
+optional pool may select the reserved `NO_KERNEL` member, which is how an
+absent supplier is expressed without inventing a topology choice.
+
+Source admission is decision-free by construction: `Kernel` refuses a
+source-admission constraint that reads one of its own decisions, which is what
+makes `admissible_kernels` a genuine existential answer over problem data
+alone. Target facts are therefore excluded from admission and asked at
+selection time, so inference coverage does not change with the board.
+
+`finn.dataflow.spec_algebra` contains the generic flat-spec algebra those
+surfaces share: path-prefixed placement with explicitly shared problem fields,
+applicability gating, and assembly of ordinary flat `DesignSpaceSpec` values.
+The authoring layer does not add a Kernel primitive to the engine.
 
 `finn.dataflow.network` and `finn.dataflow.network_validation` implement the
 flat acyclic network contract with qualified endpoints, explicit tensor-position
 maps, exact beat-sequence compatibility, exposed boundaries, and ordered
 channels without physical capacity fields. `finn.dataflow.ops.mvau` uses that
-foundation to select an embedded/direct `RegionRef` or a cyclic-delivery
-`NetworkRef`, while keeping source-to-region coordinate mappings outside the
-normalized region.
+foundation to assemble the selected Kernels, while keeping source-to-region
+coordinate mappings outside the normalized region.
+
+The parameter topology is derived, not decided. Whether the result is a
+`RegionRef` or a `NetworkRef` follows from which Kernels were selected: an
+embedded compute Region, or a streamed one with no supplier, yields a region
+reference; a selected supplier yields a network. Direct connection is
+established by exact endpoint compatibility, and the adapter is an ordinary
+optional Kernel that is refused when the endpoints already match.
+
+`finn.transformation.fpgadataflow.infer_mvau_dataflow` lowers recognized MVAU
+sources to unresolved logical nodes. It decides only whether a subgraph is a
+source form; whether any implementation supports it is the compute pool's
+answer, so the pass contains no datatype, width, target, or language switch.
+`finn.transformation.fpgadataflow.select_dataflow_design` is the replaceable
+selection-policy seam. It is operation-generic: each `DataflowOp` family names
+its own Kernel pools, constraint set, and readiness profiles, and a policy sees
+the whole model and every operation scope in one call.
 
 MVAU source associations are topology-aware. Embedded weights identify
 compute-local binding state, direct weights identify the compute region's `W`

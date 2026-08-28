@@ -29,6 +29,7 @@ from finn.dataflow.kernels import (
     KernelDemand,
     KernelSelection,
     SelectedKernel,
+    kernel_instance,
     selected_kernel,
 )
 from finn.dataflow.region import DataflowRegion, Port
@@ -271,3 +272,27 @@ def test_a_pool_backed_operation_passes_the_conformance_harness(
     assert isinstance(result.original.result, RegionRef)
     assert result.original.result.region_id == f"paired.{kernel_id}"
     assert result.restored.result == result.original.result
+
+
+def test_a_selected_kernel_binds_to_its_region_demands_and_providers() -> None:
+    engine, point = _point("even", 2)
+    instance = kernel_instance(engine, PAIRED_SELECTION, point)
+    assert isinstance(instance, Decided)
+    bound = instance.value
+    assert bound.id == "even"
+    assert bound.selection == PAIRED_SELECTION.name
+    assert bound.identity == SelectedKernel("paired.compute", "even", "1")
+    assert bound.assignments == {QualifiedPath("paired.even.lanes"): 2}
+    region = engine.query_property(point, _PATHS.region)
+    assert isinstance(region, Decided)
+    assert bound.region == region.value
+    assert set(bound.demands) == {"parameter"}
+    assert tuple(item.id for item in bound.providers) == ("even.rtl", "even.hls")
+
+
+def test_the_bound_instance_carries_only_its_own_local_choices() -> None:
+    engine, point = _point("any", 3)
+    instance = kernel_instance(engine, PAIRED_SELECTION, point)
+    assert isinstance(instance, Decided)
+    assert instance.value.assignments == {QualifiedPath("paired.any.lanes"): 3}
+    assert instance.value.demands == {}
