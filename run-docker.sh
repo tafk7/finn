@@ -231,7 +231,19 @@ fi
 #
 #   FINN_DOCKER_TARGET=dev ./run-docker.sh build
 BUILD_ONLY="0"
-if [ "$1" = "build" ]; then
+if [ "$1" = "sbx" ]; then
+  # ./run-docker.sh sbx [dev|build|build-xrt]
+  if [ -n "$2" ]; then
+    FINN_DOCKER_TARGET="$2"
+    if ! FINN_DOCKER_TAG=$(finn_compute_tag "$FINN_DOCKER_TARGET"); then
+      recho "Usage: $0 sbx [dev|build|build-xrt]"
+      exit 2
+    fi
+  fi
+  gecho "sbx mode, tier $FINN_DOCKER_TARGET"
+  FINN_SBX_MODE="1"
+  DOCKER_CMD="true"
+elif [ "$1" = "build" ]; then
   if [ -n "$2" ]; then
     FINN_DOCKER_TARGET="$2"
     if ! FINN_DOCKER_TAG=$(finn_compute_tag "$FINN_DOCKER_TARGET"); then
@@ -621,6 +633,108 @@ DOCKER_EXEC+="$FINN_DOCKER_EXTRA "
 if [ "$BUILD_ONLY" = "1" ]; then
   gecho "Built $FINN_DOCKER_TAG"
   exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# sbx mode: create-or-attach a Docker Sandboxes microVM.
+#
+# Placed here so it inherits everything resolved above -- the tier tag, the
+# Xilinx paths, and the licence handling -- instead of duplicating any of it.
+#
+# The point is parity with the docker path: one command, repeatable. Without
+# this, using sbx meant hand-running docker save, sbx template load, a long
+# sbx create, and sbx run, and redoing the first three on every commit because
+# the tag embeds `git describe`.
+# ---------------------------------------------------------------------------
+if [ "$FINN_SBX_MODE" = "1" ]; then
+  command -v sbx >/dev/null || { recho "sbx not found on PATH"; exit 1; }
+
+  # One sandbox per (tier, checkout). Lowercased; sbx requires it.
+  SBX_NAME=${FINN_SBX_NAME:-"finn-$FINN_DOCKER_TARGET-$(basename "$SCRIPTPATH")"}
+  SBX_NAME=$(echo "$SBX_NAME" | tr '[:upper:]' '[:lower:]')
+
+  if sbx ls 2>/dev/null | awk '{print $1}' | grep -qx "$SBX_NAME"; then
+    if [ "$FINN_SBX_RECREATE" = "1" ]; then
+      gecho "Removing existing sandbox $SBX_NAME (FINN_SBX_RECREATE=1)"
+      sbx rm --force "$SBX_NAME" >/dev/null 2>&1
+    else
+      gecho "Attaching to existing sandbox $SBX_NAME"
+      gecho "(FINN_SBX_RECREATE=1 to rebuild it against the current image)"
+      exec sbx run --name "$SBX_NAME"
+    fi
+  fi
+
+  # sbx keeps its own image store and cannot see the local docker one, so the
+  # image has to be exported and loaded. Skipped when the tag is already there,
+  # which is what makes repeat runs fast -- only a new tag pays the ~2 min.
+  if sbx template ls 2>/dev/null | awk '{print $1":"$2}' | grep -qx "docker.io/$FINN_DOCKER_TAG"; then
+    gecho "Template $FINN_DOCKER_TAG already loaded"
+  else
+    gecho "Loading $FINN_DOCKER_TAG into the sbx template store (first time is slow)"
+    SBX_TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
+    docker save -o "$SBX_TAR" "$FINN_DOCKER_TAG" || { recho "docker save failed"; rm -f "$SBX_TAR"; exit 1; }
+    sbx template load "$SBX_TAR" || { recho "sbx template load failed"; rm -f "$SBX_TAR"; exit 1; }
+    rm -f "$SBX_TAR"
+  fi
+
+  # Extra workspaces are POSITIONAL in sbx, and every mount lands at its host
+  # path -- which is what FINN needs anyway, since generated Vivado projects
+  # embed absolute paths (see docs/containerization.md).
+  SBX_ARGS=("$SCRIPTPATH")
+  SBX_ENV=()
+
+  # The dev tier gets NO toolchain, NO licence and NO extra egress. That is the
+  # entire point of it: the containment boundary is dev vs the rest, so leaking
+  # a licence variable in here because it happens to be set in the caller's
+  # shell would quietly widen the profile that exists to be narrow.
+  if [ "$FINN_DOCKER_TARGET" = "dev" ]; then
+    gecho "dev tier: no Xilinx mount, no licence, no toolchain egress"
+  else
+  [ -d "$FINN_XILINX_PATH/$FINN_XILINX_VERSION" ] && \
+    SBX_ARGS+=("$FINN_XILINX_PATH/$FINN_XILINX_VERSION:ro")
+
+  for v in VIVADO_PATH VITIS_PATH HLS_PATH PLATFORM_REPO_PATHS \
+           XILINXD_LICENSE_FILE LM_LICENSE_FILE NUM_DEFAULT_WORKERS; do
+    eval "val=\${$v:-}"
+    [ -n "$val" ] && SBX_ENV+=(-e "$v=$val")
+  done
+  # Node-locked licences are files that must exist inside the sandbox; mount
+  # their directory read-only at its own path, as the docker path does.
+  for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
+    eval "lval=\${$lv:-}"
+    [ -z "$lval" ] && continue
+    ( IFS=':'; for entry in $lval; do
+        case "$entry" in ''|*@*) continue ;; esac
+        d=$(dirname "$entry"); [ -d "$d" ] && echo "$d"
+      done ) | sort -u | while read -r d; do SBX_ARGS+=("$d:ro"); done
+  done
+
+  fi
+
+  gecho "Creating sandbox $SBX_NAME from $FINN_DOCKER_TAG"
+  sbx create "${FINN_SBX_AGENT:-shell}" "${SBX_ARGS[@]}" \
+    --name "$SBX_NAME" \
+    --template "$FINN_DOCKER_TAG" \
+    --kit "$SCRIPTPATH/docker/finn.kit" \
+    --no-share-skills \
+    "${SBX_ENV[@]}" || { recho "sbx create failed"; exit 1; }
+
+  # A floating licence needs raw TCP egress to PORT@HOST. sbx grants that
+  # narrowly, per sandbox, so this does not require an open posture.
+  for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
+    [ "$FINN_DOCKER_TARGET" = "dev" ] && continue
+    eval "lval=\${$lv:-}"
+    [ -z "$lval" ] && continue
+    ( IFS=':'; for entry in $lval; do
+        case "$entry" in *@*) ;; *) continue ;; esac
+        port=${entry%@*}; host=${entry#*@}
+        gecho "Allowing licence server egress: $host:$port"
+        sbx policy allow network --sandbox "$SBX_NAME" "$host:$port" >/dev/null 2>&1
+      done )
+  done
+
+  gecho "Sandbox $SBX_NAME ready"
+  exec sbx run --name "$SBX_NAME"
 fi
 
 if [ -z "$FINN_SINGULARITY" ];then
