@@ -6,6 +6,12 @@ The supported authoring surface for dataflow design spaces is
 uses only the Python standard library; region knowledge is confined to the
 public design adapter.
 
+The model-aware source-operation surface is `finn.dataflow.authoring`.
+`DataflowOp` subclasses are loaded through
+`ModelWrapper.get_customop_wrapper`, project live graph and build facts into a
+problem instance, and persist only explicitly committed decisions as node
+attributes. See `../implementation/dataflow-op.rst` for the contributor guide.
+
 The first connected Kernel definitions are the MVAU compute Kernel and cyclic
 parameter-delivery Kernel. `MVAU_COMPUTE_KERNEL_SPEC` declares three complete
 region branches: `standard.embedded`, `standard.streamed`, and

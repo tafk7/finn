@@ -16,6 +16,7 @@ If you're new to FINN development, we recommend:
    :maxdepth: 2
 
    customop-pattern
+   dataflow-op
    specialization-rules
    hls-layers
    rtl-layers

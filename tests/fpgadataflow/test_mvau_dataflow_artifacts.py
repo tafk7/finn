@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -20,11 +20,25 @@ from finn.dataflow.mvau.artifacts import (
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
+from finn.dataflow.mvau.definition import MVAUComputeBinding, MVAUComputeKernelPaths
+from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.source import (
     MVAULegacyImportMode,
     MVAUProjectionContext,
     project_mvau_source,
     start_mvau_projection,
+)
+from finn.dataflow.ops.mvau import (
+    MVAUConnectionTopology,
+    MVAUDataflowOpPaths,
+    MVAUParameterTopology,
+    MVAUWeightDeliveryDeclaration,
+)
+from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.dataflow.parameters.cyclic.definition import (
+    CyclicParameterBinding,
+    CyclicParameterKernelPaths,
+    CyclicRamStyle,
 )
 
 NODE_ID = "mvau_artifact"
@@ -97,6 +111,61 @@ def _selected(model: ModelWrapper):
     )
 
 
+@dataclass
+class _BuildConfig:
+    synth_clk_period_ns: float = CLOCK_NS
+    fpga_part: str = PART
+
+    def _resolve_fpga_part(self) -> str:
+        return self.fpga_part
+
+
+def _logical_selected(model: ModelWrapper, mem_mode: str):
+    node = model.graph.node[0]
+    node.op_type = "MvauDataflowOp"
+    node.domain = "finn.custom_op.dataflow"
+    del node.attribute[:]
+    node.attribute.extend(
+        [
+            helper.make_attribute("noActivation", 1),
+            helper.make_attribute("binaryXnorMode", 0),
+            helper.make_attribute("accDataType", "INT16"),
+        ]
+    )
+    model.model.opset_import.append(helper.make_opsetid("finn.custom_op.dataflow", 1))
+    operation = model.get_customop_wrapper(node)
+    assert isinstance(operation, MvauDataflowOp)
+    assignments = {
+        MVAUComputeKernelPaths.PE: 2,
+        MVAUComputeKernelPaths.SIMD: 2,
+        MVAUComputeKernelPaths.REGION_DECLARATION: MVAURegionDeclaration.STANDARD_STREAMED,
+        MVAUComputeKernelPaths.BINDING: MVAUComputeBinding.RTL_SOFTVEC,
+        MVAUComputeKernelPaths.COMPUTE_PUMPING: False,
+        MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: (
+            MVAUParameterTopology.CYCLIC
+            if mem_mode == "internal_decoupled"
+            else MVAUParameterTopology.DIRECT
+        ),
+    }
+    if mem_mode == "internal_decoupled":
+        assignments.update(
+            {
+                MVAUDataflowOpPaths.DELIVERY_PE: 2,
+                MVAUDataflowOpPaths.DELIVERY_SIMD: 2,
+                MVAUDataflowOpPaths.DELIVERY_DECLARATION: (
+                    MVAUWeightDeliveryDeclaration.STANDARD_FULL_TILE
+                ),
+                MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: MVAUConnectionTopology.DIRECT,
+                CyclicParameterKernelPaths.BINDING: (CyclicParameterBinding.FINN_RTL_MEMSTREAM),
+                CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle.BRAM,
+                CyclicParameterKernelPaths.PUMPED_MEMORY: False,
+            }
+        )
+    context = MVAUDataflowBuildContext(_BuildConfig())
+    operation.commit_dataflow_assignments(context, assignments)
+    return operation.resolve_dataflow(context)
+
+
 @pytest.mark.vivado
 @pytest.mark.parametrize("mem_mode", ["external", "internal_decoupled"])
 def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) -> None:
@@ -163,3 +232,30 @@ def test_requirements_backed_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) 
             simulation=replace(observation, artifact_identity="different"),
             stitched_simulation=stitched_observation,
         )
+
+
+@pytest.mark.vivado
+@pytest.mark.parametrize("mem_mode", ["external", "internal_decoupled"])
+def test_logical_dataflow_op_drives_mvau_rtl_simulation(tmp_path: Path, mem_mode: str) -> None:
+    model = _model(mem_mode)
+    selected = _logical_selected(model, mem_mode)
+    elaboration = elaborate_mvau_rtl_softvec(selected)
+    requirements = build_mvau_rtl_artifact_requirements(selected, elaboration, model, Path.cwd())
+    artifact = build_mvau_rtl_artifact(
+        requirements,
+        tmp_path / f"logical-{mem_mode}",
+        prepare_rtlsim=True,
+    )
+    activation = np.asarray([[1, 2, 3, 4], [-2, 1, 0, 3]], dtype=np.float32)
+    assert requirements.weight_initializer is not None
+    expected = np.matmul(activation, requirements.weight_initializer.as_array())
+    observation = observe_mvau_rtl_artifact(artifact, activation)
+    output = np.asarray(observation.output_values, dtype=np.float32).reshape(expected.shape)
+    assert np.array_equal(output, expected)
+    if mem_mode == "internal_decoupled":
+        stitched = observe_mvau_cyclic_stitched_artifact(
+            artifact,
+            activation,
+            tmp_path / "logical-stitched",
+        )
+        assert stitched.numerical_match

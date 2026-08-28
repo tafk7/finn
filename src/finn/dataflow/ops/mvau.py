@@ -72,6 +72,11 @@ from finn.dataflow.parameters.cyclic.definition import (
     build_cyclic_parameter_kernel_spec,
 )
 from finn.dataflow.region import BeatSequence, DataflowRegion, NumericElementType, Port
+from finn.dataflow.resolution import (
+    DATAFLOW_OP_RESULT_SEMANTICS,
+    NetworkRef as GenericNetworkRef,
+    RegionRef as GenericRegionRef,
+)
 
 
 class MVAUParameterTopology(str, Enum):
@@ -184,20 +189,16 @@ class MVAUSourceAssociation:
 
 
 @dataclass(frozen=True)
-class RegionRef:
-    """Tagged selected-region result associated with one source operation."""
+class RegionRef(GenericRegionRef):
+    """Selected MVAU region with a typed source association."""
 
-    region_id: str
-    region: DataflowRegion
     source_association: MVAUSourceAssociation
 
 
 @dataclass(frozen=True)
-class NetworkRef:
-    """Tagged selected-network result associated with one source operation."""
+class NetworkRef(GenericNetworkRef):
+    """Selected MVAU network with a typed source association."""
 
-    network_id: str
-    network: DataflowNetwork
     source_association: MVAUSourceAssociation
 
 
@@ -263,13 +264,7 @@ _BEAT_SEQUENCE_SEMANTICS = as_object_semantics(
 _REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _NETWORK_SEMANTICS = as_object_semantics(DATAFLOW_NETWORK_SEMANTICS)
 _NETWORK_REPORT_SEMANTICS = as_object_semantics(NETWORK_VALIDATION_REPORT_SEMANTICS)
-_RESULT_SEMANTICS: ValueSemantics[object] = ValueSemantics(
-    DataflowOpResult,
-    "DataflowOpResult",
-    lambda value: type(value) in {RegionRef, NetworkRef},
-    lambda left, right: left == right,
-    lambda value: value,
-)
+_RESULT_SEMANTICS = DATAFLOW_OP_RESULT_SEMANTICS
 _TOPOLOGY_SEMANTICS = as_object_semantics(
     ValueSemantics.immutable_nominal(MVAUParameterTopology, name="MVAUParameterTopology")
 )

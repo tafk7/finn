@@ -38,6 +38,7 @@ from finn.dataflow.design import (
     FindingKind,
     QualifiedPath,
 )
+from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS, local_mvau_assignment_path
 from finn.dataflow.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.definition import (
     MVAUComputeBinding,
@@ -51,9 +52,12 @@ from finn.dataflow.ops.mvau import (
     MVAUConnectionTopology,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
+    MVAUSourceAssociation,
     MVAUSourceDescription,
     MVAUWeightDeliveryDeclaration,
 )
+from finn.dataflow.resolution import ResolvedDataflowOp
+from finn.dataflow.op import DataflowOpError
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterBinding,
     CyclicParameterKernelPaths,
@@ -118,6 +122,7 @@ class MVAUProjectionContext:
     clock_period_ns: float | None = None
     supports_initialized_uram: bool | None = None
     external_weight_sequence: BeatSequence | None = None
+    runtime_writable_weights: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.accumulator_type_analysis_owner:
@@ -200,12 +205,11 @@ class MVAUSourceProjection:
 
 
 @dataclass(frozen=True)
-class MVAUResolvedDesign:
+class MVAUResolvedDesign(ResolvedDataflowOp):
     """A re-created design point and its recomputed selected semantics."""
 
-    engine: Engine
-    point: DesignPoint
     result: DataflowOpResult
+    source_association: MVAUSourceAssociation
     projection: MVAUSourceProjection
 
 
@@ -235,14 +239,13 @@ class MVAUSelectionEnvelope:
         )
 
 
-class MVAUSourceAdapterError(ValueError):
+class MVAUSourceAdapterError(DataflowOpError):
     """Raised when projection or reconstitution cannot preserve its contract."""
 
     def __init__(self, findings: tuple[Finding, ...]) -> None:
-        self.findings = tuple(
-            sorted(findings, key=lambda item: (item.path, item.kind.value, item.code))
-        )
-        super().__init__(f"MVAU source adaptation failed with {len(self.findings)} finding(s)")
+        ordered = tuple(sorted(findings, key=lambda item: (item.path, item.kind.value, item.code)))
+        super().__init__(ordered)
+        self.args = (f"MVAU source adaptation failed with {len(self.findings)} finding(s)",)
 
 
 def _finding(
@@ -354,12 +357,45 @@ def _dsp_block(fpga_part: str) -> MVAUDspBlock | None:
     return MVAUDspBlock.DSP48E2
 
 
+def classify_mvau_dsp_block(fpga_part: str) -> MVAUDspBlock | None:
+    """Classify one FPGA part into the MVAU binding's supported DSP families."""
+
+    return _dsp_block(fpga_part)
+
+
 def _supports_initialized_uram(context: MVAUProjectionContext) -> bool | None:
     if context.supports_initialized_uram is not None:
         return context.supports_initialized_uram
     if context.fpga_part is None:
         return None
     return _dsp_block(context.fpga_part) is MVAUDspBlock.DSP58
+
+
+def project_mvau_build_problem(
+    context: MVAUProjectionContext,
+    *,
+    runtime_writable_weights: bool,
+) -> Mapping[QualifiedPath, object]:
+    """Project MVAU target and invocation facts from explicit build context."""
+
+    problem: dict[QualifiedPath, object] = {
+        CyclicParameterKernelPaths.RUNTIME_WRITABLE: runtime_writable_weights,
+    }
+    target = _dsp_block(context.fpga_part) if context.fpga_part is not None else None
+    if target is not None:
+        problem[MVAUComputeKernelPaths.TARGET_DSP_BLOCK] = target
+    capabilities = _supports_initialized_uram(context)
+    if capabilities is not None:
+        problem[CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES] = (
+            CyclicTargetMemoryCapabilities(capabilities)
+        )
+    if context.external_weight_sequence is not None:
+        problem[MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE] = context.external_weight_sequence
+    if context.fpga_part is not None:
+        problem[MVAUDataflowOpPaths.TARGET_FPGA_PART] = context.fpga_part
+    if context.clock_period_ns is not None:
+        problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS] = context.clock_period_ns
+    return MappingProxyType(problem)
 
 
 def _weights_are_narrow(
@@ -548,7 +584,8 @@ def project_mvau_source(
             )
         )
         return MVAUSourceProjection(None, {}, {}, tuple(findings))
-    if node.op_type not in {"MVAU", "MVAU_hls", "MVAU_rtl"}:
+    logical_node = node.op_type == "MvauDataflowOp" and node.domain == "finn.custom_op.dataflow"
+    if node.op_type not in {"MVAU", "MVAU_hls", "MVAU_rtl"} and not logical_node:
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
@@ -634,16 +671,32 @@ def project_mvau_source(
                 value=str(accumulator_name),
             )
         )
-    mw = cast(int, _attribute_value(node, "MW", 0))
-    mh = cast(int, _attribute_value(node, "MH", 0))
-    pe = cast(int, _attribute_value(node, "PE", 0))
-    simd = cast(int, _attribute_value(node, "SIMD", 0))
-    for value, path, label in (
+    mw = (
+        weight_shape[0]
+        if logical_node and weight_shape is not None and len(weight_shape) == 2
+        else cast(int, _attribute_value(node, "MW", 0))
+    )
+    mh = (
+        weight_shape[1]
+        if logical_node and weight_shape is not None and len(weight_shape) == 2
+        else cast(int, _attribute_value(node, "MH", 0))
+    )
+    dimensions = [
         (mw, MVAUComputeKernelPaths.MATRIX_WIDTH, "MW"),
         (mh, MVAUComputeKernelPaths.MATRIX_HEIGHT, "MH"),
-        (pe, MVAUComputeKernelPaths.PE, "PE"),
-        (simd, MVAUComputeKernelPaths.SIMD, "SIMD"),
-    ):
+    ]
+    if not logical_node:
+        dimensions.extend(
+            (
+                (cast(int, _attribute_value(node, "PE", 0)), MVAUComputeKernelPaths.PE, "PE"),
+                (
+                    cast(int, _attribute_value(node, "SIMD", 0)),
+                    MVAUComputeKernelPaths.SIMD,
+                    "SIMD",
+                ),
+            )
+        )
+    for value, path, label in dimensions:
         if type(value) is not int or value <= 0:
             findings.append(
                 _finding(
@@ -732,8 +785,12 @@ def project_mvau_source(
                 )
             )
 
-    mem_mode = cast(str, _attribute_value(node, "mem_mode", "internal_decoupled"))
-    if mem_mode not in {"internal_embedded", "internal_decoupled", "external"}:
+    mem_mode = (
+        "logical"
+        if logical_node
+        else cast(str, _attribute_value(node, "mem_mode", "internal_decoupled"))
+    )
+    if not logical_node and mem_mode not in {"internal_embedded", "internal_decoupled", "external"}:
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
@@ -743,9 +800,13 @@ def project_mvau_source(
                 mem_mode=mem_mode,
             )
         )
-    runtime_writable = bool(_attribute_value(node, "runtime_writeable_weights", 0))
+    runtime_writable = (
+        bool(_attribute_value(node, "runtime_writeable_weights", 0))
+        if context.runtime_writable_weights is None
+        else context.runtime_writable_weights
+    )
     weight_initialized = model.get_initializer(weight_id) is not None
-    if mem_mode == "internal_embedded" and not weight_initialized:
+    if not logical_node and mem_mode == "internal_embedded" and not weight_initialized:
         findings.append(
             _finding(
                 FindingKind.BLOCKER,
@@ -755,7 +816,11 @@ def project_mvau_source(
                 tensor=weight_id,
             )
         )
-    if mem_mode == "internal_decoupled" and not (weight_initialized or runtime_writable):
+    if (
+        not logical_node
+        and mem_mode == "internal_decoupled"
+        and not (weight_initialized or runtime_writable)
+    ):
         findings.append(
             _finding(
                 FindingKind.BLOCKER,
@@ -765,7 +830,7 @@ def project_mvau_source(
                 tensor=weight_id,
             )
         )
-    interleave = cast(int, _attribute_value(node, "TH", 1))
+    interleave = 1 if logical_node else cast(int, _attribute_value(node, "TH", 1))
     if type(interleave) is not int or interleave <= 0:
         findings.append(
             _finding(
@@ -776,7 +841,11 @@ def project_mvau_source(
                 value=interleave,
             )
         )
-    if interleave > 1 and (node.op_type != "MVAU_rtl" or mem_mode == "internal_embedded"):
+    if (
+        not logical_node
+        and interleave > 1
+        and (node.op_type != "MVAU_rtl" or mem_mode == "internal_embedded")
+    ):
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
@@ -787,7 +856,7 @@ def project_mvau_source(
                 op_type=node.op_type,
             )
         )
-    if not no_activation and node.op_type == "MVAU_rtl":
+    if not logical_node and not no_activation and node.op_type == "MVAU_rtl":
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
@@ -808,7 +877,12 @@ def project_mvau_source(
                 fpga_part=context.fpga_part,
             )
         )
-    if interleave > 1 and target is not None and target is not MVAUDspBlock.DSP58:
+    if (
+        not logical_node
+        and interleave > 1
+        and target is not None
+        and target is not MVAUDspBlock.DSP58
+    ):
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
@@ -846,7 +920,6 @@ def project_mvau_source(
             context.accumulator_type_analysis_owner
         ),
         CyclicParameterKernelPaths.INITIALIZER_AVAILABLE: weight_initialized,
-        CyclicParameterKernelPaths.RUNTIME_WRITABLE: runtime_writable,
     }
     weight_initializer = model.get_initializer(weight_id)
     if weight_initializer is not None:
@@ -869,19 +942,12 @@ def project_mvau_source(
         problem[MVAUComputeKernelPaths.THRESHOLD_ELEMENT_TYPE] = threshold_type
     if threshold_initialized is not None:
         problem[MVAUComputeKernelPaths.THRESHOLD_INITIALIZER_AVAILABLE] = threshold_initialized
-    if target is not None:
-        problem[MVAUComputeKernelPaths.TARGET_DSP_BLOCK] = target
-    capabilities = _supports_initialized_uram(context)
-    if capabilities is not None:
-        problem[CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES] = (
-            CyclicTargetMemoryCapabilities(capabilities)
+    problem.update(
+        project_mvau_build_problem(
+            context,
+            runtime_writable_weights=runtime_writable,
         )
-    if context.external_weight_sequence is not None:
-        problem[MVAUDataflowOpPaths.EXTERNAL_WEIGHT_SEQUENCE] = context.external_weight_sequence
-    if context.fpga_part is not None:
-        problem[MVAUDataflowOpPaths.TARGET_FPGA_PART] = context.fpga_part
-    if context.clock_period_ns is not None:
-        problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS] = context.clock_period_ns
+    )
     assignments: dict[QualifiedPath, object] = {}
     if activation_type is not None and weight_type is not None:
         weights_narrow = _weights_are_narrow(
@@ -892,7 +958,7 @@ def project_mvau_source(
             runtime_writable,
         )
         problem[MVAUComputeKernelPaths.WEIGHTS_NARROW] = weights_narrow
-        if import_mode is MVAULegacyImportMode.PRESERVE_SPECIALIZATION:
+        if not logical_node and import_mode is MVAULegacyImportMode.PRESERVE_SPECIALIZATION:
             assignments = _legacy_assignments(
                 node,
                 mem_mode,
@@ -943,10 +1009,31 @@ def start_mvau_projection(
                 )
             )
         point = committed.point
+    return resolve_mvau_point(engine, point, projection)
+
+
+def resolve_mvau_point(
+    engine: Engine,
+    point: DesignPoint,
+    projection: MVAUSourceProjection,
+    *,
+    source_scope_id: str | None = None,
+) -> MVAUResolvedDesign:
+    """Resolve the MVAU result and source association for one hydrated point."""
+
     result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
     if not isinstance(result, Decided):
         raise MVAUSourceAdapterError(result.findings)
-    return MVAUResolvedDesign(engine, point, cast(DataflowOpResult, result.value), projection)
+    selected = cast(DataflowOpResult, result.value)
+    association = selected.source_association
+    return MVAUResolvedDesign(
+        engine,
+        point,
+        selected,
+        association,
+        source_scope_id or association.source_node_id,
+        projection,
+    )
 
 
 def _canonical_problem_value(value: object) -> object:
@@ -993,51 +1080,14 @@ def mvau_problem_fingerprint(problem: Mapping[QualifiedPath, object]) -> str:
     return sha256(serialized).hexdigest()
 
 
-_ENUM_ASSIGNMENTS: Mapping[QualifiedPath, type[Enum]] = {
-    MVAUComputeKernelPaths.REGION_DECLARATION: MVAURegionDeclaration,
-    MVAUComputeKernelPaths.BINDING: MVAUComputeBinding,
-    MVAUDataflowOpPaths.PARAMETER_TOPOLOGY: MVAUParameterTopology,
-    MVAUDataflowOpPaths.DELIVERY_DECLARATION: MVAUWeightDeliveryDeclaration,
-    MVAUDataflowOpPaths.CONNECTION_TOPOLOGY: MVAUConnectionTopology,
-    CyclicParameterKernelPaths.BINDING: CyclicParameterBinding,
-    CyclicParameterKernelPaths.RAM_STYLE: CyclicRamStyle,
-}
-_INTEGER_ASSIGNMENTS = frozenset(
-    {
-        MVAUComputeKernelPaths.PE,
-        MVAUComputeKernelPaths.SIMD,
-        MVAUComputeKernelPaths.INTERLEAVE,
-        MVAUDataflowOpPaths.DELIVERY_PE,
-        MVAUDataflowOpPaths.DELIVERY_SIMD,
-        MVAUDataflowOpPaths.DELIVERY_INTERLEAVE,
-    }
-)
-_BOOLEAN_ASSIGNMENTS = frozenset(
-    {
-        MVAUComputeKernelPaths.COMPUTE_PUMPING,
-        CyclicParameterKernelPaths.PUMPED_MEMORY,
-    }
-)
-
-
-def _local_assignment_path(path: QualifiedPath) -> QualifiedPath | None:
-    declared = (*_ENUM_ASSIGNMENTS, *_INTEGER_ASSIGNMENTS, *_BOOLEAN_ASSIGNMENTS)
-    matches = tuple(
-        candidate
-        for candidate in declared
-        if path == candidate or path.value.endswith(f".{candidate.value}")
-    )
-    return matches[0] if len(matches) == 1 else None
-
-
 def _encode_assignment(path: QualifiedPath, value: object) -> object:
-    local = _local_assignment_path(path)
-    if local in _ENUM_ASSIGNMENTS and isinstance(value, Enum):
-        return value.value
-    if local in _INTEGER_ASSIGNMENTS and type(value) is int:
-        return value
-    if local in _BOOLEAN_ASSIGNMENTS and type(value) is bool:
-        return value
+    local = local_mvau_assignment_path(path)
+    codec = None if local is None else MVAU_DECISION_NODEATTRS.get(local)
+    if codec is not None:
+        try:
+            return codec.encode_json(value)
+        except (KeyError, TypeError, ValueError):
+            pass
     raise MVAUSourceAdapterError(
         (
             _finding(
@@ -1051,17 +1101,13 @@ def _encode_assignment(path: QualifiedPath, value: object) -> object:
 
 
 def _decode_assignment(path: QualifiedPath, value: object) -> object:
-    local = _local_assignment_path(path)
-    enum_type = None if local is None else _ENUM_ASSIGNMENTS.get(local)
-    if enum_type is not None and isinstance(value, str):
+    local = local_mvau_assignment_path(path)
+    codec = None if local is None else MVAU_DECISION_NODEATTRS.get(local)
+    if codec is not None:
         try:
-            return enum_type(value)
-        except ValueError:
+            return codec.decode_json(value)
+        except (TypeError, ValueError):
             pass
-    if local in _INTEGER_ASSIGNMENTS and type(value) is int:
-        return value
-    if local in _BOOLEAN_ASSIGNMENTS and type(value) is bool:
-        return value
     raise MVAUSourceAdapterError(
         (
             _finding(
@@ -1309,10 +1355,7 @@ def reconstitute_mvau_selection(
         envelope,
         source_scope_id=source_node_id,
     )
-    result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
-    if not isinstance(result, Decided):
-        raise MVAUSourceAdapterError(result.findings)
-    return MVAUResolvedDesign(engine, point, cast(DataflowOpResult, result.value), projection)
+    return resolve_mvau_point(engine, point, projection)
 
 
 __all__ = [
@@ -1326,12 +1369,15 @@ __all__ = [
     "MVAUSourceAdapterError",
     "MVAUSourceMappingEntry",
     "MVAUSourceProjection",
+    "classify_mvau_dsp_block",
     "mvau_problem_fingerprint",
     "make_mvau_selection_envelope",
     "parse_mvau_selection_envelope",
     "project_mvau_source",
+    "project_mvau_build_problem",
     "reconstitute_mvau_selection",
     "reconstitute_mvau_point",
+    "resolve_mvau_point",
     "save_mvau_selection",
     "start_mvau_projection",
     "tensor_value_fingerprint",

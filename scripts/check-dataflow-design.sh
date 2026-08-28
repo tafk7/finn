@@ -32,6 +32,10 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     --explicit-package-bases \
     src/finn/dataflow/_engine \
     src/finn/dataflow/design \
+    src/finn/dataflow/authoring \
+    src/finn/dataflow/op.py \
+    src/finn/dataflow/resolution.py \
+    src/finn/dataflow/testing \
     src/finn/dataflow/region.py \
     src/finn/dataflow/region_profiles.py \
     src/finn/dataflow/region_validation.py \
@@ -42,10 +46,13 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/parameters \
     src/finn/dataflow/ops \
     src/finn/dataflow/mvau_design.py \
+    src/finn/custom_op/dataflow \
     tests/dataflow/engine \
     tests/dataflow/design \
     tests/dataflow/mvau \
     tests/dataflow/parameters \
+    tests/dataflow/synthetic_op.py \
+    tests/dataflow/test_dataflow_op.py \
     tests/dataflow/test_kernel_authoring.py \
     tests/dataflow/test_network.py \
     tests/dataflow/test_network_validation.py \
