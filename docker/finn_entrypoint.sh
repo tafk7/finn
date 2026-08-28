@@ -174,9 +174,18 @@ if [ -f "$VITIS_PATH/settings64.sh" ];then
     source "$XILINX_XRT/setup.sh" || true
     gecho "Found XRT at $XILINX_XRT"
   else
-    recho "XRT not found on $XILINX_XRT, did you skip the download or did the installation fail?"
-    recho "Vitis flows need the build-xrt image tier; dev and build do not ship XRT."
-    exit 1
+    # NOT fatal. The `build` tier ships Vivado/HLS support without XRT on
+    # purpose -- that is the whole reason it exists as a tier separate from
+    # build-xrt -- so a VITIS_PATH pointed at it lands here legitimately.
+    # Exiting killed the container outright, which under sbx surfaces only as
+    # "failed to run sandbox container" with no cause.
+    #
+    # Warn and carry on: HLS synthesis and rtlsim need Vivado, never XRT, and
+    # those still work. A genuine Vitis/Alveo flow fails later with a message
+    # about the thing it actually could not find.
+    yecho "XRT not found at $XILINX_XRT."
+    yecho "Vitis/Alveo flows need the build-xrt tier; dev and build do not ship XRT."
+    yecho "Vivado-only flows (HLS synthesis, rtlsim) are unaffected."
   fi
 else
   yecho "Unable to find $VITIS_PATH/settings64.sh"

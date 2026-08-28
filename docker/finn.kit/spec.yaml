@@ -44,4 +44,49 @@ environment:
 
 commands:
   startup:
+    # user: root because startup commands otherwise run as `agent` (uid 1000),
+    # and both of these touch root-owned paths. Note the dispatcher STOPS on a
+    # failed command, so a command that cannot succeed silently disables every
+    # one after it -- keep these unconditionally safe.
     - command: ["sh", "-c", "mkdir -p /tmp/finn_build && chmod 1777 /tmp/finn_build"]
+      user: root
+
+    # Publish the Xilinx toolchain environment to shell sessions.
+    #
+    # `sbx exec` does not run the image ENTRYPOINT, so the settings64.sh that
+    # finn_entrypoint.sh sources into PID 1 is invisible to every later
+    # session -- `vivado` is simply not on PATH. These variables cannot be
+    # static kit values: sourcing settings64.sh produces a large, install- and
+    # version-dependent set, and the tools are mounted, not baked.
+    #
+    # /etc/sandbox-persistent.sh is sbx-managed and sourced when bash starts,
+    # which covers interactive sessions, `sbx run`, and `bash -c`. A bare
+    # `sh -c` does not source it -- acceptable, because the consumers that
+    # need Vivado are shells and Python (which resolves paths via finn_paths).
+    #
+    # No-op on the dev tier, which mounts no toolchain.
+    - command:
+        - bash
+        - -c
+        - |
+          # NO `set -u`: Xilinx settings64.sh references unset variables and
+          # would abort the shell mid-source, silently producing an empty file.
+          # NO `set -e` either: a non-zero from a vendor script must not stop us.
+          settings=""
+          for p in "${VITIS_PATH:-}" "${VIVADO_PATH:-}" "${HLS_PATH:-}"; do
+            [ -n "$p" ] && [ -f "$p/settings64.sh" ] && settings="$settings $p/settings64.sh"
+          done
+          [ -z "$settings" ] && exit 0
+          for s in $settings; do . "$s" 2>/dev/null || true; done
+          {
+            echo "# Xilinx toolchain env, published by the finn kit at startup."
+            for v in PATH LD_LIBRARY_PATH XILINX_VIVADO XILINX_VITIS XILINX_HLS XILINX_XRT; do
+              eval "val=\${$v:-}"
+              [ -n "$val" ] && printf 'export %s=%q\n' "$v" "$val"
+            done
+          } >> /etc/sandbox-persistent.sh
+          # Explicit success. The block above ends on whatever the last test
+          # returned, and the dispatcher STOPS the whole chain on a non-zero
+          # exit -- which would silently disable any command added after this.
+          exit 0
+      user: root
