@@ -99,9 +99,22 @@ setup:
           done
           [ -z "$settings" ] && exit 0
           for s in $settings; do . "$s" 2>/dev/null || true; done
+          # Set only when a toolchain is actually present, so the dev tier -- which
+          # sources nothing -- never pays for it.
+          udev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
+          [ -n "$udev" ] && export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$udev"
           {
             echo "# Xilinx toolchain env, published by the finn kit at startup."
-            for v in PATH LD_LIBRARY_PATH XILINX_VIVADO XILINX_VITIS XILINX_HLS XILINX_XRT; do
+            # LD_PRELOAD of libudev is a FLEXlm workaround, not decoration.
+            # FLEXlm fingerprints the host through udev_enumerate_scan_devices
+            # during checkout, and in a microVM that corrupts the heap: Vivado
+            # dies with "realloc(): invalid pointer" and SIGABRT the moment it
+            # asks for a licence. Preloading libudev avoids it.
+            #
+            # It has to be published here rather than exported by the
+            # entrypoint, because `sbx exec` never runs the entrypoint -- which
+            # is exactly how it went missing and took synthesis down with it.
+            for v in PATH LD_LIBRARY_PATH LD_PRELOAD XILINX_VIVADO XILINX_VITIS XILINX_HLS XILINX_XRT; do
               eval "val=\${$v:-}"
               [ -n "$val" ] && printf 'export %s=%q\n' "$v" "$val"
             done

@@ -762,8 +762,18 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
     ( IFS=':'; for entry in $lval; do
         case "$entry" in *@*) ;; *) continue ;; esac
         port=${entry%@*}; host=${entry#*@}
-        gecho "Allowing licence server egress: $host:$port"
-        sbx policy allow network --sandbox "$SBX_NAME" "$host:$port" >/dev/null 2>&1
+        # HOST, not HOST:PORT. FLEXlm needs TWO connections: lmgrd on the
+        # advertised port is only a directory service, and it hands back a
+        # second, usually ephemeral port for the vendor daemon (xilinxd) where
+        # the actual checkout happens. A port-scoped rule lets `lmutil lmstat`
+        # succeed -- it only ever talks to lmgrd -- while every real checkout
+        # fails with "A valid license was not found", which is a thoroughly
+        # misleading error for a firewall problem.
+        #
+        # Still far narrower than an open posture: one internal host, not the
+        # routable range. Do not "tighten" this back to :$port.
+        gecho "Allowing licence server egress: $host (advertised port $port, plus the vendor daemon)"
+        sbx policy allow network --sandbox "$SBX_NAME" "$host" >/dev/null 2>&1
       done )
   done
 
