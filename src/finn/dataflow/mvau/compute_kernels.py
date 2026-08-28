@@ -45,7 +45,7 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.kernels import (
-    Kernel,
+    KernelDeclaration,
     KernelDemand,
     KernelExport,
     KernelProvider,
@@ -559,7 +559,7 @@ def _hls_threshold_supported(dependencies: DependencyView) -> Answer[bool]:
     return Decided(cast(NumericElementType, threshold).bit_width >= accumulator.bit_width)
 
 
-def build_legacy_hls_mvau_kernel() -> Kernel:
+def build_legacy_hls_mvau_kernel() -> KernelDeclaration:
     """The existing FINN HLS matrix-vector-activation microarchitecture."""
 
     paths = LEGACY_HLS_PATHS
@@ -630,7 +630,7 @@ def build_legacy_hls_mvau_kernel() -> Kernel:
         paths.constraint("numeric_supported"),
         paths.constraint("threshold_representable"),
     )
-    return Kernel(
+    return KernelDeclaration(
         MVAUComputeKernelId.LEGACY_HLS.value,
         "1",
         spec,
@@ -798,7 +798,7 @@ def _build_standard_rtl_kernel(
     extra_constraint_paths: tuple[QualifiedPath, ...],
     extra_source_admission: tuple[QualifiedPath, ...],
     providers: tuple[KernelProvider, ...],
-) -> Kernel:
+) -> KernelDeclaration:
     paths = MVAUComputeKernelPathSet(kernel_id)
     pumping_ref = DependencyRef.decision("compute_pumping", paths.compute_pumping, _BOOL)
     spec = DesignSpaceSpec(
@@ -828,7 +828,7 @@ def _build_standard_rtl_kernel(
         ),
     )
     source_admission = (*_rtl_source_admission_paths(paths), *extra_source_admission)
-    return Kernel(
+    return KernelDeclaration(
         kernel_id,
         "1",
         spec,
@@ -878,7 +878,7 @@ def _dsp48e1_narrow_supported(dependencies: DependencyView) -> Answer[bool]:
     return Decided(cast(bool, narrow))
 
 
-def build_soft_vector_mvau_kernel() -> Kernel:
+def build_soft_vector_mvau_kernel() -> KernelDeclaration:
     """RTL soft-vector accumulation over a standard streamed Region."""
 
     paths = SOFT_VECTOR_PATHS
@@ -934,7 +934,7 @@ def _packed_supported(dependencies: DependencyView) -> Answer[bool]:
     return Decided(lanes <= 3)
 
 
-def build_packed_dsp_mvau_kernel() -> Kernel:
+def build_packed_dsp_mvau_kernel() -> KernelDeclaration:
     """Packed DSP accumulation over a standard streamed Region."""
 
     paths = PACKED_DSP_PATHS
@@ -1064,7 +1064,7 @@ def _always_batch_interleaved(_dependencies: DependencyView) -> Answer[object]:
     return Decided(MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED)
 
 
-def build_batch_interleaved_dsp_mvau_kernel() -> Kernel:
+def build_batch_interleaved_dsp_mvau_kernel() -> KernelDeclaration:
     """Batch-interleaved DSP58 accumulation and its own chunked weight demand."""
 
     paths = BATCH_INTERLEAVED_PATHS
@@ -1110,7 +1110,7 @@ def build_batch_interleaved_dsp_mvau_kernel() -> Kernel:
         paths.constraint("tiled_width_supported"),
         paths.constraint("interleave_available"),
     )
-    return Kernel(
+    return KernelDeclaration(
         paths.kernel_id,
         "1",
         spec,

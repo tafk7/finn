@@ -20,7 +20,7 @@ from finn.dataflow.design import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.kernels import Kernel, KernelSelection
+from finn.dataflow.kernels import KernelDeclaration, KernelSelection
 from finn.dataflow.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     MVAU_COMPUTE_SELECTION,
@@ -66,7 +66,7 @@ def _compute_problem_fields() -> DesignSpaceSpec:
     return compute_pool_context()
 
 
-def _placed_selection(instance_id: str) -> tuple[KernelSelection, Kernel]:
+def _placed_selection(instance_id: str) -> tuple[KernelSelection, KernelDeclaration]:
     """Place the soft-vector Kernel under its own prefix as a one-member pool."""
 
     placed = SOFT_VECTOR_MVAU_KERNEL.place(instance_id)

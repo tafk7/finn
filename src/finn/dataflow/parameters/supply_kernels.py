@@ -39,7 +39,7 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
-from finn.dataflow.kernels import Kernel, KernelExport, KernelProvider, KernelSelection
+from finn.dataflow.kernels import KernelDeclaration, KernelExport, KernelProvider, KernelSelection
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterKernelPaths,
     CyclicRamStyle,
@@ -261,7 +261,7 @@ def _uram_initialization_supported(
 
 def build_finn_rtl_memstream_kernel(
     demand_ref: DependencyRef, full_tile_ref: DependencyRef
-) -> Kernel:
+) -> KernelDeclaration:
     """The existing FINN RTL cyclic memory streamer."""
 
     paths = MVAUWeightSupplyKernelPathSet(MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value)
@@ -287,7 +287,7 @@ def build_finn_rtl_memstream_kernel(
             Constraint(paths.constraint("pumping_supported"), _pumping_supported(paths)),
         ),
     )
-    return Kernel(
+    return KernelDeclaration(
         paths.kernel_id,
         "1",
         spec,
@@ -305,7 +305,7 @@ def build_finn_rtl_memstream_kernel(
 
 def build_finnlib_memstream_kernel(
     demand_ref: DependencyRef, full_tile_ref: DependencyRef
-) -> Kernel:
+) -> KernelDeclaration:
     """The FinnLib HLS memory-to-stream mechanism.
 
     It is a different microarchitecture from the FINN RTL streamer even where
@@ -329,7 +329,7 @@ def build_finnlib_memstream_kernel(
             ),
         ),
     )
-    return Kernel(
+    return KernelDeclaration(
         paths.kernel_id,
         "1",
         spec,

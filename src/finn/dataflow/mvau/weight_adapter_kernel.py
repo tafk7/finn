@@ -30,7 +30,7 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
-from finn.dataflow.kernels import Kernel, KernelSelection
+from finn.dataflow.kernels import KernelDeclaration, KernelSelection
 from finn.dataflow.mvau.weight_adapter import (
     construct_weight_sequence_adapter_region,
     weight_sequence_adapter_applicable,
@@ -54,7 +54,9 @@ _APPLICABLE_PATH = QualifiedPath(
 )
 
 
-def build_mvau_weight_adapter_kernel(source_ref: DependencyRef, sink_ref: DependencyRef) -> Kernel:
+def build_mvau_weight_adapter_kernel(
+    source_ref: DependencyRef, sink_ref: DependencyRef
+) -> KernelDeclaration:
     """Build the adapter Kernel over one supplier output and one compute demand."""
 
     if source_ref.name != "source_port" or sink_ref.name != "sink_port":
@@ -91,7 +93,7 @@ def build_mvau_weight_adapter_kernel(source_ref: DependencyRef, sink_ref: Depend
             Constraint(_APPLICABLE_PATH, EvaluatorSpec((source_ref, sink_ref), applicable)),
         ),
     )
-    return Kernel(
+    return KernelDeclaration(
         FULL_TILE_TO_CHUNKED,
         "1",
         spec,

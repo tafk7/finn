@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase 1 gate: Op -> Kernel pool -> selected Kernel -> Region."""
+"""Phase 1 gate: Op -> KernelDeclaration pool -> selected Kernel -> Region."""
 
 from __future__ import annotations
 
@@ -25,11 +25,11 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.kernels import (
     NO_KERNEL,
-    Kernel,
+    KernelDeclaration,
     KernelDemand,
     KernelSelection,
     SelectedKernel,
-    kernel_instance,
+    bind_kernel,
     selected_kernel,
 )
 from finn.dataflow.region import DataflowRegion, Port
@@ -191,14 +191,14 @@ def test_an_optional_pool_may_select_no_kernel() -> None:
 def test_a_kernel_must_declare_its_region_property() -> None:
     even = PAIRED_SELECTION.kernel("even")
     with pytest.raises(SpecAuthoringError) as caught:
-        Kernel("broken", "1", even.spec, QualifiedPath("semantic.paired.missing"))
+        KernelDeclaration("broken", "1", even.spec, QualifiedPath("semantic.paired.missing"))
     assert "kernel-region-path-missing" in {issue.code for issue in caught.value.issues}
 
 
 def test_a_demand_must_name_a_declared_port_property() -> None:
     even = PAIRED_SELECTION.kernel("even")
     with pytest.raises(SpecAuthoringError) as caught:
-        Kernel(
+        KernelDeclaration(
             "broken",
             "1",
             even.spec,
@@ -276,7 +276,7 @@ def test_a_pool_backed_operation_passes_the_conformance_harness(
 
 def test_a_selected_kernel_binds_to_its_region_demands_and_providers() -> None:
     engine, point = _point("even", 2)
-    instance = kernel_instance(engine, PAIRED_SELECTION, point)
+    instance = bind_kernel(engine, PAIRED_SELECTION, point)
     assert isinstance(instance, Decided)
     bound = instance.value
     assert bound.id == "even"
@@ -292,7 +292,7 @@ def test_a_selected_kernel_binds_to_its_region_demands_and_providers() -> None:
 
 def test_the_bound_instance_carries_only_its_own_local_choices() -> None:
     engine, point = _point("any", 3)
-    instance = kernel_instance(engine, PAIRED_SELECTION, point)
+    instance = bind_kernel(engine, PAIRED_SELECTION, point)
     assert isinstance(instance, Decided)
     assert instance.value.assignments == {QualifiedPath("paired.any.lanes"): 3}
     assert instance.value.demands == {}

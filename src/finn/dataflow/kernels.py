@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import cast
+from typing import TYPE_CHECKING, Any, cast
 
 from finn.dataflow.design import (
     ABSENT,
@@ -60,6 +60,9 @@ from finn.dataflow.spec_algebra import (
     rebase_spec,
     spec_declaration_paths,
 )
+
+if TYPE_CHECKING:  # the authoring scope imports this module, not the reverse
+    from finn.dataflow.authoring.kernel_design import KernelDesign
 
 #: Reserved pool member naming "no Kernel is selected for this interface".
 NO_KERNEL = "none"
@@ -119,7 +122,7 @@ class SelectedKernel:
     This is the small durable value: what a design point records and what
     provenance and evidence quote.  It is deliberately not the working object
     -- for the Kernel as selected and configured in one operation, with its
-    Region, demands, and providers attached, see :class:`KernelInstance`.
+    Region, demands, and providers attached, see :class:`Kernel`.
     """
 
     selection: str
@@ -133,8 +136,16 @@ SELECTED_KERNEL_SEMANTICS = as_object_semantics(
 
 
 @dataclass(frozen=True)
-class Kernel:
-    """One microarchitecture family and everything it owns locally."""
+class KernelDeclaration:
+    """Everything one Kernel owns locally, as ordinary engine declarations.
+
+    This is the static half of a Kernel: what it declares, before any point
+    exists.  It is a value rather than the class so that the same Kernel can
+    be placed under several namespaces, each placement being a different set
+    of paths over the same authored design.  ``owner`` records the class that
+    authored it, so a resolved selection can hand back an instance of exactly
+    that class.
+    """
 
     id: str
     version: str
@@ -145,6 +156,7 @@ class Kernel:
     demands: tuple[KernelDemand, ...] = ()
     exports: tuple[KernelExport, ...] = ()
     providers: tuple[KernelProvider, ...] = ()
+    owner: type[Kernel] | None = None
 
     def __post_init__(self) -> None:
         issues: list[SpecAuthoringIssue] = []
@@ -276,7 +288,7 @@ class Kernel:
         prefix: QualifiedPath | str,
         *,
         shared_problem_paths: Mapping[QualifiedPath, QualifiedPath] | None = None,
-    ) -> Kernel:
+    ) -> KernelDeclaration:
         """Return the same Kernel with every local path rebased under a prefix.
 
         Problem fields stay Kernel-local unless the caller explicitly maps one
@@ -302,7 +314,7 @@ class Kernel:
             path: shared.get(path, prefixed(base, path))
             for path in spec_declaration_paths(self.spec)
         }
-        return Kernel(
+        return KernelDeclaration(
             self.id,
             self.version,
             rebase_spec(
@@ -320,6 +332,7 @@ class Kernel:
                 for item in self.exports
             ),
             self.providers,
+            self.owner,
         )
 
 
@@ -383,7 +396,7 @@ class KernelSelection:
     """
 
     name: str
-    kernels: tuple[Kernel, ...]
+    kernels: tuple[KernelDeclaration, ...]
     optional: bool = False
     applies_if: EvaluatorSpec[Answer[bool]] | None = None
 
@@ -450,7 +463,7 @@ class KernelSelection:
     def feasibility_constraint_set(self) -> str:
         return f"{self.name}.feasibility"
 
-    def kernel(self, kernel_id: str) -> Kernel:
+    def kernel(self, kernel_id: str) -> KernelDeclaration:
         for candidate in self.kernels:
             if candidate.id == kernel_id:
                 return candidate
@@ -732,36 +745,70 @@ class KernelSelection:
         )
 
 
-@dataclass(frozen=True)
-class KernelInstance:
-    """One Kernel as selected and configured in one operation scope.
+class Kernel:
+    """One Kernel: the family a contributor declares, and one selected instance.
 
-    This is the operation-bound view the design calls a Kernel instance: the
-    static Kernel it was selected from, the local choices that configured it,
-    the one Region it derives, what it demands, and who can build it.  It is
-    derived from a design point, never selected -- there is exactly one
-    identity axis, and :class:`SelectedKernel` names it.
+    Subclass it to declare a microarchitecture family.  A subclass carries a
+    stable ``id`` and ``version`` and one ``define_design`` hook; calling
+    ``declare`` runs that hook under a namespace and returns the ordinary
+    engine declarations it produced.
+
+    An *instance* is that Kernel as selected and configured in one operation
+    point: the choices that configured it, the one Region it derives, what it
+    demands, what it exports, and who can build it.  Binding a resolved
+    selection returns an instance of the subclass that declared it, so a
+    consumer that knows which family it asked for gets the type it expects and
+    nothing has to be downcast from a generic bag.
+
+    There is one identity axis, named by :class:`SelectedKernel`; an instance
+    is derived from a point, never selected.
     """
 
-    kernel: Kernel
-    selection: str
-    point: DesignPoint
-    assignments: Mapping[QualifiedPath, object]
-    region: DataflowRegion
-    demands: Mapping[str, Port]
-    exports: Mapping[str, object]
+    #: Stable identity of the family.  A subclass sets both.
+    id: str = ""
+    version: str = "1"
 
-    @property
-    def id(self) -> str:
-        return self.kernel.id
+    # -- declaration authority ---------------------------------------------
 
-    @property
-    def version(self) -> str:
-        return self.kernel.version
+    @classmethod
+    def define_design(cls, design: KernelDesign[Any]) -> None:
+        """Declare this Kernel's decisions, properties, and constraints.
+
+        The scope carries the typed inputs the owning operation wired in, so a
+        subclass narrows the parameter to its own input bundle.  The base
+        cannot know that type -- a pool is the thing that pairs Kernels with
+        inputs -- which is what the ``Any`` records.
+        """
+
+        raise NotImplementedError(f"{cls.__name__} does not define a design")
+
+    # -- one bound instance -------------------------------------------------
+
+    def __init__(
+        self,
+        declaration: KernelDeclaration,
+        selection: str,
+        point: DesignPoint,
+        assignments: Mapping[QualifiedPath, object],
+        region: DataflowRegion,
+        demands: Mapping[str, Port],
+        exports: Mapping[str, object],
+    ) -> None:
+        self.declaration = declaration
+        self.selection = selection
+        self.point = point
+        self.assignments = assignments
+        self.region = region
+        self.demands = demands
+        self.exports = exports
+        # Instance attributes shadow the class-level family identity, so a
+        # generically bound Kernel still answers correctly.
+        self.id = declaration.id
+        self.version = declaration.version
 
     @property
     def providers(self) -> tuple[KernelProvider, ...]:
-        return self.kernel.providers
+        return self.declaration.providers
 
     @property
     def identity(self) -> SelectedKernel:
@@ -769,34 +816,40 @@ class KernelInstance:
 
         return SelectedKernel(self.selection, self.id, self.version)
 
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(id={self.id!r}, selection={self.selection!r})"
 
-def kernel_instance(
-    engine: Engine, selection: KernelSelection, point: DesignPoint
-) -> Answer[KernelInstance]:
-    """Bind the selected Kernel of one pool to everything it derived."""
+
+def bind_kernel(engine: Engine, selection: KernelSelection, point: DesignPoint) -> Answer[Kernel]:
+    """Bind the selected Kernel of one pool to everything it derived.
+
+    The returned object is an instance of the class that declared the selected
+    Kernel, or of ``Kernel`` itself for a declaration authored without one.
+    """
 
     identity = selected_kernel(engine, selection, point)
     if not isinstance(identity, Decided):
         return identity
-    kernel = selection.kernel(identity.value.kernel_id)
+    declaration = selection.kernel(identity.value.kernel_id)
     paths = selection.paths
     region = engine.query_property(point, paths.region)
     if not isinstance(region, Decided):
         return region
     demands: dict[str, Port] = {}
-    for interface in kernel.demand_interfaces:
+    for interface in declaration.demand_interfaces:
         answer = engine.query_property(point, paths.demand(interface))
         if isinstance(answer, Decided):
             demands[interface] = cast(Port, answer.value)
     exports: dict[str, object] = {}
-    for name in kernel.export_names:
+    for name in declaration.export_names:
         answer = engine.query_property(point, paths.export(name))
         if isinstance(answer, Decided):
             exports[name] = answer.value
-    own = {item.path for item in kernel.spec.decisions}
+    own = {item.path for item in declaration.spec.decisions}
+    bound = declaration.owner or Kernel
     return Decided(
-        KernelInstance(
-            kernel,
+        bound(
+            declaration,
             selection.name,
             point,
             {path: value for path, value in point.assignments.items() if path in own},
@@ -813,7 +866,7 @@ def admissible_kernels(
     """Return the pool members whose source-admission constraints hold.
 
     Every source-admission constraint is decision-free by construction (see
-    ``Kernel._source_admission_issues``), so evaluating them against the
+    ``KernelDeclaration._source_admission_issues``), so evaluating them against the
     problem is the whole existential question -- there is no local completion
     left to witness.  Target feasibility is deliberately not asked here; it is
     a selection-time query, and asking it now would make inference coverage
@@ -874,14 +927,14 @@ __all__ = [
     "SELECTED_KERNEL_SEMANTICS",
     "Kernel",
     "KernelDemand",
-    "KernelInstance",
+    "KernelDeclaration",
     "KernelExport",
     "KernelProvider",
     "KernelSelection",
     "KernelSelectionPaths",
     "SelectedKernel",
     "admissible_kernels",
-    "kernel_instance",
+    "bind_kernel",
     "provider_of",
     "selected_kernel",
 ]

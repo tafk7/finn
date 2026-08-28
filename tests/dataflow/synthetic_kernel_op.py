@@ -38,7 +38,7 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.kernels import (
     SELECTED_KERNEL_SEMANTICS,
-    Kernel,
+    KernelDeclaration,
     KernelDemand,
     KernelProvider,
     KernelSelection,
@@ -124,7 +124,7 @@ def _build_kernel(
     lane_values: tuple[object, ...],
     demands_parameter: bool,
     providers: tuple[str, ...],
-) -> Kernel:
+) -> KernelDeclaration:
     lanes = QualifiedPath(f"paired.{kernel_id}.lanes")
     region = QualifiedPath(f"semantic.paired.{kernel_id}.region")
     demand = QualifiedPath(f"semantic.paired.{kernel_id}.parameter_demand")
@@ -172,7 +172,7 @@ def _build_kernel(
             Constraint(extent_admitted, EvaluatorSpec((extent_ref,), extent_is_admitted)),
         ),
     )
-    return Kernel(
+    return KernelDeclaration(
         kernel_id,
         "1",
         spec,
