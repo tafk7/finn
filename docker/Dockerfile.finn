@@ -392,6 +392,12 @@ RUN set -eu; \
     useradd --create-home --uid 1000 --shell /bin/bash agent 2>/dev/null || true; \
     usermod -aG sudo agent 2>/dev/null || true; \
     echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
+    # Proxy variables must survive sudo -- an explicit requirement of the sbx
+    # template contract. Ubuntu ships these env_keep lines commented out, so
+    # without this anything the agent runs under sudo silently loses its proxy
+    # configuration and its network calls fail in a way that looks like an
+    # egress-policy denial. Mirrors docker/sandbox-templates.
+    echo 'Defaults:%sudo env_keep += "http_proxy https_proxy ftp_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY SSL_CERT_FILE NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE JAVA_TOOL_OPTIONS"' >> /etc/sudoers.d/agent; \
     chmod 0440 /etc/sudoers.d/agent; \
     touch /etc/sandbox-persistent.sh; \
     chmod 0644 /etc/sandbox-persistent.sh; \
