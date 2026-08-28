@@ -67,4 +67,5 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/test_mvau_op.py \
     tests/dataflow/test_kernel_pool.py \
     tests/dataflow/test_mvau_inference.py \
-    tests/dataflow/test_dataflow_selection.py
+    tests/dataflow/test_dataflow_selection.py \
+    tests/dataflow/test_op_kernel_waterfall_acceptance.py
