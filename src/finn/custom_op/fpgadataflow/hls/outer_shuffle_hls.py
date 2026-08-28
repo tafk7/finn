@@ -91,7 +91,7 @@ class OuterShuffle_hls(OuterShuffle, HLSBackend):
             #pragma HLS stream variable=dst0 depth=2
 
             move(in0_V, src0);
-            input_gen<-1,{np.prod(out_shape)},{','.join(map(str,interleaved))}>(src0, dst0);
+            input_gen<-1,{np.prod(out_shape)},{",".join(map(str, interleaved))}>(src0, dst0);
             move(dst0, out0_V);
 
             """

@@ -450,14 +450,12 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         # go down into dataflow partition to get folded shape info etc
         # TODO consider setting these as attributes during dataflow partitioning
         i_consumer = model.find_consumer(i_tensor_name)
-        assert (
-            i_consumer.op_type == "StreamingDataflowPartition"
-        ), """
+        assert i_consumer.op_type == "StreamingDataflowPartition", """
             Ensure CreateDataflowPartition called before driver creation."""
         first_df_model = ModelWrapper(getCustomOp(i_consumer).get_nodeattr("model"))
-        assert (
-            first_df_model.graph.node[0].op_type == "IODMA_hls"
-        ), "First partition must hold input IODMA"
+        assert first_df_model.graph.node[0].op_type == "IODMA_hls", (
+            "First partition must hold input IODMA"
+        )
         successors = model.find_direct_successors(i_consumer)
         successor_input_num = list(successors[0].input).index(i_consumer.output[0])
         successor_sdp = getCustomOp(successors[0])
@@ -490,9 +488,7 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         # go down into IODMA partition to get folded shape info etc
         # TODO consider setting these as attributes during dataflow partitioning
         o_producer = model.find_producer(o_tensor_name)
-        assert (
-            o_producer.op_type == "StreamingDataflowPartition"
-        ), """
+        assert o_producer.op_type == "StreamingDataflowPartition", """
             Ensure CreateDataflowPartition called before driver creation."""
         df_model = ModelWrapper(getCustomOp(o_producer).get_nodeattr("model"))
         assert df_model.graph.node[-1].op_type == "IODMA_hls", "Partition must hold output IODMA"

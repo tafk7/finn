@@ -415,9 +415,7 @@ class Thresholding_rtl(Thresholding, RTLBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
 
     def code_generation_ipi(self):
@@ -602,9 +600,9 @@ class Thresholding_rtl(Thresholding, RTLBackend):
             # Only update if the new datatype is wider
             if new_tdt.bitwidth() > tdt.bitwidth():
                 threshold_tensor = self.get_hw_compatible_threshold_tensor(thresholds)
-                assert np.vectorize(new_tdt.allowed)(
-                    threshold_tensor
-                ).all(), "Thresholds can't be expressed with type %s" % str(new_tdt)
+                assert np.vectorize(new_tdt.allowed)(threshold_tensor).all(), (
+                    "Thresholds can't be expressed with type %s" % str(new_tdt)
+                )
                 self.set_nodeattr("weightDataType", new_tdt.name)
                 model.set_tensor_datatype(self.onnx_node.input[1], new_tdt)
                 return new_tdt

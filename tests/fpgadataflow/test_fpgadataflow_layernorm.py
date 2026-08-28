@@ -498,25 +498,25 @@ def test_hls_rtl_dsp_conflict_detection():
 
     # Check that the warning log file was created in the verification folder
     stitched_conflict_file = os.path.join(verif_dir, "stitched_ip_rtlsim_SKIPPED_DSP_CONFLICT.txt")
-    assert os.path.isfile(
-        stitched_conflict_file
-    ), f"Expected DSP conflict log file at {stitched_conflict_file}"
+    assert os.path.isfile(stitched_conflict_file), (
+        f"Expected DSP conflict log file at {stitched_conflict_file}"
+    )
     cppsim_success = os.path.join(verif_dir, "verify_folded_hls_cppsim_0_SUCCESS.npy")
-    assert os.path.isfile(
-        cppsim_success
-    ), f"cppsim verification should have passed - check {verif_dir}"
+    assert os.path.isfile(cppsim_success), (
+        f"cppsim verification should have passed - check {verif_dir}"
+    )
 
     # Verify node_by_node_rtlsim passed (not affected by DSP conflict for non-MLO)
     rtlsim_success = os.path.join(verif_dir, "verify_node_by_node_rtlsim_0_SUCCESS.npy")
-    assert os.path.isfile(
-        rtlsim_success
-    ), f"node_by_node_rtlsim verification should have passed - check {verif_dir}"
+    assert os.path.isfile(rtlsim_success), (
+        f"node_by_node_rtlsim verification should have passed - check {verif_dir}"
+    )
 
     # Verify that stitched_ip_rtlsim was skipped (no SUCCESS file)
     stitched_success = os.path.join(verif_dir, "verify_stitched_ip_rtlsim_0_SUCCESS.npy")
-    assert not os.path.isfile(
-        stitched_success
-    ), "stitched_ip_rtlsim should have been skipped due to DSP conflict"
+    assert not os.path.isfile(stitched_success), (
+        "stitched_ip_rtlsim should have been skipped due to DSP conflict"
+    )
 
 
 def create_layernorm_threshold_mul_model(ishape):
@@ -695,29 +695,29 @@ def test_integer_hls_elementwise_no_dsp_conflict():
 
     # Check that layers were specialized as expected:
     intermediate_model_path = tmp_output_dir + "/intermediate_models/step_specialize_layers.onnx"
-    assert os.path.isfile(
-        intermediate_model_path
-    ), f"Intermediate model not found at {intermediate_model_path}"
+    assert os.path.isfile(intermediate_model_path), (
+        f"Intermediate model not found at {intermediate_model_path}"
+    )
     specialized_model = ModelWrapper(intermediate_model_path)
     op_types = [n.op_type for n in specialized_model.graph.node]
 
     # Check LayerNorm is RTL
     ln_rtl_nodes = specialized_model.get_nodes_by_op_type("LayerNorm_rtl")
-    assert (
-        len(ln_rtl_nodes) == 1
-    ), f"Expected exactly 1 LayerNorm_rtl, found {len(ln_rtl_nodes)}. Op types: {op_types}"
+    assert len(ln_rtl_nodes) == 1, (
+        f"Expected exactly 1 LayerNorm_rtl, found {len(ln_rtl_nodes)}. Op types: {op_types}"
+    )
 
     # Check Thresholding is RTL
     thr_rtl_nodes = specialized_model.get_nodes_by_op_type("Thresholding_rtl")
-    assert (
-        len(thr_rtl_nodes) == 1
-    ), f"Expected exactly 1 Thresholding_rtl, found {len(thr_rtl_nodes)}. Op types: {op_types}"
+    assert len(thr_rtl_nodes) == 1, (
+        f"Expected exactly 1 Thresholding_rtl, found {len(thr_rtl_nodes)}. Op types: {op_types}"
+    )
 
     # Check ElementwiseMul is HLS
     mul_hls_nodes = specialized_model.get_nodes_by_op_type("ElementwiseMul_hls")
-    assert (
-        len(mul_hls_nodes) == 1
-    ), f"Expected exactly 1 ElementwiseMul_hls, found {len(mul_hls_nodes)}. Op types: {op_types}"
+    assert len(mul_hls_nodes) == 1, (
+        f"Expected exactly 1 ElementwiseMul_hls, found {len(mul_hls_nodes)}. Op types: {op_types}"
+    )
 
     # Check that NO DSP conflict warning was issued
     dsp_conflict_warnings = [
@@ -731,12 +731,12 @@ def test_integer_hls_elementwise_no_dsp_conflict():
     # Verify that stitched_ip_rtlsim ran successfully (was NOT skipped)
     verif_dir = tmp_output_dir + "/verification_output"
     stitched_success = os.path.join(verif_dir, "verify_stitched_ip_rtlsim_0_SUCCESS.npy")
-    assert os.path.isfile(
-        stitched_success
-    ), f"stitched_ip_rtlsim should have run (not skipped) and passed - check {verif_dir}"
+    assert os.path.isfile(stitched_success), (
+        f"stitched_ip_rtlsim should have run (not skipped) and passed - check {verif_dir}"
+    )
 
     # Verify no conflict log file was created
     stitched_conflict_file = os.path.join(verif_dir, "stitched_ip_rtlsim_SKIPPED_DSP_CONFLICT.txt")
-    assert not os.path.isfile(
-        stitched_conflict_file
-    ), f"No DSP conflict log file should exist at {stitched_conflict_file}"
+    assert not os.path.isfile(stitched_conflict_file), (
+        f"No DSP conflict log file should exist at {stitched_conflict_file}"
+    )

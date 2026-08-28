@@ -133,6 +133,6 @@ def test_set_folding(target_fps, platform):
     min_cycles["Ultra96"] = 64
     min_cycles["U200"] = 1
 
-    assert achieved_cycles_per_frame <= max(
-        min_cycles[platform], target_cycles_per_frame
-    ), "Folding target not met"
+    assert achieved_cycles_per_frame <= max(min_cycles[platform], target_cycles_per_frame), (
+        "Folding target not met"
+    )

@@ -123,9 +123,7 @@ class InsertFIFO(Transformation):
                             if inp == output_name:
                                 fld_shape_2 = n1.get_folded_input_shape(ind=idx)
                                 idx_inp = idx
-                        assert _suitable_folded_shapes(
-                            fld_shape, fld_shape_2
-                        ), """The
+                        assert _suitable_folded_shapes(fld_shape, fld_shape_2), """The
                         folded output shape of the first node is not the same as the
                         folded output shape of the second node. A streaming fifo can't
                         be implemented in between these nodes."""

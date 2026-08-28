@@ -151,9 +151,7 @@ def test_fpgadataflow_checksum():
     model = model.transform(GiveReadableTensorNames())
     model = model.transform(InferShapes())
 
-    assert (
-        len(model.get_nodes_by_op_type("CheckSum_hls")) == 2
-    ), """Insertion of
+    assert len(model.get_nodes_by_op_type("CheckSum_hls")) == 2, """Insertion of
         checksum layers was unsuccessful"""
 
     # to verify the functionality of the checksum layer
@@ -215,13 +213,9 @@ def test_fpgadataflow_checksum():
     checksum0_drain = int(drain[0])
     checksum1_drain = int(drain[1])
 
-    assert (
-        checksum0_rtlsim == checksum0_cppsim
-    ), """The first checksums do not
+    assert checksum0_rtlsim == checksum0_cppsim, """The first checksums do not
         match in cppsim vs. rtlsim"""
-    assert (
-        checksum1_rtlsim == checksum1_cppsim
-    ), """The second checksums do not
+    assert checksum1_rtlsim == checksum1_cppsim, """The second checksums do not
         match in cppsim vs. rtlsim"""
 
     assert checksum0_drain == 0, "Drain read doesn't match drain write for first checksum"

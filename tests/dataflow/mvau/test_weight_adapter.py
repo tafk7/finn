@@ -7,17 +7,30 @@ from collections import Counter
 
 import pytest
 
-from finn.dataflow.design import Decided, Engine
-from finn.dataflow.kernel import instantiate_kernel
+from finn.dataflow.design import (
+    Absent,
+    Decided,
+    DependencyRef,
+    DesignSpaceSpec,
+    Engine,
+    ProblemField,
+    ProblemSchema,
+    QualifiedPath,
+    ValueSemantics,
+    as_object_semantics,
+)
+from finn.dataflow.kernels import NO_KERNEL, KernelSelection, SelectedKernel
 from finn.dataflow.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port,
     construct_standard_mvau_weight_port,
 )
 from finn.dataflow.mvau.weight_adapter import (
-    MVAU_WEIGHT_ADAPTER_KERNEL,
-    MVAUWeightAdapterKernelPaths,
     construct_weight_sequence_adapter_region,
     weight_sequence_adapter_applicable,
+)
+from finn.dataflow.mvau.weight_adapter_kernel import (
+    FULL_TILE_TO_CHUNKED,
+    build_mvau_weight_adapter_selection,
 )
 from finn.dataflow.network import (
     DataflowNetwork,
@@ -39,6 +52,7 @@ from finn.dataflow.region import (
     ScheduledInputRequirements,
 )
 from finn.dataflow.region_validation import validate_region
+from finn.dataflow.spec_algebra import assemble_specs
 
 INT8 = NumericElementType("int", 8)
 
@@ -142,36 +156,111 @@ def test_adapter_rejects_different_tensor_images() -> None:
         construct_weight_sequence_adapter_region(full, invalid)
 
 
-def test_adapter_is_a_bindingless_reusable_kernel_definition() -> None:
+def test_the_adapter_is_an_ordinary_optional_kernel() -> None:
     full, chunked = _ports()
+    source = QualifiedPath("problem.test.adapter_source")
+    sink = QualifiedPath("problem.test.adapter_sink")
+    port_semantics = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
+    selection = build_mvau_weight_adapter_selection(
+        DependencyRef.problem("source_port", source, port_semantics),
+        DependencyRef.problem("sink_port", sink, port_semantics),
+    )
+    spec = assemble_specs(
+        (
+            selection.build_spec(),
+            DesignSpaceSpec(
+                ProblemSchema(
+                    (ProblemField(source, port_semantics), ProblemField(sink, port_semantics))
+                )
+            ),
+        )
+    )
     engine = Engine()
-    space = engine.validate(MVAU_WEIGHT_ADAPTER_KERNEL.spec)
-    point = engine.start(
-        space,
-        {
-            MVAUWeightAdapterKernelPaths.SOURCE_PORT: full,
-            MVAUWeightAdapterKernelPaths.SINK_PORT: chunked,
-        },
+    point = engine.start(engine.validate(spec), {source: full, sink: chunked})
+
+    selected = engine.commit_assignments(
+        point, {selection.paths.kernel: FULL_TILE_TO_CHUNKED}
+    ).point
+    region = engine.query_property(selected, selection.paths.region)
+    assert isinstance(region, Decided)
+    assert not validate_region(region.value)
+    assert engine.query_property(selected, selection.paths.selected_kernel) == Decided(
+        SelectedKernel(selection.name, FULL_TILE_TO_CHUNKED, "1")
+    )
+    assert (
+        engine.evaluate_constraint_set(selected, selection.feasibility_constraint_set).verdict
+        is True
     )
 
-    instance = instantiate_kernel(engine, MVAU_WEIGHT_ADAPTER_KERNEL, point)
+    # The adapter is never implied: leaving it unselected is representable.
+    unselected = engine.commit_assignments(point, {selection.paths.kernel: NO_KERNEL}).point
+    assert isinstance(engine.query_property(unselected, selection.paths.region), Absent)
 
-    assert isinstance(instance, Decided)
-    assert instance.value.definition_id == "mvau.weight_sequence_adapter"
-    assert instance.value.binding_id is None
-    assert instance.value.binding_selection is None
-    assert not validate_region(instance.value.region)
 
-    placement = MVAU_WEIGHT_ADAPTER_KERNEL.place("adapter0", "scope.adapter0")
-    placed_space = engine.validate(placement.spec)
-    placed = engine.start(
-        placed_space,
-        {
-            placement.path(MVAUWeightAdapterKernelPaths.SOURCE_PORT): full,
-            placement.path(MVAUWeightAdapterKernelPaths.SINK_PORT): chunked,
-        },
+def test_the_adapter_refuses_endpoints_it_cannot_relate() -> None:
+    full, chunked = _ports()
+    mismatched = Port(
+        "weight",
+        chunked.operand,
+        BeatSequence(chunked.beat_sequence.elements_per_beat, chunked.beat_sequence.beats[:-1]),
     )
-    placed_instance = instantiate_kernel(engine, placement, placed)
-    assert isinstance(placed_instance, Decided)
-    assert placed_instance.value.instance_id == "adapter0"
-    assert placed_instance.value.region == instance.value.region
+    source = QualifiedPath("problem.test.adapter_source")
+    sink = QualifiedPath("problem.test.adapter_sink")
+    port_semantics = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
+    selection = build_mvau_weight_adapter_selection(
+        DependencyRef.problem("source_port", source, port_semantics),
+        DependencyRef.problem("sink_port", sink, port_semantics),
+    )
+    spec = assemble_specs(
+        (
+            selection.build_spec(),
+            DesignSpaceSpec(
+                ProblemSchema(
+                    (ProblemField(source, port_semantics), ProblemField(sink, port_semantics))
+                )
+            ),
+        )
+    )
+    engine = Engine()
+    point = engine.commit_assignments(
+        engine.start(engine.validate(spec), {source: full, sink: mismatched}),
+        {selection.paths.kernel: FULL_TILE_TO_CHUNKED},
+    ).point
+    assessment = engine.evaluate_constraint_set(point, selection.feasibility_constraint_set)
+    assert assessment.verdict is False
+
+
+def test_placing_the_adapter_keeps_its_region_and_separates_its_paths() -> None:
+    full, chunked = _ports()
+    source = QualifiedPath("problem.test.adapter_source")
+    sink = QualifiedPath("problem.test.adapter_sink")
+    port_semantics = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
+    base = build_mvau_weight_adapter_selection(
+        DependencyRef.problem("source_port", source, port_semantics),
+        DependencyRef.problem("sink_port", sink, port_semantics),
+    )
+    placed = KernelSelection(
+        f"scope.adapter0.{base.name}",
+        (base.kernel(FULL_TILE_TO_CHUNKED).place("scope.adapter0"),),
+        optional=True,
+    )
+    spec = assemble_specs(
+        (
+            base.build_spec(),
+            placed.build_spec(),
+            DesignSpaceSpec(
+                ProblemSchema(
+                    (ProblemField(source, port_semantics), ProblemField(sink, port_semantics))
+                )
+            ),
+        )
+    )
+    engine = Engine()
+    point = engine.commit_assignments(
+        engine.start(engine.validate(spec), {source: full, sink: chunked}),
+        {base.paths.kernel: FULL_TILE_TO_CHUNKED, placed.paths.kernel: FULL_TILE_TO_CHUNKED},
+    ).point
+    assert base.paths.region != placed.paths.region
+    assert engine.query_property(point, base.paths.region) == engine.query_property(
+        point, placed.paths.region
+    )

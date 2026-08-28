@@ -87,9 +87,5 @@ def test_compilation_trafo():
         compilation_attribute = get_by_name(node.attribute, "executable_path")
         executable = compilation_attribute.s.decode("UTF-8")
         print(executable)
-        assert os.path.isfile(
-            executable
-        ), """Executable of node with
-            op type {} does not exist!""".format(
-            node.op_type
-        )
+        assert os.path.isfile(executable), """Executable of node with
+            op type {} does not exist!""".format(node.op_type)

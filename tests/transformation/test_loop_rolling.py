@@ -111,9 +111,9 @@ def export_model_to_qonnx(out_dir, input_size=10, hidden_size=20, num_layers=4, 
 
 def check_tensor_shape(model_wrapper, name, expected_shape):
     actual_shape = model_wrapper.get_tensor_shape(name)
-    assert (
-        actual_shape == expected_shape
-    ), f"Shape mismatch for {name}: expected {expected_shape}, got {actual_shape}"
+    assert actual_shape == expected_shape, (
+        f"Shape mismatch for {name}: expected {expected_shape}, got {actual_shape}"
+    )
 
 
 @pytest.mark.transform
@@ -191,9 +191,9 @@ def test_finn_loop(input_size, num_layers):
     model_wrapper = model_wrapper.transform(loop_extraction)
 
     # should be one constant node and one loop-body node per layer
-    assert (
-        len(model_wrapper.get_nodes_by_op_type("fn_loop-body")) == num_layers
-    ), "Loop extraction did not find expected number of loop bodies"
+    assert len(model_wrapper.get_nodes_by_op_type("fn_loop-body")) == num_layers, (
+        "Loop extraction did not find expected number of loop bodies"
+    )
 
     model_wrapper = model_wrapper.transform(LoopRolling(loop_extraction.loop_body_template))
     model_wrapper = model_wrapper.transform(InferShapes(), apply_to_subgraphs=True)
@@ -236,12 +236,12 @@ def test_finn_loop(input_size, num_layers):
                 seen_prefixes.add(prefix)
         if any(node.op_type.startswith(prefix) for prefix in mlo_nodes):
             mlo_attr = util.get_by_name(node.attribute, "mlo_max_iter")
-            assert (
-                mlo_attr is not None
-            ), f"{node.op_type} node in loop body should have mlo_max_iter attribute"
-            assert (
-                mlo_attr.i == num_layers
-            ), "Loop body max iteration count should match number of layers"
+            assert mlo_attr is not None, (
+                f"{node.op_type} node in loop body should have mlo_max_iter attribute"
+            )
+            assert mlo_attr.i == num_layers, (
+                "Loop body max iteration count should match number of layers"
+            )
         # MVAU_rtl.adapt_for_loop_body should have switched the streamed-weight
         # MVAU to external_mem so its weights are fetched over AXI-MM per iteration
         if node.op_type.startswith("MVAU"):
@@ -323,7 +323,7 @@ def test_inconsistent_initializer_shape():
     with pytest.raises(
         Exception,
         match=(
-            "LoopRolling: all loop-body initializers of the same index must have the " "same shape"
+            "LoopRolling: all loop-body initializers of the same index must have the same shape"
         ),
     ):
         model_wrapper = model_wrapper.transform(LoopRolling(loop_extraction.loop_body_template))

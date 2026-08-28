@@ -108,9 +108,7 @@ def test_fpgadataflow_dwc(config, exec_mode, impl_style):
     model = make_single_dwc_modelwrapper(shape, inWidth, outWidth, finn_dtype, impl_style)
     # verify abstraction level execution
     y = oxe.execute_onnx(model, input_dict)["outp"]
-    assert (
-        y == x
-    ).all(), """The output values are not the same as the
+    assert (y == x).all(), """The output values are not the same as the
         input values anymore."""
     assert y.shape == tuple(shape), """The output shape is incorrect."""
 
@@ -127,9 +125,7 @@ def test_fpgadataflow_dwc(config, exec_mode, impl_style):
         model = model.transform(PrepareRTLSim())
     y = oxe.execute_onnx(model, input_dict)["outp"]
 
-    assert (
-        y == x
-    ).all(), """The output values are not the same as the
+    assert (y == x).all(), """The output values are not the same as the
         input values anymore."""
     assert y.shape == tuple(shape), """The output shape is incorrect."""
 
@@ -167,8 +163,6 @@ def test_fpgadataflow_dwc_stitched_rtlsim(config, impl_style):
     model.set_metadata_prop("exec_mode", "rtlsim")
     y = oxe.execute_onnx(model, input_dict)["outp"]
 
-    assert (
-        y == x
-    ).all(), """The output values are not the same as the
+    assert (y == x).all(), """The output values are not the same as the
         input values anymore."""
     assert y.shape == tuple(shape), """The output shape is incorrect."""

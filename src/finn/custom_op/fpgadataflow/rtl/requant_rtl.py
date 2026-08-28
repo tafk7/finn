@@ -218,9 +218,9 @@ class Requant_rtl(Requant, RTLBackend):
             output = np.asarray([output], dtype=np.float32).reshape(*exp_oshape)
             context[node.output[0]] = output
 
-            assert (
-                context[node.output[0]].shape == exp_oshape
-            ), "Output shape doesn't match expected shape."
+            assert context[node.output[0]].shape == exp_oshape, (
+                "Output shape doesn't match expected shape."
+            )
         else:
             # Use base class Python execution
             Requant.execute_node(self, context, graph)

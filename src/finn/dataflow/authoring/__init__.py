@@ -3,16 +3,7 @@
 
 """Public FINN dataflow authoring surface."""
 
-from finn.dataflow.kernel import (
-    BindingDefinition,
-    KernelDefinition,
-    KernelInstance,
-    KernelPlacement,
-    RegionDeclaration,
-    assemble_kernel_specs,
-    build_kernel_semantic_declarations,
-    gate_design_space_spec,
-)
+from finn.dataflow.kernel import RegionDeclaration, build_kernel_semantic_declarations
 from finn.dataflow.kernels import (
     NO_KERNEL,
     SELECTED_KERNEL_SEMANTICS,
@@ -45,7 +36,6 @@ from finn.dataflow.spec_algebra import (
 
 __all__ = [
     "AssignmentMapping",
-    "BindingDefinition",
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
     "DataflowOp",
@@ -53,10 +43,7 @@ __all__ = [
     "DataflowOpResult",
     "FiniteSelectionResult",
     "Kernel",
-    "KernelDefinition",
     "KernelDemand",
-    "KernelInstance",
-    "KernelPlacement",
     "KernelProvider",
     "KernelSelection",
     "KernelSelectionPaths",
@@ -71,12 +58,10 @@ __all__ = [
     "SelectedKernel",
     "SpecAuthoringError",
     "SpecAuthoringIssue",
-    "assemble_kernel_specs",
     "assemble_specs",
     "build_kernel_semantic_declarations",
     "dataflow_problem_fingerprint",
     "enumerate_feasible_points",
-    "gate_design_space_spec",
     "gate_spec",
     "selected_kernel",
 ]

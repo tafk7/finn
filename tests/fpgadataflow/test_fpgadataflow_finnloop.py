@@ -815,15 +815,15 @@ def test_finnloop_end2end_mlo(
     # With verify_save_full_context=True, all verification steps save the full
     # context as .npz. MLO stitched_ip_rtlsim now routes through the parent model
     # (need_parent=True), so it also saves the full context as .npz.
-    assert os.path.isfile(
-        verif_dir + "/verify_folded_hls_cppsim_0_SUCCESS.npz"
-    ), f"Check npz files in {verif_dir}"
-    assert os.path.isfile(
-        verif_dir + "/verify_node_by_node_rtlsim_0_SUCCESS.npz"
-    ), f"Check npz files in {verif_dir}"
-    assert os.path.isfile(
-        verif_dir + "/verify_stitched_ip_rtlsim_0_SUCCESS.npz"
-    ), f"Check npz files in {verif_dir}"
+    assert os.path.isfile(verif_dir + "/verify_folded_hls_cppsim_0_SUCCESS.npz"), (
+        f"Check npz files in {verif_dir}"
+    )
+    assert os.path.isfile(verif_dir + "/verify_node_by_node_rtlsim_0_SUCCESS.npz"), (
+        f"Check npz files in {verif_dir}"
+    )
+    assert os.path.isfile(verif_dir + "/verify_stitched_ip_rtlsim_0_SUCCESS.npz"), (
+        f"Check npz files in {verif_dir}"
+    )
 
     # Verify that the per-iteration context file was created for FINNLoop
     iteration_context_files = [
@@ -843,9 +843,9 @@ def test_finnloop_end2end_mlo(
         parts = key.split("_", 2)
         if len(parts) >= 2:
             iter_indices.add(int(parts[1]))
-    assert (
-        len(iter_indices) == iteration
-    ), f"Expected {iteration} iterations in context, found {len(iter_indices)}"
+    assert len(iter_indices) == iteration, (
+        f"Expected {iteration} iterations in context, found {len(iter_indices)}"
+    )
 
     # Cycle-count verification for the FINNLoop: compare get_exp_cycles() against the
     # measured rtlsim cycles (FMPadding-style). Gated to the single canonical config so
@@ -858,14 +858,14 @@ def test_finnloop_end2end_mlo(
     # named after that loop, so verify the per-loop logs landed there.
     if run_fifo_debug:
         loop_fifo_debug_dir = tmp_output_dir + "/debug/fifo_logs/fifo_sizing/FINNLoop_0"
-        assert os.path.isdir(
-            loop_fifo_debug_dir
-        ), f"missing per-loop fifo debug dir {loop_fifo_debug_dir}"
+        assert os.path.isdir(loop_fifo_debug_dir), (
+            f"missing per-loop fifo debug dir {loop_fifo_debug_dir}"
+        )
         loop_fifo_logs = [f for f in os.listdir(loop_fifo_debug_dir) if f.endswith(".log")]
         assert len(loop_fifo_logs) > 0, f"no per-FIFO debug logs in {loop_fifo_debug_dir}"
-        assert all(
-            f.startswith("FINNLoop_0_") for f in loop_fifo_logs
-        ), f"per-loop fifo logs not tagged with loop context: {loop_fifo_logs}"
+        assert all(f.startswith("FINNLoop_0_") for f in loop_fifo_logs), (
+            f"per-loop fifo logs not tagged with loop context: {loop_fifo_logs}"
+        )
 
     # also run dcp generation for a subset of the test parameters
     # this extends the test run time quite a lot
@@ -886,9 +886,9 @@ def test_finnloop_end2end_mlo(
         build.build_dataflow_cfg(tmp_output_dir + "/mlo_model.onnx", cfg)
 
         # check if stitched IP dcp is there
-        assert os.path.isfile(
-            tmp_output_dir + "/stitched_ip/finn_design.dcp"
-        ), f"Check vivado.log in {tmp_output_dir}/stitched_ip"
+        assert os.path.isfile(tmp_output_dir + "/stitched_ip/finn_design.dcp"), (
+            f"Check vivado.log in {tmp_output_dir}/stitched_ip"
+        )
 
 
 @pytest.mark.parametrize(
@@ -1046,15 +1046,15 @@ def test_finnloop_end2end_mlo_ddr(
     # With verify_save_full_context=True, all verification steps save the full
     # context as .npz. MLO stitched_ip_rtlsim now routes through the parent model
     # (need_parent=True), so it also saves the full context as .npz.
-    assert os.path.isfile(
-        verif_dir + "/verify_folded_hls_cppsim_0_SUCCESS.npz"
-    ), f"Check npz files in {verif_dir}"
-    assert os.path.isfile(
-        verif_dir + "/verify_node_by_node_rtlsim_0_SUCCESS.npz"
-    ), f"Check npz files in {verif_dir}"
-    assert os.path.isfile(
-        verif_dir + "/verify_stitched_ip_rtlsim_0_SUCCESS.npz"
-    ), f"Check npz files in {verif_dir}"
+    assert os.path.isfile(verif_dir + "/verify_folded_hls_cppsim_0_SUCCESS.npz"), (
+        f"Check npz files in {verif_dir}"
+    )
+    assert os.path.isfile(verif_dir + "/verify_node_by_node_rtlsim_0_SUCCESS.npz"), (
+        f"Check npz files in {verif_dir}"
+    )
+    assert os.path.isfile(verif_dir + "/verify_stitched_ip_rtlsim_0_SUCCESS.npz"), (
+        f"Check npz files in {verif_dir}"
+    )
 
     # Verify that the per-iteration context file was created for FINNLoop
     iteration_context_files = [
@@ -1074,6 +1074,6 @@ def test_finnloop_end2end_mlo_ddr(
         parts = key.split("_", 2)
         if len(parts) >= 2:
             iter_indices.add(int(parts[1]))
-    assert (
-        len(iter_indices) == iteration
-    ), f"Expected {iteration} iterations in context, found {len(iter_indices)}"
+    assert len(iter_indices) == iteration, (
+        f"Expected {iteration} iterations in context, found {len(iter_indices)}"
+    )

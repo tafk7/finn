@@ -188,7 +188,7 @@ def test_pytest_plugin_no_double_count_under_xdist(pytester):
     # sandbox conftest add ci/ itself before naming the plugin.
     ci_dir = os.path.dirname(os.path.dirname(os.path.abspath(sharding.__file__)))
     pytester.makeconftest(
-        "import sys\n" "sys.path.insert(0, %r)\n" "pytest_plugins = ['finn_ci.plugin']\n" % ci_dir
+        "import sys\nsys.path.insert(0, %r)\npytest_plugins = ['finn_ci.plugin']\n" % ci_dir
     )
     # grpA's members sleep unequally (0.30 + 0.05) so the summed group weight
     # sits well above the 0.30 slowest single member: a max-per-test regression

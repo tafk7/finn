@@ -164,7 +164,7 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                         k_s = get_by_name(n.attribute, "kernel_shape")
                         if k_s is None or len(k_s.ints) != 2 or len(set(k_s.ints)) != 1:
                             raise ValueError(
-                                "FINN only supports average pooling with " "2D square kernels."
+                                "FINN only supports average pooling with 2D square kernels."
                             )
                         k_s = k_s.ints[0]
 
@@ -175,8 +175,7 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                         stride = get_by_name(n.attribute, "strides")
                         if stride is None or len(stride.ints) != 2 or len(set(stride.ints)) != 1:
                             raise ValueError(
-                                "FINN only supports 2D strides with equal values in "
-                                "each direction."
+                                "FINN only supports 2D strides with equal values in each direction."
                             )
                         stride = stride.ints[0]
 
@@ -197,7 +196,7 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                         normalized_mode_string = rounding_mode.s.upper()
                         if rounding_mode is None or normalized_mode_string != b"FLOOR":
                             raise ValueError(
-                                "The Trunc node must have the rounding_mode " "set to 'FLOOR'."
+                                "The Trunc node must have the rounding_mode set to 'FLOOR'."
                             )
                         for inp in t_node.input[1:]:
                             if model.get_initializer(inp) is None:
@@ -335,7 +334,7 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                     k_s = get_by_name(node.attribute, "kernel_shape")
                     if k_s is None or len(k_s.ints) != 2 or len(set(k_s.ints)) != 1:
                         raise ValueError(
-                            "FINN only supports average pooling with " "2D square kernels."
+                            "FINN only supports average pooling with 2D square kernels."
                         )
                     k_s = k_s.ints[0]
 
@@ -346,7 +345,7 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                     stride = get_by_name(node.attribute, "strides")
                     if stride is None or len(stride.ints) != 2 or len(set(stride.ints)) != 1:
                         raise ValueError(
-                            "FINN only supports 2D strides with equal values in " "each direction."
+                            "FINN only supports 2D strides with equal values in each direction."
                         )
                     stride = stride.ints[0]
 
@@ -355,7 +354,7 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                     normalized_mode_string = rounding_mode.s.upper()
                     if rounding_mode is None or normalized_mode_string != b"FLOOR":
                         raise ValueError(
-                            "The Trunc node must have the rounding_mode " "set to 'FLOOR'."
+                            "The Trunc node must have the rounding_mode set to 'FLOOR'."
                         )
                     for inp in t_node.input[1:]:
                         if model.get_initializer(inp) is None:

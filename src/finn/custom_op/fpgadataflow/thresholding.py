@@ -162,9 +162,9 @@ class Thresholding(HWCustomOp):
         else:
             # special case: if input is float, we keep thresholds as is
             tdt = self.get_input_datatype(1)
-        assert np.vectorize(tdt.allowed)(
-            threshold_tensor
-        ).all(), "Thresholds can't be expressed with type %s" % str(tdt)
+        assert np.vectorize(tdt.allowed)(threshold_tensor).all(), (
+            "Thresholds can't be expressed with type %s" % str(tdt)
+        )
         self.set_nodeattr("weightDataType", tdt.name)
         # Update QONNX DataType of tensor for consistency
         model.set_tensor_datatype(self.onnx_node.input[1], tdt)
@@ -232,9 +232,7 @@ class Thresholding(HWCustomOp):
         pe = self.get_nodeattr("PE")
         tmem = mh // pe
         assert mh % pe == 0, "Requirement NumChannels divisable by PE is violated."
-        assert (
-            orig_thres_matrix.ndim == 2
-        ), """Threshold matrix dimension is
+        assert orig_thres_matrix.ndim == 2, """Threshold matrix dimension is
         not as expected (2)."""
         n_thres_steps = orig_thres_matrix.shape[1]
         assert n_thres_steps == self.get_nodeattr("numSteps"), "Mismatch in threshold steps"
@@ -248,17 +246,11 @@ class Thresholding(HWCustomOp):
         assert ret.shape[0] == mh, "Channels of threshold matrix are not as expected (mh)"
         # distribute rows between PEs
         ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
-        assert (
-            ret.shape[0] == pe
-        ), """First dimension after distribution of the
+        assert ret.shape[0] == pe, """First dimension after distribution of the
         rows between PEs is not as expected (pe)"""
-        assert (
-            ret.shape[1] == tmem
-        ), """Second dimension after distribution of the
+        assert ret.shape[1] == tmem, """Second dimension after distribution of the
         rows between PEs is not as expected (tmem)"""
-        assert (
-            ret.shape[2] == n_thres_steps
-        ), """Third dimension after distribution of the
+        assert ret.shape[2] == n_thres_steps, """Third dimension after distribution of the
         rows between PEs is not as expected (n_thres_steps)"""
         return ret.reshape(1, pe, tmem, n_thres_steps)
 

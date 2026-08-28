@@ -129,9 +129,9 @@ def _test_fpgadataflow_hwsoftmax(simd, idt, impl_style, sim_style, ifm_dim, buil
     model = model.transform(GiveUniqueNodeNames())
 
     expected_op_type = f"HWSoftmax_{impl_style}"
-    assert (
-        model.graph.node[0].op_type == expected_op_type
-    ), f"HWSoftmax wasn't converted to {expected_op_type}"
+    assert model.graph.node[0].op_type == expected_op_type, (
+        f"HWSoftmax wasn't converted to {expected_op_type}"
+    )
 
     # set SIMD post-specialize (matches layernorm test pattern)
     getCustomOp(model.graph.node[0]).set_nodeattr("SIMD", int(simd))
@@ -166,10 +166,10 @@ def _test_fpgadataflow_hwsoftmax(simd, idt, impl_style, sim_style, ifm_dim, buil
         assert exp_cycles != 0
 
     if impl_style == "rtl" and sim_style != "cppsim":
-        assert np.allclose(
-            y_ref, y_hw, rtol=rtol, atol=tolerance
-        ), "Model output does not match expected output"
+        assert np.allclose(y_ref, y_hw, rtol=rtol, atol=tolerance), (
+            "Model output does not match expected output"
+        )
     else:
-        assert np.allclose(
-            y_ref, y_hw, atol=tolerance
-        ), "Model output does not match expected output"
+        assert np.allclose(y_ref, y_hw, atol=tolerance), (
+            "Model output does not match expected output"
+        )

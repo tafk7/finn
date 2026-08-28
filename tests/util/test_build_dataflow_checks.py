@@ -39,7 +39,7 @@ def cfg(output_dir, **kw):
         synth_clk_period_ns=5.0,
         stop_step="phase_prepare_model",
         generate_outputs=kw.pop("generate_outputs", [DataflowOutputType.ESTIMATE_REPORTS]),
-        **kw
+        **kw,
     )
 
 

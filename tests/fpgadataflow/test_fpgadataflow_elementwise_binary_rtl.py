@@ -278,6 +278,6 @@ def test_elementwise_rtl_backend_selection(
     model = model.transform(SpecializeLayers(VERSAL_PART))
 
     assert len(model.graph.node) == 1
-    assert (
-        model.graph.node[0].op_type == f"{op_type}_{expected_backend}"
-    ), f"Scenario '{scenario}': expected {expected_backend}, got {model.graph.node[0].op_type}"
+    assert model.graph.node[0].op_type == f"{op_type}_{expected_backend}", (
+        f"Scenario '{scenario}': expected {expected_backend}, got {model.graph.node[0].op_type}"
+    )

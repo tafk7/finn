@@ -273,9 +273,9 @@ def test_fused_reshape_inner_transpose(
     shuffle_inst = getCustomOp(shuffle_nodes[0])
     assert list(shuffle_inst.get_nodeattr("in_shape")) == list(in_shape)
     assert list(shuffle_inst.get_nodeattr("transpose_in_shape")) == list(transpose_in_shape)
-    assert list(shuffle_inst.get_nodeattr("in_shape")) != list(
-        transpose_in_shape
-    ), "this test must exercise a FUSED reshape (in_shape != transpose_in_shape)"
+    assert list(shuffle_inst.get_nodeattr("in_shape")) != list(transpose_in_shape), (
+        "this test must exercise a FUSED reshape (in_shape != transpose_in_shape)"
+    )
 
     model = model.transform(SetShuffleSIMD(simd))
     model = model.transform(ShuffleDecomposition())
@@ -292,12 +292,12 @@ def test_fused_reshape_inner_transpose(
     inner_inst = getCustomOp(inner[0])
     # in_shape matches the physical input tensor; the flattened view the
     # transpose acts on is carried separately in transpose_in_shape.
-    assert list(inner_inst.get_nodeattr("in_shape")) == list(
-        in_shape
-    ), "InnerShuffle in_shape must match the physical input tensor"
-    assert list(inner_inst.get_nodeattr("transpose_in_shape")) == list(
-        transpose_in_shape
-    ), "InnerShuffle must carry the flattened transpose_in_shape"
+    assert list(inner_inst.get_nodeattr("in_shape")) == list(in_shape), (
+        "InnerShuffle in_shape must match the physical input tensor"
+    )
+    assert list(inner_inst.get_nodeattr("transpose_in_shape")) == list(transpose_in_shape), (
+        "InnerShuffle must carry the flattened transpose_in_shape"
+    )
     assert list(inner_inst.get_normal_output_shape()) == list(reshape_transpose_param["out_shape"])
 
     model = model.transform(GiveUniqueNodeNames())

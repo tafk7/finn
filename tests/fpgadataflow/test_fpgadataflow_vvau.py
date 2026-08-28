@@ -309,9 +309,9 @@ def test_fpgadataflow_vvau(
             model.set_metadata_prop("exec_mode", "rtlsim")
             y_expected = oxe.execute_onnx(model, input_dict)["global_out"]
 
-            assert (
-                y_produced == y_expected
-            ).all(), "Output of ONNX model not matching output of stitched-IP RTL model!"
+            assert (y_produced == y_expected).all(), (
+                "Output of ONNX model not matching output of stitched-IP RTL model!"
+            )
 
 
 def make_single_dw_conv_modelwrapper(conv_config, idt, wdt):
@@ -405,9 +405,9 @@ def test_fpgadataflow_vvau_rtl(kernel_size, in_feature_dim, in_chn, idt, wdt, pa
     output_vvau_hw = oxe.execute_onnx(model, input_dict, return_full_exec_context=True)[
         "global_out"
     ]
-    assert (
-        golden_out == output_vvau_hw
-    ).all(), "Output of ONNX model not matching output of HW-ops!"
+    assert (golden_out == output_vvau_hw).all(), (
+        "Output of ONNX model not matching output of HW-ops!"
+    )
 
     # Obtain second reference from HLS-based VVAU layer
     model = model.transform(SpecializeLayers(part))
@@ -438,9 +438,9 @@ def test_fpgadataflow_vvau_rtl(kernel_size, in_feature_dim, in_chn, idt, wdt, pa
     model = model.transform(PrepareCppSim())
     model = model.transform(CompileCppSim())
     output_vvau_cppsim = oxe.execute_onnx(model, input_dict)["global_out"]
-    assert (
-        golden_out == output_vvau_cppsim
-    ).all(), "Output of ONNX model not matching output of node-by-node CPPsim!"
+    assert (golden_out == output_vvau_cppsim).all(), (
+        "Output of ONNX model not matching output of node-by-node CPPsim!"
+    )
 
     # Run node-by-node RTLsim
     model = model.transform(SetExecMode("rtlsim"))
@@ -451,9 +451,9 @@ def test_fpgadataflow_vvau_rtl(kernel_size, in_feature_dim, in_chn, idt, wdt, pa
         "global_out"
     ]
 
-    assert (
-        golden_out == output_vvau_rtlsim
-    ).all(), "Output of ONNX model not matching output of specialized HW-ops!"
+    assert (golden_out == output_vvau_rtlsim).all(), (
+        "Output of ONNX model not matching output of specialized HW-ops!"
+    )
 
     # Stitched-IP RTLsim
     model = model.transform(CreateDataflowPartition())
@@ -476,6 +476,6 @@ def test_fpgadataflow_vvau_rtl(kernel_size, in_feature_dim, in_chn, idt, wdt, pa
     # tranpose hardware-generated outputs NHWC -> NCHW to be comparable
     output_vvau_stitched = output_vvau_stitched.transpose(0, 3, 1, 2)
 
-    assert (
-        golden_out == output_vvau_stitched
-    ).all(), "Output of ONNX model not matching output of stitched-IP RTL model!"
+    assert (golden_out == output_vvau_stitched).all(), (
+        "Output of ONNX model not matching output of stitched-IP RTL model!"
+    )

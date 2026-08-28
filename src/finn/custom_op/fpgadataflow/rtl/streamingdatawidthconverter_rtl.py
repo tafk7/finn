@@ -53,9 +53,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
         # integer width ratios
         iwidth_d = iwidth % owidth == 0
         owidth_d = owidth % iwidth == 0
-        assert (
-            iwidth_d or owidth_d
-        ), """RTL implementation of DWC requires
+        assert iwidth_d or owidth_d, """RTL implementation of DWC requires
         stream widths that are integer width ratios
         from each other. Input width is set to %s
         and output width is set to %s """ % (

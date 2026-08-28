@@ -403,12 +403,12 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
             addr_incr_end_simd = -buffer_min_size + (channel_factor + 1)
 
         # sanity check for wrap logic
-        assert not (
-            abs(addr_incr_end_window) > buffer_actual_size
-        ), "ERROR: W increment > buffer size, try setting parallel_window=1"
-        assert not (
-            abs(addr_incr_end_row) > buffer_actual_size
-        ), "ERROR: H increment > buffer size, try setting parallel_window=1"
+        assert not (abs(addr_incr_end_window) > buffer_actual_size), (
+            "ERROR: W increment > buffer size, try setting parallel_window=1"
+        )
+        assert not (abs(addr_incr_end_row) > buffer_actual_size), (
+            "ERROR: H increment > buffer size, try setting parallel_window=1"
+        )
 
         # set certain threshold indices to detect when reading/writing finishes
         code_gen_dict["$LAST_READ_ELEM$"] = [str(h * w * channel_factor - 1)]
@@ -757,17 +757,13 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
                 input_fifo_id = i - 1
                 code_gen_dict["$GENERATE_BUFFER_CONNECTION$"].append(
                     """assign reg_fifo_{fifo_id}_in = bram_fifo_{input_fifo_id}_out;
-                    """.format(
-                        fifo_id=i, input_fifo_id=input_fifo_id
-                    )
+                    """.format(fifo_id=i, input_fifo_id=input_fifo_id)
                 )
         for i in range(len(bram_fifos_depth)):
             input_fifo_id = i
             code_gen_dict["$GENERATE_BUFFER_CONNECTION$"].append(
                 """assign bram_fifo_{fifo_id}_in = reg_fifo_{input_fifo_id}_out;
-                """.format(
-                    fifo_id=i, input_fifo_id=input_fifo_id
-                )
+                """.format(fifo_id=i, input_fifo_id=input_fifo_id)
             )
 
         return template_path, code_gen_dict
@@ -985,9 +981,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
         self.set_nodeattr("OFMDim", ofm_dim)
         self.set_nodeattr("Stride", stride)
         self.set_nodeattr("Dilation", dilation)
-        assert (
-            self.get_buffer_depth() <= original_buffer_depth
-        ), """Error: requested
+        assert self.get_buffer_depth() <= original_buffer_depth, """Error: requested
             dynamic configuration does not fit in generated buffer implementation."""
 
         # (re-)call codegen and extract new values

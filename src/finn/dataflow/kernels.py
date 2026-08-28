@@ -499,9 +499,22 @@ class KernelSelection:
 
         def select(values: DependencyView) -> Answer[object]:
             present = tuple(value for value in values.values() if value is not ABSENT)
-            if len(present) != 1:
+            if len(present) > 1:
                 raise AssertionError(
-                    f"exactly one Kernel of {self.name!r} must derive a Region, got {len(present)}"
+                    f"at most one Kernel of {self.name!r} may derive a Region, got {len(present)}"
+                )
+            if not present:
+                # The selected Kernel refused to derive a Region for this
+                # problem.  That is a rejection to report, not an authoring bug.
+                return Absent(
+                    (
+                        Finding(
+                            FindingKind.REJECTION,
+                            "kernel-region-unavailable",
+                            paths.region,
+                            "the selected Kernel derives no Region for this problem",
+                        ),
+                    )
                 )
             return Decided(cast(DataflowRegion, present[0]))
 

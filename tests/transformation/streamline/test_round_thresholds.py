@@ -737,6 +737,6 @@ def test_round_and_clip_thresholds_mvau_vvau(op_type, i_dtype, o_dtype, wdt, n_c
 
     # Verify functional equivalence
     output_after = oxe.execute_onnx(model, {"inp": test_input})["outp"]
-    assert np.all(
-        output_before == output_after
-    ), "Output changed after RoundAndClipThresholds transformation"
+    assert np.all(output_before == output_after), (
+        "Output changed after RoundAndClipThresholds transformation"
+    )

@@ -118,9 +118,9 @@ def test_QONNX_to_FINN(model_name, wbits, abits):
     input_dict = {model.get_first_global_in(): input_tensor}
     output_dict = oxe.execute_onnx(model, input_dict, False)
     qonnx_export_output = output_dict[model.get_first_global_out()]
-    assert np.isclose(
-        brev_output, qonnx_export_output, atol=ATOL
-    ).all(), "The output of the Brevitas model and the QONNX model should match."
+    assert np.isclose(brev_output, qonnx_export_output, atol=ATOL).all(), (
+        "The output of the Brevitas model and the QONNX model should match."
+    )
 
     # Run QONNX to FINN conversion
     model = ModelWrapper(qonnx_base_path.format("clean"))
@@ -133,7 +133,7 @@ def test_QONNX_to_FINN(model_name, wbits, abits):
     output_dict = oxe.execute_onnx(model, input_dict, False)
     test_output = output_dict[model.get_first_global_out()]
     assert np.isclose(test_output, qonnx_export_output, atol=ATOL).all(), (
-        "The output of the FINN model " "and the QONNX -> FINN converted model should match."
+        "The output of the FINN model and the QONNX -> FINN converted model should match."
     )
 
     # Run analysis passes on the converted model

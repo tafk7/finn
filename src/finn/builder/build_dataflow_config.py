@@ -482,7 +482,7 @@ class DataflowBuildConfig:
             return vitis_default_platform[self.board]
         else:
             raise Exception(
-                "Could not resolve Vitis platform:" " need either board or vitis_platform specified"
+                "Could not resolve Vitis platform: need either board or vitis_platform specified"
             )
 
     def _resolve_verification_steps(self):

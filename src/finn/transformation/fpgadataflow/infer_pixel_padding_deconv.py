@@ -76,9 +76,9 @@ class InferPixelPaddingDeconv(Transformation):
 
                 # If len(pad) == 2, assume no padding for other dimension
                 if len(pad) == 2:  # only one dimension should be padded
-                    assert (
-                        ifm_dim_h == 1 or ifm_dim_w == 1
-                    ), "Padding is assumed to be 1D, image is 2D"
+                    assert ifm_dim_h == 1 or ifm_dim_w == 1, (
+                        "Padding is assumed to be 1D, image is 2D"
+                    )
                 # reuse ConvTranspose weights for new matmul weights
                 # conv weights are [IFM][OFM][k][k]
                 # We need to rotate the weights and make them [OFM][IFM][k][k]

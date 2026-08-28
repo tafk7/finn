@@ -162,13 +162,9 @@ def rtlsim_exec_cppxsi(
     assert dummy_data_mode, "Only dummy_data_mode=True is supported for now"
 
     # ensure stitched ip project already exists
-    assert os.path.isfile(
-        model.get_metadata_prop("wrapper_filename")
-    ), """The
+    assert os.path.isfile(model.get_metadata_prop("wrapper_filename")), """The
     file name from metadata property "wrapper_filename" doesn't exist."""
-    assert os.path.isdir(
-        model.get_metadata_prop("vivado_stitch_proj")
-    ), """The
+    assert os.path.isdir(model.get_metadata_prop("vivado_stitch_proj")), """The
     directory from metadata property "vivado_stitch_proj" doesn't exist"""
     trace_file = model.get_metadata_prop("rtlsim_trace")
     if not dummy_data_mode:
@@ -227,14 +223,14 @@ def rtlsim_exec_cppxsi(
     # retrieve the number of inputs from execution_context
     n_inferences = execution_context[model.get_first_global_in()]
     ifnames = model.get_metadata_prop("vivado_stitch_ifnames")
-    assert (
-        ifnames is not None
-    ), "Couldn't find stitched-IP interface names, did you run IP stitching first?"
+    assert ifnames is not None, (
+        "Couldn't find stitched-IP interface names, did you run IP stitching first?"
+    )
     ifnames = eval(ifnames)
     if "aximm" in ifnames.keys() and ifnames["aximm"] != []:
-        assert (
-            False
-        ), f"cppxsi sim doesn't know how to handle full AXI MM interfaces: {ifnames['aximm']}"
+        assert False, (
+            f"cppxsi sim doesn't know how to handle full AXI MM interfaces: {ifnames['aximm']}"
+        )
     instream_names = [x[0] for x in ifnames["s_axis"]]
     outstream_names = [x[0] for x in ifnames["m_axis"]]
     instream_descrs = [
@@ -306,9 +302,7 @@ def rtlsim_exec_cppxsi(
     with open(sim_base + "/run_rtlsim.sh", "w") as f:
         ld_path = runsim_env["LD_LIBRARY_PATH"]
         f.write(
-            f"LD_LIBRARY_PATH={ld_path}"
-            " ./rtlsim_xsi > rtlsim_xsi_log.txt"
-            " 2> rtlsim_xsi_stderr.log"
+            f"LD_LIBRARY_PATH={ld_path} ./rtlsim_xsi > rtlsim_xsi_log.txt 2> rtlsim_xsi_stderr.log"
         )
     launch_process_helper(runsim_cmd, cwd=sim_base)
 
@@ -336,13 +330,9 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
     - post_hook : hook function to be called after sim end
     """
     # ensure stitched ip project already exists
-    assert os.path.isfile(
-        model.get_metadata_prop("wrapper_filename")
-    ), """The
+    assert os.path.isfile(model.get_metadata_prop("wrapper_filename")), """The
     file name from metadata property "wrapper_filename" doesn't exist."""
-    assert os.path.isdir(
-        model.get_metadata_prop("vivado_stitch_proj")
-    ), """The
+    assert os.path.isdir(model.get_metadata_prop("vivado_stitch_proj")), """The
     directory from metadata property "vivado_stitch_proj" doesn't exist"""
     trace_file = model.get_metadata_prop("rtlsim_trace")
     io_dict, if_dict, num_out_values, o_tensor_info, batchsize = prep_rtlsim_io_dict(

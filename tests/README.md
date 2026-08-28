@@ -40,6 +40,7 @@ Group related tests together using the `xdist_group` marker:
 @pytest.mark.xdist_group(name="my_feature_chain")
 def test_step_1(): ...
 
+
 @pytest.mark.xdist_group(name="my_feature_chain")
 def test_step_2(): ...
 ```
