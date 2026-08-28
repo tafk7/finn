@@ -1,0 +1,47 @@
+# FINN sbx kit.
+#
+# Delivers the environment that cannot be baked into the image because it
+# depends on where the workspace is mounted, which is only known at sandbox
+# creation.
+#
+# Apply it at create time:
+#
+#   sbx create claude <repo> --template $(./run-docker.sh print-tag dev) \
+#       --kit docker/finn.kit
+#
+# WHY A KIT AND NOT THE ENTRYPOINT
+#
+# `sbx exec` starts a process directly in the container and does not go through
+# the image ENTRYPOINT, so nothing finn_entrypoint.sh exports is visible to an
+# exec session. `environment.variables` below becomes REAL process env, so it
+# reaches every invocation style - `bash -c`, `sh -c`, and a bare
+# `sbx exec <cmd>` with no shell at all. /etc/sandbox-persistent.sh reaches only
+# bash (and is sbx-managed, so the image must not write it).
+#
+# The image still works with no kit: finn_paths.py resolves the same values from
+# WORKSPACE_DIR at interpreter startup. The kit makes them available to
+# non-Python consumers too.
+#
+# SCHEMA NOTE: the published docs describe `setup.install` / `setup.startup`,
+# but sbx v0.39.0 rejects a `setup:` key and requires `commands:`, with
+# `command` as an argv LIST and no `name` field. `sbx kit inspect` then
+# normalises its OUTPUT back to `setup:`. Input and output schemas differ -
+# validate against the binary, not the docs.
+schemaVersion: "1"
+kind: mixin
+name: finn
+
+environment:
+  variables:
+    # ${WORKSPACE_DIR} is interpolated by sbx at create time. This is the one
+    # value that genuinely cannot be baked: the workspace has no fixed path.
+    # See LIMITATION(finn-root-absolute) in docker/finn_paths.py.
+    FINN_ROOT: "${WORKSPACE_DIR}"
+    # Scratch for generated HLS/Vivado projects. Inside the VM on purpose: a
+    # build tree that outlives the sandbox has nowhere to live, and writing it
+    # into the mounted workspace is what this redesign removed.
+    FINN_BUILD_DIR: "/tmp/finn_build"
+
+commands:
+  startup:
+    - command: ["sh", "-c", "mkdir -p /tmp/finn_build && chmod 1777 /tmp/finn_build"]

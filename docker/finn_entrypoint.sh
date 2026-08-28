@@ -240,25 +240,17 @@ export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$VITIS_PATH/lnx64/tools/fpo_v7_1:$HLS_P
 
 export PATH=$PATH:$HOME/.local/bin
 
-# Publish the resolved environment for sessions that never run this script.
+# NOTE: this script deliberately does NOT write /etc/sandbox-persistent.sh.
 #
-# `sbx exec` starts a process directly in the container and does NOT go through
-# the image ENTRYPOINT, so everything derived above is invisible to it. sbx sets
-# BASH_ENV to this file precisely so a template can hand state to later
-# sessions, so write what cannot be baked as ENV.
+# That file is sbx-managed. An earlier revision wrote it here, and it was dead
+# code: sbx replaces the file after the entrypoint runs, so a sandbox always
+# showed it 0 bytes despite this running as root with the file writable.
 #
-# Best-effort: the file is root-owned and this may run unprivileged, in which
-# case Python still resolves correctly on its own (finn_paths.workspace_root
-# falls back to WORKSPACE_DIR), and only shell-level convenience is lost.
-if [ -w /etc/sandbox-persistent.sh ] 2>/dev/null; then
-  {
-    echo "# Written by finn_entrypoint.sh. Regenerated on every container start."
-    for v in FINN_ROOT FINN_BUILD_DIR FINN_HLSLIB_PATH FINN_BOARD_FILES_PATH \
-             XILINX_VIVADO XILINX_VITIS XILINX_HLS VIVADO_PATH VITIS_PATH HLS_PATH; do
-      eval "val=\${$v:-}"
-      [ -n "$val" ] && echo "export $v=\"$val\""
-    done
-  } > /etc/sandbox-persistent.sh 2>/dev/null || true
-fi
+# Env for sessions that never run this script is delivered by the FINN kit
+# instead (docker/finn.kit): `environment.variables` for FINN_ROOT and
+# FINN_BUILD_DIR, which become real process env and so reach even a bare
+# `sbx exec <cmd>` with no shell, and `commands.startup` for anything that has
+# to be computed at start. Python additionally self-heals via finn_paths, so
+# the image still works under plain `docker run` with no kit at all.
 
 exec "$@"

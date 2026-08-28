@@ -418,13 +418,19 @@ RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/n
 
 # tini is PID 1; finn_entrypoint.sh still runs and still execs the command.
 #
-# CMD is `sleep infinity`, not `bash`: sbx starts the container detached, and a
-# bash with no TTY exits immediately. run-docker.sh passes an explicit command
-# for every mode and is unaffected, but note that a bare
-# `docker run -it xilinx/finn` no longer lands in a shell - use
-# `./run-docker.sh` or pass `bash` explicitly.
+# CMD stays `bash` - the interactive default a bare `docker run -it` expects.
+#
+# sbx does NOT use this CMD: it runs the image ENTRYPOINT but substitutes its
+# own keep-alive command, so PID 1 in a sandbox reads
+#
+#   /usr/bin/tini -- finn_entrypoint.sh sh -c 'trap ...; sleep infinity & wait'
+#
+# An earlier revision set CMD to `sleep infinity` believing a bash with no TTY
+# was what killed the sandbox. It was not - the entrypoint's fatal "no FINN
+# source" check was, because sbx starts PID 1 with cwd=/. That check is now a
+# warning, and CMD is irrelevant to sbx either way.
 ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
-CMD ["sleep", "infinity"]
+CMD ["bash"]
 
 
 # --- build: + the non-Python build data. Vivado / Vitis HLS flows. -----------
