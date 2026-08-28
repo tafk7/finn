@@ -96,6 +96,23 @@ class KernelDemand:
 
 
 @dataclass(frozen=True)
+class KernelExport:
+    """One Kernel-derived value the enclosing scope reads by a stable name.
+
+    Exports let a pool present one path for a value every member derives its
+    own way.  They carry no selection semantics of their own.
+    """
+
+    name: str
+    path: QualifiedPath
+    value_semantics: ValueSemantics[object]
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("export name must not be empty")
+
+
+@dataclass(frozen=True)
 class SelectedKernel:
     """The committed identity of one Kernel inside one selection."""
 
@@ -120,6 +137,7 @@ class Kernel:
     feasibility_constraints: tuple[QualifiedPath, ...] = ()
     source_admission_constraints: tuple[QualifiedPath, ...] = ()
     demands: tuple[KernelDemand, ...] = ()
+    exports: tuple[KernelExport, ...] = ()
     providers: tuple[KernelProvider, ...] = ()
 
     def __post_init__(self) -> None:
@@ -165,6 +183,23 @@ class Kernel:
                     f"demand interface {duplicate!r} is declared twice",
                 )
             )
+        for duplicate in duplicate_values(tuple(item.name for item in self.exports)):
+            issues.append(
+                SpecAuthoringIssue(
+                    "kernel-export-name-duplicate",
+                    f"{self.id}.{duplicate}",
+                    f"export name {duplicate!r} is declared twice",
+                )
+            )
+        for export in self.exports:
+            if export.path not in properties:
+                issues.append(
+                    SpecAuthoringIssue(
+                        "kernel-export-path-missing",
+                        str(export.path),
+                        "the exported path is not one of the Kernel's properties",
+                    )
+                )
         for demand in self.demands:
             if demand.port_path not in properties:
                 issues.append(
@@ -192,6 +227,13 @@ class Kernel:
 
     def demand(self, interface: str) -> KernelDemand | None:
         return next((item for item in self.demands if item.interface == interface), None)
+
+    @property
+    def export_names(self) -> tuple[str, ...]:
+        return tuple(export.name for export in self.exports)
+
+    def export(self, name: str) -> KernelExport | None:
+        return next((item for item in self.exports if item.name == name), None)
 
     def place(
         self,
@@ -237,6 +279,10 @@ class Kernel:
             tuple(mapping[path] for path in self.feasibility_constraints),
             tuple(mapping[path] for path in self.source_admission_constraints),
             tuple(KernelDemand(item.interface, mapping[item.port_path]) for item in self.demands),
+            tuple(
+                KernelExport(item.name, mapping[item.path], item.value_semantics)
+                for item in self.exports
+            ),
             self.providers,
         )
 
@@ -251,14 +297,19 @@ class KernelSelectionPaths:
     region_validation: QualifiedPath
     region_structurally_well_formed: QualifiedPath
     demands: Mapping[str, QualifiedPath] = field(default_factory=dict)
+    exports: Mapping[str, QualifiedPath] = field(default_factory=dict)
 
     def demand(self, interface: str) -> QualifiedPath:
         return self.demands[interface]
+
+    def export(self, name: str) -> QualifiedPath:
+        return self.exports[name]
 
 
 def _selection_paths(
     name: str,
     interfaces: tuple[str, ...],
+    exports: tuple[str, ...],
 ) -> KernelSelectionPaths:
     return KernelSelectionPaths(
         QualifiedPath(f"{name}.kernel"),
@@ -270,6 +321,7 @@ def _selection_paths(
             interface: QualifiedPath(f"semantic.{name}.demand.{interface}")
             for interface in interfaces
         },
+        {export: QualifiedPath(f"semantic.{name}.export.{export}") for export in exports},
     )
 
 
@@ -342,8 +394,17 @@ class KernelSelection:
         return tuple(seen)
 
     @property
+    def export_names(self) -> tuple[str, ...]:
+        seen: list[str] = []
+        for kernel in self.kernels:
+            for name in kernel.export_names:
+                if name not in seen:
+                    seen.append(name)
+        return tuple(seen)
+
+    @property
     def paths(self) -> KernelSelectionPaths:
-        return _selection_paths(self.name, self.demand_interfaces)
+        return _selection_paths(self.name, self.demand_interfaces, self.export_names)
 
     @property
     def structural_constraint_set(self) -> str:
@@ -487,6 +548,43 @@ class KernelSelection:
             applies_if=self.any_kernel_applies(),
         )
 
+    def _export_property(self, paths: KernelSelectionPaths, name: str) -> DerivedProperty:
+        owners = tuple(kernel for kernel in self.kernels if kernel.export(name) is not None)
+        semantics = cast(KernelExport, owners[0].export(name)).value_semantics
+        dependencies = tuple(
+            DependencyRef.property(
+                f"export_{index}",
+                cast(KernelExport, kernel.export(name)).path,
+                semantics,
+                absence=AbsenceMode.ALLOWS_ABSENT,
+            )
+            for index, kernel in enumerate(owners)
+        )
+
+        def select(values: DependencyView) -> Answer[object]:
+            present = tuple(value for value in values.values() if value is not ABSENT)
+            if not present:
+                return Absent(
+                    (
+                        Finding(
+                            FindingKind.LIMITATION,
+                            "kernel-export-not-declared",
+                            paths.export(name),
+                            f"the selected Kernel does not export {name!r}",
+                        ),
+                    )
+                )
+            if len(present) != 1:
+                raise AssertionError("at most one Kernel may derive one export")
+            return Decided(present[0])
+
+        return DerivedProperty(
+            paths.export(name),
+            semantics,
+            EvaluatorSpec(dependencies, select),
+            applies_if=self.any_kernel_applies(),
+        )
+
     def _selected_kernel_property(self, paths: KernelSelectionPaths) -> DerivedProperty:
         reference = self._kernel_ref("kernel_id")
         versions = {kernel.id: kernel.version for kernel in self.kernels}
@@ -603,6 +701,7 @@ __all__ = [
     "SELECTED_KERNEL_SEMANTICS",
     "Kernel",
     "KernelDemand",
+    "KernelExport",
     "KernelProvider",
     "KernelSelection",
     "KernelSelectionPaths",
