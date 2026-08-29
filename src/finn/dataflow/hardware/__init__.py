@@ -67,6 +67,13 @@ from finn.dataflow.hardware.selection import (
     HARDWARE_KERNEL_ID_SEMANTICS,
     HardwareKernelSelection,
 )
+from finn.dataflow.hardware.store import (
+    NO_ARTIFACT_STORE,
+    ArtifactKey,
+    ArtifactStore,
+    EmptyArtifactStore,
+    StoredArtifact,
+)
 
 __all__ = [
     "BINDING_PATH",
@@ -75,13 +82,17 @@ __all__ = [
     "DEFAULT_BUILDER",
     "HARDWARE_KERNEL_ID_SEMANTICS",
     "KERNEL_ARTIFACT_SCHEMA_VERSION",
+    "NO_ARTIFACT_STORE",
     "ArtifactIdentityError",
+    "ArtifactKey",
+    "ArtifactStore",
     "BoundRegion",
     "BuilderIdentity",
     "ComposedArtifactIdentity",
     "ComputationContract",
     "CoveragePattern",
     "EdgeCoverage",
+    "EmptyArtifactStore",
     "HardwareDesign",
     "HardwareKernel",
     "HardwareKernelSelection",
@@ -93,6 +104,7 @@ __all__ = [
     "RegionCoverage",
     "SourceFile",
     "SourceIdentity",
+    "StoredArtifact",
     "TargetIdentity",
     "bind_hardware_kernel",
     "bound_regions",

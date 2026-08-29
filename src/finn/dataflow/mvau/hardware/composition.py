@@ -23,6 +23,8 @@ from typing import cast
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
 from finn.dataflow.hardware import (
     DEFAULT_BUILDER,
+    NO_ARTIFACT_STORE,
+    ArtifactStore,
     BuilderIdentity,
     ComposedArtifactIdentity,
     KernelArtifactIdentity,
@@ -675,13 +677,24 @@ def build_decomposed_artifact_requirements(
 
 
 def write_decomposed_artifact(
-    requirements: MVAUDecomposedArtifactRequirements, output_directory: str | Path
+    requirements: MVAUDecomposedArtifactRequirements,
+    output_directory: str | Path,
+    *,
+    store: ArtifactStore = NO_ARTIFACT_STORE,
 ) -> tuple[str, ...]:
     """Stage the declared sources and the generated top, in compile order.
 
     Returns the file list a simulator or synthesizer should read, with the
     generated wrapper last because it instantiates everything before it.
+
+    The store is consulted first, and a hit is returned without writing
+    anything -- which is the entire point of the identity.  The default store
+    answers no to everything, so today this always builds.
     """
+
+    found = store.lookup(requirements.identity)
+    if found is not None:
+        return found.files
 
     verify_manifest(requirements.source_dependencies)
     output = Path(output_directory).resolve()
