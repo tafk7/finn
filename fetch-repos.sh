@@ -50,7 +50,7 @@ AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
 # FinnLib supplies dotp_axi and its cores, which the decomposed MVAU compiles
 # against.  Bump this together with any change to the decomposed provider's
 # source manifest; FINNLIB_ROOT overrides the checkout for local work.
-FINNLIB_COMMIT="8c6ff9851f882b298108e8e37b0a9da3fe389e1d"
+FINNLIB_COMMIT="97cdc4ee2961354c17792eec9bf72365553eb55f"
 
 QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"
@@ -61,9 +61,9 @@ XIL_BDF_URL="https://github.com/Xilinx/XilinxBoardStore.git"
 RFSOC4x2_BDF_URL="https://github.com/RealDigitalOrg/RFSoC4x2-BSP.git"
 KV260_BDF_URL="https://github.com/Xilinx/XilinxBoardStore.git"
 AUPZU3_BDF_URL="https://github.com/RealDigitalOrg/aup-zu3-bsp.git"
-# TODO: point at our own fork once it exists, so our RTL changes ship through
-# this pin rather than through a local working clone.  Upstream today.
-FINNLIB_URL="${FINNLIB_URL:-git@gitenterprise.xilinx.com:tpreusse/finnlib.git}"
+# Our fork, so RTL changes ship through this pin rather than through someone's
+# local working clone.  Upstream is tpreusse/finnlib.
+FINNLIB_URL="${FINNLIB_URL:-git@gitenterprise.xilinx.com:tkeller/finnlib.git}"
 
 QONNX_DIR="qonnx"
 FINN_EXP_DIR="finn-experimental"

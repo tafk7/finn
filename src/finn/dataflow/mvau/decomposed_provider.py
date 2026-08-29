@@ -74,11 +74,11 @@ FINN_SOURCE_FILES = (
 
 #: FinnLib's half, relative to the FinnLib root.  Order is compile order.
 FINNLIB_SOURCE_FILES = (
-    "rtl/add_multi_pkg.sv",
-    "rtl/add_multi.sv",
-    "rtl/dotp_8sx9_dsp58.sv",
-    "rtl/dotp.sv",
-    "rtl/dotp_axi.sv",
+    "rtl/arith/add_multi_pkg.sv",
+    "rtl/arith/add_multi.sv",
+    "rtl/linalg/dotp_8sx9_dsp58.sv",
+    "rtl/linalg/dotp.sv",
+    "rtl/linalg/dotp_axi.sv",
 )
 
 #: Where ``fetch-repos.sh`` places the pinned FinnLib checkout.

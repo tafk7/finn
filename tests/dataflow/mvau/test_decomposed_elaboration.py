@@ -252,8 +252,8 @@ def test_the_manifest_names_both_repositories_in_compile_order() -> None:
     # dotp_axi instantiates dotp, which instantiates dotp_8sx9_dsp58; the
     # package comes before everything that imports it.
     paths = [path for _, path in manifest]
-    assert paths.index(str(FINN_ROOT / "nowhere" / "rtl/add_multi_pkg.sv")) < paths.index(
-        str(FINN_ROOT / "nowhere" / "rtl/dotp_axi.sv")
+    assert paths.index(str(FINN_ROOT / "nowhere" / "rtl/arith/add_multi_pkg.sv")) < paths.index(
+        str(FINN_ROOT / "nowhere" / "rtl/linalg/dotp_axi.sv")
     )
 
 
