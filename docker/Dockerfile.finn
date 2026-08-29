@@ -407,53 +407,25 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
 # makes every unrelated process in the dev tier pay for it. The entrypoint sets
 # it when it actually finds Xilinx tools to source.
 
-# The sbx (Docker Sandboxes) template contract.
+# A non-root default identity, and PID 1 that reaps.
 #
-# sbx boots a template as a microVM and then applies "kits" over it that write
-# the agent's configuration. Those kits assume a specific shape, so an image
-# that does not provide it fails at create with nothing more informative than
-# "failed to run sandbox container".
+# These are generic good practice, not sbx-specific, so they belong in the
+# image everyone uses. The parts of the sbx template contract that grant actual
+# privilege -- NOPASSWD sudo above all -- live in the sbx-* targets at the
+# bottom of this file, so that a tag says which privilege model you got.
 #
-# Docker's supported route is to extend docker/sandbox-templates, which is NOT
-# open to FINN: those images are Ubuntu 26.04 on Python 3.14, and torch 2.8
-# publishes no cp314 wheel, so FINN's pinned stack cannot install there. The
-# build tiers are pinned to an LTS by XRT and Vivado regardless. So FINN owns
-# its base and reproduces the contract here.
-#
-# Each line below was established by bisecting real create failures against a
-# stock template, not from documentation:
-#
-#   agent uid 1000 + NOPASSWD sudo  - kits run as `agent` and need to write.
-#   /home/agent mode 755, with .claude/.local/.npm/.cache/workspace present
-#                                   - a bare 0750 home fails kit install with
-#                                     "cannot create .../settings.json:
-#                                     Permission denied". This one is in no
-#                                     documentation; it came from diffing a
-#                                     stock template.
-#   tini as PID 1                   - reaps zombies. Also what run-docker.sh's
-#                                     --init provides for Vivado, so on sbx
-#                                     that need is already covered.
-#   CMD that does not exit          - sbx starts the container detached. The
-#                                     previous CMD ["bash"] exited instantly
-#                                     with no TTY and took the sandbox with it.
-#   NO_PROXY / no_proxy             - without it loopback traffic is pushed
-#                                     through the egress proxy.
-#
-# This is reverse-engineered and therefore breakable by an sbx release; it is
-# verified by creating a sandbox from this image with plain `sbx`, no wrapper.
+#   agent uid 1000     a stable, non-root identity. run-docker.sh still
+#                      overrides it with --user $UID:$GID.
+#   /home/agent 0755   with .claude/.local/.npm/.cache/workspace present. A bare
+#                      0750 home fails sbx kit install with "cannot create
+#                      .../settings.json: Permission denied". That requirement
+#                      is in no documentation; it came from diffing a stock
+#                      template. Harmless here, and keeping the home layout in
+#                      one place avoids a second chown -R in the sbx layer.
+#   tini as PID 1      reaps zombies. Also what run-docker.sh's --init provided
+#                      for Vivado, so that flag is now redundant.
 RUN set -eu; \
     useradd --create-home --uid 1000 --shell /bin/bash agent 2>/dev/null || true; \
-    usermod -aG sudo agent 2>/dev/null || true; \
-    echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
-    # Proxy variables must survive sudo -- an explicit requirement of the sbx
-    # template contract. Ubuntu ships these env_keep lines commented out, so
-    # without this anything the agent runs under sudo silently loses its proxy
-    # configuration and its network calls fail in a way that looks like an
-    # egress-policy denial. Mirrors docker/sandbox-templates.
-    echo 'Defaults:%sudo env_keep += "http_proxy https_proxy ftp_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY SSL_CERT_FILE NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE JAVA_TOOL_OPTIONS"' >> /etc/sudoers.d/agent; \
-    chmod 0440 /etc/sudoers.d/agent; \
-    touch /etc/sandbox-persistent.sh; \
-    chmod 0644 /etc/sandbox-persistent.sh; \
     chmod 0755 /home/agent; \
     mkdir -p /home/agent/.claude /home/agent/.local/bin /home/agent/.npm \
              /home/agent/.cache /home/agent/workspace; \
@@ -630,4 +602,68 @@ RUN if [ -f /tmp/v80pp.deb ]; then \
         rm -rf /var/lib/apt/lists/*; \
     fi
 
+USER agent
+
+
+# =============================================================================
+# sbx targets: the generic image plus the privileged half of the sbx template
+# contract.
+#
+# WHY SEPARATE TARGETS AND NOT A BUILD ARGUMENT
+# ---------------------------------------------
+# NOPASSWD sudo is a real capability. Gating it behind a build argument would
+# produce two images with materially different privilege that are
+# indistinguishable by tag -- a hidden variant. A named target puts the
+# privilege model in the tag, where anything reading the image can see it.
+#
+# WHY NOT A SEPARATE DOCKERFILE
+# -----------------------------
+# Inheritance ENFORCES behavioural equivalence with the generic image; a second
+# Dockerfile only hopes for it. BuildKit shares every lower layer, so the
+# marginal cost of these targets is one thin layer each, not a second image.
+# Duplicated paths drifting is exactly the failure that produced the mount
+# defects this redesign started from -- adding a second axis of duplication
+# would be the wrong lesson to draw.
+#
+# WHAT SBX NEEDS THAT THE GENERIC IMAGE DELIBERATELY WITHHOLDS
+# ------------------------------------------------------------
+#   NOPASSWD sudo    sbx kits run as `agent` and install software.
+#   proxy env_keep   Ubuntu ships these commented out. Without them anything
+#                    the agent runs under sudo silently loses its proxy config
+#                    and its network calls fail looking like an egress denial.
+#   /etc/sandbox-persistent.sh
+#                    sbx-managed; the image must never WRITE it, but the file
+#                    has to exist for BASH_ENV to source on the first shell.
+#   NPM_CONFIG_PREFIX
+#                    for harnesses that `npm install -g`. Paired with its bin
+#                    dir on PATH already, in the generic ENV -- setting the
+#                    prefix alone puts the binary somewhere unreachable and the
+#                    install appears to succeed, then `command -v` fails 127.
+#
+# In-container root here is NOT a violation of the dev tier's "no privileges"
+# contract, which is about HOST exposure: no devices, no added capabilities, no
+# privileged mode, no sensitive writable mounts. The conformance suite asserts
+# both readings separately.
+#
+# Reverse-engineered from bisecting real create failures, therefore breakable
+# by an sbx release. Verified by creating a sandbox with plain `sbx`, no
+# wrapper.
+# =============================================================================
+
+FROM dev AS sbx-dev
+USER root
+COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
+RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh
+USER agent
+
+FROM build AS sbx-build
+USER root
+COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
+RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh
+USER agent
+
+FROM build-xrt AS sbx-build-xrt
+USER root
+COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
+RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh
 USER agent

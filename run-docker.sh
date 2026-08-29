@@ -138,12 +138,19 @@ finn_git_describe () {
 # exactly the unsoundness §2.1 describes. build-xrt needs no such marker: its tag
 # already carries XRT_DEB_VERSION, which differs per profile (22.04 vs 24.04),
 # and keeping its historical shape is what the Jenkins publish path relies on.
+# The sbx-* targets are the same lineage plus the privileged half of the sbx
+# template contract (NOPASSWD sudo, proxy env_keep, sandbox-persistent.sh). They
+# get their own tags rather than a build argument so that the privilege model is
+# visible in the tag rather than hidden inside identically-named images.
 finn_compute_tag () {
   case "$1" in
-    dev)       echo "xilinx/finn:dev-$FINN_PROFILE-$(finn_git_describe)" ;;
-    build)     echo "xilinx/finn:build-$FINN_PROFILE-$(finn_git_describe --dirty)" ;;
-    build-xrt) echo "xilinx/finn:$(finn_git_describe --dirty).$XRT_DEB_VERSION" ;;
-    *)         return 1 ;;
+    dev)           echo "xilinx/finn:dev-$FINN_PROFILE-$(finn_git_describe)" ;;
+    build)         echo "xilinx/finn:build-$FINN_PROFILE-$(finn_git_describe --dirty)" ;;
+    build-xrt)     echo "xilinx/finn:$(finn_git_describe --dirty).$XRT_DEB_VERSION" ;;
+    sbx-dev)       echo "xilinx/finn:sbx-dev-$FINN_PROFILE-$(finn_git_describe)" ;;
+    sbx-build)     echo "xilinx/finn:sbx-build-$FINN_PROFILE-$(finn_git_describe --dirty)" ;;
+    sbx-build-xrt) echo "xilinx/finn:sbx-$(finn_git_describe --dirty).$XRT_DEB_VERSION" ;;
+    *)             return 1 ;;
   esac
 }
 
@@ -192,13 +199,20 @@ fi
 
 DOCKER_INTERACTIVE=""
 
+# The build TARGET may be sbx-qualified (sbx-dev, sbx-build, sbx-build-xrt);
+# the TIER never is. Every capability decision below -- does this get a Xilinx
+# mount, a licence, egress, board data -- is a property of the tier, so it must
+# not have to know whether the sbx variant was selected. Deriving it once here
+# is what keeps `dev` meaning the same thing on both backends.
+FINN_TIER="${FINN_DOCKER_TARGET#sbx-}"
+
 # Catch FINN_DOCKER_EXTRA options being passed in without a trailing space
 FINN_DOCKER_EXTRA+=" "
 
 # The dev tier is defined by the absence of all of this: no Xilinx mount, no
 # licence, no platform repos. Warning about unset Xilinx variables there would
 # be noise about a deliberate property of the image.
-if [ "$FINN_DOCKER_TARGET" != "dev" ]; then
+if [ "$FINN_TIER" != "dev" ]; then
   if [ -z "$FINN_XILINX_PATH" ];then
     recho "Please set the FINN_XILINX_PATH environment variable to the path to your Xilinx tools installation directory (e.g. /opt/Xilinx)."
     recho "FINN functionality depending on Vivado, Vitis or HLS will not be available."
@@ -211,7 +225,7 @@ if [ "$FINN_DOCKER_TARGET" != "dev" ]; then
 fi
 
 # Vitis/Alveo-only prerequisites: only build-xrt can use them at all.
-if [ "$FINN_DOCKER_TARGET" = "build-xrt" ]; then
+if [ "$FINN_TIER" = "build-xrt" ]; then
   if [ -z "$PLATFORM_REPO_PATHS" ];then
     recho "Please set PLATFORM_REPO_PATHS pointing to Vitis platform files (DSAs)."
     recho "This is required to be able to use Vitis-based Alveo PCIe cards."
@@ -241,16 +255,26 @@ fi
 BUILD_ONLY="0"
 if [ "$1" = "sbx" ]; then
   # ./run-docker.sh sbx [dev|build|build-xrt]
+  #
+  # The caller names a TIER; sbx mode selects the sbx-* variant of it. Keeping
+  # the sbx-ness out of the user-facing argument means a tier means the same
+  # thing on both backends, and the target/tag mapping stays in one place.
   if [ -n "$2" ]; then
     FINN_DOCKER_TARGET="$2"
-    if ! FINN_DOCKER_TAG=$(finn_compute_tag "$FINN_DOCKER_TARGET"); then
-      recho "Usage: $0 sbx [dev|build|build-xrt]"
-      exit 2
-    fi
   fi
-  gecho "sbx mode, tier $FINN_DOCKER_TARGET"
+  case "$FINN_DOCKER_TARGET" in
+    dev|build|build-xrt) FINN_DOCKER_TARGET="sbx-$FINN_DOCKER_TARGET" ;;
+    sbx-*) ;;   # already qualified
+    *) recho "Usage: $0 sbx [dev|build|build-xrt]"; exit 2 ;;
+  esac
+  if ! FINN_DOCKER_TAG=$(finn_compute_tag "$FINN_DOCKER_TARGET"); then
+    recho "Usage: $0 sbx [dev|build|build-xrt]"
+    exit 2
+  fi
+  gecho "sbx mode, target $FINN_DOCKER_TARGET"
   FINN_SBX_MODE="1"
   DOCKER_CMD="true"
+  BUILD_ONLY="0"
 elif [ "$1" = "build" ]; then
   if [ -n "$2" ]; then
     FINN_DOCKER_TARGET="$2"
@@ -306,6 +330,11 @@ else
   DOCKER_CMD="$@"
 fi
 
+# Recompute after the dispatch: `sbx` and `build` both accept a tier argument
+# and rewrite FINN_DOCKER_TARGET, so the value derived before the dispatch is
+# stale by here. Everything below keys capability decisions off FINN_TIER.
+FINN_TIER="${FINN_DOCKER_TARGET#sbx-}"
+
 # ensure build dir exists locally
 mkdir -p $FINN_HOST_BUILD_DIR
 mkdir -p $FINN_SSH_KEY_DIR
@@ -323,7 +352,7 @@ gecho "Port-forwarding for Netron $NETRON_PORT:$NETRON_PORT"
 # are ~900 MB of data it has no way to use, and the build tiers now carry their
 # own baked copies rather than reading them from the workspace.
 if [ "$FINN_SKIP_DEP_REPOS" = "0" ]; then
-  if [ "$FINN_DOCKER_TARGET" = "dev" ]; then
+  if [ "$FINN_TIER" = "dev" ]; then
     ./fetch-repos.sh python || exit 1
   else
     ./fetch-repos.sh || exit 1
@@ -356,7 +385,7 @@ case "$XRT_OS_VERSION" in
   22.04) UBUNTU_CODENAME="jammy"; UBUNTU_TAG="jammy-20230126" ;;
   24.04) UBUNTU_CODENAME="noble"; UBUNTU_TAG="noble-20240801" ;;
   *)
-    if [ "$FINN_DOCKER_TARGET" = "build-xrt" ] && [ -z "$FINN_SKIP_XRT_DOWNLOAD" ]; then
+    if [ "$FINN_TIER" = "build-xrt" ] && [ -z "$FINN_SKIP_XRT_DOWNLOAD" ]; then
       recho "Cannot derive an Ubuntu release from XRT_DEB_VERSION='$XRT_DEB_VERSION'"
       recho "Expected xrt_<version>_<os>-<arch>-xrt with os one of 20.04, 22.04, 24.04."
       exit 1
@@ -531,7 +560,7 @@ fi
 # The Xilinx install is 267 GB and cannot be baked; it is mounted from the host.
 # The dev tier never mounts it - that, plus no licence variable, is what allows
 # the dev sandbox to run on a closed network.
-if [ ! -z "$FINN_XILINX_PATH" ] && [ "$FINN_DOCKER_TARGET" != "dev" ];then
+if [ ! -z "$FINN_XILINX_PATH" ] && [ "$FINN_TIER" != "dev" ];then
   if [[ "$FINN_XILINX_VERSION" =~ ^20([0-9]{2})\.(1|2)$ ]]; then
     year="${BASH_REMATCH[1]}"
     minor="${BASH_REMATCH[2]}"
@@ -684,7 +713,7 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   }
 
   # One sandbox per (tier, checkout). Lowercased; sbx requires it.
-  SBX_NAME=${FINN_SBX_NAME:-"finn-$FINN_DOCKER_TARGET-$(basename "$SCRIPTPATH")"}
+  SBX_NAME=${FINN_SBX_NAME:-"finn-$FINN_TIER-$(basename "$SCRIPTPATH")"}
   SBX_NAME=$(echo "$SBX_NAME" | tr '[:upper:]' '[:lower:]')
 
   gecho "Checking for an existing sandbox named $SBX_NAME"
@@ -726,7 +755,7 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   # entire point of it: the containment boundary is dev vs the rest, so leaking
   # a licence variable in here because it happens to be set in the caller's
   # shell would quietly widen the profile that exists to be narrow.
-  if [ "$FINN_DOCKER_TARGET" = "dev" ]; then
+  if [ "$FINN_TIER" = "dev" ]; then
     gecho "dev tier: no Xilinx mount, no licence, no toolchain egress"
   else
   # Mount the whole Xilinx ROOT read-only, exactly as the docker path does.
@@ -748,7 +777,7 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   if [ -n "$FINN_XILINX_PATH" ] && [ -d "$FINN_XILINX_PATH" ]; then
     SBX_ARGS+=("$FINN_XILINX_PATH:ro")
   else
-    recho "FINN_XILINX_PATH is unset or not a directory; the $FINN_DOCKER_TARGET tier needs it"
+    recho "FINN_XILINX_PATH is unset or not a directory; the $FINN_TIER tier needs it"
     exit 1
   fi
 
@@ -813,7 +842,7 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   # A floating licence needs raw TCP egress to PORT@HOST. sbx grants that
   # narrowly, per sandbox, so this does not require an open posture.
   for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
-    [ "$FINN_DOCKER_TARGET" = "dev" ] && continue
+    [ "$FINN_TIER" = "dev" ] && continue
     eval "lval=\${$lv:-}"
     [ -z "$lval" ] && continue
     ( IFS=':'; for entry in $lval; do
