@@ -1,12 +1,21 @@
 # FINN containerization: decisions and justification
 
 Date: 2026-08-28
-Revision: 2 (incorporates review feedback; D3, D4, D5 materially changed)
-Status: proposed. Nothing here is implemented except where marked **already true**.
+Revision: 3
+  r2 — review feedback; D3, D4 and D5 materially changed
+  r3 — `containerization-assessment.md` folded in and deleted; stage 9 added
+Status: **implemented.** All nine decisions are in the tree. The text below keeps
+its original proposal voice; `containerization-plan.md` records what was built
+and where it departed.
 
 This document records what to change about FINN's container story, what to leave
-alone, and why. It is written to stand on its own; it does not assume you have
-read `containerization.md` or `containerization-assessment.md`.
+alone, and why. It stands on its own. You do not have to read
+`containerization.md` first.
+
+Two names changed during implementation. `docker/finn-container-config` in D1
+and D1a became **`docker/finn-env`**, because the same program serves the host
+side and the container side. `docker/finn-sbx` in stage 9 is much smaller than
+planned, because sbx 0.39.0 added declarative environment files.
 
 ## The problem
 
@@ -457,3 +466,46 @@ step that goes stale. D1a is deliberately a *runtime* resolver instead.
 6. **D2 and D6 together** — the CI matrix must gain its capability field in the
    same step the default drops to `dev`.
 7. **D7** matrix status, then the full D8 suite.
+
+
+---
+
+# Appendix: the review that produced revision 2
+
+`containerization-assessment.md` was an independent review of the container
+story, done before any of this was built. It has been deleted rather than kept,
+because every finding is now either fixed or recorded here, and a document that
+states resolved problems in the present tense misleads a later reader.
+
+What it got right, and where each item went:
+
+| Finding | Outcome |
+|---|---|
+| Xilinx mounted read-write under docker | Fixed, defect 1 |
+| `run-docker.sh` is the authoritative build, runtime, CI and sandbox spec | D1 |
+| `build-xrt` as the default is Jenkins history | D2 |
+| Docker and sbx are not equivalent, and the differences are accidental | D1a |
+| `docker exec` bypasses the entrypoint, so the entrypoint cannot be load-bearing | D5 |
+| CI passes a mutable tag where it needs a digest | D6 |
+| py312 is documented as available but is not validated | D7 |
+| `containerization.md` has drifted from the implementation | Defects 5-8 |
+
+Where revision 2 disagreed with it, and why:
+
+- **A separate `Dockerfile.sbx`.** Rejected. BuildKit shares lower layers, so an
+  inherited target costs one thin layer, not a second image — measured, 26
+  layers against 28. Inheritance also *enforces* the equivalence that a second
+  Dockerfile could only hope for. See D3.
+- **A fixed `/workspace/finn` everywhere.** Adopted for `dev` only. Generated
+  Vivado projects embed `$::env(FINN_ROOT)`, so a project built under a fixed
+  path cannot be opened in the host GUI. See D4.
+- **Rejecting image labels outright.** Adopted in part: labels describe what the
+  image *is*, and `finn-env` resolves what it *needs*. See the "Deliberately not
+  adopted" section.
+
+Two things the review did not anticipate, both found by building it:
+
+- **`sbx env`.** sbx 0.39.0 ships declarative environment files, so most of the
+  sandbox launcher was reimplementing something sbx owns. See stage 9.
+- **The defect count.** The review named four; nine were found, and four of the
+  nine were the same fact derived in a fourth, fifth and sixth place.

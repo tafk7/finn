@@ -4,16 +4,64 @@
 Getting Started
 ***************
 
+Three ways to run FINN
+======================
+
+FINN runs in three ways. Each way has a different purpose. Select the way that
+agrees with your task.
+
+.. list-table::
+  :header-rows: 1
+
+  * - Way
+    - Command
+    - Use it for
+    - Isolation
+  * - Docker container
+    - ``docker compose run --rm dev``
+    - Development by a person
+    - None. This is a development environment, not a security boundary.
+  * - sbx sandbox
+    - ``docker/finn-sbx dev``
+    - Development by an autonomous agent
+    - A microVM with its own kernel and a network policy
+  * - Host system
+    - ``./setup-local.sh``
+    - Development with no container
+    - None
+
+The three ways use the same dependency versions, the same image tiers and the
+same toolchain resolver. A result in one way is therefore correct in the others.
+
+**Do not run an autonomous agent in the Docker container.** The container uses
+the kernel of the host and has full network access. An agent in the container
+can reach everything that your machine can reach. Use the sbx sandbox instead.
+
+FINN does not supply Vivado, Vitis or Vitis HLS. Install these tools yourself.
+FINN mounts your installation read-only.
+
 Quickstart
 ==========
 
-1. Install Docker to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_
-2. Set up ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` environment variables pointing respectively to the Xilinx tools installation directory and version (e.g. ``FINN_XILINX_PATH=/opt/Xilinx`` and ``FINN_XILINX_VERSION=2022.2``)
-3. Clone the FINN compiler from the repo: ``git clone https://github.com/Xilinx/finn/`` and go into the directory where it is cloned
-4. Execute ``./run-docker.sh quicktest verify`` to verify your installation. It is normal to see warnings during the tests - FINN uses warnings to inform users about certain conditions. As long as all tests pass, your installation is successful.
-5. Optionally, follow the instructions on :ref:`PYNQ board first-time setup`, :ref:`Vitis-based Alveo first-time setup`, or :ref:`Slash-based Alveo first-time setup` for board setup.
-6. Optionally, set up a `Vivado/Vitis license`_.
-7. All done! See :ref:`Running FINN in Docker` for the various options on how to run the FINN compiler.
+1. Install Docker. Configure it to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
+2. Install the Docker Buildx and Docker Compose plugins. Docker Desktop and the
+   Docker packages contain them. The distribution package ``docker.io`` does not:
+
+   .. code-block:: bash
+
+     sudo apt install docker-buildx-plugin docker-compose-plugin
+
+3. Set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``. These give the
+   directory and the version of your Xilinx tools, for example
+   ``FINN_XILINX_PATH=/opt/Xilinx`` and ``FINN_XILINX_VERSION=2022.2``.
+4. Clone the FINN compiler: ``git clone https://github.com/Xilinx/finn/``. Go
+   into the new directory.
+5. Run ``./run-docker.sh quicktest verify`` to verify the installation.
+   Warnings during the tests are normal. FINN uses warnings to tell you about
+   some conditions. The installation is correct if all tests pass.
+6. Optional: for board setup, obey the instructions in :ref:`PYNQ board first-time setup`, :ref:`Vitis-based Alveo first-time setup` or :ref:`Slash-based Alveo first-time setup`.
+7. Optional: set up a `Vivado/Vitis license`_.
+8. See :ref:`Running FINN in Docker` for the other ways to run the compiler.
 
 
 How do I use FINN?
@@ -47,10 +95,37 @@ by using the "advanced mode" described in the :ref:`command_line` section.
 
 Running FINN in Docker
 ======================
-FINN runs inside a Docker container, it comes with a script to easily build and launch the container. If you are not familiar with Docker, there are many excellent `online resources <https://docker-curriculum.com/>`_ to get started.
-You may want to review the :ref:`General FINN Docker tips` and :ref:`Environment variables` as well.
 
-The above mentioned script to build and launch the FINN docker container is called `run-docker.sh <https://github.com/Xilinx/finn/blob/main/run-docker.sh>`_ . It can be launched in the following modes:
+There are two commands for the Docker container. Both do the same work.
+
+Docker Compose is the standard command:
+
+.. code-block:: bash
+
+  docker compose run --rm dev                    # a shell
+  docker compose run --rm dev quicktest.sh       # the fast tests
+  docker compose --profile fpga run --rm build   # Vivado and Vitis HLS
+  docker compose --profile notebook up           # Jupyter
+
+The ``dev`` tier needs no configuration. For the tiers that use the Xilinx
+tools, make the host settings one time:
+
+.. code-block:: bash
+
+  ./docker/finn-env inspect --tier build --format sh > .env
+
+The ``.env`` file is a cache. One program writes it. Do not edit it. If it is
+not correct, delete it and make it again.
+
+`run-docker.sh <https://github.com/Xilinx/finn/blob/main/run-docker.sh>`_ is the
+older command. It continues to work, and it accepts all the variables that it
+always accepted. It now translates its arguments into the commands above. Use
+Docker Compose for new work.
+
+If Docker is new to you, there are good `online resources <https://docker-curriculum.com/>`_.
+Read :ref:`General FINN Docker tips` and :ref:`Environment variables` also.
+
+``run-docker.sh`` has these modes:
 
 Launch interactive shell
 ************************
@@ -112,13 +187,13 @@ The most relevant are summarized below:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") pass extra arguments to the ``docker run`` command when executing ``./run-docker.sh``
 * (optional) ``FINN_SKIP_DEP_REPOS`` (default "0") skips the download of FINN dependency repos (uses the ones already downloaded under deps/.
-* (optional) ``FINN_DOCKER_TARGET`` (default "build-xrt") selects the image tier: ``dev`` (no XRT, no Xilinx mount, no licence - suitable for a closed-network sandbox), ``build`` (adds finn-hlslib and board files for RTL/HLS work), or ``build-xrt`` (adds XRT for Vitis/Alveo/V80 targets).
-* (optional) ``FINN_DEPS`` (default "live") controls how qonnx, brevitas and finn-experimental resolve. ``live`` uses the checkouts under ``deps/``, so edits and branch switches take effect immediately. ``frozen`` uses the wheels baked into the image at the ``deps.env`` pins.
+* (optional) ``FINN_DOCKER_TARGET`` (default "build") selects the image tier. ``dev`` has no XRT, no Xilinx mount and no licence, so it runs on a closed network. ``build`` adds finn-hlslib and the board files for RTL and HLS work. ``build-xrt`` adds XRT for Vitis, Alveo and V80 targets. Note that RTL simulation uses the ``xsim`` tool of Vivado, not XRT. If ``FINN_XILINX_PATH`` is not set, ``run-docker.sh`` gives a warning and uses ``dev``. Docker Compose and Bake use ``dev`` as the default.
+* (optional) ``FINN_DEPS`` (default "frozen") selects the source of qonnx, brevitas and finn-experimental. ``frozen`` uses the wheels in the image, at the versions in ``deps.env``. ``live`` uses the checkouts in ``deps/``, so your edits take effect immediately; if a checkout is missing, FINN stops and tells you which one. ``auto`` uses a checkout if it is present, and the wheel if it is not.
 * (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
 * (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
 * (optional) ``FINN_XRT_SHA256`` (default "") pins the sha256 of the downloaded XRT .deb. The build prints the observed checksum when this is unset.
 * (optional) ``DOCKER_BUILDKIT`` (default "1") enables `Docker BuildKit <https://docs.docker.com/develop/develop-images/build_enhancements/>`_ for faster Docker image rebuilding (recommended).
-* (optional) ``FINN_SINGULARITY`` (default "") points to a pre-built Singularity image to use instead of the Docker image. Singularity support is experimental and intended only for systems where Docker is unavailable.
+* ``FINN_SINGULARITY`` is **removed**. It changed the Docker argument list into Singularity arguments, and Docker Compose now builds that list. If you use Singularity, get the mounts and the environment from ``./docker/finn-env inspect --tier <tier> --format json`` and build the command yourself.
 
 General FINN Docker tips
 ************************
@@ -223,11 +298,16 @@ Start on the target side:
 
 Continue on the host side (replace the ``<PYNQ_IP>`` and ``<PYNQ_USERNAME>`` with the IP address and username of your board from the first step):
 
-1. Launch the Docker container from where you cloned finn with ``./run-docker.sh``
-2. Go into the `ssh_keys` directory  (e.g. ``cd /path/to/finn/ssh_keys``)
-3. Run ``ssh-keygen`` to create a key pair e.g. ``id_rsa`` private and ``id_rsa.pub`` public key
-4. Run ``ssh-copy-id -i id_rsa.pub <PYNQ_USERNAME>@<PYNQ_IP>`` to install the keys on the remote system
-5. Test that you can ``ssh <PYNQ_USERNAME>@<PYNQ_IP>`` without having to enter the password. Pass the ``-v`` flag to the ssh command if it doesn't work to help you debug.
+1. Set ``FINN_SSH_KEY_DIR`` to the directory that holds your keys, for example
+   ``export FINN_SSH_KEY_DIR=/path/to/finn/ssh_keys``. FINN mounts this
+   directory only when you set the variable. Earlier versions mounted
+   ``finn/ssh_keys`` always.
+2. Start the Docker container from the directory where you cloned FINN:
+   ``./run-docker.sh``
+3. Go into the ``ssh_keys`` directory, for example ``cd /path/to/finn/ssh_keys``
+4. Run ``ssh-keygen`` to make a key pair, for example the private key ``id_rsa`` and the public key ``id_rsa.pub``
+5. Run ``ssh-copy-id -i id_rsa.pub <PYNQ_USERNAME>@<PYNQ_IP>`` to install the keys on the remote system
+6. Make sure that ``ssh <PYNQ_USERNAME>@<PYNQ_IP>`` does not ask for a password. If it asks for a password, add the ``-v`` flag to the ssh command to find the cause.
 
 
 Vitis-based Alveo first-time setup

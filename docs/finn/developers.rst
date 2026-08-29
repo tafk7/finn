@@ -65,8 +65,13 @@ important to understand how we handle this in Docker.
 Image tiers
 -----------
 
-docker/Dockerfile.finn defines three targets, each a superset of the last.
-Select one with ``FINN_DOCKER_TARGET``; the default is ``build-xrt``.
+``docker/Dockerfile.finn`` defines six targets. Three are tiers. Each tier is a
+superset of the tier before it. Each tier also has an ``sbx-`` variant.
+
+Select a tier with ``FINN_DOCKER_TARGET``. The default is ``build`` for
+``run-docker.sh``, and ``dev`` for Docker Compose and Bake. The two defaults are
+different on purpose. A person who uses ``run-docker.sh`` expects Vivado. A new
+contributor or an agent must get a usable environment with no configuration.
 
 .. list-table::
   :header-rows: 1
@@ -86,14 +91,25 @@ Select one with ``FINN_DOCKER_TARGET``; the default is ``build-xrt``.
     - Vitis, Alveo and V80 targets. XRT is needed only on these paths - notably
       *not* for rtlsim, which uses Vivado's xsim.
 
-Build one without running it:
+The ``sbx-`` variants add the privileged part of the sbx template contract:
+``NOPASSWD`` sudo, proxy variables that stay set through sudo, and
+``/etc/sandbox-persistent.sh``. Only the sbx sandbox lane uses these variants.
+They are separate targets, not a build argument, because the tag must show which
+privilege model you have.
+
+To build an image but not run it:
 
 .. code-block:: bash
 
   ./run-docker.sh build dev
+  docker buildx bake -f docker-bake.hcl dev-py310
 
-None of the images bake a user. Identity is applied at runtime by
-``--user``, so one image serves every developer and the tag means what it says.
+``docker-bake.hcl`` holds the build matrix, the build arguments, the labels and
+the tag rule. It is the only place that computes a tag.
+
+No image contains a user identity. Docker applies the identity at run time with
+``--user``. One image is therefore correct for every developer, and the tag
+agrees with the contents.
 
 Dependency handling
 -------------------
@@ -113,11 +129,30 @@ in-progress edits to qonnx or brevitas survive a container launch.
 
 Inside the image, qonnx, brevitas and finn-experimental are installed as
 ordinary wheels, which carry their dependency closure, metadata and console
-scripts. They are normally shadowed: ``FINN_DEPS=live`` (the default) puts
-``$FINN_ROOT/deps/*/src`` ahead of them on ``sys.path``, so edits and branch
-switches take effect with no reinstall. ``FINN_DEPS=frozen`` skips the shadowing
-and pins the deps to the commits in ``deps.env``. FINN's own ``src`` is always
-resolved from the workspace and is never baked.
+scripts. ``FINN_DEPS`` selects which source wins:
+
+.. list-table::
+  :header-rows: 1
+
+  * - Value
+    - Effect
+  * - ``frozen``
+    - Use the wheels in the image. This is the **default**. The dependency
+      commits are the commits in ``deps.env``.
+  * - ``live``
+    - Use the checkouts in ``$FINN_ROOT/deps/*/src``. Your edits take effect
+      immediately. If a checkout is missing, FINN stops and tells you which one.
+  * - ``auto``
+    - Use a checkout if it is present. If it is not present, use the wheel.
+
+The default was ``live`` in earlier versions. That default fell back to the
+wheels without a message when a checkout was missing. An unattended run could
+therefore use either source, and the output did not say which. ``frozen`` is
+also necessary for reproducible CI: FINN mounts its source, so the image digest
+identifies the environment but not the code.
+
+FINN's own ``src`` always comes from the workspace. FINN is never baked into
+the image.
 
 The two non-Python dependencies are reached through ``FINN_HLSLIB_PATH`` and
 ``FINN_BOARD_FILES_PATH``. These default to the historical ``deps/`` locations;

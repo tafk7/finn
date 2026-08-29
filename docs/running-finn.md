@@ -1,231 +1,235 @@
 # Running FINN
 
-FINN supports three ways to run, for three different purposes. Pick the one
-that matches what you are doing; they are not ranked, and none is a fallback
-for another.
+FINN runs in three ways. Each way has a different purpose. Select the way that
+agrees with your task. No way is better than the others.
 
-| | Lane | Use it for | Isolation |
+| | Way | Use it for | Isolation |
 |---|---|---|---|
-| **1** | **Docker container** | setup-and-go human development | none — a dev environment, not a boundary |
-| **2** | **sbx sandbox** | autonomous agent development | microVM + egress policy |
-| **3** | **Bare host** | unstructured development | none |
+| **1** | **Docker container** | Development by a person | None. This is a development environment, not a security boundary. |
+| **2** | **sbx sandbox** | Development by an autonomous agent | A microVM with its own kernel and a network policy |
+| **3** | **Host system** | Development with no container | None |
 
-All three share the same dependency pins, the same tier definitions, and the
-same toolchain resolver, so a result in one lane means the same thing in the
-others.
+The three ways use the same dependency versions, the same image tiers and the
+same toolchain resolver. A result in one way is therefore correct in the others.
 
-## What FINN provides, and what you provide
+## What FINN gives you, and what you give FINN
 
-FINN ships the **software environment**: Python, the dependency closure, HLS
-headers, board files, and on the largest tier XRT. It does **not** ship Vivado,
-Vitis or Vitis HLS.
+FINN supplies the **software environment**: Python, the dependency set, the HLS
+headers, the board files, and XRT on the largest tier. FINN does **not** supply
+Vivado, Vitis or Vitis HLS.
 
-That split is practical rather than ideological. Engineers run different tool
-versions, install to local disk or to network storage, and are bound by AMD's
-distribution terms for the tools themselves. So FINN expects you to have your
-own installation and tells you how to connect it.
+This division is practical. Engineers use different tool versions. Some install
+the tools on a local disk, others on network storage. AMD also has distribution
+conditions for the tools. FINN therefore uses your installation, and this
+document tells you how to connect it.
 
-You provide:
+You supply:
 
-| | Set with | Needed by |
+| Item | Variable | Necessary for |
 |---|---|---|
-| Xilinx install location | `FINN_XILINX_PATH` | `build`, `build-xrt` |
+| Xilinx installation directory | `FINN_XILINX_PATH` | `build`, `build-xrt` |
 | Xilinx version | `FINN_XILINX_VERSION` | `build`, `build-xrt` |
-| A licence | `XILINXD_LICENSE_FILE` | anything that runs the tools |
+| A licence | `XILINXD_LICENSE_FILE` | All tool operations |
 | Vitis platforms | `PLATFORM_REPO_PATHS` | `build-xrt`, Alveo only |
 
-The install is always mounted **read-only**. The tools do not write into their
-own installation — verified with a real `synth_design` — and an agent with write
-access to a 267 GB install nobody wants to rebuild is the largest avoidable risk
-in this setup.
+FINN mounts the installation **read-only**. The tools do not write into their
+own installation. A real `synth_design` operation shows this. An agent with
+write access to a 267 GB installation is the largest unnecessary risk in this
+setup.
 
-Both licence forms work:
+The two licence types both operate:
 
-- `XILINXD_LICENSE_FILE=2100@licsrv.example` — a floating server. Nothing is
-  mounted; the sandbox is granted egress to that **host**. Not `host:port`:
-  FLEXlm hands back a second, usually ephemeral, vendor-daemon port after the
-  initial handshake, so a port-scoped rule lets `lmutil lmstat` succeed while
-  every real checkout fails with a misleading error.
-- `XILINXD_LICENSE_FILE=/path/to/Xilinx.lic` — node-locked. The containing
-  directory is mounted read-only at its own path.
+- `XILINXD_LICENSE_FILE=2100@licsrv.example` is a floating server. FINN mounts
+  nothing. FINN permits network access to that **host**.
 
-> **Node-locked licences in lane 2 are unverified.** FLEXlm binds a node-locked
-> licence to an Ethernet host ID, and a sandbox does not present the host's.
-> `docker run --mac-address` exists; sbx has no equivalent. Whether a
-> node-locked checkout succeeds in a sandbox is tracked as conformance test 9
-> and has not been run. Do not assume either answer.
+  FINN does not use `host:port`. FLEXlm gives a second port for the vendor
+  daemon after the first connection, and that port usually changes. A rule with
+  a port lets `lmutil lmstat` operate, but each subsequent licence request
+  fails with an incorrect message.
+
+- `XILINXD_LICENSE_FILE=/path/to/Xilinx.lic` is node-locked. FINN mounts the
+  parent directory read-only, at the same path.
+
+> **Node-locked licences in way 2 are not verified.** FLEXlm connects a
+> node-locked licence to an Ethernet host ID. A sandbox does not show the host
+> ID of the machine. The `docker run --mac-address` option exists, but sbx has
+> no equivalent. Conformance test 9 examines this. The test has not been run.
+> Do not assume a result.
 
 ## Tiers
 
-The same three tiers exist in every lane.
+The three tiers are the same in all three ways.
 
-| Tier | Adds | Needs from the host |
+| Tier | Adds | Necessary from the host |
 |---|---|---|
-| `dev` | Python, FINN and its dependency closure | **nothing** but the repo |
-| `build` | HLS headers, board files | Xilinx install, licence |
-| `build-xrt` | XRT, V80 support | + platform repository |
+| `dev` | Python, FINN and its dependencies | **Nothing** but the repository |
+| `build` | HLS headers, board files | Xilinx installation, licence |
+| `build-xrt` | XRT, V80 support | Also the platform repository |
 
-`dev` is defined by what it lacks. It has no toolchain mount, no licence, no
-secrets and no FINN-specific network egress, which is what lets an agent or a
-new contributor run it with no configuration at all. If you find yourself adding
-a host mount to `dev`, that is the signal to use `build` instead.
+The `dev` tier is defined by what it does not have. It has no toolchain mount,
+no licence, no secrets and no FINN network access. An agent or a new
+contributor can therefore use it with no configuration. If you must add a host
+mount to `dev`, use `build` instead.
 
-Note that RTL simulation needs Vivado's `xsim`, not XRT — so `build`, not
-`build-xrt`.
+RTL simulation uses the `xsim` tool of Vivado, not XRT. Use `build` for RTL
+simulation.
 
 ---
 
-## Lane 1 — Docker, for human development
+## Way 1 — Docker, for development by a person
 
 ```bash
 docker compose run --rm dev                      # a shell
-docker compose run --rm dev quicktest.sh         # the fast test suite
-docker compose --profile fpga run --rm build     # Vivado / Vitis HLS
+docker compose run --rm dev quicktest.sh         # the fast tests
+docker compose --profile fpga run --rm build     # Vivado and Vitis HLS
 docker compose --profile notebook up             # Jupyter
 ```
 
-`dev` needs no configuration. For the FPGA tiers, generate the host-specific
-values once:
+The `dev` tier needs no configuration. For the tiers that use the Xilinx tools,
+make the host settings one time:
 
 ```bash
 export FINN_XILINX_PATH=/opt/Xilinx FINN_XILINX_VERSION=2025.2
 ./docker/finn-env inspect --tier build --format sh > .env
 ```
 
-`.env` is a cache with a single producer. Never hand-edit it; delete and
-regenerate it if it looks stale.
+The `.env` file is a cache. One program writes it. Do not edit it. If it is not
+correct, delete it and make it again.
 
-### `run-docker.sh` — the legacy entry point
+### `run-docker.sh`, the older command
 
 ```bash
 ./run-docker.sh quicktest
-FINN_DOCKER_TARGET=build ./run-docker.sh bash
+FINN_DOCKER_TARGET=build-xrt ./run-docker.sh bash
 ```
 
-Still supported, still works, and every environment variable it ever took still
-works. It is now a translator onto the commands above and owns no configuration
-of its own. New work should target Compose directly; existing scripts and muscle
-memory need not change.
+This command continues to operate. It accepts all the variables that it always
+accepted. It now translates its arguments into the commands above, and it holds
+no configuration. Use Docker Compose for new work. You do not have to change
+your scripts or your habits.
 
-Three defaults differ from older versions of the script:
+Three defaults are different from earlier versions:
 
-- the default tier is `build`, not `build-xrt` — Vivado and Vitis HLS are
-  present, XRT and the platform repository are not. RTL simulation needs
-  `xsim`, not XRT. With no `FINN_XILINX_PATH` configured it warns and falls
-  back to `dev` rather than failing; an *explicit* `FINN_DOCKER_TARGET=build`
-  still errors, because that is a request rather than a default.
-  (Plain Compose and bake default to `dev`, which is right for a new
-  contributor or an agent.)
-- `dev` mounts the workspace at its host path under `run-docker.sh`, and at
-  `/workspace/finn` under plain Compose
-- `FINN_DEPS` defaults to `frozen`
+- The default tier is `build`, not `build-xrt`. Vivado and Vitis HLS are
+  available. XRT and the platform repository are not. If `FINN_XILINX_PATH` is
+  not set, the command gives a warning and uses `dev`. An explicit
+  `FINN_DOCKER_TARGET=build` still stops with an error, because that is a
+  request and not a default. Docker Compose and Bake use `dev`, which is
+  correct for a new contributor or an agent.
+- Under `run-docker.sh`, the `dev` tier mounts the workspace at its host path.
+  Under Docker Compose, it mounts the workspace at `/workspace/finn`.
+- `FINN_DEPS` is `frozen`.
 
-### This lane is not a security boundary
+### This way is not a security boundary
 
-The container shares the host kernel and has unrestricted network access.
-Running an autonomous agent in it means the agent can reach anything your
-machine can reach. The read-only toolchain mount and the narrow `dev` tier are
-there to prevent **accidents**, not to contain an adversary.
+The container uses the kernel of the host and has full network access. An
+autonomous agent in the container can reach everything that your machine can
+reach. The read-only toolchain mount and the small `dev` tier prevent
+**accidents**. They do not stop an attacker.
 
-For agent work, use lane 2.
+Use way 2 for agent work.
 
 ---
 
-## Lane 2 — sbx, for autonomous agent development
+## Way 2 — sbx, for development by an autonomous agent
 
 ```bash
-docker/finn-sbx dev                      # narrow: the repo, nothing else
-docker/finn-sbx build                    # + toolchain (ro) + licence egress
+docker/finn-sbx dev                      # only the repository
+docker/finn-sbx build                    # also the toolchain (ro) and licence access
 docker/finn-sbx build -- pytest -m util  # one command
-docker/finn-sbx rm build                 # tear down
+docker/finn-sbx rm build                 # remove the sandbox
 ```
 
-This is the lane with an actual boundary: a microVM with its own kernel, and
-egress denied by default with narrow per-sandbox allowances. `dev` gets no
-toolchain, no licence and no egress grant at all — not because the variables
-happen to be unset, but because the tier does not load the overlay that adds
+This way has a true boundary: a microVM with its own kernel. Network access is
+denied, with small permissions for each sandbox. The `dev` tier has no
+toolchain, no licence and no network permission. This is not because the
+variables are empty. It is because the tier does not read the file that adds
 them.
 
-Requires `sbx` ≥ 0.39.0, signed in.
+You must have sbx 0.39.0 or later, and you must be signed in.
 
-### How it is put together
+### How it is assembled
 
-`docker/sbxenv/base.sbxenv.yaml` declares what a FINN sandbox is; `fpga.sbxenv.yaml`
-is the capability escalation layered over it for the toolchain tiers.
-`sbx env run` handles create-or-attach. `docker/finn-sbx` does only the three
-things that file format cannot express: load a locally built template into sbx's
-image store, materialise the environment files outside every mounted workspace,
-and grant licence-server egress.
+`docker/sbxenv/base.sbxenv.yaml` declares what a FINN sandbox is.
+`fpga.sbxenv.yaml` adds the toolchain for the larger tiers. The `sbx env run`
+command creates the sandbox, or connects to it if it exists.
 
-The environment files are materialised outside the workspace deliberately. With
-a direct mount the agent can write every file it can see, so an environment file
-inside the workspace is a file the agent could edit to widen its own next
-sandbox.
+`docker/finn-sbx` does only the three tasks that the file format cannot do:
+
+1. Put a locally built image into the image store of sbx.
+2. Write the environment files to a directory outside all mounted workspaces.
+3. Permit network access to the licence server.
+
+Task 2 is necessary for safety. With a direct mount, the agent can write each
+file that it can read. An environment file in the workspace is therefore a file
+that the agent can change to make its next sandbox larger.
 
 ---
 
-## Lane 3 — bare host, for unstructured development
+## Way 3 — host system, for development with no container
 
 ```bash
 ./setup-local.sh
 ```
 
-Creates a virtualenv, fetches dependencies, installs FINN editable, resolves
-your Xilinx toolchain and builds `finn_xsi`.
+This command makes a virtual environment, gets the dependencies, installs FINN,
+finds your Xilinx toolchain and builds `finn_xsi`.
 
-To configure the toolchain in an existing shell:
+To set up the toolchain in a shell that you already have:
 
 ```bash
 eval "$(./docker/finn-env print --format sh)"
 ```
 
-`finn-env` is not container-specific — it resolves and sources a toolchain
-wherever it runs, which is why all three lanes share it. That sharing is not
-cosmetic: `setup-local.sh` previously had its own copy of the layout logic,
-hardcoded to the pre-2024.2 Xilinx directory structure, and reported "Vivado not
-found" on every recent install.
+`finn-env` is not only for containers. It finds a toolchain and sets it up
+wherever it runs. This is why all three ways use it.
 
-No isolation, and the least CI coverage of the three. Conformance test 10 covers
-the toolchain resolution; the rest is best-effort.
+The shared code is necessary. `setup-local.sh` had its own copy of this logic.
+That copy used the Xilinx directory structure from before 2024.2. It therefore
+reported "Vivado not found" on each recent installation.
+
+This way has no isolation and the least test coverage. Conformance test 10
+examines the toolchain resolution. The other parts have no tests.
 
 ---
 
-## Requirements
+## Necessary tools
 
-| Tool | Needed for | Where it comes from |
+| Tool | Necessary for | Source |
 |---|---|---|
-| Docker Engine | lanes 1 and 2 | any installation |
-| **`docker buildx`** | every image build | Docker Desktop, or Docker's own apt/yum packages |
-| **`docker compose`** | lane 1 | same |
-| Python 3 | `finn-env`, all lanes | every Linux distribution |
-| `sbx` ≥ 0.39.0 | lane 2 only | separate install |
-| Xilinx tools | `build` tiers only | your own installation |
+| Docker Engine | Ways 1 and 2 | Any installation |
+| **`docker buildx`** | All image builds | Docker Desktop, or the Docker packages |
+| **`docker compose`** | Way 1 | The same |
+| Python 3 | `finn-env`, all ways | Each Linux distribution |
+| `sbx` 0.39.0 or later | Way 2 only | A separate installation |
+| Xilinx tools | The `build` tiers only | Your own installation |
 
-**buildx and compose are CLI plugins, not part of the engine.** Docker Desktop
-and Docker's own packages include them; the distribution `docker.io` package
-does **not**. If you installed with `apt install docker.io`:
+Buildx and Compose are CLI plugins. They are not part of the engine. Docker
+Desktop and the Docker packages contain them. The distribution package
+`docker.io` does not contain them. If you installed Docker with
+`apt install docker.io`, do this:
 
 ```bash
 sudo apt install docker-buildx-plugin docker-compose-plugin
 ```
 
-Tested against: docker 29.6.1, buildx 0.35.0, compose 5.3.1, sbx 0.39.0.
+Tested with docker 29.6.1, buildx 0.35.0, compose 5.3.1 and sbx 0.39.0.
 
-## Where the pieces live
+## Where each part is
 
-| Concern | Owner |
+| Subject | File |
 |---|---|
-| What images exist, their names, their build inputs | `docker-bake.hcl` |
-| Where your toolchain is, licence form, mounts, egress | `docker/finn-env` |
-| Lane 1 runtime | `compose.yaml` |
-| Lane 2 runtime | `docker/sbxenv/*.sbxenv.yaml` |
-| Lane 3 setup | `setup-local.sh` |
-| Dependency pins | `deps.env` |
-| Legacy lane 1 entry point | `run-docker.sh` |
+| Which images exist, their names and their build inputs | `docker-bake.hcl` |
+| Your toolchain location, licence type, mounts and network access | `docker/finn-env` |
+| Way 1 runtime | `compose.yaml` |
+| Way 2 runtime | `docker/sbxenv/*.sbxenv.yaml` |
+| Way 3 setup | `setup-local.sh` |
+| Dependency versions | `deps.env` |
+| The older command for way 1 | `run-docker.sh` |
 
-Every host fact is derived in exactly one place, `finn-env`. That is a
-correctness property rather than tidiness: the defects this structure replaced
-were all cases of two code paths computing the same fact and drifting apart.
+`finn-env` finds each host fact one time only. This is a correctness
+requirement, not tidiness. The defects that this structure replaced were all
+examples of two programs that found the same fact and then disagreed.
 
-For the design reasoning see `docs/containerization-decisions.md`; for the
-mechanisms see `docs/containerization.md`.
+For the reasons behind the design, read `containerization-decisions.md`. For
+the mechanisms, read `containerization.md`.
