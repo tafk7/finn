@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""FINN's single environment resolver, for both sides of the container boundary.
+
+Three subcommands, one body of resolution logic:
+
+    finn-env inspect --format json      HOST side, before launch. Emits the
+                                        mounts, egress grants, environment and
+                                        policy a launcher needs.
+    finn-env print --format sh|json|env0
+                                        CONTAINER side. Emits the resolved
+                                        Xilinx toolchain environment.
+    finn-env exec <cmd> [args...]       CONTAINER side. Applies that environment
+                                        and execs.
+
+WHY ONE PROGRAM AND NOT TWO
+---------------------------
+The host view and the container view must agree about the same facts - where the
+toolchain is, which licence form is in use, what the workspace path is. When
+those were derived twice, they drifted, and the drift was silent:
+
+  - the docker path mounted the whole Xilinx root; the sbx path mounted
+    $ROOT/$VERSION, which is the post-2024.2 layout only, so on a 2022.2 site
+    the sandbox got no toolchain at all while still being handed VIVADO_PATH;
+  - PLATFORM_REPO_PATHS was passed to sbx as env with no corresponding mount;
+  - the Xilinx root was :ro on one path and :rw on the other.
+
+Three bugs, one cause. Deriving each fact exactly once is the fix, and this
+file is where "once" is.
+
+WHY A RESOLVER AND NOT GENERATED FILES
+--------------------------------------
+An alternative was to generate compose.yaml / the sbx kit / bake args from one
+source. Rejected: generated files go stale silently when someone edits the
+output instead of the input. This runs at launch, so it cannot disagree with
+itself. Compose consumes its output through a generated .env, which is a cache
+with a single producer, not a second source of truth.
+
+STDOUT IS DATA
+--------------
+`inspect` and `print` emit machine-readable output on stdout and nothing else.
+Every diagnostic goes to stderr. Callers may pipe stdout directly.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+TIERS = ("dev", "build", "build-xrt")
+
+# Tiers that get a toolchain, a licence and toolchain egress. `dev` deliberately
+# gets none of it: that boundary is the reason the tier exists, and it is
+# enforced here rather than left to whether the caller's shell happens to have
+# FINN_XILINX_PATH set.
+FPGA_TIERS = ("build", "build-xrt")
+
+# D4: the workspace path policy.
+#
+#   mirror  container path == host path. Required for anything that generates
+#           Vivado projects, because add_files writes $::env(FINN_ROOT) into the
+#           .xpr as an absolute path (LIMITATION(finn-root-absolute)), so a
+#           project built under a fixed path cannot be opened in the host GUI.
+#           Also forced by sbx, which has no mount remapping.
+#   fixed   container path == FIXED_WORKSPACE. Better for remote daemons,
+#           reproducible diagnostics and Dev Container config.
+#
+# Stage 7 of docs/containerization-plan.md flips the dev default to "fixed".
+# Until then this is plumbed but dormant, so the policy can be tested before it
+# becomes the behaviour.
+FIXED_WORKSPACE = "/workspace/finn"
+DEFAULT_DEV_WORKSPACE_POLICY = "mirror"
+
+# Vendor executables that get a transparent shim (stage 3). Listed here because
+# the shim needs the same toolchain resolution this file already performs.
+SHIMMED_TOOLS = ("vivado", "vitis", "vitis_hls", "vitis-run", "v++",
+                 "xelab", "xsim", "xvlog", "xsc", "lmutil", "xsct")
+
+# Variables a sourced settings64.sh is allowed to contribute. An allowlist, not
+# a diff of everything: settings64.sh also exports shell bookkeeping and a
+# handful of variables that are actively harmful to carry into an unrelated
+# process.
+TOOLCHAIN_VARS = ("PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "XILINX_VIVADO",
+                  "XILINX_VITIS", "XILINX_HLS", "XILINX_XRT", "XILINX_SDX",
+                  "XILINX_VIVADO_HLS", "RDI_DATADIR", "PYTHONPATH")
+
+
+def warn(msg):
+    print("finn-env: %s" % msg, file=sys.stderr)
+
+
+def die(msg, code=1):
+    print("finn-env: error: %s" % msg, file=sys.stderr)
+    sys.exit(code)
+
+
+# --------------------------------------------------------------------------
+# Shared resolution. Used by both the host and container sides.
+# --------------------------------------------------------------------------
+
+def xilinx_layout(root, version):
+    """Locate Vivado / Vitis / HLS within a Xilinx install.
+
+    AMD reorganised the install tree after 2024.2:
+
+        <= 2024.2   $ROOT/Vivado/2022.2   $ROOT/Vitis_HLS/2022.2
+        >  2024.2   $ROOT/2025.1/Vivado   $ROOT/2025.1/Vitis
+
+    Returning both candidates and probing is deliberate. Deciding from the
+    version string alone means a site with a symlinked or non-standard tree gets
+    a confidently wrong answer; probing means an unusual layout is detected
+    rather than assumed. The version string only orders the candidates.
+    """
+    if not root or not version:
+        return {}
+
+    m = re.match(r"^(20\d\d)\.([12])$", version)
+    if not m:
+        warn("FINN_XILINX_VERSION %r is not YYYY.1 or YYYY.2; "
+             "probing both layouts anyway" % version)
+        new_first = False
+    else:
+        new_first = (int(m.group(1)), int(m.group(2))) > (2024, 2)
+
+    new = {
+        "XILINX_VIVADO": os.path.join(root, version, "Vivado"),
+        "XILINX_VITIS": os.path.join(root, version, "Vitis"),
+        "XILINX_HLS": os.path.join(root, version, "Vitis"),
+    }
+    old = {
+        "XILINX_VIVADO": os.path.join(root, "Vivado", version),
+        "XILINX_VITIS": os.path.join(root, "Vitis", version),
+        "XILINX_HLS": os.path.join(root, "Vitis_HLS", version),
+    }
+
+    found = {}
+    for candidate in ((new, old) if new_first else (old, new)):
+        for key, path in candidate.items():
+            if key not in found and os.path.isdir(path):
+                found[key] = path
+    return found
+
+
+def classify_license(value):
+    """Split a FLEXlm licence variable into server and file entries.
+
+    XILINXD_LICENSE_FILE / LM_LICENSE_FILE take a colon-separated list of
+    either form:
+
+        PORT@HOST     floating server. Nothing to mount; needs TCP egress.
+        /path/to.lic  node-locked file. Must be readable inside the container.
+
+    Egress is granted to the HOST, never host:port. FLEXlm uses two
+    connections: lmgrd on the advertised port is a directory service that hands
+    back a second, usually ephemeral, port for the vendor daemon where the
+    checkout actually happens. A port-scoped rule lets `lmutil lmstat` succeed
+    while every real checkout fails with "A valid license was not found" - a
+    thoroughly misleading error for a firewall problem. Do not narrow this.
+    """
+    servers, files = [], []
+    for entry in (value or "").split(":"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "@" in entry:
+            port, _, host = entry.partition("@")
+            servers.append({"host": host, "advertised_port": port})
+        else:
+            files.append(entry)
+    return servers, files
+
+
+def resolve_host(tier, backend):
+    """Everything a launcher needs, derived from the host, exactly once."""
+    if tier not in TIERS:
+        die("unknown tier %r; expected one of %s" % (tier, ", ".join(TIERS)), 2)
+
+    workspace_host = os.environ.get(
+        "FINN_ROOT",
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # sbx attaches every mount at its host path and offers no remapping, so the
+    # policy is not a free choice there.
+    if backend == "sbx" or tier in FPGA_TIERS:
+        policy = "mirror"
+    else:
+        policy = DEFAULT_DEV_WORKSPACE_POLICY
+    workspace_target = (workspace_host if policy == "mirror"
+                        else FIXED_WORKSPACE)
+
+    out = {
+        "tier": tier,
+        "backend": backend,
+        "profile": os.environ.get("FINN_PROFILE", "py310"),
+        "platform": "linux/amd64",
+        "workspace": {
+            "policy": policy,
+            "source": workspace_host,
+            "target": workspace_target,
+        },
+        "mounts": [],
+        "egress": [],
+        "env": {"FINN_ROOT": workspace_target},
+    }
+
+    deps = os.environ.get("FINN_DEPS", "auto").lower()
+    out["env"]["FINN_DEPS"] = deps
+
+    if tier == "dev":
+        # Asserted, not merely omitted. Something reading this output should be
+        # able to see that the empty lists are a property of the tier rather
+        # than a resolution that came up short.
+        out["dev_contract"] = {
+            "toolchain": False, "license": False, "egress": False,
+        }
+        return out
+
+    root = os.environ.get("FINN_XILINX_PATH")
+    version = os.environ.get("FINN_XILINX_VERSION")
+    if not root:
+        die("FINN_XILINX_PATH is unset; tier %r requires it" % tier, 3)
+    if not os.path.isdir(root):
+        die("FINN_XILINX_PATH=%s is not a directory" % root, 3)
+
+    # The ROOT, read-only, on every backend.
+    #
+    # Mounting the root rather than $ROOT/$VERSION sidesteps the layout question
+    # entirely -- which is what the docker path always did and what the sbx path
+    # got wrong. It exposes more filesystem surface; read-only is what makes
+    # that acceptable, and the tools do not write into their own installation.
+    out["mounts"].append({"source": root, "target": root, "mode": "ro",
+                          "reason": "xilinx-toolchain"})
+
+    layout = xilinx_layout(root, version)
+    if not layout:
+        warn("no Vivado/Vitis/HLS found under %s for version %r; "
+             "the toolchain mount will be present but empty of known tools"
+             % (root, version))
+    out["env"].update(layout)
+    # Legacy aliases. FINN's own code and generated Tcl read these.
+    if "XILINX_VIVADO" in layout:
+        out["env"]["VIVADO_PATH"] = layout["XILINX_VIVADO"]
+    if "XILINX_VITIS" in layout:
+        out["env"]["VITIS_PATH"] = layout["XILINX_VITIS"]
+    if "XILINX_HLS" in layout:
+        out["env"]["HLS_PATH"] = layout["XILINX_HLS"]
+
+    platforms = os.environ.get("PLATFORM_REPO_PATHS")
+    if platforms and os.path.isdir(platforms):
+        # Skip when the root mount already covers it, so a launcher does not
+        # emit an overlapping bind.
+        if not os.path.abspath(platforms).startswith(os.path.abspath(root) + os.sep):
+            out["mounts"].append({"source": platforms, "target": platforms,
+                                  "mode": "ro", "reason": "platform-repo"})
+        out["env"]["PLATFORM_REPO_PATHS"] = platforms
+
+    for var in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE"):
+        value = os.environ.get(var)
+        if not value:
+            continue
+        out["env"][var] = value
+        servers, files = classify_license(value)
+        for server in servers:
+            out["egress"].append({"host": server["host"], "reason": "flexlm",
+                                  "advertised_port": server["advertised_port"]})
+        for path in files:
+            directory = os.path.dirname(path)
+            if not os.path.isdir(directory):
+                warn("licence path %s not found on the host; not mounted" % path)
+                continue
+            # The directory rather than the file: a single-file bind cannot
+            # accommodate sibling state files. See the UNRESOLVED note in
+            # docker/finn.kit/spec.yaml about :ro versus those writes.
+            if not any(m["source"] == directory for m in out["mounts"]):
+                out["mounts"].append({"source": directory, "target": directory,
+                                      "mode": "ro", "reason": "license-file"})
+
+    for var in ("NUM_DEFAULT_WORKERS", "IMAGENET_VAL_PATH"):
+        if os.environ.get(var):
+            out["env"][var] = os.environ[var]
+
+    return out
+
+
+# --------------------------------------------------------------------------
+# Container side.
+# --------------------------------------------------------------------------
+
+def settings_scripts():
+    """The settings64.sh files present in this container, in source order."""
+    found = []
+    for var in ("XILINX_VITIS", "VITIS_PATH", "XILINX_VIVADO", "VIVADO_PATH",
+                "XILINX_HLS", "HLS_PATH", "XILINX_XRT"):
+        base = os.environ.get(var)
+        if not base:
+            continue
+        for name in ("settings64.sh", "setup.sh"):
+            script = os.path.join(base, name)
+            if os.path.isfile(script) and script not in found:
+                found.append(script)
+    return found
+
+
+def libudev_preload():
+    """The libudev LD_PRELOAD workaround.
+
+    Vivado aborts inside udev_enumerate_scan_devices with
+    "realloc(): invalid pointer" unless the system libudev is preloaded. This
+    has to be applied per-process rather than in the entrypoint: `sbx exec` and
+    `docker exec` both bypass the ENTRYPOINT, and a Vivado launched that way
+    crashed exactly this way until the preload moved out of it.
+    """
+    for libdir in ("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
+                   "/lib/aarch64-linux-gnu"):
+        candidate = os.path.join(libdir, "libudev.so.1")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def toolchain_env():
+    """The environment delta from sourcing the mounted toolchain.
+
+    Sources each settings script in one bash and reports the allowlisted
+    variables. Deliberately NOT `set -u`: settings64.sh reads unset variables
+    on several Xilinx releases, and a strict shell aborts partway through,
+    leaving a half-configured PATH that fails much later and elsewhere.
+    """
+    scripts = settings_scripts()
+    env = {}
+
+    if scripts:
+        script = "\n".join(['. %s >/dev/null 2>&1 || true' % s for s in scripts])
+        script += "\nfor v in %s; do eval \"printf '%%s=%%s\\\\0' \\\"\\$v\\\" \\\"\\${$v-}\\\"\"; done" \
+                  % " ".join(TOOLCHAIN_VARS)
+        try:
+            raw = subprocess.run(["bash", "-c", script], capture_output=True,
+                                 timeout=120).stdout
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            warn("could not source the toolchain (%s); "
+                 "vendor tools will not be on PATH" % exc)
+            return {}
+        for record in raw.split(b"\0"):
+            if not record:
+                continue
+            key, _, value = record.decode("utf-8", "replace").partition("=")
+            if value and value != os.environ.get(key, ""):
+                env[key] = value
+
+    preload = libudev_preload()
+    if preload:
+        existing = env.get("LD_PRELOAD", os.environ.get("LD_PRELOAD", ""))
+        parts = [p for p in existing.split(":") if p]
+        if preload not in parts:
+            parts.append(preload)
+        env["LD_PRELOAD"] = ":".join(parts)
+
+    return env
+
+
+# --------------------------------------------------------------------------
+# Subcommands.
+# --------------------------------------------------------------------------
+
+def cmd_inspect(args):
+    data = resolve_host(args.tier, args.backend)
+    if args.format == "json":
+        json.dump(data, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:  # sh -- a .env file for Compose
+        for key, value in sorted(data["env"].items()):
+            sys.stdout.write("%s=%s\n" % (key, value))
+        sys.stdout.write("FINN_WORKSPACE_SOURCE=%s\n" % data["workspace"]["source"])
+        sys.stdout.write("FINN_WORKSPACE_TARGET=%s\n" % data["workspace"]["target"])
+    return 0
+
+
+def cmd_print(args):
+    env = toolchain_env()
+    if args.format == "json":
+        json.dump(env, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    elif args.format == "env0":
+        for key, value in sorted(env.items()):
+            sys.stdout.write("%s=%s\0" % (key, value))
+    else:  # sh
+        for key, value in sorted(env.items()):
+            # Single-quote and escape embedded quotes: a Xilinx path with a
+            # space in it must survive being eval'd by the caller.
+            sys.stdout.write("export %s='%s'\n" % (key, value.replace("'", "'\\''")))
+    return 0
+
+
+def cmd_exec(args):
+    if not args.command:
+        die("exec needs a command", 2)
+    env = dict(os.environ)
+    env.update(toolchain_env())
+    # Idempotence marker, so a shim invoked from an already-configured session
+    # -- or a tool that re-execs itself -- does not re-source.
+    env["FINN_ENV_APPLIED"] = "1"
+    try:
+        os.execvpe(args.command[0], args.command, env)
+    except OSError as exc:
+        die("cannot exec %s: %s" % (args.command[0], exc), 127)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="finn-env", description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("inspect", help="host-side resolution (JSON)")
+    p.add_argument("--tier", default=os.environ.get("FINN_DOCKER_TARGET", "dev"),
+                   choices=TIERS)
+    p.add_argument("--backend", default="docker", choices=("docker", "sbx"))
+    p.add_argument("--format", default="json", choices=("json", "sh"))
+    p.set_defaults(func=cmd_inspect)
+
+    p = sub.add_parser("print", help="container-side toolchain environment")
+    p.add_argument("--format", default="sh", choices=("sh", "json", "env0"))
+    p.set_defaults(func=cmd_print)
+
+    p = sub.add_parser("exec", help="apply the environment and exec")
+    p.add_argument("command", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_exec)
+
+    args = parser.parse_args()
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()
