@@ -20,11 +20,11 @@ agrees with your task.
   * - Docker container
     - ``docker compose run --rm dev``
     - Development by a person
-    - None. This is a development environment, not a security boundary.
+    - Processes and files are separate. The kernel is shared and the network is open.
   * - sbx sandbox
     - ``docker/finn-sbx dev``
     - Development by an autonomous agent
-    - A microVM with its own kernel and a network policy
+    - A separate kernel. The network is closed unless you permit a host.
   * - Host system
     - ``./setup-local.sh``
     - Development with no container
@@ -33,9 +33,12 @@ agrees with your task.
 The three ways use the same dependency versions, the same image tiers and the
 same toolchain resolver. A result in one way is therefore correct in the others.
 
-**Do not run an autonomous agent in the Docker container.** The container uses
-the kernel of the host and has full network access. An agent in the container
-can reach everything that your machine can reach. Use the sbx sandbox instead.
+**Do not run an autonomous agent in the Docker container.** The container does
+separate processes and files, and it removes many Linux capabilities. But it
+uses the same kernel as the host, and it can reach each address that the host
+can reach. Docker has no list of permitted destinations. An agent can therefore
+send data out, and text in its input can tell it to. Use the sbx sandbox
+instead. :ref:`Running FINN in Docker` gives the full comparison.
 
 FINN does not supply Vivado, Vitis or Vitis HLS. Install these tools yourself.
 FINN mounts your installation read-only.

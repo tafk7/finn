@@ -5,8 +5,8 @@ agrees with your task. No way is better than the others.
 
 | | Way | Use it for | Isolation |
 |---|---|---|---|
-| **1** | **Docker container** | Development by a person | None. This is a development environment, not a security boundary. |
-| **2** | **sbx sandbox** | Development by an autonomous agent | A microVM with its own kernel and a network policy |
+| **1** | **Docker container** | Development by a person | Processes and files are separate. The kernel is shared and the network is open. |
+| **2** | **sbx sandbox** | Development by an autonomous agent | A separate kernel. The network is closed unless you permit a host. |
 | **3** | **Host system** | Development with no container | None |
 
 The three ways use the same dependency versions, the same image tiers and the
@@ -120,12 +120,36 @@ Three defaults are different from earlier versions:
   Under Docker Compose, it mounts the workspace at `/workspace/finn`.
 - `FINN_DEPS` is `frozen`.
 
-### This way is not a security boundary
+### What this way protects, and what it does not
 
-The container uses the kernel of the host and has full network access. An
-autonomous agent in the container can reach everything that your machine can
-reach. The read-only toolchain mount and the small `dev` tier prevent
-**accidents**. They do not stop an attacker.
+The container is a real boundary, but not a complete one. Be exact about which
+parts are which.
+
+The container **does** give you:
+
+- Separate namespaces for processes, files, network interfaces, hostname,
+  interprocess communication and control groups. A process in the container
+  sees 4 processes; the host has more than 900.
+- A reduced set of Linux capabilities. Docker removes `SYS_ADMIN`,
+  `SYS_MODULE`, `SYS_PTRACE`, `NET_ADMIN`, `SYS_BOOT` and `SYS_RAWIO`, and
+  keeps 14.
+- A seccomp filter, which stops approximately 44 system calls.
+- A read-only mount of the Xilinx installation.
+
+The container does **not** give you:
+
+- **A separate kernel.** The container and the host use the same kernel. An
+  attack against the kernel escapes the container.
+- **Network control.** The container has its own network interface, but it can
+  reach each address that the host can reach. Docker has no list of permitted
+  destinations.
+- **A separate user namespace.** User ID 1000 in the container is user ID 1000
+  on the host. A write through a mounted directory is a write by that host
+  user.
+
+The second of these is the important one for an agent. The usual risk is not an
+attack against the kernel. The usual risk is that the agent sends data out, or
+that text in its input tells it to. Docker cannot stop this. sbx can.
 
 Use way 2 for agent work.
 
