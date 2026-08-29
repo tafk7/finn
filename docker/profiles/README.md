@@ -110,6 +110,7 @@ part of the compatibility contract rather than an incidental detail.
 |---|---|
 | sbx | v0.39.0 |
 | kit schemaVersion | 2 (`setup:`); requires sbx >= 0.36 |
+| `.sbxenv.yaml` schemaVersion | 1; requires sbx >= 0.39.0. Experimental — the format may change |
 | docker | 29.6.1 |
 | buildx | v0.35.0 |
 

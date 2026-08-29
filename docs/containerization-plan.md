@@ -3,7 +3,7 @@
 Date: 2026-08-28
 Implements: `containerization-decisions.md` (revision 2)
 Branch: `feature/sbx`
-Status: **all eight stages implemented.** See "Outcome" at the bottom for what
+Status: **all eight stages implemented, plus an unplanned stage 9.** See "Outcome" at the bottom for what
 was verified, what changed from the plan, and what is still open.
 
 Eight stages. Each ends at a green tree that could ship on its own — no stage
@@ -335,3 +335,86 @@ And two more found by running things rather than reading them:
   composition, so the launcher still owns the `docker run` assembly and the sbx
   create-or-attach flow. Finishing that is a further step, not a blocker — the
   declarative artifacts work today and the launcher agrees with them.
+
+
+---
+
+# Stage 9 (unplanned): `sbx env` and the launcher reduction
+
+Added after reading the cloned sbx documentation, which revealed that sbx
+0.39.0 — the version already pinned — ships declarative environment files.
+
+| Commit | What landed |
+| --- | --- |
+| `e53d2ce91` | `docker/sbxenv/*.sbxenv.yaml` + `docker/finn-sbx`; -189 lines |
+| `a42aeb238` | compose takes the docker runtime; `run-docker.sh` 900 → 256 |
+
+## What the docs changed
+
+The plan called for hand-writing `docker/finn-sbx` as a ~130-line peer of
+`compose.yaml`. That was wrong: **`sbx env run` IS create-or-attach**, so most
+of what `run-docker.sh` did for sbx — name derivation, existence check, a
+timeout wrapper around a wedged-daemon `sbx ls`, positional mount assembly,
+licence-directory mounts, an attach fallback for a racing create — was
+reimplementing something sbx now owns. `finn-sbx` is 181 lines and does only
+the three things the format cannot express.
+
+## Facts established by testing, not by reading
+
+The docs are silent or wrong on all of these:
+
+- **Host `${VAR}` interpolation works in `name`, `workspace`, `kits[]` and
+  `sandboxOptions.template`**, not just `env`. The release notes mention host
+  interpolation; the field reference documents no syntax. This is what lets the
+  committed environment files stay static and machine-independent.
+- **`WORKSPACE_DIR` is a real environment variable** in the sandbox (= the
+  primary workspace). **`WORKDIR` is not** — it is a kit-render placeholder for
+  `files.content` only. Our kit uses the former and is correct; the two are
+  easy to conflate because the docs only ever mention the latter.
+- **`pullPolicy: never` genuinely refuses**, with an accurate message. The
+  default `always` tries to pull `xilinx/finn:...` from Docker Hub and reports
+  what looks like an authentication failure.
+
+## What `.sbxenv.yaml` cannot express
+
+Both confirmed by testing:
+
+1. **Loading a locally built template.** sbx keeps its own image store and
+   cannot see the host daemon's, so `docker save` + `sbx template load` must
+   precede create. No field for it.
+2. **Network egress.** No `network:` field, and no allow-at-create flag — only
+   `--deny-network` (sbx ≥ 0.38). `sbx policy allow network --sandbox` stays a
+   post-create step.
+
+If a later sbx gains either, delete the corresponding block in `finn-sbx`
+rather than keeping both.
+
+## The placement constraint
+
+sbx's docs are explicit that an environment file must live outside every
+mounted workspace: with direct mount the agent can edit the file that governs
+its own next sandbox. For a repo whose purpose is sandboxed agent work that is
+not hypothetical. The committed artifacts under `docker/sbxenv/` are therefore
+never what `sbx env` reads — `finn-sbx` materialises them into
+`$XDG_STATE_HOME` at launch, and removes a stale `fpga` overlay when switching
+to `dev` so the narrow profile cannot inherit a toolchain mount from a previous
+build-tier run.
+
+## Resolved from the earlier "still open" list
+
+- **`run-docker.sh` is now 256 lines**, close to the ~80–120 projected once the
+  licence header and legacy verb surface are counted. It derives no host facts.
+- **The spaces-in-paths gap is closed** for the docker path: compose takes a
+  YAML list, not a concatenated argument string.
+
+## Newly open
+
+- **`FINN_SINGULARITY` was dropped.** It worked by string-substituting the
+  docker argument list (`-v` → `-B`), which belongs to compose now. It exits
+  with a message pointing at `finn-env inspect --format json`. This is a real
+  capability removal, not an oversight; if anyone uses it, it needs its own
+  small script.
+- **`sbx env` is experimental** and its file format may change. That is a
+  deliberate bet — the tested version is recorded in
+  `docker/profiles/README.md`, and `ci/scripts/conformance.sh 5` is the check
+  that catches a break.
