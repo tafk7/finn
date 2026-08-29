@@ -607,11 +607,11 @@ def run_one(config: Config, finn_root: str) -> bool:
     return ok
 
 
-def _record_identity(finn_root: str, library_root: str) -> None:
+def record_identity(finn_root: str, library_root: str) -> None:
     """Print what was actually compiled.
 
     A passing run means nothing unless the result says which revisions it
-    passed against.
+    passed against.  Public because fixture 6 owes its log the same header.
     """
 
     for label, root in (("finn", finn_root), ("finnlib", library_root)):
@@ -661,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
     if not os.path.isdir(os.path.join(library_root, "rtl")):
         print(f"FinnLib RTL not found under {library_root}; set FINNLIB_ROOT or fetch-repos.sh")
         return 2
-    _record_identity(root, library_root)
+    record_identity(root, library_root)
 
     configs = (
         [CONFIGS_BY_LABEL[arguments.config]] if arguments.config is not None else list(CONFIGS)

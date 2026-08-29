@@ -37,6 +37,7 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     CONFIGS_BY_LABEL,
     Config,
     decomposed_requirements,
+    record_identity,
 )
 from finn.dataflow.mvau.decomposed_provider import finnlib_root, write_decomposed_artifact
 
@@ -59,6 +60,10 @@ _UTILIZATION = re.compile(r"^\|\s*(DSP\w*)\s*\|\s*(\d+)\s*\|", re.MULTILINE)
 
 #: How Vivado reports a device or feature this installation is not licensed for.
 _UNLICENSED = "A valid license was not found"
+
+#: Set on the per-configuration workers, which share the dispatcher's log and
+#: would otherwise repeat its header once per configuration.
+_IDENTITY_RECORDED = "FIXTURE6_IDENTITY_RECORDED"
 
 
 def _tcl(top: str, part: str, sources: list[str], report: Path) -> str:
@@ -140,8 +145,11 @@ def run_one(config: Config) -> int:
 
 def _run_each_in_its_own_process(labels: list[str]) -> tuple[int, int, int]:
     passed = failed = skipped = 0
+    environment = {**os.environ, _IDENTITY_RECORDED: "1"}
     for label in labels:
-        completed = subprocess.run([sys.executable, __file__, "--config", label], check=False)
+        completed = subprocess.run(
+            [sys.executable, __file__, "--config", label], check=False, env=environment
+        )
         if completed.returncode == PASS:
             passed += 1
         elif completed.returncode == SKIP:
@@ -167,6 +175,12 @@ def main(argv: list[str] | None = None) -> int:
     if not os.path.isdir(os.path.join(library_root, "rtl")):
         print(f"FinnLib RTL not found under {library_root}; set FINNLIB_ROOT or fetch-repos.sh")
         return FAIL
+
+    # A synthesis result that does not say which revisions it synthesized is
+    # not a result.  Fixture 5 prints this and fixture 6 did not, so its log
+    # could not be attributed to a checkout at all.
+    if not os.environ.get(_IDENTITY_RECORDED):
+        record_identity(finn_root, library_root)
 
     if arguments.config is not None:
         return run_one(CONFIGS_BY_LABEL[arguments.config])
