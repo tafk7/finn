@@ -83,6 +83,21 @@ class BuilderIdentity:
             raise ValueError("a builder identity needs a backend id and a tool version")
 
 
+#: What a caller that says nothing gets.
+#:
+#: The version is the literal string ``unspecified`` and not a probe of
+#: ``XILINX_VIVADO``.  Reading the environment here would look more honest and
+#: be less so: it would make the identity depend on ambient state, so the same
+#: inputs would key differently in a shell that happened to have the tool on
+#: its path.  A caller that cares about the tool version passes it, and
+#: ``finn.util.basic.get_vivado_version`` is where it reads one from.
+#:
+#: ``unspecified`` is therefore a claim in its own right -- "nobody said" -- and
+#: two builds under different real Vivado versions share it.  That is the §7.4
+#: cost made visible rather than hidden behind a plausible-looking number.
+DEFAULT_BUILDER = BuilderIdentity("vivado", "unspecified")
+
+
 @dataclass(frozen=True)
 class TargetIdentity:
     """The device and timing the artifact was built for."""
@@ -216,7 +231,7 @@ def kernel_artifact_identity(
     roots: Mapping[str, Path],
     *,
     target: TargetIdentity,
-    builder: BuilderIdentity,
+    builder: BuilderIdentity = DEFAULT_BUILDER,
 ) -> KernelArtifactIdentity:
     """The artifact identity of one bound Kernel.
 
@@ -247,6 +262,7 @@ def composed_artifact_identity(
 
 __all__ = [
     "COMPOSED_ARTIFACT_SCHEMA_VERSION",
+    "DEFAULT_BUILDER",
     "KERNEL_ARTIFACT_SCHEMA_VERSION",
     "ArtifactIdentityError",
     "BuilderIdentity",

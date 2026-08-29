@@ -34,6 +34,7 @@ from finn.dataflow.hardware.authoring import (
 )
 from finn.dataflow.hardware.identity import (
     COMPOSED_ARTIFACT_SCHEMA_VERSION,
+    DEFAULT_BUILDER,
     KERNEL_ARTIFACT_SCHEMA_VERSION,
     ArtifactIdentityError,
     BuilderIdentity,
@@ -71,6 +72,7 @@ __all__ = [
     "BINDING_PATH",
     "COMPOSED_ARTIFACT_SCHEMA_VERSION",
     "COVERAGE",
+    "DEFAULT_BUILDER",
     "HARDWARE_KERNEL_ID_SEMANTICS",
     "KERNEL_ARTIFACT_SCHEMA_VERSION",
     "ArtifactIdentityError",

@@ -27,6 +27,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataflow.mvau.test_decomposed_op import NODE_ID, _committed, _context, _model
 from dataflow.mvau.test_fused_hardware import _place, _source_description
 from finn.dataflow.hardware import (
+    DEFAULT_BUILDER,
     KERNEL_ARTIFACT_SCHEMA_VERSION,
     ArtifactIdentityError,
     BuilderIdentity,
@@ -249,6 +250,67 @@ def test_the_key_is_the_same_in_a_fresh_process(seed: str) -> None:
         )
     ).key
     assert completed.stdout.strip() == expected
+
+
+# -- the builder label -------------------------------------------------------
+
+
+def test_an_unspecified_builder_is_the_named_default() -> None:
+    """The whole of 5b's contract, in two assertions.
+
+    The default is a *label*, not a probe: it says ``unspecified`` rather than
+    reading ``XILINX_VIVADO``, so the identity is a function of its arguments
+    and of nothing ambient.  A caller that knows its tool version supplies it,
+    and supplying a different one moves the key -- which is what makes the
+    label load-bearing rather than decorative.
+    """
+
+    _, compute = _place().decomposed()
+    default = kernel_artifact_identity(compute, _roots(), target=TARGET)
+
+    assert default.builder == DEFAULT_BUILDER
+    assert default.builder.tool_version == "unspecified"
+    assert (
+        kernel_artifact_identity(
+            compute, _roots(), target=TARGET, builder=BuilderIdentity("vivado", "2024.2")
+        ).key
+        != default.key
+    )
+
+
+def test_the_default_builder_does_not_read_the_environment() -> None:
+    """The reason the version is a sentinel, asserted rather than promised.
+
+    With ``XILINX_VIVADO`` set, a probing default would key differently in this
+    shell than in one without the tool -- the same inputs, two keys, and no way
+    to tell from the value which shell produced it.
+    """
+
+    _, compute = _place().decomposed()
+    baseline = kernel_artifact_identity(compute, _roots(), target=TARGET).key
+
+    previous = os.environ.get("XILINX_VIVADO")
+    os.environ["XILINX_VIVADO"] = "/tools/Xilinx/Vivado/2024.2"
+    try:
+        assert kernel_artifact_identity(compute, _roots(), target=TARGET).key == baseline
+    finally:
+        if previous is None:
+            del os.environ["XILINX_VIVADO"]
+        else:
+            os.environ["XILINX_VIVADO"] = previous
+
+
+def test_the_builder_label_is_a_label_and_not_an_execution_adapter() -> None:
+    """The drift 5b exists to prevent, made a failing test rather than a note.
+
+    ``BuildBackend`` in the vocabulary note is a tool-execution adapter.  This
+    is a pair of strings.  If it grows a way to run something, the separation
+    has failed and the identity has stopped being a pure value.
+    """
+
+    for forbidden in ("run", "build", "execute", "synthesize", "invoke"):
+        assert not hasattr(DEFAULT_BUILDER, forbidden)
+    assert {field for field in vars(DEFAULT_BUILDER)} == {"backend_id", "tool_version"}
 
 
 # -- construction from a real binding ----------------------------------------
