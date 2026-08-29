@@ -1,0 +1,250 @@
+# FINN containerization: execution plan
+
+Date: 2026-08-28
+Implements: `containerization-decisions.md` (revision 2)
+Branch: continue on `feature/sbx`
+
+Eight stages. Each ends at a green tree that could ship on its own — no stage
+depends on a later one to be correct. Stages 1-3 are strictly additive to
+current behavior; the first user-visible change lands in stage 6.
+
+Verification commands assume `FINN_XILINX_PATH` and a licence are configured, as
+they are on the development host.
+
+---
+
+## Stage 1 — Defects
+
+Independent of the restructuring. Defect 1 is a live containment hole; do this
+first regardless of whether the rest proceeds.
+
+**Files:** `run-docker.sh`, `docker/Dockerfile.finn`, `docs/containerization.md`,
+`docker/finn.kit/spec.yaml`
+
+1. **`:ro` on the docker Xilinx mount** (`run-docker.sh:547`). Add `:ro`. Run a
+   real synthesis afterward — if any Xilinx-side write was silently load-bearing,
+   this is where it surfaces, and it must surface now rather than under an agent.
+2. **Mount the whole Xilinx root `:ro` on sbx too** (`run-docker.sh:719-720`).
+   Replaces the version-directory guard, so the pre-2024.2 layout stops silently
+   mounting nothing. This is also the D1a simplification landing early — it
+   removes the layout branch from one of the two paths before that path is
+   rewritten.
+3. **Mount `PLATFORM_REPO_PATHS` on sbx** (`run-docker.sh:722-726`), matching the
+   docker path.
+4. **`USER agent`** in `Dockerfile.finn` at the `dev` stage. Docker `--user`
+   still overrides it; this fixes the default for every consumer that does not
+   pass one.
+5. **Doc fixes:** delete the `sandbox-persistent.sh` claim at
+   `containerization.md:701`; correct the schema claim at line 685 to state that
+   v0.39.0 accepts `setup:` under `schemaVersion: "2"`; correct the kit's
+   "requires open posture" comment (`spec.yaml:17-20`) to record that a bare
+   hostname grant is sufficient and was verified.
+6. **Test node-locked licensing** with the licence directory `:ro` (defect 8).
+   Whichever way it resolves, fix the code or the comment — do not edit the prose
+   on inference.
+
+**Verify**
+
+```bash
+./run-docker.sh build          # docker, :ro toolchain
+./run-docker.sh sbx build      # sbx, full root, platform repo present
+# then a real synth_design on xczu28dr in each
+```
+
+**Stop if:** the `:ro` mount breaks synthesis. That would mean the tools write
+into the install, which changes the containment story materially and needs its
+own decision.
+
+---
+
+## Stage 2 — `finn-env`
+
+The single resolver. Written and tested before anything consumes it.
+
+**New:** `docker/finn-env`
+
+Three subcommands, one resolution path:
+
+- `inspect --format json` — runs **on the host**, emits tier, profile, status,
+  workspace policy, mounts, egress hosts, env, platform.
+- `print --format=sh|json|env0` — runs **in the container**, emits the resolved
+  toolchain environment.
+- `exec <cmd>` — sources, then execs. Idempotent.
+
+Host and container views share one implementation so they cannot disagree.
+
+Language: Python. It must parse `deps.env` and profile files and emit JSON;
+`finn_paths.py` already establishes Python as available at both ends.
+
+**Verify:** unit tests over synthetic host layouts — both Xilinx layouts, both
+licence forms, missing toolchain, `dev` tier. `inspect` output diffed against
+what `run-docker.sh` currently computes for the same inputs; any divergence is
+either a bug in the new code or an undocumented behavior in the old, and both
+need explaining before proceeding.
+
+Nothing consumes it yet. Fully revertable.
+
+---
+
+## Stage 3 — Transparent exec
+
+**New:** `docker/toolchain-shim`
+**Modified:** `docker/Dockerfile.finn`, `docker/finn_entrypoint.sh`
+
+1. One shim script; the Dockerfile symlinks it as `vivado`, `vitis_hls`, `v++`,
+   `xelab`, `xsim`, `lmutil` into a directory ahead of the mounted toolchain on
+   `PATH`. Each sources via `finn-env` and `exec`s the real binary.
+2. `BASH_ENV` plus a profile snippet for interactive and `bash -c` sessions.
+3. Shrink the entrypoint to first-boot HOME/identity repair only. If nothing
+   correctness-critical remains, delete it and drop `ENTRYPOINT` to `tini` alone.
+
+**Verify** — the bare forms, which are the whole point:
+
+```bash
+docker exec <c> python -c 'import finn'
+docker exec <c> vivado -version
+sbx exec <s> python -c 'import finn'
+sbx exec <s> vivado -version
+```
+
+All four must pass with no wrapper and no shell. Test 4 is currently expected to
+fail on `vivado` — that is the latent docker defect this stage closes.
+
+**Watch for:** shim recursion if the shim directory ends up on `PATH` twice.
+`exec` the resolved absolute path, never re-resolve through `PATH`.
+
+---
+
+## Stage 4 — Identity, sudo, workspace policy
+
+**Modified:** `docker/Dockerfile.finn`, `run-docker.sh`
+
+1. Add `FROM dev AS sbx-dev` (and `sbx-build`, `sbx-build-xrt` as needed) adding
+   only the sbx contract: NOPASSWD sudo, populated `/home/agent`, proxy
+   `env_keep`. Remove those from the generic stages.
+2. Point the sbx path at the `sbx-*` targets.
+3. Teach `finn-env inspect` the workspace policy: `mirror` for FPGA tiers and
+   all sbx, `fixed` for `dev` on docker. Not yet the default — plumbed, dormant.
+
+**Verify:** `sbx-dev` and `dev` images built from one lineage; confirm shared
+layers with `docker history`. Run the full sbx suite against `sbx-dev` and
+confirm no behavior change. Confirm `dev` has no sudo and `sbx-dev` does.
+
+**Note:** this is where "no privileges" becomes two separate properties. The
+conformance test in stage 8 must assert both readings; write the assertion now
+while the distinction is fresh.
+
+---
+
+## Stage 5 — Dependency modes
+
+**Modified:** `docker/finn_paths.py`, `run-docker.sh`, `docker/Dockerfile.finn`
+
+`frozen` / `live` / `auto`, replacing `finn_paths.py:123`'s
+`!= "frozen"` test. `live` fails loudly on a missing checkout. `auto` is today's
+behavior, named honestly. Remove the automatic `fetch-repos.sh`
+(`run-docker.sh:319-321`) in favor of an explicit command.
+
+Default stays `auto` in this stage. Flipping it to `frozen` is stage 7, with CI.
+
+**Verify:** each mode with checkouts present and absent; `live` must fail with a
+clear message naming the missing dependency, not fall back.
+
+---
+
+## Stage 6 — Declarative artifacts
+
+The bulk of the work, and the first user-visible change.
+
+**New:** `docker-bake.hcl`, `compose.yaml`, `.devcontainer/devcontainer.json`
+**Modified:** `run-docker.sh` (→ wrapper), `docker/finn.kit/spec.yaml`
+
+1. `docker-bake.hcl`: tier × profile matrix, `status` per target, args, OCI
+   labels, `platform`. Tags derived here and nowhere else.
+2. `compose.yaml`: services `dev`, `build`, `notebook` with Compose `profiles:`.
+   Consumes `finn-env inspect` output via a generated `.env`.
+3. `.devcontainer/devcontainer.json` → compose service `dev`.
+4. Kit consumes `finn-env inspect` instead of computing anything.
+5. `run-docker.sh` reduced to translation: old CLI → bake/compose. Target ~80
+   lines. Keep `FINN_DOCKER_EXTRA` as a site escape hatch.
+
+**Verify:** every old invocation still works through the wrapper. Both suites
+green. Tag output from bake byte-identical to what `finn_compute_tag` produced,
+so no image rebuild is triggered by the migration itself.
+
+**Risk:** the largest stage. If it needs splitting, land bake first (build side
+only, no runtime change), then compose.
+
+---
+
+## Stage 7 — Defaults and CI
+
+**Modified:** `docker-bake.hcl`, `compose.yaml`, `ci/`, `docker/profiles/README.md`
+
+Four changes that must land together, because each is a breaking default that
+the others compensate for:
+
+1. Default tier `build-xrt` → `dev`.
+2. Default `dev` workspace → `/workspace/finn`. FPGA and sbx keep mirroring.
+3. Default `FINN_DEPS` → `frozen`.
+4. CI: `buildx bake`, publish by digest, shards receive the digest plus the
+   provenance tuple (source commit, digest, profile, tier, resolved dep
+   commits). Stage matrix gains a capability field.
+
+**Verify:** CI green end to end. Two shards on one digest with `frozen` execute
+identical code — assert this explicitly, it is the property the digest exists
+for.
+
+**Migration note required** in the release notes: three defaults changed, and a
+user doing Vivado work will notice all three.
+
+---
+
+## Stage 8 — Matrix status and conformance
+
+**Modified:** `docker-bake.hcl`, `docs/`
+**New:** conformance suite
+
+Status on every bake target (`supported` / `experimental` / `deprecated`);
+py312 is `experimental` per `docker/profiles/README.md:15`. Record the supported
+sbx version range — the contract is reverse-engineered, so the tested version is
+part of it.
+
+The nine conformance tests from the decisions doc, notably:
+
+- bare `docker exec` and bare `sbx exec`, both `python` and `vivado`
+- Xilinx and platform mounts present **and read-only**
+- both privilege readings (generic: no host privilege, no in-container root;
+  `sbx-*`: no host privilege, in-container root)
+- a checkout path with spaces and unusual characters, under both workspace
+  policies
+- node-locked licence with the directory `:ro`
+
+Split `containerization.md` into stable ADRs plus short user docs derived from
+the live artifacts.
+
+---
+
+## Sequencing rationale
+
+Stages 1-3 are additive: they fix defects and add capability without changing
+any default, so each can ship alone and be reverted alone. Stage 4 introduces
+the target split but keeps behavior identical. Stage 5 adds a mode without
+changing the default.
+
+Everything user-visible is concentrated in stages 6 and 7, which is deliberate —
+one migration note, not five.
+
+Stage 3 before stage 6 matters: the shims must work before `run-docker.sh` stops
+being the thing that sets up the environment. Reversing them leaves a window
+where neither mechanism is fully responsible.
+
+Stage 5 before stage 7 matters: `frozen` must exist and be tested before it
+becomes the default that makes the CI digest meaningful.
+
+## Not in scope
+
+`LIMITATION(finn-root-absolute)` is worked around, not fixed. The real fix is
+IP-XACT packaging via finnlib (see that repo's design note), which would remove
+`FINN_ROOT` from generated projects and make D4's per-tier policy unnecessary.
+That is a separate project.

@@ -29,6 +29,7 @@
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 # green echo
@@ -39,6 +40,13 @@ gecho () {
 # red echo
 recho () {
   echo -e "${RED}$1${NC}"
+}
+
+# yellow echo. finn_license_mounts has called this since it was written; it was
+# never defined, so a missing licence path printed "yecho: command not found"
+# instead of the warning, and the warning itself was lost.
+yecho () {
+  echo -e "${YELLOW}$1${NC}" >&2
 }
 
 # Identity is applied at `docker run` time via --user, never baked into the
@@ -544,7 +552,12 @@ if [ ! -z "$FINN_XILINX_PATH" ] && [ "$FINN_DOCKER_TARGET" != "dev" ];then
   else
     echo "FINN_XILINX_VERSION ($FINN_XILINX_VERSION) is not in the correct format (YYYY.1 or YYYY.2)"
   fi
-  DOCKER_EXEC+="-v $FINN_XILINX_PATH:$FINN_XILINX_PATH "
+  # READ-ONLY. The tools do not write into their own installation, and an agent
+  # with write access to 267 GB of proprietary, versioned, hard-to-restore state
+  # is the single largest blast radius this container has. The sbx path has
+  # always mounted this :ro; the docker path did not, which was both a
+  # containment hole and a parity gap.
+  DOCKER_EXEC+="-v $FINN_XILINX_PATH:$FINN_XILINX_PATH:ro "
   if [ -d "$VIVADO_PATH" ];then
     DOCKER_EXEC+="-e "XILINX_VIVADO=$VIVADO_PATH" "
     DOCKER_EXEC+="-e VIVADO_PATH=$VIVADO_PATH "
@@ -556,7 +569,7 @@ if [ ! -z "$FINN_XILINX_PATH" ] && [ "$FINN_DOCKER_TARGET" != "dev" ];then
     DOCKER_EXEC+="-e VITIS_PATH=$VITIS_PATH "
   fi
   if [ -d "$PLATFORM_REPO_PATHS" ];then
-    DOCKER_EXEC+="-v $PLATFORM_REPO_PATHS:$PLATFORM_REPO_PATHS "
+    DOCKER_EXEC+="-v $PLATFORM_REPO_PATHS:$PLATFORM_REPO_PATHS:ro "
     DOCKER_EXEC+="-e PLATFORM_REPO_PATHS=$PLATFORM_REPO_PATHS "
   fi
 fi
@@ -716,8 +729,39 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   if [ "$FINN_DOCKER_TARGET" = "dev" ]; then
     gecho "dev tier: no Xilinx mount, no licence, no toolchain egress"
   else
-  [ -d "$FINN_XILINX_PATH/$FINN_XILINX_VERSION" ] && \
-    SBX_ARGS+=("$FINN_XILINX_PATH/$FINN_XILINX_VERSION:ro")
+  # Mount the whole Xilinx ROOT read-only, exactly as the docker path does.
+  #
+  # This used to mount $FINN_XILINX_PATH/$FINN_XILINX_VERSION, which is the
+  # POST-2024.2 layout only. Xilinx reorganised its install tree after 2024.2:
+  #
+  #   <= 2024.2   $ROOT/Vivado/2022.2, $ROOT/Vitis_HLS/2022.2, ...
+  #   >  2024.2   $ROOT/2025.1/Vivado, $ROOT/2025.1/Vitis, ...
+  #
+  # On an older site -- including 2022.2, which is FINN's documented default --
+  # that directory does not exist, the [ -d ] guard failed, and the sandbox was
+  # created with NO toolchain mounted at all while still being handed
+  # VIVADO_PATH and friends pointing at absent paths. Silently.
+  #
+  # Mounting the root sidesteps the layout question entirely and is what the
+  # docker path has always done. It exposes more read-only filesystem surface;
+  # that is the deliberate trade, and read-only is what makes it acceptable.
+  if [ -n "$FINN_XILINX_PATH" ] && [ -d "$FINN_XILINX_PATH" ]; then
+    SBX_ARGS+=("$FINN_XILINX_PATH:ro")
+  else
+    recho "FINN_XILINX_PATH is unset or not a directory; the $FINN_DOCKER_TARGET tier needs it"
+    exit 1
+  fi
+
+  # The platform repo lives outside $FINN_XILINX_PATH, so the root mount above
+  # does not cover it. It was previously passed as -e with no mount at all,
+  # meaning Vitis/Alveo flows under sbx got a path to a directory that was not
+  # there. The docker path mounts it; so does this now.
+  if [ -n "$PLATFORM_REPO_PATHS" ] && [ -d "$PLATFORM_REPO_PATHS" ]; then
+    case "$PLATFORM_REPO_PATHS" in
+      "$FINN_XILINX_PATH"/*) ;;   # already covered by the root mount
+      *) SBX_ARGS+=("$PLATFORM_REPO_PATHS:ro") ;;
+    esac
+  fi
 
   for v in VIVADO_PATH VITIS_PATH HLS_PATH PLATFORM_REPO_PATHS \
            XILINXD_LICENSE_FILE LM_LICENSE_FILE NUM_DEFAULT_WORKERS; do
@@ -726,14 +770,27 @@ if [ "$FINN_SBX_MODE" = "1" ]; then
   done
   # Node-locked licences are files that must exist inside the sandbox; mount
   # their directory read-only at its own path, as the docker path does.
-  for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
-    eval "lval=\${$lv:-}"
-    [ -z "$lval" ] && continue
-    ( IFS=':'; for entry in $lval; do
-        case "$entry" in ''|*@*) continue ;; esac
-        d=$(dirname "$entry"); [ -d "$d" ] && echo "$d"
-      done ) | sort -u | while read -r d; do SBX_ARGS+=("$d:ro"); done
-  done
+  #
+  # NOTE the shape here. This was previously
+  #
+  #   ( ... ) | sort -u | while read -r d; do SBX_ARGS+=("$d:ro"); done
+  #
+  # in which the `while` is the last stage of a pipeline and therefore runs in a
+  # SUBSHELL, so every append to SBX_ARGS was discarded when it exited. Node-
+  # locked licence directories were never actually mounted. Process substitution
+  # keeps the loop in the current shell. Do not reintroduce the pipe.
+  while IFS= read -r d; do
+    [ -n "$d" ] && SBX_ARGS+=("$d:ro")
+  done < <(
+    for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
+      eval "lval=\${$lv:-}"
+      [ -z "$lval" ] && continue
+      ( IFS=':'; for entry in $lval; do
+          case "$entry" in ''|*@*) continue ;; esac
+          d=$(dirname "$entry"); [ -d "$d" ] && echo "$d"
+        done )
+    done | sort -u
+  )
 
   fi
 

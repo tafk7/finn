@@ -461,9 +461,23 @@ RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/n
 ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
 CMD ["bash"]
 
+# The image's default user. This was missing entirely: `agent` was created but
+# never selected, so every consumer that did not pass --user got ROOT. That
+# included plain `docker run`, `docker exec`, and any orchestrator reading the
+# image's own metadata to decide who to run as.
+#
+# run-docker.sh still passes --user $UID:$GID and so is unaffected; this fixes
+# the default for everyone who does not.
+#
+# Stages below re-assert USER root for their install steps and restore this at
+# the end. A stage that forgets will fail loudly on the first apt-get, which is
+# the desired failure mode.
+USER agent
+
 
 # --- build: + the non-Python build data. Vivado / Vitis HLS flows. -----------
 FROM dev AS build
+USER root
 
 ARG HLSLIB_COMMIT
 ARG AVNET_BDF_COMMIT
@@ -484,9 +498,12 @@ RUN cd /opt/finn-src && \
 ENV FINN_HLSLIB_PATH=/opt/finn-src/deps/finn-hlslib \
     FINN_BOARD_FILES_PATH=/opt/finn-src/deps/board_files
 
+USER agent
+
 
 # --- build-xrt: + XRT and v80++. Vitis / Alveo / V80 targets only. -----------
 FROM build AS build-xrt
+USER root
 
 # One authored value. The Ubuntu release and the target architecture are derived
 # from it rather than pinned separately, because a Noble package on a Jammy base
@@ -573,3 +590,5 @@ RUN if [ -f /tmp/v80pp.deb ]; then \
         rm /tmp/v80pp.deb && \
         rm -rf /var/lib/apt/lists/*; \
     fi
+
+USER agent

@@ -681,12 +681,16 @@ reads 0 bytes in a live sandbox because sbx replaces it after the entrypoint
 runs. Anything needing to be computed at start belongs in the kit's
 `commands.startup`, which may write that file.
 
-Kit schema drift worth knowing: the published docs describe `setup.install` /
-`setup.startup`, but v0.39.0 rejects a `setup:` key and requires `commands:`,
-with `command` as an argv **list** and no `name` field — and `kit inspect` then
-normalises its *output* back to `setup:`. Input and output schemas differ, the
-same asymmetry as the `caps` -> `permissions` rename. Validate against the
-binary, not the docs.
+Kit schema versions, verified against sbx v0.39.0: `schemaVersion: "1"` uses
+`commands:`, `schemaVersion: "2"` uses `setup:`. v2 is available from sbx 0.36
+and is what `docker/finn.kit/spec.yaml` uses. The two grammars must not be
+mixed — v1 fields inside a v2 spec are rejected at decode.
+
+An earlier revision of this document claimed v0.39.0 *rejects* `setup:` and
+requires `commands:`. That was wrong: it was a v1 spec being read by a v2 parser,
+and the diagnosis stopped at the error message. The checked-in kit uses `setup:`
+and works. Validate against the binary — but validate the whole hypothesis, not
+just the first failure.
 
 **sbx substitutes its own CMD.** PID 1 in a sandbox is
 `tini -- finn_entrypoint.sh sh -c 'trap ...; sleep infinity & wait'`, so the
@@ -697,8 +701,12 @@ default. What kills a sandbox is the ENTRYPOINT *exiting*, not the CMD.
 `finn_entrypoint.sh` exports is absent from exec sessions, so path resolution
 cannot live in the shell. `finn_paths.workspace_root()` therefore falls back
 `FINN_ROOT` → `WORKSPACE_DIR` (set by sbx) → a cwd that actually contains
-`src/finn`, and `FINN_BUILD_DIR` is defaulted the same way. The entrypoint also
-writes what it resolved to `/etc/sandbox-persistent.sh` for shell sessions.
+`src/finn`, and `FINN_BUILD_DIR` is defaulted the same way.
+
+The entrypoint does **not** write `/etc/sandbox-persistent.sh` — see above, that
+file is sbx-managed and the image must not touch it. The kit's startup command
+writes `/etc/finn-toolchain.sh` and appends a single guarded source line to it
+instead.
 
 **Why not extend `docker/sandbox-templates`.** That is Docker's supported route
 and it is closed to FINN: the images are Ubuntu 26.04 on Python 3.14, and
