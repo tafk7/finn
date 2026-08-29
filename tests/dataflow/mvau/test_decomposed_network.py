@@ -16,6 +16,8 @@ consume, and checks that specification computes a matrix product.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
@@ -42,11 +44,11 @@ from finn.dataflow.mvau.decomposed import (
 from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
 from finn.dataflow.mvau_problem import MVAUComputationProfile, MVAUProblemPaths
 from finn.dataflow.network_validation import validate_network
-from finn.dataflow.region import DataflowRegion, NumericElementType
+from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 #: ``(R, MW, MH, PE, SIMD)``.
 GEOMETRIES = [

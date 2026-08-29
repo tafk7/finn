@@ -75,6 +75,9 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/parameters \
     tests/dataflow/synthetic_op.py \
     tests/dataflow/mvau_op_facts.py \
+    tests/dataflow/normalized_structure.py \
+    tests/dataflow/test_datatypes.py \
+    tests/dataflow/test_kernel_admission.py \
     tests/dataflow/test_authoring_op_design.py \
     tests/dataflow/test_authoring_scope.py \
     tests/dataflow/test_mvau_narrow_weights.py \

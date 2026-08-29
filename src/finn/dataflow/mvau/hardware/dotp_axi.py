@@ -18,6 +18,7 @@ family.  See the vocabulary note section 5.5.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, finite, reject
@@ -30,6 +31,7 @@ from finn.dataflow.hardware import (
 )
 from finn.dataflow.mvau.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.mvau.hardware.inputs import DotProductHardwareInputs
+from finn.dataflow.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.mvau.rtl_parameters import (
     DSP_VERSION,
     dsp_version,
@@ -37,7 +39,7 @@ from finn.dataflow.mvau.rtl_parameters import (
     signed_activations,
 )
 from finn.dataflow.mvau_problem import MVAUDspBlock
-from finn.dataflow.region import NumericElementType
+from finn.dataflow.region import NumericElementType, element_width
 
 #: FinnLib's half of the composition, relative to the FinnLib root, in compile
 #: order -- ``dotp_axi`` instantiates ``dotp``, which instantiates the core.
@@ -61,29 +63,148 @@ _DSP_WIDTHS = {
 }
 
 
-def covers_operand_types(activation: NumericElementType, weight: NumericElementType) -> bool:
-    """Whether this core's arithmetic exists for these operand types.
+#: The datatypes this core's datapath is a two's-complement multiplier for.
+#:
+#: Matched by **canonical identity**, not by family and width.  QONNX reports
+#: ``is_integer()`` true for ``BINARY``, ``BIPOLAR``, and ``TERNARY`` as well,
+#: and those are integer-*valued* domains rather than two's-complement ones:
+#: ``TERNARY`` is two bits wide and spans -1..1, so a width-and-family test
+#: admits it and the RTL then computes over a range it was never given.  That
+#: is the ``TERNARY``-lowered-as-``INT2`` defect, and naming the families
+#: explicitly is what closes it.
+_MULTIPLIABLE_FAMILIES = ("INT", "UINT")
 
-    Answerable from graph facts alone -- no target, no decision -- which is what
-    lets the operation's transitional admission bridge ask it before anything is
-    selected.  See :data:`finn.dataflow.mvau.decomposed.HARDWARE_OPERAND_TYPE_COVERAGE`.
+
+def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
+    """Whether ``datatype`` is a plain sized integer this datapath can multiply.
+
+    ``INT<n>`` / ``UINT<n>`` and nothing else.  Special encodings are excluded
+    by name even where they answer ``is_integer()``, and a datatype QONNX would
+    canonicalize to a special name -- ``UINT1`` is ``BINARY`` -- is excluded
+    with them, because the canonical name is the identity.
+    """
+
+    name = datatype.name
+    return any(
+        name.startswith(prefix) and name[len(prefix) :].isdigit()
+        for prefix in _MULTIPLIABLE_FAMILIES
+    )
+
+
+#: The roles this core declares *signed* in its own RTL, and therefore cannot
+#: accept an unsigned datatype for.
+#:
+#: ``dotp.sv`` and ``dotp_top.sv`` declare the result port as
+#:
+#:     output logic signed [PE-1:0][ACCU_WIDTH-1:0]  p
+#:
+#: so the accumulation and the value leaving the core are two's-complement
+#: signed.  A ``UINT16`` accumulator would be reinterpreted at the boundary,
+#: and every value above the signed maximum would come back negative.
+#:
+#: The weight operand is signed for the same kind of reason: the multiplier's
+#: A port is fed as a signed operand.
+#:
+#: The activation is *not* in this set -- ``SIGNED_ACTIVATIONS`` exists
+#: precisely so the core can be told which of the two it is getting.  So the
+#: role contract is deliberately non-uniform:
+#:
+#:     activation   INT<n> or UINT<n>
+#:     weight       INT<n>
+#:     accumulator  INT<n>
+#:     output       INT<n>, and equal to the accumulator
+#:
+#: Applying one rule to all four roles was the previous shape, and it admitted
+#: an unsigned accumulator and output with no refusal at all.
+_SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
+
+
+@dataclass(frozen=True)
+class _RoleVerdict:
+    """One numeric role's answer, with the reason if it is a refusal."""
+
+    role: str
+    supported: bool
+    detail: str = ""
+
+
+def covers_numeric_types(types: MVAUNumericTypes) -> tuple[_RoleVerdict, ...]:
+    """This core's one authoritative datatype predicate, over every role.
+
+    The single implementation behind both the physical coverage constraint and
+    the operation's transitional admission bridge.  They ask it through thin
+    adapters rather than each restating the rule, so the two cannot answer
+    differently -- which §10 of the adoption note requires while the bridge
+    exists at all.
+
+    Answerable from graph facts alone: no target, no decision.  That is what
+    lets admission ask it before anything is selected, and it is also why the
+    *width envelope* is not here -- the DSP datapath limits depend on the board,
+    so they stay in :func:`_width_supported`, where a refusal removes a target
+    from coverage rather than a graph from inference.
+
+    Returns a verdict per role rather than one boolean, so a refusal names which
+    operand was wrong; the callers reduce that as they need it.
 
     Integrality is *physical*, not semantic.  A ``DataflowRegion`` admits
     floating-point element types perfectly well, and arithmetic behaviour is
     binding-owned; a float dot product is a Region this Kernel cannot build, not
-    a Region that does not exist.  Adding a float Kernel should widen what FINN
-    admits without touching the Region declaration or the source matcher.
+    a Region that does not exist.  Adding a float Kernel widens what FINN admits
+    without touching the Region declaration or the source matcher.
     """
 
-    return activation.type_id in {"int", "uint"} and weight.type_id == "int"
+    roles = (
+        ("activation", types.activation),
+        ("weight", types.weight),
+        ("accumulator", types.accumulator),
+        ("output", types.output),
+    )
+    verdicts = []
+    for role, datatype in roles:
+        if not _is_twos_complement_integer(datatype):
+            verdicts.append(
+                _RoleVerdict(role, False, f"{datatype.name} is not a two's-complement integer")
+            )
+            continue
+        if role in _SIGNED_ROLES and not datatype.signed():
+            verdicts.append(
+                _RoleVerdict(
+                    role,
+                    False,
+                    f"{datatype.name} is unsigned; the core declares this role signed",
+                )
+            )
+            continue
+        verdicts.append(_RoleVerdict(role, True))
+    return tuple(verdicts)
 
 
-def _operand_types_supported(activation: NumericElementType, weight: NumericElementType) -> object:
-    if not covers_operand_types(activation, weight):
+def covers_operand_types(types: MVAUNumericTypes) -> bool:
+    """The boolean reduction, for callers that only need admission's answer."""
+
+    return all(verdict.supported for verdict in covers_numeric_types(types))
+
+
+def _operand_types_supported(
+    activation: NumericElementType,
+    weight: NumericElementType,
+    accumulator: NumericElementType,
+    output: NumericElementType,
+) -> object:
+    """The coverage adapter: the same predicate, reported as a finding."""
+
+    refused = [
+        verdict
+        for verdict in covers_numeric_types(
+            MVAUNumericTypes(activation, weight, accumulator, output)
+        )
+        if not verdict.supported
+    ]
+    if refused:
         return reject(
-            "dotp-axi-operands-not-integer",
-            "this dot-product core multiplies integers",
-            values={"activation": activation.type_id, "weight": weight.type_id},
+            "dotp-axi-numeric-types-unsupported",
+            "this dot-product core multiplies two's-complement integers",
+            values={verdict.role: verdict.detail for verdict in refused},
         )
     return True
 
@@ -96,11 +217,11 @@ def _operand_widths_supported(activation: NumericElementType, weight: NumericEle
     over the same semantics, not a different Region.
     """
 
-    if activation.bit_width < 2 or weight.bit_width < 2:
+    if element_width(activation) < 2 or element_width(weight) < 2:
         return reject(
             "dotp-axi-operands-too-narrow",
             "the dot-product core needs at least two bits of each operand",
-            values={"activation": activation.bit_width, "weight": weight.bit_width},
+            values={"activation": element_width(activation), "weight": element_width(weight)},
         )
     return True
 
@@ -116,10 +237,10 @@ def _width_supported(
 
     a_width, b_width, p_width = _DSP_WIDTHS[target]
     return (
-        2 <= weight.bit_width <= a_width
-        and 2 <= activation.bit_width <= b_width
-        and accumulator.bit_width <= p_width
-        and output.bit_width <= p_width
+        2 <= element_width(weight) <= a_width
+        and 2 <= element_width(activation) <= b_width
+        and element_width(accumulator) <= p_width
+        and element_width(output) <= p_width
     )
 
 
@@ -186,27 +307,32 @@ class DotpAxiKernel(HardwareKernel):
             "activation_width",
             int,
             dependencies={"element_type": facts.activation_element_type},
-            evaluate=lambda element_type: element_type.bit_width,
+            evaluate=element_width,
         )
         weight_width = design.derived(
             "weight_width",
             int,
             dependencies={"element_type": facts.weight_element_type},
-            evaluate=lambda element_type: element_type.bit_width,
+            evaluate=element_width,
         )
         accumulator_width = design.derived(
             "accumulator_width",
             int,
             dependencies={"element_type": facts.accumulator_element_type},
-            evaluate=lambda element_type: element_type.bit_width,
+            evaluate=element_width,
         )
 
         # -- what this core can actually build ------------------------------
         design.coverage_constraint(
             "operand_types_supported",
+            # Every numeric role, not just the two that get multiplied.  An
+            # integer dot product with a floating-point accumulator used to pass
+            # here because nothing asked.
             dependencies={
                 "activation": facts.activation_element_type,
                 "weight": facts.weight_element_type,
+                "accumulator": facts.accumulator_element_type,
+                "output": facts.output_element_type,
             },
             evaluate=_operand_types_supported,
         )

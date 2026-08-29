@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from dataclasses import replace
 
 import pytest
@@ -41,13 +43,13 @@ from finn.dataflow.parameters.supply_kernels import (
     WeightOrganization,
     build_mvau_weight_supply_selection,
 )
-from finn.dataflow.region import DataflowRegion, NumericElementType, Port
+from finn.dataflow.region import DataflowRegion, Port
 from finn.dataflow.region_validation import RegionValidationReport
 from finn.dataflow.spec_algebra import assemble_specs
 from finn.dataflow.mvau_problem import MVAUProblemPaths
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 _MISSING = object()
 
 _PORT = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))

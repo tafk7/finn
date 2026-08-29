@@ -27,6 +27,10 @@ passing is the part that reads declarations.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
+from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
+
 from dataclasses import dataclass
 from typing import cast
 
@@ -82,17 +86,17 @@ from finn.dataflow.region import (
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     OutputInterface,
     Port,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
     ScheduleLevel,
+    element_width as element_width_of,
 )
 from finn.dataflow.spec_algebra import SpecAuthoringError
 
-INT8 = NumericElementType("int", 8)
+INT8 = DataType["INT8"]
 OWNER = "example"
 
 #: The node ids the synthetic assembly uses.  A Kernel never sees these -- it
@@ -200,7 +204,7 @@ def _semantics() -> tuple[OpDesign, HardwareInputs, QualifiedPath]:
 
     design = OpDesign("example.op", problem_namespace=OWNER)
     extent = design.graph_fact("extent", int)
-    element_type = design.graph_fact("element_type", NumericElementType)
+    element_type = design.graph_fact("element_type", QONNX_DATATYPE_VALUE_SEMANTICS)
     target_family = design.target_fact("family", str, required=False)
     lanes = design.decision("lanes", int, domain=divisors_of(extent))
     # The width is a declared property, not a projection applied on the way out
@@ -209,7 +213,7 @@ def _semantics() -> tuple[OpDesign, HardwareInputs, QualifiedPath]:
         "element_width",
         int,
         dependencies={"element_type": element_type},
-        evaluate=lambda element_type: element_type.bit_width,
+        evaluate=element_width_of,
     )
     producer = design.derived(
         "producer_region",

@@ -11,6 +11,10 @@ between the family and the selected thing.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
+from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
+
 from dataclasses import dataclass
 from typing import cast
 
@@ -50,7 +54,7 @@ from finn.dataflow.region import (
     ScheduleLevel,
 )
 
-INT8 = NumericElementType("int", 8)
+INT8 = DataType["INT8"]
 POOL = "example.compute"
 
 
@@ -185,7 +189,7 @@ def _pool() -> tuple[OpDesign, ComputeInputs, KernelSelection]:
     op = OpDesign("example.op", problem_namespace="example")
     inputs = ComputeInputs(
         extent=op.graph_fact("extent", int),
-        element_type=op.graph_fact("element_type", NumericElementType),
+        element_type=op.graph_fact("element_type", QONNX_DATATYPE_VALUE_SEMANTICS),
         target_family=op.target_fact("family", str, required=False),
     )
     provenance = op.provenance()
@@ -407,7 +411,7 @@ def test_binding_propagates_an_unresolved_demand_rather_than_dropping_it() -> No
     op = OpDesign("example.op", problem_namespace="example")
     inputs = ComputeInputs(
         extent=op.graph_fact("extent", int),
-        element_type=op.graph_fact("element_type", NumericElementType),
+        element_type=op.graph_fact("element_type", QONNX_DATATYPE_VALUE_SEMANTICS),
         target_family=op.target_fact("family", str, required=False),
     )
     pool = "probe.compute"

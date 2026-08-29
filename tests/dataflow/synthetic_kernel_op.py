@@ -10,6 +10,8 @@ layer, and Region equality that does not collapse Kernel identity.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from collections.abc import Mapping
 from typing import cast
 
@@ -49,7 +51,6 @@ from finn.dataflow.region import (
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     OutputInterface,
     Port,
@@ -96,7 +97,7 @@ def _finite(values: tuple[object, ...]) -> DecisionDomain:
 
 
 def _region(extent: int) -> DataflowRegion:
-    element_type = NumericElementType("int", 8)
+    element_type = DataType["INT8"]
     source = Operand("x", element_type, (extent,))
     result = Operand("y", element_type, (extent,))
     beats = BeatSequence(1, tuple(((index,),) for index in range(extent)))
@@ -138,7 +139,7 @@ def _build_kernel(
 
     def derive_demand(dependencies: DependencyView) -> Answer[object]:
         extent = cast(int, dependencies["extent"])
-        element_type = NumericElementType("int", 8)
+        element_type = DataType["INT8"]
         return Decided(
             Port(
                 "parameter",

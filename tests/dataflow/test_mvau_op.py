@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from dataclasses import replace
 
 import pytest
@@ -56,12 +58,12 @@ from finn.dataflow.parameters.supply_kernels import (
     MVAUWeightSupplyKernelId,
     WeightOrganization,
 )
-from finn.dataflow.region import NumericElementType, Port
+from finn.dataflow.region import Port
 from finn.dataflow.selection import enumerate_feasible_points
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 COMPUTE = MVAU_COMPUTE_SELECTION.paths
 SUPPLY = MVAU_WEIGHT_SUPPLY_SELECTION.paths

@@ -31,6 +31,7 @@ from finn.dataflow.design import (
     QualifiedPath,
     RequestError,
 )
+from finn.dataflow.datatypes import encode_datatype, is_qonnx_datatype
 from finn.dataflow.kernels import KernelSelection
 from finn.dataflow.resolution import NetworkRef, RegionRef, ResolvedDataflowOp
 
@@ -196,6 +197,11 @@ def _canonical_value(value: object) -> object:
         return {"float_hex": value.hex()}
     if isinstance(value, QualifiedPath):
         return {"qualified_path": value.value}
+    # Before the dataclass branch: a QONNX datatype is not a dataclass, but
+    # being explicit here says that a datatype is fingerprinted by its canonical
+    # name and by nothing else -- never by its class or its private width.
+    if is_qonnx_datatype(value):
+        return encode_datatype(value)
     if isinstance(value, Enum):
         return {
             "enum_type": f"{type(value).__module__}.{type(value).__qualname__}",

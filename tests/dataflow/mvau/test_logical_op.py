@@ -60,14 +60,19 @@ from finn.dataflow.ops.mvau import (
     NetworkRef,
     RegionRef,
 )
-from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.dataflow.datatypes import is_qonnx_datatype
+from finn.dataflow.ops.mvau_op import (
+    MVAU_DATAFLOW_OP_FAMILY_VERSION,
+    MVAUDataflowBuildContext,
+    MvauDataflowOp,
+)
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,
     MVAUWeightSupplyKernelId,
     WeightOrganization,
 )
-from finn.dataflow.region import BeatSequence, NumericElementType
+from finn.dataflow.region import BeatSequence
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
 from finn.dataflow.mvau_problem import MVAUProblemPaths
 
@@ -438,7 +443,7 @@ def test_logical_mvau_region_topologies_match_standalone_resolution(
 
 def test_batch_interleaved_external_contract_resolves_directly(tmp_path: Path) -> None:
     external = construct_batch_interleaved_mvau_weight_port(
-        4, 4, 4, NumericElementType("int", 8), 2, 2, 2
+        4, 4, 4, DataType["INT8"], 2, 2, 2
     ).beat_sequence
     model = _model()
     operation = _wrapped(model)
@@ -564,6 +569,65 @@ def test_logical_mvau_stale_graph_and_build_facts_are_rejected(
     assert {finding.code for finding in stale.value.findings} == {
         "dataflow-selection-problem-mismatch"
     }
+
+
+def test_a_v4_node_is_rejected_for_its_family_version_not_incidentally() -> None:
+    """The operation-schema bump the QONNX datatype adoption owes.
+
+    ``v4`` was committed by the Region/Kernel Phase 1+3 work.  Adopting QONNX
+    datatypes changed the problem fields' value semantics, the problem
+    fingerprint encoding, the Region representation those fields flow into, and
+    persistence compatibility -- all of which this version labels.
+
+    A v4 node was already refused *incidentally*, as a problem-fingerprint
+    mismatch, while the family version went on asserting the schema was
+    unchanged.  That is the more dangerous kind of wrong, because a version
+    that no longer describes what it labels is believed.  So the refusal has to
+    name the family.
+    """
+
+    assert MVAU_DATAFLOW_OP_FAMILY_VERSION == "mvau-dataflow-op-v5"
+
+    operation = _wrapped(_model())
+    operation.commit_dataflow_assignments(
+        _context(),
+        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
+    )
+    operation.set_nodeattr(operation.FAMILY_VERSION_ATTR, "mvau-dataflow-op-v4")
+
+    with pytest.raises(DataflowOpError) as stale:
+        operation.hydrate_dataflow_point(_context())
+    assert {finding.code for finding in stale.value.findings} == {
+        "dataflow-selection-family-mismatch"
+    }
+
+
+def test_a_freshly_saved_v5_selection_reloads_with_its_datatypes_intact() -> None:
+    """Save and reload under the new schema, checked at the datatypes.
+
+    The companion to the rejection above: what v5 refuses to reinterpret it
+    must itself round-trip.  Compared as datatype *values*, since a canonical
+    name would compare equal to its datatype and so prove nothing.
+    """
+
+    model = _model()
+    operation = _wrapped(model)
+    operation.commit_dataflow_assignments(
+        _context(),
+        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
+    )
+    assert operation.get_nodeattr(operation.FAMILY_VERSION_ATTR) == "mvau-dataflow-op-v5"
+
+    point = operation.hydrate_dataflow_point(_context())
+    for path in (
+        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
+        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
+        MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
+        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
+    ):
+        value = point.problem[path]
+        assert is_qonnx_datatype(value), path
+        assert value == DataType[value.name], path
 
 
 def test_logical_mvau_assignments_survive_fresh_process_reload(tmp_path: Path) -> None:

@@ -19,6 +19,13 @@ from itertools import product
 from math import prod
 from typing import Iterable, Iterator, Mapping, Optional, Tuple
 
+from finn.dataflow.datatypes import (
+    DatatypeError,
+    QONNXDataType,
+    canonical_qonnx_datatype,
+    qonnx_datatype_width,
+)
+
 Coordinate = Tuple[int, ...]
 RequirementKey = Tuple[Coordinate, Coordinate]
 RequirementEntry = Tuple[RequirementKey, int]
@@ -88,16 +95,113 @@ def _coordinates(extents: Tuple[int, ...]) -> Iterator[Coordinate]:
     yield from product(*(range(extent) for extent in extents))
 
 
-@dataclass(frozen=True)
-class NumericElementType:
-    """Complete logical numeric scalar type."""
+#: A logical numeric scalar type is a QONNX datatype.
+#:
+#: There is no FINN-local datatype value.  The name is kept as an alias because
+#: it is what the canon calls the concept and what several hundred annotations
+#: already say; ``finn.dataflow.datatypes`` owns the identity, the recognition,
+#: and the canonicalization.
+NumericElementType = QONNXDataType
 
-    type_id: str
-    bit_width: int
 
-    def __post_init__(self) -> None:
-        _require_string(self.type_id, "type_id")
-        _require_int(self.bit_width, "bit_width")
+# -- element-type accessors ---------------------------------------------------
+#
+# Every read of an element type goes through one of these rather than touching
+# the datatype's own methods.  Introduced while the representation was still
+# ``(type_id, bit_width)`` so that switching it edited three functions instead
+# of sixty-two call sites; two of the three are now thin, and the third is the
+# list of questions that still need rewriting.
+
+
+def is_element_type(value: object) -> bool:
+    """Whether ``value`` is a usable element type.
+
+    The condition three separate validators had spelled out identically, now
+    delegated to the datatype boundary plus the one thing a Region additionally
+    requires: a positive width, so a degenerate ``INT0`` -- which QONNX will
+    happily resolve -- cannot describe a beat.
+
+    The width is read from the *canonical* value rather than from ``value``,
+    via ``qonnx_datatype_width``.  ``value`` here is untrusted and is not what a
+    Region would end up holding -- ``_canonical_element_type`` re-resolves it --
+    so measuring the caller's instance would answer for an object that is about
+    to be discarded, and would let a raising ``bitwidth()`` escape a predicate
+    that is supposed to be total.
+    """
+
+    try:
+        return qonnx_datatype_width(value) > 0
+    except DatatypeError:
+        return False
+
+
+def element_width(element_type: NumericElementType) -> int:
+    """The element's width in bits."""
+
+    return element_type.bitwidth()
+
+
+def element_family(element_type: NumericElementType) -> str:
+    """The element's reduced family label: ``int``, ``uint``, ``float``, ...
+
+    **Transitional, and deliberately conspicuous.**  A reduced family is
+    precisely the lossy notion adopting QONNX removes: this maps ``TERNARY`` and
+    ``INT2`` to the same label, exactly as the old representation did, which is
+    the live defect recorded in ``open/qonnx-datatype-adoption.md`` §1.1.
+
+    It is reproduced faithfully here on purpose.  Switching the representation
+    and fixing the classification in one step would leave nothing able to say
+    which of the two caused a change.  Every caller is a question that must be
+    re-asked by canonical datatype identity, and emptying this function is what
+    Phase D of the adoption is for.
+
+    Datatypes with no legacy label -- fixed point, scaled integer -- return
+    their canonical name, so they match no family test and are refused by
+    coverage rather than silently joining one.
+
+    **What is left.**  The decomposed slice no longer calls this: ``dotp_axi``
+    asks canonical identity, and ``SIGNED_ACTIVATIONS`` asks ``signed()``.  The
+    remaining callers are the legacy HLS and RTL pool members in
+    ``compute_kernels.py``, whose bipolar/binary tests are the same reduced
+    question they always were.  Rewriting *their* datatype semantics would be a
+    behaviour change on legacy paths, which is not this migration's to make, and
+    those Kernels are retired by Phase 7 of the Region/Kernel binding plan
+    anyway.  Left deliberately, recorded rather than hidden.
+
+    New code must not call this.  Ask what it actually needs to know: the width,
+    the signedness, or whether this specific datatype is one the Kernel can
+    multiply.
+    """
+
+    name = element_type.name
+    if name in {"BIPOLAR", "BINARY"}:
+        return name.lower()
+    if element_type.is_integer():
+        return "int" if element_type.signed() else "uint"
+    if name.startswith("FLOAT"):
+        return "float"
+    return name
+
+
+def _canonical_element_type(value: object) -> NumericElementType:
+    """Re-resolve an element type on the way into a Region value.
+
+    Validating and then keeping the caller's object would not be enough.  QONNX
+    datatypes carry writable private state and are not interned, so a Region
+    holding the caller's instance can be renamed underneath -- and because
+    identity and hash both derive from the canonical name, the same mutation
+    also loses that Region from any mapping keyed on it.  Re-resolving here
+    means a Region's element type is always the registered value, whatever the
+    caller does with theirs afterwards.
+
+    This is the Region half of the ingestion discipline; the engine's value
+    semantics do the same on its side.
+    """
+
+    try:
+        return canonical_qonnx_datatype(value)
+    except DatatypeError as error:
+        raise TypeError(f"element_type must be a QONNX datatype: {error}") from error
 
 
 @dataclass(frozen=True)
@@ -110,8 +214,7 @@ class Operand:
 
     def __post_init__(self) -> None:
         _require_string(self.id, "operand id")
-        if not isinstance(self.element_type, NumericElementType):
-            raise TypeError("element_type must be a NumericElementType")
+        object.__setattr__(self, "element_type", _canonical_element_type(self.element_type))
         shape = tuple(self.shape)
         for extent in shape:
             _require_int(extent, "operand shape extent")
@@ -242,14 +345,13 @@ class BeatType:
     elements_per_beat: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.element_type, NumericElementType):
-            raise TypeError("element_type must be a NumericElementType")
+        object.__setattr__(self, "element_type", _canonical_element_type(self.element_type))
         _require_int(self.elements_per_beat, "elements_per_beat")
 
     @property
     def logical_bit_width(self) -> int:
         """Return the logical number of bits in one beat."""
-        return self.element_type.bit_width * self.elements_per_beat
+        return element_width(self.element_type) * self.elements_per_beat
 
 
 @dataclass(frozen=True)

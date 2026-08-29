@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 import os
 from pathlib import Path
 import subprocess
@@ -33,13 +35,12 @@ from finn.dataflow.mvau.source import (
     parse_mvau_selection_envelope,
     reconstitute_mvau_point,
 )
-from finn.dataflow.region import NumericElementType
 from finn.dataflow.spec_algebra import SpecAuthoringError, assemble_specs
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from dataflow.mvau_op_facts import compute_pool_context
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 
 def _compute_problem() -> dict[QualifiedPath, object]:

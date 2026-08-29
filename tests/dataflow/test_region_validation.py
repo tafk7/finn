@@ -1,12 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     OutputInterface,
     Port,
@@ -15,7 +16,7 @@ from finn.dataflow.region import (
 )
 from finn.dataflow.region_validation import validate_region
 
-ELEMENT_TYPE = NumericElementType("int", 8)
+ELEMENT_TYPE = DataType["INT8"]
 
 
 def _input(port_id, operand, beats, requirements, elements_per_beat=1):
@@ -162,7 +163,9 @@ def test_condition_2_port_identity_is_unique_across_directions():
 
 
 def test_condition_3_operand_shape_type_and_identity_are_consistent():
-    invalid = Operand("shared", NumericElementType("int", 0), (0,))
+    # ``INT0`` is a datatype QONNX will resolve, so it reaches the Region and
+    # is caught by the positive-width rule rather than by the datatype boundary.
+    invalid = Operand("shared", DataType["INT0"], (0,))
     conflicting = Operand("shared", ELEMENT_TYPE, (1,))
     region = DataflowRegion(
         LogicalSchedule((("step", 1),)),

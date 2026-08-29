@@ -71,6 +71,7 @@ from finn.dataflow.mvau.hardware.inputs import (
     DotProductHardwareInputs,
 )
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
     construct_activation_replay_region,
@@ -111,15 +112,20 @@ ACTIVATION_EDGE = "activation_replay"
 HARDWARE_OWNER = "mvau.hardware"
 
 #: Every physical Kernel that can cover the dot-product Region, as its
-#: graph-answerable operand-type predicate.
+#: graph-answerable datatype predicate over the *complete* numeric signature.
 #:
 #: This is the inventory the transitional admission bridge in
 #: ``DotProductKernel`` quantifies over.  It exists because inference asks an
 #: existential question -- can *anything* build this? -- that
-#: ``admissible_kernels`` cannot yet put to physical Kernels.  Each entry is the
-#: same function that Kernel's own coverage constraint uses, so the bridge and
-#: the coverage cannot drift apart.
-HARDWARE_OPERAND_TYPE_COVERAGE = (dotp_axi_covers_operand_types,)
+#: ``admissible_kernels`` cannot yet put to physical Kernels.  Each entry is a
+#: reduction of the same function that Kernel's own coverage constraint uses, so
+#: the bridge and the coverage cannot answer differently.
+#:
+#: The signature is complete on purpose: an inventory asked only about
+#: activation and weight would admit an integer dot product with a
+#: floating-point accumulator, which is exactly the hole the signature closed on
+#: the coverage side.
+HARDWARE_NUMERIC_TYPE_COVERAGE = (dotp_axi_covers_operand_types,)
 
 
 @dataclass(frozen=True)
@@ -198,16 +204,19 @@ class DotProductKernel(Kernel):
         # existential is spelled out here over a declared inventory.
         #
         # Adding a float Kernel therefore widens admission by extending
-        # ``HARDWARE_OPERAND_TYPE_COVERAGE``, not by editing this Region or the
+        # ``HARDWARE_NUMERIC_TYPE_COVERAGE``, not by editing this Region or the
         # source matcher.  Delete this once admission can ask coverage directly.
         design.source_constraint(
-            "some_hardware_covers_the_operand_types",
+            "some_hardware_covers_the_numeric_types",
             dependencies={
                 "activation": facts.activation_element_type,
                 "weight": facts.weight_element_type,
+                "accumulator": facts.accumulator_element_type,
+                "output": facts.output_element_type,
             },
-            evaluate=lambda activation, weight: any(
-                covers(activation, weight) for covers in HARDWARE_OPERAND_TYPE_COVERAGE
+            evaluate=lambda activation, weight, accumulator, output: any(
+                covers(MVAUNumericTypes(activation, weight, accumulator, output))
+                for covers in HARDWARE_NUMERIC_TYPE_COVERAGE
             ),
         )
 
@@ -515,7 +524,7 @@ def construct_decomposed_mvau_network(
 
 __all__ = [
     "ACTIVATION_EDGE",
-    "HARDWARE_OPERAND_TYPE_COVERAGE",
+    "HARDWARE_NUMERIC_TYPE_COVERAGE",
     "ActivationReplayInputs",
     "ActivationReplayKernel",
     "DOT_PRODUCT_NODE",

@@ -21,6 +21,12 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "DATAFLOW_NETWORK_SEMANTICS",
         "DATAFLOW_REGION_SEMANTICS",
         "NETWORK_VALIDATION_REPORT_SEMANTICS",
+        # Datatype fields are declared by every operation, so their value
+        # semantics belong on the supported surface alongside the Region's.
+        # Without this an author has to reach into ``design.region`` to say
+        # "this problem field is a datatype", which reads as internal.
+        "QONNX_DATATYPE_SEMANTICS",
+        "QONNX_DATATYPE_VALUE_SEMANTICS",
         "REGION_VALIDATION_REPORT_SEMANTICS",
         "AbsenceMode",
         "Absent",

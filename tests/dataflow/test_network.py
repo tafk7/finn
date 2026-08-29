@@ -5,7 +5,7 @@ from dataclasses import fields
 
 from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
 from finn.dataflow.network import ChannelSpec, OrderedChannel
-from finn.dataflow.region import NumericElementType
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 
 def test_ordered_channel_has_no_physical_capacity_or_timing_fields() -> None:
@@ -20,7 +20,7 @@ def test_ordered_channel_has_no_physical_capacity_or_timing_fields() -> None:
 
 
 def test_position_map_is_not_inferred_from_equal_widths() -> None:
-    element_type = NumericElementType("int", 8)
+    element_type = DataType["INT8"]
     region = construct_standard_streamed_mvau_region(
         1, 4, 4, element_type, element_type, element_type, 2, 2
     )

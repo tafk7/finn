@@ -31,6 +31,7 @@ from finn.dataflow.hardware import (
 )
 from finn.dataflow.mvau.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.mvau.hardware.inputs import ActivationReplayHardwareInputs
+from finn.dataflow.region import element_width
 
 #: FINN's half of the composition, relative to the FINN root, in compile order.
 FINN_ROOT = "finn"
@@ -80,7 +81,9 @@ class ReplayBufferKernel(HardwareKernel):
                 "activation_element_type": facts.activation_element_type,
                 "simd": facts.simd,
             },
-            evaluate=lambda activation_element_type, simd: simd * activation_element_type.bit_width,
+            evaluate=lambda activation_element_type, simd: (
+                simd * element_width(activation_element_type)
+            ),
         )
         design.parameter("LEN", cast("Ref[object]", length))
         design.parameter("REP", cast("Ref[object]", repetitions))

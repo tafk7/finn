@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from collections import Counter
 
 import pytest
@@ -47,14 +49,13 @@ from finn.dataflow.region import (
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Port,
     ScheduledInputRequirements,
 )
 from finn.dataflow.region_validation import validate_region
 from finn.dataflow.spec_algebra import assemble_specs
 
-INT8 = NumericElementType("int", 8)
+INT8 = DataType["INT8"]
 
 
 def _ports() -> tuple[Port, Port]:

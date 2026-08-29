@@ -42,9 +42,20 @@ def dsp_version(target: MVAUDspBlock) -> object:
 
 
 def signed_activations(activation: NumericElementType) -> object:
-    """``SIGNED_ACTIVATIONS``: whether the activation operand carries a sign."""
+    """``SIGNED_ACTIVATIONS``: whether the activation operand carries a sign.
 
-    return activation.type_id == "int"
+    Asked of the datatype directly.  This used to read a reduced family label
+    and compare it to ``"int"``, which happened to give the right answer only
+    because the label conflated "signed" with "integer"; the parameter is about
+    signedness, so it asks about signedness.
+
+    Reaching here at all means coverage already established the operand is a
+    two's-complement integer, so ``signed()`` is the sign of that encoding
+    rather than the looser "can represent negatives" it means for, say,
+    ``BIPOLAR``.
+    """
+
+    return bool(activation.signed())
 
 
 def segment_length(clock_period_ns: float, pumping: bool, simd: int) -> object:

@@ -40,7 +40,7 @@ from finn.dataflow.parameters.supply_kernels import (
 )
 
 from finn.dataflow.mvau_problem import MVAUProblemPaths
-from finn.dataflow.region import NumericElementType, Port
+from finn.dataflow.region import NumericElementType, Port, element_width
 
 _ELABORATION_PATH = QualifiedPath("elaboration.mvau")
 
@@ -511,8 +511,8 @@ def _compute_physical_objects(
         resolved.point.problem[MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
     wrapper_parameters: tuple[tuple[str, PhysicalParameterValue], ...] = (
-        ("ACCU_WIDTH", accumulator_type.bit_width),
-        ("ACTIVATION_WIDTH", activation_type.bit_width),
+        ("ACCU_WIDTH", element_width(accumulator_type)),
+        ("ACTIVATION_WIDTH", element_width(activation_type)),
         ("IS_MVU", True),
         ("MH", matrix_height),
         ("MW", matrix_width),
@@ -523,13 +523,13 @@ def _compute_physical_objects(
         ("SIGNED_ACTIVATIONS", signed),
         ("SIMD", simd),
         ("VERSION", version),
-        ("WEIGHT_WIDTH", weight_type.bit_width),
+        ("WEIGHT_WIDTH", element_width(weight_type)),
     )
     shell_parameters = (
         *wrapper_parameters,
         ("ACTIVATION_REPLAY_LEN", matrix_width // simd),
         ("ACTIVATION_REPLAY_REP", matrix_height // pe),
-        ("ACTIVATION_REPLAY_WIDTH", simd * activation_type.bit_width),
+        ("ACTIVATION_REPLAY_WIDTH", simd * element_width(activation_type)),
     )
     components = (
         MVAUPhysicalComponent(

@@ -44,6 +44,7 @@ from finn.dataflow.design import (
     as_object_semantics,
 )
 from finn.dataflow.authoring.scope import Ref
+from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.kernels import (
     KernelDeclaration,
     KernelDemand,
@@ -77,7 +78,13 @@ from finn.dataflow.mvau_problem import (
     MVAU_PROBLEM,
     MVAUDspBlock,
 )
-from finn.dataflow.region import DataflowRegion, NumericElementType, Port
+from finn.dataflow.region import (
+    DataflowRegion,
+    NumericElementType,
+    Port,
+    element_family,
+    element_width,
+)
 
 E = TypeVar("E", bound=Enum)
 
@@ -104,9 +111,10 @@ SOFT_VECTOR_PROVIDER_ID = "finn.rtl.mvu_vvu_axi"
 
 _INTEGER = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integer"))
 _BOOL = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
-_ELEMENT_TYPE = as_object_semantics(
-    ValueSemantics.immutable_nominal(NumericElementType, name="NumericElementType")
-)
+#: The shared declaration, never a fresh ``immutable_nominal`` over the alias:
+#: that would mint a third ``type_token`` for the datatype domain, and
+#: ``is_compatible_with`` compares tokens by identity.
+_ELEMENT_TYPE = QONNX_DATATYPE_SEMANTICS
 _REGION = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _PORT = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
 
@@ -286,8 +294,10 @@ def _computation_types_supported(dependencies: DependencyView) -> Answer[bool]:
     activation = cast(NumericElementType, dependencies["activation_element_type"])
     weight = cast(NumericElementType, dependencies["weight_element_type"])
     if profile is MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR:
-        return Decided(activation.type_id == "bipolar" and weight.type_id == "bipolar")
-    return Decided(activation.type_id != "binary" and weight.type_id != "binary")
+        return Decided(
+            element_family(activation) == "bipolar" and element_family(weight) == "bipolar"
+        )
+    return Decided(element_family(activation) != "binary" and element_family(weight) != "binary")
 
 
 def _accumulator_output_type_supported(dependencies: DependencyView) -> Answer[bool]:
@@ -568,7 +578,7 @@ def _hls_numeric_supported(dependencies: DependencyView) -> Answer[bool]:
     supported = {"int", "uint", "bipolar"}
     activation = cast(NumericElementType, dependencies["activation_element_type"])
     weight = cast(NumericElementType, dependencies["weight_element_type"])
-    return Decided(activation.type_id in supported and weight.type_id in supported)
+    return Decided(element_family(activation) in supported and element_family(weight) in supported)
 
 
 def _hls_partition_supported(dependencies: DependencyView) -> Answer[bool]:
@@ -585,10 +595,10 @@ def _hls_width_supported(dependencies: DependencyView) -> Answer[bool]:
     pe = cast(int, dependencies["pe"])
     simd = cast(int, dependencies["simd"])
     widths = (
-        activation.bit_width * simd,
-        weight.bit_width * pe * simd,
-        accumulator.bit_width * pe,
-        output.bit_width * pe,
+        element_width(activation) * simd,
+        element_width(weight) * pe * simd,
+        element_width(accumulator) * pe,
+        element_width(output) * pe,
     )
     return Decided(max(widths) <= 8191)
 
@@ -608,7 +618,7 @@ def _hls_threshold_supported(dependencies: DependencyView) -> Answer[bool]:
             "fused-threshold feasibility requires a threshold element type",
         )
     accumulator = cast(NumericElementType, dependencies["accumulator_element_type"])
-    return Decided(cast(NumericElementType, threshold).bit_width >= accumulator.bit_width)
+    return Decided(element_width(cast(NumericElementType, threshold)) >= element_width(accumulator))
 
 
 def build_legacy_hls_mvau_kernel() -> KernelDeclaration:
@@ -709,10 +719,10 @@ def _rtl_numeric_supported(dependencies: DependencyView) -> Answer[bool]:
     activation = cast(NumericElementType, dependencies["activation_element_type"])
     weight = cast(NumericElementType, dependencies["weight_element_type"])
     return Decided(
-        activation.type_id in {"int", "uint"}
-        and weight.type_id == "int"
-        and activation.bit_width >= 2
-        and weight.bit_width >= 2
+        element_family(activation) in {"int", "uint"}
+        and element_family(weight) == "int"
+        and element_width(activation) >= 2
+        and element_width(weight) >= 2
     )
 
 
@@ -741,10 +751,10 @@ def _rtl_width_supported(owner: QualifiedPath) -> EvaluatorSpec[Answer[bool]]:
         accumulator = cast(NumericElementType, dependencies["accumulator_element_type"])
         output = cast(NumericElementType, dependencies["output_element_type"])
         return Decided(
-            2 <= weight.bit_width <= a_width
-            and 2 <= activation.bit_width <= b_width
-            and accumulator.bit_width <= p_width
-            and output.bit_width <= p_width
+            2 <= element_width(weight) <= a_width
+            and 2 <= element_width(activation) <= b_width
+            and element_width(accumulator) <= p_width
+            and element_width(output) <= p_width
         )
 
     return EvaluatorSpec(
@@ -966,7 +976,9 @@ PACKED_DSP_PATHS = MVAUComputeKernelPathSet(MVAUComputeKernelId.PACKED_DSP.value
 def _packed_supported(dependencies: DependencyView) -> Answer[bool]:
     activation = cast(NumericElementType, dependencies["activation_element_type"])
     weight = cast(NumericElementType, dependencies["weight_element_type"])
-    if weight.bit_width > 8 or activation.bit_width > 9:
+    weight_bits = element_width(weight)
+    activation_bits = element_width(activation)
+    if weight_bits > 8 or activation_bits > 9:
         return Decided(False)
     narrow = dependencies["narrow_weights"]
     if narrow is ABSENT:
@@ -977,12 +989,11 @@ def _packed_supported(dependencies: DependencyView) -> Answer[bool]:
             "packed-DSP feasibility requires a weights-narrow fact",
         )
     dsp_input_width = 27
-    lane_width = weight.bit_width + activation.bit_width - 1
+    lane_width = weight_bits + activation_bits - 1
     lanes = (
         1
-        if dsp_input_width == weight.bit_width
-        else 1
-        + (dsp_input_width - (0 if cast(bool, narrow) else 1) - weight.bit_width) // lane_width
+        if dsp_input_width == weight_bits
+        else 1 + (dsp_input_width - (0 if cast(bool, narrow) else 1) - weight_bits) // lane_width
     )
     return Decided(lanes <= 3)
 
@@ -1094,7 +1105,7 @@ def _interleave_available(dependencies: DependencyView) -> Answer[bool]:
 def _tiled_width_supported(dependencies: DependencyView) -> Answer[bool]:
     activation = cast(NumericElementType, dependencies["activation_element_type"])
     weight = cast(NumericElementType, dependencies["weight_element_type"])
-    return Decided(activation.bit_width <= 8 and weight.bit_width <= 8)
+    return Decided(element_width(activation) <= 8 and element_width(weight) <= 8)
 
 
 def _batch_interleaved_region(dependencies: DependencyView) -> Answer[object]:

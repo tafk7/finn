@@ -13,6 +13,7 @@ from finn.dataflow.region import (
     InputInterface,
     Operand,
     OutputInterface,
+    element_width,
 )
 
 
@@ -125,12 +126,13 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
                     f"operand identity {operand.id!r} has inconsistent type or shape",
                 )
             )
-        if operand.element_type.bit_width <= 0:
+        width = element_width(operand.element_type)
+        if width <= 0:
             issues.append(
                 RegionValidationIssue(
                     "operand.bit_width_not_positive",
                     f"{path}.port.operand.element_type.bit_width",
-                    f"numeric bit width must be positive, got {operand.element_type.bit_width}",
+                    f"numeric bit width must be positive, got {width}",
                 )
             )
         for dimension, extent in enumerate(operand.shape):

@@ -37,6 +37,24 @@ substantial, launch an agent instead: it keeps the multi-hundred-line Vivado
 transcripts out of the main context and reports the conclusion. One agent per
 independent sweep.
 
+### Do not run two `run-docker.sh` invocations at once
+
+They race and one of them dies. `docker/finn_entrypoint.sh` moves
+`deps/qonnx/pyproject.toml` aside while it runs `pip install -e`, then moves it
+back. The repository is bind-mounted into every container, so that one file is
+shared: a second container entering the same window fails with
+
+```
+mv: cannot stat '.../deps/qonnx/pyproject.toml': No such file or directory
+```
+
+and exits before producing a fixture log at all. The failure names qonnx and
+looks nothing like a concurrency problem, which is why it is written down here.
+
+So fixtures 5 and 6 are **sequential**, not parallel — start the second only
+after the first has exited. Backgrounding them both at once is the natural
+thing to do and the wrong one.
+
 ### Running against FinnLib
 
 The decomposed MVAU compiles against FinnLib, which is a separate repository.

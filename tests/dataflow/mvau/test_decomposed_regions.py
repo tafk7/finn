@@ -11,6 +11,8 @@ decomposition must be invisible at the outer boundary.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 import pytest
 
 from finn.dataflow.mvau.regions import (
@@ -18,11 +20,11 @@ from finn.dataflow.mvau.regions import (
     construct_dot_product_region,
     construct_standard_streamed_mvau_region,
 )
-from finn.dataflow.region import BeatSequence, DataflowRegion, NumericElementType
+from finn.dataflow.region import BeatSequence, DataflowRegion
 from finn.dataflow.region_validation import validate_region
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 #: ``(R, MW, MH, PE, SIMD)``, including the degenerate folds that break naive
 #: constructions: one neuron fold, one synapse fold, and PE spanning MH.

@@ -25,6 +25,8 @@ is this multiplier's.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 import pytest
 
 from dataflow.mvau_op_facts import compute_pool_context
@@ -36,15 +38,17 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import (
-    HARDWARE_OPERAND_TYPE_COVERAGE,
+    HARDWARE_NUMERIC_TYPE_COVERAGE,
     ActivationReplayKernel,
     DecomposedMVAUKernels,
     DotProductKernel,
 )
 from finn.dataflow.mvau.hardware.dotp_axi import (
+    covers_numeric_types,
     covers_operand_types,
     covers_operand_types as dotp_axi_covers_operand_types,
 )
+from finn.dataflow.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
 )
@@ -55,14 +59,14 @@ from finn.dataflow.mvau_problem import (
 )
 from finn.dataflow.region import NumericElementType
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
-INT20 = NumericElementType("int", 20)
-INT32 = NumericElementType("int", 32)
-INT64 = NumericElementType("int", 64)
-UINT8 = NumericElementType("uint", 8)
-FLOAT16 = NumericElementType("float", 16)
-BIPOLAR = NumericElementType("bipolar", 1)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
+INT20 = DataType["INT20"]
+INT32 = DataType["INT32"]
+INT64 = DataType["INT64"]
+UINT8 = DataType["UINT8"]
+FLOAT16 = DataType["FLOAT16"]
+BIPOLAR = DataType["BIPOLAR"]
 
 
 def _problem(
@@ -203,7 +207,7 @@ def test_operands_no_hardware_can_multiply_are_not_admitted(
     """
 
     engine, point, pools = _point(activation=activation, weight=weight)
-    assert "some_hardware_covers_the_operand_types" in _rejected(engine, point, pools)
+    assert "some_hardware_covers_the_numeric_types" in _rejected(engine, point, pools)
 
 
 def test_operand_types_and_widths_are_both_the_hardwares() -> None:
@@ -237,8 +241,8 @@ def test_the_hardware_does_not_claim_types_it_cannot_multiply() -> None:
 
     engine, point, pools = _point(activation=FLOAT16, weight=FLOAT16)
     assert "operand_types_supported" in _rejected(engine, point, pools)
-    assert covers_operand_types(INT8, INT8) is True
-    assert covers_operand_types(FLOAT16, FLOAT16) is False
+    assert covers_operand_types(MVAUNumericTypes(INT8, INT8, INT16, INT16)) is True
+    assert covers_operand_types(MVAUNumericTypes(FLOAT16, FLOAT16, INT16, INT16)) is False
 
 
 def test_admission_quantifies_over_the_declared_hardware_inventory() -> None:
@@ -249,15 +253,141 @@ def test_admission_quantifies_over_the_declared_hardware_inventory() -> None:
     coverage constraint uses, so the two cannot drift.
     """
 
-    assert dotp_axi_covers_operand_types in HARDWARE_OPERAND_TYPE_COVERAGE
-    assert any(covers(INT8, INT8) for covers in HARDWARE_OPERAND_TYPE_COVERAGE)
-    assert not any(covers(FLOAT16, FLOAT16) for covers in HARDWARE_OPERAND_TYPE_COVERAGE)
+    supported = MVAUNumericTypes(INT8, INT8, INT16, INT16)
+    unsupported = MVAUNumericTypes(FLOAT16, FLOAT16, FLOAT16, FLOAT16)
+    assert dotp_axi_covers_operand_types in HARDWARE_NUMERIC_TYPE_COVERAGE
+    assert any(covers(supported) for covers in HARDWARE_NUMERIC_TYPE_COVERAGE)
+    assert not any(covers(unsupported) for covers in HARDWARE_NUMERIC_TYPE_COVERAGE)
+
+
+def test_an_integer_product_with_a_floating_accumulator_is_refused() -> None:
+    """The hole the complete signature was introduced to close.
+
+    Before it, coverage inspected activation and weight only, and the sole
+    condition mentioning the other two roles checked that they equalled *each
+    other*.  So this exact configuration was admitted with **no refusals at
+    all**, lowered, and elaborated onto a multiplier that cannot produce it.
+
+    Named per role, so the diagnostic says which operand was wrong rather than
+    that something was.
+    """
+
+    engine, point, pools = _point(accumulator=FLOAT16, output=FLOAT16)
+    assert "operand_types_supported" in _rejected(engine, point, pools)
+    assert covers_operand_types(MVAUNumericTypes(INT8, INT8, FLOAT16, FLOAT16)) is False
+
+    refused = {
+        verdict.role
+        for verdict in covers_numeric_types(MVAUNumericTypes(INT8, INT8, FLOAT16, FLOAT16))
+        if not verdict.supported
+    }
+    assert refused == {"accumulator", "output"}
+
+
+def test_ternary_is_refused_by_identity_not_by_family_and_width() -> None:
+    """The §1.1 defect, pinned so it cannot return.
+
+    ``TERNARY`` is two bits wide and QONNX reports ``is_integer()`` true for it,
+    so every family-and-width test admitted it -- and the old reduction then
+    spelled it ``INT2`` in the artifact, a different value domain reported as
+    nothing.  It has to be refused by canonical identity, and ``INT2`` -- a
+    genuine two-bit two's-complement integer -- has to keep working, or the fix
+    would just be a narrower version of the same mistake.
+
+    **Scope.**  This says ``DotpAxiKernel`` refuses ``TERNARY``, and no artifact
+    path relabels it.  It does *not* say MVAU inference rejects ternary
+    outright: the legacy HLS and RTL pool members still classify through
+    ``element_family``, which maps ``TERNARY`` to ``"int"``, so a ternary MatMul
+    is still recognized and lowered through one of them.  Whether that is
+    correct is a question about those legacy paths' actual ternary support, and
+    it is deliberately not settled here -- see ``element_family``'s own note.
+    """
+
+    ternary = DataType["TERNARY"]
+    assert ternary.is_integer() is True
+    assert ternary.bitwidth() == 2
+
+    assert covers_operand_types(MVAUNumericTypes(ternary, INT8, INT16, INT16)) is False
+    assert covers_operand_types(MVAUNumericTypes(DataType["INT2"], INT8, INT16, INT16)) is True
+
+    engine, point, pools = _point(activation=ternary)
+    assert "operand_types_supported" in _rejected(engine, point, pools)
+
+
+def test_special_one_bit_encodings_are_refused_by_identity() -> None:
+    """``BINARY`` and ``BIPOLAR`` are integer-valued, not two's-complement.
+
+    ``BIPOLAR`` spans -1..1 in one bit; a datapath told it has a one-bit signed
+    integer would compute over -1..0.  ``UINT1`` is the same value as
+    ``BINARY``, so it goes with them -- adopting QONNX means adopting that
+    merge.
+    """
+
+    for name in ("BINARY", "BIPOLAR", "UINT1"):
+        assert (
+            covers_operand_types(MVAUNumericTypes(DataType[name], INT8, INT16, INT16)) is False
+        ), name
+
+
+def test_an_unsigned_weight_is_refused_with_its_own_reason() -> None:
+    """Separately diagnosable: the type is fine, the signedness is not."""
+
+    refused = {
+        verdict.role
+        for verdict in covers_numeric_types(MVAUNumericTypes(INT8, UINT8, INT16, INT16))
+        if not verdict.supported
+    }
+    assert refused == {"weight"}
+
+
+@pytest.mark.parametrize(
+    ("accumulator", "output", "expected"),
+    [
+        (DataType["UINT16"], DataType["UINT16"], {"accumulator", "output"}),
+        (DataType["UINT16"], INT16, {"accumulator"}),
+        (INT16, DataType["UINT16"], {"output"}),
+    ],
+)
+def test_an_unsigned_accumulator_or_output_is_refused(
+    accumulator: NumericElementType, output: NumericElementType, expected: set[str]
+) -> None:
+    """The core declares these roles signed, so it cannot take unsigned ones.
+
+    ``dotp.sv`` and ``dotp_top.sv`` declare the result port as
+    ``output logic signed [PE-1:0][ACCU_WIDTH-1:0] p``, so accumulation and the
+    value leaving the core are two's-complement signed.  A ``UINT16``
+    accumulator would be reinterpreted at that boundary and everything above
+    the signed maximum would come back negative.
+
+    Applying one uniform integer rule to all four roles admitted this with no
+    refusal at all -- the same shape of omission as the floating accumulator,
+    one level finer.
+    """
+
+    refused = {
+        verdict.role
+        for verdict in covers_numeric_types(MVAUNumericTypes(INT8, INT8, accumulator, output))
+        if not verdict.supported
+    }
+    assert refused == expected
+
+
+def test_an_unsigned_activation_is_still_accepted() -> None:
+    """The role contract is deliberately non-uniform.
+
+    ``SIGNED_ACTIVATIONS`` exists exactly so the core can be told which of the
+    two it is being given, so refusing unsigned activations along with the
+    other roles would be the opposite error.
+    """
+
+    assert covers_operand_types(MVAUNumericTypes(UINT8, INT8, INT16, INT16)) is True
+    assert _feasible(activation=UINT8) is True
 
 
 def test_a_one_bit_operand_is_a_hardware_limit_not_a_source_one() -> None:
     """The Region is expressible; this multiplier is what cannot take it."""
 
-    engine, point, pools = _point(activation=NumericElementType("int", 1))
+    engine, point, pools = _point(activation=DataType["INT1"])
     assert "operand_widths_supported" in _rejected(engine, point, pools)
 
 

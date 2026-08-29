@@ -19,6 +19,8 @@ arithmetic.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from typing import cast
 
 import pytest
@@ -50,9 +52,9 @@ from finn.dataflow.mvau_problem import (
 )
 from finn.dataflow.region import NumericElementType
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
-UINT8 = NumericElementType("uint", 8)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
+UINT8 = DataType["UINT8"]
 
 DOTP_AXI = DECOMPOSED_MVAU_KERNELS.dot_product_hardware
 REPLAY_BUFFER = DECOMPOSED_MVAU_KERNELS.replay_hardware

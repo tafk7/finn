@@ -27,6 +27,7 @@ from finn.dataflow.mvau.compute_kernels import (
 )
 from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.mvau.source import (
+    MVAU_DECLARATION_FAMILY_VERSION,
     MVAU_SOURCE_MAPPING,
     MVAULegacyImportMode,
     MVAUProjectionContext,
@@ -52,7 +53,7 @@ from finn.dataflow.parameters.supply_kernels import (
     MVAUWeightSupplyKernelId,
     WeightOrganization,
 )
-from finn.dataflow.region import NumericElementType
+from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 
 NODE_ID = "mvau0"
@@ -240,8 +241,8 @@ def test_fused_threshold_projection_preserves_real_tensor_contract() -> None:
     assert description.threshold_operand_id == "thresholds"
     assert description.threshold_shape == (6, 3)
     threshold_type = projection.problem_data[MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE]
-    assert isinstance(threshold_type, NumericElementType)
-    assert threshold_type.bit_width == 16
+    assert is_qonnx_datatype(threshold_type)
+    assert threshold_type == DataType["INT16"]
     assert projection.problem_data[MVAUProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE] is True
 
 
@@ -459,6 +460,65 @@ def test_reconstitution_rejects_changed_declaration_family_version() -> None:
     assert {finding.code for finding in mismatch.value.findings} == {
         "mvau-selection-envelope-incompatible"
     }
+
+
+def test_reconstitution_rejects_a_v9_selection_rather_than_migrating_it() -> None:
+    """The QONNX datatype bump, tested at the version it actually rejects.
+
+    ``obsolete-family`` above proves the mechanism works for *some* string.
+    This names the real predecessor, because a v9 envelope is the one someone
+    will genuinely have on disk and the one whose reinterpretation would be
+    silently wrong: v9 fingerprints element types as
+    ``{"numeric_element_type": [family, width]}``, which cannot distinguish the
+    ``TERNARY`` problem it was taken from an ``INT2`` one. Deriving a v10 name
+    from that pair is exactly the lossy reconstruction this migration removed,
+    so the selection is refused rather than migrated.
+    """
+
+    assert MVAU_DECLARATION_FAMILY_VERSION == "mvau-source-composition-v10"
+
+    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
+    original = start_mvau_projection(_project_preserving(model))
+    save_mvau_selection(model, NODE_ID, original.point)
+    key = f"finn.dataflow.mvau.selection:{NODE_ID}"
+    payload = json.loads(model.get_metadata_prop(key))
+    payload["declaration_family_version"] = "mvau-source-composition-v9"
+    model.set_metadata_prop(key, json.dumps(payload))
+
+    with pytest.raises(MVAUSourceAdapterError) as mismatch:
+        reconstitute_mvau_selection(model, NODE_ID, _context())
+
+    assert {finding.code for finding in mismatch.value.findings} == {
+        "mvau-selection-envelope-incompatible"
+    }
+
+
+def test_a_saved_v10_selection_reloads_with_its_datatypes_intact() -> None:
+    """Save and reload across the new encoding, end to end.
+
+    The round trip that matters after the representation change: the persisted
+    form is canonical names, and what comes back has to be datatype *values*
+    equal to what went in -- not the names, which would compare equal to the
+    datatypes anyway and so prove nothing.
+    """
+
+    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
+    original = start_mvau_projection(_project_preserving(model))
+    save_mvau_selection(model, NODE_ID, original.point)
+
+    reloaded = reconstitute_mvau_selection(model, NODE_ID, _context())
+
+    for path in (
+        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
+        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
+        MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
+        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
+    ):
+        before = original.point.problem[path]
+        after = reloaded.point.problem[path]
+        assert is_qonnx_datatype(after), path
+        assert after == before, path
+        assert after.name == before.name, path
 
 
 def test_reconstitution_rejects_changed_problem_and_obsolete_choice(tmp_path: Path) -> None:

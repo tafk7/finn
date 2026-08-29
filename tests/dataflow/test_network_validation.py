@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from dataclasses import replace
 from typing import cast
 
@@ -31,7 +33,6 @@ from finn.dataflow.region import (
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     OutputInterface,
     Port,
@@ -39,8 +40,8 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
 )
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 
 def _compute(*, interleaved: bool) -> DataflowRegion:
@@ -260,7 +261,7 @@ def test_element_type_and_beat_order_mismatches_are_both_reported() -> None:
     weight = compute.input_interface("weight").port
     wrong_source = Port(
         "weight",
-        Operand("W", NumericElementType("uint", 8), weight.operand.shape),
+        Operand("W", DataType["UINT8"], weight.operand.shape),
         BeatSequence(
             weight.beat_sequence.elements_per_beat,
             tuple(tuple(reversed(beat)) for beat in weight.beat_sequence.beats),

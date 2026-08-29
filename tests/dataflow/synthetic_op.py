@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from collections.abc import Mapping
 from enum import Enum
 from typing import cast
@@ -36,7 +38,6 @@ from finn.dataflow.region import (
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     OutputInterface,
     Port,
@@ -91,7 +92,7 @@ def _derive_association(dependencies: DependencyView) -> Answer[object]:
 
 
 def _region(extent: int) -> DataflowRegion:
-    element_type = NumericElementType("int", 8)
+    element_type = DataType["INT8"]
     source = Operand("x", element_type, (extent,))
     result = Operand("y", element_type, (extent,))
     beats = BeatSequence(1, tuple((((index,),)) for index in range(extent)))

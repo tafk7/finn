@@ -21,6 +21,7 @@ from finn.dataflow.region import (
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
     ScheduleLevel,
+    is_element_type,
 )
 
 
@@ -47,7 +48,7 @@ def _positive_integer(value: object) -> bool:
 
 
 def _complete_numeric_element_type(value: object) -> bool:
-    return type(value) is NumericElementType and bool(value.type_id) and value.bit_width > 0
+    return is_element_type(value)
 
 
 def _validate_common_arguments(

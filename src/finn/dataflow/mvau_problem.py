@@ -29,7 +29,8 @@ from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterKernelPaths,
     CyclicTargetMemoryCapabilities,
 )
-from finn.dataflow.region import BeatSequence, NumericElementType
+from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.region import BeatSequence, NumericElementType, is_element_type
 
 
 class MVAUComputationProfile(str, Enum):
@@ -84,7 +85,7 @@ def _non_empty_string(value: object) -> bool:
 
 
 def _complete_numeric_element_type(value: object) -> bool:
-    return type(value) is NumericElementType and bool(value.type_id) and value.bit_width > 0
+    return is_element_type(value)
 
 
 def _source_description_valid(value: object) -> bool:
@@ -167,9 +168,14 @@ def build_mvau_problem(design: OpDesign) -> MVAUProblem:
         )
 
     def numeric(name: str, *, required: bool = True) -> Ref[NumericElementType]:
+        # The prebuilt semantics, never the ``NumericElementType`` name: that is
+        # now a Protocol, and letting the scope derive semantics from it would
+        # mint ``type_token=QONNXDataType`` -- a *second* token for the same
+        # domain, which ``is_compatible_with`` compares by identity and would
+        # therefore report as incompatible with every other datatype field.
         return design.graph_fact(
             name,
-            NumericElementType,
+            QONNX_DATATYPE_VALUE_SEMANTICS,
             required=required,
             validate=_complete_numeric_element_type,
             description="must be a complete numeric element type",
@@ -195,7 +201,7 @@ def build_mvau_problem(design: OpDesign) -> MVAUProblem:
         # graph fact even though both come from the model.
         accumulator_element_type=design.analysis_fact(
             "accumulator_element_type",
-            NumericElementType,
+            QONNX_DATATYPE_VALUE_SEMANTICS,
             validate=_complete_numeric_element_type,
             description="must be a complete numeric element type",
         ),

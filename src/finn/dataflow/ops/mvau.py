@@ -83,7 +83,8 @@ from finn.dataflow.parameters.supply_kernels import (
     OUTPUT_PORT_EXPORT,
     build_mvau_weight_supply_selection,
 )
-from finn.dataflow.region import BeatSequence, DataflowRegion, NumericElementType, Port
+from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
+from finn.dataflow.region import BeatSequence, DataflowRegion, Port
 from finn.dataflow.resolution import (
     DATAFLOW_OP_RESULT_SEMANTICS,
     NetworkRef as GenericNetworkRef,
@@ -235,9 +236,7 @@ _INTEGER = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integ
 _FLOAT = as_object_semantics(ValueSemantics.immutable_nominal(float, name="float"))
 _STRING = as_object_semantics(ValueSemantics.immutable_nominal(str, name="string"))
 _BOOL = as_object_semantics(ValueSemantics.immutable_nominal(bool, name="boolean"))
-_ELEMENT_TYPE = as_object_semantics(
-    ValueSemantics.immutable_nominal(NumericElementType, name="NumericElementType")
-)
+_ELEMENT_TYPE = QONNX_DATATYPE_SEMANTICS
 _PORT = as_object_semantics(ValueSemantics.immutable_nominal(Port, name="Port"))
 _BEAT_SEQUENCE = as_object_semantics(
     ValueSemantics.immutable_nominal(BeatSequence, name="BeatSequence")

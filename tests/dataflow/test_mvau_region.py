@@ -4,11 +4,12 @@
 import pytest
 
 from finn.dataflow.mvau_design import MVAUWeightInterface, construct_mvau_compute_region
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
-    NumericElementType,
     OutputInterface,
     Port,
     ScheduledOutputAvailability,
@@ -26,7 +27,7 @@ def _mvau_region(
     weight_field_order=None,
     output_field_order=None,
 ):
-    element_type = NumericElementType("int", 8)
+    element_type = DataType["INT8"]
     region = construct_mvau_compute_region(
         repetitions,
         matrix_width,
@@ -127,7 +128,7 @@ def test_small_streamed_weight_mvau_region_matches_authoring_semantics():
 
 
 def test_embedded_weight_mvau_region_omits_only_the_weight_interface():
-    element_type = NumericElementType("int", 8)
+    element_type = DataType["INT8"]
     streamed = construct_mvau_compute_region(
         2,
         4,

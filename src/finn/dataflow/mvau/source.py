@@ -27,7 +27,6 @@ from typing import Protocol, cast
 
 import numpy as np  # type: ignore[import-not-found]
 from onnx import AttributeProto, GraphProto, NodeProto  # type: ignore[import-not-found]
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import (
     Decided,
@@ -71,19 +70,42 @@ from finn.dataflow.parameters.supply_kernels import (
 )
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
-from finn.dataflow.region import BeatSequence, NumericElementType
+from finn.dataflow.datatypes import (
+    DatatypeError,
+    canonical_qonnx_datatype,
+    resolve_qonnx_datatype_name,
+    encode_datatype,
+    is_qonnx_datatype,
+)
+from finn.dataflow.region import (
+    BeatSequence,
+    NumericElementType,
+    element_width,
+)
 
 _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-#: v9 moves the decomposed compute's physical half onto its own Kernels: the
-#: pumping choice changes owner, path, and node attribute, and the coverage
-#: conditions it used to carry are now the hardware's.  A v8 selection names
+#: v9 moved the decomposed compute's physical half onto its own Kernels: the
+#: pumping choice changed owner, path, and node attribute, and the coverage
+#: conditions it used to carry became the hardware's.  A v8 selection names
 #: ``dataflow_dot_product_pumping``, which no longer exists, so it is rejected
 #: rather than reinterpreted -- the value is the same but the thing that owns it
 #: is not, and silently rehoming a choice is how provenance stops being true.
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v9"
+#:
+#: v10 adopts QONNX datatypes as the one datatype identity.  A v9 problem
+#: fingerprint encodes element types as ``{"numeric_element_type": [family,
+#: width]}``; v10 encodes ``{"qonnx_datatype": name}``.  Those are different
+#: values for the same fact and the old one is *lossy* -- a v9 fingerprint
+#: cannot distinguish the ``TERNARY`` problem it was taken from an ``INT2`` one
+#: -- so a v9 selection is rejected rather than migrated.  Deriving a v10 name
+#: from a v9 pair is exactly the reconstruction this change removes.
+#:
+#: Kept as a second bump rather than folded into v9: v9 is already committed and
+#: observable, and retroactively widening what it labels would make the version
+#: stop describing the tree that carries it.
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v10"
 MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
     {
         "noActivation": ("i", False, 1, {0, 1}),
@@ -94,18 +116,6 @@ MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyTyp
         "dataflow_source_nodes": ("s", False, "", None),
     }
 )
-
-
-class _DataTypeLike(Protocol):
-    name: str
-
-    def bitwidth(self) -> int: ...
-
-    def is_integer(self) -> bool: ...
-
-    def signed(self) -> bool: ...
-
-    def min(self) -> int | float: ...
 
 
 class _MinimumLike(Protocol):
@@ -330,26 +340,6 @@ def _logical_source_attributes(
     return MappingProxyType(values)
 
 
-def _numeric_element_type(datatype: object) -> NumericElementType | None:
-    candidate = cast(_DataTypeLike, datatype)
-    try:
-        name = candidate.name
-        width = int(candidate.bitwidth())
-        if name == "BIPOLAR":
-            type_id = "bipolar"
-        elif name == "BINARY":
-            type_id = "binary"
-        elif candidate.is_integer():
-            type_id = "int" if candidate.signed() else "uint"
-        elif name.startswith(("FLOAT", "BFLOAT")):
-            type_id = "float"
-        else:
-            return None
-    except (AttributeError, TypeError, ValueError):
-        return None
-    return NumericElementType(type_id, width) if width > 0 else None
-
-
 def _tensor_type(
     model: MVAUModelAccessor,
     tensor_id: str,
@@ -357,20 +347,38 @@ def _tensor_type(
     role: str,
     findings: list[Finding],
 ) -> NumericElementType | None:
+    """The tensor's datatype, carried through rather than classified.
+
+    The adapter used to reduce the annotation to a local family-and-width pair
+    here, and refuse anything that did not fit five known families.  That put
+    two unrelated jobs in one place: reporting that a tensor is unusable *as a
+    source*, and deciding which datatypes some hardware can build.
+
+    Only the first is this function's.  A fixed-point or scaled-integer MatMul
+    is a perfectly well-formed graph -- the reason FINN will not lower it is
+    that no Kernel covers those operands, which is a coverage answer with a
+    Kernel's name on it, not a projection failure.  So the datatype travels as
+    itself, and the refusal happens where the reason lives.
+
+    What remains here is genuine source trouble: an annotation QONNX cannot
+    resolve, or a degenerate width that could not describe a beat.
+    """
+
     try:
-        element_type = _numeric_element_type(model.get_tensor_datatype(tensor_id))
-    except (KeyError, TypeError, ValueError, AttributeError):
+        element_type = canonical_qonnx_datatype(model.get_tensor_datatype(tensor_id))
+    except (DatatypeError, KeyError, TypeError, ValueError, AttributeError):
         element_type = None
-    if element_type is None:
+    if element_type is None or element_width(element_type) <= 0:
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-source-datatype-unknown",
                 path,
-                f"{role} tensor has no supported, complete numeric datatype",
+                f"{role} tensor has no resolvable QONNX datatype of positive width",
                 tensor=tensor_id,
             )
         )
+        return None
     return element_type
 
 
@@ -469,7 +477,14 @@ def _initializer_excludes_minimum(
         minimum = float(cast(float, cast(_MinimumLike, initializer).min()))
     except (AttributeError, TypeError, ValueError):
         return None
-    minimum_type_value = -(2 ** (weight_type.bit_width - 1)) if weight_type.type_id == "int" else 0
+    # The datatype's own minimum, rather than a width-and-family reconstruction
+    # of it.  ``-(2 ** (w - 1)) if signed else 0`` is what ``min()`` computes,
+    # and asking the datatype means special encodings answer for themselves
+    # instead of being folded into whichever branch their label fell in.
+    try:
+        minimum_type_value = float(weight_type.min())
+    except Exception:  # noqa: BLE001 - QONNX leaves min() undefined for some types
+        return None
     return minimum != minimum_type_value
 
 
@@ -519,13 +534,15 @@ def _legacy_compute_kernel(
         return None
     if target is not MVAUDspBlock.DSP58:
         return MVAUComputeKernelId.SOFT_VECTOR
-    lane_width = weight_type.bit_width + activation_type.bit_width - 1
+    weight_bits = element_width(weight_type)
+    activation_bits = element_width(activation_type)
+    lane_width = weight_bits + activation_bits - 1
     lanes = (
         1
-        if weight_type.bit_width == 27
-        else 1 + (27 - (0 if weights_narrow else 1) - weight_type.bit_width) // lane_width
+        if weight_bits == 27
+        else 1 + (27 - (0 if weights_narrow else 1) - weight_bits) // lane_width
     )
-    packed = lanes <= 3 and weight_type.bit_width <= 8 and activation_type.bit_width <= 9
+    packed = lanes <= 3 and weight_bits <= 8 and activation_bits <= 9
     return MVAUComputeKernelId.PACKED_DSP if packed else MVAUComputeKernelId.SOFT_VECTOR
 
 
@@ -737,11 +754,18 @@ def project_mvau_graph_source(
         findings,
     )
     accumulator_name = source_attribute("accDataType", "INT32")
+    # Resolved once, through the canonical name, and carried as that object --
+    # the attribute is a name and this is the one place it becomes a value.
     try:
-        accumulator_type = _numeric_element_type(DataType[cast(str, accumulator_name)])
-    except (KeyError, TypeError, ValueError):
+        # Permissive on purpose: ``accDataType`` is a legacy node attribute, so
+        # it is whatever a human or an older FINN wrote, and adopting QONNX
+        # means adopting its reading of that spelling.  Persistence is the
+        # opposite case and uses the strict decoder.
+        accumulator_type = resolve_qonnx_datatype_name(cast(str, accumulator_name))
+    except DatatypeError:
         accumulator_type = None
-    if accumulator_type is None:
+    if accumulator_type is None or element_width(accumulator_type) <= 0:
+        accumulator_type = None
         findings.append(
             _finding(
                 FindingKind.LIMITATION,
@@ -1079,9 +1103,7 @@ def project_mvau_source(
     activation_type = problem.get(MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE)
     weight_type = problem.get(MVAUProblemPaths.WEIGHT_ELEMENT_TYPE)
     excludes_minimum: bool | None = None
-    if isinstance(activation_type, NumericElementType) and isinstance(
-        weight_type, NumericElementType
-    ):
+    if is_qonnx_datatype(activation_type) and is_qonnx_datatype(weight_type):
         excludes_minimum = _initializer_excludes_minimum(
             model, node.input[1], weight_type, mem_mode
         )
@@ -1094,8 +1116,8 @@ def project_mvau_source(
     if (
         not logical_node
         and import_mode is MVAULegacyImportMode.PRESERVE_SPECIALIZATION
-        and isinstance(activation_type, NumericElementType)
-        and isinstance(weight_type, NumericElementType)
+        and is_qonnx_datatype(activation_type)
+        and is_qonnx_datatype(weight_type)
     ):
         assignments = _legacy_assignments(
             node,
@@ -1191,8 +1213,8 @@ def _canonical_problem_value(value: object) -> object:
         return value
     if isinstance(value, Enum):
         return {"enum": type(value).__name__, "value": value.value}
-    if isinstance(value, NumericElementType):
-        return {"numeric_element_type": [value.type_id, value.bit_width]}
+    if is_qonnx_datatype(value):
+        return encode_datatype(value)
     if isinstance(value, MVAUSourceDescription):
         return {
             "source_description": {

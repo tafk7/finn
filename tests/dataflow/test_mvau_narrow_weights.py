@@ -12,6 +12,8 @@ tests pin the replacement, in which no projection writes another's fact.
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.design import Decided, Engine, QualifiedPath
 from finn.dataflow.authoring.op_design import Provenance
@@ -20,11 +22,10 @@ from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,
     MVAUProblemPaths,
 )
-from finn.dataflow.region import NumericElementType
 from finn.dataflow.spec_algebra import assemble_specs
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 
 def _narrow(

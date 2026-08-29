@@ -5,12 +5,13 @@ import pytest
 
 from dataclasses import FrozenInstanceError
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     Port,
     ScheduledInputRequirements,
@@ -19,7 +20,7 @@ from finn.dataflow.region import (
 
 @pytest.mark.parametrize("shape", [(), (3,), (2, 3), (2, 2, 3)])
 def test_operand_position_enumeration_and_rank_round_trip(shape):
-    operand = Operand("x", NumericElementType("int", 8), shape)
+    operand = Operand("x", DataType["INT8"], shape)
 
     assert len(operand.positions) == operand.position_count
     for expected_rank, position in enumerate(operand.positions):
@@ -38,7 +39,7 @@ def test_schedule_enumeration_and_rank_round_trip(levels):
 
 
 def test_rank_zero_operand_and_schedule_have_one_empty_coordinate():
-    operand = Operand("scalar", NumericElementType("fixed", 12), ())
+    operand = Operand("scalar", DataType["FIXED<12,6>"], ())
     schedule = LogicalSchedule(())
 
     assert operand.positions == ((),)
@@ -120,7 +121,7 @@ def test_mutable_inputs_are_snapshotted_and_values_are_frozen():
     shape = [2]
     beats = [[(0,)], [(1,)]]
     requirement_map = {((0,), (0,)): 1}
-    operand = Operand("x", NumericElementType("uint", 4), shape)
+    operand = Operand("x", DataType["UINT4"], shape)
     sequence = BeatSequence(1, beats)
     requirements = ScheduledInputRequirements(requirement_map)
 
@@ -136,7 +137,7 @@ def test_mutable_inputs_are_snapshotted_and_values_are_frozen():
 
 
 def test_region_interface_sets_have_deterministic_order_and_equality():
-    operand = Operand("x", NumericElementType("int", 8), (2,))
+    operand = Operand("x", DataType["INT8"], (2,))
     requirements = ScheduledInputRequirements()
     first = InputInterface(Port("b", operand, BeatSequence(1, (((0,),),))), requirements)
     second = InputInterface(Port("a", operand, BeatSequence(1, (((1,),),))), requirements)

@@ -6,11 +6,12 @@ from finn.dataflow.mvau.regions import (
     construct_standard_streamed_mvau_region,
 )
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
     LogicalSchedule,
-    NumericElementType,
     Operand,
     OutputInterface,
     Port,
@@ -19,8 +20,8 @@ from finn.dataflow.region import (
 )
 from finn.dataflow.region_validation import RegionValidationReport, validate_region
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 
 def test_delivery_exactly_preserves_standard_and_interleaved_weight_sequences() -> None:

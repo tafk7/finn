@@ -895,6 +895,22 @@ def admissible_kernels(
     left to witness.  Target feasibility is deliberately not asked here; it is
     a selection-time query, and asking it now would make inference coverage
     depend on the board.
+
+    **Admission requires a positive answer.**  Only ``Decided(True)`` admits;
+    every other answer refuses.  The two non-``Decided`` cases are refusals for
+    different reasons, and neither is an admission:
+
+    - ``Absent`` is what ``reject(...)`` produces.  It is a refusal that carries
+      its reason, so treating it as anything else would let the very diagnostic
+      that explains a refusal be the thing that suppresses it.
+    - ``Unresolved`` means the question could not be answered.  Because these
+      constraints are decision-free, that can only mean the problem did not
+      supply something they read, and lowering a graph whose coverage was never
+      established is the failure this function exists to prevent.
+
+    Earlier this counted only ``Decided(False)``, which was latent while every
+    constraint returned a flat boolean and would have become a silent
+    over-admission the moment one returned findings instead.
     """
 
     admitted: list[str] = []
@@ -908,11 +924,10 @@ def admissible_kernels(
         ):
             continue
         assessment = engine.evaluate_constraints(result.point, kernel.source_admission_constraints)
-        refused = any(
-            isinstance(answer, Decided) and answer.value is False
+        if all(
+            isinstance(answer, Decided) and answer.value is True
             for answer in assessment.answers.values()
-        )
-        if not refused:
+        ):
             admitted.append(kernel.id)
     return tuple(admitted)
 

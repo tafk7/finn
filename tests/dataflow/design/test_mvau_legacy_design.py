@@ -5,14 +5,15 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.mvau.legacy_design import MVAU_DESIGN_SPACE_SPEC, MVAUDesignPaths
 from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
 from finn.dataflow.ops.mvau import MVAU_DATAFLOW_OP_SPEC
-from finn.dataflow.region import NumericElementType
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 
 def test_the_legacy_spec_is_not_the_operation_spec() -> None:

@@ -7,12 +7,13 @@ from finn.dataflow.mvau.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_streamed_mvau_region,
 )
-from finn.dataflow.region import NumericElementType
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import RegionValidationReport, validate_region
 
-INT8 = NumericElementType("int", 8)
-INT16 = NumericElementType("int", 16)
+INT8 = DataType["INT8"]
+INT16 = DataType["INT16"]
 
 
 def _interleaved(

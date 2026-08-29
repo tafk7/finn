@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+
 import pytest
 
 from finn.dataflow._engine.conformance import MonotonicityHarness
@@ -48,11 +50,11 @@ from finn.dataflow.spec_algebra import assemble_specs
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from dataflow.mvau_op_facts import compute_pool_context
 
-INT2 = NumericElementType("int", 2)
-INT8 = NumericElementType("int", 8)
-INT9 = NumericElementType("int", 9)
-INT16 = NumericElementType("int", 16)
-FLOAT32 = NumericElementType("float", 32)
+INT2 = DataType["INT2"]
+INT8 = DataType["INT8"]
+INT9 = DataType["INT9"]
+INT16 = DataType["INT16"]
+FLOAT32 = DataType["FLOAT32"]
 _MISSING = object()
 
 PATHS = MVAU_COMPUTE_SELECTION.paths
@@ -330,8 +332,8 @@ def test_packed_preserves_the_num_lanes_limit() -> None:
 @pytest.mark.parametrize(
     "activation_type,weight_type",
     [
-        (NumericElementType("int", 1), INT8),
-        (INT8, NumericElementType("int", 1)),
+        (DataType["INT1"], INT8),
+        (INT8, DataType["INT1"]),
     ],
 )
 def test_rtl_minimum_input_width_assertions_are_represented(
@@ -413,8 +415,8 @@ def test_accumulator_profiles_require_equal_accumulator_and_output_types() -> No
 @pytest.mark.parametrize(
     "target,accumulator",
     [
-        (MVAUDspBlock.DSP48E1, NumericElementType("int", 49)),
-        (MVAUDspBlock.DSP58, NumericElementType("int", 59)),
+        (MVAUDspBlock.DSP48E1, DataType["INT49"]),
+        (MVAUDspBlock.DSP58, DataType["INT59"]),
     ],
 )
 def test_rtl_width_envelope_rejects_datapath_overflow(

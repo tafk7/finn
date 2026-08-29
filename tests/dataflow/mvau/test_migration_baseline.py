@@ -22,6 +22,13 @@ Three kinds of comparison value, chosen by size:
   tuples, so ``repr`` is deterministic and a digest over it is exact equality.
 - the **whole generated wrapper** for one representative configuration, so that
   when a digest moves there is something a reviewer can read.
+- a **normalized structural projection** of the same Regions and Network, in
+  which element types are reduced to canonical QONNX names and everything else
+  is carried through verbatim.  Added for the QONNX datatype adoption, which
+  moves every ``repr`` digest containing an operand type -- most of them --
+  leaving nothing that discriminates at exactly the moment it is needed.  This
+  one does not move, so the sentinels can say *something changed* while it says
+  *and the change was confined to the datatype representation.*
 
 Nothing here is a checked-in generated file: every expected value lives in this
 module, so changing one is an edit a reviewer sees.
@@ -41,16 +48,20 @@ which phase entitled you to.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
+from dataflow.normalized_structure import normalized
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.mvau.hardware.binding import finnlib_root
 from finn.dataflow.mvau.hardware.composition import MVAUDecomposedArtifactRequirements
 from finn.dataflow.ops.mvau import NetworkRef
+from finn.dataflow.region import LogicalSchedule, ScheduleLevel
 
 
 def _fingerprint(value: object) -> str:
@@ -74,6 +85,33 @@ def _semantic(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
         "dot_product_region": _fingerprint(network.node(DOT_PRODUCT_NODE).region),
         "network": _fingerprint(network),
         "source_association": _fingerprint(result.source_association),
+    }
+
+
+def _structure(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str]:
+    """The same logical dataflow, projected so the datatype change cannot move it.
+
+    ``_semantic`` above digests ``repr``, which carries the datatype
+    *representation*, so every one of its values moves when that representation
+    changes and none of them discriminate afterwards.  This digests the
+    normalized structure instead: identical objects, with element types reduced
+    to canonical QONNX names and everything else -- schedules, requirements,
+    availability, beat sequences, shapes, ids, topology, boundaries -- carried
+    through unchanged.
+
+    So during the QONNX adoption these must **not** move while the ``_semantic``
+    digests do.  That is the whole division of labour: the sentinels say
+    something changed, this says the change was confined to what was entitled
+    to change.
+    """
+
+    result = requirements.elaboration.semantic_result
+    assert isinstance(result, NetworkRef)
+    network = result.network
+    return {
+        "replay_region": _fingerprint(normalized(network.node(REPLAY_NODE).region)),
+        "dot_product_region": _fingerprint(normalized(network.node(DOT_PRODUCT_NODE).region)),
+        "network": _fingerprint(normalized(network)),
     }
 
 
@@ -167,6 +205,24 @@ def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
 #: the connections, the boundaries, the generated wrapper -- is byte-identical
 #: across that migration, which is the whole claim it was written to test.
 #:
+#: **The QONNX datatype adoption moved the three Region and Network sentinels,
+#: on every configuration, and nothing else.**  Element types are now QONNX
+#: values rather than ``NumericElementType`` pairs, so every ``repr`` containing
+#: one is a different string -- which is what these digests measure and exactly
+#: why they cannot, by themselves, say whether anything *meaningful* changed.
+#:
+#: What says that is the ``structure`` projection below, which is unchanged:
+#: same schedules, requirements, availability, beat sequences, shapes, ids,
+#: topology, and boundary contracts, with datatypes normalized to the canonical
+#: names they already stood for.  Recorded under the old representation, held
+#: across the change.  Alongside it, ``source_association`` (it carries no
+#: datatype), every ``physical`` value, the manifest, the build inputs, and the
+#: generated wrapper are all byte-identical.
+#:
+#: So the three that moved are the three that had to, and the evidence for that
+#: claim is a projection that did not move rather than a reviewer's reading of
+#: three digests that did.
+#:
 #: ``softvec`` and ``packed`` share all three semantic fingerprints, and
 #: ``packed`` and ``three_repetitions`` share their parameters.  Both are the
 #: decomposition showing: the target does not reach the Region, and the
@@ -175,10 +231,15 @@ def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
 BASELINE: dict[str, dict[str, dict[str, str]]] = {
     "softvec": {
         "semantic": {
-            "replay_region": "0c08bc0413d7ee1e",
-            "dot_product_region": "07d8fa36396ec034",
-            "network": "8f6a9e1f7bcb2938",
+            "replay_region": "ce4074c2e917efa9",
+            "dot_product_region": "b2c35e417e53b89d",
+            "network": "ea9a263b574d1270",
             "source_association": "3c6ea7a0e9df8133",
+        },
+        "structure": {
+            "replay_region": "122ab852c2247d16",
+            "dot_product_region": "4876e27376505c60",
+            "network": "9c48b9e87597263f",
         },
         "physical": {
             "parameters": "8162f7a7817c53be",
@@ -193,10 +254,15 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
     },
     "packed": {
         "semantic": {
-            "replay_region": "0c08bc0413d7ee1e",
-            "dot_product_region": "07d8fa36396ec034",
-            "network": "8f6a9e1f7bcb2938",
+            "replay_region": "ce4074c2e917efa9",
+            "dot_product_region": "b2c35e417e53b89d",
+            "network": "ea9a263b574d1270",
             "source_association": "7767cb8c4af2f097",
+        },
+        "structure": {
+            "replay_region": "122ab852c2247d16",
+            "dot_product_region": "4876e27376505c60",
+            "network": "9c48b9e87597263f",
         },
         "physical": {
             "parameters": "d6d573ebc9159065",
@@ -211,10 +277,15 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
     },
     "one_neuron_fold": {
         "semantic": {
-            "replay_region": "7f6bb4f6b2804f68",
-            "dot_product_region": "60ef4a019d3fca2e",
-            "network": "820446c128a5b4fb",
+            "replay_region": "a9b76dff00dc9418",
+            "dot_product_region": "5038bc0fa07c5464",
+            "network": "952cec43c390b3d2",
             "source_association": "2c9a5e9090571167",
+        },
+        "structure": {
+            "replay_region": "f542a1093538a080",
+            "dot_product_region": "ce5629aa829a6330",
+            "network": "f09fa896f67462bb",
         },
         "physical": {
             "parameters": "201ffec0dc084a80",
@@ -229,10 +300,15 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
     },
     "one_synapse_fold": {
         "semantic": {
-            "replay_region": "23c152d8ccedfccd",
-            "dot_product_region": "818358b57e1df615",
-            "network": "abfffc4474be1bc0",
+            "replay_region": "48262f6762a1f168",
+            "dot_product_region": "ee3c2b199c1c12b4",
+            "network": "f5aaf34dda6cecf1",
             "source_association": "ef8ffc89aa5fa2d8",
+        },
+        "structure": {
+            "replay_region": "b3c45c253cb1b2d0",
+            "dot_product_region": "b3703a62b9a40f48",
+            "network": "0cf38816e325504e",
         },
         "physical": {
             "parameters": "20ebdde09b7e74ee",
@@ -247,10 +323,15 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
     },
     "three_repetitions": {
         "semantic": {
-            "replay_region": "eb8f2deb6ea2cd24",
-            "dot_product_region": "f2ef68bde80cb1bc",
-            "network": "aeda9a5b5394f7d0",
+            "replay_region": "37034b41e5101834",
+            "dot_product_region": "6856cc341045417d",
+            "network": "a12d3f6171e96728",
             "source_association": "787aa6716d820069",
+        },
+        "structure": {
+            "replay_region": "10681ce538502a39",
+            "dot_product_region": "0529c885081e3c40",
+            "network": "baa7f7d2025d8675",
         },
         "physical": {
             "parameters": "d6d573ebc9159065",
@@ -265,10 +346,15 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
     },
     "repetitions_softvec": {
         "semantic": {
-            "replay_region": "b5c9495d9f80ac5a",
-            "dot_product_region": "c930061f5c1c055f",
-            "network": "a0b15b3004aaeb0a",
+            "replay_region": "5983ba6a09b1ece6",
+            "dot_product_region": "8b93e707a53863d5",
+            "network": "461254b40e7acde1",
             "source_association": "acb88d9fe3e3cd90",
+        },
+        "structure": {
+            "replay_region": "237f117519baf7cb",
+            "dot_product_region": "97b71886018a9393",
+            "network": "a7a7035e03b8a1c9",
         },
         "physical": {
             "parameters": "4d0ad578ed08cf0e",
@@ -283,10 +369,15 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
     },
     "pumped": {
         "semantic": {
-            "replay_region": "f3fdeb4f43f7039d",
-            "dot_product_region": "4c9f45f87188e970",
-            "network": "2db2687eb1631bc4",
+            "replay_region": "91aca23ffb0d8e10",
+            "dot_product_region": "39aa2b3143bab0c9",
+            "network": "565cf9a717dbb382",
             "source_association": "e283f88676fceed2",
+        },
+        "structure": {
+            "replay_region": "ae4c9bfd0ef7586c",
+            "dot_product_region": "acef80088ad7167b",
+            "network": "44863558ab8afc15",
         },
         "physical": {
             "parameters": "e7e05f66b02b4927",
@@ -416,6 +507,74 @@ def test_the_selected_logical_dataflow_is_unchanged(config: fixture.Config) -> N
 
     built = fixture.decomposed_requirements(config)
     assert _semantic(built) == BASELINE[config.label]["semantic"]
+
+
+@pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
+def test_the_normalized_structure_is_unchanged(config: fixture.Config) -> None:
+    """The projection that must hold *through* the QONNX datatype adoption.
+
+    Unlike the digests above, this one is not expected to move during that
+    migration.  If it does, the change reached past the datatype
+    representation.
+    """
+
+    built = fixture.decomposed_requirements(config)
+    assert _structure(built) == BASELINE[config.label]["structure"]
+
+
+def test_the_normalized_projection_does_not_carry_the_datatype_representation() -> None:
+    """The property the projection's value depends on, tested directly.
+
+    Written before the switch, when it compared a ``NumericElementType`` against
+    the QONNX datatype it stood for and asserted the two projected alike.  That
+    comparison is no longer expressible -- the old representation is gone -- so
+    what survives is the half that still means something: the projection of a
+    datatype is its canonical name, which is what the recorded structure
+    fingerprints above were computed from under the *old* code.
+
+    Those fingerprints being unchanged is the actual cross-representation
+    evidence; this pins the substitution rule they depend on.
+    """
+
+    for canonical in ("INT8", "UINT4", "INT32", "BIPOLAR", "BINARY"):
+        assert normalized(DataType[canonical]) == ("datatype", canonical)
+
+
+def test_the_normalized_projection_still_sees_everything_else() -> None:
+    """It normalizes datatypes; it must not normalize away the structure.
+
+    Without this the projection could pass the migration by discarding what it
+    was meant to protect.  Each perturbation is of a field that shares a digest
+    with an element type, and each must be visible.
+    """
+
+    built = fixture.decomposed_requirements(fixture.CONFIGS_BY_LABEL["softvec"])
+    result = built.elaboration.semantic_result
+    assert isinstance(result, NetworkRef)
+    region = result.network.node(DOT_PRODUCT_NODE).region
+    baseline = normalized(region)
+
+    renamed = replace(
+        region,
+        schedule=LogicalSchedule(
+            tuple(
+                ScheduleLevel(f"{level.name}_moved", level.extent)
+                for level in region.schedule.levels
+            )
+        ),
+    )
+    assert normalized(renamed) != baseline
+
+    dropped = replace(region, outputs=())
+    assert normalized(dropped) != baseline
+
+    reshaped = replace(
+        region,
+        schedule=LogicalSchedule(
+            tuple(ScheduleLevel(level.name, level.extent + 1) for level in region.schedule.levels)
+        ),
+    )
+    assert normalized(reshaped) != baseline
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)

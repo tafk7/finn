@@ -46,7 +46,10 @@ from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
 )
 from finn.dataflow.mvau_problem import MVAUProblemPaths
-from finn.dataflow.region import BeatSequence, NumericElementType
+from finn.dataflow.region import (
+    BeatSequence,
+    NumericElementType,
+)
 
 _ARTIFACT_PATH = QualifiedPath("artifact.mvau.rtl_softvec")
 _DATAFLOW_SCOPE_ID_ATTR = "dataflow_scope_id"
@@ -235,27 +238,6 @@ def _require_feasible(resolved: MVAUResolvedDesign, constraint_set: str) -> None
             _finding(
                 "mvau-artifact-feasibility-incomplete",
                 f"artifact construction could not establish {constraint_set!r} feasibility",
-            ),
-        )
-    )
-
-
-def _datatype_name(element_type: NumericElementType) -> str:
-    if element_type.type_id == "bipolar" and element_type.bit_width == 1:
-        return "BIPOLAR"
-    if element_type.type_id == "binary" and element_type.bit_width == 1:
-        return "BINARY"
-    if element_type.type_id == "int":
-        return f"INT{element_type.bit_width}"
-    if element_type.type_id == "uint":
-        return f"UINT{element_type.bit_width}"
-    if element_type.type_id == "float":
-        return f"FLOAT{element_type.bit_width}"
-    raise MVAUArtifactError(
-        (
-            _finding(
-                "mvau-artifact-datatype-unsupported",
-                f"no QONNX datatype spelling is declared for {element_type!r}",
             ),
         )
     )
@@ -620,10 +602,13 @@ def build_mvau_rtl_artifact_requirements(
         (*description.leading_shape, matrix_width),
         expected_weight_shape,
         (*description.leading_shape, matrix_height),
-        _datatype_name(activation_type),
-        _datatype_name(weight_type),
-        _datatype_name(accumulator_type),
-        _datatype_name(output_type),
+        # The names the model annotated, carried through.  This used to
+        # reconstruct a spelling from a reduced family and width, which is how a
+        # ``TERNARY`` tensor reached an artifact declaring ``INT2``.
+        activation_type.name,
+        weight_type.name,
+        accumulator_type.name,
+        output_type.name,
         weight_payload_kind,
         None
         if weight_array is None

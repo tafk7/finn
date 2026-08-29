@@ -33,7 +33,8 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.kernel import RegionDeclaration, build_kernel_semantic_declarations
 from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
-from finn.dataflow.region import NumericElementType
+from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
+from finn.dataflow.region import NumericElementType, is_element_type
 
 
 def _positive_integer(value: object) -> bool:
@@ -41,13 +42,11 @@ def _positive_integer(value: object) -> bool:
 
 
 def _complete_numeric_element_type(value: object) -> bool:
-    return type(value) is NumericElementType and bool(value.type_id) and value.bit_width > 0
+    return is_element_type(value)
 
 
 _INTEGER_SEMANTICS = ValueSemantics.immutable_nominal(int, name="integer")
-_ELEMENT_TYPE_SEMANTICS = ValueSemantics.immutable_nominal(
-    NumericElementType, name="NumericElementType"
-)
+_ELEMENT_TYPE_SEMANTICS = QONNX_DATATYPE_SEMANTICS
 _REGION_SEMANTICS = as_object_semantics(DATAFLOW_REGION_SEMANTICS)
 _INTEGER_OBJECT_SEMANTICS = as_object_semantics(_INTEGER_SEMANTICS)
 _ELEMENT_TYPE_OBJECT_SEMANTICS = as_object_semantics(_ELEMENT_TYPE_SEMANTICS)

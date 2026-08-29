@@ -48,11 +48,31 @@ from finn.dataflow.ops.mvau import (
 from finn.dataflow.mvau_problem import MVAU_PROBLEM_PROVENANCE, MVAUProblemPaths
 from finn.dataflow.region import BeatSequence
 
-#: v4 renames the decomposed pumping attribute to ``dataflow_dotp_axi_pumping``,
+#: v4 renamed the decomposed pumping attribute to ``dataflow_dotp_axi_pumping``,
 #: following the choice to the physical Kernel that now owns it.  ``PE`` and
-#: ``SIMD`` keep their paths and attributes: they stayed with the Region, and
+#: ``SIMD`` kept their paths and attributes: they stayed with the Region, and
 #: churning a persisted name that means exactly what it did would be noise.
-MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v4"
+#:
+#: v5 adopts QONNX datatypes.  This version labels the *operation's* schema, and
+#: four things about it changed:
+#:
+#: - the problem fields' value semantics (a new engine value domain);
+#: - the problem fingerprint encoding, from
+#:   ``{"numeric_element_type": [family, width]}`` to ``{"qonnx_datatype": name}``;
+#: - the Region value representation those fields flow into; and
+#: - persistence compatibility, since the old encoding is lossy and cannot be
+#:   migrated forward.
+#:
+#: Leaving this at v4 would have been the more dangerous kind of wrong: a v4
+#: node *is* still refused, but only incidentally, as a problem-fingerprint
+#: mismatch, while the family version went on asserting the schema was
+#: unchanged.  A version that no longer describes what it labels is worse than
+#: no version, because it is believed.
+#:
+#: Bumped separately from `MVAU_DECLARATION_FAMILY_VERSION`, which tracks the
+#: source-selection envelope; the two label different things and are allowed to
+#: move independently.
+MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v5"
 
 
 @dataclass(frozen=True)
