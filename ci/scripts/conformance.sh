@@ -217,7 +217,7 @@ if want 5 && [ "$have_sbx" = 1 ]; then
             fi
         fi
     else
-        skip "5: no sandbox named $SANDBOX (create one with FINN_SBX_NAME=$SANDBOX ./run-docker.sh sbx build)"
+        skip "5: no sandbox named $SANDBOX (create one with FINN_SBX_NAME=$SANDBOX docker/finn-sbx build)"
     fi
 elif want 5; then
     skip "5: sbx not on PATH"

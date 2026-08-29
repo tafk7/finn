@@ -704,193 +704,23 @@ if [ "$BUILD_ONLY" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# sbx mode: create-or-attach a Docker Sandboxes microVM.
+# sbx mode delegates to docker/finn-sbx.
 #
-# Placed here so it inherits everything resolved above -- the tier tag, the
-# Xilinx paths, and the licence handling -- instead of duplicating any of it.
+# This used to be ~180 lines of hand-rolled create-or-attach: name derivation,
+# an existence check, a timeout wrapper around a wedged-daemon `sbx ls`,
+# positional mount assembly, licence-directory mounts, and an attach fallback
+# for a racing create.
 #
-# The point is parity with the docker path: one command, repeatable. Without
-# this, using sbx meant hand-running docker save, sbx template load, a long
-# sbx create, and sbx run, and redoing the first three on every commit because
-# the tag embeds `git describe`.
+# Almost all of it was reimplementation. sbx 0.39.0 added declarative
+# environment files, and `sbx env run` IS create-or-attach -- so the mounts,
+# environment, kit and template selection now live in
+# docker/sbxenv/*.sbxenv.yaml, and finn-sbx does only the three things that
+# format cannot express: load a locally built template into sbx's image store,
+# materialise the environment files outside every mounted workspace, and grant
+# licence-server egress.
 # ---------------------------------------------------------------------------
 if [ "$FINN_SBX_MODE" = "1" ]; then
-  command -v sbx >/dev/null || { recho "sbx not found on PATH"; exit 1; }
-
-  # Every sbx query is wrapped in a timeout and announced before it runs.
-  #
-  # sbx talks to a daemon, and a wedged daemon makes `sbx ls` spin instead of
-  # failing -- which, in an unguarded pipeline, hangs this script with no output
-  # at all after the docker build. A timeout turns that into a diagnosable error.
-  : ${FINN_SBX_TIMEOUT:=60}
-  # Diagnostics go to STDERR and the caller checks the status: a pipeline runs
-  # this in a subshell, where an `exit` would kill only that subshell and any
-  # message on stdout would be swallowed by the next stage. Callers must
-  # therefore capture the output first, never pipe this directly.
-  sbx_q () {
-    timeout "$FINN_SBX_TIMEOUT" sbx "$@" 2>/dev/null
-    local rc=$?
-    if [ "$rc" -eq 124 ]; then
-      recho "\`sbx $*\` timed out after ${FINN_SBX_TIMEOUT}s." >&2
-      recho "The sbx daemon may be wedged. Try: sbx daemon restart" >&2
-      recho "(raise FINN_SBX_TIMEOUT if your machine is merely slow)" >&2
-    fi
-    return $rc
-  }
-
-  # One sandbox per (tier, checkout). Lowercased; sbx requires it.
-  SBX_NAME=${FINN_SBX_NAME:-"finn-$FINN_TIER-$(basename "$SCRIPTPATH")"}
-  SBX_NAME=$(echo "$SBX_NAME" | tr '[:upper:]' '[:lower:]')
-
-  gecho "Checking for an existing sandbox named $SBX_NAME"
-  SBX_LS=$(sbx_q ls); [ $? -eq 124 ] && exit 1
-  if echo "$SBX_LS" | awk '{print $1}' | grep -qx "$SBX_NAME"; then
-    if [ "$FINN_SBX_RECREATE" = "1" ]; then
-      gecho "Removing existing sandbox $SBX_NAME (FINN_SBX_RECREATE=1)"
-      sbx rm --force "$SBX_NAME" >/dev/null 2>&1
-    else
-      gecho "Attaching to existing sandbox $SBX_NAME"
-      gecho "(FINN_SBX_RECREATE=1 to rebuild it against the current image)"
-      exec sbx run --name "$SBX_NAME"
-    fi
-  fi
-
-  # sbx keeps its own image store and cannot see the local docker one, so the
-  # image has to be exported and loaded. Skipped when the tag is already there,
-  # which is what makes repeat runs fast -- only a new tag pays the ~2 min.
-  gecho "Checking the sbx template store for $FINN_DOCKER_TAG"
-  SBX_TPL=$(sbx_q template ls); [ $? -eq 124 ] && exit 1
-  if echo "$SBX_TPL" | awk '{print $1":"$2}' | grep -qx "docker.io/$FINN_DOCKER_TAG"; then
-    gecho "Template $FINN_DOCKER_TAG already loaded"
-  else
-    gecho "Loading $FINN_DOCKER_TAG into the sbx template store (first time is slow)"
-    SBX_TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
-    gecho "  exporting the image (silent, a few minutes for the build tiers)"
-    docker save -o "$SBX_TAR" "$FINN_DOCKER_TAG" || { recho "docker save failed"; rm -f "$SBX_TAR"; exit 1; }
-    sbx template load "$SBX_TAR" || { recho "sbx template load failed"; rm -f "$SBX_TAR"; exit 1; }
-    rm -f "$SBX_TAR"
-  fi
-
-  # Extra workspaces are POSITIONAL in sbx, and every mount lands at its host
-  # path -- which is what FINN needs anyway, since generated Vivado projects
-  # embed absolute paths (see docs/containerization.md).
-  SBX_ARGS=("$SCRIPTPATH")
-  SBX_ENV=()
-
-  # The dev tier gets NO toolchain, NO licence and NO extra egress. That is the
-  # entire point of it: the containment boundary is dev vs the rest, so leaking
-  # a licence variable in here because it happens to be set in the caller's
-  # shell would quietly widen the profile that exists to be narrow.
-  if [ "$FINN_TIER" = "dev" ]; then
-    gecho "dev tier: no Xilinx mount, no licence, no toolchain egress"
-  else
-  # Mount the whole Xilinx ROOT read-only, exactly as the docker path does.
-  #
-  # This used to mount $FINN_XILINX_PATH/$FINN_XILINX_VERSION, which is the
-  # POST-2024.2 layout only. Xilinx reorganised its install tree after 2024.2:
-  #
-  #   <= 2024.2   $ROOT/Vivado/2022.2, $ROOT/Vitis_HLS/2022.2, ...
-  #   >  2024.2   $ROOT/2025.1/Vivado, $ROOT/2025.1/Vitis, ...
-  #
-  # On an older site -- including 2022.2, which is FINN's documented default --
-  # that directory does not exist, the [ -d ] guard failed, and the sandbox was
-  # created with NO toolchain mounted at all while still being handed
-  # VIVADO_PATH and friends pointing at absent paths. Silently.
-  #
-  # Mounting the root sidesteps the layout question entirely and is what the
-  # docker path has always done. It exposes more read-only filesystem surface;
-  # that is the deliberate trade, and read-only is what makes it acceptable.
-  if [ -n "$FINN_XILINX_PATH" ] && [ -d "$FINN_XILINX_PATH" ]; then
-    SBX_ARGS+=("$FINN_XILINX_PATH:ro")
-  else
-    recho "FINN_XILINX_PATH is unset or not a directory; the $FINN_TIER tier needs it"
-    exit 1
-  fi
-
-  # The platform repo lives outside $FINN_XILINX_PATH, so the root mount above
-  # does not cover it. It was previously passed as -e with no mount at all,
-  # meaning Vitis/Alveo flows under sbx got a path to a directory that was not
-  # there. The docker path mounts it; so does this now.
-  if [ -n "$PLATFORM_REPO_PATHS" ] && [ -d "$PLATFORM_REPO_PATHS" ]; then
-    case "$PLATFORM_REPO_PATHS" in
-      "$FINN_XILINX_PATH"/*) ;;   # already covered by the root mount
-      *) SBX_ARGS+=("$PLATFORM_REPO_PATHS:ro") ;;
-    esac
-  fi
-
-  for v in VIVADO_PATH VITIS_PATH HLS_PATH PLATFORM_REPO_PATHS \
-           XILINXD_LICENSE_FILE LM_LICENSE_FILE NUM_DEFAULT_WORKERS; do
-    eval "val=\${$v:-}"
-    [ -n "$val" ] && SBX_ENV+=(-e "$v=$val")
-  done
-  # Node-locked licences are files that must exist inside the sandbox; mount
-  # their directory read-only at its own path, as the docker path does.
-  #
-  # NOTE the shape here. This was previously
-  #
-  #   ( ... ) | sort -u | while read -r d; do SBX_ARGS+=("$d:ro"); done
-  #
-  # in which the `while` is the last stage of a pipeline and therefore runs in a
-  # SUBSHELL, so every append to SBX_ARGS was discarded when it exited. Node-
-  # locked licence directories were never actually mounted. Process substitution
-  # keeps the loop in the current shell. Do not reintroduce the pipe.
-  while IFS= read -r d; do
-    [ -n "$d" ] && SBX_ARGS+=("$d:ro")
-  done < <(
-    for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
-      eval "lval=\${$lv:-}"
-      [ -z "$lval" ] && continue
-      ( IFS=':'; for entry in $lval; do
-          case "$entry" in ''|*@*) continue ;; esac
-          d=$(dirname "$entry"); [ -d "$d" ] && echo "$d"
-        done )
-    done | sort -u
-  )
-
-  fi
-
-  gecho "Creating sandbox $SBX_NAME from $FINN_DOCKER_TAG"
-  sbx create "${FINN_SBX_AGENT:-shell}" "${SBX_ARGS[@]}" \
-    --name "$SBX_NAME" \
-    --template "$FINN_DOCKER_TAG" \
-    --kit "$SCRIPTPATH/docker/finn.kit" \
-    --no-share-skills \
-    "${SBX_ENV[@]}" || {
-      # A racing or missed existence check should not be fatal: the sandbox we
-      # wanted is right there.
-      if sbx_q ls | awk '{print $1}' | grep -qx "$SBX_NAME"; then
-        gecho "Sandbox $SBX_NAME already exists; attaching"
-        exec sbx run --name "$SBX_NAME"
-      fi
-      recho "sbx create failed"; exit 1
-    }
-
-  # A floating licence needs raw TCP egress to PORT@HOST. sbx grants that
-  # narrowly, per sandbox, so this does not require an open posture.
-  for lv in XILINXD_LICENSE_FILE LM_LICENSE_FILE; do
-    [ "$FINN_TIER" = "dev" ] && continue
-    eval "lval=\${$lv:-}"
-    [ -z "$lval" ] && continue
-    ( IFS=':'; for entry in $lval; do
-        case "$entry" in *@*) ;; *) continue ;; esac
-        port=${entry%@*}; host=${entry#*@}
-        # HOST, not HOST:PORT. FLEXlm needs TWO connections: lmgrd on the
-        # advertised port is only a directory service, and it hands back a
-        # second, usually ephemeral port for the vendor daemon (xilinxd) where
-        # the actual checkout happens. A port-scoped rule lets `lmutil lmstat`
-        # succeed -- it only ever talks to lmgrd -- while every real checkout
-        # fails with "A valid license was not found", which is a thoroughly
-        # misleading error for a firewall problem.
-        #
-        # Still far narrower than an open posture: one internal host, not the
-        # routable range. Do not "tighten" this back to :$port.
-        gecho "Allowing licence server egress: $host (advertised port $port, plus the vendor daemon)"
-        sbx policy allow network --sandbox "$SBX_NAME" "$host" >/dev/null 2>&1
-      done )
-  done
-
-  gecho "Sandbox $SBX_NAME ready"
-  exec sbx run --name "$SBX_NAME"
+  exec "$SCRIPTPATH/docker/finn-sbx" "$FINN_TIER" ${FINN_SBX_ARGS:+$FINN_SBX_ARGS}
 fi
 
 if [ -z "$FINN_SINGULARITY" ];then
