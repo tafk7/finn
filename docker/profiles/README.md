@@ -8,10 +8,19 @@ FINN_PROFILE=py310 ./run-docker.sh quicktest   # default
 FINN_PROFILE=py312 ./run-docker.sh quicktest
 ```
 
+Status is declared in `docker-bake.hcl`, which is where the profile matrix now
+lives, and gates CI through the `supported` and `experimental` bake groups:
+
+| Status | Meaning |
+|---|---|
+| `supported` | must build and must pass its declared tests |
+| `experimental` | smoke-built; a failure is reported and does not gate |
+| `deprecated` | retained, excluded from normal CI |
+
 | Profile | Ubuntu | Python | Status |
 |---|---|---|---|
-| `py310` | 22.04 jammy | 3.10 | Current. Validated: 1970 tests pass. |
-| `py312` | 24.04 noble | 3.12 | Tracks upstream PR 1603 (`upgrade/python_version`), which is WIP. **Not yet validated here.** |
+| `py310` | 22.04 jammy | 3.10 | **supported.** Validated: 1970 tests pass. |
+| `py312` | 24.04 noble | 3.12 | **experimental.** Tracks upstream PR 1603 (`upgrade/python_version`), which is WIP. Does not currently build. |
 
 This exists because 24.04 / Python 3.12 is a near-term requirement but the
 upstream work landing it is unfinished. Rather than fork or wait, both stacks
@@ -78,3 +87,31 @@ FINN_PROFILE=py312 ./run-docker.sh quicktest
 The build itself gates on `pip check`, a real pytest run, and agreement between
 `finn_paths.DEP_SRC_DIRS` and `deps.env`. Those catch environment breakage but
 not behavioural regressions, so compare a test run against the other profile.
+
+
+## Where a profile's build inputs live
+
+The Ubuntu snapshot tag, XRT package and XRT checksum are in `docker-bake.hcl`,
+not here. bake's HCL has no `file()` function and does not read `.env`, so
+keeping them in a shell file would have meant either generated files (which go
+stale silently) or a mandatory wrapper -- so that a bare
+`docker buildx bake dev-py312` would build with py310's XRT package. A build
+matrix is what that file is for.
+
+`profile.env` remains for the values `run-docker.sh` needs outside the build.
+
+## Supported sbx versions
+
+The sbx template contract in `docker/sbx-contract.sh` is reverse-engineered from
+observed `sbx create` failures, not from documentation, so the tested version is
+part of the compatibility contract rather than an incidental detail.
+
+| Component | Tested against |
+|---|---|
+| sbx | v0.39.0 |
+| kit schemaVersion | 2 (`setup:`); requires sbx >= 0.36 |
+| docker | 29.6.1 |
+| buildx | v0.35.0 |
+
+An sbx release can break the contract. `ci/scripts/conformance.sh 5` is the
+check: it creates a sandbox with plain `sbx` and runs a bare `sbx exec`.
