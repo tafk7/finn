@@ -478,40 +478,38 @@ if [ -n "$FINN_DOCKER_SHARED_IMAGE_DIR" ] && \
   fi
 fi
 
-# Build the FINN Docker image
+# Build the FINN Docker image, via bake.
+#
+# docker-bake.hcl is the authority on the build matrix, the build arguments and
+# the tag rule. This used to be a `docker build` with sixteen --build-arg flags
+# and a tag computed here, which meant CI re-derived the tag string and hoped it
+# matched. Now everything references a target by name.
+#
+# GIT_DESCRIBE cannot be computed inside HCL, so it is passed. Bare
+# `docker buildx bake dev-py310` still works; it just produces a "local" tag
+# instead of a provenance-bearing one.
 if [ "$FINN_DOCKER_PREBUILT" = "0" ] && [ -z "$FINN_SINGULARITY" ]; then
-  # Need to ensure this is done within the finn/ root folder:
   OLD_PWD=$(pwd)
-  cd $SCRIPTPATH
-  # Export DOCKER_BUILDKIT to enable BuildKit features
+  cd "$SCRIPTPATH" || exit 1
   export DOCKER_BUILDKIT
-  # No identity build args. The image is user-agnostic: identity is applied at
-  # runtime via --user below, or by whatever orchestrator runs it. Baking a user
-  # made two developers produce materially different images under an identical
-  # tag, which made every tag-keyed path - the Jenkins publish step,
-  # FINN_DOCKER_SHARED_IMAGE_DIR, any registry push - unsound.
-  docker build \
-    -f docker/Dockerfile.finn \
-    --target=$FINN_DOCKER_TARGET \
-    --build-arg FINN_PROFILE=$FINN_PROFILE \
-    --build-arg UBUNTU_TAG=$UBUNTU_TAG \
-    --build-arg XRT_DEB_VERSION=$XRT_DEB_VERSION \
-    --build-arg XRT_DEB_SHA256=$FINN_XRT_SHA256 \
-    --build-arg SKIP_XRT=$FINN_SKIP_XRT_DOWNLOAD \
-    --build-arg LOCAL_XRT=$LOCAL_XRT \
-    --build-arg V80PP_DEB_PACKAGE=$V80PP_DEB_PACKAGE \
-    --build-arg QONNX_COMMIT=$QONNX_COMMIT \
-    --build-arg FINN_EXP_COMMIT=$FINN_EXP_COMMIT \
-    --build-arg BREVITAS_COMMIT=$BREVITAS_COMMIT \
-    --build-arg HLSLIB_COMMIT=$HLSLIB_COMMIT \
-    --build-arg AVNET_BDF_COMMIT=$AVNET_BDF_COMMIT \
-    --build-arg XIL_BDF_COMMIT=$XIL_BDF_COMMIT \
-    --build-arg RFSOC4x2_BDF_COMMIT=$RFSOC4x2_BDF_COMMIT \
-    --build-arg KV260_BDF_COMMIT=$KV260_BDF_COMMIT \
-    --build-arg AUPZU3_BDF_COMMIT=$AUPZU3_BDF_COMMIT \
-    --tag=$FINN_DOCKER_TAG $FINN_DOCKER_BUILD_EXTRA \
-    . || { recho "docker build failed"; exit 1; }
-  cd $OLD_PWD
+  export GIT_DESCRIBE="$(finn_git_describe)"
+  export GIT_DESCRIBE_DIRTY="$(finn_git_describe --dirty)"
+  export LOCAL_XRT SKIP_XRT="$FINN_SKIP_XRT_DOWNLOAD" V80PP_DEB_PACKAGE
+  BAKE_TARGET="${FINN_DOCKER_TARGET}-${FINN_PROFILE}"
+  gecho "Building bake target $BAKE_TARGET"
+  docker buildx bake --load $FINN_DOCKER_BUILD_EXTRA "$BAKE_TARGET" \
+    || { recho "docker buildx bake $BAKE_TARGET failed"; exit 1; }
+  # The tag rule lives in one place now, so assert the two agree rather than
+  # trusting that they do. A silent divergence here would leave the run using an
+  # image that the build did not produce.
+  BAKED_TAG=$(docker buildx bake --print "$BAKE_TARGET" 2>/dev/null \
+    | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$BAKE_TARGET']['tags'][0])" 2>/dev/null)
+  if [ -n "$BAKED_TAG" ] && [ "$BAKED_TAG" != "$FINN_DOCKER_TAG" ]; then
+    recho "Tag mismatch: bake produced $BAKED_TAG but this script expects $FINN_DOCKER_TAG"
+    recho "finn_compute_tag in run-docker.sh and tag() in docker-bake.hcl have diverged."
+    exit 1
+  fi
+  cd "$OLD_PWD" || exit 1
 fi
 
 # Remove local xrt.deb file from repo
