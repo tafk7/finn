@@ -23,10 +23,8 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
-from finn.dataflow.mvau.decomposed_provider import (
-    FINNLIB_SOURCE_FILES,
-    verify_source_manifest,
-)
+from finn.dataflow.mvau.hardware.binding import verify_manifest
+from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
@@ -35,7 +33,9 @@ def test_every_configuration_builds_what_it_will_simulate(config: fixture.Config
 
     built = fixture.decomposed_requirements(config)
 
-    declared = {item.name for item in DECOMPOSED_MVAU_KERNELS.provider_parameters()}
+    declared = {
+        item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
+    }
     assert {name for name, _ in built.parameters} == declared
 
     # The generated top instantiates both cores with the declared values, and
@@ -50,7 +50,7 @@ def test_every_configuration_builds_what_it_will_simulate(config: fixture.Config
         ), name
 
     assert built.target_fpga_part == config.fpga_part
-    assert len(built.finnlib_sources) == len(FINNLIB_SOURCE_FILES)
+    assert len(built.finnlib_sources) == len(FINNLIB_SOURCES)
 
 
 def test_the_manifest_resolves_against_this_checkout() -> None:
@@ -64,7 +64,7 @@ def test_the_manifest_resolves_against_this_checkout() -> None:
     built = fixture.decomposed_requirements(fixture.CONFIGS[0])
     if any(not Path(path).is_file() for path in built.finnlib_sources):
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
-    verify_source_manifest(built.source_dependencies)
+    verify_manifest(built.source_dependencies)
 
 
 def test_the_folding_reaches_the_rtl_as_the_point_decided_it() -> None:

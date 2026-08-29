@@ -34,7 +34,7 @@ from finn.dataflow.mvau.compute_kernels import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.compute_kernels import MVAU_REPLAY_SELECTION
+from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_REPLAY_SELECTION
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
@@ -218,15 +218,24 @@ def test_the_result_property_never_needs_a_topology_decision() -> None:
         str(MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel),
     }
     assert identity_decisions <= decisions
+    owners = {
+        f"{selection.name}.{kernel.id}."
+        for selection in (
+            MVAU_COMPUTE_SELECTION,
+            MVAU_REPLAY_SELECTION,
+            MVAU_WEIGHT_SUPPLY_SELECTION,
+            MVAU_WEIGHT_ADAPTER_SELECTION,
+        )
+        for kernel in selection.kernels
+    } | {
+        # The physical Kernels own choices too.  They are in no selection --
+        # one covers each Region, so there is nothing to choose between -- but
+        # a decision of theirs is as owned as any other.
+        f"{kernel.namespace}."
+        for kernel in DECOMPOSED_MVAU_KERNELS.hardware
+    }
     for path in decisions - identity_decisions:
-        # Everything else belongs to exactly one named Kernel.
-        assert any(
-            path.startswith(f"{selection.name}.{kernel.id}.")
-            for selection in (
-                MVAU_COMPUTE_SELECTION,
-                MVAU_REPLAY_SELECTION,
-                MVAU_WEIGHT_SUPPLY_SELECTION,
-                MVAU_WEIGHT_ADAPTER_SELECTION,
-            )
-            for kernel in selection.kernels
-        ), path
+        # Everything else belongs to exactly one named Kernel, semantic or
+        # physical.  A decision belonging to none would be a free-floating
+        # choice the design space offers and nobody owns.
+        assert sum(path.startswith(owner) for owner in owners) == 1, path

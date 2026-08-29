@@ -39,7 +39,8 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     decomposed_requirements,
     record_identity,
 )
-from finn.dataflow.mvau.decomposed_provider import finnlib_root, write_decomposed_artifact
+from finn.dataflow.mvau.hardware.binding import finnlib_root
+from finn.dataflow.mvau.hardware.composition import write_decomposed_artifact
 
 #: Synthesis is slow and mostly repeats itself, so only one configuration per
 #: DSP generation runs by default -- the generation is what changes the

@@ -444,3 +444,34 @@ def test_the_replay_choice_does_not_apply_to_a_fused_member() -> None:
     point = operation.hydrate_dataflow_point(_context())
     assert isinstance(Engine().query_property(point, MVAU_REPLAY_SELECTION.paths.region), Absent)
     assert Engine().evaluate_constraint_set(point, "mvau_op_structural").verdict is True
+
+
+def test_structural_readiness_does_not_wait_on_a_physical_choice() -> None:
+    """Pumping changes no beat, so a Region-complete point is structurally ready.
+
+    This regressed the moment the physical decisions joined the structural
+    profile: a point with every semantic choice committed and its Network fully
+    derived reported ``ready=None`` purely because nobody had said whether to
+    pump the datapath.  That defeats the separation the physical layer exists to
+    draw -- structural readiness is a question about logical dataflow.
+    """
+
+    operation = _wrapped(_model())
+    operation.initialize_dataflow_scope_id()
+    semantic = {
+        path: value
+        for path, value in _choices().items()
+        if path != DECOMPOSED_MVAU_KERNELS.compute_pumping.path
+    }
+    operation.commit_dataflow_assignments(_context(), semantic)
+    resolved = operation.resolve_dataflow(_context())
+    engine, point = resolved.engine, resolved.point
+
+    assert engine.check_readiness(point, "mvau_op_structural").ready is True
+    # ...and the artifact profile correctly still says no, for that exact reason.
+    assert engine.check_readiness(point, "artifact_inputs").ready is not True
+
+    committed = engine.commit_assignments(
+        point, {DECOMPOSED_MVAU_KERNELS.compute_pumping.path: False}
+    ).point
+    assert engine.check_readiness(committed, "artifact_inputs").ready is True

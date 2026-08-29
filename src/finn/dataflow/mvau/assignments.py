@@ -84,8 +84,14 @@ MVAU_DECISION_NODEATTRS: Mapping[QualifiedPath, NodeAttrCodec] = MappingProxyTyp
         # which Kernel was selected.
         DECOMPOSED_MVAU_KERNELS.pe.path: NodeAttrCodec.integer("dataflow_dot_product_pe"),
         DECOMPOSED_MVAU_KERNELS.simd.path: NodeAttrCodec.integer("dataflow_dot_product_simd"),
+        # Pumping is the dot-product *hardware's* choice, not the Region's: it
+        # changes how fast the datapath runs and moves no beat.  Both the path
+        # and the attribute name say so, because keeping the old
+        # ``dataflow_dot_product_pumping`` would have been the cheaper lie --
+        # the attribute would name a Region that no longer owns the value.  A
+        # node carrying the old name is rejected rather than reinterpreted.
         DECOMPOSED_MVAU_KERNELS.compute_pumping.path: NodeAttrCodec.boolean(
-            "dataflow_dot_product_pumping"
+            "dataflow_dotp_axi_pumping"
         ),
         MVAU_REPLAY_SELECTION.paths.kernel: NodeAttrCodec.string("dataflow_replay_kernel"),
         # FINN RTL memstream supply Kernel.

@@ -1,47 +1,35 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The physical realization of the decomposed MVAU: replay + FinnLib dotp.
+"""Composing the two bound Kernels into one buildable artifact.
 
-Two cores where the fused path had one, so there is no legacy custom op that
-emits this structure and none is added.  The wrapper is generated here, from
-the elaboration -- which is the point: every parameter driven into either core
-is read out of the design point through the Kernel's own ``ProviderParameter``
-table, never recomputed.
+Each Kernel says what module it is and with which parameters.  Neither says how
+they are wired, because wiring two Kernels together is not either Kernel's
+business -- it is this assembly's, which is also the only thing that knows the
+Network the wiring has to realize.
 
-``dotp_axi`` and its dependencies come from FinnLib, which is a separate
-repository.  ``fetch-repos.sh`` pins the revision and checks it out under
-``deps/finnlib``; ``FINNLIB_ROOT`` overrides that for local work against a
-working clone.
-
-This module holds only the *provider* half.  The Kernel declarations and the
-Network assembly live in :mod:`finn.dataflow.mvau.decomposed`.
+The generated top is emitted here, from the bindings: every parameter driven
+into either core was read out of the design point through that Kernel's own
+declared table, never recomputed.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
-from finn.dataflow.kernels import Kernel, KernelSelection, bind_kernel, provider_of
-from finn.dataflow.mvau.compute_kernels import (
-    DECOMPOSED_MVAU_KERNELS,
-    MVAU_COMPUTE_SELECTION,
-    MVAU_REPLAY_SELECTION,
-)
-from finn.dataflow.mvau.compute_pool import MVAUComputeKernelId
+from finn.dataflow.design import Finding, FindingKind, QualifiedPath
+from finn.dataflow.hardware import KernelBinding
 from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
-    DOT_PRODUCT_PROVIDER,
     REPLAY_NODE,
-    REPLAY_PROVIDER,
     ActivationReplayKernel,
+    DotProductKernel,
 )
+from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.mvau.elaboration import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
@@ -57,124 +45,28 @@ from finn.dataflow.mvau.elaboration import (
     MVAUSemanticPortRef,
     mvau_elaboration_origin,
 )
-from finn.dataflow.mvau.provider_values import resolve_provider_parameters, scalar_parameters
+from finn.dataflow.mvau.compute_kernels import MVAU_COMPUTE_SELECTION, MVAU_REPLAY_SELECTION
+from finn.dataflow.mvau.hardware.binding import (
+    DecomposedBindings,
+    bind_decomposed,
+    resolved_manifest,
+    source_roots,
+    verify_manifest,
+)
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 from finn.dataflow.mvau_problem import MVAUProblemPaths
-from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.ops.mvau import NetworkRef
 from finn.dataflow.region import Port
 
-_PROVIDER_PATH = QualifiedPath("provider.mvau.decomposed")
+#: The generated top is FINN's own, not either Kernel's.
+WRAPPER_MODULE = "finn.dataflow.mvau.decomposed_wrapper"
 
-#: FINN's own half of the composition, relative to the FINN root.
-FINN_SOURCE_FILES = (
-    "finn-rtllib/mvu/mvu_pkg.sv",
-    "finn-rtllib/mvu/replay_buffer.sv",
-)
-
-#: FinnLib's half, relative to the FinnLib root.  Order is compile order.
-FINNLIB_SOURCE_FILES = (
-    "rtl/arith/add_multi_pkg.sv",
-    "rtl/arith/add_multi.sv",
-    "rtl/linalg/dotp_8sx9_dsp58.sv",
-    "rtl/linalg/dotp.sv",
-    "rtl/linalg/dotp_axi.sv",
-)
-
-#: Where ``fetch-repos.sh`` places the pinned FinnLib checkout.
-FINNLIB_DEFAULT_SUBDIRECTORY = "deps/finnlib"
-
-#: Environment override for a local working clone.
-FINNLIB_ROOT_VARIABLE = "FINNLIB_ROOT"
+_COMPOSITION_PATH = QualifiedPath("hardware.mvau.composition")
 
 
-def _fail(
-    code: str, message: str, values: tuple[tuple[str, object], ...] = ()
-) -> MVAUElaborationError:
+def _fail(code: str, message: str) -> MVAUElaborationError:
     return MVAUElaborationError(
-        (Finding(FindingKind.LIMITATION, code, _PROVIDER_PATH, message, values),)
+        (Finding(FindingKind.LIMITATION, code, _COMPOSITION_PATH, message),)
     )
-
-
-def finnlib_root(finn_root: str | Path) -> Path:
-    """The FinnLib checkout this build should compile against.
-
-    ``FINNLIB_ROOT`` wins so a working clone can be used during development;
-    otherwise it is the revision ``fetch-repos.sh`` pinned.
-    """
-
-    override = os.environ.get(FINNLIB_ROOT_VARIABLE)
-    if override:
-        return Path(override).resolve()
-    return (Path(finn_root) / FINNLIB_DEFAULT_SUBDIRECTORY).resolve()
-
-
-def decomposed_source_manifest(
-    finn_root: str | Path, finnlib: str | Path | None = None
-) -> tuple[tuple[str, str], ...]:
-    """Every RTL file the decomposed composition compiles, in compile order.
-
-    Returned as ``(id, absolute path)`` pairs.  Naming the files is a statement
-    about the design and does not need them to be on disk; whether they are
-    there is :func:`verify_source_manifest`'s question, asked when something is
-    about to read them.
-    """
-
-    root = Path(finn_root).resolve()
-    library = Path(finnlib).resolve() if finnlib is not None else finnlib_root(root)
-    return tuple(
-        [
-            (f"compute.finn.{index}", str(root / relative))
-            for index, relative in enumerate(FINN_SOURCE_FILES)
-        ]
-        + [
-            (f"compute.finnlib.{index}", str(library / relative))
-            for index, relative in enumerate(FINNLIB_SOURCE_FILES)
-        ]
-    )
-
-
-def verify_source_manifest(entries: tuple[tuple[str, str], ...]) -> None:
-    """Refuse a manifest that names files this checkout does not have.
-
-    Reported here, with the FinnLib root in the finding, rather than surfacing
-    later as an ``xelab`` error with no provenance.
-    """
-
-    missing = tuple(path for _, path in entries if not Path(path).is_file())
-    if missing:
-        raise _fail(
-            "mvau-decomposed-source-missing",
-            "declared decomposed RTL sources do not exist; is FinnLib fetched?",
-            (("paths", missing),),
-        )
-
-
-# -- parameter values --------------------------------------------------------
-
-
-def decomposed_provider_values(resolved: MVAUResolvedDesign) -> Mapping[str, object]:
-    """Both cores' declared parameters, read out of this point."""
-
-    return resolve_provider_parameters(
-        resolved.engine,
-        resolved.point,
-        DECOMPOSED_MVAU_KERNELS.provider_parameters(),
-    )
-
-
-#: Which core each declared parameter belongs to.  Everything else is the dot
-#: product's; the replay buffer takes exactly these three.
-REPLAY_PARAMETER_NAMES = ("LEN", "REP", "W")
-
-
-def _split(values: Mapping[str, object]) -> tuple[dict[str, object], dict[str, object]]:
-    replay = {name: values[name] for name in REPLAY_PARAMETER_NAMES}
-    compute = {name: value for name, value in values.items() if name not in replay}
-    return replay, compute
-
-
-# -- Verilog generation ------------------------------------------------------
 
 
 def _literal(value: object) -> str:
@@ -191,7 +83,8 @@ def _byte_aligned(bits: int) -> int:
 
 def render_decomposed_wrapper(
     module_name: str,
-    values: Mapping[str, object],
+    replay: Mapping[str, object],
+    compute: Mapping[str, object],
     *,
     activation_bits: int,
     weight_bits: int,
@@ -206,7 +99,6 @@ def render_decomposed_wrapper(
     that fixture must be the same code.
     """
 
-    replay, compute = _split(values)
     return f"""// Generated by finn.dataflow.mvau.decomposed_provider -- do not edit.
 // The decomposed MVAU: finn replay_buffer -> finnlib dotp_axi.
 module {module_name} #(
@@ -295,81 +187,100 @@ def _numeric(
     )
 
 
-def _bound(resolved: MVAUResolvedDesign, selection: KernelSelection) -> Kernel:
-    """The selected Kernel of one pool, bound to everything it derived.
+@dataclass(frozen=True)
+class _Provenance:
+    """What one physical object traces back to, and nothing it does not."""
 
-    Going through ``bind_kernel`` rather than reading the pool's paths directly
-    is what makes this an elaboration *of a Kernel*: an unresolved demand or
-    export propagates as a finding instead of quietly not being there.
+    regions: tuple[str, ...]
+    ports: tuple[MVAUSemanticPortRef, ...]
+    decisions: tuple[QualifiedPath, ...]
+    kernels: tuple[str, ...]
+
+
+def _provenance(
+    binding: KernelBinding,
+    semantic_kernel_id: str,
+    selection: QualifiedPath,
+    network: DataflowNetwork,
+) -> _Provenance:
+    """Everything behind one bound Kernel: what it covers and what chose it.
+
+    Three kinds of decision, and all three belong.  The selection that picked
+    the semantic alternative, the Kernel's own committed choices, and every
+    decision it imports -- ``compute_pumping`` configured this core, and
+    ``PE``/``SIMD`` size it without being its to pick.  The replay buffer has no
+    choices of its own at all, so imports are the only reason its record is not
+    empty, and an empty record for hardware the folding literally dimensions
+    would be the provenance failure this exists to prevent.
     """
 
-    answer = bind_kernel(resolved.engine, selection, resolved.point)
-    if not isinstance(answer, Decided):
-        raise MVAUElaborationError(
-            answer.findings
-            or (
-                Finding(
-                    FindingKind.BLOCKER,
-                    "mvau-decomposed-kernel-unbound",
-                    _PROVIDER_PATH,
-                    f"the selected {selection.name} Kernel did not bind",
-                ),
+    node_id = binding.regions[0].node_id
+    return _Provenance(
+        (node_id,),
+        tuple(
+            MVAUSemanticPortRef(node_id, interface.port.id)
+            for interface in network.node(node_id).region.interfaces
+        ),
+        tuple(
+            dict.fromkeys(
+                (
+                    selection,
+                    *sorted(binding.kernel.assignments, key=str),
+                    *binding.kernel.declaration.imported_decisions,
+                )
             )
-        )
-    return answer.value
+        ),
+        tuple(sorted({semantic_kernel_id, binding.kernel_id})),
+    )
 
 
-def _require_decomposed(resolved: MVAUResolvedDesign) -> tuple[DataflowNetwork, Kernel, Kernel]:
-    compute = _bound(resolved, MVAU_COMPUTE_SELECTION)
-    if compute.id != MVAUComputeKernelId.DOT_PRODUCT.value:
-        raise _fail(
-            "mvau-decomposed-kernel-unsupported",
-            "this provider implements only the decomposed dot-product Kernel",
-        )
-    if not isinstance(resolved.result, NetworkRef):
-        raise _fail(
-            "mvau-decomposed-result-not-a-network",
-            "the decomposed Kernel must resolve to a replay-plus-compute Network",
-        )
-    replay = _bound(resolved, MVAU_REPLAY_SELECTION)
-    for selection, kernel, provider in (
-        (MVAU_COMPUTE_SELECTION, compute.id, DOT_PRODUCT_PROVIDER),
-        (MVAU_REPLAY_SELECTION, replay.id, REPLAY_PROVIDER),
-    ):
-        if provider_of(selection, kernel, provider) is None:
-            raise _fail(
-                "mvau-decomposed-provider-unavailable",
-                f"{kernel} does not declare the provider {provider}",
-            )
-    network = resolved.result.network
-    node_ids = {node.id for node in network.nodes}
-    if node_ids != {REPLAY_NODE, DOT_PRODUCT_NODE}:
-        raise _fail(
-            "mvau-decomposed-network-unsupported",
-            "this provider builds the two-node replay-plus-compute Network only",
-            (("nodes", tuple(sorted(node_ids))),),
-        )
-    # The node the assembly placed must be the Region the Kernel derived.  If
-    # these ever differ, the physical structure would describe something the
-    # semantics never agreed to.
-    for node_id, bound in ((DOT_PRODUCT_NODE, compute), (REPLAY_NODE, replay)):
-        if network.node(node_id).region != bound.region:
-            raise _fail(
-                "mvau-decomposed-region-not-the-kernels",
-                f"the {node_id} node is not the Region {bound.id} derived",
-            )
-    return network, compute, replay
+def _merge(items: tuple[_Provenance, ...]) -> _Provenance:
+    """The union, for an object that genuinely spans several bindings."""
+
+    def unique(values: tuple[object, ...]) -> tuple[object, ...]:
+        return tuple(dict.fromkeys(values))
+
+    return _Provenance(
+        cast("tuple[str, ...]", unique(tuple(v for i in items for v in i.regions))),
+        cast(
+            "tuple[MVAUSemanticPortRef, ...]",
+            unique(tuple(v for i in items for v in i.ports)),
+        ),
+        cast(
+            "tuple[QualifiedPath, ...]",
+            unique(tuple(v for i in items for v in i.decisions)),
+        ),
+        cast("tuple[str, ...]", unique(tuple(v for i in items for v in i.kernels))),
+    )
 
 
-def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboration:
+def _component(binding: KernelBinding, prefix: str, parent: str) -> MVAUPhysicalComponent:
+    """The Kernel's own component, placed under this source scope.
+
+    A Kernel names itself ``dot_product`` and knows nothing about where that
+    instance sits or what encloses it.  Both are this assembly's to supply: the
+    placement prefix, and the generated wrapper the two cores live inside.
+    """
+
+    (declared,) = type(binding.kernel).elaborate(binding)
+    return MVAUPhysicalComponent(
+        f"{prefix}.{declared.id}", declared.module, parent, declared.parameters
+    )
+
+
+def elaborate_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboration:
     """Elaborate the decomposed slice into a replay core and a dot-product core."""
 
-    network, compute_kernel, replay_kernel = _require_decomposed(resolved)
-    values = decomposed_provider_values(resolved)
-    replay_values, compute_values = _split(values)
+    bindings = bind_decomposed(resolved)
+    return compose(resolved, bindings)
 
-    replay_region = replay_kernel.region
-    compute_region = compute_kernel.region
+
+def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUPhysicalElaboration:
+    """Wire two bound Kernels into one physical elaboration."""
+
+    network = bindings.network
+    replay_region = bindings.replay.regions[0].region
+    compute_region = bindings.compute.regions[0].region
     activation_in = replay_region.input_interface("activation_in").port
     activation_out = replay_region.output_interface("activation_out").port
     dot_activation = compute_region.input_interface("activation").port
@@ -379,27 +290,26 @@ def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElabo
     source_id = resolved.result.source_association.source_node_id
     prefix = f"{source_id}.compute"
     wrapper_id = f"{prefix}.wrapper"
-    replay_id = f"{prefix}.replay"
-    dot_id = f"{prefix}.dot_product"
+    replay_component = _component(bindings.replay, prefix, wrapper_id)
+    dot_component = _component(bindings.compute, prefix, wrapper_id)
+    replay_id = replay_component.id
+    dot_id = dot_component.id
 
+    everything = {
+        **dict(bindings.replay.parameters),
+        **dict(bindings.compute.parameters),
+    }
     components = (
         MVAUPhysicalComponent(
             wrapper_id,
-            "finn.dataflow.mvau.decomposed_wrapper",
-            parameters=scalar_parameters(values),
+            WRAPPER_MODULE,
+            parameters=tuple(
+                (name, cast("bool | int | float | str", everything[name]))
+                for name in sorted(everything)
+            ),
         ),
-        MVAUPhysicalComponent(
-            replay_id,
-            "finn-rtllib.mvu.replay_buffer",
-            wrapper_id,
-            scalar_parameters(replay_values),
-        ),
-        MVAUPhysicalComponent(
-            dot_id,
-            "finnlib.rtl.dotp_axi",
-            wrapper_id,
-            scalar_parameters(compute_values),
-        ),
+        replay_component,
+        dot_component,
     )
     interfaces = (
         _numeric(
@@ -483,10 +393,10 @@ def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElabo
             "m_axis_output_tready",
         ),
     )
-    # Signal names are each core's own, not one convention imposed on all
-    # three.  ``replay_buffer`` predates the AXI naming and takes ``clk`` with
-    # an active-high ``rst``; the generated wrapper is what inverts the reset
-    # and bridges the two, so the model has to say which is which.
+    # Signal names are each core's own, not one convention imposed on all three.
+    # ``replay_buffer`` predates the AXI naming and takes ``clk`` with an
+    # active-high ``rst``; the generated wrapper is what inverts the reset and
+    # bridges the two, so the model has to say which is which.
     controls = (
         MVAUPhysicalControlInterface(
             f"{wrapper_id}.clock", wrapper_id, MVAUPhysicalControlKind.CLOCK, "ap_clk"
@@ -519,7 +429,8 @@ def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElabo
             "compute.wrapper_activation",
             (f"{wrapper_id}.activation", f"{replay_id}.activation_in"),
         ),
-        # The one internal edge the Network declares, realized.
+        # The one internal edge the Network declares, realized.  Neither Kernel
+        # absorbs it, so it is a connection rather than internal wiring.
         MVAUPhysicalConnection(
             "compute.replay_to_dot_product",
             (f"{replay_id}.activation_out", f"{dot_id}.activation"),
@@ -532,6 +443,7 @@ def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElabo
             "compute.wrapper_output", (f"{dot_id}.output", f"{wrapper_id}.output")
         ),
     )
+    interfaces_by_id = {item.id: item for item in interfaces}
     boundary_interface = {
         (REPLAY_NODE, "activation_in"): f"{wrapper_id}.activation",
         (DOT_PRODUCT_NODE, "weight"): f"{wrapper_id}.weight",
@@ -550,50 +462,68 @@ def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElabo
         resolved.result.source_association.source_node_id,
         *resolved.result.source_association.fused_source_node_ids,
     )
-    decisions = (
-        MVAU_COMPUTE_SELECTION.paths.kernel,
-        MVAU_REPLAY_SELECTION.paths.kernel,
-        DECOMPOSED_MVAU_KERNELS.pe.path,
-        DECOMPOSED_MVAU_KERNELS.simd.path,
-        DECOMPOSED_MVAU_KERNELS.compute_pumping.path,
-    )
-    kernels = (MVAUComputeKernelId.DOT_PRODUCT.value, ActivationReplayKernel.id)
-    providers = (DOT_PRODUCT_PROVIDER, REPLAY_PROVIDER)
+    # Provenance is per binding, not one payload shared by everything.  A single
+    # merged record makes the replay component claim the dot product's Kernel
+    # and the dot product claim the replay's, which is worse than saying
+    # nothing: it is a specific false statement about what realizes what.
+    by_component = {
+        replay_id: _provenance(
+            bindings.replay,
+            ActivationReplayKernel.id,
+            MVAU_REPLAY_SELECTION.paths.kernel,
+            network,
+        ),
+        dot_id: _provenance(
+            bindings.compute,
+            DotProductKernel.id,
+            MVAU_COMPUTE_SELECTION.paths.kernel,
+            network,
+        ),
+    }
+    # The wrapper and every connection through it span both, so their record is
+    # the union -- which is what a union is for, rather than the default.
+    everything_covered = _merge(tuple(by_component.values()))
+    by_component[wrapper_id] = everything_covered
 
     def association(
         physical_id: str,
-        regions: tuple[str, ...],
-        ports: tuple[MVAUSemanticPortRef, ...],
+        provenance: _Provenance,
+        ports: tuple[MVAUSemanticPortRef, ...] | None = None,
         edges: tuple[str, ...] = (),
     ) -> MVAUPhysicalAssociation:
         return MVAUPhysicalAssociation(
-            physical_id, owners, regions, ports, edges, decisions, kernels, providers
+            physical_id,
+            owners,
+            provenance.regions,
+            provenance.ports if ports is None else ports,
+            edges,
+            provenance.decisions,
+            provenance.kernels,
+            (),
         )
 
-    all_regions = (REPLAY_NODE, DOT_PRODUCT_NODE)
-    all_ports = tuple(
-        MVAUSemanticPortRef(node.id, interface.port.id)
-        for node in network.nodes
-        for interface in node.region.interfaces
-    )
     associations = (
-        *(association(component.id, all_regions, all_ports) for component in components),
+        *(association(item.id, by_component[item.id]) for item in components),
+        # An interface belongs to exactly one component, and its semantic ports
+        # are already declared on it -- so it inherits that component's record
+        # and narrows the ports to the ones it actually carries.
         *(
-            association(
-                interface.id,
-                tuple(sorted({port.region_id for port in interface.semantic_ports})),
-                interface.semantic_ports,
-            )
-            for interface in interfaces
+            association(item.id, by_component[item.component_id], item.semantic_ports)
+            for item in interfaces
         ),
+        # A connection spans the components it joins.
         *(
             association(
-                connection.id,
-                all_regions,
-                all_ports,
-                connection.semantic_edge_ids,
+                item.id,
+                _merge(
+                    tuple(
+                        by_component[interfaces_by_id[interface].component_id]
+                        for interface in item.interface_ids
+                    )
+                ),
+                edges=item.semantic_edge_ids,
             )
-            for connection in connections
+            for item in connections
         ),
     )
     return MVAUPhysicalElaboration(
@@ -618,11 +548,10 @@ def elaborate_mvau_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElabo
 class MVAUDecomposedArtifactRequirements:
     """Everything needed to produce the decomposed RTL, and nothing ambient.
 
-    Deliberately not ``MVAURTLArtifactRequirements``: that value exists to
-    drive the legacy ``MVAU_rtl`` custom op, which emits the fused core and
-    cannot emit this one.  The decomposed path generates its own top, so it
-    carries the generated text rather than the inputs to someone else's
-    generator.
+    Deliberately not ``MVAURTLArtifactRequirements``: that value exists to drive
+    the legacy ``MVAU_rtl`` custom op, which emits the fused core and cannot emit
+    this one.  The decomposed path generates its own top, so it carries the
+    generated text rather than the inputs to someone else's generator.
     """
 
     top_module_name: str
@@ -658,17 +587,17 @@ def build_decomposed_artifact_requirements(
             "mvau-decomposed-result-mismatch",
             "the elaboration does not belong to the selected semantic result",
         )
-    _, compute_kernel, replay_kernel = _require_decomposed(resolved)
+    bindings = bind_decomposed(resolved)
     top = f"{resolved.result.source_association.source_node_id}_decomposed"
     wrapper = elaboration.component(
         f"{resolved.result.source_association.source_node_id}.compute.wrapper"
     )
-    values = {name: cast(object, value) for name, value in wrapper.parameters}
-    replay_region = replay_kernel.region
-    compute_region = compute_kernel.region
+    replay_region = bindings.replay.regions[0].region
+    compute_region = bindings.compute.regions[0].region
     text = render_decomposed_wrapper(
         top,
-        values,
+        dict(bindings.replay.parameters),
+        dict(bindings.compute.parameters),
         activation_bits=replay_region.input_interface("activation_in").port.logical_beat_bits,
         weight_bits=compute_region.input_interface("weight").port.logical_beat_bits,
         output_bits=compute_region.output_interface("output").port.logical_beat_bits,
@@ -678,7 +607,7 @@ def build_decomposed_artifact_requirements(
         elaboration.target_fpga_part,
         elaboration.target_clock_period_ns,
         wrapper.parameters,
-        decomposed_source_manifest(finn_root, finnlib),
+        resolved_manifest(bindings, source_roots(finn_root, finnlib)),
         f"{top}.sv",
         text,
         elaboration,
@@ -694,7 +623,7 @@ def write_decomposed_artifact(
     generated wrapper last because it instantiates everything before it.
     """
 
-    verify_source_manifest(requirements.source_dependencies)
+    verify_manifest(requirements.source_dependencies)
     output = Path(output_directory).resolve()
     output.mkdir(parents=True, exist_ok=True)
     staged: list[str] = []
@@ -709,18 +638,11 @@ def write_decomposed_artifact(
 
 
 __all__ = [
-    "FINNLIB_DEFAULT_SUBDIRECTORY",
-    "FINNLIB_ROOT_VARIABLE",
-    "FINNLIB_SOURCE_FILES",
-    "FINN_SOURCE_FILES",
-    "REPLAY_PARAMETER_NAMES",
+    "WRAPPER_MODULE",
     "MVAUDecomposedArtifactRequirements",
     "build_decomposed_artifact_requirements",
-    "decomposed_provider_values",
-    "decomposed_source_manifest",
-    "elaborate_mvau_decomposed",
-    "finnlib_root",
+    "compose",
+    "elaborate_decomposed",
     "render_decomposed_wrapper",
-    "verify_source_manifest",
     "write_decomposed_artifact",
 ]

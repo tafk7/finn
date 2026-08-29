@@ -1,25 +1,32 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The MVAU standard streamed form as two Kernels and a Network.
+"""The MVAU standard streamed form as two Regions and a Network.
 
 ``ActivationReplayKernel`` presents each activation row once per neuron fold;
 ``DotProductKernel`` does the arithmetic.  The monolithic Region did both, with
 the replay hidden inside its schedule.
 
-Both are authored through ``KernelDesign``, so they read only what this module
-wires into them.  ``DotProductKernel`` owns ``pe`` and ``simd`` because it is
-the thing those numbers fold; ``ActivationReplayKernel`` owns nothing and
-derives its geometry from the folding it must feed.  That direction is the
-supply waterfall: a producer presents what its consumer's configuration
-requires, and never the reverse.
+Both are **semantic** declarations.  Despite the class name -- which survives
+until the migration renames it -- neither knows anything about hardware: no
+source files, no RTL parameters, no target coverage, no provider.  What they
+declare is a Region, the folding it is built from, what it requires supplied,
+and what it is required to compute.  ``DotProductKernel`` owns ``pe`` and
+``simd`` because it is the thing those numbers fold; ``ActivationReplayKernel``
+owns nothing and derives its geometry from the folding it must feed.  That
+direction is the supply waterfall: a producer presents what its consumer's
+configuration requires, and never the reverse.
+
+The hardware that realizes them -- ``DotpAxiKernel`` and ``ReplayBufferKernel``
+-- is declared here too, because this module is what knows the wiring, but it
+lives in :mod:`finn.dataflow.mvau.hardware` and imports these declarations
+rather than being part of them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import cast
-from enum import Enum
 
 from finn.dataflow.authoring.kernel_design import (
     KernelDesign,
@@ -27,30 +34,7 @@ from finn.dataflow.authoring.kernel_design import (
     kernel_namespace,
 )
 from finn.dataflow.authoring.op_design import ProblemProvenance
-from finn.dataflow.authoring.scope import Ref, divisors_of, finite
-from finn.dataflow.kernels import (
-    KERNEL_ID_SEMANTICS,
-    Kernel,
-    KernelDeclaration,
-    KernelSelection,
-)
-from finn.dataflow.mvau.compute_pool import (
-    REGION_FORM_EXPORT,
-    WEIGHT_INTERFACE,
-    MVAUComputeKernelId,
-)
-from finn.dataflow.mvau.rtl_parameters import (
-    DSP_VERSION,
-    dsp_version,
-    segment_length,
-    signed_activations,
-)
-from finn.dataflow.mvau.regions import (
-    MVAURegionDeclaration,
-    construct_activation_replay_region,
-    construct_dot_product_region,
-    construct_standard_mvau_weight_port,
-)
+from finn.dataflow.authoring.scope import Ref, divisors_of
 from finn.dataflow.design import (
     AbsenceMode,
     Answer,
@@ -60,11 +44,43 @@ from finn.dataflow.design import (
     EvaluatorSpec,
     QualifiedPath,
 )
+from finn.dataflow.hardware import ComputationContract, hardware_namespace
+from finn.dataflow.hardware.authoring import declare_hardware_kernel
+from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
+from finn.dataflow.kernels import (
+    KERNEL_ID_SEMANTICS,
+    Kernel,
+    KernelDeclaration,
+    KernelSelection,
+)
+from finn.dataflow.mvau.computation import (
+    ACTIVATION_REPLAY_COMPUTATION,
+    DOT_PRODUCT_COMPUTATION,
+)
+from finn.dataflow.mvau.compute_pool import (
+    REGION_FORM_EXPORT,
+    WEIGHT_INTERFACE,
+    MVAUComputeKernelId,
+)
+from finn.dataflow.mvau.hardware.dotp_axi import (
+    DotpAxiKernel,
+    covers_operand_types as dotp_axi_covers_operand_types,
+)
+from finn.dataflow.mvau.hardware.inputs import (
+    ActivationReplayHardwareInputs,
+    DotProductHardwareInputs,
+)
+from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.mvau.regions import (
+    MVAURegionDeclaration,
+    construct_activation_replay_region,
+    construct_dot_product_region,
+    construct_standard_mvau_weight_port,
+)
 from finn.dataflow.mvau_problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
     MVAUComputationProfile,
-    MVAUDspBlock,
     MVAUProblem,
 )
 from finn.dataflow.network import (
@@ -91,48 +107,28 @@ DOT_PRODUCT_NODE = "compute"
 #: The single internal edge.
 ACTIVATION_EDGE = "activation_replay"
 
-#: The two providers this slice targets.
-REPLAY_PROVIDER = "finn.rtl.replay_buffer"
-DOT_PRODUCT_PROVIDER = "finnlib.rtl.dotp_axi"
+#: Where the two physical Kernels are placed.
+HARDWARE_OWNER = "mvau.hardware"
 
-
-class ParameterOwnership(str, Enum):
-    """The four things a provider parameter is allowed to be.
-
-    Design note section 9.1: anything else is an undeclared derivation, which
-    is how ``SEGMENTLEN`` used to reach an artifact without ever appearing in
-    the design point.
-    """
-
-    PROBLEM = "projected problem data"
-    DECISION = "committed decision"
-    DERIVED = "derived property"
-    CONSTANT = "provider constant"
-
-
-@dataclass(frozen=True)
-class ProviderParameter:
-    """One RTL parameter and where its value is entitled to come from."""
-
-    name: str
-    ownership: ParameterOwnership
-    source: QualifiedPath | None = None
-    value: object | None = None
-    why: str = ""
-
-    def __post_init__(self) -> None:
-        constant = self.ownership is ParameterOwnership.CONSTANT
-        if constant and self.source is not None:
-            raise ValueError(f"{self.name} is a constant and cannot name a source path")
-        if not constant and self.source is None:
-            raise ValueError(f"{self.name} is {self.ownership.value} and must name a source path")
-        if constant and not self.why:
-            raise ValueError(f"{self.name} is a provider constant and must say why")
+#: Every physical Kernel that can cover the dot-product Region, as its
+#: graph-answerable operand-type predicate.
+#:
+#: This is the inventory the transitional admission bridge in
+#: ``DotProductKernel`` quantifies over.  It exists because inference asks an
+#: existential question -- can *anything* build this? -- that
+#: ``admissible_kernels`` cannot yet put to physical Kernels.  Each entry is the
+#: same function that Kernel's own coverage constraint uses, so the bridge and
+#: the coverage cannot drift apart.
+HARDWARE_OPERAND_TYPE_COVERAGE = (dotp_axi_covers_operand_types,)
 
 
 @dataclass(frozen=True)
 class DotProductInputs:
-    """What the dot-product Kernel is allowed to read."""
+    """What the dot-product Region declaration is allowed to read.
+
+    Target facts are absent on purpose.  A Region is the same Region on every
+    board; what a board can build is the physical Kernel's question.
+    """
 
     repetitions: Ref[int]
     matrix_width: Ref[int]
@@ -142,17 +138,14 @@ class DotProductInputs:
     output_element_type: Ref[NumericElementType]
     accumulator_element_type: Ref[NumericElementType]
     computation_profile: Ref[MVAUComputationProfile]
-    target_dsp_block: Ref[MVAUDspBlock]
-    target_clock_period_ns: Ref[float]
-    narrow_weights: Ref[bool]
 
 
 @dataclass(frozen=True)
 class ActivationReplayInputs:
-    """What the replay Kernel is allowed to read.
+    """What the replay Region declaration is allowed to read.
 
-    ``pe`` and ``simd`` arrive from the dot-product Kernel's choices, wired in
-    by the operation.  Replay does not decide them and does not name their
+    ``pe`` and ``simd`` arrive from the dot-product declaration's choices, wired
+    in by this module.  Replay does not decide them and does not name their
     paths; it is told what folding it has to feed.
     """
 
@@ -175,49 +168,15 @@ class DotProductKernel(Kernel):
         facts = design.inputs
         pe = design.choice("pe", int, domain=divisors_of(facts.matrix_height))
         simd = design.choice("simd", int, domain=divisors_of(facts.matrix_width))
-        pumping = design.choice("compute_pumping", bool, domain=finite((False, True)))
 
-        # Everything the provider needs that is neither projected nor decided
-        # is declared here, so no value reaches an artifact without appearing
-        # in the design point first.
-        # The operation reads these back by name when it assembles the provider
-        # table, so they are declared rather than bound to locals.
-        design.derived(
-            "dsp_version",
-            int,
-            dependencies={"target": facts.target_dsp_block},
-            evaluate=dsp_version,
-        )
-        design.derived(
-            "signed_activations",
-            bool,
-            dependencies={"activation": facts.activation_element_type},
-            evaluate=signed_activations,
-        )
-        design.derived(
-            "segment_length",
-            int,
-            dependencies={
-                "clock_period_ns": facts.target_clock_period_ns,
-                "pumping": pumping,
-                "simd": simd,
-            },
-            evaluate=segment_length,
-        )
-        # -- what the source must be for this Kernel to serve it at all ----
-        # Answerable from graph facts alone, so they gate inference.
+        # -- what the source must be for this Region to represent it at all --
+        # Answerable from graph facts alone, so they gate inference.  Both are
+        # statements about the *shape* of the computation, not about whether
+        # any hardware exists for it.
         design.source_constraint(
             "computation_supported",
             dependencies={"profile": facts.computation_profile},
             evaluate=lambda profile: profile is MVAUComputationProfile.ACCUMULATOR_INTEGER,
-        )
-        design.source_constraint(
-            "numeric_supported",
-            dependencies={
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-            },
-            evaluate=_numeric_supported,
         )
         design.source_constraint(
             "accumulator_output_type_supported",
@@ -227,38 +186,31 @@ class DotProductKernel(Kernel):
             },
             evaluate=lambda accumulator, output: accumulator == output,
         )
-
-        # -- what the provider can actually build --------------------------
-        # These read the target, a decision, or a derived property, so they are
-        # coverage questions rather than admission ones: a source this Kernel
-        # serves may still be unbuildable on a given board.
-        design.feasibility_constraint(
-            "target_supported",
-            dependencies={"target": facts.target_dsp_block},
-            evaluate=lambda target: target in DSP_VERSION,
-        )
-        design.feasibility_constraint(
-            "width_supported",
+        # TRANSITIONAL, and not a property of this Region.
+        #
+        # A ``DataflowRegion`` admits floating-point element types, and
+        # arithmetic behaviour is binding-owned, so "these operands are
+        # integers" is a statement about the hardware that exists, not about
+        # what this Region can represent.  What inference actually needs to ask
+        # is existential: *does some physical Kernel covering this Region handle
+        # these types?*  There is no generic bridge for that question yet --
+        # ``admissible_kernels`` sees semantic declarations only -- so the
+        # existential is spelled out here over a declared inventory.
+        #
+        # Adding a float Kernel therefore widens admission by extending
+        # ``HARDWARE_OPERAND_TYPE_COVERAGE``, not by editing this Region or the
+        # source matcher.  Delete this once admission can ask coverage directly.
+        design.source_constraint(
+            "some_hardware_covers_the_operand_types",
             dependencies={
-                "target": facts.target_dsp_block,
                 "activation": facts.activation_element_type,
                 "weight": facts.weight_element_type,
-                "accumulator": facts.accumulator_element_type,
-                "output": facts.output_element_type,
             },
-            evaluate=_width_supported,
+            evaluate=lambda activation, weight: any(
+                covers(activation, weight) for covers in HARDWARE_OPERAND_TYPE_COVERAGE
+            ),
         )
-        design.feasibility_constraint(
-            "narrow_weights_supported",
-            dependencies={"target": facts.target_dsp_block, "narrow": facts.narrow_weights},
-            evaluate=_narrow_weights_supported,
-        )
-        design.feasibility_constraint(
-            "pumping_supported",
-            dependencies={"pumping": pumping, "simd": simd},
-            evaluate=lambda pumping, simd: simd >= 2 if pumping else True,
-        )
-        design.provider(DOT_PRODUCT_PROVIDER)
+
         design.region(
             dependencies={
                 "repetitions": facts.repetitions,
@@ -271,6 +223,15 @@ class DotProductKernel(Kernel):
                 "simd": simd,
             },
             evaluate=construct_dot_product_region,
+        )
+        # What this Region's traffic is required to mean.  A physical Kernel
+        # declares what it implements and the two are compared, because equal
+        # beats over equal schedules do not imply equal arithmetic.
+        design.derived(
+            "computation",
+            ComputationContract,
+            dependencies={},
+            evaluate=lambda: DOT_PRODUCT_COMPUTATION,
         )
         design.demand(
             WEIGHT_INTERFACE,
@@ -285,8 +246,8 @@ class DotProductKernel(Kernel):
             evaluate=construct_standard_mvau_weight_port,
         )
         # The pool presents one region-form path across its members, and the
-        # operation reads it to decide the parameter topology and, now, whether
-        # a replay node belongs in the assembly.
+        # operation reads it to decide the parameter topology and whether a
+        # replay node belongs in the assembly.
         design.export(
             REGION_FORM_EXPORT,
             cast(
@@ -300,118 +261,13 @@ class DotProductKernel(Kernel):
             ),
         )
 
-    @classmethod
-    def provider_parameters(
-        cls, design_paths: DotProductPaths, problem: MVAUProblem
-    ) -> tuple[ProviderParameter, ...]:
-        """Every ``dotp_axi`` parameter, audited against section 9.1."""
-
-        return (
-            ProviderParameter("PE", ParameterOwnership.DECISION, design_paths.pe),
-            ProviderParameter("SIMD", ParameterOwnership.DECISION, design_paths.simd),
-            ProviderParameter(
-                "PUMPED_COMPUTE", ParameterOwnership.DECISION, design_paths.compute_pumping
-            ),
-            ProviderParameter(
-                "ACTIVATION_WIDTH",
-                ParameterOwnership.PROBLEM,
-                problem.activation_element_type.path,
-            ),
-            ProviderParameter(
-                "WEIGHT_WIDTH", ParameterOwnership.PROBLEM, problem.weight_element_type.path
-            ),
-            ProviderParameter(
-                "ACCU_WIDTH", ParameterOwnership.PROBLEM, problem.accumulator_element_type.path
-            ),
-            # No MW or MH: dotp_axi does not take them.  The fused wrapper did,
-            # only to derive SF and NF for the replay it contained -- which is
-            # now the replay Kernel's LEN and REP.  That absence is the
-            # decomposition showing up in the parameter list.
-            ProviderParameter("VERSION", ParameterOwnership.DERIVED, design_paths.dsp_version),
-            ProviderParameter(
-                "SIGNED_ACTIVATIONS",
-                ParameterOwnership.DERIVED,
-                design_paths.signed_activations,
-            ),
-            ProviderParameter(
-                "SEGMENTLEN", ParameterOwnership.DERIVED, design_paths.segment_length
-            ),
-            ProviderParameter(
-                "NARROW_WEIGHTS",
-                ParameterOwnership.DERIVED,
-                MVAU_EFFECTIVE_NARROW_WEIGHTS.path,
-            ),
-            ProviderParameter(
-                "ACTIVATION_BROADCASTING",
-                ParameterOwnership.CONSTANT,
-                value=1,
-                why=(
-                    "this slice covers the MVU form only; the VVU form is a separate "
-                    "question that must not be decided from the Boolean alone"
-                ),
-            ),
-            ProviderParameter(
-                "FORCE_BEHAVIORAL",
-                ParameterOwnership.CONSTANT,
-                value=0,
-                why="synthesis uses the inferred implementation; behavioural is a debug aid",
-            ),
-        )
-
-
-#: Multiplier operand and accumulator widths each DSP generation offers.
-_DSP_WIDTHS = {
-    MVAUDspBlock.DSP48E1: (25, 18, 48),
-    MVAUDspBlock.DSP48E2: (27, 18, 48),
-    MVAUDspBlock.DSP58: (27, 24, 58),
-}
-
-
-def _numeric_supported(activation: NumericElementType, weight: NumericElementType) -> object:
-    """The dot-product core multiplies integers, and needs at least two bits."""
-
-    return (
-        activation.type_id in {"int", "uint"}
-        and weight.type_id == "int"
-        and activation.bit_width >= 2
-        and weight.bit_width >= 2
-    )
-
-
-def _width_supported(
-    target: MVAUDspBlock,
-    activation: NumericElementType,
-    weight: NumericElementType,
-    accumulator: NumericElementType,
-    output: NumericElementType,
-) -> object:
-    """Whether the operands and accumulator fit the target's DSP datapath."""
-
-    a_width, b_width, p_width = _DSP_WIDTHS[target]
-    return (
-        2 <= weight.bit_width <= a_width
-        and 2 <= activation.bit_width <= b_width
-        and accumulator.bit_width <= p_width
-        and output.bit_width <= p_width
-    )
-
-
-def _narrow_weights_supported(target: MVAUDspBlock, narrow: bool) -> object:
-    """DSP48E1's narrower A port needs the minimum-value promise to pack.
-
-    This is coverage, not admission: the source is perfectly expressible, the
-    board just cannot build it without the stronger contract on the weights.
-    """
-
-    return narrow if target is MVAUDspBlock.DSP48E1 else True
-
 
 class ActivationReplayKernel(Kernel):
     """Present each activation row once per neuron fold.
 
-    Retained even at one neuron fold, where it is an identity: the Network
-    shape should not depend on the matrix geometry, and eliding the physical
-    buffer is a provider's decision, not a semantic one.
+    Retained even at one neuron fold, where it is an identity: the Network shape
+    should not depend on the matrix geometry, and eliding the physical buffer is
+    the hardware's business, not the semantics'.
     """
 
     id = "activation_replay"
@@ -431,98 +287,61 @@ class ActivationReplayKernel(Kernel):
             },
             evaluate=construct_activation_replay_region,
         )
-        # The buffer's three parameters are the folding restated in the RTL's
-        # own vocabulary, so they are derived, never decided.
         design.derived(
-            "buffer_length",
-            int,
-            dependencies={"matrix_width": facts.matrix_width, "simd": facts.simd},
-            evaluate=lambda matrix_width, simd: matrix_width // simd,
+            "computation",
+            ComputationContract,
+            dependencies={},
+            evaluate=lambda: ACTIVATION_REPLAY_COMPUTATION,
         )
-        design.derived(
-            "buffer_repetitions",
-            int,
-            dependencies={"matrix_height": facts.matrix_height, "pe": facts.pe},
-            evaluate=lambda matrix_height, pe: matrix_height // pe,
-        )
-        design.derived(
-            "buffer_width",
-            int,
-            dependencies={
-                "activation_element_type": facts.activation_element_type,
-                "simd": facts.simd,
-            },
-            evaluate=lambda activation_element_type, simd: simd * activation_element_type.bit_width,
-        )
-        design.provider(REPLAY_PROVIDER)
-
-    @classmethod
-    def provider_parameters(cls, design_paths: ReplayPaths) -> tuple[ProviderParameter, ...]:
-        """Every ``replay_buffer`` parameter, audited against section 9.1."""
-
-        return (
-            ProviderParameter("LEN", ParameterOwnership.DERIVED, design_paths.buffer_length),
-            ProviderParameter("REP", ParameterOwnership.DERIVED, design_paths.buffer_repetitions),
-            ProviderParameter("W", ParameterOwnership.DERIVED, design_paths.buffer_width),
-        )
-
-
-@dataclass(frozen=True)
-class DotProductPaths:
-    """Where each dot-product value lives, for the provider audit."""
-
-    pe: QualifiedPath
-    simd: QualifiedPath
-    compute_pumping: QualifiedPath
-    dsp_version: QualifiedPath
-    signed_activations: QualifiedPath
-    segment_length: QualifiedPath
-
-
-@dataclass(frozen=True)
-class ReplayPaths:
-    """Where each replay value lives, for the provider audit."""
-
-    buffer_length: QualifiedPath
-    buffer_repetitions: QualifiedPath
-    buffer_width: QualifiedPath
 
 
 @dataclass(frozen=True)
 class DecomposedMVAUKernels:
-    """The dot-product member, the replay pool, and the folding between them.
+    """The decomposed slice: two Region declarations and the hardware for them.
 
     The dot product is a *declaration*, not a pool: it belongs to the operation's
     one compute pool alongside the Kernels it is replacing.  Replay is its own
-    optional pool because it is a second node, present only when the compute
-    choice is the decomposed one.
+    pool because it is a second node, present only when the compute choice is
+    the decomposed one.
+
+    The two physical Kernels are not pools either.  Exactly one covers each
+    Region, so there is no choice to make and none is invented; their bindings
+    are derived.
     """
 
     dot_product: KernelDeclaration
     activation_replay: KernelSelection
+    dot_product_hardware: HardwareKernelDeclaration
+    replay_hardware: HardwareKernelDeclaration
     pe: Ref[int]
     simd: Ref[int]
     compute_pumping: Ref[bool]
-    dot_product_paths: DotProductPaths
-    replay_paths: ReplayPaths
 
-    def provider_parameters(
-        self, problem: MVAUProblem = MVAU_PROBLEM
-    ) -> tuple[ProviderParameter, ...]:
-        """Every parameter both providers consume, with its declared owner."""
+    @property
+    def hardware(self) -> tuple[HardwareKernelDeclaration, ...]:
+        return (self.dot_product_hardware, self.replay_hardware)
 
-        return (
-            *DotProductKernel.provider_parameters(self.dot_product_paths, problem),
-            *ActivationReplayKernel.provider_parameters(self.replay_paths),
+    @property
+    def coverage_constraints(self) -> tuple[QualifiedPath, ...]:
+        """Every physical coverage condition, for the operation's feasibility set.
+
+        Coverage is asked at feasibility rather than only at binding, so a point
+        that no hardware can build is refused while it is still a design point
+        -- not accepted, elaborated, and then rejected by a Kernel.
+        """
+
+        return tuple(
+            dict.fromkeys(path for item in self.hardware for path in item.coverage_constraints)
         )
 
 
-def _replay_applies(compute_pool: str) -> EvaluatorSpec[Answer[bool]]:
-    """Replay belongs in the assembly exactly when the compute is decomposed.
+def _decomposed_selected(compute_pool: str) -> EvaluatorSpec[Answer[bool]]:
+    """True exactly when the operation's compute choice is the decomposed one.
 
-    Gated on the compute *decision* rather than on the region form, because the
-    question is which Kernel was chosen, and reading the choice directly says
-    that without a derivation in between.
+    Gates the replay pool and both physical Kernels.  Read from the compute
+    *decision* rather than from a region form, because the question is which
+    alternative was chosen and reading the choice says that without a derivation
+    in between.
     """
 
     selected = DependencyRef.decision(
@@ -544,16 +363,16 @@ def build_decomposed_mvau_kernels(
     *,
     provenance: ProblemProvenance | None = None,
 ) -> DecomposedMVAUKernels:
-    """Declare both Kernels and wire the folding from consumer to producer.
+    """Declare both Regions, then the hardware that covers them.
 
-    ``compute_pool`` is the operation's one compute selection: the dot product
-    is declared inside it, beside the fused Kernels it replaces, so choosing
-    the decomposed implementation is the same kind of choice as choosing any
-    other -- not a different operation and not a second axis.
+    ``compute_pool`` is the operation's one compute selection: the dot product is
+    declared inside it, beside the fused Kernels it replaces, so choosing the
+    decomposed implementation is the same kind of choice as choosing any other.
 
-    The dot product is declared first because it owns the folding; the replay
-    Kernel is then told what that folding is.  Declaration order here is the
-    supply waterfall made literal.
+    Declaration order is the supply waterfall made literal.  The dot product is
+    declared first because it owns the folding; the replay Region is then told
+    what that folding is; the physical Kernels are declared last because they
+    import from both and contribute to neither.
     """
 
     dot_product, dot_product_design = declare_kernel_design(
@@ -568,19 +387,11 @@ def build_decomposed_mvau_kernels(
             output_element_type=problem.output_element_type,
             accumulator_element_type=problem.accumulator_element_type,
             computation_profile=problem.computation_profile,
-            # Both are optional problem fields, but a provider parameter that
-            # needs the target cannot be derived without it.  Requiring them at
-            # the use site makes the engine answer Unresolved with the missing
-            # field in the trace, instead of an evaluator guessing.
-            target_dsp_block=problem.target_dsp_block,
-            target_clock_period_ns=problem.target_clock_period_ns,
-            narrow_weights=MVAU_EFFECTIVE_NARROW_WEIGHTS,
         ),
         provenance=provenance,
     )
     pe = dot_product_design.handle("pe", int)
     simd = dot_product_design.handle("simd", int)
-    pumping = dot_product_design.handle("compute_pumping", bool)
     replay, replay_design = declare_kernel_design(
         ActivationReplayKernel,
         kernel_namespace(REPLAY_POOL, ActivationReplayKernel.id),
@@ -594,6 +405,44 @@ def build_decomposed_mvau_kernels(
         ),
         provenance=provenance,
     )
+
+    applies = _decomposed_selected(compute_pool)
+    dot_product_hardware, dotp_design = declare_hardware_kernel(
+        DotpAxiKernel,
+        hardware_namespace(HARDWARE_OWNER, DotpAxiKernel.id),
+        DotProductHardwareInputs(
+            region=dot_product_design.handle("region", DataflowRegion),
+            computation=dot_product_design.handle("computation", ComputationContract),
+            pe=pe,
+            simd=simd,
+            activation_element_type=problem.activation_element_type,
+            weight_element_type=problem.weight_element_type,
+            output_element_type=problem.output_element_type,
+            accumulator_element_type=problem.accumulator_element_type,
+            narrow_weights=MVAU_EFFECTIVE_NARROW_WEIGHTS,
+            # Both are optional problem fields, but a physical parameter that
+            # needs the target cannot be derived without it.  Requiring them at
+            # the use site makes the engine answer Unresolved with the missing
+            # field in the trace, instead of an evaluator guessing.
+            target_dsp_block=problem.target_dsp_block,
+            target_clock_period_ns=problem.target_clock_period_ns,
+        ),
+        applies_if=applies,
+    )
+    replay_hardware, _ = declare_hardware_kernel(
+        ReplayBufferKernel,
+        hardware_namespace(HARDWARE_OWNER, ReplayBufferKernel.id),
+        ActivationReplayHardwareInputs(
+            region=replay_design.handle("region", DataflowRegion),
+            computation=replay_design.handle("computation", ComputationContract),
+            matrix_width=problem.matrix_width,
+            matrix_height=problem.matrix_height,
+            pe=pe,
+            simd=simd,
+            activation_element_type=problem.activation_element_type,
+        ),
+        applies_if=applies,
+    )
     return DecomposedMVAUKernels(
         dot_product,
         KernelSelection(
@@ -605,24 +454,13 @@ def build_decomposed_mvau_kernels(
             # boundary, which is a different contract from the source's.  The
             # applicability gate already withholds the decision entirely for
             # every other compute Kernel.
-            applies_if=_replay_applies(compute_pool),
+            applies_if=applies,
         ),
+        dot_product_hardware,
+        replay_hardware,
         pe,
         simd,
-        pumping,
-        DotProductPaths(
-            pe.path,
-            simd.path,
-            pumping.path,
-            dot_product_design.handle("dsp_version", int).path,
-            dot_product_design.handle("signed_activations", bool).path,
-            dot_product_design.handle("segment_length", int).path,
-        ),
-        ReplayPaths(
-            replay_design.handle("buffer_length", int).path,
-            replay_design.handle("buffer_repetitions", int).path,
-            replay_design.handle("buffer_width", int).path,
-        ),
+        dotp_design.handle("compute_pumping", bool),
     )
 
 
@@ -677,20 +515,16 @@ def construct_decomposed_mvau_network(
 
 __all__ = [
     "ACTIVATION_EDGE",
+    "HARDWARE_OPERAND_TYPE_COVERAGE",
     "ActivationReplayInputs",
     "ActivationReplayKernel",
     "DOT_PRODUCT_NODE",
-    "DOT_PRODUCT_PROVIDER",
     "DecomposedMVAUKernels",
     "DotProductInputs",
     "DotProductKernel",
-    "DotProductPaths",
-    "ParameterOwnership",
-    "ProviderParameter",
+    "HARDWARE_OWNER",
     "REPLAY_NODE",
     "REPLAY_POOL",
-    "REPLAY_PROVIDER",
-    "ReplayPaths",
     "WEIGHT_INTERFACE",
     "build_decomposed_mvau_kernels",
     "construct_decomposed_mvau_network",

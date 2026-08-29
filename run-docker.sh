@@ -319,6 +319,16 @@ fi
 if [ -n "$LM_LICENSE_FILE" ]; then
   DOCKER_EXEC+="-e LM_LICENSE_FILE=$LM_LICENSE_FILE "
 fi
+# Forward the RTL fixtures' log-destination overrides. Without these the
+# documented `FIXTURE5_LOG=... bash run-docker.sh ...` invocation is silently
+# wrong: the variable never crosses into the container, the fixture writes to
+# its default path, and a sweep overwrites the evidence for every run but the
+# last -- with nothing to say it happened.
+for fixture_log in FIXTURE5_LOG FIXTURE6_LOG; do
+  if [ -n "${!fixture_log}" ]; then
+    DOCKER_EXEC+="-e $fixture_log=${!fixture_log} "
+  fi
+done
 # Optional host cache for torch.hub / huggingface weights to avoid CDN 504s
 # on parallel CI runs. Bind target is /finn_cache (NOT $HOME, because docker
 # creates bind parents as root and that would break pip install --user).

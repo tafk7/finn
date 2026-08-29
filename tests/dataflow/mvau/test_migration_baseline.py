@@ -48,10 +48,8 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
-from finn.dataflow.mvau.decomposed_provider import (
-    MVAUDecomposedArtifactRequirements,
-    finnlib_root,
-)
+from finn.dataflow.mvau.hardware.binding import finnlib_root
+from finn.dataflow.mvau.hardware.composition import MVAUDecomposedArtifactRequirements
 from finn.dataflow.ops.mvau import NetworkRef
 
 
@@ -157,8 +155,17 @@ def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
     }
 
 
-#: Every configuration the RTL matrix simulates, as it stood when fixture 5 and
-#: fixture 6 last passed together: FINN ``55f853ab6``, FinnLib ``97cdc4ee``.
+#: Every configuration the RTL matrix simulates.  Taken at FINN ``55f853ab6``
+#: with FinnLib ``97cdc4ee``, where fixture 5 and fixture 6 last passed together.
+#:
+#: **Phase 1+3 moved exactly one of these, on every configuration:**
+#: ``associations``.  It records the decision paths behind each physical object,
+#: and ``compute_pumping`` changed owner from the dot-product Region to the
+#: ``dotp_axi`` Kernel; the provider ids it also recorded are gone with the
+#: providers.  Every other value here -- both Regions, the Network, the source
+#: association, the manifest, the parameters, the components, the interfaces,
+#: the connections, the boundaries, the generated wrapper -- is byte-identical
+#: across that migration, which is the whole claim it was written to test.
 #:
 #: ``softvec`` and ``packed`` share all three semantic fingerprints, and
 #: ``packed`` and ``three_repetitions`` share their parameters.  Both are the
@@ -180,7 +187,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "b954f296f62e47fb",
             "connections": "315f5a4fead89a41",
             "boundaries": "d93fafe0914c3887",
-            "associations": "1444bf09933a90d7",
+            "associations": "43fc6c132eef7a09",
             "wrapper": "7c84810aee950733",
         },
     },
@@ -198,7 +205,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "10974902328b4ddf",
             "connections": "f54a3d78f385b0ad",
             "boundaries": "86e8517e03945509",
-            "associations": "59458025dbb515eb",
+            "associations": "13e3f529cead61a9",
             "wrapper": "cc613a698585a151",
         },
     },
@@ -216,7 +223,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "41dcdc2c96649be5",
             "connections": "c046ba0b8dd365c5",
             "boundaries": "667e8a513a7d78a8",
-            "associations": "ae1c29a985932f34",
+            "associations": "89e10da3576be82f",
             "wrapper": "ae2e0f9efb51edbd",
         },
     },
@@ -234,7 +241,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "a247a182419bdd77",
             "connections": "23f3e9df21ba7d83",
             "boundaries": "9e64c3ee18cb4316",
-            "associations": "3f50d66a364c892a",
+            "associations": "7ea760bb4db7cd0b",
             "wrapper": "b51f2dbae1f8826b",
         },
     },
@@ -252,7 +259,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "b5eb163f0011feb8",
             "connections": "bec46178ba047b3b",
             "boundaries": "a3b8ecd070f519e1",
-            "associations": "d550f91bb7d1c6bf",
+            "associations": "e1345b911f15448d",
             "wrapper": "e51e969edaca2760",
         },
     },
@@ -270,7 +277,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "d4db82222fd89522",
             "connections": "b7a0a11b90ebe3d1",
             "boundaries": "4050ecbd3636f989",
-            "associations": "63d37f74345885d7",
+            "associations": "e31605b025b110ce",
             "wrapper": "c68e96d55e1af932",
         },
     },
@@ -288,7 +295,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "95779a8114bf1f7f",
             "connections": "5323d92561033ffe",
             "boundaries": "d9dd74f985acabaf",
-            "associations": "e2fd5a53b99048a6",
+            "associations": "7807f51534e5f083",
             "wrapper": "deb3ca3b732bde2f",
         },
     },

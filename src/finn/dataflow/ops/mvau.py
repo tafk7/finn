@@ -48,6 +48,7 @@ from finn.dataflow.kernels import (
     KernelSelection,
     SelectedKernel,
 )
+from finn.dataflow.hardware import check_declared_references
 from finn.dataflow.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     FULL_TILE_WEIGHT_EXPORT,
@@ -55,7 +56,7 @@ from finn.dataflow.mvau.compute_kernels import (
     REGION_FORM_EXPORT,
     WEIGHT_INTERFACE,
 )
-from finn.dataflow.mvau.compute_kernels import MVAU_REPLAY_SELECTION
+from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_REPLAY_SELECTION
 from finn.dataflow.mvau.decomposed import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.weight_adapter_kernel import build_mvau_weight_adapter_selection
@@ -1005,12 +1006,26 @@ _OP_FEASIBILITY_CONSTRAINTS = tuple(
             *MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraints(),
             *MVAU_WEIGHT_ADAPTER_SELECTION.feasibility_constraints(),
             *MVAU_REPLAY_SELECTION.feasibility_constraints(),
+            # Physical coverage is a feasibility question, not only a binding
+            # one.  A point no hardware can build should be refused while it is
+            # still a design point, rather than resolved, elaborated, and then
+            # turned away by a Kernel that was never consulted.
+            *DECOMPOSED_MVAU_KERNELS.coverage_constraints,
             *_OP_STRUCTURAL_CONSTRAINTS,
         )
     )
 )
 
-_OP_DECISIONS = (
+#: Every choice that changes a Region or the Network.
+#:
+#: Structural readiness asks for exactly these.  A physical choice belongs in
+#: the artifact set below and nowhere near this one: ``compute_pumping`` changes
+#: how fast the datapath runs and moves no beat, so a point whose Regions and
+#: Network are fully derived is structurally ready whether or not anyone has
+#: decided to pump it.  Mixing the two made structural readiness answer ``None``
+#: for a design that had resolved perfectly, which defeats the separation this
+#: whole layer exists to draw.
+_SEMANTIC_DECISIONS = (
     MVAU_COMPUTE_SELECTION.paths.kernel,
     *(item.path for kernel in MVAU_COMPUTE_SELECTION.kernels for item in kernel.spec.decisions),
     MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel,
@@ -1024,7 +1039,15 @@ _OP_DECISIONS = (
     *(item.path for kernel in MVAU_REPLAY_SELECTION.kernels for item in kernel.spec.decisions),
 )
 
-_OP_PROPERTIES = (
+#: The physical Kernels' own choices.  There is no Kernel *selection* here --
+#: one covers each Region -- but the choices those Kernels make are ordinary
+#: decisions, and nothing can be built until they are committed.
+_PHYSICAL_DECISIONS = tuple(
+    item.path for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.spec.decisions
+)
+
+#: Every Region, Network, and association value the operation derives.
+_SEMANTIC_PROPERTIES = (
     MVAU_COMPUTE_SELECTION.paths.region,
     MVAU_COMPUTE_SELECTION.paths.selected_kernel,
     MVAUDataflowOpPaths.COMPUTE_REGION_FORM,
@@ -1039,6 +1062,16 @@ _OP_PROPERTIES = (
     MVAUDataflowOpPaths.RESULT,
 )
 
+#: Every physical value the decomposed hardware derives.  Artifact inputs, so a
+#: point is not ready to *build* until they resolve -- but it is ready to be a
+#: design long before that.
+_PHYSICAL_PROPERTIES = tuple(
+    item.path for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.spec.properties
+)
+
+_OP_DECISIONS = (*_SEMANTIC_DECISIONS, *_PHYSICAL_DECISIONS)
+_OP_PROPERTIES = (*_SEMANTIC_PROPERTIES, *_PHYSICAL_PROPERTIES)
+
 
 def _op_constraint_sets() -> tuple[ConstraintSet, ...]:
     return (
@@ -1051,8 +1084,8 @@ def _op_readiness_profiles() -> tuple[ReadinessProfile, ...]:
     return (
         ReadinessProfile(
             "mvau_op_structural",
-            decisions=_OP_DECISIONS,
-            properties=_OP_PROPERTIES,
+            decisions=_SEMANTIC_DECISIONS,
+            properties=_SEMANTIC_PROPERTIES,
             constraints=_OP_STRUCTURAL_CONSTRAINTS,
         ),
         ReadinessProfile(
@@ -1073,17 +1106,28 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
         constraint_sets=_op_constraint_sets(),
         readiness_profiles=_op_readiness_profiles(),
     )
-    return assemble_specs(
+    assembled = assemble_specs(
         (
             MVAU_COMPUTE_SELECTION.build_spec(),
             # Present only when the decomposed compute member is selected.
             MVAU_REPLAY_SELECTION.build_spec(),
+            # The hardware that covers the decomposed Regions, gated the same
+            # way.  Not a pool: one Kernel covers each Region, so there is no
+            # choice and the design space claims none.
+            *(item.spec for item in DECOMPOSED_MVAU_KERNELS.hardware),
             MVAU_WEIGHT_SUPPLY_SELECTION.build_spec(),
             MVAU_WEIGHT_ADAPTER_SELECTION.build_spec(),
             MVAU_PROBLEM_SPEC,
             additions,
         )
     )
+    # Every handle the physical Kernels read has to name something this space
+    # really declares, with the right kind and the right type.  ``Engine
+    # .validate`` cannot ask this -- a path a Kernel merely reads is not part of
+    # its own specification -- so a forgotten scope would validate cleanly here
+    # and fail at binding time with an engine request error instead.
+    check_declared_references(assembled, DECOMPOSED_MVAU_KERNELS.hardware)
+    return assembled
 
 
 MVAU_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()

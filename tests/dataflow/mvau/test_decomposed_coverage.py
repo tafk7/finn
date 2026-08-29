@@ -1,13 +1,26 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What ``DotProductKernel`` will and will not claim it can build.
+"""What the decomposed slice will and will not claim, and on which side.
 
-A Kernel that declares no conditions claims everything, which is worse than
-claiming nothing: the pool reports a design point feasible and the provider
-inventory overclaims what it can realize.  These pin the two halves of the
-split -- what the *source* must be for this Kernel to serve it at all, and what
-the *provider* can build on a given board.
+A declaration with no conditions claims everything, which is worse than claiming
+nothing: the design space reports a point feasible and the hardware overclaims
+what it can realize.  These pin the two halves of the split, which now fall on
+opposite sides of the semantic/physical line:
+
+- **the Region** says what the source must be for this to represent it at all:
+  the accumulator profile, integer operands, an output that *is* the
+  accumulator.  These gate inference, so they must be answerable from graph
+  facts alone.
+- **the Kernel** says what a given board can build: the DSP family, operand and
+  accumulator widths, the narrow-weight promise, pumping, and a minimum operand
+  width.  These read the target or a physical choice, so they are coverage
+  questions and must never remove a graph from inference.
+
+The line moved during Phase 1+3 and one case moved with it in two pieces:
+operand *integrality* is the Region's -- a float MatMul is not a dot-product
+Region badly implemented, it is not one at all -- while the two-bit *minimum*
+is this multiplier's.
 """
 
 from __future__ import annotations
@@ -16,16 +29,24 @@ import pytest
 
 from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.authoring import assemble_specs
-from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath
+from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import (
+    HARDWARE_OPERAND_TYPE_COVERAGE,
     ActivationReplayKernel,
     DecomposedMVAUKernels,
     DotProductKernel,
+)
+from finn.dataflow.mvau.hardware.dotp_axi import (
+    covers_operand_types,
+    covers_operand_types as dotp_axi_covers_operand_types,
+)
+from finn.dataflow.ops.mvau import (
+    MVAU_DATAFLOW_OP_SPEC,
 )
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,
@@ -42,6 +63,32 @@ INT64 = NumericElementType("int", 64)
 UINT8 = NumericElementType("uint", 8)
 FLOAT16 = NumericElementType("float", 16)
 BIPOLAR = NumericElementType("bipolar", 1)
+
+
+def _problem(
+    activation: NumericElementType = INT8,
+    weight: NumericElementType = INT8,
+    accumulator: NumericElementType = INT16,
+    output: NumericElementType = INT16,
+    profile: MVAUComputationProfile = MVAUComputationProfile.ACCUMULATOR_INTEGER,
+    target: MVAUDspBlock = MVAUDspBlock.DSP58,
+    narrow: bool = False,
+) -> dict[QualifiedPath, object]:
+    return {
+        MVAUProblemPaths.REPETITIONS: 2,
+        MVAUProblemPaths.MATRIX_WIDTH: 8,
+        MVAUProblemPaths.MATRIX_HEIGHT: 4,
+        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE: activation,
+        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE: weight,
+        MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE: accumulator,
+        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE: output,
+        MVAUProblemPaths.COMPUTATION_PROFILE: profile,
+        MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: True,
+        MVAUProblemPaths.RUNTIME_WRITABLE: False,
+        MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM: narrow,
+        MVAUProblemPaths.TARGET_DSP_BLOCK: target,
+        MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: 4.0,
+    }
 
 
 def _point(
@@ -65,25 +112,13 @@ def _point(
                 compute_pool_context(),
                 MVAU_COMPUTE_SELECTION.build_spec(),
                 MVAU_REPLAY_SELECTION.build_spec(),
+                *(item.spec for item in DECOMPOSED_MVAU_KERNELS.hardware),
             )
         )
     )
-    problem: dict[QualifiedPath, object] = {
-        MVAUProblemPaths.REPETITIONS: 2,
-        MVAUProblemPaths.MATRIX_WIDTH: 8,
-        MVAUProblemPaths.MATRIX_HEIGHT: 4,
-        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE: activation,
-        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE: weight,
-        MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE: accumulator,
-        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE: output,
-        MVAUProblemPaths.COMPUTATION_PROFILE: profile,
-        MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: True,
-        MVAUProblemPaths.RUNTIME_WRITABLE: False,
-        MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM: narrow,
-        MVAUProblemPaths.TARGET_DSP_BLOCK: target,
-        MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: 4.0,
-    }
-    point = engine.start(space, problem)
+    point = engine.start(
+        space, _problem(activation, weight, accumulator, output, profile, target, narrow)
+    )
     point = engine.commit_assignments(
         point,
         {
@@ -98,24 +133,38 @@ def _point(
 
 
 def _rejected(engine: Engine, point: DesignPoint, pools: DecomposedMVAUKernels) -> set[str]:
-    assessment = engine.evaluate_constraint_set(
-        point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
-    )
-    return {
-        str(path).rsplit(".", 1)[-1]
-        for path, answer in assessment.answers.items()
+    """Everything refusing this point, from both halves of the split.
+
+    Asking only the pool would silently stop testing everything that moved to
+    the hardware, and the file would keep passing while checking less.
+
+    The two halves need different rules, because ``Absent`` means different
+    things in them.  The pool's set spans *every* member, so a constraint
+    belonging to a Kernel this point did not select is legitimately absent --
+    only a flat ``False`` is a refusal there.  The hardware constraints are all
+    the selected Kernel's own, so an ``Absent`` among them can only have come
+    from a ``reject(...)`` inside the evaluator, which is a refusal carrying a
+    reason.
+    """
+
+    pool = engine.evaluate_constraint_set(point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set)
+    hardware = engine.evaluate_constraints(point, DECOMPOSED_MVAU_KERNELS.coverage_constraints)
+    refused = {
+        str(path)
+        for path, answer in pool.answers.items()
         if isinstance(answer, Decided) and answer.value is False
+    } | {
+        str(path)
+        for path, answer in hardware.answers.items()
+        if not isinstance(answer, Unresolved)
+        and not (isinstance(answer, Decided) and answer.value is True)
     }
+    return {path.rsplit(".", 1)[-1] for path in refused}
 
 
 def _feasible(**overrides: object) -> bool:
     engine, point, pools = _point(**overrides)  # type: ignore[arg-type]
-    return (
-        engine.evaluate_constraint_set(
-            point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
-        ).verdict
-        is True
-    )
+    return not _rejected(engine, point, pools)
 
 
 # -- the baseline the rest is measured against -------------------------------
@@ -143,11 +192,73 @@ def test_only_the_accumulator_profile_is_served(profile: MVAUComputationProfile)
     ("activation", "weight"),
     [(FLOAT16, FLOAT16), (INT8, FLOAT16), (BIPOLAR, BIPOLAR), (INT8, BIPOLAR)],
 )
-def test_non_integer_operands_are_refused(
+def test_operands_no_hardware_can_multiply_are_not_admitted(
     activation: NumericElementType, weight: NumericElementType
 ) -> None:
+    """Inference must not lower a MatMul nothing can build.
+
+    The condition is existential over the hardware inventory, not a property of
+    the Region: a float dot product is a Region FINN has no Kernel for, and it
+    becomes admissible the day one is added.
+    """
+
     engine, point, pools = _point(activation=activation, weight=weight)
-    assert "numeric_supported" in _rejected(engine, point, pools)
+    assert "some_hardware_covers_the_operand_types" in _rejected(engine, point, pools)
+
+
+def test_operand_types_and_widths_are_both_the_hardwares() -> None:
+    """Neither is a Region restriction; both are coverage on ``dotp_axi``.
+
+    A ``DataflowRegion`` admits floating-point element types and arithmetic is
+    binding-owned, so putting integrality on the declaration would have said
+    something false about what a Region can be -- and would have made a float
+    Kernel unaddable without editing the Region.
+    """
+
+    coverage = {
+        str(path).rsplit(".", 1)[-1]
+        for path in DECOMPOSED_MVAU_KERNELS.dot_product_hardware.coverage_constraints
+    }
+    assert {"operand_types_supported", "operand_widths_supported"} <= coverage
+
+    semantic = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
+    names = {str(path).rsplit(".", 1)[-1] for path in semantic.source_admission_constraints}
+    assert "operand_types_supported" not in names
+    assert "operand_widths_supported" not in names
+
+
+def test_the_hardware_does_not_claim_types_it_cannot_multiply() -> None:
+    """The bug the split exposed in the other direction.
+
+    With integrality on the Region, ``dotp_axi`` had no type coverage at all and
+    answered True for FLOAT16 -- the declaration refused float while the Kernel
+    claimed it.
+    """
+
+    engine, point, pools = _point(activation=FLOAT16, weight=FLOAT16)
+    assert "operand_types_supported" in _rejected(engine, point, pools)
+    assert covers_operand_types(INT8, INT8) is True
+    assert covers_operand_types(FLOAT16, FLOAT16) is False
+
+
+def test_admission_quantifies_over_the_declared_hardware_inventory() -> None:
+    """Adding a Kernel widens admission; it does not edit the Region.
+
+    Pinning the mechanism, not just the outcome: the bridge asks each entry in
+    the inventory, and each entry is the same predicate that Kernel's own
+    coverage constraint uses, so the two cannot drift.
+    """
+
+    assert dotp_axi_covers_operand_types in HARDWARE_OPERAND_TYPE_COVERAGE
+    assert any(covers(INT8, INT8) for covers in HARDWARE_OPERAND_TYPE_COVERAGE)
+    assert not any(covers(FLOAT16, FLOAT16) for covers in HARDWARE_OPERAND_TYPE_COVERAGE)
+
+
+def test_a_one_bit_operand_is_a_hardware_limit_not_a_source_one() -> None:
+    """The Region is expressible; this multiplier is what cannot take it."""
+
+    engine, point, pools = _point(activation=NumericElementType("int", 1))
+    assert "operand_widths_supported" in _rejected(engine, point, pools)
 
 
 def test_unsigned_activations_are_served() -> None:
@@ -219,9 +330,39 @@ def test_pumping_needs_at_least_two_lanes() -> None:
     assert _feasible(simd=1, pumping=False) is True
 
 
-def test_the_kernel_declares_both_kinds_of_condition() -> None:
-    """The regression this file exists for: a Kernel with no conditions at all."""
+def test_no_physical_path_appears_in_the_structural_profile() -> None:
+    """Stated over the declaration, so it cannot regress by accident."""
 
-    declaration = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
-    assert declaration.source_admission_constraints
-    assert len(declaration.feasibility_constraints) > len(declaration.source_admission_constraints)
+    profile = next(
+        item
+        for item in MVAU_DATAFLOW_OP_SPEC.readiness_profiles
+        if item.name == "mvau_op_structural"
+    )
+    physical = {kernel.namespace for kernel in DECOMPOSED_MVAU_KERNELS.hardware}
+    for path in (*profile.decisions, *profile.properties):
+        assert not any(str(path).startswith(f"{owner}.") for owner in physical), path
+        assert not any(str(path).startswith(f"semantic.{owner}.") for owner in physical), path
+
+
+def test_both_sides_declare_conditions_and_neither_declares_the_others() -> None:
+    """The regression this file exists for, restated across the new line.
+
+    Before Phase 1+3 one declaration carried both kinds and the test compared
+    their counts.  Now they are two objects, and what matters is that each has
+    conditions of its own kind and none of the other's -- a Region that read the
+    target, or a Kernel that gated inference, would be the split undone.
+    """
+
+    semantic = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
+    assert semantic.source_admission_constraints
+    assert DECOMPOSED_MVAU_KERNELS.dot_product_hardware.coverage_constraints
+
+    # The Region reads no target and no decision -- checked above for admission,
+    # asserted here for every condition it has, because it now has only those.
+    physical_paths = {
+        MVAUProblemPaths.TARGET_DSP_BLOCK,
+        MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS,
+    }
+    for constraint in semantic.spec.constraints:
+        read = {item.path for item in constraint.evaluator.dependencies}
+        assert not read & physical_paths, constraint.path

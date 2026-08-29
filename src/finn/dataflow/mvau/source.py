@@ -77,10 +77,13 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-#: v8 adds the decomposed compute member, the replay decision and its node
-#: attribute, a Region form, and a Network result topology.  A v7 selection
-#: cannot describe any of those, so it is not reinterpretable as one.
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v8"
+#: v9 moves the decomposed compute's physical half onto its own Kernels: the
+#: pumping choice changes owner, path, and node attribute, and the coverage
+#: conditions it used to carry are now the hardware's.  A v8 selection names
+#: ``dataflow_dot_product_pumping``, which no longer exists, so it is rejected
+#: rather than reinterpreted -- the value is the same but the thing that owns it
+#: is not, and silently rehoming a choice is how provenance stops being true.
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v9"
 MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
     {
         "noActivation": ("i", False, 1, {0, 1}),

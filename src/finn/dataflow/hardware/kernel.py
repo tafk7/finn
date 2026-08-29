@@ -44,6 +44,7 @@ from finn.dataflow.design import (
     Answer,
     Decided,
     DependencyKind,
+    DependencyRef,
     DesignPoint,
     DesignSpaceSpec,
     Engine,
@@ -580,6 +581,49 @@ class HardwareKernelDeclaration:
             if parameter.source is not None:
                 referenced.append((f"parameter {parameter.name!r}", parameter.source))
         return tuple(referenced)
+
+    @property
+    def imported_decisions(self) -> tuple[QualifiedPath, ...]:
+        """Every decision this Kernel reads but does not own.
+
+        Both routes count, and each catches what the other misses.  A fold can
+        reach a Kernel through a derived property without ever being a parameter
+        -- ``SIMD`` sizes the replay buffer that way, and appears in none of its
+        three RTL parameters -- or it can be driven straight into the RTL and
+        read nowhere else, which is how ``PE`` reaches ``dotp_axi``.  Scanning
+        only the specification loses the second; only the parameters, the first.
+
+        Provenance is what this is for.  Hardware whose record omits the folding
+        it was built around is hardware nobody can trace.
+        """
+
+        owned = {item.path for item in self.spec.decisions}
+        found = [
+            path
+            for path, kind in self._read_declarations()
+            if kind is DependencyKind.DECISION and path not in owned
+        ]
+        return tuple(dict.fromkeys(found))
+
+    def _read_declarations(self) -> list[tuple[QualifiedPath, DependencyKind]]:
+        """Every declaration this Kernel reads, by whichever route."""
+
+        groups: list[tuple[DependencyRef, ...]] = []
+        for decision in self.spec.decisions:
+            groups.append(decision.domain.dependencies)
+            if decision.applies_if is not None:
+                groups.append(decision.applies_if.dependencies)
+        for item in self.spec.properties:
+            groups.append(item.evaluator.dependencies)
+            if item.applies_if is not None:
+                groups.append(item.applies_if.dependencies)
+        for constraint in self.spec.constraints:
+            groups.append(constraint.evaluator.dependencies)
+            if constraint.applies_if is not None:
+                groups.append(constraint.applies_if.dependencies)
+        read = [(item.path, item.kind) for group in groups for item in group]
+        read.extend((item.path, item.kind) for _, item in self.references)
+        return read
 
     @property
     def parameter_names(self) -> tuple[str, ...]:

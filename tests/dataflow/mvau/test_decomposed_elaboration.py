@@ -22,7 +22,7 @@ from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - fixtures come wit
     _model,
     _wrapped,
 )
-from finn.dataflow.design import Decided, QualifiedPath
+from finn.dataflow.design import QualifiedPath
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
@@ -32,24 +32,35 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUWeightSource,
 )
 from finn.dataflow.mvau.decomposed import (
-    DOT_PRODUCT_PROVIDER,
-    REPLAY_PROVIDER,
-    ParameterOwnership,
+    ACTIVATION_EDGE,
+    DOT_PRODUCT_NODE,
+    REPLAY_NODE,
+    DotProductKernel,
 )
-from finn.dataflow.mvau.decomposed_provider import (
-    FINNLIB_SOURCE_FILES,
-    FINN_SOURCE_FILES,
-    REPLAY_PARAMETER_NAMES,
-    build_decomposed_artifact_requirements,
-    decomposed_provider_values,
-    decomposed_source_manifest,
-    elaborate_mvau_decomposed,
+from finn.dataflow.mvau.elaboration import (
+    MVAUElaborationError,
+    MVAUPhysicalAssociation,
+    MVAUSemanticPortRef,
+)
+from finn.dataflow.mvau.hardware.binding import (
+    bind_decomposed,
     finnlib_root,
-    verify_source_manifest,
+    resolved_manifest,
+    source_roots,
+    verify_manifest,
+)
+from finn.dataflow.mvau.hardware.composition import (
+    build_decomposed_artifact_requirements,
+    elaborate_decomposed,
     write_decomposed_artifact,
 )
-from finn.dataflow.mvau.elaboration import MVAUElaborationError
-from finn.dataflow.mvau.providers import MVAU_COMPUTE_ELABORATORS, elaborate_mvau
+from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
+from finn.dataflow.mvau.hardware.replay_buffer import FINN_SOURCES
+from finn.dataflow.mvau.providers import (
+    MVAU_HARDWARE_ELABORATORS,
+    MVAU_PROVIDER_ELABORATORS,
+    elaborate_mvau,
+)
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION, NetworkRef
 
@@ -101,14 +112,25 @@ def test_elaboration_follows_the_selected_kernel() -> None:
     assert fused == {"finn-rtllib.mvu.mvu_vvu_axi", "finn.rtl.mvau.generated_wrapper"}
 
 
-def test_every_dispatchable_provider_is_one_a_kernel_declares() -> None:
-    """A table entry naming a provider no Kernel publishes is dead dispatch."""
+def test_dispatch_is_split_between_the_migrated_and_legacy_paths() -> None:
+    """The decomposed member routes by Kernel id; the fused ones by provider.
+
+    A member in both tables would be ambiguous, and a provider entry no Kernel
+    publishes is dead dispatch.
+    """
 
     published = {
         provider.id for kernel in MVAU_COMPUTE_SELECTION.kernels for provider in kernel.providers
     }
-    assert set(MVAU_COMPUTE_ELABORATORS) <= published
-    assert {SOFT_VECTOR_PROVIDER_ID, DOT_PRODUCT_PROVIDER} <= set(MVAU_COMPUTE_ELABORATORS)
+    assert set(MVAU_PROVIDER_ELABORATORS) <= published
+    assert SOFT_VECTOR_PROVIDER_ID in MVAU_PROVIDER_ELABORATORS
+
+    kernel_ids = {kernel.id for kernel in MVAU_COMPUTE_SELECTION.kernels}
+    assert set(MVAU_HARDWARE_ELABORATORS) <= kernel_ids
+    assert DotProductKernel.id in MVAU_HARDWARE_ELABORATORS
+    # The migrated member declares no provider at all, so it cannot be reached
+    # through the legacy half even by accident.
+    assert MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id).providers == ()
 
 
 def test_a_kernel_with_no_covered_provider_is_refused_not_guessed() -> None:
@@ -132,9 +154,9 @@ def test_a_kernel_with_no_covered_provider_is_refused_not_guessed() -> None:
     assert any("no-covered-provider" in item.code for item in raised.value.findings)
 
 
-def test_the_decomposed_provider_refuses_a_fused_point() -> None:
+def test_the_decomposed_hardware_refuses_a_fused_point() -> None:
     with pytest.raises(MVAUElaborationError):
-        elaborate_mvau_decomposed(_softvec_resolved())
+        elaborate_decomposed(_softvec_resolved())
 
 
 # -- the physical structure --------------------------------------------------
@@ -183,10 +205,114 @@ def test_each_core_declares_its_own_control_signal_names() -> None:
     assert "ap_clk2x" not in by_component[f"{prefix}.replay"]
 
 
-def test_the_origin_records_both_kernels_and_both_providers() -> None:
+def test_the_origin_records_both_semantic_kernels_and_no_provider() -> None:
     origin = elaborate_mvau(_resolved()).origin
     assert set(origin.kernel_ids) == {"dot_product", "activation_replay"}
-    assert set(origin.provider_ids) == {DOT_PRODUCT_PROVIDER, REPLAY_PROVIDER}
+    # The migrated path has no providers to record.  An empty tuple here is the
+    # migration visible in the provenance.
+    assert origin.provider_ids == ()
+
+
+def test_the_binding_records_the_hardware_that_realized_each_region() -> None:
+    """What the origin no longer says, the bindings do -- and more precisely."""
+
+    bindings = bind_decomposed(_resolved())
+    assert bindings.compute.kernel_id == "dotp_axi"
+    assert bindings.replay.kernel_id == "replay_buffer"
+    assert bindings.compute.node_ids == ("compute",)
+    assert bindings.replay.node_ids == ("replay",)
+    # Each Kernel was told which node fills its role, and recorded exactly that.
+    assert bindings.compute.regions[0].role == "compute"
+    assert bindings.replay.regions[0].role == "replay"
+
+
+def _association(source: str, physical_id: str) -> MVAUPhysicalAssociation:
+    elaboration = elaborate_mvau(_resolved())
+    return next(
+        item for item in elaboration.associations if item.physical_id == f"{source}.{physical_id}"
+    )
+
+
+def test_each_component_is_associated_with_its_own_kernel_and_region_only() -> None:
+    """One shared payload made every object claim everything.
+
+    That is worse than recording nothing: it is a specific false statement --
+    the replay component claiming ``DotpAxiKernel``, the dot product claiming
+    ``ReplayBufferKernel``, and each claiming both Regions.
+    """
+
+    source = _resolved().result.source_association.source_node_id
+    replay = _association(source, "compute.replay")
+    dot = _association(source, "compute.dot_product")
+
+    assert replay.kernel_ids == ("activation_replay", "replay_buffer")
+    assert replay.semantic_region_ids == (REPLAY_NODE,)
+    assert {port.region_id for port in replay.semantic_ports} == {REPLAY_NODE}
+
+    assert dot.kernel_ids == ("dot_product", "dotp_axi")
+    assert dot.semantic_region_ids == (DOT_PRODUCT_NODE,)
+    assert {port.region_id for port in dot.semantic_ports} == {DOT_PRODUCT_NODE}
+
+    # Neither claims the other's hardware.
+    assert "dotp_axi" not in replay.kernel_ids
+    assert "replay_buffer" not in dot.kernel_ids
+
+
+def test_every_choice_behind_a_component_is_recorded_against_it() -> None:
+    """Including the ones it imports: a fold sizes hardware it did not pick."""
+
+    source = _resolved().result.source_association.source_node_id
+    replay = {str(path) for path in _association(source, "compute.replay").decision_paths}
+    dot = {str(path) for path in _association(source, "compute.dot_product").decision_paths}
+    folding = {"mvau.compute.dot_product.pe", "mvau.compute.dot_product.simd"}
+
+    # Both cores are dimensioned by the folding, so both record it.
+    assert folding <= replay
+    assert folding <= dot
+    # Each records the selection that put it there.
+    assert "mvau.replay.kernel" in replay
+    assert "mvau.compute.kernel" in dot
+    # Pumping configured the dot product and nothing else.
+    assert "mvau.hardware.dotp_axi.compute_pumping" in dot
+    assert "mvau.hardware.dotp_axi.compute_pumping" not in replay
+
+
+def test_the_wrapper_and_the_internal_edge_span_both_bindings() -> None:
+    """A union where a union is true, rather than as the default everywhere."""
+
+    source = _resolved().result.source_association.source_node_id
+    wrapper = _association(source, "compute.wrapper")
+    edge = next(
+        item
+        for item in elaborate_mvau(_resolved()).associations
+        if item.physical_id == "compute.replay_to_dot_product"
+    )
+
+    for item in (wrapper, edge):
+        assert set(item.semantic_region_ids) == {REPLAY_NODE, DOT_PRODUCT_NODE}
+        assert set(item.kernel_ids) == {
+            "activation_replay",
+            "replay_buffer",
+            "dot_product",
+            "dotp_axi",
+        }
+    assert edge.semantic_edge_ids == (ACTIVATION_EDGE,)
+
+
+def test_an_interface_is_associated_with_the_component_that_carries_it() -> None:
+    source = _resolved().result.source_association.source_node_id
+    replay_input = _association(source, "compute.replay.activation_in")
+
+    assert replay_input.kernel_ids == ("activation_replay", "replay_buffer")
+    assert replay_input.semantic_ports == (MVAUSemanticPortRef(REPLAY_NODE, "activation_in"),)
+
+
+def test_each_binding_states_the_arithmetic_it_implements() -> None:
+    """Equal traffic does not imply equal computation, so both sides declare."""
+
+    bindings = bind_decomposed(_resolved())
+    assert bindings.compute.origin().computations == (("compute", "mvau.dot_product:1"),)
+    assert bindings.replay.origin().computations == (("replay", "mvau.activation_replay:1"),)
 
 
 # -- parameter provenance ----------------------------------------------------
@@ -195,13 +321,17 @@ def test_the_origin_records_both_kernels_and_both_providers() -> None:
 def test_every_parameter_reaching_the_rtl_came_from_the_point() -> None:
     """The Phase F obligation, stated directly.
 
-    The declared table is the *only* source: if elaboration invented a value,
+    The declared tables are the *only* source: if elaboration invented a value,
     or dropped one, these two sets would differ.
     """
 
     resolved = _resolved()
-    declared = {item.name for item in DECOMPOSED_MVAU_KERNELS.provider_parameters()}
-    assert set(decomposed_provider_values(resolved)) == declared
+    declared = {
+        item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
+    }
+    bindings = bind_decomposed(resolved)
+    resolved_names = {name for binding in bindings.bindings for name, _ in binding.parameters}
+    assert resolved_names == declared
 
     wrapper = elaborate_mvau(resolved).component(
         f"{resolved.result.source_association.source_node_id}.compute.wrapper"
@@ -213,45 +343,34 @@ def test_the_cores_are_given_their_own_parameters_only() -> None:
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
     prefix = f"{resolved.result.source_association.source_node_id}.compute"
+    replay_names = set(DECOMPOSED_MVAU_KERNELS.replay_hardware.parameter_names)
 
     replay = elaboration.component(f"{prefix}.replay")
-    assert {name for name, _ in replay.parameters} == set(REPLAY_PARAMETER_NAMES)
+    assert {name for name, _ in replay.parameters} == replay_names
 
     dot_product = elaboration.component(f"{prefix}.dot_product")
     names = {name for name, _ in dot_product.parameters}
-    assert not names & set(REPLAY_PARAMETER_NAMES)
+    assert not names & replay_names
     # dotp_axi does not take the matrix geometry; the fused core needed it only
     # to size the replay it contained.
     assert not names & {"MW", "MH", "IS_MVU"}
 
 
-def test_the_derived_parameters_are_read_not_recomputed() -> None:
-    """``VERSION``, ``SIGNED_ACTIVATIONS`` and ``SEGMENTLEN`` name properties."""
-
-    by_name = {item.name: item for item in DECOMPOSED_MVAU_KERNELS.provider_parameters()}
-    for name in ("VERSION", "SIGNED_ACTIVATIONS", "SEGMENTLEN"):
-        assert by_name[name].ownership is ParameterOwnership.DERIVED
-        assert by_name[name].source is not None
-
-    values = decomposed_provider_values(_resolved())
-    resolved = _resolved()
-    for name in ("VERSION", "SIGNED_ACTIVATIONS", "SEGMENTLEN"):
-        source = by_name[name].source
-        assert source is not None
-        answer = resolved.engine.query_property(resolved.point, source)
-        assert isinstance(answer, Decided)
-        assert values[name] == answer.value
-
-
 # -- the source manifest -----------------------------------------------------
 
 
+def _manifest(finnlib: Path) -> tuple[tuple[str, str], ...]:
+    return resolved_manifest(bind_decomposed(_resolved()), source_roots(FINN_ROOT, finnlib))
+
+
 def test_the_manifest_names_both_repositories_in_compile_order() -> None:
-    manifest = decomposed_source_manifest(FINN_ROOT, FINN_ROOT / "nowhere")
+    """Each Kernel contributes its own sources, replay first because it feeds."""
+
+    manifest = _manifest(FINN_ROOT / "nowhere")
     names = [name for name, _ in manifest]
     assert names == [
-        *(f"compute.finn.{index}" for index in range(len(FINN_SOURCE_FILES))),
-        *(f"compute.finnlib.{index}" for index in range(len(FINNLIB_SOURCE_FILES))),
+        *(f"compute.finn.{index}" for index in range(len(FINN_SOURCES))),
+        *(f"compute.finnlib.{index}" for index in range(len(FINNLIB_SOURCES))),
     ]
     # dotp_axi instantiates dotp, which instantiates dotp_8sx9_dsp58; the
     # package comes before everything that imports it.
@@ -261,12 +380,19 @@ def test_the_manifest_names_both_repositories_in_compile_order() -> None:
     )
 
 
+def test_the_manifest_resolves_each_kernels_named_root() -> None:
+    """A Kernel says ``finnlib/rtl/...``; where that is, is the checkout's business."""
+
+    manifest = dict(_manifest(FINN_ROOT / "nowhere"))
+    assert manifest["compute.finn.0"].startswith(str(FINN_ROOT / "finn-rtllib"))
+    assert manifest["compute.finnlib.0"].startswith(str(FINN_ROOT / "nowhere"))
+
+
 def test_a_manifest_that_names_absent_files_is_refused() -> None:
     """With the FinnLib root wrong, the finding says so rather than xelab."""
 
-    manifest = decomposed_source_manifest(FINN_ROOT, FINN_ROOT / "nowhere")
     with pytest.raises(MVAUElaborationError) as raised:
-        verify_source_manifest(manifest)
+        verify_manifest(_manifest(FINN_ROOT / "nowhere"))
     assert any("source-missing" in item.code for item in raised.value.findings)
 
 

@@ -62,10 +62,10 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
-from finn.dataflow.mvau.decomposed_provider import (
+from finn.dataflow.mvau.hardware.binding import finnlib_root
+from finn.dataflow.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
-    finnlib_root,
     write_decomposed_artifact,
 )
 from finn.dataflow.mvau.providers import elaborate_mvau
