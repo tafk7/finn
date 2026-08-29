@@ -509,6 +509,41 @@ RUN cd /opt/finn-src && \
 ENV FINN_HLSLIB_PATH=/opt/finn-src/deps/finn-hlslib \
     FINN_BOARD_FILES_PATH=/opt/finn-src/deps/board_files
 
+# The FLEXlm/libudev workaround, baked.
+#
+# Without it a licence checkout dies with "realloc(): invalid pointer" inside
+# udev_enumerate_scan_devices. FLEXlm fingerprints the host through libudev
+# during checkout and corrupts the heap doing it; preloading the system libudev
+# avoids it. Reproduced on plain docker, so this is NOT microVM-specific -- an
+# earlier comment in docker/finn.kit/spec.yaml claimed it was, and was wrong.
+#
+# WHY BAKED RATHER THAN RESOLVED AT RUNTIME. finn-env used to probe for this
+# per process. The probe was doing very little: the library is in the base image
+# at a fixed path, on the only architecture these tiers support (bake declares
+# platforms = ["linux/amd64"], and XRT and Vivado are x86-64 only). Baking it
+# moves the value from run-time to CREATE-time, so a bare `docker exec` or
+# `sbx exec` inherits it with no hook at all -- neither runs the ENTRYPOINT, and
+# a Vivado launched that way is exactly how this went missing and took synthesis
+# down with it.
+#
+# WHY HERE AND NOT IN system OR dev. `dev` has no Vivado and no reason to
+# preload libudev into every unrelated process. Measured harmless -- git, pip
+# and apt are unaffected -- but the narrow tier stays narrow on principle, the
+# same as it does for mounts, licences and egress.
+#
+# The assertion is the point of baking it. If a future profile changes distro
+# and the library moves, this fails the BUILD. Left to runtime, ld.so instead
+# prints "cannot be preloaded: ignored" on every single exec, which looks like a
+# FINN bug; and before that, a failed probe returned nothing at all and Vivado
+# aborted at licence checkout with a heap error pointing nowhere near the cause.
+RUN set -eu; \
+    libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1); \
+    [ -n "$libudev" ] || { echo "ERROR: libudev.so.1 not found; the FLEXlm workaround cannot be applied" >&2; exit 1; }; \
+    echo "libudev for LD_PRELOAD: $libudev"; \
+    test "$libudev" = /lib/x86_64-linux-gnu/libudev.so.1 || \
+        { echo "ERROR: libudev is at $libudev, not the baked path below. Update the ENV." >&2; exit 1; }
+ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
+
 USER agent
 
 

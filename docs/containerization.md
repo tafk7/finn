@@ -423,9 +423,31 @@ launch runs.
   `/finn_cache` as a non-root user and fail whenever the cache is absent.
   `run-docker.sh` sets them alongside the mount; without it torch falls back to
   `~/.cache`.
-- **`LD_PRELOAD` moved into the entrypoint rather than `ENV`.** It is a FlexLM
-  workaround; setting it image-wide makes every process in the dev tier pay for
-  it. The entrypoint applies it only when it has found Xilinx tools to source.
+- **`LD_PRELOAD` is `ENV`, baked into the `build` stage.** It is a FLEXlm
+  workaround: without it a licence checkout dies with `realloc(): invalid
+  pointer` inside `udev_enumerate_scan_devices`, because FLEXlm fingerprints the
+  host through libudev during checkout and corrupts the heap doing it.
+
+  Two earlier positions here were wrong, both corrected by testing:
+
+  - It was described as microVM-specific. It is not — the crash reproduces on
+    plain `docker run`.
+  - It lived in the entrypoint, then in a per-process probe in `finn-env`. Both
+    are more machinery than the problem needs: the library sits at a fixed path
+    in the base image on the only architecture the FPGA tiers support. Baking it
+    moves the value from run-time to **create-time**, so a bare `docker exec` or
+    `sbx exec` inherits it with no hook at all — and neither of those runs the
+    ENTRYPOINT, which is exactly how it went missing and took synthesis down.
+
+  It is baked in `build`, not `system` or `dev`: the dev tier has no Vivado and
+  no reason to preload libudev into unrelated processes. Measured harmless
+  (`git`, `pip`, `apt` are unaffected), but the narrow tier stays narrow on
+  principle, as it does for mounts, licences and egress.
+
+  The build asserts the library is where the `ENV` says. That assertion is the
+  point of baking: a distro change fails the build, instead of `ld.so` printing
+  `cannot be preloaded: ignored` on every exec — or, worse, a silent probe
+  failure and a heap error at checkout pointing nowhere near the cause.
 - **`--no-install-recommends` was not adopted** in the system stage. The size win
   comes from the tier split, and trimming the base OS is a change to the
   Vivado/XRT runtime that cannot be validated without a full synthesis run.

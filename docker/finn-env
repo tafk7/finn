@@ -335,23 +335,6 @@ def finn_library_paths():
     return [p for p in dict.fromkeys(paths) if os.path.isdir(p)]
 
 
-def libudev_preload():
-    """The libudev LD_PRELOAD workaround.
-
-    Vivado aborts inside udev_enumerate_scan_devices with
-    "realloc(): invalid pointer" unless the system libudev is preloaded. This
-    has to be applied per-process rather than in the entrypoint: `sbx exec` and
-    `docker exec` both bypass the ENTRYPOINT, and a Vivado launched that way
-    crashed exactly this way until the preload moved out of it.
-    """
-    for libdir in ("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
-                   "/lib/aarch64-linux-gnu"):
-        candidate = os.path.join(libdir, "libudev.so.1")
-        if os.path.exists(candidate):
-            return candidate
-    return None
-
-
 # Path-like variables that must be de-duplicated. See dedupe_paths().
 PATH_VARS = ("PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH")
 
@@ -434,17 +417,15 @@ def toolchain_env():
                 parts.append(path)
         env["LD_LIBRARY_PATH"] = ":".join(parts)
 
-    # The FLEXlm/libudev workaround, but only when a licensed tool is actually
-    # going to run. Preloading libudev into every process in the image would be
-    # a gratuitous change to unrelated programs.
-    if scripts:
-        preload = libudev_preload()
-        if preload:
-            existing = env.get("LD_PRELOAD", os.environ.get("LD_PRELOAD", ""))
-            parts = [p for p in existing.split(":") if p]
-            if preload not in parts:
-                parts.append(preload)
-            env["LD_PRELOAD"] = ":".join(parts)
+    # NOTE: the FLEXlm/libudev LD_PRELOAD workaround is NOT applied here.
+    #
+    # It is baked as ENV in the `build` stage of docker/Dockerfile.finn, which
+    # moves it from run-time to create-time -- so a bare `docker exec` or
+    # `sbx exec` inherits it without needing any hook. This function used to
+    # probe for it per process, which was doing very little work for a library
+    # that sits at a fixed path in the base image on the only architecture the
+    # FPGA tiers support. LD_PRELOAD is still in TOOLCHAIN_VARS so that whatever
+    # settings64.sh contributes is picked up and de-duplicated against it.
 
     return dedupe_paths(env)
 
