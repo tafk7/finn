@@ -27,6 +27,9 @@
 #   8  awkward workspace path         both policies survive spaces (NOT the
 #                                     launcher -- see the note at test 8)
 #   9  node-locked licence with :ro   UNRESOLVED contradiction in the kit
+#  10  lane 3 resolves a toolchain    the bare-host lane has the fewest users
+#                                     and the least coverage, so it is the one
+#                                     that rots silently
 #
 # Tests 4 and 5 in their BARE form are the load-bearing ones. Running them
 # through a wrapper would pass while the property they exist to check is
@@ -47,7 +50,7 @@ head_() { echo; echo "=== $* ==="; }
 # loses every increment, which is how a red run can print a green total. Keep
 # every ok/bad call in the current shell.
 
-WANT="${*:-1 2 3 4 5 6 7 8 9}"
+WANT="${*:-1 2 3 4 5 6 7 8 9 10}"
 want () { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo local)
@@ -349,6 +352,43 @@ if want 9; then
         fi
     else
         skip "9: needs docker and FINN_XILINX_PATH"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+head_ "10. Lane 3: the resolver works on a bare host"
+# ---------------------------------------------------------------------------
+# The three supported lanes -- docker, sbx, bare host -- share one toolchain
+# resolver precisely so they cannot drift. Lane 3 has the fewest users and no
+# other coverage, and setup-local.sh had in fact drifted: it hardcoded the
+# pre-2024.2 Xilinx layout and reported "Vivado not found" on any recent
+# install. That is the same defect that had sbx mounting no toolchain.
+#
+# This does NOT run setup-local.sh end to end -- that builds a venv and
+# compiles finn_xsi, which is minutes and needs network. It checks the part
+# that drifted.
+if want 10; then
+    if [ "$have_xilinx" = 1 ]; then
+        out=$(./docker/finn-env print --format sh 2>/dev/null)
+        if printf '%s' "$out" | grep -q '^export PATH='; then
+            ok "finn-env resolves a toolchain on the bare host"
+        else
+            bad "finn-env produced no PATH on the bare host"
+        fi
+        # The real check: does the resolved environment actually run the tool?
+        if bash -c 'eval "$(./docker/finn-env print --format sh)"; command -v vivado' >/dev/null 2>&1; then
+            ok "vivado is on PATH after sourcing finn-env on the host"
+        else
+            bad "vivado is NOT on PATH after sourcing finn-env on the host"
+        fi
+    else
+        skip "10: FINN_XILINX_PATH not set"
+    fi
+    # setup-local.sh must not have grown its own layout logic back.
+    if grep -qE '^\s*VIVADO_PATH="\$FINN_XILINX_PATH/Vivado/' setup-local.sh 2>/dev/null; then
+        bad "setup-local.sh has hardcoded the pre-2024.2 Xilinx layout again"
+    else
+        ok "setup-local.sh delegates layout resolution to finn-env"
     fi
 fi
 

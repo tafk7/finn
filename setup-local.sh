@@ -253,31 +253,48 @@ gecho "Step 5: Checking Xilinx tools..."
 XILINX_AVAILABLE=0
 
 if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
-    # Determine paths based on version format
-    # Versions 2020.1 and older have different path structure
-    VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
-    VITIS_PATH="$FINN_XILINX_PATH/Vitis/$FINN_XILINX_VERSION"
-    HLS_PATH="$FINN_XILINX_PATH/Vitis_HLS/$FINN_XILINX_VERSION"
+    # Resolution is delegated to docker/finn-env, which is NOT container-specific
+    # -- `print` and `exec` just resolve and source a toolchain wherever they
+    # run. All three supported lanes (docker, sbx, bare host) therefore share
+    # one implementation.
+    #
+    # This block used to hardcode
+    #
+    #     VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
+    #
+    # which is the PRE-2024.2 layout only. AMD reorganised the tree after
+    # 2024.2 to $ROOT/$VERSION/Vivado, so on any recent install this found
+    # nothing and reported "Vivado not found" at a path the user could see was
+    # wrong. That is the same defect that had the sbx backend silently mounting
+    # no toolchain -- the fourth instance of one fact being derived in a fourth
+    # place. finn-env probes both layouts rather than assuming either.
+    eval "$("${FINN_ROOT}/docker/finn-env" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
 
-    if [ -f "$VIVADO_PATH/settings64.sh" ]; then
-        gecho "  Found Vivado at $VIVADO_PATH"
-        source "$VIVADO_PATH/settings64.sh"
-        export XILINX_VIVADO="$VIVADO_PATH"
+    if [ -n "${XILINX_VIVADO:-}" ]; then
+        gecho "  Found Vivado at $XILINX_VIVADO"
         XILINX_AVAILABLE=1
     else
-        yecho "Vivado not found at $VIVADO_PATH"
+        yecho "Vivado not found under $FINN_XILINX_PATH for version $FINN_XILINX_VERSION"
     fi
+    [ -n "${XILINX_VITIS:-}" ] && gecho "  Found Vitis at $XILINX_VITIS" \
+        || yecho "Vitis not found (optional, for Alveo)"
+    [ -n "${XILINX_HLS:-}" ] && gecho "  Found Vitis HLS at $XILINX_HLS" \
+        || yecho "Vitis HLS not found"
 
-    if [ -f "$VITIS_PATH/settings64.sh" ]; then
-        gecho "  Found Vitis at $VITIS_PATH"
-    else
-        yecho "Vitis not found at $VITIS_PATH (optional, for Alveo)"
-    fi
-
-    if [ -f "$HLS_PATH/settings64.sh" ]; then
-        gecho "  Found Vitis HLS at $HLS_PATH"
-    else
-        yecho "Vitis HLS not found at $HLS_PATH"
+    if [ "$XILINX_AVAILABLE" -eq 1 ]; then
+        # Source the toolchain into THIS shell, the same way the container does.
+        eval "$("${FINN_ROOT}/docker/finn-env" print --format sh 2>/dev/null)"
+        export FINN_ENV_APPLIED=1
+        # The FLEXlm/libudev workaround. Baked as ENV in the container image;
+        # on a bare host it has to be applied here. Without it a licence
+        # checkout dies with "realloc(): invalid pointer" inside
+        # udev_enumerate_scan_devices.
+        libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
+        if [ -n "$libudev" ]; then
+            export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$libudev"
+        else
+            yecho "libudev.so.1 not found; licence checkout may abort"
+        fi
     fi
 else
     yecho "FINN_XILINX_PATH and/or FINN_XILINX_VERSION not set"

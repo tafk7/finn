@@ -1,5 +1,12 @@
 # FINN containerization redesign — analysis and design
 
+> **Reference, not a starting point.** For how to *run* FINN — the three
+> supported lanes and what each needs — see
+> [running-finn.md](running-finn.md). For why the structure is shaped this way,
+> see [containerization-decisions.md](containerization-decisions.md). This
+> document records the mechanisms and the findings behind them.
+
+
 Branch: `feature/sbx`. Status: **implemented and verified on docker and plain sbx.** §1–§3 are the original analysis
 and are unchanged. §4 records what was built and where it departs from the
 proposal; §5 answers the open questions with measurements.

@@ -19,7 +19,24 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Getting Started
 
-Please see the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page for more information on requirements, installation, and how to run FINN in different modes. Due to the complex nature of the dependencies of the project, **we only support Docker-based execution of the FINN compiler at this time**.
+FINN runs three ways, for three purposes. See **[docs/running-finn.md](docs/running-finn.md)**
+for the full guide.
+
+| Lane | Command | For |
+|---|---|---|
+| **Docker** | `docker compose run --rm dev` | setup-and-go human development |
+| **sbx sandbox** | `docker/finn-sbx dev` | autonomous agent development |
+| **Bare host** | `./setup-local.sh` | unstructured development |
+
+The `dev` tier needs no configuration at all — no toolchain, no licence, no
+network access. Vivado and Vitis work is the `build` tier, which mounts **your
+own** Xilinx installation read-only; FINN does not ship the tools.
+
+`./run-docker.sh` still works and still accepts every variable it always did.
+It is now a wrapper over the Docker lane.
+
+See also the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
+page on readthedocs.
 
 ## What's New in FINN?
 
