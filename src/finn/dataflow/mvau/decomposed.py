@@ -18,6 +18,7 @@ requires, and never the reverse.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 from enum import Enum
 from math import ceil, floor
 
@@ -28,13 +29,32 @@ from finn.dataflow.authoring.kernel_design import (
 )
 from finn.dataflow.authoring.op_design import ProblemProvenance
 from finn.dataflow.authoring.scope import Ref, divisors_of, finite, unresolved
-from finn.dataflow.kernels import Kernel, KernelSelection
+from finn.dataflow.kernels import (
+    KERNEL_ID_SEMANTICS,
+    Kernel,
+    KernelDeclaration,
+    KernelSelection,
+)
+from finn.dataflow.mvau.compute_pool import (
+    REGION_FORM_EXPORT,
+    WEIGHT_INTERFACE,
+    MVAUComputeKernelId,
+)
 from finn.dataflow.mvau.regions import (
+    MVAURegionDeclaration,
     construct_activation_replay_region,
     construct_dot_product_region,
     construct_standard_mvau_weight_port,
 )
-from finn.dataflow.design import QualifiedPath
+from finn.dataflow.design import (
+    AbsenceMode,
+    Answer,
+    Decided,
+    DependencyRef,
+    DependencyView,
+    EvaluatorSpec,
+    QualifiedPath,
+)
 from finn.dataflow.mvau_problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
@@ -53,14 +73,11 @@ from finn.dataflow.network import (
 )
 from finn.dataflow.region import DataflowRegion, NumericElementType, Port
 
-#: The two pools this decomposition adds.  Each has one member today; they are
-#: separate pools because they are separate choices, not because either is
-#: currently plural.
+#: Replay is its own pool because it is a second node, not a second compute
+#: choice: it is present exactly when the decomposed compute member is selected.
+#: The dot product has no pool of its own -- it is a member of the operation's
+#: one compute pool, beside the fused Kernels it replaces.
 REPLAY_POOL = "mvau.replay"
-DOT_PRODUCT_POOL = "mvau.dotp"
-
-#: The one parameter interface the dot-product half needs supplied.
-WEIGHT_INTERFACE = "weight"
 
 #: Node ids inside the assembled Network.
 REPLAY_NODE = "replay"
@@ -157,7 +174,7 @@ class ActivationReplayInputs:
 class DotProductKernel(Kernel):
     """Folded multiply-accumulate over an already-expanded activation stream."""
 
-    id = "dot_product"
+    id = MVAUComputeKernelId.DOT_PRODUCT.value
     version = "1"
 
     @classmethod
@@ -273,6 +290,21 @@ class DotProductKernel(Kernel):
                 "simd": simd,
             },
             evaluate=construct_standard_mvau_weight_port,
+        )
+        # The pool presents one region-form path across its members, and the
+        # operation reads it to decide the parameter topology and, now, whether
+        # a replay node belongs in the assembly.
+        design.export(
+            REGION_FORM_EXPORT,
+            cast(
+                "Ref[object]",
+                design.derived(
+                    "region_form",
+                    MVAURegionDeclaration,
+                    dependencies={"matrix_width": facts.matrix_width},
+                    evaluate=lambda matrix_width: MVAURegionDeclaration.DOT_PRODUCT_STREAMED,
+                ),
+            ),
         )
 
     @classmethod
@@ -486,10 +518,16 @@ class ReplayPaths:
 
 
 @dataclass(frozen=True)
-class DecomposedMVAUPools:
-    """The two pools and the folding handles the operation wired between them."""
+class DecomposedMVAUKernels:
+    """The dot-product member, the replay pool, and the folding between them.
 
-    dot_product: KernelSelection
+    The dot product is a *declaration*, not a pool: it belongs to the operation's
+    one compute pool alongside the Kernels it is replacing.  Replay is its own
+    optional pool because it is a second node, present only when the compute
+    choice is the decomposed one.
+    """
+
+    dot_product: KernelDeclaration
     activation_replay: KernelSelection
     pe: Ref[int]
     simd: Ref[int]
@@ -508,21 +546,48 @@ class DecomposedMVAUPools:
         )
 
 
-def build_decomposed_mvau_pools(
+def _replay_applies(compute_pool: str) -> EvaluatorSpec[Answer[bool]]:
+    """Replay belongs in the assembly exactly when the compute is decomposed.
+
+    Gated on the compute *decision* rather than on the region form, because the
+    question is which Kernel was chosen, and reading the choice directly says
+    that without a derivation in between.
+    """
+
+    selected = DependencyRef.decision(
+        "compute_kernel",
+        QualifiedPath(f"{compute_pool}.kernel"),
+        KERNEL_ID_SEMANTICS,
+        absence=AbsenceMode.ALLOWS_ABSENT,
+    )
+
+    def evaluate(dependencies: DependencyView) -> Answer[bool]:
+        return Decided(dependencies["compute_kernel"] == DotProductKernel.id)
+
+    return EvaluatorSpec((selected,), evaluate)
+
+
+def build_decomposed_mvau_kernels(
+    compute_pool: str,
     problem: MVAUProblem = MVAU_PROBLEM,
     *,
     provenance: ProblemProvenance | None = None,
-) -> DecomposedMVAUPools:
+) -> DecomposedMVAUKernels:
     """Declare both Kernels and wire the folding from consumer to producer.
 
-    The dot-product Kernel is declared first because it owns the folding; the
-    replay Kernel is then told what that folding is.  Declaration order here is
-    the waterfall made literal.
+    ``compute_pool`` is the operation's one compute selection: the dot product
+    is declared inside it, beside the fused Kernels it replaces, so choosing
+    the decomposed implementation is the same kind of choice as choosing any
+    other -- not a different operation and not a second axis.
+
+    The dot product is declared first because it owns the folding; the replay
+    Kernel is then told what that folding is.  Declaration order here is the
+    supply waterfall made literal.
     """
 
     dot_product, dot_product_design = declare_kernel_design(
         DotProductKernel,
-        kernel_namespace(DOT_PRODUCT_POOL, DotProductKernel.id),
+        kernel_namespace(compute_pool, DotProductKernel.id),
         DotProductInputs(
             repetitions=problem.repetitions,
             matrix_width=problem.matrix_width,
@@ -558,9 +623,14 @@ def build_decomposed_mvau_pools(
         ),
         provenance=provenance,
     )
-    return DecomposedMVAUPools(
-        KernelSelection(DOT_PRODUCT_POOL, (dot_product,)),
-        KernelSelection(REPLAY_POOL, (replay,)),
+    return DecomposedMVAUKernels(
+        dot_product,
+        KernelSelection(
+            REPLAY_POOL,
+            (replay,),
+            optional=True,
+            applies_if=_replay_applies(compute_pool),
+        ),
         pe,
         simd,
         pumping,
@@ -634,9 +704,8 @@ __all__ = [
     "ActivationReplayInputs",
     "ActivationReplayKernel",
     "DOT_PRODUCT_NODE",
-    "DOT_PRODUCT_POOL",
     "DOT_PRODUCT_PROVIDER",
-    "DecomposedMVAUPools",
+    "DecomposedMVAUKernels",
     "DotProductInputs",
     "DotProductKernel",
     "DotProductPaths",
@@ -647,6 +716,6 @@ __all__ = [
     "REPLAY_PROVIDER",
     "ReplayPaths",
     "WEIGHT_INTERFACE",
-    "build_decomposed_mvau_pools",
+    "build_decomposed_mvau_kernels",
     "construct_decomposed_mvau_network",
 ]

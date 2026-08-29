@@ -17,11 +17,15 @@ import pytest
 from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath
+from finn.dataflow.mvau.compute_kernels import (
+    DECOMPOSED_MVAU_KERNELS,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
+)
 from finn.dataflow.mvau.decomposed import (
     ActivationReplayKernel,
-    DecomposedMVAUPools,
+    DecomposedMVAUKernels,
     DotProductKernel,
-    build_decomposed_mvau_pools,
 )
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,
@@ -52,15 +56,15 @@ def _point(
     pe: int = 2,
     simd: int = 2,
     pumping: bool = False,
-) -> tuple[Engine, DesignPoint, DecomposedMVAUPools]:
-    pools = build_decomposed_mvau_pools()
+) -> tuple[Engine, DesignPoint, DecomposedMVAUKernels]:
+    pools = DECOMPOSED_MVAU_KERNELS
     engine = Engine()
     space = engine.validate(
         assemble_specs(
             (
                 compute_pool_context(),
-                pools.dot_product.build_spec(),
-                pools.activation_replay.build_spec(),
+                MVAU_COMPUTE_SELECTION.build_spec(),
+                MVAU_REPLAY_SELECTION.build_spec(),
             )
         )
     )
@@ -83,8 +87,8 @@ def _point(
     point = engine.commit_assignments(
         point,
         {
-            pools.dot_product.paths.kernel: DotProductKernel.id,
-            pools.activation_replay.paths.kernel: ActivationReplayKernel.id,
+            MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
+            MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
             pools.pe.path: pe,
             pools.simd.path: simd,
             pools.compute_pumping.path: pumping,
@@ -93,8 +97,10 @@ def _point(
     return engine, point, pools
 
 
-def _rejected(engine: Engine, point: DesignPoint, pools: DecomposedMVAUPools) -> set[str]:
-    assessment = engine.evaluate_constraint_set(point, pools.dot_product.feasibility_constraint_set)
+def _rejected(engine: Engine, point: DesignPoint, pools: DecomposedMVAUKernels) -> set[str]:
+    assessment = engine.evaluate_constraint_set(
+        point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
+    )
     return {
         str(path).rsplit(".", 1)[-1]
         for path, answer in assessment.answers.items()
@@ -105,7 +111,9 @@ def _rejected(engine: Engine, point: DesignPoint, pools: DecomposedMVAUPools) ->
 def _feasible(**overrides: object) -> bool:
     engine, point, pools = _point(**overrides)  # type: ignore[arg-type]
     return (
-        engine.evaluate_constraint_set(point, pools.dot_product.feasibility_constraint_set).verdict
+        engine.evaluate_constraint_set(
+            point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
+        ).verdict
         is True
     )
 
@@ -158,8 +166,7 @@ def test_an_output_that_is_not_the_accumulator_is_refused() -> None:
 def test_source_admission_reads_no_target_or_decision() -> None:
     """Admission is asked before a board or a folding is known."""
 
-    pools = build_decomposed_mvau_pools()
-    declaration = pools.dot_product.kernels[0]
+    declaration = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
     admission = set(declaration.source_admission_constraints)
     by_path = {item.path: item for item in declaration.spec.constraints}
     decisions = {item.path for item in declaration.spec.decisions}
@@ -201,8 +208,7 @@ def test_dsp48e1_needs_the_narrow_weight_promise() -> None:
 def test_the_narrow_weight_rule_is_not_a_source_question() -> None:
     """It must never remove a graph from inference; only a board from coverage."""
 
-    pools = build_decomposed_mvau_pools()
-    declaration = pools.dot_product.kernels[0]
+    declaration = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
     names = {str(path).rsplit(".", 1)[-1] for path in declaration.source_admission_constraints}
     assert "narrow_weights_supported" not in names
 
@@ -216,7 +222,6 @@ def test_pumping_needs_at_least_two_lanes() -> None:
 def test_the_kernel_declares_both_kinds_of_condition() -> None:
     """The regression this file exists for: a Kernel with no conditions at all."""
 
-    pools = build_decomposed_mvau_pools()
-    declaration = pools.dot_product.kernels[0]
+    declaration = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
     assert declaration.source_admission_constraints
     assert len(declaration.feasibility_constraints) > len(declaration.source_admission_constraints)

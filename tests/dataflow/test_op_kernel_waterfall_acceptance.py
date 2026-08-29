@@ -34,6 +34,7 @@ from finn.dataflow.mvau.compute_kernels import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
+from finn.dataflow.mvau.compute_kernels import MVAU_REPLAY_SELECTION
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
@@ -212,6 +213,7 @@ def test_the_result_property_never_needs_a_topology_decision() -> None:
     assert str(MVAUDataflowOpPaths.PARAMETER_TOPOLOGY) not in decisions
     identity_decisions = {
         str(MVAU_COMPUTE_SELECTION.paths.kernel),
+        str(MVAU_REPLAY_SELECTION.paths.kernel),
         str(MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel),
         str(MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel),
     }
@@ -222,6 +224,7 @@ def test_the_result_property_never_needs_a_topology_decision() -> None:
             path.startswith(f"{selection.name}.{kernel.id}.")
             for selection in (
                 MVAU_COMPUTE_SELECTION,
+                MVAU_REPLAY_SELECTION,
                 MVAU_WEIGHT_SUPPLY_SELECTION,
                 MVAU_WEIGHT_ADAPTER_SELECTION,
             )

@@ -55,6 +55,8 @@ from finn.dataflow.mvau.compute_kernels import (
     REGION_FORM_EXPORT,
     WEIGHT_INTERFACE,
 )
+from finn.dataflow.mvau.compute_kernels import MVAU_REPLAY_SELECTION
+from finn.dataflow.mvau.decomposed import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.weight_adapter_kernel import build_mvau_weight_adapter_selection
 from finn.dataflow.mvau_problem import (
@@ -215,6 +217,7 @@ class MVAUDataflowOpPaths:
     RESULT = QualifiedPath("semantic.mvau.op.result")
 
     WEIGHT_CONNECTION_SUPPORTED = QualifiedPath("constraint.mvau.op.weight_connection_supported")
+    DECOMPOSED_SUPPLY_SUPPORTED = QualifiedPath("constraint.mvau.op.decomposed_supply_supported")
     EXPOSED_WEIGHT_SOURCE_AVAILABLE = QualifiedPath(
         "constraint.mvau.op.exposed_weight_source_available"
     )
@@ -315,6 +318,18 @@ _SUPPLY_KERNEL_REF = DependencyRef.decision(
 _SUPPLY_REGION_REF = DependencyRef.property(
     "supply_region", _SUPPLY_PATHS.region, _REGION, absence=AbsenceMode.ALLOWS_ABSENT
 )
+_REPLAY_REGION_REF = DependencyRef.property(
+    "replay_region",
+    MVAU_REPLAY_SELECTION.paths.region,
+    _REGION,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
+_REPLAY_KERNEL_REF = DependencyRef.decision(
+    "replay_kernel",
+    MVAU_REPLAY_SELECTION.paths.kernel,
+    KERNEL_ID_SEMANTICS,
+    absence=AbsenceMode.ALLOWS_ABSENT,
+)
 _SUPPLY_OUTPUT_PORT_REF = DependencyRef.property(
     "supply_output_port",
     _SUPPLY_PATHS.export(OUTPUT_PORT_EXPORT),
@@ -399,8 +414,23 @@ def _weight_connection_supported(dependencies: DependencyView) -> Answer[bool]:
     a question already settled, so it is rejected.
     """
 
-    source = cast(Port, dependencies["supply_output_port"])
-    sink = cast(Port, dependencies["compute_weight_port"])
+    raw_source = dependencies["supply_output_port"]
+    raw_sink = dependencies["compute_weight_port"]
+    if raw_source is ABSENT or raw_sink is ABSENT:
+        # A connection whose endpoints are not both derived is not unsupported;
+        # it is unanswered, and saying so beats crashing on an absent value.
+        return Unresolved(
+            (
+                Finding(
+                    FindingKind.LIMITATION,
+                    "mvau-weight-endpoints-unavailable",
+                    MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
+                    "both weight endpoints must derive before compatibility is decidable",
+                ),
+            )
+        )
+    source = cast(Port, raw_source)
+    sink = cast(Port, raw_sink)
     directly_compatible = (
         source.operand == sink.operand and source.beat_sequence == sink.beat_sequence
     )
@@ -451,12 +481,16 @@ def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
     repetitions = cast(int, dependencies["repetitions"])
     matrix_width = cast(int, dependencies["matrix_width"])
     matrix_height = cast(int, dependencies["matrix_height"])
-    compute_owner = "compute" if topology is MVAUParameterTopology.CYCLIC else "mvau.compute"
+    assembled = topology is MVAUParameterTopology.CYCLIC or _has_replay(dependencies)
+    compute_owner = DOT_PRODUCT_NODE if assembled else "mvau.compute"
+    # With a replay node in front, the activation tensor arrives there, not at
+    # the compute node.  Everything else keeps the owner it had.
+    activation_owner = REPLAY_NODE if _has_replay(dependencies) else compute_owner
     operands = [
         SourceOperandAssociation(
             "activation",
             description.activation_operand_id,
-            SemanticOperandDestination(compute_owner, "X"),
+            SemanticOperandDestination(activation_owner, "X"),
             CoordinateMappingKind.FLATTEN_LEADING,
             (*description.leading_shape, matrix_width),
             (repetitions, matrix_width),
@@ -472,10 +506,10 @@ def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
     ]
     if topology is MVAUParameterTopology.EMBEDDED:
         weight_destination: SourceOperandDestination = BindingLocalStateDestination(
-            "mvau.compute", "weights"
+            compute_owner, "weights"
         )
     elif topology is MVAUParameterTopology.DIRECT:
-        weight_destination = SemanticOperandDestination("mvau.compute", "W")
+        weight_destination = SemanticOperandDestination(compute_owner, "W")
     else:
         weight_destination = BindingLocalStateDestination("delivery", "weights")
     operands.insert(
@@ -566,81 +600,116 @@ def _source_association_valid(dependencies: DependencyView) -> Answer[bool]:
 
 
 def _construct_network(
-    delivery: DataflowRegion,
+    delivery: DataflowRegion | None,
     compute: DataflowRegion,
     adapter: DataflowRegion | None,
+    replay: DataflowRegion | None = None,
 ) -> DataflowNetwork:
-    delivery_port = delivery.output_interface("weight").port
+    """Assemble whichever nodes the selected Kernels put in play.
+
+    Two independent reasons produce more than one node: a selected supplier
+    delivers the weights, and the decomposed compute member needs an activation
+    replay in front of it.  They compose -- either, both, or neither.
+    """
+
     compute_port = compute.input_interface("weight").port
-    nodes: tuple[NetworkNode, ...]
-    edges: tuple[Edge, ...]
-    if adapter is None:
-        nodes = (NetworkNode("delivery", delivery), NetworkNode("compute", compute))
-        edges = (
+    nodes: list[NetworkNode] = [NetworkNode(DOT_PRODUCT_NODE, compute)]
+    edges: list[Edge] = []
+
+    if delivery is not None:
+        delivery_port = delivery.output_interface("weight").port
+        nodes.append(NetworkNode("delivery", delivery))
+        if adapter is None:
+            edges.append(
+                Edge(
+                    "weight",
+                    RegionEndpoint("delivery", "weight"),
+                    (
+                        SinkContract(
+                            RegionEndpoint("compute", "weight"),
+                            PositionMap.identity(delivery_port.beat_sequence.image),
+                        ),
+                    ),
+                )
+            )
+        else:
+            nodes.append(NetworkNode("weight_adapter", adapter))
+            edges.extend(
+                (
+                    Edge(
+                        "delivery_to_adapter",
+                        RegionEndpoint("delivery", "weight"),
+                        (
+                            SinkContract(
+                                RegionEndpoint("weight_adapter", "weight_in"),
+                                PositionMap.identity(delivery_port.beat_sequence.image),
+                            ),
+                        ),
+                    ),
+                    Edge(
+                        "adapter_to_compute",
+                        RegionEndpoint("weight_adapter", "weight_out"),
+                        (
+                            SinkContract(
+                                RegionEndpoint("compute", "weight"),
+                                PositionMap.identity(compute_port.beat_sequence.image),
+                            ),
+                        ),
+                    ),
+                )
+            )
+
+    activation_endpoint = RegionEndpoint("compute", "activation")
+    activation_sequence = compute.input_interface("activation").port.beat_sequence
+    if replay is not None:
+        produced = replay.output_interface("activation_out").port
+        nodes.append(NetworkNode(REPLAY_NODE, replay))
+        edges.append(
             Edge(
-                "weight",
-                RegionEndpoint("delivery", "weight"),
+                ACTIVATION_EDGE,
+                RegionEndpoint(REPLAY_NODE, "activation_out"),
                 (
                     SinkContract(
-                        RegionEndpoint("compute", "weight"),
-                        PositionMap.identity(delivery_port.beat_sequence.image),
+                        RegionEndpoint("compute", "activation"),
+                        PositionMap.identity(produced.beat_sequence.image),
                     ),
                 ),
-            ),
+            )
         )
-    else:
-        nodes = (
-            NetworkNode("delivery", delivery),
-            NetworkNode("weight_adapter", adapter),
-            NetworkNode("compute", compute),
-        )
-        edges = (
-            Edge(
-                "delivery_to_adapter",
-                RegionEndpoint("delivery", "weight"),
-                (
-                    SinkContract(
-                        RegionEndpoint("weight_adapter", "weight_in"),
-                        PositionMap.identity(delivery_port.beat_sequence.image),
-                    ),
-                ),
-            ),
-            Edge(
-                "adapter_to_compute",
-                RegionEndpoint("weight_adapter", "weight_out"),
-                (
-                    SinkContract(
-                        RegionEndpoint("compute", "weight"),
-                        PositionMap.identity(compute_port.beat_sequence.image),
-                    ),
-                ),
-            ),
-        )
-    return DataflowNetwork(
-        nodes,
-        edges,
-        (
-            BoundaryContract(
-                "activation",
-                RegionEndpoint("compute", "activation"),
-                compute.input_interface("activation").port.beat_sequence,
-            ),
-            BoundaryContract(
-                "output",
-                RegionEndpoint("compute", "output"),
-                compute.output_interface("output").port.beat_sequence,
-            ),
+        # The activation now enters at the replay node, and the sequence the
+        # outside sees is the compact one it consumes, not the expanded one the
+        # dot product does.
+        activation_endpoint = RegionEndpoint(REPLAY_NODE, "activation_in")
+        activation_sequence = replay.input_interface("activation_in").port.beat_sequence
+
+    boundaries = [
+        BoundaryContract("activation", activation_endpoint, activation_sequence),
+        BoundaryContract(
+            "output",
+            RegionEndpoint("compute", "output"),
+            compute.output_interface("output").port.beat_sequence,
         ),
-    )
+    ]
+    if delivery is None:
+        boundaries.append(
+            BoundaryContract(
+                "weight", RegionEndpoint("compute", "weight"), compute_port.beat_sequence
+            )
+        )
+    return DataflowNetwork(tuple(nodes), tuple(edges), tuple(boundaries))
+
+
+def _optional_region(value: object) -> DataflowRegion | None:
+    return None if value is ABSENT else cast(DataflowRegion, value)
 
 
 def _derive_network(dependencies: DependencyView) -> Answer[object]:
-    adapter = dependencies["adapter_region"]
     return Decided(
         _construct_network(
-            cast(DataflowRegion, dependencies["supply_region"]),
+            _optional_region(dependencies["supply_region"]),
             cast(DataflowRegion, dependencies["compute_region"]),
-            None if adapter is ABSENT else cast(DataflowRegion, adapter),
+            _optional_region(dependencies["adapter_region"]),
+            _optional_region(dependencies["replay_region"]),
         )
     )
 
@@ -654,18 +723,21 @@ def _network_is_structurally_well_formed(dependencies: DependencyView) -> Answer
 
 
 def _derive_op_result(dependencies: DependencyView) -> Answer[object]:
+    """One Region when the compute stands alone, a Network when it does not."""
+
     topology = cast(MVAUParameterTopology, dependencies["parameter_topology"])
     association = cast(MVAUSourceAssociation, dependencies["source_association"])
-    if topology is MVAUParameterTopology.CYCLIC:
+    assembled = topology is MVAUParameterTopology.CYCLIC or _has_replay(dependencies)
+    if assembled:
         network = dependencies["network"]
         if network is ABSENT:
             return Absent(
                 (
                     Finding(
                         FindingKind.REJECTION,
-                        "mvau-supplied-topology-has-no-network",
+                        "mvau-assembled-topology-has-no-network",
                         MVAUDataflowOpPaths.RESULT,
-                        "a selected supplier requires an assembled network",
+                        "a selected supplier or replay Kernel requires an assembled network",
                     ),
                 )
             )
@@ -701,8 +773,26 @@ def _weight_is_exposed(dependencies: DependencyView) -> Answer[bool]:
     return Decided(value is ABSENT or value == NO_KERNEL)
 
 
+def _has_replay(dependencies: DependencyView) -> bool:
+    value = dependencies["replay_kernel"]
+    return value is not ABSENT and value != NO_KERNEL
+
+
+def _needs_a_network(dependencies: DependencyView) -> Answer[bool]:
+    """More than one node, for either of the two independent reasons.
+
+    A selected supplier adds a delivery node; the decomposed compute member
+    adds a replay node.  Either alone is enough to make the result a Network
+    rather than a Region.
+    """
+
+    supplied = cast(Decided[bool], _weight_is_supplied(dependencies)).value
+    return Decided(supplied or _has_replay(dependencies))
+
+
 _SUPPLIED = EvaluatorSpec((_SUPPLY_KERNEL_REF,), _weight_is_supplied)
 _EXPOSED = EvaluatorSpec((_COMPUTE_REGION_FORM_REF, _SUPPLY_KERNEL_REF), _weight_is_exposed)
+_ASSEMBLED = EvaluatorSpec((_SUPPLY_KERNEL_REF, _REPLAY_KERNEL_REF), _needs_a_network)
 
 
 def _interleaved_supply(dependencies: DependencyView) -> Answer[bool]:
@@ -738,6 +828,7 @@ def _op_properties() -> tuple[DerivedProperty, ...]:
                     _COMPUTE_SELECTED_REF,
                     _SUPPLY_SELECTED_REF,
                     _ADAPTER_SELECTED_REF,
+                    _REPLAY_KERNEL_REF,
                 ),
                 _derive_source_association,
             ),
@@ -746,9 +837,15 @@ def _op_properties() -> tuple[DerivedProperty, ...]:
             MVAUDataflowOpPaths.NETWORK,
             _NETWORK,
             EvaluatorSpec(
-                (_SUPPLY_REGION_REF, _COMPUTE_REGION_REF, _ADAPTER_REGION_REF), _derive_network
+                (
+                    _SUPPLY_REGION_REF,
+                    _COMPUTE_REGION_REF,
+                    _ADAPTER_REGION_REF,
+                    _REPLAY_REGION_REF,
+                ),
+                _derive_network,
             ),
-            applies_if=_SUPPLIED,
+            applies_if=_ASSEMBLED,
         ),
         DerivedProperty(
             MVAUDataflowOpPaths.NETWORK_VALIDATION,
@@ -757,21 +854,46 @@ def _op_properties() -> tuple[DerivedProperty, ...]:
                 (DependencyRef.property("network", MVAUDataflowOpPaths.NETWORK, _NETWORK),),
                 _derive_network_validation,
             ),
-            applies_if=_SUPPLIED,
+            applies_if=_ASSEMBLED,
         ),
         DerivedProperty(
             MVAUDataflowOpPaths.RESULT,
             DATAFLOW_OP_RESULT_SEMANTICS,
             EvaluatorSpec(
-                (_TOPOLOGY_REF, _COMPUTE_REGION_REF, _NETWORK_REF, _SOURCE_ASSOCIATION_REF),
+                (
+                    _TOPOLOGY_REF,
+                    _COMPUTE_REGION_REF,
+                    _NETWORK_REF,
+                    _SOURCE_ASSOCIATION_REF,
+                    _REPLAY_KERNEL_REF,
+                ),
                 _derive_op_result,
             ),
         ),
     )
 
 
+def _decomposed_supply_supported(dependencies: DependencyView) -> Answer[bool]:
+    """The decomposed compute takes its weights at the boundary, for now.
+
+    Re-attaching the memstream supplier is its own increment: the supplier
+    connects to the dot product's weight demand, which is unchanged, so nothing
+    about this is hard -- it is simply not done, and claiming otherwise would
+    let a point resolve that no provider can build.
+    """
+
+    if not _has_replay(dependencies):
+        return Decided(True)
+    supply = dependencies["supply_kernel"]
+    return Decided(supply is ABSENT or supply == NO_KERNEL)
+
+
 def _op_constraints() -> tuple[Constraint, ...]:
     return (
+        Constraint(
+            MVAUDataflowOpPaths.DECOMPOSED_SUPPLY_SUPPORTED,
+            EvaluatorSpec((_REPLAY_KERNEL_REF, _SUPPLY_KERNEL_REF), _decomposed_supply_supported),
+        ),
         Constraint(
             MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
             EvaluatorSpec(
@@ -834,6 +956,7 @@ _OP_STRUCTURAL_CONSTRAINTS = (
     MVAU_WEIGHT_SUPPLY_SELECTION.paths.region_structurally_well_formed,
     MVAU_WEIGHT_ADAPTER_SELECTION.paths.region_structurally_well_formed,
     MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
+    MVAUDataflowOpPaths.DECOMPOSED_SUPPLY_SUPPORTED,
     MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE,
     MVAUDataflowOpPaths.INTERLEAVED_PUMPING_SUPPORTED,
     MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
@@ -913,6 +1036,8 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
     return assemble_specs(
         (
             MVAU_COMPUTE_SELECTION.build_spec(),
+            # Present only when the decomposed compute member is selected.
+            MVAU_REPLAY_SELECTION.build_spec(),
             MVAU_WEIGHT_SUPPLY_SELECTION.build_spec(),
             MVAU_WEIGHT_ADAPTER_SELECTION.build_spec(),
             MVAU_PROBLEM_SPEC,
@@ -925,6 +1050,7 @@ MVAU_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()
 
 MVAU_SELECTIONS: tuple[KernelSelection, ...] = (
     MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAU_WEIGHT_ADAPTER_SELECTION,
 )

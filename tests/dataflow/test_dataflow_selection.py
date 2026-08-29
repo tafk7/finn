@@ -25,6 +25,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
+from finn.dataflow.mvau.compute_kernels import MVAU_REPLAY_SELECTION
 from finn.dataflow.ops.mvau import (
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
@@ -232,6 +233,7 @@ def test_readiness_and_feasibility_are_reported_separately() -> None:
     assert set(report.feasibility) == set(MvauDataflowOp.feasibility_constraint_sets())
     assert set(report.feasibility) == {
         MVAU_COMPUTE_SELECTION.feasibility_constraint_set,
+        MVAU_REPLAY_SELECTION.feasibility_constraint_set,
         MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set,
         MVAU_WEIGHT_ADAPTER_SELECTION.feasibility_constraint_set,
     }
@@ -312,6 +314,7 @@ def test_the_transform_needs_no_operation_specific_configuration() -> None:
     assert MvauDataflowOp.artifact_readiness_profile() == "artifact_inputs"
     assert MvauDataflowOp.kernel_selections() == (
         MVAU_COMPUTE_SELECTION,
+        MVAU_REPLAY_SELECTION,
         MVAU_WEIGHT_SUPPLY_SELECTION,
         MVAU_WEIGHT_ADAPTER_SELECTION,
     )

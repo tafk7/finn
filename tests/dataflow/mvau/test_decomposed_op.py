@@ -1,13 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase 4's forcing case, through a real operation.
+"""Phase 4's forcing case, through the real MVAU operation.
 
 The Network constructor and its tests show the two Regions assemble.  This
-shows an *operation* doing it: projecting its problem from a live
-``ModelWrapper``, selecting both Kernels, returning the decomposed
-``NetworkRef``, associating the source tensors with the two nodes that now
-carry them, and reconstituting all of that after a save and reload.
+shows ``MvauDataflowOp`` doing it: projecting its problem from a live
+``ModelWrapper``, selecting the decomposed compute member and its replay
+Kernel, returning a ``NetworkRef``, associating the source tensors with the two
+nodes that now carry them, and reconstituting all of that after a save and
+reload.
+
+There is one MVAU operation and one ONNX op type.  Choosing the decomposed
+implementation is a Kernel selection inside its design space, the same kind of
+choice as picking any other compute member -- not a different node type and not
+a second axis beside the Kernels.
 """
 
 from __future__ import annotations
@@ -32,14 +38,18 @@ from finn.dataflow.design import QualifiedPath
 from finn.dataflow.mvau_problem import MVAUProblemPaths
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
-from finn.dataflow.ops.mvau import NetworkRef, SemanticOperandDestination
-from finn.dataflow.ops.mvau_decomposed import (
-    DOT_PRODUCT_SELECTION,
-    MVAU_DECOMPOSED_POOLS,
-    REPLAY_SELECTION,
-    DecomposedMvauDataflowOp,
+from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.ops.mvau import (
+    MVAU_WEIGHT_SUPPLY_SELECTION,
+    NetworkRef,
+    SemanticOperandDestination,
 )
-from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext
+from finn.dataflow.mvau.compute_kernels import (
+    DECOMPOSED_MVAU_KERNELS,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
+)
+from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region
 
@@ -63,7 +73,7 @@ def _context() -> MVAUDataflowBuildContext:
 
 def _model(*, repetitions: int = 4) -> ModelWrapper:
     node = helper.make_node(
-        "DecomposedMvauDataflowOp",
+        "MvauDataflowOp",
         ["activation", "weights"],
         ["output"],
         name=NODE_ID,
@@ -112,36 +122,39 @@ def _model(*, repetitions: int = 4) -> ModelWrapper:
     return model
 
 
-def _wrapped(model: ModelWrapper) -> DecomposedMvauDataflowOp:
+def _wrapped(model: ModelWrapper) -> MvauDataflowOp:
     operation = model.get_customop_wrapper(model.graph.node[0])
-    assert isinstance(operation, DecomposedMvauDataflowOp)
+    assert isinstance(operation, MvauDataflowOp)
     return operation
 
 
 def _choices(*, pe: int = 2, simd: int = 2, pumping: bool = False) -> dict[QualifiedPath, object]:
-    pools = MVAU_DECOMPOSED_POOLS
+    pools = DECOMPOSED_MVAU_KERNELS
     return {
-        DOT_PRODUCT_SELECTION.paths.kernel: DotProductKernel.id,
-        REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
+        MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
+        MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
         pools.pe.path: pe,
         pools.simd.path: simd,
         pools.compute_pumping.path: pumping,
+        # This slice takes its weights at the boundary; re-attaching the
+        # supplier is its own increment.
+        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
     }
 
 
-def _result(operation: DecomposedMvauDataflowOp) -> NetworkRef:
+def _result(operation: MvauDataflowOp) -> NetworkRef:
     result = operation.resolve_dataflow(_context()).result
     assert isinstance(result, NetworkRef)
     return result
 
 
-def _network(operation: DecomposedMvauDataflowOp) -> DataflowNetwork:
+def _network(operation: MvauDataflowOp) -> DataflowNetwork:
     return _result(operation).network
 
 
 def _committed(
     model: ModelWrapper, *, pe: int = 2, simd: int = 2, pumping: bool = False
-) -> DecomposedMvauDataflowOp:
+) -> MvauDataflowOp:
     operation = _wrapped(model)
     operation.initialize_dataflow_scope_id()
     # Raises DataflowOpError with findings if anything is rejected.
@@ -245,9 +258,9 @@ def test_the_selection_survives_a_save_and_reload(tmp_path: Path) -> None:
 
     reloaded = _wrapped(ModelWrapper(str(path)))
     assignments = reloaded.read_assignments()
-    pools = MVAU_DECOMPOSED_POOLS
-    assert assignments[DOT_PRODUCT_SELECTION.paths.kernel] == DotProductKernel.id
-    assert assignments[REPLAY_SELECTION.paths.kernel] == ActivationReplayKernel.id
+    pools = DECOMPOSED_MVAU_KERNELS
+    assert assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == DotProductKernel.id
+    assert assignments[MVAU_REPLAY_SELECTION.paths.kernel] == ActivationReplayKernel.id
     assert assignments[pools.pe.path] == 2
     assert assignments[pools.simd.path] == 4
 
@@ -272,7 +285,9 @@ def test_the_persisted_attributes_are_named_for_what_they_choose() -> None:
     names = {item.name for item in model.graph.node[0].attribute}
 
     assert {
-        "dataflow_dot_product_kernel",
+        # The compute choice persists under the pool's own attribute, because
+        # the decomposed member is one of that pool's members.
+        "dataflow_compute_kernel",
         "dataflow_replay_kernel",
         "dataflow_dot_product_pe",
         "dataflow_dot_product_simd",
@@ -306,8 +321,29 @@ def test_every_folding_assembles_a_valid_network(pe: int, simd: int) -> None:
     assert len(network.nodes) == 2
 
 
-def test_the_op_declares_exactly_the_two_pools() -> None:
-    assert DecomposedMvauDataflowOp.kernel_selections() == (
-        DOT_PRODUCT_SELECTION,
-        REPLAY_SELECTION,
+def test_the_decomposed_member_is_a_peer_of_the_kernels_it_replaces() -> None:
+    """One pool, one choice.  The decomposition is not a separate operation."""
+
+    assert "dot_product" in MVAU_COMPUTE_SELECTION.kernel_ids
+    assert {"rtl_softvec", "rtl_packed"} <= set(MVAU_COMPUTE_SELECTION.kernel_ids)
+    assert MVAU_REPLAY_SELECTION in MvauDataflowOp.kernel_selections()
+
+
+def test_a_fused_member_still_resolves_to_a_region() -> None:
+    """Adding the decomposed member changed nothing for the others."""
+
+    model = _model()
+    operation = _wrapped(model)
+    operation.initialize_dataflow_scope_id()
+    operation.commit_dataflow_assignments(
+        _context(),
+        {
+            MVAU_COMPUTE_SELECTION.paths.kernel: "rtl_softvec",
+            QualifiedPath("mvau.compute.rtl_softvec.pe"): 2,
+            QualifiedPath("mvau.compute.rtl_softvec.simd"): 2,
+            QualifiedPath("mvau.compute.rtl_softvec.compute_pumping"): False,
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+        },
     )
+    result = operation.resolve_dataflow(_context()).result
+    assert not isinstance(result, NetworkRef)

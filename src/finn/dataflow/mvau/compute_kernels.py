@@ -59,6 +59,14 @@ from finn.dataflow.mvau.regions import (
     construct_standard_mvau_weight_port,
     construct_standard_streamed_mvau_region,
 )
+from finn.dataflow.mvau.compute_pool import (
+    FULL_TILE_WEIGHT_EXPORT,
+    MVAUComputeKernelId,
+    MVAU_COMPUTE_SELECTION_NAME,
+    REGION_FORM_EXPORT,
+    WEIGHT_INTERFACE,
+)
+from finn.dataflow.mvau.decomposed import build_decomposed_mvau_kernels
 from finn.dataflow.mvau_problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
@@ -67,15 +75,6 @@ from finn.dataflow.mvau_problem import (
 from finn.dataflow.region import DataflowRegion, NumericElementType, Port
 
 E = TypeVar("E", bound=Enum)
-
-
-class MVAUComputeKernelId(str, Enum):
-    """Stable identities of the initial MVAU compute Kernel pool."""
-
-    LEGACY_HLS = "legacy_hls"
-    SOFT_VECTOR = "rtl_softvec"
-    PACKED_DSP = "rtl_packed"
-    BATCH_INTERLEAVED_DSP = "rtl_batch_interleaved_dsp58"
 
 
 class MVAUHlsResource(str, Enum):
@@ -92,24 +91,10 @@ class MVAUWeightSource(str, Enum):
     STREAMED = "streamed"
 
 
-#: The Kernel-pool selection name and its owned path root.
-MVAU_COMPUTE_SELECTION_NAME = "mvau.compute"
-
-#: The name under which a compute Kernel exports its Region form.
-REGION_FORM_EXPORT = "region_form"
-
-#: The parameter interface every streamed compute Kernel demands.
-WEIGHT_INTERFACE = "weight"
-
 #: The RTL generator that realizes the soft-vector Kernel.  A provider is
 #: declared here, on the Kernel it implements, so the inventory is the single
 #: answer to "what can build this".
 SOFT_VECTOR_PROVIDER_ID = "finn.rtl.mvu_vvu_axi"
-
-#: The name under which a compute Kernel exports its natural full-tile weight
-#: contract.  A supplier that organizes its output independently of the demand
-#: produces this sequence instead, which is what makes an adapter necessary.
-FULL_TILE_WEIGHT_EXPORT = "full_tile_weight_port"
 
 
 _INTEGER = as_object_semantics(ValueSemantics.immutable_nominal(int, name="integer"))
@@ -1135,13 +1120,25 @@ SOFT_VECTOR_MVAU_KERNEL = build_soft_vector_mvau_kernel()
 PACKED_DSP_MVAU_KERNEL = build_packed_dsp_mvau_kernel()
 BATCH_INTERLEAVED_DSP_MVAU_KERNEL = build_batch_interleaved_dsp_mvau_kernel()
 
+#: The decomposed member and the replay pool that accompanies it.  Declared
+#: here rather than elsewhere because the dot product belongs to *this* pool:
+#: it is the replacement for the two RTL standard-streamed Kernels, and picking
+#: it is the same kind of choice as picking either of them.
+DECOMPOSED_MVAU_KERNELS = build_decomposed_mvau_kernels(MVAU_COMPUTE_SELECTION_NAME)
+
+#: The optional second node the decomposed member needs.
+MVAU_REPLAY_SELECTION = DECOMPOSED_MVAU_KERNELS.activation_replay
+
 MVAU_COMPUTE_SELECTION = KernelSelection(
     MVAU_COMPUTE_SELECTION_NAME,
     (
         LEGACY_HLS_MVAU_KERNEL,
+        # Being replaced by the decomposed member below; they remain only
+        # because elaboration still runs through them.
         SOFT_VECTOR_MVAU_KERNEL,
         PACKED_DSP_MVAU_KERNEL,
         BATCH_INTERLEAVED_DSP_MVAU_KERNEL,
+        DECOMPOSED_MVAU_KERNELS.dot_product,
     ),
 )
 

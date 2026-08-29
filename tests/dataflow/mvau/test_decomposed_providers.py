@@ -19,14 +19,18 @@ import pytest
 from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
+from finn.dataflow.mvau.compute_kernels import (
+    DECOMPOSED_MVAU_KERNELS,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
+)
 from finn.dataflow.mvau.decomposed import (
     DOT_PRODUCT_PROVIDER,
     REPLAY_PROVIDER,
     ActivationReplayKernel,
-    DecomposedMVAUPools,
+    DecomposedMVAUKernels,
     DotProductKernel,
     ParameterOwnership,
-    build_decomposed_mvau_pools,
 )
 from finn.dataflow.mvau_problem import (
     MVAU_PROBLEM,
@@ -51,15 +55,15 @@ def _started(
     pe: int = 2,
     simd: int = 2,
     pumping: bool = False,
-) -> tuple[Engine, DesignPoint, DecomposedMVAUPools]:
-    pools = build_decomposed_mvau_pools()
+) -> tuple[Engine, DesignPoint, DecomposedMVAUKernels]:
+    pools = DECOMPOSED_MVAU_KERNELS
     engine = Engine()
     space = engine.validate(
         assemble_specs(
             (
                 compute_pool_context(),
-                pools.dot_product.build_spec(),
-                pools.activation_replay.build_spec(),
+                MVAU_COMPUTE_SELECTION.build_spec(),
+                MVAU_REPLAY_SELECTION.build_spec(),
             )
         )
     )
@@ -83,8 +87,8 @@ def _started(
     point = engine.commit_assignments(
         point,
         {
-            pools.dot_product.paths.kernel: DotProductKernel.id,
-            pools.activation_replay.paths.kernel: ActivationReplayKernel.id,
+            MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
+            MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
             pools.pe.path: pe,
             pools.simd.path: simd,
             pools.compute_pumping.path: pumping,
@@ -154,7 +158,7 @@ REPLAY_BUFFER_PARAMETERS = {"LEN", "REP", "W"}
 
 
 def test_the_audit_covers_exactly_the_parameters_the_rtl_takes() -> None:
-    pools = build_decomposed_mvau_pools()
+    pools = DECOMPOSED_MVAU_KERNELS
     problem = MVAU_PROBLEM
 
     dot_product = {
@@ -178,9 +182,8 @@ def test_the_dot_product_takes_no_matrix_geometry() -> None:
 
 
 def test_the_providers_are_declared_on_the_kernels_they_realize() -> None:
-    pools = build_decomposed_mvau_pools()
-    dot_product = pools.dot_product.kernels[0]
-    replay = pools.activation_replay.kernels[0]
+    dot_product = MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id)
+    replay = MVAU_REPLAY_SELECTION.kernels[0]
 
     assert [item.id for item in dot_product.providers] == [DOT_PRODUCT_PROVIDER]
     assert [item.id for item in replay.providers] == [REPLAY_PROVIDER]
@@ -256,7 +259,7 @@ def test_the_replay_parameters_restate_the_folding() -> None:
 def test_narrow_weights_is_the_operation_property_not_a_kernel_one() -> None:
     """Ownership: the value authority is an operation question, not a Kernel's."""
 
-    pools = build_decomposed_mvau_pools()
+    pools = DECOMPOSED_MVAU_KERNELS
     narrow = next(item for item in pools.provider_parameters() if item.name == "NARROW_WEIGHTS")
     assert narrow.source == MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS
     assert MVAU_PROBLEM_PROVENANCE.kind_of(narrow.source) is None

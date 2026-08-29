@@ -17,29 +17,20 @@ from finn.dataflow.mvau_problem import (
     MVAUProblemPaths,
 )
 
-#: Facts outside ``problem.mvau.*`` and ``problem.target.*`` that a compute
-#: Kernel nonetheless reaches, directly or through an operation property.
-_ALSO_READ = (MVAUProblemPaths.RUNTIME_WRITABLE,)
-
 
 def compute_pool_context() -> DesignSpaceSpec:
-    """Every operation-owned declaration the compute pool depends on."""
+    """Every operation-owned declaration the compute pool depends on.
+
+    Everything the operation declares except the source description, which
+    describes tensors a pool-only test has no graph to name.
+    """
 
     fields = tuple(
         field
         for field in MVAU_PROBLEM_SPEC.problem_schema.fields
-        if (
-            str(field.path).startswith(("problem.mvau.", "problem.target."))
-            or field.path in _ALSO_READ
-        )
-        and field.path != MVAUProblemPaths.SOURCE_DESCRIPTION
+        if field.path != MVAUProblemPaths.SOURCE_DESCRIPTION
     )
-    properties = tuple(
-        item
-        for item in MVAU_PROBLEM_SPEC.properties
-        if item.path == MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS
-    )
-    return DesignSpaceSpec(ProblemSchema(fields), properties=properties)
+    return DesignSpaceSpec(ProblemSchema(fields), properties=MVAU_PROBLEM_SPEC.properties)
 
 
 __all__ = ["compute_pool_context"]

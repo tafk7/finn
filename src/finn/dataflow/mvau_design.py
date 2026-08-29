@@ -3,19 +3,23 @@
 
 """Compatibility facade for the MVAU Kernel authoring modules."""
 
-from finn.dataflow.mvau import (
+from finn.dataflow.mvau.computation import MVAUComputationProfile
+from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_DSP_MVAU_KERNEL,
     LEGACY_HLS_MVAU_KERNEL,
     MVAU_COMPUTE_SELECTION,
-    MVAU_DESIGN_SPACE_SPEC,
     PACKED_DSP_MVAU_KERNEL,
     SOFT_VECTOR_MVAU_KERNEL,
-    MVAUComputationProfile,
     MVAUComputeKernelId,
+)
+from finn.dataflow.mvau.legacy_design import (
+    MVAU_DESIGN_SPACE_SPEC,
     MVAUDesignPaths,
+    build_legacy_mvau_design_space_spec,
+)
+from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
     MVAUWeightInterface,
-    build_legacy_mvau_design_space_spec,
     construct_batch_interleaved_streamed_mvau_region,
     construct_mvau_compute_region,
     construct_standard_embedded_mvau_region,

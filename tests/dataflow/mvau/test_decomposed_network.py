@@ -25,15 +25,18 @@ from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.kernels import bind_kernel
+from finn.dataflow.mvau.compute_kernels import (
+    DECOMPOSED_MVAU_KERNELS,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
+)
 from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
-    DOT_PRODUCT_POOL,
     REPLAY_NODE,
     REPLAY_POOL,
     ActivationReplayKernel,
     DotProductKernel,
-    build_decomposed_mvau_pools,
     construct_decomposed_mvau_network,
 )
 from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
@@ -60,14 +63,14 @@ def _bound(
     geometry: tuple[int, int, int, int, int],
 ) -> tuple[ActivationReplayKernel, DotProductKernel]:
     repetitions, matrix_width, matrix_height, pe, simd = geometry
-    pools = build_decomposed_mvau_pools()
+    pools = DECOMPOSED_MVAU_KERNELS
     engine = Engine()
     space = engine.validate(
         assemble_specs(
             (
                 compute_pool_context(),
-                pools.dot_product.build_spec(),
-                pools.activation_replay.build_spec(),
+                MVAU_COMPUTE_SELECTION.build_spec(),
+                MVAU_REPLAY_SELECTION.build_spec(),
             )
         )
     )
@@ -89,14 +92,14 @@ def _bound(
     point = engine.commit_assignments(
         point,
         {
-            pools.dot_product.paths.kernel: DotProductKernel.id,
-            pools.activation_replay.paths.kernel: ActivationReplayKernel.id,
+            MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
+            MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
             pools.pe.path: pe,
             pools.simd.path: simd,
         },
     ).point
-    replay = bind_kernel(engine, pools.activation_replay, point)
-    compute = bind_kernel(engine, pools.dot_product, point)
+    replay = bind_kernel(engine, MVAU_REPLAY_SELECTION, point)
+    compute = bind_kernel(engine, MVAU_COMPUTE_SELECTION, point)
     assert isinstance(replay, Decided) and isinstance(compute, Decided)
     return (
         cast(ActivationReplayKernel, replay.value),
@@ -260,20 +263,19 @@ def test_the_decomposed_and_monolithic_regions_compute_the_same_thing(
 
 
 def test_the_two_pools_are_separate_choices() -> None:
-    pools = build_decomposed_mvau_pools()
-    assert pools.dot_product.name == DOT_PRODUCT_POOL
-    assert pools.activation_replay.name == REPLAY_POOL
-    assert pools.dot_product.paths.kernel != pools.activation_replay.paths.kernel
+    assert MVAU_COMPUTE_SELECTION.paths.kernel is not None
+    assert MVAU_REPLAY_SELECTION.name == REPLAY_POOL
+    assert MVAU_COMPUTE_SELECTION.paths.kernel != MVAU_REPLAY_SELECTION.paths.kernel
 
 
 def test_the_folding_is_owned_by_the_consumer_not_the_producer() -> None:
     """Replay declares no decisions; the paths it reads belong to the dot product."""
 
-    pools = build_decomposed_mvau_pools()
-    replay = pools.activation_replay.kernels[0]
+    pools = DECOMPOSED_MVAU_KERNELS
+    replay = MVAU_REPLAY_SELECTION.kernels[0]
     assert replay.spec.decisions == ()
-    assert str(pools.pe.path).startswith(DOT_PRODUCT_POOL)
-    assert str(pools.simd.path).startswith(DOT_PRODUCT_POOL)
+    assert str(pools.pe.path).startswith(MVAU_COMPUTE_SELECTION.name)
+    assert str(pools.simd.path).startswith(MVAU_COMPUTE_SELECTION.name)
 
     read = {
         dependency.path
@@ -286,11 +288,12 @@ def test_the_folding_is_owned_by_the_consumer_not_the_producer() -> None:
 def test_a_folding_disagreement_is_unrepresentable() -> None:
     """There is one ``pe`` path and one ``simd`` path, so the two cannot differ."""
 
-    pools = build_decomposed_mvau_pools()
     decisions = {
         item.path
-        for selection in (pools.dot_product, pools.activation_replay)
-        for kernel in selection.kernels
+        for kernel in (
+            MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id),
+            MVAU_REPLAY_SELECTION.kernels[0],
+        )
         for item in kernel.spec.decisions
     }
     assert sum(str(path).endswith(".pe") for path in decisions) == 1

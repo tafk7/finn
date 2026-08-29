@@ -21,6 +21,8 @@ from finn.dataflow.mvau.compute_kernels import (
     LEGACY_HLS_PATHS,
     PACKED_DSP_PATHS,
     SOFT_VECTOR_PATHS,
+    DECOMPOSED_MVAU_KERNELS,
+    MVAU_REPLAY_SELECTION,
     MVAUHlsResource,
     MVAUWeightSource,
 )
@@ -77,6 +79,15 @@ MVAU_DECISION_NODEATTRS: Mapping[QualifiedPath, NodeAttrCodec] = MappingProxyTyp
         BATCH_INTERLEAVED_PATHS.pe: NodeAttrCodec.integer("dataflow_interleaved_pe"),
         BATCH_INTERLEAVED_PATHS.simd: NodeAttrCodec.integer("dataflow_interleaved_simd"),
         BATCH_INTERLEAVED_PATHS.interleave: NodeAttrCodec.integer("dataflow_interleaved_batch"),
+        # Decomposed compute Kernel.  The replay half owns no choices; it is
+        # told the folding, so there is nothing of its own to persist beyond
+        # which Kernel was selected.
+        DECOMPOSED_MVAU_KERNELS.pe.path: NodeAttrCodec.integer("dataflow_dot_product_pe"),
+        DECOMPOSED_MVAU_KERNELS.simd.path: NodeAttrCodec.integer("dataflow_dot_product_simd"),
+        DECOMPOSED_MVAU_KERNELS.compute_pumping.path: NodeAttrCodec.boolean(
+            "dataflow_dot_product_pumping"
+        ),
+        MVAU_REPLAY_SELECTION.paths.kernel: NodeAttrCodec.string("dataflow_replay_kernel"),
         # FINN RTL memstream supply Kernel.
         FINN_RTL_MEMSTREAM_PATHS.organization: _enum_codec(
             "dataflow_finn_rtl_memstream_organization", WeightOrganization
