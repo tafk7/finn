@@ -109,6 +109,35 @@ class Absent(_AnswerBase):
     def __post_init__(self) -> None:
         object.__setattr__(self, "findings", ordered_findings(self.findings))
 
+    @property
+    def is_rejection(self) -> bool:
+        """Whether this absence is a *refusal* rather than an inapplicability.
+
+        ``Absent`` carries two different meanings and the findings are what
+        separate them.
+
+        Most absences say the question did not arise: an ``applies_if`` that
+        answered false, a decision with no proposal, or a required dependency
+        that was itself absent.  The last of those carries a ``LIMITATION``
+        finding explaining the propagation, so "has findings" is not the
+        discriminator.
+
+        A refusal is what ``reject(...)`` produces, and it is an author saying
+        *no, with a reason*.  It is spelled ``Absent`` rather than
+        ``Decided(False)`` only so the reason travels; the answer is a
+        refusal, and anything reducing a set of answers to a verdict has to
+        count it as one.
+
+        Conflating the two is not theoretical.  Constraint-set verdicts ignored
+        every ``Absent``, so a physical coverage constraint that refused a point
+        with a reason left ``mvau_op_feasibility`` reporting ``True`` -- and
+        selection would hand that point on to be refused later, at binding,
+        where the whole point of asking coverage at feasibility was to catch it
+        first.
+        """
+
+        return any(item.kind is FindingKind.REJECTION for item in self.findings)
+
 
 @dataclass(frozen=True, slots=True)
 class Unresolved(_AnswerBase):
@@ -175,7 +204,33 @@ class ConstraintAssessment:
 
     @property
     def not_applicable(self) -> tuple[QualifiedPath, ...]:
-        return tuple(path for path, answer in self.answers.items() if isinstance(answer, Absent))
+        """The constraints that did not arise -- refusals excluded.
+
+        A ``reject(...)`` is also spelled ``Absent``, and reporting it here
+        would describe a refused constraint as one that never applied.
+        """
+
+        return tuple(
+            path
+            for path, answer in self.answers.items()
+            if isinstance(answer, Absent) and not answer.is_rejection
+        )
+
+    @property
+    def refused(self) -> tuple[QualifiedPath, ...]:
+        """Every constraint that said no, by either spelling.
+
+        ``Decided(False)`` is the flat refusal and a rejecting ``Absent`` is
+        the one carrying a reason; both are refusals, and a caller asking why
+        the verdict is ``False`` needs them together.
+        """
+
+        return tuple(
+            path
+            for path, answer in self.answers.items()
+            if (isinstance(answer, Decided) and answer.value is False)
+            or (isinstance(answer, Absent) and answer.is_rejection)
+        )
 
 
 @dataclass(frozen=True, slots=True)

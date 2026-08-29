@@ -31,7 +31,7 @@ import pytest
 
 from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.authoring import assemble_specs
-from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
+from finn.dataflow.design import DesignPoint, Engine, QualifiedPath
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
@@ -146,27 +146,20 @@ def _rejected(engine: Engine, point: DesignPoint, pools: DecomposedMVAUKernels) 
     Asking only the pool would silently stop testing everything that moved to
     the hardware, and the file would keep passing while checking less.
 
-    The two halves need different rules, because ``Absent`` means different
-    things in them.  The pool's set spans *every* member, so a constraint
-    belonging to a Kernel this point did not select is legitimately absent --
-    only a flat ``False`` is a refusal there.  The hardware constraints are all
-    the selected Kernel's own, so an ``Absent`` among them can only have come
-    from a ``reject(...)`` inside the evaluator, which is a refusal carrying a
-    reason.
+    Both halves now read ``ConstraintAssessment.refused``.  They used to need
+    different rules: the pool's set spans every member, so an ``Absent`` there
+    is usually an unselected Kernel's constraint, while an ``Absent`` among the
+    hardware constraints could only be a ``reject(...)``.  That distinction was
+    real but it was being drawn *here*, by position, because the engine's own
+    reduction dropped rejections entirely -- so this helper had to hand-roll
+    what a verdict should have said, and could only get away with it because it
+    knew which set was which.  The engine now separates a rejecting ``Absent``
+    from an inapplicable one directly, which is where the distinction belongs.
     """
 
     pool = engine.evaluate_constraint_set(point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set)
     hardware = engine.evaluate_constraints(point, DECOMPOSED_MVAU_KERNELS.coverage_constraints)
-    refused = {
-        str(path)
-        for path, answer in pool.answers.items()
-        if isinstance(answer, Decided) and answer.value is False
-    } | {
-        str(path)
-        for path, answer in hardware.answers.items()
-        if not isinstance(answer, Unresolved)
-        and not (isinstance(answer, Decided) and answer.value is True)
-    }
+    refused = {str(path) for path in (*pool.refused, *hardware.refused)}
     return {path.rsplit(".", 1)[-1] for path in refused}
 
 

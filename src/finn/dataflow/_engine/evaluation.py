@@ -62,6 +62,24 @@ def _finding(
     return Finding(kind, code, path, message, values, trace)
 
 
+def _satisfied(answer: Answer[bool]) -> bool:
+    """Whether one final constraint answer permits the set to pass.
+
+    Three cases, and the middle one is the one that was missing.  ``Decided``
+    carries its own answer.  A rejecting ``Absent`` is a refusal that chose the
+    ``Absent`` spelling so its reason could travel, and counts as one.  Any
+    other ``Absent`` is a question that did not arise -- an inapplicable
+    constraint, or one whose dependency did not apply -- and does not refuse.
+
+    ``Unresolved`` never reaches here: the caller establishes every answer is
+    final before reducing, and withholds the verdict otherwise.
+    """
+
+    if isinstance(answer, Decided):
+        return bool(answer.value)
+    return isinstance(answer, Absent) and not answer.is_rejection
+
+
 def _traced(answer: Answer[T], owner: QualifiedPath) -> Answer[T]:
     if isinstance(answer, Decided):
         return answer
@@ -689,11 +707,14 @@ class EvaluationKernel:
             for path in paths
         }
         complete = all(isinstance(answer, (Decided, Absent)) for answer in answers.values())
-        verdict = (
-            all(answer.value for answer in answers.values() if isinstance(answer, Decided))
-            if complete
-            else None
-        )
+        # A rejecting ``Absent`` is a refusal, not an inapplicability.  This
+        # used to ignore every ``Absent``, so a constraint that answered
+        # ``reject(...)`` -- an author refusing *with a reason* -- left the
+        # verdict ``True``.  Coverage constraints are the ones that do this,
+        # which meant a point no hardware could build passed operation-level
+        # feasibility and was refused later at binding, defeating the purpose
+        # of asking coverage at feasibility at all.
+        verdict = all(_satisfied(answer) for answer in answers.values()) if complete else None
         return ConstraintAssessment(answers, verdict)
 
     def check_readiness(

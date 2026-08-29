@@ -35,6 +35,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow.authoring import Ref, assemble_specs
 from finn.dataflow.design import (
     DATAFLOW_NETWORK_SEMANTICS,
+    Absent,
     Answer,
     ConstraintAssessment,
     Decided,
@@ -251,27 +252,25 @@ class _Placed:
     def semantic_refusals(self) -> set[str]:
         """Why the operation refuses, by constraint name. Diagnostic only.
 
-        Two shapes, not one. ``Decided(False)`` is the flat refusal;
-        ``Unresolved`` means the constraint could not be evaluated at all -- a
-        missing source description, say -- which is not permission to proceed.
-        Collecting only flat ``False`` was the second half of the bypass, and
-        it is why a point with no source description bound cleanly.
+        Three shapes. ``Decided(False)`` is the flat refusal; a *rejecting*
+        ``Absent`` is a ``reject(...)`` -- a refusal carrying a reason, which
+        is how every coverage constraint says no; and ``Unresolved`` means the
+        constraint could not be evaluated at all, which is not permission to
+        proceed.
 
-        ``Absent`` is deliberately *not* here. This set spans every pool, so a
-        constraint belonging to a Kernel this point did not select is
-        legitimately absent, and treating that as a refusal would report the
-        whole unselected inventory as broken.
+        A non-rejecting ``Absent`` is deliberately excluded. This set spans
+        every pool, so a constraint belonging to a Kernel this point did not
+        select is legitimately absent, and treating that as a refusal would
+        report the whole unselected inventory as broken.
 
-        The gate does not use this. ``verdict`` is the engine's own reduction
-        and knows the difference; this exists so a failure says which
-        constraint, rather than only that the verdict was not ``True``.
+        ``ConstraintAssessment.refused`` draws the first two of those lines, so
+        this does not redraw them.
         """
 
-        return {
+        return {str(path).rsplit(".", 1)[-1] for path in self.feasibility().refused} | {
             str(path).rsplit(".", 1)[-1]
             for path, answer in self.feasibility().answers.items()
             if isinstance(answer, Unresolved)
-            or (isinstance(answer, Decided) and answer.value is False)
         }
 
     def bind(
@@ -824,16 +823,67 @@ def test_weights_that_fill_the_a_port_are_refused_without_the_narrow_promise(
     Both of these used to bind cleanly. Both reach the generic ``mvu`` core,
     whose ``sliceLanes()`` computes ``bit_slack = -1`` and terminates with
     "Cannot accommodate 27-bit non-narrow weights" at ``mvu.sv:113``.
+
+    The refusal is asserted at *operation feasibility* first, and that is the
+    stronger of the two claims. Binding refusing it means no invalid artifact
+    is produced; the operation refusing it means the point is eliminated while
+    it is still a design point, which is what asking coverage at feasibility
+    was for. Those were briefly not the same thing -- see
+    ``test_a_rejecting_constraint_makes_the_set_verdict_false``.
     """
 
     placed = _place(weight=weight, accumulator=INT32, output=INT32, target=target, narrow=False)
-    answer = placed.bind(FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE})
 
+    assert placed.feasibility().verdict is False
+    assert "narrow_weights_supported" in placed.semantic_refusals()
+    with pytest.raises(InfeasiblePoint, match="narrow_weights_supported"):
+        placed.bind(FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE})
+
+    # And the Kernel's own refusal still carries the arithmetic that explains
+    # it, for a caller who reaches binding by another route.
+    answer = placed.bind_unchecked(
+        FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE}
+    )
     assert isinstance(answer, Unresolved)
     finding = next(
         item for item in answer.findings if item.code == "mvu-vvu-axi-weights-do-not-pack"
     )
     assert dict(finding.values)["bit_slack"] == -1
+
+
+def test_a_rejecting_coverage_constraint_makes_the_operation_refuse() -> None:
+    """The guarantee coverage-at-feasibility exists for.
+
+    Physical coverage constraints are asked at operation feasibility so a point
+    no hardware can build is eliminated while it is still a design point --
+    refused by selection, not discovered at binding.
+
+    That guarantee was broken. A coverage constraint refuses by returning
+    ``reject(...)``, which is an ``Absent`` carrying a ``REJECTION``, and the
+    engine's verdict ignored every ``Absent``. So this configuration left
+    ``mvau_op_feasibility`` reporting ``True``: ``SelectDataflowDesign`` could
+    pick it, and only binding would say no.
+
+    Asserted on the *verdict* rather than on a later refusal, because "binding
+    eventually refuses it" is a weaker property that held throughout.
+    """
+
+    placed = _place(
+        weight=INT27,
+        accumulator=INT32,
+        output=INT32,
+        target=MVAUDspBlock.DSP48E2,
+        narrow=False,
+    )
+    assessment = placed.feasibility()
+
+    assert assessment.verdict is False
+    (refused,) = assessment.refused
+    assert str(refused).endswith("narrow_weights_supported")
+    # Spelled as a rejection, which is exactly why it was being dropped.
+    answer = assessment.answers[refused]
+    assert isinstance(answer, Absent) and answer.is_rejection
+    assert refused not in assessment.not_applicable
 
 
 @pytest.mark.parametrize("target", [MVAUDspBlock.DSP48E1, MVAUDspBlock.DSP48E2, MVAUDspBlock.DSP58])
