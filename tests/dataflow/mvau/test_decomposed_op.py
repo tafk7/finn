@@ -34,13 +34,21 @@ from finn.dataflow.mvau.decomposed import (
     ActivationReplayKernel,
     DotProductKernel,
 )
-from finn.dataflow.design import QualifiedPath
+from finn.dataflow.design import (
+    Absent,
+    ConstraintAssessment,
+    Decided,
+    Engine,
+    QualifiedPath,
+)
 from finn.dataflow.mvau_problem import MVAUProblemPaths
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
 from finn.dataflow.kernels import NO_KERNEL
+from finn.dataflow.op import DataflowOpError
 from finn.dataflow.ops.mvau import (
     MVAU_WEIGHT_SUPPLY_SELECTION,
+    MVAUDataflowOpPaths,
     NetworkRef,
     SemanticOperandDestination,
 )
@@ -347,3 +355,92 @@ def test_a_fused_member_still_resolves_to_a_region() -> None:
     )
     result = operation.resolve_dataflow(_context()).result
     assert not isinstance(result, NetworkRef)
+
+
+# -- the operation's own verdict ---------------------------------------------
+#
+# Validating the Network directly says the assembly is well formed.  It does
+# not say the *operation* accepts it: its constraints are separate declarations
+# that can disagree with what assembly produced, and did.  These ask the
+# operation.
+
+
+def _assessment(operation: MvauDataflowOp, name: str) -> ConstraintAssessment:
+    return Engine().evaluate_constraint_set(operation.hydrate_dataflow_point(_context()), name)
+
+
+@pytest.mark.parametrize("constraint_set", ["mvau_op_structural", "mvau_op_feasibility"])
+def test_the_operation_accepts_the_decomposed_point(constraint_set: str) -> None:
+    operation = _committed(_model())
+    assessment = _assessment(operation, constraint_set)
+    rejected = {
+        str(path): answer for path, answer in assessment.answers.items() if answer == Decided(False)
+    }
+    assert rejected == {}
+    assert assessment.verdict is True
+
+
+def test_the_operation_is_structurally_ready() -> None:
+    operation = _committed(_model())
+    point = operation.hydrate_dataflow_point(_context())
+    assert Engine().check_readiness(point, "mvau_op_structural").ready is True
+
+
+def test_the_association_and_the_network_are_both_checked() -> None:
+    """Neither constraint may quietly sit out on a decomposed point.
+
+    ``source_association_valid`` once assumed ownership followed from the
+    parameter topology alone and rejected the replay node; the Network check
+    once applied only when a supplier had produced the Network.  Both are
+    ``Absent`` failures rather than ``False`` ones, so a verdict alone would
+    not have caught either.
+    """
+
+    assessment = _assessment(_committed(_model()), "mvau_op_structural")
+    for path in (
+        MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
+        MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
+        MVAU_REPLAY_SELECTION.paths.region_structurally_well_formed,
+    ):
+        assert assessment.answers[path] == Decided(True), path
+
+
+# -- replay is not optional --------------------------------------------------
+
+
+def test_the_replay_kernel_cannot_be_declined() -> None:
+    """Without it the dot product's expanded activation reaches the boundary.
+
+    ``R x NF x SF`` beats where the source operation presents ``R x SF``.  That
+    is a different contract, so ``none`` is not in this pool's domain when the
+    compute is decomposed -- the choice is withheld, not defaulted.
+    """
+
+    assert NO_KERNEL not in MVAU_REPLAY_SELECTION.candidate_ids
+
+    operation = _wrapped(_model())
+    operation.initialize_dataflow_scope_id()
+    choices = dict(_choices())
+    choices[MVAU_REPLAY_SELECTION.paths.kernel] = NO_KERNEL
+    with pytest.raises(DataflowOpError):
+        operation.commit_dataflow_assignments(_context(), choices)
+
+
+def test_the_replay_choice_does_not_apply_to_a_fused_member() -> None:
+    """It is mandatory where it applies and withheld everywhere else."""
+
+    operation = _wrapped(_model())
+    operation.initialize_dataflow_scope_id()
+    operation.commit_dataflow_assignments(
+        _context(),
+        {
+            MVAU_COMPUTE_SELECTION.paths.kernel: "rtl_softvec",
+            QualifiedPath("mvau.compute.rtl_softvec.pe"): 2,
+            QualifiedPath("mvau.compute.rtl_softvec.simd"): 2,
+            QualifiedPath("mvau.compute.rtl_softvec.compute_pumping"): False,
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+        },
+    )
+    point = operation.hydrate_dataflow_point(_context())
+    assert isinstance(Engine().query_property(point, MVAU_REPLAY_SELECTION.paths.region), Absent)
+    assert Engine().evaluate_constraint_set(point, "mvau_op_structural").verdict is True

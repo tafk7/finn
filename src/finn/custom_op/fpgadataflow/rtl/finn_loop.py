@@ -60,7 +60,9 @@ def collect_ip_dirs(model, ipstitch_path):
     for node in model.graph.node:
         node_inst = getCustomOp(node)
         ip_dir_value = node_inst.get_nodeattr("ip_path")
-        assert os.path.isdir(ip_dir_value), """The directory that should
+        assert os.path.isdir(
+            ip_dir_value
+        ), """The directory that should
         contain the generated ip blocks doesn't exist."""
         ip_dirs += [ip_dir_value]
         if node.op_type.startswith("MVAU") or node.op_type == "Thresholding_hls":
@@ -794,18 +796,16 @@ class FINNLoop(HWCustomOp, RTLBackend):
         adj_list = adjacency_list(
             loop_body,
             lambda node: (
-                (
-                    node.op_type == "Thresholding_rtl"
-                    and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
-                )
-                or (
-                    node.op_type == "MVAU_rtl"
-                    and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
-                )
-                or (
-                    node.op_type.startswith("Elementwise")
-                    and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
-                )
+                node.op_type == "Thresholding_rtl"
+                and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
+            )
+            or (
+                node.op_type == "MVAU_rtl"
+                and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
+            )
+            or (
+                node.op_type.startswith("Elementwise")
+                and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
             ),
         )
 

@@ -29,17 +29,23 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
 
-import numpy as np
+import numpy as np  # type: ignore[import-not-found]
 
 from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, Engine
+from finn.dataflow.mvau.compute_kernels import (
+    DECOMPOSED_MVAU_KERNELS,
+    MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
+)
 from finn.dataflow.mvau.decomposed import (
     ActivationReplayKernel,
     DotProductKernel,
     ParameterOwnership,
-    build_decomposed_mvau_pools,
 )
 from finn.dataflow.mvau_problem import (
     MVAU_PROBLEM_SPEC,
@@ -142,14 +148,17 @@ def declared_parameters(config: Config) -> dict[str, object]:
     the point or the provider table; none is restated here.
     """
 
-    pools = build_decomposed_mvau_pools()
+    pools = DECOMPOSED_MVAU_KERNELS
     engine = Engine()
     space = engine.validate(
         assemble_specs(
             (
                 mvau_operation_context(),
-                pools.dot_product.build_spec(),
-                pools.activation_replay.build_spec(),
+                # The operation's real compute pool, not a private one: the
+                # values driven into the RTL must be the values the shipped
+                # design space produces for this point.
+                MVAU_COMPUTE_SELECTION.build_spec(),
+                MVAU_REPLAY_SELECTION.build_spec(),
             )
         )
     )
@@ -176,15 +185,17 @@ def declared_parameters(config: Config) -> dict[str, object]:
     point = engine.commit_assignments(
         point,
         {
-            pools.dot_product.paths.kernel: DotProductKernel.id,
-            pools.activation_replay.paths.kernel: ActivationReplayKernel.id,
+            MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
+            MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
             pools.pe.path: config.pe,
             pools.simd.path: config.simd,
             pools.compute_pumping.path: config.pumping,
         },
     ).point
 
-    feasible = engine.evaluate_constraint_set(point, pools.dot_product.feasibility_constraint_set)
+    feasible = engine.evaluate_constraint_set(
+        point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
+    )
     if feasible.verdict is not True:
         raise AssertionError(f"{config.label}: the design point is not feasible: {feasible}")
 
@@ -421,7 +432,7 @@ def _drive(
     top_module: str,
     sources: list[str],
     top_path: str,
-    stimulus: dict,
+    stimulus: dict[str, list[int]],
     expected: int,
     *,
     stalls: bool,
@@ -442,7 +453,7 @@ def _drive(
 def _simulate(
     sim_dir: str,
     so_rel: str,
-    stimulus: dict,
+    stimulus: dict[str, list[int]],
     expected: int,
     *,
     stalls: bool,
@@ -453,7 +464,7 @@ def _simulate(
     # Different throttles per stream, so the two inputs also arrive out of step
     # with each other rather than in lockstep.
     throttles = {"in0": (2, 3), "in1": (3, 2)} if stalls else {}
-    for name, values in stimulus["inputs"].items():
+    for name, values in stimulus.items():
         sim.stream_input(
             f"{name}_V",
             map(lambda value: f"{value:0x}", list(values)),
@@ -467,7 +478,8 @@ def _simulate(
     timeouts = sim.run()
     if timeouts:
         raise AssertionError(f"{label}: deadlock, watchdogs fired: {timeouts}")
-    result = [int(value, base=16) for value in collected]
+    # Both collectors are iterables of hex strings; neither is typed as one.
+    result = [int(value, base=16) for value in cast("Iterable[str]", collected)]
     if watchdog in sim.watchdogs:
         sim.remove_watchdog(watchdog)
     close_rtlsim(sim)
@@ -490,7 +502,7 @@ def _run(config: Config, finn_root: str, finnlib_root: str) -> bool:
         _random_word(generator, config.pe * config.simd * config.weight_bits)
         for _ in range(passes * synapse_folds * neuron_folds)
     ]
-    stimulus = {"inputs": {"in0": activation, "in1": weight}}
+    stimulus = {"in0": activation, "in1": weight}
     print(
         f"  geometry: R={passes} SF={synapse_folds} NF={neuron_folds} "
         f"in0={len(activation)} in1={len(weight)} expect {expected} outputs"

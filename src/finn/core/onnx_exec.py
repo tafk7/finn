@@ -68,7 +68,9 @@ def execute_onnx(model, input_dict, return_full_exec_context=False, start_node=N
         if not model.check_all_tensor_shapes_specified():
             raise Exception("Found unspecified tensor shapes, try infer_shapes")
         ret = model.analysis(ta.nodes_topologically_sorted)
-        assert ret["nodes_topologically_sorted"] is True, """Nodes must be
+        assert (
+            ret["nodes_topologically_sorted"] is True
+        ), """Nodes must be
         topologically sorted."""
 
         graph = model.graph

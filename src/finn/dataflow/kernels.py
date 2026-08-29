@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The public Kernel authoring surface.
+"""The Kernel model: what a Kernel is, and how a pool of them assembles.
 
 A ``Kernel`` names one meaningful microarchitecture family.  A
 ``KernelSelection`` is one static, Op-class-owned pool of candidate Kernels
@@ -12,6 +12,15 @@ identity between Kernel and provider.
 This module adds no engine primitive.  A selection assembles ordinary problem
 fields, decisions, derived properties, constraints, constraint sets, and
 readiness profiles into one flat ``DesignSpaceSpec``.
+
+**Which of these you write.**  Author a ``Kernel`` subclass and hand it to
+``finn.dataflow.authoring.declare_kernel``; that is the supported contribution
+path and it is what ``finn.dataflow.authoring`` re-exports.
+``KernelDeclaration`` is the *compiled* form ``declare_kernel`` returns -- a
+Kernel class with its scoped declarations already built -- and it stays
+exported here because pool assembly and the engine both take it by name.
+Constructing one by hand means writing the declarations that
+``KernelDesign`` exists to write for you.
 """
 
 from __future__ import annotations

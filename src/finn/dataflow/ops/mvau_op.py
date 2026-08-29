@@ -48,7 +48,9 @@ from finn.dataflow.ops.mvau import (
 from finn.dataflow.mvau_problem import MVAU_PROBLEM_PROVENANCE, MVAUProblemPaths
 from finn.dataflow.region import BeatSequence
 
-MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v2"
+#: v3 adds the replay Kernel decision and its ``dataflow_replay_kernel``
+#: attribute to the persisted set.
+MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v3"
 
 
 @dataclass(frozen=True)

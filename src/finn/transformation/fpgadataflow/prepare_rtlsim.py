@@ -66,9 +66,9 @@ class PrepareRTLSim(NodeLocalTransformation):
                 inst = registry.getCustomOp(node)
                 inst.prepare_rtlsim(self.behav)
                 # ensure that executable path is now set
-                assert inst.get_nodeattr("rtlsim_so") != "", (
-                    "Failed to prepare RTLSim, no rtlsim_so attribute found."
-                )
+                assert (
+                    inst.get_nodeattr("rtlsim_so") != ""
+                ), "Failed to prepare RTLSim, no rtlsim_so attribute found."
             except KeyError:
                 # exception if op_type is not supported
                 raise Exception("Custom op_type %s is currently not supported." % op_type)

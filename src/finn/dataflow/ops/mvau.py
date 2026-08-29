@@ -473,6 +473,23 @@ def _interleaved_pumping_supported(dependencies: DependencyView) -> Answer[bool]
     return Decided(pumped is ABSENT or not cast(bool, pumped))
 
 
+def _semantic_owners(dependencies: DependencyView) -> tuple[str, str]:
+    """The node ids the source tensors land on, as ``(compute, activation)``.
+
+    Assembly is what moves them.  A Network names its compute node
+    ``DOT_PRODUCT_NODE``, and a replay node in front of it takes the activation
+    tensor while everything else keeps the owner it had.  Derivation and
+    validation must agree on this exactly, so both ask here rather than each
+    reconstructing it from the topology.
+    """
+
+    topology = cast(MVAUParameterTopology, dependencies["parameter_topology"])
+    assembled = topology is MVAUParameterTopology.CYCLIC or _has_replay(dependencies)
+    compute_owner = DOT_PRODUCT_NODE if assembled else "mvau.compute"
+    activation_owner = REPLAY_NODE if _has_replay(dependencies) else compute_owner
+    return compute_owner, activation_owner
+
+
 def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
     description = cast(MVAUSourceDescription, dependencies["source_description"])
     topology = cast(MVAUParameterTopology, dependencies["parameter_topology"])
@@ -481,11 +498,7 @@ def _derive_source_association(dependencies: DependencyView) -> Answer[object]:
     repetitions = cast(int, dependencies["repetitions"])
     matrix_width = cast(int, dependencies["matrix_width"])
     matrix_height = cast(int, dependencies["matrix_height"])
-    assembled = topology is MVAUParameterTopology.CYCLIC or _has_replay(dependencies)
-    compute_owner = DOT_PRODUCT_NODE if assembled else "mvau.compute"
-    # With a replay node in front, the activation tensor arrives there, not at
-    # the compute node.  Everything else keeps the owner it had.
-    activation_owner = REPLAY_NODE if _has_replay(dependencies) else compute_owner
+    compute_owner, activation_owner = _semantic_owners(dependencies)
     operands = [
         SourceOperandAssociation(
             "activation",
@@ -564,14 +577,30 @@ def _source_association_valid(dependencies: DependencyView) -> Answer[bool]:
     threshold_valid = profile is not MVAUComputationProfile.FUSED_THRESHOLD or (
         description.threshold_operand_id is not None and description.threshold_shape is not None
     )
-    compute_operands = {interface.port.operand.id for interface in compute.interfaces}
+    compute_owner, activation_owner = _semantic_owners(dependencies)
+    # A semantic destination is valid only if the node it names is really in
+    # the assembly *and* carries that operand.  Checking membership per owner
+    # is what makes a misrouted activation -- the replay tensor addressed to
+    # the dot product, or the other way round -- fail here.
+    replay = dependencies["replay_region"]
+    operands_by_owner = {
+        compute_owner: {interface.port.operand.id for interface in compute.interfaces}
+    }
+    if activation_owner != compute_owner:
+        operands_by_owner[activation_owner] = (
+            set()
+            if replay is ABSENT
+            else {
+                interface.port.operand.id for interface in cast(DataflowRegion, replay).interfaces
+            }
+        )
     semantic_destinations_valid = True
     for operand in association.operands:
         destination = operand.destination
         if not isinstance(destination, SemanticOperandDestination):
             continue
-        expected_owner = "compute" if topology is MVAUParameterTopology.CYCLIC else "mvau.compute"
-        if destination.owner_id != expected_owner or destination.operand_id not in compute_operands:
+        available = operands_by_owner.get(destination.owner_id)
+        if available is None or destination.operand_id not in available:
             semantic_destinations_valid = False
     local_destinations = {
         operand.role: operand.destination
@@ -582,7 +611,7 @@ def _source_association_valid(dependencies: DependencyView) -> Answer[bool]:
         (
             topology is MVAUParameterTopology.EMBEDDED
             and local_destinations.get("weight")
-            == BindingLocalStateDestination("mvau.compute", "weights")
+            == BindingLocalStateDestination(compute_owner, "weights")
         )
         or (topology is MVAUParameterTopology.DIRECT and "weight" not in local_destinations)
         or (
@@ -932,6 +961,8 @@ def _op_constraints() -> tuple[Constraint, ...]:
                     _COMPUTE_REGION_REF,
                     _REPETITIONS_REF,
                     _COMPUTATION_REF,
+                    _REPLAY_KERNEL_REF,
+                    _REPLAY_REGION_REF,
                 ),
                 _source_association_valid,
             ),
@@ -946,7 +977,10 @@ def _op_constraints() -> tuple[Constraint, ...]:
                 ),
                 _network_is_structurally_well_formed,
             ),
-            applies_if=_SUPPLIED,
+            # Whenever there is a Network at all, not only when a supplier made
+            # it: a replay node produces one too, and its structure is exactly
+            # as much in need of checking.
+            applies_if=_ASSEMBLED,
         ),
     )
 
@@ -955,6 +989,7 @@ _OP_STRUCTURAL_CONSTRAINTS = (
     MVAU_COMPUTE_SELECTION.paths.region_structurally_well_formed,
     MVAU_WEIGHT_SUPPLY_SELECTION.paths.region_structurally_well_formed,
     MVAU_WEIGHT_ADAPTER_SELECTION.paths.region_structurally_well_formed,
+    MVAU_REPLAY_SELECTION.paths.region_structurally_well_formed,
     MVAUDataflowOpPaths.WEIGHT_CONNECTION_SUPPORTED,
     MVAUDataflowOpPaths.DECOMPOSED_SUPPLY_SUPPORTED,
     MVAUDataflowOpPaths.EXPOSED_WEIGHT_SOURCE_AVAILABLE,
@@ -969,6 +1004,7 @@ _OP_FEASIBILITY_CONSTRAINTS = tuple(
             *MVAU_COMPUTE_SELECTION.feasibility_constraints(),
             *MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraints(),
             *MVAU_WEIGHT_ADAPTER_SELECTION.feasibility_constraints(),
+            *MVAU_REPLAY_SELECTION.feasibility_constraints(),
             *_OP_STRUCTURAL_CONSTRAINTS,
         )
     )
@@ -984,6 +1020,8 @@ _OP_DECISIONS = (
         for item in kernel.spec.decisions
     ),
     MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel,
+    MVAU_REPLAY_SELECTION.paths.kernel,
+    *(item.path for kernel in MVAU_REPLAY_SELECTION.kernels for item in kernel.spec.decisions),
 )
 
 _OP_PROPERTIES = (
@@ -992,6 +1030,8 @@ _OP_PROPERTIES = (
     MVAUDataflowOpPaths.COMPUTE_REGION_FORM,
     MVAU_WEIGHT_SUPPLY_SELECTION.paths.region,
     MVAU_WEIGHT_ADAPTER_SELECTION.paths.region,
+    MVAU_REPLAY_SELECTION.paths.region,
+    MVAU_REPLAY_SELECTION.paths.selected_kernel,
     MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
     MVAUDataflowOpPaths.SOURCE_ASSOCIATION,
     MVAUDataflowOpPaths.NETWORK,

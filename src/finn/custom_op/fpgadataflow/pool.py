@@ -88,7 +88,9 @@ class Pool(HWCustomOp):
             assert odt == idt, "In datatype must be equal to out datatype for Maxpool"
         elif fxn == "QuantAvgPool":
             idt = DataType[self.get_nodeattr("InputDataType")]
-            assert idt.signed() == odt.signed(), """QuantAvgPool: Can't mix signed
+            assert (
+                idt.signed() == odt.signed()
+            ), """QuantAvgPool: Can't mix signed
             and unsigned datatypes"""
         else:
             raise Exception("Pool_Batch doesn't currently support " + fxn)

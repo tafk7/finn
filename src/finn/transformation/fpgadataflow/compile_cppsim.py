@@ -56,13 +56,17 @@ class CompileCppSim(NodeLocalTransformation):
                 # lookup op_type in registry of CustomOps
                 inst = registry.getCustomOp(node)
                 # ensure that code is generated
-                assert inst.get_nodeattr("code_gen_dir_cppsim") != "", """Node
+                assert (
+                    inst.get_nodeattr("code_gen_dir_cppsim") != ""
+                ), """Node
                 attribute "code_gen_dir_cppsim" is not set. Please run
                 Transformation PrepareCppSim first."""
                 # call the compilation function for this node
                 inst.compile_singlenode_code()
                 # ensure that executable path is now set
-                assert inst.get_nodeattr("executable_path") != "", """Transformation
+                assert (
+                    inst.get_nodeattr("executable_path") != ""
+                ), """Transformation
                 compile was not successful, there is no path to executables set
                 in node attribute "executable_path"."""
             except KeyError:

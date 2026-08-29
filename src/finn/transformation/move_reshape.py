@@ -45,9 +45,9 @@ class RemoveCNVtoFCFlatten(Transformation):
                                     # absorb transpose into weight matrix,
                                     # allowing FC layer to operate on the NHWC input
                                     W = model.get_initializer(consumer.input[1])
-                                    assert W is not None, (
-                                        "Initializer for matmul weights is not set."
-                                    )
+                                    assert (
+                                        W is not None
+                                    ), "Initializer for matmul weights is not set."
                                     W_new = W.reshape(c, h, w, mh)
                                     W_new = W_new.transpose((1, 2, 0, 3))
                                     W_new = W_new.reshape(mw, mh)

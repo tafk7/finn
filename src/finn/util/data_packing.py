@@ -689,7 +689,7 @@ def packed_bytearray_to_finnpy_float(
     target_bits = dtype.bitwidth()
     if reverse_endian:
         packed_bytearray = np.ascontiguousarray(np.flip(packed_bytearray, axis=-1))
-    unpacked_float = packed_bytearray.view(f">f{target_bits // 8}")
+    unpacked_float = packed_bytearray.view(f">f{target_bits//8}")
     unpacked_float = unpacked_float.astype(np.float32)
     if reverse_inner:
         unpacked_float = np.flip(unpacked_float, -1)

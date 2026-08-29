@@ -77,7 +77,10 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v7"
+#: v8 adds the decomposed compute member, the replay decision and its node
+#: attribute, a Region form, and a Network result topology.  A v7 selection
+#: cannot describe any of those, so it is not reinterpretable as one.
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v8"
 MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
     {
         "noActivation": ("i", False, 1, {0, 1}),

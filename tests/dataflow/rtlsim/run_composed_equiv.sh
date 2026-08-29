@@ -8,8 +8,10 @@
 # comparison would be reported as a pass by anything checking $?.
 set -euo pipefail
 cd "$FINN_ROOT"
+# A generated log, so it goes somewhere .gitignore already covers (*.log) and
+# never into the tree.  Override to put it elsewhere.
+log="${FIXTURE5_LOG:-$FINN_ROOT/fixture5.log}"
 status=0
-python tests/dataflow/rtlsim/composed_mvau_equiv.py 2>&1 \
-    | tee "$FINN_ROOT/_fixture5_out.txt" || status=$?
-echo "EXIT=$status" | tee -a "$FINN_ROOT/_fixture5_out.txt"
+python tests/dataflow/rtlsim/composed_mvau_equiv.py 2>&1 | tee "$log" || status=$?
+echo "EXIT=$status" | tee -a "$log"
 exit "$status"

@@ -628,7 +628,12 @@ def build_decomposed_mvau_kernels(
         KernelSelection(
             REPLAY_POOL,
             (replay,),
-            optional=True,
+            # Not optional.  When the compute is decomposed the replay node is
+            # part of the semantics, not an option: without it the dot product
+            # would expose its expanded activation sequence at the operation
+            # boundary, which is a different contract from the source's.  The
+            # applicability gate already withholds the decision entirely for
+            # every other compute Kernel.
             applies_if=_replay_applies(compute_pool),
         ),
         pe,
