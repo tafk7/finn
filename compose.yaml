@@ -6,22 +6,25 @@
 #   docker compose --profile fpga run --rm build-xrt
 #   docker compose up notebook
 #
-# BEFORE YOU RUN THIS
-# -------------------
-# The FPGA services need host facts that no committed file can know: where the
-# Xilinx install is, which licence form is in use, which directories to bind.
-# Generate them once per host:
+# BEFORE YOU RUN THIS -- FOR EVERY SERVICE, INCLUDING dev
+# -------------------------------------------------------
 #
-#   ./docker/finn-env inspect --tier build --format sh > .env
+#   ./docker/finn-env inspect --tier dev --format sh > .env
 #
-# .env is a CACHE with a single producer, not a second source of truth. If it
-# looks stale, delete it and regenerate -- never hand-edit it.
+# .env is a CACHE with a single producer. Delete and regenerate it if it looks
+# stale; never hand-edit it.
 #
-# The `dev` service deliberately needs none of that and works with no .env at
-# all. That is the point of the tier: an agent or a new contributor gets a
-# working environment with one mount, no secrets, no egress and no host
-# toolchain. If you find yourself adding a bind mount to `dev`, that is the
-# signal to make an fpga-profile service instead.
+# This step is NOT optional for dev, and an earlier version of this comment
+# wrongly said it was. Compose cannot run `id -u`, so with no .env the `user:`
+# key below falls back to 1000:1000. On any host whose uid is not 1000, the
+# container then cannot write the bind-mounted workspace, and the failure is a
+# bare `PermissionError` from whatever tries first -- not a message about uids.
+#
+# run-docker.sh does this for you. Plain Compose cannot.
+#
+# What dev DOES avoid is host state: no toolchain, no licence, no secrets, no
+# egress. Only the workspace is mounted. If you find yourself adding a bind
+# mount to `dev`, that is the signal to make an fpga-profile service instead.
 #
 # WORKSPACE PATH
 # --------------

@@ -19,8 +19,9 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Getting Started
 
-FINN runs three ways, for three purposes. See **[docs/running-finn.md](docs/running-finn.md)**
-for the full guide.
+FINN runs three ways, for three purposes. See the
+[Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
+page for the full guide.
 
 | Lane | Command | For |
 |---|---|---|
@@ -28,15 +29,15 @@ for the full guide.
 | **sbx sandbox** | `docker/finn-sbx dev` | autonomous agent development |
 | **Bare host** | `./setup-local.sh` | unstructured development |
 
-The `dev` tier needs no configuration at all — no toolchain, no licence, no
-network access. Vivado and Vitis work is the `build` tier, which mounts **your
+The `dev` tier needs no host state — no toolchain, no licence, no network
+access. (It does need one setup command; see the guide.) Vivado and Vitis work is the `build` tier, which mounts **your
 own** Xilinx installation read-only; FINN does not ship the tools.
 
 `./run-docker.sh` still works and still accepts every variable it always did.
 It is now a wrapper over the Docker lane.
 
-See also the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
-page on readthedocs.
+Due to the complex dependencies of this project, we recommend one of the
+container-based methods.
 
 ## What's New in FINN?
 

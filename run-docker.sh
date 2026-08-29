@@ -51,7 +51,7 @@
 # somewhere else now, exactly once. The three mount defects that started this
 # work were all the same failure -- two code paths deriving the same host fact
 # and drifting -- so a launcher that derives nothing cannot reproduce them.
-# See docs/containerization-decisions.md.
+# See docs/containerization.md.
 # ============================================================================
 
 set -uo pipefail

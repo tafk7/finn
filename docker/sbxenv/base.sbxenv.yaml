@@ -50,7 +50,7 @@ kits:
 env:
   # sbx mounts at the host path and cannot remap, so the workspace policy is
   # always `mirror` here regardless of the tier -- see D4 in
-  # docs/containerization-decisions.md.
+  # docs/containerization.md.
   FINN_ROOT: "${FINN_WORKSPACE_SOURCE}"
   # Scratch inside the VM. A build tree that outlives the sandbox has nowhere
   # to live, and writing it into the mounted workspace is what this redesign

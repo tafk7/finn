@@ -110,15 +110,22 @@ Docker Compose is the standard command:
   docker compose --profile fpga run --rm build   # Vivado and Vitis HLS
   docker compose --profile notebook up           # Jupyter
 
-The ``dev`` tier needs no configuration. For the tiers that use the Xilinx
-tools, make the host settings one time:
+Make the host settings one time, for **every** tier including ``dev``:
 
 .. code-block:: bash
 
-  ./docker/finn-env inspect --tier build --format sh > .env
+  ./docker/finn-env inspect --tier dev --format sh > .env
 
 The ``.env`` file is a cache. One program writes it. Do not edit it. If it is
 not correct, delete it and make it again.
+
+This step is necessary. Docker Compose cannot run ``id -u``, so with no
+``.env`` the container runs as user 1000. If your user ID is not 1000, the
+container cannot write to the workspace, and you get a permission error from
+the first program that tries. ``run-docker.sh`` makes this file for you.
+
+The ``dev`` tier still needs no *host state*: no toolchain, no licence, no
+secrets and no network access. Only the workspace is mounted.
 
 `run-docker.sh <https://github.com/Xilinx/finn/blob/main/run-docker.sh>`_ is the
 older command. It continues to work, and it accepts all the variables that it
@@ -167,6 +174,35 @@ This will launch the `Jupyter notebook <https://jupyter.org/>`_ server inside a 
   The ``run-docker.sh`` script forwards ports 8888 for Jupyter and 8081 for Netron, and launches the notebook server with appropriate arguments.
 
 
+Image tiers
+===========
+
+The three tiers are the same in all three ways. Select one with
+``FINN_DOCKER_TARGET``.
+
+.. list-table::
+  :header-rows: 1
+
+  * - Tier
+    - Adds
+    - Necessary from the host
+  * - ``dev``
+    - Python, FINN and its dependencies
+    - **Nothing** but the repository
+  * - ``build``
+    - HLS headers, board files
+    - Xilinx installation, licence
+  * - ``build-xrt``
+    - XRT, V80 support
+    - Also the platform repository
+
+The ``dev`` tier is defined by what it does not have. It has no toolchain
+mount, no licence and no FINN network access. An agent or a new contributor can
+therefore use it with no configuration.
+
+RTL simulation uses the ``xsim`` tool of Vivado, not XRT. Use ``build`` for RTL
+simulation.
+
 Environment variables
 **********************
 
@@ -204,6 +240,64 @@ General FINN Docker tips
 * Do not use ``sudo`` to launch the FINN Docker. Instead, setup Docker to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
 * If you want a new terminal on an already-running container, you can do this with ``docker exec -it <name_of_container> bash``.
 * The container is spawned with the `--rm` option, so make sure that any important files you created inside the container are either in the finn compiler folder (which is mounted from the host computer) or otherwise backed up.
+
+What each way protects
+======================
+
+The Docker container is a real boundary, but not a complete one. Be exact about
+which parts are which.
+
+The container **does** give you:
+
+* Separate namespaces for processes, files, network interfaces, hostname,
+  interprocess communication and control groups.
+* A reduced set of Linux capabilities. Docker removes ``SYS_ADMIN``,
+  ``SYS_MODULE``, ``SYS_PTRACE``, ``NET_ADMIN``, ``SYS_BOOT`` and ``SYS_RAWIO``.
+* A seccomp filter, which stops approximately 44 system calls.
+* A read-only mount of the Xilinx installation.
+
+The container does **not** give you:
+
+* **A separate kernel.** The container and the host use the same kernel. An
+  attack against the kernel escapes the container.
+* **Network control.** The container can reach each address that the host can
+  reach. Docker has no list of permitted destinations.
+* **A separate user namespace.** User ID 1000 in the container is user ID 1000
+  on the host. A write through a mounted directory is a write by that host user.
+
+The second item decides the recommendation for agents. The usual risk is not an
+attack against the kernel. The usual risk is that the agent sends data out, or
+that text in its input tells it to. Docker cannot stop this. sbx can.
+
+Running FINN in an sbx sandbox
+==============================
+
+Use this way when an autonomous agent does the development. The sandbox is a
+microVM with its own kernel. Network access is denied until you permit a host.
+
+.. code-block:: bash
+
+  docker/finn-sbx dev                      # only the repository
+  docker/finn-sbx build                    # also the toolchain (ro) and licence access
+  docker/finn-sbx build -- pytest -m util  # one command
+  docker/finn-sbx rm build                 # remove the sandbox
+
+You must have `sbx <https://docs.docker.com/ai/sandboxes/>`_ 0.39.0 or later,
+and you must be signed in.
+
+The ``dev`` tier in a sandbox has no toolchain, no licence and no network
+permission. This is not because the variables are empty. It is because the tier
+does not read the file that adds them.
+
+The command builds the image, puts it into the image store of sbx, and then
+uses ``sbx env`` to make or connect to the sandbox.
+``docker/sbxenv/base.sbxenv.yaml`` declares what a FINN sandbox is, and
+``fpga.sbxenv.yaml`` adds the toolchain for the larger tiers.
+
+.. note::
+   Node-locked licences are not verified in a sandbox. FLEXlm connects a
+   node-locked licence to an Ethernet host ID, and a sandbox does not show the
+   host ID of the machine. Floating licences (``port@host``) do operate.
 
 Running FINN without Docker (Local Installation)
 =================================================

@@ -11,7 +11,7 @@
 # only transport, the image is saved to a shared directory and other agents load
 # it rather than rebuilding. Prefer publishing by digest to a registry when one
 # exists -- see ci/scripts/build-images.sh, and D6 in
-# docs/containerization-decisions.md for why a tag alone is not enough.
+# docs/containerization.md for why a tag alone is not enough.
 #
 # Reads FINN_DOCKER_SHARED_IMAGE_DIR and FINN_DOCKER_PREBUILT, exactly as
 # before. Exits 0 having loaded nothing when neither is set, so callers can

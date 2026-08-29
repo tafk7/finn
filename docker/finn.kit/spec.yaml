@@ -41,7 +41,7 @@
 # used the floating PORT@HOST form, which mounts nothing, so this path is
 # untested. Either the write claim is wrong or the mount policy is - resolve it
 # by testing a node-locked checkout against a named sbx version, not by editing
-# this comment. Tracked as conformance test 9 in docs/containerization-plan.md.
+# this comment. Tracked as conformance test 9 in ci/scripts/conformance.sh.
 #
 # WHY A KIT AND NOT THE ENTRYPOINT
 #
