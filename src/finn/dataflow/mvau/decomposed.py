@@ -20,7 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 from enum import Enum
-from math import ceil, floor
 
 from finn.dataflow.authoring.kernel_design import (
     KernelDesign,
@@ -28,7 +27,7 @@ from finn.dataflow.authoring.kernel_design import (
     kernel_namespace,
 )
 from finn.dataflow.authoring.op_design import ProblemProvenance
-from finn.dataflow.authoring.scope import Ref, divisors_of, finite, unresolved
+from finn.dataflow.authoring.scope import Ref, divisors_of, finite
 from finn.dataflow.kernels import (
     KERNEL_ID_SEMANTICS,
     Kernel,
@@ -39,6 +38,12 @@ from finn.dataflow.mvau.compute_pool import (
     REGION_FORM_EXPORT,
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
+)
+from finn.dataflow.mvau.rtl_parameters import (
+    DSP_VERSION,
+    dsp_version,
+    segment_length,
+    signed_activations,
 )
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
@@ -89,18 +94,6 @@ ACTIVATION_EDGE = "activation_replay"
 #: The two providers this slice targets.
 REPLAY_PROVIDER = "finn.rtl.replay_buffer"
 DOT_PRODUCT_PROVIDER = "finnlib.rtl.dotp_axi"
-
-#: The DSP generation each target family selects in the RTL.
-_DSP_VERSION = {
-    MVAUDspBlock.DSP48E1: 1,
-    MVAUDspBlock.DSP48E2: 2,
-    MVAUDspBlock.DSP58: 3,
-}
-
-#: Per-DSP delay terms behind the segment-length derivation, in nanoseconds.
-#: Kept as named constants because they are a timing model, not magic numbers.
-_SEGMENT_BASE_DELAY_NS = 0.741
-_SEGMENT_STAGE_DELAY_NS = 0.605
 
 
 class ParameterOwnership(str, Enum):
@@ -193,13 +186,13 @@ class DotProductKernel(Kernel):
             "dsp_version",
             int,
             dependencies={"target": facts.target_dsp_block},
-            evaluate=lambda target: _DSP_VERSION[target],
+            evaluate=dsp_version,
         )
         design.derived(
             "signed_activations",
             bool,
             dependencies={"activation": facts.activation_element_type},
-            evaluate=lambda activation: activation.type_id == "int",
+            evaluate=signed_activations,
         )
         design.derived(
             "segment_length",
@@ -209,7 +202,7 @@ class DotProductKernel(Kernel):
                 "pumping": pumping,
                 "simd": simd,
             },
-            evaluate=_segment_length,
+            evaluate=segment_length,
         )
         # -- what the source must be for this Kernel to serve it at all ----
         # Answerable from graph facts alone, so they gate inference.
@@ -242,7 +235,7 @@ class DotProductKernel(Kernel):
         design.feasibility_constraint(
             "target_supported",
             dependencies={"target": facts.target_dsp_block},
-            evaluate=lambda target: target in _DSP_VERSION,
+            evaluate=lambda target: target in DSP_VERSION,
         )
         design.feasibility_constraint(
             "width_supported",
@@ -411,28 +404,6 @@ def _narrow_weights_supported(target: MVAUDspBlock, narrow: bool) -> object:
     """
 
     return narrow if target is MVAUDspBlock.DSP48E1 else True
-
-
-def _segment_length(clock_period_ns: float, pumping: bool, simd: int) -> object:
-    """The DSP cascade length the target clock can carry.
-
-    Preserved verbatim from the elaborator it is being taken out of, because
-    the point of declaring it is to fix its *ownership*, not its value.  Do not
-    replace it with ``SEGMENTLEN = 0``: zero means ``SEGLEN = CHAINLEN``, the
-    longest cascade, which discards exactly the clock-driven shortening this
-    computes and quietly loses timing coverage at fast clocks.
-    """
-
-    reference_clock = clock_period_ns / 2 if pumping else clock_period_ns
-    if reference_clock <= _SEGMENT_BASE_DELAY_NS:
-        return unresolved(
-            "mvau-segment-length-clock-infeasible",
-            "the target clock period is below the covered RTL segment-delay bound",
-            values={"reference_clock_ns": reference_clock},
-        )
-    covered_stages = floor((reference_clock - _SEGMENT_BASE_DELAY_NS) / _SEGMENT_STAGE_DELAY_NS + 1)
-    longest_chain = ceil(simd / (6 if pumping else 3))
-    return min(covered_stages, longest_chain)
 
 
 class ActivationReplayKernel(Kernel):

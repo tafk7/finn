@@ -67,6 +67,11 @@ from finn.dataflow.mvau.compute_pool import (
     WEIGHT_INTERFACE,
 )
 from finn.dataflow.mvau.decomposed import build_decomposed_mvau_kernels
+from finn.dataflow.mvau.rtl_parameters import (
+    dsp_version,
+    segment_length,
+    signed_activations,
+)
 from finn.dataflow.mvau_problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
@@ -147,6 +152,7 @@ _MATRIX_HEIGHT = MVAU_PROBLEM.matrix_height.dependency("matrix_height")
 _WEIGHT_INITIALIZER = MVAU_PROBLEM.weight_initializer_available.dependency(
     "weight_initializer_available"
 )
+_TARGET_CLOCK = MVAU_PROBLEM.target_clock_period_ns.dependency("clock_period_ns")
 
 
 def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
@@ -235,6 +241,18 @@ class MVAUComputeKernelPathSet:
     @property
     def full_tile_weight_port(self) -> QualifiedPath:
         return self._semantic("full_tile_weight_port")
+
+    @property
+    def dsp_version(self) -> QualifiedPath:
+        return self._semantic("dsp_version")
+
+    @property
+    def signed_activations(self) -> QualifiedPath:
+        return self._semantic("signed_activations")
+
+    @property
+    def segment_length(self) -> QualifiedPath:
+        return self._semantic("segment_length")
 
     @property
     def neuron_folds(self) -> QualifiedPath:
@@ -343,6 +361,55 @@ def _shared_source_constraint_paths(
         paths.constraint("computation_types_supported"),
         paths.constraint("accumulator_output_type_supported"),
         paths.constraint("fused_threshold_source_supported"),
+    )
+
+
+def _rtl_parameter_properties(
+    paths: MVAUComputeKernelPathSet,
+) -> tuple[DerivedProperty, ...]:
+    """``VERSION``, ``SIGNED_ACTIVATIONS`` and ``SEGMENTLEN``, declared.
+
+    The elaborator used to compute all three itself, which put values into an
+    artifact that never appeared in the design point.  They are ordinary
+    derived properties here, evaluated by the one shared implementation in
+    ``rtl_parameters`` that the decomposed Kernel also declares them from.
+    """
+
+    def version(dependencies: DependencyView) -> Answer[object]:
+        target = dependencies["target_dsp_block"]
+        if target is ABSENT:
+            return _missing_problem(
+                paths.dsp_version,
+                MVAU_PROBLEM.target_dsp_block.path,
+                "mvau-target-dsp-missing",
+                "the RTL core version follows from the target DSP family",
+            )
+        return Decided(dsp_version(cast(MVAUDspBlock, target)))
+
+    def signedness(dependencies: DependencyView) -> Answer[object]:
+        return Decided(
+            signed_activations(cast(NumericElementType, dependencies["activation_element_type"]))
+        )
+
+    def segment(dependencies: DependencyView) -> Answer[object]:
+        value = segment_length(
+            cast(float, dependencies["clock_period_ns"]),
+            cast(bool, dependencies["compute_pumping"]),
+            cast(int, dependencies["simd"]),
+        )
+        return value if isinstance(value, Unresolved) else Decided(value)
+
+    pumping_ref = DependencyRef.decision("compute_pumping", paths.compute_pumping, _BOOL)
+    return (
+        DerivedProperty(paths.dsp_version, _INTEGER, EvaluatorSpec((_TARGET_DSP,), version)),
+        DerivedProperty(
+            paths.signed_activations, _BOOL, EvaluatorSpec((_ACTIVATION_TYPE,), signedness)
+        ),
+        DerivedProperty(
+            paths.segment_length,
+            _INTEGER,
+            EvaluatorSpec((_TARGET_CLOCK, pumping_ref, _simd_ref(paths)), segment),
+        ),
     )
 
 
@@ -794,6 +861,7 @@ def _build_standard_rtl_kernel(
         ),
         properties=(
             *_fold_properties(paths),
+            *_rtl_parameter_properties(paths),
             DerivedProperty(
                 paths.region,
                 _REGION,

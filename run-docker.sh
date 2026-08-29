@@ -309,6 +309,16 @@ DOCKER_EXEC+="-e LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1 "
 # Workaround for running multiple Vivado instances simultaneously, see:
 # https://adaptivesupport.amd.com/s/article/63253?language=en_US
 DOCKER_EXEC+="-e XILINX_LOCAL_USER_DATA=no "
+# Forward the license configuration. Simulation does not need it, so its
+# absence goes unnoticed until the first synthesis of a licensed device
+# (Versal) fails with "A valid license was not found" -- which reads as a
+# missing entitlement rather than as an unset variable.
+if [ -n "$XILINXD_LICENSE_FILE" ]; then
+  DOCKER_EXEC+="-e XILINXD_LICENSE_FILE=$XILINXD_LICENSE_FILE "
+fi
+if [ -n "$LM_LICENSE_FILE" ]; then
+  DOCKER_EXEC+="-e LM_LICENSE_FILE=$LM_LICENSE_FILE "
+fi
 # Optional host cache for torch.hub / huggingface weights to avoid CDN 504s
 # on parallel CI runs. Bind target is /finn_cache (NOT $HOME, because docker
 # creates bind parents as root and that would break pip install --user).

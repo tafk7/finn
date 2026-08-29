@@ -9,14 +9,27 @@ Runs INSIDE the FINN Docker container; needs Vivado's ``xelab`` and ``finn_xsi``
 
 The decomposition claims that ``mvu_vvu_axi`` is an activation replay followed
 by a dot-product core, and that naming the two halves separately changes
-nothing observable.  The RTL says the same thing: ``dotp_axi`` is
-``mvu_vvu_axi`` with the ``replay_buffer`` lifted out and ``alast`` taken from
-``s_axis_input_tlast`` instead of the replay's ``olast``.  This test drives both
-with the same random stream and requires bit-identical output.
+nothing observable.  This drives both with the same random stream and requires
+bit-identical output.
 
-Both DUTs are compared to *each other*, not to a numeric golden, so the
-stimulus is raw random integers packed to the stream widths.  Any value reaches
-both identically; a mismatch can only mean the composition altered behaviour.
+**The composed DUT is not written here.**  It comes out of the production path:
+a real ``MvauDataflowOp`` over a real graph selects the decomposed Kernel, the
+provider elaborates it, and ``write_decomposed_artifact`` emits the Verilog and
+the source manifest.  Anything this fixture proves is therefore a property of
+what the compiler actually builds, not of a lookalike assembled beside it.  The
+*fused* top is written here, because that one is the oracle.
+
+Both DUTs are compared to each other, not to a numeric golden, so the stimulus
+is raw random integers packed to the stream widths.  Any value reaches both
+identically; a mismatch can only mean the composition altered behaviour.
+
+**Each simulation runs in its own process.**  XSI keeps state that outlives
+``close_rtlsim``: the third ``load_sim_obj`` in a process hangs -- not the
+third load of the same object, the third load at all -- with no diagnostic and
+without the watchdog firing.  Isolating per configuration is not enough,
+because one configuration is already four simulations.  Compiling and running
+each one in a fresh interpreter removes the variable entirely and costs only
+process startup, which is nothing beside ``xelab``.
 
 Usage, from ``finn/``::
 
@@ -25,59 +38,43 @@ Usage, from ``finn/``::
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
+from onnx import TensorProto, helper  # type: ignore[import-not-found]
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
+from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
-from finn.dataflow.authoring import assemble_specs
-from finn.dataflow.design import Decided, Engine
+from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
 )
-from finn.dataflow.mvau.decomposed import (
-    ActivationReplayKernel,
-    DotProductKernel,
-    ParameterOwnership,
+from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
+from finn.dataflow.mvau.decomposed_provider import (
+    MVAUDecomposedArtifactRequirements,
+    build_decomposed_artifact_requirements,
+    finnlib_root,
+    write_decomposed_artifact,
 )
-from finn.dataflow.mvau_problem import (
-    MVAU_PROBLEM_SPEC,
-    MVAUComputationProfile,
-    MVAUDspBlock,
-    MVAUProblemPaths,
-)
-from finn.dataflow.design import DesignSpaceSpec, ProblemSchema
-from finn.dataflow.region import NumericElementType
+from finn.dataflow.mvau.providers import elaborate_mvau
+from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION
+from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
 
-
-def mvau_operation_context() -> DesignSpaceSpec:
-    """The operation-owned declarations the two pools read.
-
-    The same context the pool tests assemble, restated here because this script
-    runs inside the container without the test tree on the path.
-    """
-
-    fields = tuple(
-        item
-        for item in MVAU_PROBLEM_SPEC.problem_schema.fields
-        if item.path != MVAUProblemPaths.SOURCE_DESCRIPTION
-    )
-    return DesignSpaceSpec(ProblemSchema(fields), properties=MVAU_PROBLEM_SPEC.properties)
-
-
-#: These designs settle in tens of ticks, so a generous budget only converts a
-#: deadlock into an hour of simulation before anyone finds out.
-LIVENESS = 20000
-
-#: What the fused golden compiles against: FINN's own ship-everything list.
+#: The fused golden's sources, relative to ``finn-rtllib/mvu``.
 FUSED_SOURCES = (
     "mvu_pkg.sv",
     "mvu_vvu_axi.sv",
@@ -87,19 +84,19 @@ FUSED_SOURCES = (
     "add_multi.sv",
 )
 
-#: What the composed DUT compiles against: the same cores, reached through
-#: FinnLib's dot-product wrapper, plus FINN's replay buffer.
-COMPOSED_FINN_SOURCES = ("mvu_pkg.sv", "replay_buffer.sv")
-COMPOSED_FINNLIB_SOURCES = (
-    "add_multi_pkg.sv",
-    "add_multi.sv",
-    "dotp_axi.sv",
-    "dotp.sv",
-    "dotp_8sx9_dsp58.sv",
-)
-
 ACCU_WIDTH = 16
 CLOCK_PERIOD_NS = 4.0
+LIVENESS = 4000
+
+
+def finn_root() -> str:
+    """The FINN checkout, from the environment or from where this file sits.
+
+    The container sets ``FINN_ROOT``; a plain pytest run does not, and the
+    parts of this harness that need no simulator should still work there.
+    """
+
+    return os.environ.get("FINN_ROOT") or str(Path(__file__).resolve().parents[3])
 
 
 @dataclass(frozen=True)
@@ -125,10 +122,22 @@ class Config:
     def neuron_folds(self) -> int:
         return self.matrix_height // self.pe
 
+    @property
+    def fpga_part(self) -> str:
+        return _PART_FOR_TARGET[self.target]
 
-#: DSP48E2 exercises the soft-vector core, DSP58 the packed one.  The last four
-#: cover what the earlier version of this harness did not: several repetitions
-#: (so the replay buffer has to reset between frames), and pumped compute.
+
+#: A part per DSP family, so the design point's target is the real target and
+#: not an assertion the fixture makes on the side.
+_PART_FOR_TARGET = {
+    MVAUDspBlock.DSP48E1: "xc7z020clg400-1",
+    MVAUDspBlock.DSP48E2: "xczu3eg-sbva484-1-e",
+    MVAUDspBlock.DSP58: "xcvc1902-vsva2197-2MP-e-S",
+}
+
+#: DSP48E2 exercises the soft-vector core, DSP58 the packed one.  The last
+#: three cover several repetitions (so the replay buffer has to reset between
+#: frames) and pumped compute.
 CONFIGS = [
     Config("softvec", MVAUDspBlock.DSP48E2, 1, 4, 4, 2, 2),
     Config("packed", MVAUDspBlock.DSP58, 1, 4, 4, 2, 2),
@@ -139,95 +148,165 @@ CONFIGS = [
     Config("pumped", MVAUDspBlock.DSP58, 2, 8, 4, 2, 4, pumping=True),
 ]
 
+CONFIGS_BY_LABEL = {config.label: config for config in CONFIGS}
 
-def declared_parameters(config: Config) -> dict[str, object]:
-    """Resolve a real design point and read the values it declares.
 
-    This is the difference between "an arrangement that behaves the same" and
-    "the arrangement this design space asks for".  Every value below comes from
-    the point or the provider table; none is restated here.
-    """
+# -- the production path -----------------------------------------------------
 
-    pools = DECOMPOSED_MVAU_KERNELS
-    engine = Engine()
-    space = engine.validate(
-        assemble_specs(
-            (
-                mvau_operation_context(),
-                # The operation's real compute pool, not a private one: the
-                # values driven into the RTL must be the values the shipped
-                # design space produces for this point.
-                MVAU_COMPUTE_SELECTION.build_spec(),
-                MVAU_REPLAY_SELECTION.build_spec(),
-            )
+
+class _BuildConfig:
+    """The narrow slice of a build configuration the MVAU operation reads."""
+
+    def __init__(self, part: str) -> None:
+        self.synth_clk_period_ns = CLOCK_PERIOD_NS
+        self.fpga_part = part
+
+    def _resolve_fpga_part(self) -> str:
+        return cast(str, self.fpga_part)
+
+
+def _model(config: Config) -> ModelWrapper:
+    """A one-node graph whose shapes and types are the configuration."""
+
+    node_id = f"mvau_{config.label}"
+    node = helper.make_node(
+        "MvauDataflowOp",
+        ["activation", "weights"],
+        ["output"],
+        name=node_id,
+        domain="finn.custom_op.dataflow",
+        dataflow_scope_id=f"{node_id}_scope",
+        accDataType=f"INT{ACCU_WIDTH}",
+        ActVal=0,
+        noActivation=1,
+        binaryXnorMode=0,
+    )
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(
+                [node],
+                f"composed-{config.label}",
+                [
+                    helper.make_tensor_value_info(
+                        "activation",
+                        TensorProto.FLOAT,
+                        [config.repetitions, config.matrix_width],
+                    ),
+                    helper.make_tensor_value_info(
+                        "weights",
+                        TensorProto.FLOAT,
+                        [config.matrix_width, config.matrix_height],
+                    ),
+                ],
+                [
+                    helper.make_tensor_value_info(
+                        "output",
+                        TensorProto.FLOAT,
+                        [config.repetitions, config.matrix_height],
+                    )
+                ],
+            ),
+            producer_name="fixture5",
+            opset_imports=[
+                helper.make_opsetid("", 21),
+                helper.make_opsetid("finn.custom_op.dataflow", 1),
+            ],
         )
     )
-    activation = NumericElementType("int", config.activation_bits)
-    weight = NumericElementType("int", config.weight_bits)
-    accumulator = NumericElementType("int", ACCU_WIDTH)
-    point = engine.start(
-        space,
-        {
-            MVAUProblemPaths.REPETITIONS: config.repetitions,
-            MVAUProblemPaths.MATRIX_WIDTH: config.matrix_width,
-            MVAUProblemPaths.MATRIX_HEIGHT: config.matrix_height,
-            MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE: activation,
-            MVAUProblemPaths.WEIGHT_ELEMENT_TYPE: weight,
-            MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE: accumulator,
-            MVAUProblemPaths.OUTPUT_ELEMENT_TYPE: accumulator,
-            MVAUProblemPaths.COMPUTATION_PROFILE: MVAUComputationProfile.ACCUMULATOR_INTEGER,
-            MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: True,
-            MVAUProblemPaths.RUNTIME_WRITABLE: False,
-            MVAUProblemPaths.TARGET_DSP_BLOCK: config.target,
-            MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: CLOCK_PERIOD_NS,
-        },
+    model.set_tensor_datatype("activation", DataType[f"INT{config.activation_bits}"])
+    model.set_tensor_datatype("weights", DataType[f"INT{config.weight_bits}"])
+    model.set_tensor_datatype("output", DataType[f"INT{ACCU_WIDTH}"])
+    generator = np.random.RandomState(1)
+    model.set_initializer(
+        "weights",
+        generator.randint(
+            -(2 ** (config.weight_bits - 1)),
+            2 ** (config.weight_bits - 1),
+            size=(config.matrix_width, config.matrix_height),
+        ).astype(np.float32),
     )
-    point = engine.commit_assignments(
-        point,
+    return model
+
+
+def decomposed_requirements(config: Config) -> MVAUDecomposedArtifactRequirements:
+    """Everything the compiler says this configuration should be built from.
+
+    Straight through the production path: select the decomposed Kernel on a
+    real operation, elaborate through the declared provider, and build the
+    requirements.  Nothing about the RTL is decided here.
+    """
+
+    model = _model(config)
+    context = MVAUDataflowBuildContext(_BuildConfig(config.fpga_part))
+    operation = model.get_customop_wrapper(model.graph.node[0])
+    assert isinstance(operation, MvauDataflowOp)
+    operation.initialize_dataflow_scope_id()
+    operation.commit_dataflow_assignments(
+        context,
         {
             MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
             MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
-            pools.pe.path: config.pe,
-            pools.simd.path: config.simd,
-            pools.compute_pumping.path: config.pumping,
+            DECOMPOSED_MVAU_KERNELS.pe.path: config.pe,
+            DECOMPOSED_MVAU_KERNELS.simd.path: config.simd,
+            DECOMPOSED_MVAU_KERNELS.compute_pumping.path: config.pumping,
+            # Weights arrive at the boundary; re-attaching the supplier is
+            # increment G.
+            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
         },
-    ).point
-
-    feasible = engine.evaluate_constraint_set(
-        point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
     )
-    if feasible.verdict is not True:
-        raise AssertionError(f"{config.label}: the design point is not feasible: {feasible}")
+    resolved = operation.resolve_dataflow(context)
+    root = finn_root()
+    return build_decomposed_artifact_requirements(
+        resolved,
+        elaborate_mvau(resolved),
+        root,
+        finnlib_root(root),
+    )
 
-    values: dict[str, object] = {}
-    for parameter in pools.provider_parameters():
-        if parameter.ownership is ParameterOwnership.CONSTANT:
-            values[parameter.name] = parameter.value
-            continue
-        assert parameter.source is not None
-        if parameter.ownership is ParameterOwnership.DECISION:
-            values[parameter.name] = point.assignments[parameter.source]
-        elif parameter.ownership is ParameterOwnership.PROBLEM:
-            raw = point.problem[parameter.source]
-            values[parameter.name] = raw.bit_width if isinstance(raw, NumericElementType) else raw
-        else:
-            answer = engine.query_property(point, parameter.source)
-            if not isinstance(answer, Decided):
-                raise AssertionError(f"{config.label}: {parameter.name} did not resolve: {answer}")
-            values[parameter.name] = answer.value
-    return values
+
+def declared_parameters(config: Config) -> dict[str, object]:
+    """The RTL parameter values the design point declares, by name."""
+
+    return dict(decomposed_requirements(config).parameters)
+
+
+# -- the fused oracle --------------------------------------------------------
 
 
 def _verilog(value: object) -> str:
     return str(int(value)) if isinstance(value, bool) else str(value)
 
 
-def _ports(config: Config, values: dict[str, object]) -> str:
+def _fused_top(name: str, config: Config, values: dict[str, object]) -> str:
+    """The golden: one fused wrapper, driven by the same declared values.
+
+    ``IS_MVU``, ``MW`` and ``MH`` are the fused wrapper's own parameters -- it
+    needs the geometry to size the replay it contains.  They are not in the
+    declared dot-product parameter set, which is the decomposition showing up
+    in the parameter list.
+    """
+
     weight_bits = config.pe * config.simd * config.weight_bits
     input_bits = config.simd * config.activation_bits
     output_bits = config.pe * ACCU_WIDTH
-    del values
-    return f"""#(
+    shared = ",\n        ".join(
+        f".{key}({_verilog(values[key])})"
+        for key in (
+            "VERSION",
+            "PE",
+            "SIMD",
+            "SEGMENTLEN",
+            "ACTIVATION_WIDTH",
+            "WEIGHT_WIDTH",
+            "ACCU_WIDTH",
+            "NARROW_WEIGHTS",
+            "SIGNED_ACTIVATIONS",
+            "PUMPED_COMPUTE",
+            "FORCE_BEHAVIORAL",
+        )
+    )
+    return f"""
+module {name} #(
     parameter WSTREAM = {(weight_bits + 7) // 8 * 8},
     parameter ISTREAM = {(input_bits + 7) // 8 * 8},
     parameter OSTREAM = {(output_bits + 7) // 8 * 8}
@@ -244,39 +323,11 @@ def _ports(config: Config, values: dict[str, object]) -> str:
     output logic [OSTREAM-1:0] out0_V_tdata,
     output logic out0_V_tvalid,
     input  logic out0_V_tready
-)"""
-
-
-def _shared_parameters(values: dict[str, object]) -> str:
-    """The parameters both wrappers take, from the declared values verbatim."""
-
-    return f""".VERSION({_verilog(values["VERSION"])}),
-        .PE({_verilog(values["PE"])}), .SIMD({_verilog(values["SIMD"])}),
-        .SEGMENTLEN({_verilog(values["SEGMENTLEN"])}),
-        .ACTIVATION_WIDTH({_verilog(values["ACTIVATION_WIDTH"])}),
-        .WEIGHT_WIDTH({_verilog(values["WEIGHT_WIDTH"])}),
-        .ACCU_WIDTH({_verilog(values["ACCU_WIDTH"])}),
-        .NARROW_WEIGHTS({_verilog(values["NARROW_WEIGHTS"])}),
-        .SIGNED_ACTIVATIONS({_verilog(values["SIGNED_ACTIVATIONS"])}),
-        .PUMPED_COMPUTE({_verilog(values["PUMPED_COMPUTE"])}),
-        .FORCE_BEHAVIORAL({_verilog(values["FORCE_BEHAVIORAL"])})"""
-
-
-def _fused_top(name: str, config: Config, values: dict[str, object]) -> str:
-    """The golden: one fused wrapper.
-
-    ``IS_MVU``, ``MW`` and ``MH`` are the fused wrapper's own parameters -- it
-    needs the geometry to size the replay it contains.  They are not part of
-    the declared dot-product parameter set, which is the decomposition showing
-    up in the parameter list.
-    """
-
-    return f"""
-module {name} {_ports(config, values)};
+);
     mvu_vvu_axi #(
         .IS_MVU(1),
         .MW({config.matrix_width}), .MH({config.matrix_height}),
-        {_shared_parameters(values)}
+        {shared}
     ) core (
         .ap_clk(ap_clk), .ap_clk2x(ap_clk2x), .ap_rst_n(ap_rst_n),
         .s_axis_weights_tdata(in1_V_tdata),
@@ -293,57 +344,7 @@ endmodule
 """
 
 
-def _composed_top(name: str, config: Config, values: dict[str, object]) -> str:
-    """Replay feeding a dot product, wired exactly as the fused core wires them.
-
-    Every parameter is the value the design point declares.  ``replay_buffer``
-    takes ``LEN``/``REP``/``W`` from the replay Kernel's derived properties, and
-    its ``olast`` becomes the dot product's ``tlast``.  ``ofin`` is left
-    unconnected because the fused core never reads it either.
-    """
-
-    return f"""
-module {name} {_ports(config, values)};
-    localparam int unsigned REPLAY_W = {_verilog(values["W"])};
-
-    uwire rst = !ap_rst_n;
-    uwire [REPLAY_W-1:0] replayed_tdata;
-    uwire replayed_tvalid;
-    uwire replayed_tlast;
-    uwire replayed_tready;
-
-    replay_buffer #(
-        .LEN({_verilog(values["LEN"])}), .REP({_verilog(values["REP"])}), .W(REPLAY_W)
-    ) activation_replay (
-        .clk(ap_clk), .rst(rst),
-        .idat(in0_V_tdata[REPLAY_W-1:0]),
-        .ivld(in0_V_tvalid),
-        .irdy(in0_V_tready),
-        .odat(replayed_tdata),
-        .olast(replayed_tlast),
-        .ofin(),
-        .ovld(replayed_tvalid),
-        .ordy(replayed_tready)
-    );
-
-    dotp_axi #(
-        .ACTIVATION_BROADCASTING({_verilog(values["ACTIVATION_BROADCASTING"])}),
-        {_shared_parameters(values)}
-    ) dot_product (
-        .ap_clk(ap_clk), .ap_clk2x(ap_clk2x), .ap_rst_n(ap_rst_n),
-        .s_axis_weights_tdata(in1_V_tdata),
-        .s_axis_weights_tvalid(in1_V_tvalid),
-        .s_axis_weights_tready(in1_V_tready),
-        .s_axis_input_tdata(replayed_tdata),
-        .s_axis_input_tvalid(replayed_tvalid),
-        .s_axis_input_tlast(replayed_tlast),
-        .s_axis_input_tready(replayed_tready),
-        .m_axis_output_tdata(out0_V_tdata),
-        .m_axis_output_tvalid(out0_V_tvalid),
-        .m_axis_output_tready(out0_V_tready)
-    );
-endmodule
-"""
+# -- simulation --------------------------------------------------------------
 
 
 def _random_word(generator: np.random.RandomState, bits: int) -> int:
@@ -356,23 +357,6 @@ def _random_word(generator: np.random.RandomState, bits: int) -> int:
 
     raw = int.from_bytes(bytes(generator.randint(0, 256, size=(bits + 7) // 8)), "little")
     return raw & ((1 << bits) - 1)
-
-
-def _write(directory: str, name: str, text: str) -> str:
-    path = os.path.join(directory, name)
-    with open(path, "w") as handle:
-        handle.write(text)
-    return path
-
-
-def _sources(root: str, subdirectory: str, names: tuple[str, ...]) -> list[str]:
-    resolved = []
-    for name in names:
-        path = os.path.join(root, subdirectory, name)
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"missing RTL source: {path}")
-        resolved.append(path)
-    return resolved
 
 
 #: Output beats accepted between stalls, and how long each stall lasts.
@@ -431,7 +415,6 @@ def _collect_with_backpressure(sim: object, stream: str, size: int, watchdog: ob
 def _drive(
     top_module: str,
     sources: list[str],
-    top_path: str,
     stimulus: dict[str, list[int]],
     expected: int,
     *,
@@ -439,15 +422,78 @@ def _drive(
 ) -> list[int]:
     """Compile and run one DUT, optionally stalling both sides of it.
 
-    Each call gets its own scratch directory and its own simulation object.
-    Sharing either -- two tops compiled into one directory, or one compiled
-    object loaded twice in a process -- segfaults inside XSI, so the compile
-    cost is paid per run deliberately rather than optimised away.
+    **One simulation per process.**  XSI keeps state that ``close_rtlsim`` does
+    not release: the third ``load_sim_obj`` in a process hangs -- not the third
+    *of the same object*, the third at all -- with no diagnostic and without the
+    watchdog firing.  Isolating per configuration was not enough, because one
+    configuration is already four simulations.  So each one is compiled and run
+    by :func:`simulate_once` in a fresh interpreter, and this function only
+    marshals arguments across that boundary.
     """
 
     with tempfile.TemporaryDirectory() as scratch:
-        sim_dir, so_rel = compile_sim_obj(top_module, [*sources, top_path], scratch, behav=True)
-        return _simulate(sim_dir, so_rel, stimulus, expected, stalls=stalls, label=top_module)
+        request = Path(scratch) / "request.json"
+        response = Path(scratch) / "response.json"
+        request.write_text(
+            json.dumps(
+                {
+                    "top_module": top_module,
+                    "sources": sources,
+                    "stimulus": stimulus,
+                    "expected": expected,
+                    "stalls": stalls,
+                }
+            )
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                __file__,
+                "--simulate",
+                str(request),
+                "--out",
+                str(response),
+            ],
+            check=False,
+        )
+        if completed.returncode != 0 or not response.is_file():
+            raise AssertionError(
+                f"{top_module}: simulation subprocess failed (exit {completed.returncode})"
+            )
+        payload = json.loads(response.read_text())
+        if payload.get("error"):
+            raise AssertionError(f"{top_module}: {payload['error']}")
+        return cast("list[int]", payload["output"])
+
+
+def simulate_once(request_path: str, response_path: str) -> int:
+    """Run exactly one simulation described by a JSON request, then exit.
+
+    The whole body of the process: compile, load, run, write the outputs.
+    Nothing else may load a simulation object here, which is the point.
+    """
+
+    request = json.loads(Path(request_path).read_text())
+    payload: dict[str, object]
+    try:
+        with tempfile.TemporaryDirectory() as scratch:
+            sim_dir, so_rel = compile_sim_obj(
+                request["top_module"], request["sources"], scratch, behav=True
+            )
+            payload = {
+                "output": _simulate(
+                    sim_dir,
+                    so_rel,
+                    request["stimulus"],
+                    request["expected"],
+                    stalls=request["stalls"],
+                    label=request["top_module"],
+                )
+            }
+    except Exception as failure:  # noqa: BLE001 - reported across the boundary
+        payload = {"error": f"{type(failure).__name__}: {failure}"}
+    Path(response_path).write_text(json.dumps(payload))
+    return 1 if payload.get("error") else 0
 
 
 def _simulate(
@@ -486,9 +532,27 @@ def _simulate(
     return result
 
 
-def _run(config: Config, finn_root: str, finnlib_root: str) -> bool:
+def _write(directory: str, name: str, text: str) -> str:
+    path = os.path.join(directory, name)
+    with open(path, "w") as handle:
+        handle.write(text)
+    return path
+
+
+def _sources(root: str, subdirectory: str, names: tuple[str, ...]) -> list[str]:
+    resolved = []
+    for name in names:
+        path = os.path.join(root, subdirectory, name)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"missing RTL source: {path}")
+        resolved.append(path)
+    return resolved
+
+
+def run_one(config: Config, finn_root: str) -> bool:
     print(f"\n========== fixture 5: {config.label} ==========")
-    values = declared_parameters(config)
+    requirements = decomposed_requirements(config)
+    values = dict(requirements.parameters)
     synapse_folds, neuron_folds = config.synapse_folds, config.neuron_folds
     passes = config.repetitions
     expected = passes * neuron_folds
@@ -507,32 +571,30 @@ def _run(config: Config, finn_root: str, finnlib_root: str) -> bool:
         f"  geometry: R={passes} SF={synapse_folds} NF={neuron_folds} "
         f"in0={len(activation)} in1={len(weight)} expect {expected} outputs"
     )
+    print(f"  top:      {requirements.top_module_name} on {requirements.target_fpga_part}")
     print(
         "  declared: "
         + " ".join(f"{name}={_verilog(value)}" for name, value in sorted(values.items()))
     )
 
     fused_sources = _sources(finn_root, "finn-rtllib/mvu", FUSED_SOURCES)
-    composed_sources = [
-        *_sources(finn_root, "finn-rtllib/mvu", COMPOSED_FINN_SOURCES),
-        *_sources(finnlib_root, "rtl", COMPOSED_FINNLIB_SOURCES),
-    ]
 
     ok = True
     for stalls in (False, True):
         mode = "stalled" if stalls else "free-running"
-        with tempfile.TemporaryDirectory() as sources_dir:
-            fused_path = _write(
-                sources_dir, "mvau_fused.sv", _fused_top("mvau_fused", config, values)
-            )
-            composed_path = _write(
-                sources_dir, "mvau_composed.sv", _composed_top("mvau_composed", config, values)
-            )
+        with tempfile.TemporaryDirectory() as scratch:
+            # The composed DUT is whatever the compiler emits, verbatim.
+            composed_sources = list(write_decomposed_artifact(requirements, scratch))
+            fused_path = _write(scratch, "mvau_fused.sv", _fused_top("mvau_fused", config, values))
             fused = _drive(
-                "mvau_fused", fused_sources, fused_path, stimulus, expected, stalls=stalls
+                "mvau_fused", [*fused_sources, fused_path], stimulus, expected, stalls=stalls
             )
             composed = _drive(
-                "mvau_composed", composed_sources, composed_path, stimulus, expected, stalls=stalls
+                requirements.top_module_name,
+                composed_sources,
+                stimulus,
+                expected,
+                stalls=stalls,
             )
         matched = fused == composed and len(fused) == expected
         print(f"  {mode:12} fused={fused}")
@@ -542,18 +604,17 @@ def _run(config: Config, finn_root: str, finnlib_root: str) -> bool:
             ok = False
     if ok:
         print(f"  {config.label.upper()}: PASS (bit-identical, {expected} outputs, both modes)")
-        return True
-    return False
+    return ok
 
 
-def _record_identity(finn_root: str, finnlib_root: str) -> None:
+def _record_identity(finn_root: str, library_root: str) -> None:
     """Print what was actually compiled.
 
-    FinnLib comes from an ambient checkout, so a passing run means nothing
-    unless the result says which revision it passed against.
+    A passing run means nothing unless the result says which revisions it
+    passed against.
     """
 
-    for label, root in (("finn", finn_root), ("finnlib", finnlib_root)):
+    for label, root in (("finn", finn_root), ("finnlib", library_root)):
         try:
             revision = subprocess.run(
                 ["git", "-C", root, "rev-parse", "HEAD"],
@@ -572,16 +633,40 @@ def _record_identity(finn_root: str, finnlib_root: str) -> None:
         print(f"{label:8} {revision}{' (dirty)' if dirty else ''}  {root}")
 
 
-def main() -> int:
-    finn_root = os.environ["FINN_ROOT"]
-    finnlib_root = os.environ.get("FINNLIB_ROOT", os.path.join(finn_root, "..", "finnlib"))
-    if not os.path.isdir(os.path.join(finnlib_root, "rtl")):
-        print(f"FinnLib RTL not found under {finnlib_root}; set FINNLIB_ROOT")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config",
+        choices=sorted(CONFIGS_BY_LABEL),
+        help="run only this configuration",
+    )
+    parser.add_argument(
+        "--simulate",
+        metavar="REQUEST",
+        help="internal: run the one simulation this JSON request describes",
+    )
+    parser.add_argument("--out", metavar="RESPONSE", help="internal: where to write the result")
+    arguments = parser.parse_args(argv)
+
+    # The simulation worker does nothing else -- no resolving, no printing --
+    # because loading a second simulation object in the same process is what
+    # this split exists to prevent.
+    if arguments.simulate is not None:
+        if arguments.out is None:
+            parser.error("--simulate requires --out")
+        return simulate_once(arguments.simulate, arguments.out)
+
+    root = finn_root()
+    library_root = str(finnlib_root(root))
+    if not os.path.isdir(os.path.join(library_root, "rtl")):
+        print(f"FinnLib RTL not found under {library_root}; set FINNLIB_ROOT or fetch-repos.sh")
         return 2
-    _record_identity(finn_root, finnlib_root)
-    ok = True
-    for config in CONFIGS:
-        ok &= _run(config, finn_root, finnlib_root)
+    _record_identity(root, library_root)
+
+    configs = (
+        [CONFIGS_BY_LABEL[arguments.config]] if arguments.config is not None else list(CONFIGS)
+    )
+    ok = all([run_one(config, root) for config in configs])
     print("\nRESULT:", "FIXTURE 5 PASS" if ok else "FIXTURE 5 FAIL")
     return 0 if ok else 1
 

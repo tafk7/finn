@@ -47,6 +47,10 @@ KV260_BDF_COMMIT="98e0d3efc901f0b974006bc4370c2a7ad8856c79"
 #   find deps/board_files/ -type f -exec md5sum {} \; | sort -k 2 | md5sum
 EXP_BOARD_FILES_MD5="221a7edc838f4236922afbd9b9a20f17"
 AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
+# FinnLib supplies dotp_axi and its cores, which the decomposed MVAU compiles
+# against.  Bump this together with any change to the decomposed provider's
+# source manifest; FINNLIB_ROOT overrides the checkout for local work.
+FINNLIB_COMMIT="8c6ff9851f882b298108e8e37b0a9da3fe389e1d"
 
 QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"
@@ -57,6 +61,9 @@ XIL_BDF_URL="https://github.com/Xilinx/XilinxBoardStore.git"
 RFSOC4x2_BDF_URL="https://github.com/RealDigitalOrg/RFSoC4x2-BSP.git"
 KV260_BDF_URL="https://github.com/Xilinx/XilinxBoardStore.git"
 AUPZU3_BDF_URL="https://github.com/RealDigitalOrg/aup-zu3-bsp.git"
+# TODO: point at our own fork once it exists, so our RTL changes ship through
+# this pin rather than through a local working clone.  Upstream today.
+FINNLIB_URL="${FINNLIB_URL:-git@gitenterprise.xilinx.com:tpreusse/finnlib.git}"
 
 QONNX_DIR="qonnx"
 FINN_EXP_DIR="finn-experimental"
@@ -67,6 +74,7 @@ XIL_BDF_DIR="xil-bdf"
 RFSOC4x2_BDF_DIR="rfsoc4x2-bdf"
 KV260_SOM_BDF_DIR="kv260-som-bdf"
 AUPZU3_BDF_DIR="aupzu3-8gb-bdf"
+FINNLIB_DIR="finnlib"
 
 # absolute path to this script, e.g. /home/user/bin/foo.sh
 SCRIPT=$(readlink -f "$0")
@@ -155,6 +163,14 @@ fetch_repo $QONNX_URL $QONNX_COMMIT $QONNX_DIR
 fetch_repo $FINN_EXP_URL $FINN_EXP_COMMIT $FINN_EXP_DIR
 fetch_repo $BREVITAS_URL $BREVITAS_COMMIT $BREVITAS_DIR
 fetch_repo $HLSLIB_URL $HLSLIB_COMMIT $HLSLIB_DIR
+# FinnLib lives on gitenterprise, so it needs SSH credentials the public
+# clones do not.  A local working clone reached through FINNLIB_ROOT is the
+# supported alternative; skipping here must not fail the whole fetch.
+if [ "$FINN_SKIP_FINNLIB" = "1" ]; then
+    echo "Skipping FinnLib; set FINNLIB_ROOT to a working clone"
+else
+    fetch_repo $FINNLIB_URL $FINNLIB_COMMIT $FINNLIB_DIR
+fi
 fetch_repo $AVNET_BDF_URL $AVNET_BDF_COMMIT $AVNET_BDF_DIR
 fetch_repo $XIL_BDF_URL $XIL_BDF_COMMIT $XIL_BDF_DIR
 fetch_repo $RFSOC4x2_BDF_URL $RFSOC4x2_BDF_COMMIT $RFSOC4x2_BDF_DIR

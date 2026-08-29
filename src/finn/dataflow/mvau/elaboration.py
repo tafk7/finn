@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import ceil, floor
 from typing import cast
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
@@ -26,6 +25,7 @@ from finn.dataflow.mvau.source import (
 from finn.dataflow.network import DataflowNetwork, RegionEndpoint
 from finn.dataflow.ops.mvau import (
     MVAU_COMPUTE_SELECTION,
+    MVAU_REPLAY_SELECTION,
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
@@ -39,7 +39,7 @@ from finn.dataflow.parameters.supply_kernels import (
     MVAUWeightSupplyKernelId,
 )
 
-from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.mvau_problem import MVAUProblemPaths
 from finn.dataflow.region import NumericElementType, Port
 
 _ELABORATION_PATH = QualifiedPath("elaboration.mvau")
@@ -326,6 +326,28 @@ def _required_assignment(resolved: MVAUResolvedDesign, path: QualifiedPath) -> o
     return value
 
 
+def _required_property(resolved: MVAUResolvedDesign, path: QualifiedPath) -> object:
+    """Read a value the design point already derived.
+
+    Elaboration never computes a parameter value.  If a Kernel did not declare
+    it, that is the defect -- not something to work around here.
+    """
+
+    answer = resolved.engine.query_property(resolved.point, path)
+    if not isinstance(answer, Decided):
+        raise MVAUElaborationError(
+            answer.findings
+            or (
+                _finding(
+                    "mvau-elaboration-property-unresolved",
+                    "physical elaboration requires a resolved declared property",
+                    path,
+                ),
+            )
+        )
+    return answer.value
+
+
 def _required_problem(resolved: MVAUResolvedDesign, path: QualifiedPath) -> object:
     value = resolved.point.problem.get(path)
     if value is None:
@@ -376,15 +398,15 @@ def mvau_elaboration_origin(resolved: MVAUResolvedDesign) -> MVAUElaborationOrig
     )
     kernel_ids = [compute_kernel_id]
     provider_ids = list(_declared_providers(MVAU_COMPUTE_SELECTION, compute_kernel_id))
-    if isinstance(resolved.result, NetworkRef):
-        supply_kernel_id = _selected_kernel_id(
-            resolved,
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
-            "mvau-elaboration-supply-kernel-missing",
-            "the selected supplier Kernel must resolve before elaboration",
-        )
-        kernel_ids.append(supply_kernel_id)
-        provider_ids.extend(_declared_providers(MVAU_WEIGHT_SUPPLY_SELECTION, supply_kernel_id))
+    # Whichever further pools this point actually selected from -- not "a
+    # Network implies a supplier", which stopped being true once the decomposed
+    # compute member started contributing a replay node of its own.
+    for selection in (MVAU_WEIGHT_SUPPLY_SELECTION, MVAU_REPLAY_SELECTION):
+        answer = resolved.engine.query_property(resolved.point, selection.paths.selected_kernel)
+        if not isinstance(answer, Decided) or not isinstance(answer.value, SelectedKernel):
+            continue
+        kernel_ids.append(answer.value.kernel_id)
+        provider_ids.extend(_declared_providers(selection, answer.value.kernel_id))
     return MVAUElaborationOrigin(
         MVAU_DECLARATION_FAMILY_VERSION,
         mvau_problem_fingerprint(resolved.point.problem),
@@ -470,12 +492,12 @@ def _compute_physical_objects(
     pumped = cast(bool, _required_assignment(resolved, SOFT_VECTOR_PATHS.compute_pumping))
     matrix_width = cast(int, resolved.point.problem[MVAUProblemPaths.MATRIX_WIDTH])
     matrix_height = cast(int, resolved.point.problem[MVAUProblemPaths.MATRIX_HEIGHT])
-    target = cast(MVAUDspBlock, resolved.point.problem[MVAUProblemPaths.TARGET_DSP_BLOCK])
-    version = {
-        MVAUDspBlock.DSP48E1: 1,
-        MVAUDspBlock.DSP48E2: 2,
-        MVAUDspBlock.DSP58: 3,
-    }[target]
+    # VERSION, SIGNED_ACTIVATIONS and SEGMENTLEN are read, not computed.  The
+    # Kernel declares all three, so the value driven into the RTL is the value
+    # that is in the design point -- which is the whole reason they moved.
+    version = cast(int, _required_property(resolved, SOFT_VECTOR_PATHS.dsp_version))
+    signed = cast(bool, _required_property(resolved, SOFT_VECTOR_PATHS.signed_activations))
+    segment_length = cast(int, _required_property(resolved, SOFT_VECTOR_PATHS.segment_length))
     activation_type = cast(
         NumericElementType,
         resolved.point.problem[MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE],
@@ -488,21 +510,6 @@ def _compute_physical_objects(
         NumericElementType,
         resolved.point.problem[MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE],
     )
-    clock_period = cast(float, resolved.point.problem[MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS])
-    reference_clock = clock_period / 2 if pumped else clock_period
-    if reference_clock <= 0.741:
-        raise MVAUElaborationError(
-            (
-                _finding(
-                    "mvau-elaboration-clock-infeasible",
-                    "selected clock period is below the covered RTL segment-delay bound",
-                    MVAUDataflowOpPaths.TARGET_CLOCK_PERIOD_NS,
-                ),
-            )
-        )
-    critical_path_dsps = floor((reference_clock - 0.741) / 0.605 + 1)
-    max_chain_length = ceil(simd / (6 if pumped else 3))
-    segment_length = min(critical_path_dsps, max_chain_length)
     wrapper_parameters: tuple[tuple[str, PhysicalParameterValue], ...] = (
         ("ACCU_WIDTH", accumulator_type.bit_width),
         ("ACTIVATION_WIDTH", activation_type.bit_width),
@@ -513,7 +520,7 @@ def _compute_physical_objects(
         ("PE", pe),
         ("PUMPED_COMPUTE", pumped),
         ("SEGMENTLEN", segment_length),
-        ("SIGNED_ACTIVATIONS", activation_type.type_id == "int"),
+        ("SIGNED_ACTIVATIONS", signed),
         ("SIMD", simd),
         ("VERSION", version),
         ("WEIGHT_WIDTH", weight_type.bit_width),
