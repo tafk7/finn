@@ -469,15 +469,16 @@ def test_two_source_nodes_with_one_configuration_share_one_identity() -> None:
     """The point of the whole phase, at the value level.
 
     Two MVAUs at different graph positions, configured identically, produce one
-    artifact identity -- so one build serves both.  Today they do not share a
-    build, because ``top_module_name`` is ``{source_node_id}_decomposed``; that
-    is 5c's to fix, and this asserts the value it will be fixed against.
+    artifact identity and one generated top -- so one build serves both.  That
+    is the sentence the whole phase exists to make true, and it was false
+    before 5c: ``top_module_name`` was ``{source_node_id}_decomposed``, so the
+    node reached the built text and two identical MVAUs were two builds.
 
     Note what does *not* separate them: ``KernelOrigin``.  The Phase 5 plan
     expected it to, but the decomposed Network's node ids are the fixed
     ``replay`` and ``compute``, so the origins are equal here too.  The
-    placement fact lives one layer up, in the composition that names the
-    generated top -- which is where it has to be removed.
+    placement fact lived one layer up, in the composition that names the
+    generated top, which is where it was removed.
     """
 
     resolutions = tuple(
@@ -492,15 +493,18 @@ def test_two_source_nodes_with_one_configuration_share_one_identity() -> None:
         ) == kernel_artifact_identity(right, _roots(), target=TARGET, builder=BUILDER)
         assert left.origin() == right.origin()
 
-    # The defect this identity exists to fix, still present and named here so
-    # that 5c's change has something that already says what it is changing.
-    tops = tuple(
-        build_decomposed_artifact_requirements(
-            resolved, elaborate_mvau(resolved), FINN_ROOT
-        ).top_module_name
+    built = tuple(
+        build_decomposed_artifact_requirements(resolved, elaborate_mvau(resolved), FINN_ROOT)
         for resolved in resolutions
     )
-    assert tops[0] != tops[1]
+    assert built[0].identity == built[1].identity
+    assert built[0].top_module_name == built[1].top_module_name
+    assert built[0].wrapper_source == built[1].wrapper_source
+    # The elaborated *instances* still differ, and must: an instance name
+    # legitimately depends on where the instance is.  Only the artifact is one.
+    assert {item.id for item in built[0].elaboration.components} != {
+        item.id for item in built[1].elaboration.components
+    }
 
 
 def test_no_instance_fact_reaches_the_serialization() -> None:

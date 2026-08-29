@@ -12,6 +12,7 @@ was selected rather than on a hard-wired assumption about which one it was.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -49,8 +50,16 @@ from finn.dataflow.mvau.hardware.binding import (
     source_roots,
     verify_manifest,
 )
+from finn.dataflow.hardware import (
+    BuilderIdentity,
+    KernelArtifactIdentity,
+    TargetIdentity,
+    composed_artifact_identity,
+    kernel_artifact_identity,
+)
 from finn.dataflow.mvau.hardware.composition import (
     build_decomposed_artifact_requirements,
+    decomposed_top_module_name,
     elaborate_decomposed,
     write_decomposed_artifact,
 )
@@ -444,3 +453,128 @@ def test_requirements_refuse_an_elaboration_from_another_point() -> None:
             _resolved(), elaborate_mvau(other.resolve_dataflow(_context())), FINN_ROOT
         )
     assert any("mismatch" in item.code for item in raised.value.findings)
+
+
+# -- artifact identity (Phase 5c) --------------------------------------------
+
+
+def test_the_requirements_carry_the_identity_of_what_they_build() -> None:
+    """The identity is over the two bound Kernels and the top it generated.
+
+    Not recomputed here from the same inputs, which would only assert the code
+    agrees with itself: the Kernel identities are rebuilt from the *bindings*,
+    and the wrapper hash from the text the requirements actually carry.
+    """
+
+    resolved = _resolved()
+    requirements = build_decomposed_artifact_requirements(
+        resolved, elaborate_mvau(resolved), FINN_ROOT
+    )
+    bindings = bind_decomposed(resolved)
+    target = TargetIdentity(requirements.target_fpga_part, requirements.clock_period_ns)
+
+    assert requirements.identity == composed_artifact_identity(
+        tuple(
+            kernel_artifact_identity(binding, source_roots(FINN_ROOT), target=target)
+            for binding in bindings.bindings
+        ),
+        requirements.wrapper_source,
+    )
+    # Compile order, and the replay feeds the dot product.
+    assert tuple(item.kernel_id for item in requirements.identity.kernels) == (
+        DECOMPOSED_MVAU_KERNELS.replay_hardware.id,
+        DECOMPOSED_MVAU_KERNELS.dot_product_hardware.id,
+    )
+
+
+def test_the_generated_module_name_names_no_placement() -> None:
+    """The exclusion list, enforced where it was actually being violated.
+
+    The name is inside the generated text and the text is inside the key, so a
+    placement in the name is a placement in the key -- reached through the
+    artifact content rather than through a field, which is why naming the
+    module was the load-bearing part of this increment rather than cosmetics.
+    """
+
+    resolved = _resolved()
+    requirements = build_decomposed_artifact_requirements(
+        resolved, elaborate_mvau(resolved), FINN_ROOT
+    )
+    source_id = resolved.result.source_association.source_node_id
+
+    assert source_id not in requirements.top_module_name
+    assert source_id not in requirements.wrapper_file_name
+    assert source_id not in requirements.wrapper_source
+    assert f"module {requirements.top_module_name}" in requirements.wrapper_source
+
+
+def test_the_module_name_separates_configurations_but_not_source_content() -> None:
+    """Why the name is taken over less than the key is.
+
+    It has to separate configurations, so that two different designs stitched
+    into one block design are two modules.  It deliberately does *not* follow
+    source content: a name that moved whenever a FinnLib file was edited would
+    churn every recorded fixture for a change that alters no configuration, and
+    two builds differing only in source content already land under different
+    keys.
+    """
+
+    def identity(pe: int) -> KernelArtifactIdentity:
+        resolved = _committed(_model(), pe=pe).resolve_dataflow(_context())
+        return kernel_artifact_identity(
+            bind_decomposed(resolved).compute,
+            source_roots(FINN_ROOT),
+            target=TargetIdentity("xcvc1902-vsva2197-2MP-e-S", 4.0),
+        )
+
+    two, four = identity(pe=2), identity(pe=4)
+    assert decomposed_top_module_name((two,)) != decomposed_top_module_name((four,))
+
+    edited = replace(
+        two,
+        sources=tuple(replace(item, digest=f"{item.digest[:-1]}0") for item in two.sources),
+    )
+    assert edited.key != two.key
+    assert decomposed_top_module_name((edited,)) == decomposed_top_module_name((two,))
+
+
+def test_the_identity_exists_before_anything_is_written(tmp_path: Path) -> None:
+    """A lookup that can only run after the build is not a lookup.
+
+    ``build_decomposed_artifact_requirements`` writes nothing, so the identity
+    is available to consult a store with; staging the artifact afterwards must
+    not change it.
+    """
+
+    resolved = _resolved()
+    requirements = build_decomposed_artifact_requirements(
+        resolved, elaborate_mvau(resolved), FINN_ROOT
+    )
+    before = requirements.identity
+    assert not any(tmp_path.iterdir())
+
+    if any(not Path(path).is_file() for path in requirements.finnlib_sources):
+        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
+    write_decomposed_artifact(requirements, tmp_path)
+    assert requirements.identity == before
+
+
+def test_a_different_builder_moves_the_artifact_key_but_not_the_module_name() -> None:
+    """The two are taken over different material, and this is where it shows.
+
+    The builder is a build input, so it keys.  It is not part of the
+    configuration the module is named for, so the same RTL keeps the same
+    module name across a tool bump -- which is what stops a Vivado upgrade from
+    rewriting every generated top.
+    """
+
+    resolved = _resolved()
+    elaboration = elaborate_mvau(resolved)
+    default = build_decomposed_artifact_requirements(resolved, elaboration, FINN_ROOT)
+    bumped = build_decomposed_artifact_requirements(
+        resolved, elaboration, FINN_ROOT, builder=BuilderIdentity("vivado", "2025.1")
+    )
+
+    assert bumped.identity.key != default.identity.key
+    assert bumped.top_module_name == default.top_module_name
+    assert bumped.wrapper_source == default.wrapper_source

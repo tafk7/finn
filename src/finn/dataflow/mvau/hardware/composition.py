@@ -21,7 +21,17 @@ from pathlib import Path
 from typing import cast
 
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
-from finn.dataflow.hardware import KernelBinding
+from finn.dataflow.hardware import (
+    DEFAULT_BUILDER,
+    BuilderIdentity,
+    ComposedArtifactIdentity,
+    KernelArtifactIdentity,
+    KernelBinding,
+    TargetIdentity,
+    composed_artifact_identity,
+    kernel_artifact_identity,
+)
+from finn.dataflow.hardware.identity import content_hash
 from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
@@ -563,10 +573,47 @@ class MVAUDecomposedArtifactRequirements:
     wrapper_file_name: str
     wrapper_source: str
     elaboration: MVAUPhysicalElaboration
+    #: What this artifact *is*, keyed by its physical inputs alone.  Computed
+    #: before any builder runs, which is what makes it usable as a lookup.
+    identity: ComposedArtifactIdentity
 
     @property
     def finnlib_sources(self) -> tuple[str, ...]:
         return tuple(path for name, path in self.source_dependencies if ".finnlib." in name)
+
+
+def decomposed_top_module_name(kernels: tuple[KernelArtifactIdentity, ...]) -> str:
+    """A module name derived from the configuration, and from nothing placed.
+
+    It used to be ``{source_node_id}_decomposed``, which is why two identical
+    MVAUs at different graph positions were two builds.  Naming the module from
+    the artifact key instead is circular -- the name is inside the wrapper text
+    and the wrapper text is inside the key -- so the name is taken over the
+    part of the Kernel identities that exists before the wrapper does.
+
+    Sources are deliberately *excluded* even though they are in the key.  A
+    name that moved whenever a FinnLib file was edited would churn every
+    recorded fixture for a change that does not alter the configuration, and
+    the name has only to separate configurations: two builds differing only in
+    source content already land under different keys, and are never stitched
+    into one design from the same configuration.
+    """
+
+    material = _canonical_configuration(kernels)
+    return f"mvau_decomposed_{content_hash(material.encode())[:12]}"
+
+
+def _canonical_configuration(kernels: tuple[KernelArtifactIdentity, ...]) -> str:
+    return "\n".join(
+        "|".join(
+            (
+                item.kernel_id,
+                item.kernel_version,
+                *(f"{name}={_literal(value)}" for name, value in item.parameters),
+            )
+        )
+        for item in kernels
+    )
 
 
 def build_decomposed_artifact_requirements(
@@ -574,8 +621,14 @@ def build_decomposed_artifact_requirements(
     elaboration: MVAUPhysicalElaboration,
     finn_root: str | Path,
     finnlib: str | Path | None = None,
+    *,
+    builder: BuilderIdentity = DEFAULT_BUILDER,
 ) -> MVAUDecomposedArtifactRequirements:
-    """Turn a decomposed elaboration into a self-contained build input."""
+    """Turn a decomposed elaboration into a self-contained build input.
+
+    The identity is computed here, before anything is written, because a
+    lookup that can only be performed after the build has run is not a lookup.
+    """
 
     if elaboration.origin != mvau_elaboration_origin(resolved):
         raise _fail(
@@ -588,7 +641,13 @@ def build_decomposed_artifact_requirements(
             "the elaboration does not belong to the selected semantic result",
         )
     bindings = bind_decomposed(resolved)
-    top = f"{resolved.result.source_association.source_node_id}_decomposed"
+    roots = source_roots(finn_root, finnlib)
+    target = TargetIdentity(elaboration.target_fpga_part, elaboration.target_clock_period_ns)
+    kernels = tuple(
+        kernel_artifact_identity(binding, roots, target=target, builder=builder)
+        for binding in bindings.bindings
+    )
+    top = decomposed_top_module_name(kernels)
     wrapper = elaboration.component(
         f"{resolved.result.source_association.source_node_id}.compute.wrapper"
     )
@@ -607,10 +666,11 @@ def build_decomposed_artifact_requirements(
         elaboration.target_fpga_part,
         elaboration.target_clock_period_ns,
         wrapper.parameters,
-        resolved_manifest(bindings, source_roots(finn_root, finnlib)),
+        resolved_manifest(bindings, roots),
         f"{top}.sv",
         text,
         elaboration,
+        composed_artifact_identity(kernels, text),
     )
 
 
@@ -642,6 +702,7 @@ __all__ = [
     "MVAUDecomposedArtifactRequirements",
     "build_decomposed_artifact_requirements",
     "compose",
+    "decomposed_top_module_name",
     "elaborate_decomposed",
     "render_decomposed_wrapper",
     "write_decomposed_artifact",
