@@ -140,89 +140,46 @@ if [ ! -d "${FINN_ROOT}/src/finn" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Xilinx tools. Everything below depends on the read-only host mount, which is
-# why it cannot move into a layer.
+# Xilinx tools.
+#
+# This used to be ~110 lines of settings64.sh sourcing, and it was the ONLY
+# place that did it -- which meant `docker exec` and `sbx exec`, neither of
+# which runs the ENTRYPOINT, got no toolchain at all. FINN's own documentation
+# recommends `docker exec` for a second terminal, so that was a real gap and
+# not a theoretical one.
+#
+# The resolution now lives in finn-env, which every invocation style reaches:
+# this entrypoint, the BASH_ENV hook, and the transparent vendor-tool shims. The
+# entrypoint is no longer load-bearing for correctness -- it is an optimisation
+# that front-loads the work once for the session.
 # ---------------------------------------------------------------------------
 
-# Workaround for a FlexLM issue, scoped to the case where a licensed tool is
-# actually going to run. See:
-# https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
-if [ -n "$VITIS_PATH" ] || [ -n "$VIVADO_PATH" ] || [ -n "$HLS_PATH" ]; then
-  export LD_PRELOAD="${LD_PRELOAD:-/lib/x86_64-linux-gnu/libudev.so.1}"
-fi
-
-# The dev tier deliberately has no Xilinx mount, so the detailed "did you mean
-# to set VITIS_PATH?" advice is noise there - and with the paths unset it used to
-# print "Unable to find /settings64.sh", which reads like a bug. Say it once.
 if [ -z "$VITIS_PATH" ] && [ -z "$VIVADO_PATH" ] && [ -z "$HLS_PATH" ]; then
   gecho "No Xilinx tools configured. Vivado, Vitis, HLS and rtlsim are unavailable;"
   gecho "everything else - transformations, ONNX execution, brevitas export, tests"
   gecho "not marked vivado/vitis/board - works. Use the build tier if you need them."
-  export PATH=$PATH:$HOME/.local/bin
-  exec "$@"
+else
+  # finn-env writes shell assignments to stdout and diagnostics to stderr, so
+  # this eval cannot be corrupted by a warning. Failure is non-fatal for the
+  # same reason the checks below are: killing PID 1 here surfaces under sbx as
+  # an opaque "failed to run sandbox container" with no cause.
+  if _finn_env_sh=$(finn-env print --format sh 2>/dev/null); then
+    eval "$_finn_env_sh"
+    export FINN_ENV_APPLIED=1
+    gecho "Xilinx toolchain configured (finn-env)"
+  else
+    yecho "finn-env could not resolve the Xilinx toolchain."
+    yecho "Vendor tools will attempt to configure themselves on first use."
+  fi
+  unset _finn_env_sh
 fi
 
-if [ -f "$VITIS_PATH/settings64.sh" ];then
-  # source Vitis env.vars
-  export XILINX_VITIS=$VITIS_PATH
-  export XILINX_XRT=/opt/xilinx/xrt
-  # env scripts may return non-zero, so do not let that abort the container
-  source "$VITIS_PATH/settings64.sh" || true
-  gecho "Found Vitis at $VITIS_PATH"
-  if [ -f "$XILINX_XRT/setup.sh" ];then
-    # source XRT
-    source "$XILINX_XRT/setup.sh" || true
-    gecho "Found XRT at $XILINX_XRT"
-  else
-    # NOT fatal. The `build` tier ships Vivado/HLS support without XRT on
-    # purpose -- that is the whole reason it exists as a tier separate from
-    # build-xrt -- so a VITIS_PATH pointed at it lands here legitimately.
-    # Exiting killed the container outright, which under sbx surfaces only as
-    # "failed to run sandbox container" with no cause.
-    #
-    # Warn and carry on: HLS synthesis and rtlsim need Vivado, never XRT, and
-    # those still work. A genuine Vitis/Alveo flow fails later with a message
-    # about the thing it actually could not find.
-    yecho "XRT not found at $XILINX_XRT."
-    yecho "Vitis/Alveo flows need the build-xrt tier; dev and build do not ship XRT."
-    yecho "Vivado-only flows (HLS synthesis, rtlsim) are unaffected."
-  fi
-else
-  yecho "Unable to find $VITIS_PATH/settings64.sh"
-  yecho "Functionality dependent on Vitis will not be available."
-  yecho "If you need Vitis, ensure VITIS_PATH is set correctly and mounted into the Docker container."
-  if [ -f "$VIVADO_PATH/settings64.sh" ];then
-    # source Vivado env.vars
-    export XILINX_VIVADO=$VIVADO_PATH
-    source "$VIVADO_PATH/settings64.sh" || true
-    gecho "Found Vivado at $VIVADO_PATH"
-  else
-    yecho "Unable to find $VIVADO_PATH/settings64.sh"
-    yecho "Functionality dependent on Vivado will not be available."
-    yecho "If you need Vivado, ensure VIVADO_PATH is set correctly and mounted into the Docker container."
-  fi
-fi
+export PATH="$PATH:$HOME/.local/bin"
 
-if [ -z "${XILINX_VIVADO}" ]; then
-  yecho "finnxsi will be unavailable since Vivado was not found"
-else
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/lib/x86_64-linux-gnu/:${XILINX_VIVADO}/lib/lnx64.o
-fi
 # finn_xsi is NOT compiled here. It is built on demand by finn.xsi.setup, into
 # $FINN_BUILD_DIR rather than into the source tree, so a container start no
 # longer deposits a build artifact in the mounted workspace - and no longer
 # pays for a compile it may never use.
-
-if [ -f "$HLS_PATH/settings64.sh" ];then
-  # source Vitis HLS env.vars
-  source "$HLS_PATH/settings64.sh" || true
-  gecho "Found Vitis HLS at $HLS_PATH"
-else
-  yecho "Unable to find $HLS_PATH/settings64.sh"
-  yecho "Functionality dependent on Vitis HLS will not be available."
-  yecho "Please note that FINN needs at least version 2020.2 for Vitis HLS support. Our recommendation is to use version 2022.2"
-  yecho "If you need Vitis HLS, ensure HLS_PATH is set correctly and mounted into the Docker container."
-fi
 
 # Beta-device Tcl init scripts. Sentinel-guarded so repeated container starts
 # against the same HOME are a no-op instead of recopying every time.
@@ -244,10 +201,6 @@ if [ -d "$FINN_ROOT/.Xilinx" ] && [ ! -f "$HOME/.Xilinx/.finn-seeded" ]; then
   fi
   touch "$HOME/.Xilinx/.finn-seeded" 2>/dev/null || true
 fi
-
-export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$VITIS_PATH/lnx64/tools/fpo_v7_1:$HLS_PATH/lnx64/tools/fpo_v7_1"
-
-export PATH=$PATH:$HOME/.local/bin
 
 # NOTE: this script deliberately does NOT write /etc/sandbox-persistent.sh.
 #

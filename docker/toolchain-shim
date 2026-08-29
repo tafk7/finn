@@ -1,0 +1,69 @@
+#!/bin/sh
+# Transparent shim for a mounted Xilinx vendor tool.
+#
+# Installed into /usr/local/lib/finn/toolchain-bin and symlinked once per tool
+# (vivado, vitis_hls, v++, xelab, ...). That directory is EARLY on PATH, so
+#
+#     docker exec <container> vivado -version
+#     sbx exec <sandbox> vivado -version
+#
+# work with no wrapper, no shell, and no caller cooperation.
+#
+# WHY THIS EXISTS
+# ---------------
+# Neither `docker exec` nor `sbx exec` runs the image ENTRYPOINT, so nothing the
+# entrypoint exports is visible to them. FINN's own documentation recommends
+# `docker exec` for opening a second terminal, so this is not an exotic path.
+#
+# An explicit wrapper -- `finn-env exec vivado ...` -- does not solve it. A
+# generic agent or CI system issues the bare command; it has no reason to know
+# FINN's calling convention. Requiring it to relocates the special-casing to the
+# caller rather than removing it. The shim removes it.
+#
+# Coverage, by invocation style:
+#
+#   interactive shell / bash -c     BASH_ENV sources the environment
+#   bare exec with no shell         THIS
+#   Python                          finn_paths.py, at interpreter startup
+#
+# IDEMPOTENCE AND RECURSION
+# -------------------------
+# Two hazards, both of which have bitten:
+#
+#   1. Re-sourcing on every nested call is slow and can duplicate PATH entries.
+#      FINN_ENV_APPLIED short-circuits that.
+#   2. If the shim directory is still on PATH when we dispatch, `command -v`
+#      finds the shim again and we recurse until the process dies. So the
+#      real executable is resolved with the shim directory REMOVED from PATH,
+#      and never by re-running a bare name.
+
+set -e
+
+SHIM_DIR=/usr/local/lib/finn/toolchain-bin
+tool=$(basename "$0")
+
+# Resolve the real tool with the shim directory taken out of PATH, so we cannot
+# find ourselves. Done before any sourcing, because sourcing settings64.sh is
+# what puts the real tool on PATH in the first place.
+strip_shim_dir () {
+    printf '%s' "$1" | tr ':' '\n' | grep -vxF "$SHIM_DIR" | paste -sd: -
+}
+
+if [ "${FINN_ENV_APPLIED:-}" = "1" ]; then
+    # Environment already applied by an outer finn-env or BASH_ENV: just
+    # dispatch. This is the nested-call path and must stay cheap.
+    PATH=$(strip_shim_dir "$PATH")
+    export PATH
+    real=$(command -v "$tool" 2>/dev/null) || real=""
+    if [ -z "$real" ]; then
+        echo "finn: $tool not found after the toolchain was configured." >&2
+        echo "finn: the Xilinx install may not be mounted in this container." >&2
+        exit 127
+    fi
+    exec "$real" "$@"
+fi
+
+# Cold path: source the toolchain, then dispatch. finn-env exec sets
+# FINN_ENV_APPLIED, so the re-entry above handles the actual lookup and there is
+# exactly one place that resolves the binary.
+exec finn-env exec "$tool" "$@"

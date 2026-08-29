@@ -347,10 +347,40 @@ print('env consistent: numpy', numpy.__version__, '| torch', torch.__version__, 
 # incompatibility is a runtime import failure with no metadata conflict, so pip
 # check passes while every pytest invocation dies at plugin load.
 
-COPY docker/finn_entrypoint.sh docker/quicktest.sh docker/build_dataflow /usr/local/bin/
+COPY docker/finn_entrypoint.sh docker/quicktest.sh docker/build_dataflow \
+     docker/finn-env /usr/local/bin/
 RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
               /usr/local/bin/quicktest.sh \
-              /usr/local/bin/build_dataflow
+              /usr/local/bin/build_dataflow \
+              /usr/local/bin/finn-env
+
+# Transparent vendor-tool shims.
+#
+# Neither `docker exec` nor `sbx exec` runs the image ENTRYPOINT, so a bare
+#
+#     docker exec <container> vivado -version
+#
+# saw none of the toolchain environment. An explicit `finn-env exec` wrapper
+# does not fix that: a generic agent or CI system issues the bare command and
+# has no reason to know FINN's calling convention. The shim directory goes
+# EARLY on PATH so the bare command works with no caller cooperation.
+#
+# The tool list comes from finn-env's SHIMMED_TOOLS, and the build asserts they
+# agree -- so adding a tool in one place cannot silently skip the other.
+COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
+COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
+RUN set -eu; \
+    chmod 755 /usr/local/lib/finn/toolchain-shim; \
+    chmod 644 /etc/finn-bashenv.sh; \
+    mkdir -p /usr/local/lib/finn/toolchain-bin; \
+    for t in $(python -c 'import runpy,sys; \
+        m=runpy.run_path("/usr/local/bin/finn-env"); \
+        print(" ".join(m["SHIMMED_TOOLS"]))'); do \
+        ln -sf /usr/local/lib/finn/toolchain-shim \
+               /usr/local/lib/finn/toolchain-bin/"$t"; \
+    done; \
+    echo "shimmed: $(ls /usr/local/lib/finn/toolchain-bin | tr '\n' ' ')"; \
+    test -L /usr/local/lib/finn/toolchain-bin/vivado
 
 # Static environment. Everything here used to be passed as -e on every docker
 # run, which meant it could not reach a runtime with no create-time env
@@ -437,11 +467,20 @@ RUN set -eu; \
 #   NPM_CONFIG_PREFIX must be paired with its bin dir on PATH. Setting the
 #   prefix alone relocates `npm install -g` somewhere unreachable, so installing
 #   a CLI appears to succeed and then `command -v <cli>` fails with 127.
+# BASH_ENV points at finn-bashenv.sh, NOT straight at /etc/sandbox-persistent.sh.
+# That file is sbx-managed and must still be sourced -- finn-bashenv.sh sources
+# it first, then adds the toolchain environment that shells would otherwise miss.
+# Pointing BASH_ENV directly at the sbx file, as this used to, left `bash -c`
+# sessions with no Xilinx tools.
+#
+# The shim directory is early on PATH but AFTER npm-global, so it shadows the
+# mounted toolchain's own bin (which settings64.sh prepends at source time)
+# without shadowing anything sbxc or a harness installs.
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
     no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
-    BASH_ENV=/etc/sandbox-persistent.sh \
+    BASH_ENV=/etc/finn-bashenv.sh \
     NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
-    PATH=/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/usr/local/share/npm-global/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/npm-global
 
