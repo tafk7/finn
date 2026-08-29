@@ -301,3 +301,30 @@ def test_sh_format_is_shell_assignments(tmp_path):
         env={"PATH": os.environ["PATH"], "FINN_ROOT": "/w/finn"})
     assert "FINN_ROOT=/w/finn" in proc.stdout
     assert "FINN_WORKSPACE_TARGET=/w/finn" in proc.stdout
+
+
+# --------------------------------------------------------------------------
+# Idempotence.
+# --------------------------------------------------------------------------
+
+def test_dedupe_paths_collapses_repeats():
+    """settings64.sh prepends unconditionally, so applying it twice grows PATH.
+
+    Observed in a live sandbox at four copies of the full Xilinx PATH -- about
+    3 kB -- because the entrypoint applied it, then the sbx kit's startup
+    command applied it again on top of the result.
+    """
+    env = {"PATH": "/a:/b:/a:/c:/b", "LD_PRELOAD": "/x:/x"}
+    out = finn_env.dedupe_paths(dict(env))
+    assert out["PATH"] == "/a:/b:/c"      # order preserved, first wins
+    assert out["LD_PRELOAD"] == "/x"
+
+
+def test_dedupe_paths_drops_empty_segments():
+    out = finn_env.dedupe_paths({"PATH": "/a::/b:"})
+    assert out["PATH"] == "/a:/b"
+
+
+def test_dedupe_paths_ignores_absent_vars():
+    out = finn_env.dedupe_paths({"PATH": "/a"})
+    assert out == {"PATH": "/a"}

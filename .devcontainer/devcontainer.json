@@ -1,0 +1,69 @@
+{
+  // FINN's portable development contract, for Dev Containers, Codespaces and
+  // any agent tooling that reads this format.
+  //
+  // It points at compose's `dev` service deliberately. That service is held to
+  // a hard contract: only the workspace is mounted from the host, and there is
+  // no toolchain, no licence, no secret, no device and no FINN-specific
+  // network egress. An automation can therefore launch it knowing nothing
+  // about FINN -- there is no requirement to discover because there is no
+  // requirement.
+  //
+  // Vivado, Vitis and HLS work is NOT available here, and that is the point.
+  // Those need host paths and a licence, which is explicit capability
+  // escalation a human opts into:
+  //
+  //   docker compose --profile fpga run --rm build
+  //
+  // There is deliberately no second devcontainer.json for the FPGA tiers. Dev
+  // Containers is the right format for the portable default; a profile whose
+  // whole nature is host-specific escalation is not portable, and pretending
+  // otherwise in this file would just produce a config that fails on every
+  // machine but one.
+  "name": "FINN (dev)",
+
+  "dockerComposeFile": "../compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace/finn",
+
+  // The image's own default. run-docker.sh overrides it with the host uid, and
+  // compose does the same via FINN_UID, but a Dev Containers host does its own
+  // uid mapping and this is the identity it maps onto.
+  "remoteUser": "agent",
+  "updateRemoteUserUID": true,
+
+  // Declared, not assumed: XRT and Vivado are x86-64 only, and the image
+  // carries explicit x86-64 assumptions (the LSB loader symlink, the ncurses 5
+  // backport).
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  "containerEnv": {
+    "FINN_ROOT": "/workspace/finn",
+    // frozen, not auto: an editor or agent session should get exactly the
+    // dependency commits the image was built with, not whatever happens to be
+    // checked out under deps/. Co-developing qonnx or brevitas is an explicit
+    // FINN_DEPS=live choice.
+    "FINN_DEPS": "frozen"
+  },
+
+  // Nothing here installs software or reaches the network. The image already
+  // carries the full dependency closure as wheels, which is what makes the
+  // dev tier usable with egress closed.
+  "postCreateCommand": "python -c 'import finn; print(\"FINN import OK\")'",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}

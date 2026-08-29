@@ -1,0 +1,146 @@
+# FINN's runtime services. The human-facing half of the container story.
+#
+#   docker compose run --rm dev                   Python work, no toolchain
+#   docker compose run --rm dev quicktest.sh
+#   docker compose --profile fpga run --rm build  Vivado / Vitis HLS
+#   docker compose --profile fpga run --rm build-xrt
+#   docker compose up notebook
+#
+# BEFORE YOU RUN THIS
+# -------------------
+# The FPGA services need host facts that no committed file can know: where the
+# Xilinx install is, which licence form is in use, which directories to bind.
+# Generate them once per host:
+#
+#   ./docker/finn-env inspect --tier build --format sh > .env
+#
+# .env is a CACHE with a single producer, not a second source of truth. If it
+# looks stale, delete it and regenerate -- never hand-edit it.
+#
+# The `dev` service deliberately needs none of that and works with no .env at
+# all. That is the point of the tier: an agent or a new contributor gets a
+# working environment with one mount, no secrets, no egress and no host
+# toolchain. If you find yourself adding a bind mount to `dev`, that is the
+# signal to make an fpga-profile service instead.
+#
+# WORKSPACE PATH
+# --------------
+# `dev` mounts the checkout at /workspace/finn. The FPGA services mount it at
+# its HOST path, because generated Vivado projects embed $::env(FINN_ROOT) as
+# an absolute path via add_files -- so a project built under a fixed path
+# cannot be opened in the host's Vivado GUI, which is routine debugging here.
+# See LIMITATION(finn-root-absolute) in docker/finn_paths.py.
+#
+# Consequence worth knowing: FINN_ROOT differs between dev and the FPGA tiers
+# on the same host. finn_paths.py resolves it correctly either way, but the
+# path moving when you switch tiers is surprising the first time.
+
+x-common: &common
+  init: false            # the image has tini as PID 1; a second init is redundant
+  working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
+  # FINN_UID/FINN_GID, not UID/GID: bash marks UID readonly and does not export
+  # it, so ${UID} here would silently resolve to the default and every file the
+  # container wrote to the bind mount would be owned by uid 1000. `finn-env
+  # inspect --format sh` emits both.
+  user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
+  environment:
+    FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
+    FINN_DEPS: ${FINN_DEPS:-auto}
+    NUM_DEFAULT_WORKERS: ${NUM_DEFAULT_WORKERS:-4}
+
+# Everything an FPGA tier needs from the host, resolved by `finn-env inspect`.
+# Read-only throughout: the tools do not write into their own installation, and
+# an agent with write access to the Xilinx tree is the largest blast radius this
+# container has.
+x-toolchain: &toolchain
+  XILINX_VIVADO: ${XILINX_VIVADO:-}
+  XILINX_VITIS: ${XILINX_VITIS:-}
+  XILINX_HLS: ${XILINX_HLS:-}
+  VIVADO_PATH: ${VIVADO_PATH:-}
+  VITIS_PATH: ${VITIS_PATH:-}
+  HLS_PATH: ${HLS_PATH:-}
+  PLATFORM_REPO_PATHS: ${PLATFORM_REPO_PATHS:-}
+  XILINXD_LICENSE_FILE: ${XILINXD_LICENSE_FILE:-}
+  LM_LICENSE_FILE: ${LM_LICENSE_FILE:-}
+
+services:
+
+  # The universal default. No toolchain, no licence, no secrets, no host
+  # privilege, no FINN-specific egress -- only the workspace is mounted from
+  # the host. This is the contract the conformance suite asserts, and the
+  # reason automation needs no discovery protocol to run it.
+  dev:
+    <<: *common
+    image: xilinx/finn:dev-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.finn
+      target: dev
+      args:
+        FINN_PROFILE: ${FINN_PROFILE:-py310}
+    volumes:
+      - .:/workspace/finn
+    working_dir: /workspace/finn
+    environment:
+      FINN_ROOT: /workspace/finn
+      FINN_DEPS: ${FINN_DEPS:-auto}
+
+  build:
+    <<: *common
+    profiles: [fpga]
+    image: xilinx/finn:build-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.finn
+      target: build
+      args:
+        FINN_PROFILE: ${FINN_PROFILE:-py310}
+    volumes:
+      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
+      - ${FINN_XILINX_PATH:?set FINN_XILINX_PATH, or generate .env with finn-env inspect}:${FINN_XILINX_PATH}:ro
+      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+    environment:
+      <<: *toolchain
+      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+      FINN_DEPS: ${FINN_DEPS:-auto}
+
+  build-xrt:
+    <<: *common
+    profiles: [fpga]
+    image: xilinx/finn:${GIT_DESCRIBE:-local}.${XRT_DEB_VERSION:-xrt}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.finn
+      target: build-xrt
+      args:
+        FINN_PROFILE: ${FINN_PROFILE:-py310}
+    volumes:
+      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
+      - ${FINN_XILINX_PATH:?set FINN_XILINX_PATH, or generate .env with finn-env inspect}:${FINN_XILINX_PATH}:ro
+      - ${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:ro
+      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+    environment:
+      <<: *toolchain
+      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+      FINN_DEPS: ${FINN_DEPS:-auto}
+
+  notebook:
+    <<: *common
+    profiles: [notebook]
+    image: xilinx/finn:dev-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
+    volumes:
+      - .:/workspace/finn
+    working_dir: /workspace/finn
+    environment:
+      FINN_ROOT: /workspace/finn
+      FINN_DEPS: ${FINN_DEPS:-auto}
+      JUPYTER_PORT: ${JUPYTER_PORT:-8888}
+      NETRON_PORT: ${NETRON_PORT:-8081}
+    ports:
+      - "${JUPYTER_PORT:-8888}:${JUPYTER_PORT:-8888}"
+      - "${NETRON_PORT:-8081}:${NETRON_PORT:-8081}"
+    command: >
+      jupyter notebook --no-browser --ip=0.0.0.0
+      --port ${JUPYTER_PORT:-8888} notebooks

@@ -346,6 +346,35 @@ def libudev_preload():
     return None
 
 
+# Path-like variables that must be de-duplicated. See dedupe_paths().
+PATH_VARS = ("PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH")
+
+
+def dedupe_paths(env):
+    """Collapse repeated entries in colon-separated path variables.
+
+    settings64.sh PREPENDS to PATH unconditionally. Applying the toolchain more
+    than once in a process tree -- the entrypoint does it, then the sbx kit's
+    startup command does it again, then a shell might -- therefore grows PATH
+    without bound. It was observed at four copies of the full Xilinx PATH, about
+    3 kB, which is slow to search and makes any diagnostic printing the
+    environment unreadable.
+
+    Order-preserving, first occurrence wins, so the toolchain still shadows the
+    system tools exactly as settings64.sh intended.
+    """
+    for var in PATH_VARS:
+        if var not in env:
+            continue
+        seen, ordered = set(), []
+        for part in env[var].split(":"):
+            if part and part not in seen:
+                seen.add(part)
+                ordered.append(part)
+        env[var] = ":".join(ordered)
+    return env
+
+
 def toolchain_env():
     """The environment delta from sourcing the mounted toolchain.
 
@@ -411,7 +440,7 @@ def toolchain_env():
                 parts.append(preload)
             env["LD_PRELOAD"] = ":".join(parts)
 
-    return env
+    return dedupe_paths(env)
 
 
 # --------------------------------------------------------------------------
@@ -428,6 +457,15 @@ def cmd_inspect(args):
             sys.stdout.write("%s=%s\n" % (key, value))
         sys.stdout.write("FINN_WORKSPACE_SOURCE=%s\n" % data["workspace"]["source"])
         sys.stdout.write("FINN_WORKSPACE_TARGET=%s\n" % data["workspace"]["target"])
+        # Compose cannot get these from the shell: bash marks UID readonly and
+        # exports neither, so ${UID} in a compose file silently resolves to its
+        # default and every file written to a bind mount ends up owned by uid
+        # 1000 instead of the invoking user.
+        sys.stdout.write("FINN_UID=%d\n" % os.getuid())
+        sys.stdout.write("FINN_GID=%d\n" % os.getgid())
+        for key in ("FINN_XILINX_PATH", "FINN_HOST_BUILD_DIR", "FINN_PROFILE"):
+            if os.environ.get(key):
+                sys.stdout.write("%s=%s\n" % (key, os.environ[key]))
     return 0
 
 

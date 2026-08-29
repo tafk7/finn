@@ -90,55 +90,45 @@ setup:
 
     # Publish the Xilinx toolchain environment to shell sessions.
     #
-    # `sbx exec` does not run the image ENTRYPOINT, so the settings64.sh that
-    # finn_entrypoint.sh sources into PID 1 is invisible to every later
-    # session -- `vivado` is simply not on PATH. These variables cannot be
-    # static kit values: sourcing settings64.sh produces a large, install- and
-    # version-dependent set, and the tools are mounted, not baked.
+    # `sbx exec` does not run the image ENTRYPOINT, so anything the entrypoint
+    # sources into PID 1 is invisible to every later session. The image handles
+    # that itself now -- BASH_ENV plus the transparent vendor-tool shims -- so
+    # this command is an OPTIMISATION, not the mechanism: it resolves the
+    # toolchain once at startup instead of letting the first shell pay for it.
     #
-    # /etc/sandbox-persistent.sh is sbx-managed and sourced when bash starts,
-    # which covers interactive sessions, `sbx run`, and `bash -c`. A bare
-    # `sh -c` does not source it -- acceptable, because the consumers that
-    # need Vivado are shells and Python (which resolves paths via finn_paths).
+    # It delegates to finn-env rather than re-deriving anything. This block used
+    # to source settings64.sh itself, which made it a second implementation of
+    # logic that also lived in the entrypoint and (in a different form) in
+    # run-docker.sh. Every mount defect this redesign fixed came from exactly
+    # that shape.
+    #
+    # Constraints from the kit dispatcher, all learned the hard way:
+    #   - it STOPS the chain on a non-zero exit, so this must end with exit 0
+    #     or anything added after it is silently disabled;
+    #   - startup commands REPLAY on every restart, so this must be idempotent.
+    #     It writes /etc/finn-toolchain.sh whole and adds one guarded source
+    #     line, rather than appending to the sbx-managed file each time;
+    #   - /etc/sandbox-persistent.sh is sbx-managed. The image must never write
+    #     its CONTENT, but adding a source line at startup is how sbx expects a
+    #     kit to contribute.
     #
     # No-op on the dev tier, which mounts no toolchain.
     - command:
         - bash
         - -c
         - |
-          # NO `set -u`: Xilinx settings64.sh references unset variables and
-          # would abort the shell mid-source, silently producing an empty file.
-          # NO `set -e` either: a non-zero from a vendor script must not stop us.
-          settings=""
-          for p in "${VITIS_PATH:-}" "${VIVADO_PATH:-}" "${HLS_PATH:-}"; do
-            [ -n "$p" ] && [ -f "$p/settings64.sh" ] && settings="$settings $p/settings64.sh"
-          done
-          [ -z "$settings" ] && exit 0
-          for s in $settings; do . "$s" 2>/dev/null || true; done
-          # Set only when a toolchain is actually present, so the dev tier -- which
-          # sources nothing -- never pays for it.
-          udev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
-          [ -n "$udev" ] && export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$udev"
-          {
-            echo "# Xilinx toolchain env, published by the finn kit at startup."
-            # LD_PRELOAD of libudev is a FLEXlm workaround, not decoration.
-            # FLEXlm fingerprints the host through udev_enumerate_scan_devices
-            # during checkout, and in a microVM that corrupts the heap: Vivado
-            # dies with "realloc(): invalid pointer" and SIGABRT the moment it
-            # asks for a licence. Preloading libudev avoids it.
-            #
-            # It has to be published here rather than exported by the
-            # entrypoint, because `sbx exec` never runs the entrypoint -- which
-            # is exactly how it went missing and took synthesis down with it.
-            for v in PATH LD_LIBRARY_PATH LD_PRELOAD XILINX_VIVADO XILINX_VITIS XILINX_HLS XILINX_XRT; do
-              eval "val=\${$v:-}"
-              [ -n "$val" ] && printf 'export %s=%q\n' "$v" "$val"
-            done
-          } > /etc/finn-toolchain.sh
-          grep -q finn-toolchain /etc/sandbox-persistent.sh 2>/dev/null \
-            || echo ". /etc/finn-toolchain.sh" >> /etc/sandbox-persistent.sh
-          # Explicit success. The block above ends on whatever the last test
-          # returned, and the dispatcher STOPS the whole chain on a non-zero
-          # exit -- which would silently disable any command added after this.
+          command -v finn-env >/dev/null 2>&1 || exit 0
+          finn-env print --format sh > /etc/finn-toolchain.sh.$$ 2>/dev/null || {
+            rm -f /etc/finn-toolchain.sh.$$; exit 0
+          }
+          if [ -s /etc/finn-toolchain.sh.$$ ]; then
+            mv -f /etc/finn-toolchain.sh.$$ /etc/finn-toolchain.sh
+            chmod 0644 /etc/finn-toolchain.sh
+            grep -q finn-toolchain /etc/sandbox-persistent.sh 2>/dev/null \
+              || echo ". /etc/finn-toolchain.sh" >> /etc/sandbox-persistent.sh
+          else
+            rm -f /etc/finn-toolchain.sh.$$
+          fi
+          # Explicit success: the dispatcher stops the whole chain otherwise.
           exit 0
       user: "0"
