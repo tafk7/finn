@@ -391,7 +391,7 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
     NUM_DEFAULT_WORKERS=4 \
     LOCALHOST_URL="localhost" \
     SHELL=/bin/bash \
-    FINN_DEPS=auto \
+    FINN_DEPS=frozen \
     XILINX_LOCAL_USER_DATA=no
 # TORCH_HOME / HF_HOME are deliberately NOT set here, though §3.4 grouped them
 # with the static tier. They point into /finn_cache, which exists only when

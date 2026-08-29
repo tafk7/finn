@@ -119,9 +119,19 @@ fi
 #   build      + finn-hlslib and board files, for Vivado / Vitis HLS flows.
 #   build-xrt  + XRT and v80++, for Vitis / Alveo / V80 targets.
 #
-# Defaults to build-xrt so an unqualified `./run-docker.sh` behaves exactly as
-# it did before the split, which is what Jenkins relies on.
-: ${FINN_DOCKER_TARGET="build-xrt"}
+# Defaults to `dev`.
+#
+# It used to default to build-xrt, which was Jenkins history rather than a
+# considered choice: the largest tier with the widest host exposure -- the whole
+# Xilinx tree mounted, a licence, egress to the licence server -- for work that
+# mostly needs none of it. CI now names its tier explicitly via the stage
+# matrix, so the developer default no longer has to carry that.
+#
+# `dev` is held to a hard contract: only the workspace is mounted from the host,
+# and there is no toolchain, no licence, no secret, no device and no
+# FINN-specific egress. Vivado work is an explicit `./run-docker.sh <cmd> build`
+# or FINN_DOCKER_TARGET=build.
+: ${FINN_DOCKER_TARGET="dev"}
 
 # Tag per tier. build-xrt keeps the historical shape - git describe --dirty plus
 # the XRT package name - because that is the tag the Jenkins publish path keys

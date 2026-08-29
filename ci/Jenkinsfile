@@ -356,14 +356,30 @@ void rotateBuildTrees() {
 // Build-Docker-Image stage helpers
 // ============================================================================
 
+// The CI image tier. Python-only shards do not need Vivado, a licence or the
+// 267 GB Xilinx mount; before this was a knob, every shard paid for build-xrt
+// because that was run-docker.sh's default. Override per job.
+String ciImageTier() {
+  return env.FINN_CI_IMAGE_TIER ?: 'build-xrt'
+}
+
+String ciBakeTarget() {
+  return "${ciImageTier()}-${env.FINN_PROFILE ?: 'py310'}"
+}
+
 void buildAndPublishDockerImage() {
   // -a -f reclaims the whole local image cache. The FINN builder agent is
   // assumed single-tenant so this will not evict another job's images.
   sh 'docker system prune -a -f'
-  sh "./run-docker.sh echo 'Docker image build complete'"
   String imageDir = buildDockerImageDir()
+  // Build via bake and emit the provenance tuple. The image digest alone does
+  // NOT identify what was tested: FINN source is mounted rather than baked, so
+  // the digest describes the environment and the finn_commit + resolved
+  // dependency commits describe the code. Shards need all of it.
+  sh "ci/scripts/build-images.sh ${shellQuote(ciBakeTarget())} ${shellQuote(imageDir ?: '')}"
   if (imageDir) {
     publishSharedDockerImage(imageDir)
+    archiveArtifacts artifacts: "**/finn-image-provenance.json", allowEmptyArchive: true
   } else {
     echo "buildAndPublishDockerImage: local fallback mode, skipping image publish"
   }
@@ -381,9 +397,15 @@ String buildDockerImageDir() {
 // readers away from in-progress writes. publish_docker_image.sh handles the
 // same-build-retry serialisation.
 void publishSharedDockerImage(String imageDir) {
-  def tag = sh(returnStdout: true, script: './run-docker.sh print-tag').trim()
+  // The tag comes from bake, which owns the tag rule. run-docker.sh print-tag
+  // still exists and still agrees -- it asserts as much after every build --
+  // but CI should read the authority rather than a second implementation of it.
+  def tag = sh(returnStdout: true, script: """
+    docker buildx bake --print ${shellQuote(ciBakeTarget())} \
+      | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['${ciBakeTarget()}']['tags'][0])"
+  """).trim()
   if (!tag || tag.contains('\n')) {
-    error "run-docker.sh print-tag must emit exactly one Docker tag line. Got: ${tag}"
+    error "bake must emit exactly one Docker tag for ${ciBakeTarget()}. Got: ${tag}"
   }
   sh "mkdir -p ${shellQuote(imageDir)}"
   sh "ci/scripts/publish_docker_image.sh " +

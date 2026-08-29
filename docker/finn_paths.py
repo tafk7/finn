@@ -53,7 +53,7 @@ today, which is why the trade is currently worth making.
 Runtime contract
 ----------------
 ``FINN_ROOT`` unset means do nothing at all, so the image stays usable with no
-mount. ``FINN_DEPS`` selects ``frozen``, ``live`` or ``auto`` (the default); see
+mount. ``FINN_DEPS`` selects ``frozen`` (the default), ``live`` or ``auto``; see
 ``deps_mode`` below.
 
 This runs at the start of every Python process in the image, so it must stay
@@ -118,7 +118,7 @@ class DepsUnavailable(RuntimeError):
 
 
 DEPS_MODES = ("frozen", "live", "auto")
-DEFAULT_DEPS_MODE = "auto"
+DEFAULT_DEPS_MODE = "frozen"
 
 
 def deps_mode():

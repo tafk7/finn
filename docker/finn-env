@@ -66,11 +66,17 @@ FPGA_TIERS = ("build", "build-xrt")
 #   fixed   container path == FIXED_WORKSPACE. Better for remote daemons,
 #           reproducible diagnostics and Dev Container config.
 #
-# Stage 7 of docs/containerization-plan.md flips the dev default to "fixed".
-# Until then this is plumbed but dormant, so the policy can be tested before it
-# becomes the behaviour.
+# dev defaults to "fixed" and the FPGA tiers to "mirror". dev is Python-only and
+# generates no Vivado projects, so mirroring buys it nothing while costing
+# remote-daemon support, reproducible diagnostic paths, and simple Dev Container
+# config. The FPGA tiers generate projects and so must mirror.
+#
+# CONSEQUENCE: FINN_ROOT differs between dev and the FPGA tiers on one host, so
+# the workspace path moves when you switch tiers. finn_paths.py resolves either
+# correctly, but it surprises people; it is called out in compose.yaml and the
+# docs for that reason.
 FIXED_WORKSPACE = "/workspace/finn"
-DEFAULT_DEV_WORKSPACE_POLICY = "mirror"
+DEFAULT_DEV_WORKSPACE_POLICY = "fixed"
 
 # Vendor executables that get a transparent shim (stage 3). Listed here because
 # the shim needs the same toolchain resolution this file already performs.

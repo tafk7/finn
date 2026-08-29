@@ -45,7 +45,7 @@ x-common: &common
   user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
   environment:
     FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-    FINN_DEPS: ${FINN_DEPS:-auto}
+    FINN_DEPS: ${FINN_DEPS:-frozen}
     NUM_DEFAULT_WORKERS: ${NUM_DEFAULT_WORKERS:-4}
 
 # Everything an FPGA tier needs from the host, resolved by `finn-env inspect`.
@@ -83,7 +83,7 @@ services:
     working_dir: /workspace/finn
     environment:
       FINN_ROOT: /workspace/finn
-      FINN_DEPS: ${FINN_DEPS:-auto}
+      FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build:
     <<: *common
@@ -103,7 +103,7 @@ services:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
       FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
-      FINN_DEPS: ${FINN_DEPS:-auto}
+      FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build-xrt:
     <<: *common
@@ -124,7 +124,7 @@ services:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
       FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
-      FINN_DEPS: ${FINN_DEPS:-auto}
+      FINN_DEPS: ${FINN_DEPS:-frozen}
 
   notebook:
     <<: *common
@@ -135,7 +135,7 @@ services:
     working_dir: /workspace/finn
     environment:
       FINN_ROOT: /workspace/finn
-      FINN_DEPS: ${FINN_DEPS:-auto}
+      FINN_DEPS: ${FINN_DEPS:-frozen}
       JUPYTER_PORT: ${JUPYTER_PORT:-8888}
       NETRON_PORT: ${NETRON_PORT:-8081}
     ports:

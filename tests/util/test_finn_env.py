@@ -294,13 +294,24 @@ def test_stdout_is_pure_json_even_with_warnings(tmp_path):
 
 
 def test_sh_format_is_shell_assignments(tmp_path):
+    """The .env compose consumes.
+
+    Under the dev policy the SOURCE is the host checkout and the TARGET is the
+    fixed path -- they are deliberately different, and conflating them is what
+    would mount the workspace in the wrong place.
+    """
     proc = subprocess.run(
         [sys.executable, FINN_ENV, "inspect", "--tier", "dev",
          "--format", "sh"],
         capture_output=True, text=True,
         env={"PATH": os.environ["PATH"], "FINN_ROOT": "/w/finn"})
-    assert "FINN_ROOT=/w/finn" in proc.stdout
-    assert "FINN_WORKSPACE_TARGET=/w/finn" in proc.stdout
+    assert "FINN_WORKSPACE_SOURCE=/w/finn" in proc.stdout
+    assert "FINN_WORKSPACE_TARGET=%s" % finn_env.FIXED_WORKSPACE in proc.stdout
+    # FINN_ROOT is the CONTAINER path, so it tracks the target, not the source.
+    assert "FINN_ROOT=%s" % finn_env.FIXED_WORKSPACE in proc.stdout
+    # Compose cannot get these from the shell; see the comment in finn-env.
+    assert "FINN_UID=" in proc.stdout
+    assert "FINN_GID=" in proc.stdout
 
 
 # --------------------------------------------------------------------------
@@ -328,3 +339,18 @@ def test_dedupe_paths_drops_empty_segments():
 def test_dedupe_paths_ignores_absent_vars():
     out = finn_env.dedupe_paths({"PATH": "/a"})
     assert out == {"PATH": "/a"}
+
+
+def test_dev_uses_the_fixed_workspace_path(tmp_path):
+    """D4, as flipped in stage 7.
+
+    dev is Python-only and generates no Vivado projects, so mirroring the host
+    path buys it nothing while costing remote-daemon support and reproducible
+    diagnostics. The FPGA tiers still mirror because generated .xpr files embed
+    $::env(FINN_ROOT) as an absolute path.
+    """
+    proc = _inspect({"FINN_ROOT": "/somewhere/finn"}, "dev")
+    data = json.loads(proc.stdout)
+    assert data["workspace"]["policy"] == "fixed"
+    assert data["workspace"]["source"] == "/somewhere/finn"
+    assert data["workspace"]["target"] == finn_env.FIXED_WORKSPACE

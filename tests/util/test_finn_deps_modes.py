@@ -39,8 +39,15 @@ def _workspace(tmp_path, with_deps):
     return str(root)
 
 
-def test_default_is_auto(deps_env):
-    assert finn_paths.deps_mode() == "auto"
+def test_default_is_frozen(deps_env):
+    """Stage 7 flipped this from auto.
+
+    An unattended run must resolve the same way every time. auto could pick
+    either source depending on whether deps/ happened to be populated, which
+    means two CI shards on the same image digest could execute different code
+    -- the exact property the digest exists to guarantee.
+    """
+    assert finn_paths.deps_mode() == "frozen"
 
 
 @pytest.mark.parametrize("mode", ["frozen", "live", "auto"])
@@ -55,8 +62,9 @@ def test_mode_is_case_insensitive(deps_env):
 
 
 def test_unknown_mode_warns_and_falls_back(deps_env, capsys):
+    """Falls back to the default, which is the SAFE mode, not the lenient one."""
     deps_env.setenv("FINN_DEPS", "sometimes")
-    assert finn_paths.deps_mode() == "auto"
+    assert finn_paths.deps_mode() == finn_paths.DEFAULT_DEPS_MODE == "frozen"
     assert "not one of" in capsys.readouterr().err
 
 
