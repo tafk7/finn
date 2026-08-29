@@ -2,7 +2,9 @@
 
 Date: 2026-08-28
 Implements: `containerization-decisions.md` (revision 2)
-Branch: continue on `feature/sbx`
+Branch: `feature/sbx`
+Status: **all eight stages implemented.** See "Outcome" at the bottom for what
+was verified, what changed from the plan, and what is still open.
 
 Eight stages. Each ends at a green tree that could ship on its own — no stage
 depends on a later one to be correct. Stages 1-3 are strictly additive to
@@ -248,3 +250,88 @@ becomes the default that makes the CI digest meaningful.
 IP-XACT packaging via finnlib (see that repo's design note), which would remove
 `FINN_ROOT` from generated projects and make D4's per-tier policy unnecessary.
 That is a separate project.
+
+---
+
+# Outcome
+
+Eight stages, eight commits, all on `feature/sbx`.
+
+| Stage | Commit | What landed |
+| --- | --- | --- |
+| 1 | `a4f09fbf7` | Defects 1-8, plus two found while fixing them |
+| 2 | `71db8850a` | `docker/finn-env`, the single resolver, + 22 tests |
+| 3 | `d064d02e8` | Transparent exec: shims, BASH_ENV, entrypoint shrunk |
+| 4 | `5530bc006` | `sbx-*` targets, `sbx-contract.sh`, `FINN_TIER` |
+| 5 | `731a9d65c` | `frozen` / `live` / `auto`, + 13 tests |
+| 6 | `39c0ab9d7`, `84d4a1797` | bake; then compose, devcontainer, kit delegation |
+| 7 | `e5fbfe75f` | Three default flips + CI provenance |
+| 8 | `924603882` | Conformance suite + supported matrix |
+
+## Verified on real hardware
+
+- `synth_design` on `xczu28dr` with the toolchain mounted `:ro`: licence
+  checked out and released, `SYNTH_OK cells=114`, 0 errors. The stage 1 stop
+  condition did not trigger — the tools do not write into their installation.
+- The same synthesis through a **bare `docker exec`**, no shell and no wrapper.
+- Conformance suite: **20 pass, 0 fail, 3 skip.**
+- Full `quicktest.sh` in the `dev` tier: **2479 passed**, 16 skipped, 5 xfailed,
+  1 xpassed, 0 failed.
+- Unit tests: **39 pass** (`tests/util/test_finn_env.py`,
+  `test_finn_deps_modes.py`).
+- All six bake tags byte-identical to `finn_compute_tag`, so the migration
+  triggered no rebuild.
+- `dev` 26 layers, `sbx-dev` 28 — the sbx targets really are two thin layers on
+  a shared base, not a second image.
+
+## Defects found that were not in the plan
+
+Two, both while fixing the four that were:
+
+- **The node-locked licence mount loop ran in a subshell.** It ended in
+  `| while read`, so every `SBX_ARGS+=` was discarded and licence directories
+  were never mounted. Same subshell-counter bug class the live-test scripts
+  had, and the conformance suite was written to avoid.
+- **`yecho` was called and never defined**, so a missing licence path printed
+  "command not found" and lost the warning it was trying to give.
+
+And two more found by running things rather than reading them:
+
+- **`${UID}` in compose is a trap.** bash marks it readonly and exports neither
+  `UID` nor `GID`, so compose silently takes the default and every file written
+  to a bind mount ends up owned by uid 1000.
+- **PATH had four copies of the full Xilinx PATH** — about 3 kB — in a live
+  sandbox, because `settings64.sh` prepends unconditionally and the toolchain
+  was applied by the entrypoint and again by the kit.
+
+## Changed from the plan
+
+- **The profile matrix moved into `docker-bake.hcl`.** The plan assumed bake
+  could read the existing shell files. It cannot: HCL has no `file()` and does
+  not read `.env` — both verified, not assumed. The alternatives were codegen
+  (goes stale silently) or a mandatory wrapper (so a bare
+  `docker buildx bake dev-py312` would build with py310's XRT package).
+- **`sbx-contract.sh` exists.** The plan implied three inline `RUN` blocks;
+  writing them made the duplication obvious given the argument the plan itself
+  makes about duplicated paths drifting.
+- **`FINN_TIER` was not in the plan** but is needed once targets can be
+  sbx-qualified, so that a tier means the same thing on both backends.
+
+## Still open
+
+- **The Jenkins wiring is reviewed, not run.** There is no Jenkins here.
+  `ci/scripts/build-images.sh` is tested directly and produces a correct
+  provenance record; the Jenkinsfile changes around it are not exercised.
+- **The node-locked licence question is unresolved.** Conformance test 9 skips
+  for want of a node-locked licence, and says so. The `:ro`-versus-sibling-
+  writes contradiction in `docker/finn.kit/spec.yaml` stands.
+- **`run-docker.sh` still cannot survive a space in a path.** It assembles
+  docker arguments by string concatenation. Conformance test 8 checks the
+  workspace policies, not the launcher, and the script says so.
+- **`dev-py312` does not build.** Marked `experimental` because it tracks
+  unfinished upstream work; reported, does not gate.
+- **`run-docker.sh` is ~870 lines, not the ~80 the plan projected.** Bake took
+  the build and the tag rule; compose has not yet taken the runtime
+  composition, so the launcher still owns the `docker run` assembly and the sbx
+  create-or-attach flow. Finishing that is a further step, not a blocker — the
+  declarative artifacts work today and the launcher agrees with them.
