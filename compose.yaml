@@ -79,10 +79,13 @@ services:
       args:
         FINN_PROFILE: ${FINN_PROFILE:-py310}
     volumes:
-      - .:/workspace/finn
-    working_dir: /workspace/finn
+      # Defaults to the fixed path. run-docker.sh overrides both through its own
+      # env file so the legacy contract keeps mirroring the host path -- see the
+      # note at the top of this file about FINN_ROOT differing between tiers.
+      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
+    working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
     environment:
-      FINN_ROOT: /workspace/finn
+      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build:
@@ -131,10 +134,10 @@ services:
     profiles: [notebook]
     image: xilinx/finn:dev-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
     volumes:
-      - .:/workspace/finn
-    working_dir: /workspace/finn
+      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
+    working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
     environment:
-      FINN_ROOT: /workspace/finn
+      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
       FINN_DEPS: ${FINN_DEPS:-frozen}
       JUPYTER_PORT: ${JUPYTER_PORT:-8888}
       NETRON_PORT: ${NETRON_PORT:-8081}

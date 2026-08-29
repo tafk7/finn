@@ -101,3 +101,6 @@ MANIFEST
 # compose, with a single producer. Never commit it and never hand-edit it:
 # delete and regenerate if it looks stale.
 /.env
+
+# run-docker.sh writes this; same rules as .env.
+/.finn-run.env
