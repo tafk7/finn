@@ -71,7 +71,7 @@ need_image () {
     [ -n "$tag" ] || return 1
     docker image inspect "$tag" >/dev/null 2>&1 && return 0
     echo "  (building $tier for this commit)" >&2
-    docker buildx bake --load "${tier}-${FINN_PROFILE:-py310}" >/dev/null 2>&1
+    docker buildx bake -f docker-bake.hcl --load "${tier}-${FINN_PROFILE:-py310}" >/dev/null 2>&1
 }
 
 CONTAINER=finn-conformance-$$
@@ -92,7 +92,7 @@ head_ "1. Supported targets build; experimental ones smoke-build"
 # ---------------------------------------------------------------------------
 if want 1 && [ "$have_docker" = 1 ]; then
     for target in dev-py310 build-py310 sbx-dev-py310; do
-        if docker buildx bake --load "$target" >/dev/null 2>&1; then
+        if docker buildx bake -f docker-bake.hcl --load "$target" >/dev/null 2>&1; then
             ok "supported target builds: $target"
         else
             bad "supported target FAILED to build: $target"
@@ -100,7 +100,7 @@ if want 1 && [ "$have_docker" = 1 ]; then
     done
     # py312 is marked experimental in docker-bake.hcl -- it tracks an unfinished
     # upstream PR. A failure here is reported, not fatal.
-    if docker buildx bake --load dev-py312 >/dev/null 2>&1; then
+    if docker buildx bake -f docker-bake.hcl --load dev-py312 >/dev/null 2>&1; then
         ok "experimental target builds: dev-py312"
     else
         skip "experimental target dev-py312 does not build (does not gate)"

@@ -88,10 +88,10 @@ export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
 
 BAKE_TARGET="sbx-${TIER}-${FINN_PROFILE}"
 gecho "Building $BAKE_TARGET"
-docker buildx bake --load "$BAKE_TARGET" \
+docker buildx bake -f docker-bake.hcl --load "$BAKE_TARGET" \
     || { recho "docker buildx bake $BAKE_TARGET failed"; exit 1; }
 
-FINN_SBX_TEMPLATE=$(docker buildx bake --print "$BAKE_TARGET" 2>/dev/null \
+FINN_SBX_TEMPLATE=$(docker buildx bake -f docker-bake.hcl --print "$BAKE_TARGET" 2>/dev/null \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$BAKE_TARGET']['tags'][0])")
 [ -n "$FINN_SBX_TEMPLATE" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
 

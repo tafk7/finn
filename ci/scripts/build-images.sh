@@ -44,11 +44,11 @@ if ! git diff --quiet HEAD 2>/dev/null; then
 fi
 
 echo "Building bake target $TARGET"
-docker buildx bake --load "$TARGET"
+docker buildx bake -f docker-bake.hcl --load "$TARGET"
 
 # Ask bake for the tag rather than recomputing it. This is the whole point of
 # moving the rule into docker-bake.hcl: there is exactly one implementation.
-TAG=$(docker buildx bake --print "$TARGET" 2>/dev/null \
+TAG=$(docker buildx bake -f docker-bake.hcl --print "$TARGET" 2>/dev/null \
       | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$TARGET']['tags'][0])")
 
 # Image ID, not RepoDigests. RepoDigests is populated only after a push, and is

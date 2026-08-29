@@ -109,7 +109,13 @@ memory need not change.
 
 Three defaults differ from older versions of the script:
 
-- the default tier is `dev`, not `build-xrt`
+- the default tier is `build`, not `build-xrt` — Vivado and Vitis HLS are
+  present, XRT and the platform repository are not. RTL simulation needs
+  `xsim`, not XRT. With no `FINN_XILINX_PATH` configured it warns and falls
+  back to `dev` rather than failing; an *explicit* `FINN_DOCKER_TARGET=build`
+  still errors, because that is a request rather than a default.
+  (Plain Compose and bake default to `dev`, which is right for a new
+  contributor or an agent.)
 - `dev` mounts the workspace at its host path under `run-docker.sh`, and at
   `/workspace/finn` under plain Compose
 - `FINN_DEPS` defaults to `frozen`

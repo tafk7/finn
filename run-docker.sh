@@ -66,9 +66,28 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 cd "$SCRIPTPATH" || exit 1
 
 : "${FINN_PROFILE:=py310}"
-# dev, not build-xrt. See D2 in docs/containerization-decisions.md: the old
-# default was Jenkins history, and it was the widest-exposure tier.
-: "${FINN_DOCKER_TARGET:=dev}"
+# Was the tier chosen by the caller, or is it about to be defaulted? The
+# fallback below only applies to a DEFAULT, never to an explicit request.
+FINN_DOCKER_TARGET_EXPLICIT="${FINN_DOCKER_TARGET+yes}"
+
+# `build`, for the LEGACY entry point specifically.
+#
+# The three lanes have different right answers here and it is worth being
+# explicit about why they differ rather than making them agree:
+#
+#   compose / bake   default `dev`. A new contributor or an agent should get a
+#                    working environment with no toolchain, no licence and no
+#                    configuration.
+#   run-docker.sh    default `build`. Anyone typing this has been running FINN
+#                    for years and expects Vivado and Vitis HLS to be present.
+#                    Silently handing them the Python-only tier would look like
+#                    a broken install.
+#
+# NOT build-xrt, which was the historic default. That was Jenkins history: the
+# widest-exposure tier -- XRT, the platform repository, the largest image -- for
+# work that mostly needs Vivado and nothing more. RTL simulation needs xsim, not
+# XRT. CI now names its tier explicitly through FINN_CI_IMAGE_TIER.
+: "${FINN_DOCKER_TARGET:=build}"
 : "${FINN_DEPS:=frozen}"
 : "${FINN_DOCKER_PREBUILT:=0}"
 : "${FINN_DOCKER_EXTRA:=}"
@@ -88,6 +107,24 @@ cd "$SCRIPTPATH" || exit 1
 # backends.
 FINN_TIER="${FINN_DOCKER_TARGET#sbx-}"
 
+# Degrade to `dev` rather than failing when the default tier needs a toolchain
+# that is not configured.
+#
+# finn-env is strict: `inspect --tier build` with no FINN_XILINX_PATH is a hard
+# error, which is right for a resolver. But this script defaults to `build`, and
+# historically it warned and carried on when the Xilinx variables were unset --
+# so making the DEFAULT fail would break anyone doing Python-only work who never
+# had Vivado configured. An explicit FINN_DOCKER_TARGET=build still errors, as
+# it should: that is a request, not a default.
+if [ "$FINN_TIER" != "dev" ] && [ -z "${FINN_DOCKER_TARGET_EXPLICIT:-}" ] \
+   && [ -z "${FINN_XILINX_PATH:-}" ]; then
+    yecho "FINN_XILINX_PATH is not set; falling back to the dev tier."
+    yecho "Vivado, Vitis, HLS and rtlsim are unavailable. Everything else works."
+    yecho "Set FINN_XILINX_PATH and FINN_XILINX_VERSION for the build tier."
+    FINN_DOCKER_TARGET="dev"
+    FINN_TIER="dev"
+fi
+
 # ----------------------------------------------------------------------------
 # Tags come from bake. This script no longer has a tag rule of its own -- it had
 # one, kept in sync with docker-bake.hcl by an assertion, and one authority is
@@ -97,9 +134,17 @@ GIT_DESCRIBE="$(git describe --always --tags 2>/dev/null || echo local)"
 GIT_DESCRIBE_DIRTY="$(git describe --always --tags --dirty 2>/dev/null || echo local)"
 export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
 
+# -f docker-bake.hcl is REQUIRED, not tidiness.
+#
+# With no -f, bake auto-loads every definition it finds in the directory --
+# including compose.yaml. compose's fpga services guard the toolchain mount with
+# ${FINN_XILINX_PATH:?...}, so on a machine with no Xilinx configured bake fails
+# to interpolate and refuses to run ANY target, including dev-py310 which has
+# nothing to do with the toolchain. Bake reads the bake file; compose reads the
+# compose file.
 finn_bake_tag () {
     local target="$1-${FINN_PROFILE}"
-    docker buildx bake --print "$target" 2>/dev/null \
+    docker buildx bake -f docker-bake.hcl --print "$target" 2>/dev/null \
         | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$target']['tags'][0])" 2>/dev/null
 }
 
@@ -133,7 +178,7 @@ case "${1:-}" in
     target="${FINN_DOCKER_TARGET}-${FINN_PROFILE}"
     gecho "Building bake target $target"
     # shellcheck disable=SC2086
-    docker buildx bake --load $FINN_DOCKER_BUILD_EXTRA "$target" \
+    docker buildx bake -f docker-bake.hcl --load $FINN_DOCKER_BUILD_EXTRA "$target" \
         || { recho "docker buildx bake $target failed"; exit 1; }
     gecho "Built $(finn_bake_tag "$FINN_DOCKER_TARGET")"
     exit 0
@@ -253,7 +298,7 @@ if [ "$FINN_DOCKER_PREBUILT" = "1" ] || [ -n "${FINN_DOCKER_SHARED_IMAGE_DIR:-}"
     ./ci/scripts/load-shared-image.sh "$(finn_bake_tag "$FINN_DOCKER_TARGET")" || exit 1
 else
     # shellcheck disable=SC2086
-    docker buildx bake --load $FINN_DOCKER_BUILD_EXTRA \
+    docker buildx bake -f docker-bake.hcl --load $FINN_DOCKER_BUILD_EXTRA \
         "${FINN_DOCKER_TARGET}-${FINN_PROFILE}" \
         || { recho "image build failed"; exit 1; }
 fi
