@@ -53,11 +53,12 @@ today, which is why the trade is currently worth making.
 Runtime contract
 ----------------
 ``FINN_ROOT`` unset means do nothing at all, so the image stays usable with no
-mount. ``FINN_DEPS`` selects live (default) or frozen; see workspace_root and
-dep_src_dirs below.
+mount. ``FINN_DEPS`` selects ``frozen``, ``live`` or ``auto`` (the default); see
+``deps_mode`` below.
 
 This runs at the start of every Python process in the image, so it must stay
-cheap and must never raise.
+cheap and must never raise -- with exactly one deliberate exception, an explicit
+``FINN_DEPS=live`` whose checkouts are absent. See the handler at the bottom.
 """
 
 import os
@@ -112,15 +113,46 @@ def workspace_root():
     return root
 
 
-def deps_are_live():
-    """Whether the workspace shadows the baked dependency wheels.
+class DepsUnavailable(RuntimeError):
+    """FINN_DEPS=live was requested and a required checkout is absent."""
 
-    live (default) resolves qonnx, brevitas and finn-experimental from the
-    workspace, so edits and branch switches take effect with no reinstall.
-    frozen leaves them to the wheels, pinning them to the deps.env commits
-    regardless of what is checked out.
+
+DEPS_MODES = ("frozen", "live", "auto")
+DEFAULT_DEPS_MODE = "auto"
+
+
+def deps_mode():
+    """Which dependency sources win: ``frozen``, ``live`` or ``auto``.
+
+    ``frozen``
+        Always the baked wheels, pinned to the deps.env commits regardless of
+        what is checked out. The right default for CI and for agents, and a
+        precondition for an image digest meaning anything: with sources
+        shadowing, two CI shards on the same digest can execute different code.
+    ``live``
+        Require the workspace checkouts and fail loudly if any is missing. For
+        co-developing qonnx, brevitas or finn-experimental.
+    ``auto``
+        Workspace where present, wheels otherwise.
+
+    This used to be a two-way ``!= "frozen"`` test with ``live`` as the
+    documented default, which meant the default silently fell back to wheels
+    when a checkout was absent. That is ``auto`` behaviour under a name that
+    promises determinism - the worst combination, because an unattended run
+    could resolve either way with nothing in the output to say which.
     """
-    return os.environ.get("FINN_DEPS", "live").lower() != "frozen"
+    mode = os.environ.get("FINN_DEPS", DEFAULT_DEPS_MODE).lower()
+    if mode not in DEPS_MODES:
+        sys.stderr.write(
+            "finn: FINN_DEPS=%r is not one of %s; using %r\n"
+            % (mode, ", ".join(DEPS_MODES), DEFAULT_DEPS_MODE))
+        return DEFAULT_DEPS_MODE
+    return mode
+
+
+def deps_are_live():
+    """Whether the workspace shadows the baked dependency wheels."""
+    return deps_mode() != "frozen"
 
 
 def source_dirs():
@@ -129,13 +161,29 @@ def source_dirs():
     if not root:
         return []
 
-    # FINN itself is never baked into the image, so it is live in both modes -
+    mode = deps_mode()
+
+    # FINN itself is never baked into the image, so it is live in every mode -
     # there is no wheel for frozen to fall back to, by design.
     relative = ["src"]
-    if deps_are_live():
+    if mode != "frozen":
         relative.extend(DEP_SRC_DIRS)
 
-    return [os.path.join(root, rel) for rel in relative]
+    dirs = [os.path.join(root, rel) for rel in relative]
+
+    if mode == "live":
+        # Fail loudly. The whole point of asking for `live` rather than `auto`
+        # is to be told when a checkout is missing instead of silently getting
+        # the baked wheel and debugging a version discrepancy later.
+        missing = [d for d in dirs if not os.path.isdir(d)]
+        if missing:
+            raise DepsUnavailable(
+                "FINN_DEPS=live but these dependency sources are missing:\n  "
+                + "\n  ".join(missing)
+                + "\nRun ./fetch-repos.sh, or use FINN_DEPS=auto to fall back "
+                  "to the baked wheels, or FINN_DEPS=frozen to require them.")
+
+    return dirs
 
 
 def ensure_build_dir():
@@ -173,5 +221,16 @@ def install():
 
 try:
     install()
+except DepsUnavailable as exc:
+    # Deliberately NOT swallowed, unlike everything else here.
+    #
+    # This module runs at the start of every Python process in the image and
+    # must never break an unrelated one, which is why the blanket handler below
+    # exists. But FINN_DEPS=live is an explicit request to be told when a
+    # checkout is missing rather than silently getting the baked wheel and
+    # debugging a version discrepancy hours later. Honouring that request means
+    # being loud. `auto` is the mode for "use whatever is there".
+    sys.stderr.write("\nfinn: %s\n\n" % exc)
+    raise SystemExit(1)
 except Exception:  # pragma: no cover - startup code must never break Python
     pass

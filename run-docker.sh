@@ -351,7 +351,25 @@ gecho "Port-forwarding for Netron $NETRON_PORT:$NETRON_PORT"
 # The dev tier gets the Python packages only: finn-hlslib and the board files
 # are ~900 MB of data it has no way to use, and the build tiers now carry their
 # own baked copies rather than reading them from the workspace.
-if [ "$FINN_SKIP_DEP_REPOS" = "0" ]; then
+# Dependency sources are NOT fetched automatically any more.
+#
+# This used to run on nearly every invocation, which is a network round trip
+# and a checkout mutation before every `./run-docker.sh quicktest`. The image
+# already carries the pinned Python wheels, and the build tiers carry their own
+# finn-hlslib and board files, so the fetch is only needed when you are
+# actually co-developing a dependency.
+#
+# FINN_DEPS selects what wins at import time:
+#
+#   frozen  the baked wheels, always. CI and agents.
+#   live    the workspace checkouts, and a clear failure if any is missing.
+#   auto    workspace where present, wheels otherwise. (default)
+#
+# `live` is the mode that needs the checkouts, so that is the one that fetches.
+# Set FINN_FETCH_DEPS=1 to force a fetch in any mode.
+if [ "$FINN_SKIP_DEP_REPOS" = "0" ] \
+   && { [ "${FINN_DEPS:-}" = "live" ] || [ "${FINN_FETCH_DEPS:-0}" = "1" ]; }; then
+  gecho "Fetching dependency sources (FINN_DEPS=live)"
   if [ "$FINN_TIER" = "dev" ]; then
     ./fetch-repos.sh python || exit 1
   else

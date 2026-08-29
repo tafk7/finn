@@ -283,8 +283,8 @@ COPY deps.env fetch-repos.sh /opt/finn-src/
 # Fetch and install the three importable deps as ordinary wheels, then drop the
 # checkouts - brevitas alone is 222 MB of git history that the image never needs.
 #
-# These wheels are not usually what gets imported: FINN_DEPS=live (the default)
-# has the mounted workspace shadow them. Their job is to carry the dependency
+# These wheels are what FINN_DEPS=frozen pins to, and what auto (the default)
+# and live shadow with the mounted workspace. Their job is to carry the dependency
 # closure, the metadata and the 19 console scripts, so that a container can
 # start with no network and no pip install.
 RUN cd /opt/finn-src && \
@@ -391,7 +391,7 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
     NUM_DEFAULT_WORKERS=4 \
     LOCALHOST_URL="localhost" \
     SHELL=/bin/bash \
-    FINN_DEPS=live \
+    FINN_DEPS=auto \
     XILINX_LOCAL_USER_DATA=no
 # TORCH_HOME / HF_HOME are deliberately NOT set here, though §3.4 grouped them
 # with the static tier. They point into /finn_cache, which exists only when
