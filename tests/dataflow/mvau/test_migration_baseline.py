@@ -10,18 +10,28 @@ This module is the oracle for that claim -- it pins the selected Regions, the
 assembled Network, the source association, and every physical value the
 decomposed path emits, for each configuration the RTL matrix simulates.
 
-Two kinds of comparison value, chosen by size:
+Three kinds of comparison value, chosen by size:
 
+- a **literal** where the value is small and load-bearing: the top module name,
+  the wrapper file name, the target part, the clock period, and the ordered
+  source manifest.  These are what a build actually consumes, so a change to
+  one should read as a change, not as a moved digest.
 - a **fingerprint** where the value is too large to read -- a Region carries
   thousands of sparse requirement entries, so a literal would be unreviewable
   and a diff useless.  Regions and Networks are frozen dataclasses over sorted
   tuples, so ``repr`` is deterministic and a digest over it is exact equality.
-- a **literal** where the value is small enough to review, which is the whole
-  generated wrapper for one representative configuration.  When a fingerprint
-  moves, that literal is what says how.
+- the **whole generated wrapper** for one representative configuration, so that
+  when a digest moves there is something a reviewer can read.
 
 Nothing here is a checked-in generated file: every expected value lives in this
 module, so changing one is an edit a reviewer sees.
+
+**The digests are migration sentinels, not artifact identities.**  A digest over
+``repr`` is exactly right for "did this change while I was moving it" and
+exactly wrong for "may these two builds share a cache entry": it is sensitive to
+declaration paths, node ids, and field ordering, none of which a reusable
+artifact should depend on.  Phase 5 builds the artifact identity from declared
+physical inputs, and it does not start here.
 
 A failure here during the migration is not automatically a bug -- Phase 3 moves
 ``compute_pumping`` and the physical parameter paths on purpose.  It is a
@@ -38,7 +48,10 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
-from finn.dataflow.mvau.decomposed_provider import MVAUDecomposedArtifactRequirements
+from finn.dataflow.mvau.decomposed_provider import (
+    MVAUDecomposedArtifactRequirements,
+    finnlib_root,
+)
 from finn.dataflow.ops.mvau import NetworkRef
 
 
@@ -66,19 +79,73 @@ def _semantic(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
     }
 
 
-def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str]:
-    """The hardware the provider elaborated, fingerprinted.
+#: The named roots the manifest resolves against, and the files under each, in
+#: compile order.  Kept here rather than imported so that a reordering in the
+#: provider is a *difference* against this baseline instead of being tracked by
+#: it silently.
+EXPECTED_MANIFEST: tuple[tuple[str, str, str], ...] = (
+    ("compute.finn.0", "finn", "finn-rtllib/mvu/mvu_pkg.sv"),
+    ("compute.finn.1", "finn", "finn-rtllib/mvu/replay_buffer.sv"),
+    ("compute.finnlib.0", "finnlib", "rtl/arith/add_multi_pkg.sv"),
+    ("compute.finnlib.1", "finnlib", "rtl/arith/add_multi.sv"),
+    ("compute.finnlib.2", "finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv"),
+    ("compute.finnlib.3", "finnlib", "rtl/linalg/dotp.sv"),
+    ("compute.finnlib.4", "finnlib", "rtl/linalg/dotp_axi.sv"),
+)
 
-    The source manifest is projected to its ids and file names.  Its absolute
-    paths depend on where this checkout lives, and a baseline that changes with
-    the working directory would compare nothing.
+
+def _manifest(
+    requirements: MVAUDecomposedArtifactRequirements,
+) -> tuple[tuple[str, str, str], ...]:
+    """The manifest as ``(id, named root, root-relative path)``.
+
+    Absolute paths depend on where this checkout lives, and a baseline that
+    moved with the working directory would compare nothing.  A *basename* would
+    be worse than that: it compares something, but not enough -- two files of
+    the same name under different roots, or a file moved between directories in
+    FinnLib, would both slip through.  So the root is named and the path is kept
+    whole beneath it.
     """
+
+    # Longest root first: the pinned FinnLib checkout lives *under* the FINN
+    # root, so matching in declaration order would attribute every FinnLib file
+    # to ``finn`` and quietly defeat the point of naming the roots.
+    roots = sorted(
+        (
+            ("finn", Path(fixture.finn_root()).resolve()),
+            ("finnlib", finnlib_root(fixture.finn_root())),
+        ),
+        key=lambda item: len(str(item[1])),
+        reverse=True,
+    )
+    entries: list[tuple[str, str, str]] = []
+    for name, path in requirements.source_dependencies:
+        resolved = Path(path).resolve()
+        for root_name, root in roots:
+            if resolved.is_relative_to(root):
+                entries.append((name, root_name, str(resolved.relative_to(root))))
+                break
+        else:  # pragma: no cover - a manifest entry under no declared root
+            entries.append((name, "unrooted", str(resolved)))
+    return tuple(entries)
+
+
+def _build_inputs(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, object]:
+    """The small values a build consumes directly, compared as themselves."""
+
+    return {
+        "top_module_name": requirements.top_module_name,
+        "wrapper_file_name": requirements.wrapper_file_name,
+        "target_fpga_part": requirements.target_fpga_part,
+        "clock_period_ns": requirements.clock_period_ns,
+    }
+
+
+def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str]:
+    """The hardware the provider elaborated, fingerprinted."""
 
     elaboration = requirements.elaboration
     return {
-        "manifest": _fingerprint(
-            tuple((name, Path(path).name) for name, path in requirements.source_dependencies)
-        ),
         "parameters": _fingerprint(requirements.parameters),
         "components": _fingerprint(elaboration.components),
         "numeric_interfaces": _fingerprint(elaboration.numeric_interfaces),
@@ -107,7 +174,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "3c6ea7a0e9df8133",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "8162f7a7817c53be",
             "components": "7899fcc0bf491f02",
             "numeric_interfaces": "b5c19bfdd4c9857f",
@@ -126,7 +192,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "7767cb8c4af2f097",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "d6d573ebc9159065",
             "components": "f717e392f4c971f0",
             "numeric_interfaces": "2dda613ec4084892",
@@ -145,7 +210,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "2c9a5e9090571167",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "201ffec0dc084a80",
             "components": "957680b992e6a76a",
             "numeric_interfaces": "24ff33baade35484",
@@ -164,7 +228,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "ef8ffc89aa5fa2d8",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "20ebdde09b7e74ee",
             "components": "9cd4ad7494cc3be7",
             "numeric_interfaces": "091286e99a0a973c",
@@ -183,7 +246,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "787aa6716d820069",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "d6d573ebc9159065",
             "components": "173f4373497aea1b",
             "numeric_interfaces": "a8dc8bf7e992d616",
@@ -202,7 +264,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "acb88d9fe3e3cd90",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "4d0ad578ed08cf0e",
             "components": "20a863e19a37ea4f",
             "numeric_interfaces": "b3b8dcc324bf56c3",
@@ -221,7 +282,6 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "source_association": "e283f88676fceed2",
         },
         "physical": {
-            "manifest": "7c249c74a2294925",
             "parameters": "e7e05f66b02b4927",
             "components": "592ebb9e0f08c069",
             "numeric_interfaces": "cd8c871d382dd36d",
@@ -353,10 +413,38 @@ def test_the_selected_logical_dataflow_is_unchanged(config: fixture.Config) -> N
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
 def test_the_elaborated_hardware_is_unchanged(config: fixture.Config) -> None:
-    """Manifest, parameters, physical structure, and generated text."""
+    """Parameters, physical structure, and generated text."""
 
     built = fixture.decomposed_requirements(config)
     assert _physical(built) == BASELINE[config.label]["physical"]
+
+
+@pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
+def test_the_build_inputs_are_unchanged(config: fixture.Config) -> None:
+    """The small values a build consumes, compared as themselves."""
+
+    built = fixture.decomposed_requirements(config)
+    assert _build_inputs(built) == {
+        "top_module_name": f"mvau_{config.label}_scope_decomposed",
+        "wrapper_file_name": f"mvau_{config.label}_scope_decomposed.sv",
+        "target_fpga_part": config.fpga_part,
+        "clock_period_ns": fixture.CLOCK_PERIOD_NS,
+    }
+
+
+@pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
+def test_the_source_manifest_names_the_same_files_under_the_same_roots(
+    config: fixture.Config,
+) -> None:
+    """Ids, named roots, and root-relative paths, in compile order.
+
+    Compile order is part of the claim: ``dotp_axi`` instantiates ``dotp``,
+    which instantiates the DSP core, and a manifest that listed them the other
+    way round would still name the right files.
+    """
+
+    built = fixture.decomposed_requirements(config)
+    assert _manifest(built) == EXPECTED_MANIFEST
 
 
 def test_the_generated_wrapper_reads_as_it_did() -> None:

@@ -23,7 +23,7 @@ behind it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Generic, TypeVar
 
@@ -38,6 +38,7 @@ from finn.dataflow.authoring.scope import (
 )
 from finn.dataflow.design import Answer, DesignSpaceSpec, EvaluatorSpec, ValueSemantics
 from finn.dataflow.hardware.kernel import (
+    ComputationContract,
     CoveragePattern,
     EdgeCoverage,
     HardwareKernel,
@@ -46,6 +47,8 @@ from finn.dataflow.hardware.kernel import (
     RegionCoverage,
     SourceFile,
 )
+from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.region import DataflowRegion
 from finn.dataflow.spec_algebra import gate_spec
 
 In = TypeVar("In")
@@ -61,34 +64,59 @@ class HardwareDesign(Scope, Generic[In]):
     def __init__(self, namespace: str, inputs: In) -> None:
         super().__init__(namespace)
         self.inputs = inputs
-        self._coverage: CoveragePattern | None = None
+        self._regions: list[RegionCoverage] = []
+        self._edges: list[EdgeCoverage] = []
+        self._sealed = False
         self._parameters: list[KernelParameter] = []
         self._sources: list[SourceFile] = []
 
     # -- coverage ----------------------------------------------------------
 
-    def covers(
+    def covers_region(
         self,
-        *roles: str,
-        edges: Sequence[str] = (),
-        describe: dict[str, str] | None = None,
+        role: str,
+        *,
+        region: Ref[DataflowRegion],
+        computation: Ref[ComputationContract],
+        implements: ComputationContract,
+        description: str = "",
     ) -> None:
-        """Declare which Region roles, and which edges between them, this realizes.
+        """Declare one Region this Kernel realizes, by naming its declaration.
 
-        A role is this Kernel's own word for a position it implements.  Naming
-        an edge means the Kernel absorbs that connection internally, which is
-        exactly what makes a fused Kernel different from two adjacent ones.
+        ``region`` and ``computation`` are handles the covered semantics wired
+        in, so the Kernel is claiming a specific Region rather than a shape.
+        ``implements`` is its own statement of what it computes, checked at
+        binding against what that Region requires -- because equal traffic does
+        not imply equal arithmetic.
         """
 
-        if self._coverage is not None:
-            raise AuthoringError(f"{self.namespace} already declares its coverage")
-        if not roles:
-            raise AuthoringError(f"{self.namespace} must cover at least one Region role")
-        described = describe or {}
-        self._coverage = CoveragePattern(
-            tuple(RegionCoverage(role, described.get(role, "")) for role in roles),
-            tuple(EdgeCoverage(role, described.get(role, "")) for role in edges),
-        )
+        if self._sealed:
+            raise AuthoringError(f"{self.namespace} already sealed its coverage")
+        if any(item.role == role for item in self._regions):
+            raise AuthoringError(f"{self.namespace} covers Region role {role!r} twice")
+        self._regions.append(RegionCoverage(role, region, computation, implements, description))
+
+    def absorbs_edge(
+        self,
+        role: str,
+        *,
+        network: Ref[DataflowNetwork],
+        source_role: str,
+        sink_role: str,
+        description: str = "",
+    ) -> None:
+        """Declare one connection this Kernel implements as internal wiring.
+
+        Absorbing the edge is what makes a fused Kernel fused.  Naming the two
+        roles it runs between lets binding check the selected Network really has
+        that connection, in that direction -- an id alone would be a claim.
+        """
+
+        if self._sealed:
+            raise AuthoringError(f"{self.namespace} already sealed its coverage")
+        if any(item.role == role for item in self._edges):
+            raise AuthoringError(f"{self.namespace} absorbs edge role {role!r} twice")
+        self._edges.append(EdgeCoverage(role, network, source_role, sink_role, description))
 
     def coverage_constraint(
         self,
@@ -176,9 +204,10 @@ class HardwareDesign(Scope, Generic[In]):
 
     @property
     def declared_coverage(self) -> CoveragePattern:
-        if self._coverage is None:
-            raise AuthoringError(f"{self.namespace} declares no coverage")
-        return self._coverage
+        if not self._regions:
+            raise AuthoringError(f"{self.namespace} covers no Region")
+        self._sealed = True
+        return CoveragePattern(tuple(self._regions), tuple(self._edges))
 
     @property
     def declared_parameters(self) -> tuple[KernelParameter, ...]:

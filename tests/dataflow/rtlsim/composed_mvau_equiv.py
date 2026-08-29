@@ -44,7 +44,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -162,7 +162,7 @@ class _BuildConfig:
         self.fpga_part = part
 
     def _resolve_fpga_part(self) -> str:
-        return cast(str, self.fpga_part)
+        return self.fpga_part
 
 
 def _model(config: Config) -> ModelWrapper:
@@ -277,7 +277,7 @@ def _verilog(value: object) -> str:
     return str(int(value)) if isinstance(value, bool) else str(value)
 
 
-def _fused_top(name: str, config: Config, values: dict[str, object]) -> str:
+def _fused_top(name: str, config: Config, values: Mapping[str, object]) -> str:
     """The golden: one fused wrapper, driven by the same declared values.
 
     ``IS_MVU``, ``MW`` and ``MH`` are the fused wrapper's own parameters -- it

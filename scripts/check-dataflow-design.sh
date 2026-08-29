@@ -45,6 +45,7 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/region_validation.py \
     src/finn/dataflow/kernel.py \
     src/finn/dataflow/kernels.py \
+    src/finn/dataflow/hardware \
     src/finn/dataflow/spec_algebra.py \
     src/finn/dataflow/network.py \
     src/finn/dataflow/network_validation.py \
@@ -57,6 +58,7 @@ MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/transformation/fpgadataflow/select_dataflow_design.py \
     tests/dataflow/engine \
     tests/dataflow/design \
+    tests/dataflow/hardware \
     tests/dataflow/mvau \
     tests/dataflow/parameters \
     tests/dataflow/synthetic_op.py \

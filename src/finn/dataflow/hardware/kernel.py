@@ -14,11 +14,18 @@ The name is deliberate and temporary.  ``finn.dataflow.kernels.Kernel`` still
 means the *semantic* thing during the migration, so this one is spelled out
 until that one is renamed and this becomes simply the Kernel.
 
-**Coverage is declared, never inferred.**  A Kernel says it realizes a Region
-in the ``compute`` role; the assembly that owns the Network says which node
-holds that role.  Two Regions with equal values are not thereby the same
-Region, so a binding that guessed from shape would associate hardware with
-semantics it was never told about.
+**Coverage names a declaration, not a shape.**  A Kernel does not say "I
+realize some Region in the compute role"; it says "I realize *this* declared
+Region, which is required to compute *this* contract".  Binding resolves both
+and checks them.  Two Regions can carry identical traffic and mean different
+arithmetic -- ``REGION.md`` §3.6 is explicit that computation is a binding
+concern -- so a coverage claim that rested on schedules and beat maps would
+admit a maximum-reduction core into a dot-product position and never notice.
+
+**A bound Kernel cannot see the point it was bound at.**  It gets its covered
+Regions, its own committed choices, and its resolved parameters.  Elaboration
+that could reach an undeclared problem field would be making a design decision
+out of band, which is the one thing elaboration may never do.
 
 This module adds no engine primitive.  A Kernel's decisions, derived
 parameters, and coverage conditions are ordinary ``Decision``,
@@ -43,9 +50,11 @@ from finn.dataflow.design import (
     Finding,
     FindingKind,
     QualifiedPath,
+    RequestError,
     Unresolved,
 )
-from finn.dataflow.region import DataflowRegion, NumericElementType
+from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.region import DataflowRegion
 from finn.dataflow.spec_algebra import SpecAuthoringError, SpecAuthoringIssue, duplicate_values
 
 if TYPE_CHECKING:  # the authoring scope imports this module, not the reverse
@@ -55,42 +64,111 @@ if TYPE_CHECKING:  # the authoring scope imports this module, not the reverse
 BINDING_PATH = QualifiedPath("hardware.binding")
 
 
+def _finding(code: str, message: str, values: tuple[tuple[str, object], ...] = ()) -> Finding:
+    return Finding(FindingKind.LIMITATION, code, BINDING_PATH, message, values)
+
+
+def _resolve(engine: Engine, point: DesignPoint, path: QualifiedPath) -> Answer[object]:
+    """Read one declared property, turning an engine refusal into an answer.
+
+    ``query_property`` raises when a path is not a declared property of this
+    design space -- which is exactly what an unvalidated imported reference
+    looks like.  A binding that let that escape would report a stack trace
+    where it owes a finding.
+    """
+
+    try:
+        return engine.query_property(point, path)
+    except RequestError as error:
+        return Unresolved(
+            (
+                _finding(
+                    "hardware-reference-not-declared",
+                    f"{path} is not a derived property of this design space",
+                    (("detail", tuple(item.message for item in error.findings)),),
+                ),
+            )
+        )
+
+
+# -- what a Region is required to compute ------------------------------------
+
+
+@dataclass(frozen=True)
+class ComputationContract:
+    """What the traffic crossing a Region's boundary is required to mean.
+
+    Equal Region values do not imply equal computation: a dot product, a
+    maximum, and a population count over the same operands produce the same
+    schedule, the same beat grouping, and the same availability.  The contract
+    is what distinguishes them, so it is declared on both sides and compared.
+    """
+
+    id: str
+    version: str = "1"
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("a computation contract must be named")
+
+
 # -- coverage ----------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class RegionCoverage:
-    """One Region role this Kernel realizes.
+    """One Region this Kernel realizes, named by declaration.
 
-    The role is the Kernel's own vocabulary -- ``compute``, ``replay``,
-    ``delivery`` -- not a node id.  What fills the role is stated at binding
-    time by whoever owns the Network.
+    ``region`` and ``computation`` are handles the covered semantics wired in.
+    ``implements`` is this Kernel's own claim about what it computes.  Binding
+    resolves the first two and refuses unless the supplied Region *is* the
+    declared one and the required contract *is* the implemented one.
     """
 
     role: str
+    region: Ref[DataflowRegion]
+    computation: Ref[ComputationContract]
+    implements: ComputationContract
     description: str = ""
 
     def __post_init__(self) -> None:
         if not self.role:
             raise ValueError("a Region coverage role must be named")
+        for label, handle in (("region", self.region), ("computation", self.computation)):
+            if handle.kind is not DependencyKind.PROPERTY:
+                raise ValueError(
+                    f"coverage {label!r} must name a derived property, not a "
+                    f"{handle.kind.value}; a Region is derived from the design, "
+                    f"never supplied beside it"
+                )
 
 
 @dataclass(frozen=True)
 class EdgeCoverage:
-    """One connecting edge this Kernel realizes internally.
+    """One connecting edge this Kernel absorbs internally.
 
-    A fused Kernel absorbs the edge between the Regions it covers: the
-    connection still exists semantically, but no physical interface is exposed
-    for it.  Declaring that is what distinguishes a fused Kernel from two
-    Kernels that happen to be adjacent.
+    A fused Kernel takes the connection between two Regions it covers and
+    implements it as wiring rather than as a pair of exposed interfaces.
+    Declaring the roles it runs between is what lets binding check that the
+    selected Network really has that edge, in that direction, between those
+    two nodes -- rather than trusting an id.
     """
 
     role: str
+    network: Ref[DataflowNetwork]
+    source_role: str
+    sink_role: str
     description: str = ""
 
     def __post_init__(self) -> None:
         if not self.role:
             raise ValueError("an edge coverage role must be named")
+        if not self.source_role or not self.sink_role:
+            raise ValueError(f"edge {self.role!r} must name its source and sink roles")
+        if self.source_role == self.sink_role:
+            raise ValueError(f"edge {self.role!r} cannot run from a role to itself")
+        if self.network.kind is not DependencyKind.PROPERTY:
+            raise ValueError("edge coverage must name a derived Network property")
 
 
 @dataclass(frozen=True)
@@ -122,6 +200,17 @@ class CoveragePattern:
                     "coverage-edge-role-duplicate", duplicate, "edge role declared twice"
                 )
             )
+        known = {item.role for item in self.regions}
+        for edge in self.edges:
+            for endpoint in (edge.source_role, edge.sink_role):
+                if endpoint not in known:
+                    issues.append(
+                        SpecAuthoringIssue(
+                            "coverage-edge-role-unknown",
+                            f"{edge.role}.{endpoint}",
+                            "an absorbed edge must run between Regions this Kernel covers",
+                        )
+                    )
         if issues:
             raise SpecAuthoringError(tuple(issues))
 
@@ -132,6 +221,15 @@ class CoveragePattern:
     @property
     def edge_roles(self) -> tuple[str, ...]:
         return tuple(item.role for item in self.edges)
+
+    def region(self, role: str) -> RegionCoverage:
+        return next(item for item in self.regions if item.role == role)
+
+    @property
+    def shape(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """What two Kernels must share to be alternatives for one another."""
+
+        return (self.region_roles, self.edge_roles)
 
 
 # -- physical parameters -----------------------------------------------------
@@ -149,6 +247,11 @@ class KernelParameter:
     Ownership is read off the handle rather than restated beside it.  Declaring
     a parameter a decision and then pointing it at a property was expressible
     before, and it is now not.
+
+    The value arrives as it was declared.  There is no projection step: a
+    parameter that needs a bit width names a property that computes one, so the
+    width is in the design point and in the audit rather than happening on the
+    way out.
     """
 
     name: str
@@ -190,11 +293,7 @@ def _parameter_value(
                 f"{parameter.name} names a problem field this point does not carry",
                 source.path,
             )
-        raw = point.problem[source.path]
-        # An element type reaches the RTL as its width.  Projecting here rather
-        # than in each declaration keeps the table naming the *fact*, which is
-        # what makes it readable as an audit.
-        return Decided(raw.bit_width if isinstance(raw, NumericElementType) else raw)
+        return Decided(point.problem[source.path])
     if source.kind is DependencyKind.DECISION:
         if source.path not in point.assignments:
             return _missing(
@@ -203,7 +302,7 @@ def _parameter_value(
                 source.path,
             )
         return Decided(point.assignments[source.path])
-    answer = engine.query_property(point, source.path)
+    answer = _resolve(engine, point, source.path)
     if isinstance(answer, Decided):
         return Decided(answer.value)
     return Unresolved(
@@ -230,7 +329,9 @@ def scalar_parameters(
     """The parameter table as sorted scalar pairs, for a physical component.
 
     A non-scalar would silently stringify into generated HDL, so it is refused
-    here rather than discovered in a synthesis log.
+    here rather than discovered in a synthesis log.  An element type reaching
+    this point is the usual cause, and it means a width property was owed and
+    not declared.
     """
 
     bad = tuple(
@@ -242,7 +343,7 @@ def scalar_parameters(
                 SpecAuthoringIssue(
                     "hardware-parameter-not-scalar",
                     ", ".join(sorted(bad)),
-                    "physical parameters must be scalar",
+                    "physical parameters must be scalar; declare a property that projects one",
                 ),
             )
         )
@@ -292,8 +393,9 @@ class HardwareKernelDeclaration:
     """Everything one physical Kernel owns locally, as engine declarations.
 
     The static half: what the Kernel declares, before any point exists.  A
-    contributor writes a ``HardwareKernel`` subclass and never constructs this;
-    it is what ``declare_hardware_kernel`` returns.
+    contributor writes a ``HardwareKernel`` subclass and never constructs or
+    imports this; it is what ``declare_hardware_kernel`` returns, and it is
+    kept out of the package's public surface for that reason.
     """
 
     id: str
@@ -337,41 +439,64 @@ class HardwareKernelDeclaration:
                     f"physical parameter {duplicate!r} is declared twice",
                 )
             )
-        issues.extend(self._parameter_source_issues())
+        issues.extend(self._local_reference_issues())
         if issues:
             raise SpecAuthoringError(tuple(issues))
 
-    def _parameter_source_issues(self) -> list[SpecAuthoringIssue]:
-        """A parameter may only name a declaration that exists.
-
-        A decision or property the Kernel imports is legitimately not in its
-        own spec -- that is what importing means -- so only paths under this
-        Kernel's own namespace are checked.  The rest are checked when the
-        design space is assembled, where the other declarations are visible.
-        """
-
-        owned = {
+    @property
+    def _owned_paths(self) -> set[QualifiedPath]:
+        return {
             *(item.path for item in self.spec.decisions),
             *(item.path for item in self.spec.properties),
         }
+
+    def _is_local(self, path: QualifiedPath) -> bool:
         # A decision lands at ``<namespace>.<name>`` and a derived property at
         # ``semantic.<namespace>.<name>``, so locality is either of those forms.
-        local_prefixes = (f"{self.namespace}.", f"semantic.{self.namespace}.")
+        return str(path).startswith((f"{self.namespace}.", f"semantic.{self.namespace}."))
+
+    def _local_reference_issues(self) -> list[SpecAuthoringIssue]:
+        """A local reference must name something this Kernel really declares.
+
+        Imported references are legitimately absent from this spec -- that is
+        what importing means -- so they are checked against the assembled design
+        space instead, by :func:`check_declared_references`.
+        """
+
+        owned = self._owned_paths
         issues: list[SpecAuthoringIssue] = []
-        for parameter in self.parameters:
-            source = parameter.source
-            if source is None or source.kind is DependencyKind.PROBLEM:
-                continue
-            is_local = str(source.path).startswith(local_prefixes)
-            if is_local and source.path not in owned:
+        for label, path in self.referenced_paths:
+            if self._is_local(path) and path not in owned:
                 issues.append(
                     SpecAuthoringIssue(
-                        "hardware-parameter-source-undeclared",
-                        str(source.path),
-                        f"{parameter.name} names a local path this Kernel does not declare",
+                        "hardware-reference-undeclared",
+                        str(path),
+                        f"{label} names a local path this Kernel does not declare",
                     )
                 )
         return issues
+
+    @property
+    def referenced_paths(self) -> tuple[tuple[str, QualifiedPath], ...]:
+        """Every declaration this Kernel reads, as ``(what needs it, path)``.
+
+        Coverage handles are included: a Kernel whose covered Region property
+        does not exist is exactly as broken as one whose parameter source does
+        not, and both should be caught before a point is ever started.
+        """
+
+        referenced: list[tuple[str, QualifiedPath]] = []
+        for coverage in self.coverage.regions:
+            referenced.append((f"coverage {coverage.role!r} Region", coverage.region.path))
+            referenced.append(
+                (f"coverage {coverage.role!r} computation", coverage.computation.path)
+            )
+        for edge in self.coverage.edges:
+            referenced.append((f"edge {edge.role!r} Network", edge.network.path))
+        for parameter in self.parameters:
+            if parameter.source is not None:
+                referenced.append((f"parameter {parameter.name!r}", parameter.source.path))
+        return tuple(referenced)
 
     @property
     def parameter_names(self) -> tuple[str, ...]:
@@ -381,7 +506,59 @@ class HardwareKernelDeclaration:
         return next((item for item in self.parameters if item.name == name), None)
 
 
+def check_declared_references(
+    specification: DesignSpaceSpec,
+    declarations: Sequence[HardwareKernelDeclaration],
+) -> None:
+    """Refuse any Kernel reference the assembled design space does not declare.
+
+    ``Engine.validate()`` cannot catch this on its own: an imported path a
+    Kernel merely *reads* is not part of the Kernel's own specification, so an
+    assembly that forgot to include the declaring scope validates cleanly and
+    then fails at binding time with an engine request error.  Asking here turns
+    that into an authoring error, at the moment the mistake is made.
+    """
+
+    problem = {item.path for item in specification.problem_schema.fields}
+    decisions = {item.path for item in specification.decisions}
+    properties = {item.path for item in specification.properties}
+    issues: list[SpecAuthoringIssue] = []
+    for declaration in declarations:
+        for label, path in declaration.referenced_paths:
+            if path not in problem | decisions | properties:
+                issues.append(
+                    SpecAuthoringIssue(
+                        "hardware-reference-not-assembled",
+                        str(path),
+                        f"{declaration.id}: {label} names a path the design space does not declare",
+                    )
+                )
+    if issues:
+        raise SpecAuthoringError(tuple(issues))
+
+
 # -- the Kernel --------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class KernelOrigin:
+    """What a bound Kernel is, in values that survive being written down.
+
+    This is what evidence quotes and what an artifact identity will later be
+    computed from.  It deliberately carries no node names beyond the ones the
+    Kernel covers and no graph position: two equal configured Kernels at
+    different source nodes should differ here only where they physically differ.
+    """
+
+    kernel_id: str
+    kernel_version: str
+    namespace: str
+    covered_nodes: tuple[str, ...]
+    covered_edges: tuple[str, ...]
+    computations: tuple[tuple[str, str], ...]
+    assignments: tuple[tuple[str, object], ...]
+    parameters: tuple[tuple[str, object], ...]
+    sources: tuple[tuple[str, str], ...]
 
 
 class HardwareKernel:
@@ -393,9 +570,10 @@ class HardwareKernel:
     ordinary engine declarations it produced.
 
     An *instance* is that Kernel as bound at one point: the Regions it was told
-    it covers, the local choices that configured it, and its resolved physical
-    parameters.  Binding returns an instance of the subclass that declared it,
-    so a consumer that knows which Kernel it asked for gets the type it expects.
+    it covers, its own committed choices, and its resolved parameters.  It does
+    not hold the point.  Everything an elaboration may use had to be declared,
+    which is what makes "elaboration invents no value" a property of the type
+    rather than a rule someone remembers.
     """
 
     #: Stable identity of the family.  A subclass sets both.
@@ -417,8 +595,8 @@ class HardwareKernel:
     def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
         """The physical components this Kernel becomes at one binding.
 
-        Elaboration makes no design choice.  Every value it uses is already in
-        the binding, which is why this takes the binding and nothing else.
+        Elaboration makes no design choice.  Every value it may use is in the
+        binding, and nothing else is reachable from it.
         """
 
         raise NotImplementedError(f"{cls.__name__} does not elaborate")
@@ -426,25 +604,51 @@ class HardwareKernel:
     def __init__(
         self,
         declaration: HardwareKernelDeclaration,
-        point: DesignPoint,
         regions: Mapping[str, BoundRegion],
         edges: Mapping[str, str],
+        assignments: Mapping[QualifiedPath, object],
         parameters: Mapping[str, object],
     ) -> None:
         self.declaration = declaration
-        self.point = point
         self.regions = regions
         self.edges = edges
+        #: Only this Kernel's own committed choices.  A Kernel has no business
+        #: reading another's, and no way to.
+        self.assignments = assignments
         self.parameters = parameters
         # Instance attributes shadow the class-level family identity, so a
         # generically bound Kernel still answers correctly.
         self.id = declaration.id
         self.version = declaration.version
 
+    @property
+    def sources(self) -> tuple[SourceFile, ...]:
+        return self.declaration.sources
+
     def region(self, role: str) -> DataflowRegion:
         """The Region bound into one covered role."""
 
         return self.regions[role].region
+
+    def origin(self) -> KernelOrigin:
+        """The durable record of what this binding is."""
+
+        return KernelOrigin(
+            self.id,
+            self.version,
+            self.declaration.namespace,
+            tuple(sorted(item.node_id for item in self.regions.values())),
+            tuple(sorted(self.edges.values())),
+            tuple(
+                sorted(
+                    (item.role, f"{item.implements.id}:{item.implements.version}")
+                    for item in self.declaration.coverage.regions
+                )
+            ),
+            tuple(sorted((str(path), value) for path, value in self.assignments.items())),
+            tuple(sorted(self.parameters.items())),
+            tuple(sorted((item.root, item.path) for item in self.declaration.sources)),
+        )
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(id={self.id!r}, covers={sorted(self.regions)})"
@@ -492,12 +696,166 @@ class KernelBinding:
     def edge_ids(self) -> tuple[str, ...]:
         return tuple(sorted(edge_id for _, edge_id in self.edges))
 
+    def origin(self) -> KernelOrigin:
+        return self.kernel.origin()
+
     def components(self) -> tuple[PhysicalComponent, ...]:
         return type(self.kernel).elaborate(self)
 
 
-def _finding(code: str, message: str, values: tuple[tuple[str, object], ...] = ()) -> Finding:
-    return Finding(FindingKind.LIMITATION, code, BINDING_PATH, message, values)
+def _role_findings(
+    declaration: HardwareKernelDeclaration,
+    regions: Mapping[str, BoundRegion],
+    edges: Mapping[str, str],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for label, expected, given in (
+        ("region", set(declaration.coverage.region_roles), set(regions)),
+        ("edge", set(declaration.coverage.edge_roles), set(edges)),
+    ):
+        if expected != given:
+            findings.append(
+                _finding(
+                    f"hardware-coverage-{label}-roles-mismatch",
+                    f"{declaration.id} covers {label} roles this binding does not fill exactly",
+                    (
+                        ("unfilled", tuple(sorted(expected - given))),
+                        ("undeclared", tuple(sorted(given - expected))),
+                    ),
+                )
+            )
+    for role, bound in regions.items():
+        if bound.role != role:
+            findings.append(
+                _finding(
+                    "hardware-coverage-role-mislabelled",
+                    f"a Region bound under {role!r} names itself {bound.role!r}",
+                )
+            )
+    return findings
+
+
+def _semantic_findings(
+    engine: Engine,
+    point: DesignPoint,
+    declaration: HardwareKernelDeclaration,
+    regions: Mapping[str, BoundRegion],
+) -> list[Finding]:
+    """Check every covered role against the declaration it names."""
+
+    findings: list[Finding] = []
+    for coverage in declaration.coverage.regions:
+        supplied = regions[coverage.role]
+        declared = _resolve(engine, point, coverage.region.path)
+        if not isinstance(declared, Decided):
+            findings.extend(declared.findings)
+        elif declared.value != supplied.region:
+            findings.append(
+                _finding(
+                    "hardware-coverage-region-not-the-declared-one",
+                    f"the Region bound into {coverage.role!r} is not the one "
+                    f"{coverage.region.path} derives",
+                    (("node", supplied.node_id), ("declared_at", str(coverage.region.path))),
+                )
+            )
+        required = _resolve(engine, point, coverage.computation.path)
+        if not isinstance(required, Decided):
+            findings.extend(required.findings)
+        elif required.value != coverage.implements:
+            findings.append(
+                _finding(
+                    "hardware-computation-contract-mismatch",
+                    f"{declaration.id} implements {coverage.implements.id!r} where "
+                    f"{coverage.role!r} requires {required.value!r}",
+                    (("role", coverage.role), ("implements", coverage.implements.id)),
+                )
+            )
+    return findings
+
+
+def _edge_findings(
+    engine: Engine,
+    point: DesignPoint,
+    declaration: HardwareKernelDeclaration,
+    regions: Mapping[str, BoundRegion],
+    edges: Mapping[str, str],
+) -> list[Finding]:
+    """Check every absorbed edge really connects the two nodes it claims to."""
+
+    findings: list[Finding] = []
+    for coverage in declaration.coverage.edges:
+        edge_id = edges[coverage.role]
+        answer = _resolve(engine, point, coverage.network.path)
+        if not isinstance(answer, Decided):
+            findings.extend(answer.findings)
+            continue
+        network = cast(DataflowNetwork, answer.value)
+        found = next((item for item in network.edges if item.id == edge_id), None)
+        if found is None:
+            findings.append(
+                _finding(
+                    "hardware-covered-edge-absent",
+                    f"the selected Network has no edge {edge_id!r} for {coverage.role!r}",
+                    (("edges", tuple(item.id for item in network.edges)),),
+                )
+            )
+            continue
+        source_node = regions[coverage.source_role].node_id
+        sink_node = regions[coverage.sink_role].node_id
+        sinks = tuple(item.endpoint.node_id for item in found.sinks)
+        if found.source.node_id != source_node or sink_node not in sinks:
+            findings.append(
+                _finding(
+                    "hardware-covered-edge-misconnected",
+                    f"edge {edge_id!r} does not run from {source_node!r} to {sink_node!r}",
+                    (("source", found.source.node_id), ("sinks", sinks)),
+                )
+            )
+    return findings
+
+
+def _coverage_findings(
+    engine: Engine, point: DesignPoint, declaration: HardwareKernelDeclaration
+) -> list[Finding]:
+    """Evaluate the Kernel's own coverage conditions.
+
+    Two ways to be refused, and both mean the same thing.  ``False`` is the
+    flat answer; ``Absent`` is what ``reject(...)`` produces, which is how an
+    author says no *with a reason*.  A rejection's own findings are carried
+    through -- replacing "the fused core stops at 8" with "does not cover this
+    point" would throw away the only part anyone can act on.
+    """
+
+    try:
+        assessment = engine.evaluate_constraints(point, declaration.coverage_constraints)
+    except RequestError as error:
+        return [
+            _finding(
+                "hardware-coverage-constraint-not-declared",
+                f"{declaration.id} names a coverage constraint this design space lacks",
+                (("detail", tuple(item.message for item in error.findings)),),
+            )
+        ]
+    findings: list[Finding] = []
+    refused: list[QualifiedPath] = []
+    for path, answer in assessment.answers.items():
+        if isinstance(answer, Decided):
+            if answer.value is False:
+                refused.append(path)
+        elif isinstance(answer, Unresolved):
+            findings.extend(answer.findings)
+        else:
+            refused.append(path)
+            findings.extend(answer.findings)
+    if refused:
+        findings.append(
+            _finding(
+                "hardware-coverage-refused",
+                f"{declaration.id} does not cover this point",
+                (("constraints", tuple(str(path) for path in sorted(refused, key=str))),),
+            )
+        )
+    return findings
 
 
 def bind_hardware_kernel(
@@ -507,88 +865,35 @@ def bind_hardware_kernel(
     regions: Mapping[str, BoundRegion],
     edges: Mapping[str, str] | None = None,
 ) -> Answer[KernelBinding]:
-    """Bind one physical Kernel to the exact semantics it was told it covers.
+    """Bind one physical Kernel to the exact semantics it declared it covers.
 
     ``regions`` and ``edges`` map this Kernel's declared roles onto real node
     and edge identities.  They are supplied by whoever owns the Network,
-    because that is the only thing entitled to say what a role means here --
-    inferring it from Region shape would associate hardware with semantics
-    nobody stated.
+    because that is the only thing entitled to say what a role means here.  The
+    binding then *checks* the claim rather than trusting it: the Region must be
+    the one the coverage handle derives, the computation contract must be the
+    one the Kernel implements, and an absorbed edge must really run between the
+    two covered nodes in the selected Network.
 
     Every declared role must be filled and no undeclared one supplied, every
-    coverage constraint must hold, and every declared parameter must resolve.
-    A Kernel bound with a parameter missing is indistinguishable from one that
-    never declared it, and a consumer would read the absence as "no such
-    value" rather than "the value could not be answered".
+    coverage condition must hold, and every declared parameter must resolve.  A
+    Kernel bound with a parameter missing is indistinguishable from one that
+    never declared it, and a consumer would read the absence as "no such value"
+    rather than "the value could not be answered".
     """
 
     supplied_edges = dict(edges or {})
-    findings: list[Finding] = []
-
-    expected_regions, given_regions = set(declaration.coverage.region_roles), set(regions)
-    if expected_regions != given_regions:
-        findings.append(
-            _finding(
-                "hardware-coverage-region-roles-mismatch",
-                f"{declaration.id} covers Region roles this binding does not fill exactly",
-                (
-                    ("unfilled", tuple(sorted(expected_regions - given_regions))),
-                    ("undeclared", tuple(sorted(given_regions - expected_regions))),
-                ),
-            )
-        )
-    expected_edges, given_edges = set(declaration.coverage.edge_roles), set(supplied_edges)
-    if expected_edges != given_edges:
-        findings.append(
-            _finding(
-                "hardware-coverage-edge-roles-mismatch",
-                f"{declaration.id} covers edge roles this binding does not fill exactly",
-                (
-                    ("unfilled", tuple(sorted(expected_edges - given_edges))),
-                    ("undeclared", tuple(sorted(given_edges - expected_edges))),
-                ),
-            )
-        )
-    for role, bound in regions.items():
-        if bound.role != role:
-            findings.append(
-                _finding(
-                    "hardware-coverage-role-mislabelled",
-                    f"a Region bound under {role!r} names itself {bound.role!r}",
-                )
-            )
+    findings = _role_findings(declaration, regions, supplied_edges)
     if findings:
+        # Everything below indexes by role, so a role mismatch has to stop here
+        # rather than be reported alongside consequences of itself.
         return Unresolved(tuple(findings))
 
-    assessment = engine.evaluate_constraints(point, declaration.coverage_constraints)
-    # Two ways to be refused, and both mean the same thing here.  ``False`` is
-    # the flat answer; ``Absent`` is what ``reject(...)`` produces, which is how
-    # an author says no *with a reason*.  Treating only the first as refusal
-    # would let a rejection with a message through as coverage.  ``Unresolved``
-    # is different in kind -- the question could not be answered -- so its own
-    # findings propagate rather than being restated as a refusal.
-    refused: list[QualifiedPath] = []
-    unresolved: list[Finding] = []
-    for path, answer in assessment.answers.items():
-        if isinstance(answer, Decided):
-            if answer.value is False:
-                refused.append(path)
-        elif isinstance(answer, Unresolved):
-            unresolved.extend(answer.findings)
-        else:
-            refused.append(path)
-    if unresolved:
-        return Unresolved(tuple(unresolved))
-    if refused:
-        return Unresolved(
-            (
-                _finding(
-                    "hardware-coverage-refused",
-                    f"{declaration.id} does not cover this point",
-                    (("constraints", tuple(str(path) for path in sorted(refused, key=str))),),
-                ),
-            )
-        )
+    findings.extend(_semantic_findings(engine, point, declaration, regions))
+    findings.extend(_edge_findings(engine, point, declaration, regions, supplied_edges))
+    findings.extend(_coverage_findings(engine, point, declaration))
+    if findings:
+        return Unresolved(tuple(findings))
 
     values: dict[str, object] = {}
     for parameter in declaration.parameters:
@@ -597,8 +902,10 @@ def bind_hardware_kernel(
             return Unresolved(resolved.findings)
         values[parameter.name] = resolved.value
 
+    owned = {item.path for item in declaration.spec.decisions}
+    local = {path: value for path, value in point.assignments.items() if path in owned}
     bound_type = declaration.owner or HardwareKernel
-    instance = bound_type(declaration, point, dict(regions), supplied_edges, values)
+    instance = bound_type(declaration, dict(regions), supplied_edges, local, values)
     return Decided(
         KernelBinding(
             instance,
@@ -618,16 +925,19 @@ def bound_regions(pairs: Sequence[tuple[str, str, DataflowRegion]]) -> dict[str,
 __all__ = [
     "BINDING_PATH",
     "BoundRegion",
+    "ComputationContract",
     "CoveragePattern",
     "EdgeCoverage",
     "HardwareKernel",
     "HardwareKernelDeclaration",
     "KernelBinding",
+    "KernelOrigin",
     "KernelParameter",
     "PhysicalComponent",
     "RegionCoverage",
     "SourceFile",
     "bind_hardware_kernel",
     "bound_regions",
+    "check_declared_references",
     "scalar_parameters",
 ]

@@ -24,6 +24,7 @@ from typing import cast
 
 from finn.dataflow.design import (
     Answer,
+    ConstraintSet,
     Decided,
     Decision,
     DecisionDomain,
@@ -36,6 +37,8 @@ from finn.dataflow.design import (
     Finding,
     FindingKind,
     QualifiedPath,
+    ReadinessProfile,
+    RequestError,
     Unresolved,
     ValueSemantics,
     as_object_semantics,
@@ -137,6 +140,12 @@ class HardwareKernelSelection:
             dict.fromkeys(path for item in self.kernels for path in item.coverage_constraints)
         )
 
+    @property
+    def coverage_constraint_set(self) -> str:
+        """The name policy asks about to eliminate Kernels this target cannot build."""
+
+        return f"{self.name}.coverage"
+
     def kernel(self, kernel_id: str) -> HardwareKernelDeclaration:
         for candidate in self.kernels:
             if candidate.id == kernel_id:
@@ -176,8 +185,68 @@ class HardwareKernelSelection:
                     applies_if=self.applies_if,
                 ),
             ),
+            # One named set over every member's coverage conditions, so a policy
+            # can ask "what can this target build" without knowing which Kernels
+            # exist or which of them owns which condition.
+            constraint_sets=(
+                ConstraintSet(self.coverage_constraint_set, self.coverage_constraints),
+            ),
+            readiness_profiles=(
+                ReadinessProfile(
+                    self.coverage_constraint_set,
+                    decisions=(self.kernel_path,),
+                    constraints=self.coverage_constraints,
+                ),
+            ),
         )
         return assemble_specs((*gated, own))
+
+    def supported_kernels(self, engine: Engine, point: DesignPoint) -> tuple[str, ...]:
+        """The members this point could actually build, without binding any.
+
+        Each candidate is committed on a trial point and asked only its own
+        coverage conditions, so eliminating an unbuildable Kernel is cheap and
+        needs no Regions.  A candidate whose conditions are merely unresolved is
+        kept: "cannot tell yet" is not "no", and dropping it here would hide a
+        Kernel that a later fact would have admitted.
+
+        Once the choice is committed there is nothing left to eliminate, so the
+        answer is the committed member alone -- and only if it still holds up.
+        Reporting its rejected peers as available would be worse than useless
+        to a policy that is past the point of switching.
+        """
+
+        committed = point.assignments.get(self.kernel_path)
+        candidates = (
+            self.kernels
+            if committed is None
+            else tuple(item for item in self.kernels if item.id == committed)
+        )
+        supported: list[str] = []
+        for kernel in candidates:
+            if not kernel.coverage_constraints:
+                supported.append(kernel.id)
+                continue
+            trial = point
+            if committed is None:
+                result = engine.try_commit_assignments(point, {self.kernel_path: kernel.id})
+                if isinstance(result, RequestError):
+                    continue
+                if any(
+                    outcome.disposition not in {"committed", "unchanged"}
+                    for outcome in result.outcomes
+                ):
+                    continue
+                trial = result.point
+            assessment = engine.evaluate_constraints(trial, kernel.coverage_constraints)
+            refused = any(
+                not isinstance(answer, Unresolved)
+                and not (isinstance(answer, Decided) and answer.value is True)
+                for answer in assessment.answers.values()
+            )
+            if not refused:
+                supported.append(kernel.id)
+        return tuple(supported)
 
     def selected(self, engine: Engine, point: DesignPoint) -> Answer[str]:
         """The committed physical Kernel id, if one is assigned."""

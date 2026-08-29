@@ -13,6 +13,17 @@ To contribute one, subclass ``HardwareKernel``, declare its design through
 ``HardwareDesign``, and hand it to ``declare_hardware_kernel``.  Add a
 ``HardwareKernelSelection`` only when several Kernels cover one point and
 something has to choose between them.
+
+``HardwareKernelDeclaration`` is deliberately absent from this surface.  It is
+the *compiled* form -- a Kernel class with its scoped declarations already
+built -- and a contributor never names it.  Assembly code that genuinely needs
+the type imports it from ``finn.dataflow.hardware.kernel``.
+
+**This contract is not finished.**  Two of the nine obligations the migration
+plan lists for a physical Kernel are stubs here: artifact requirements and
+implementation evidence.  Both are shaped by what the first real consumer
+needs, so they are added when the MVAU migration supplies one, not guessed at
+from a synthetic case.
 """
 
 from finn.dataflow.hardware.authoring import (
@@ -24,17 +35,19 @@ from finn.dataflow.hardware.authoring import (
 from finn.dataflow.hardware.kernel import (
     BINDING_PATH,
     BoundRegion,
+    ComputationContract,
     CoveragePattern,
     EdgeCoverage,
     HardwareKernel,
-    HardwareKernelDeclaration,
     KernelBinding,
+    KernelOrigin,
     KernelParameter,
     PhysicalComponent,
     RegionCoverage,
     SourceFile,
     bind_hardware_kernel,
     bound_regions,
+    check_declared_references,
     scalar_parameters,
 )
 from finn.dataflow.hardware.selection import (
@@ -47,19 +60,21 @@ __all__ = [
     "COVERAGE",
     "HARDWARE_KERNEL_ID_SEMANTICS",
     "BoundRegion",
+    "ComputationContract",
     "CoveragePattern",
     "EdgeCoverage",
     "HardwareDesign",
     "HardwareKernel",
-    "HardwareKernelDeclaration",
     "HardwareKernelSelection",
     "KernelBinding",
+    "KernelOrigin",
     "KernelParameter",
     "PhysicalComponent",
     "RegionCoverage",
     "SourceFile",
     "bind_hardware_kernel",
     "bound_regions",
+    "check_declared_references",
     "declare_hardware_kernel",
     "hardware_namespace",
     "scalar_parameters",

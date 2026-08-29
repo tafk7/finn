@@ -17,6 +17,12 @@ MVAU depends on it:
 
 The semantics are deliberately not MVAU's.  A surface that only works for the
 operation it was extracted from has not been extracted.
+
+The two Regions here carry *identical* schedules, requirements, availability,
+and beat maps, and differ only in operand naming, while the two computation
+contracts over them differ outright.  That is on purpose: it makes every
+coverage check that could have been satisfied by shape fail, so what remains
+passing is the part that reads declarations.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from finn.dataflow.authoring import (
     reject,
 )
 from finn.dataflow.design import (
+    Answer,
     Decided,
     DesignPoint,
     DesignSpaceSpec,
@@ -44,17 +51,29 @@ from finn.dataflow.design import (
     Unresolved,
 )
 from finn.dataflow.hardware import (
+    BoundRegion,
+    ComputationContract,
     HardwareDesign,
     HardwareKernel,
-    HardwareKernelDeclaration,
     HardwareKernelSelection,
     KernelBinding,
     PhysicalComponent,
     bind_hardware_kernel,
     bound_regions,
+    check_declared_references,
     declare_hardware_kernel,
     hardware_namespace,
     scalar_parameters,
+)
+from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
+from finn.dataflow.network import (
+    BoundaryContract,
+    DataflowNetwork,
+    Edge,
+    NetworkNode,
+    PositionMap,
+    RegionEndpoint,
+    SinkContract,
 )
 from finn.dataflow.region import (
     BeatSequence,
@@ -74,11 +93,16 @@ from finn.dataflow.spec_algebra import SpecAuthoringError
 INT8 = NumericElementType("int", 8)
 OWNER = "example"
 
-#: The two node ids the synthetic assembly uses.  A Kernel never sees these --
-#: it declares roles, and the assembly says which node fills each one.
+#: The node ids the synthetic assembly uses.  A Kernel never sees these -- it
+#: declares roles, and the assembly says which node fills each one.
 PRODUCER_NODE = "upstream"
 CONSUMER_NODE = "downstream"
 LINK_EDGE = "producer_to_consumer"
+
+#: Two contracts over identically shaped traffic.  Nothing in a Region tells
+#: them apart, which is exactly why they are declared.
+SCALED = ComputationContract("scaled_copy")
+REDUCED = ComputationContract("running_maximum")
 
 
 # -- synthetic semantics -----------------------------------------------------
@@ -91,18 +115,51 @@ def _region(extent: int, operand: str) -> DataflowRegion:
     source = Operand(f"{operand}_in", INT8, (extent,))
     result = Operand(f"{operand}_out", INT8, (extent,))
     beats = BeatSequence(1, tuple(((index,),) for index in range(extent)))
+    requirements: dict[tuple[tuple[int, ...], tuple[int, ...]], int] = {
+        ((index,), (index,)): 1 for index in range(extent)
+    }
+    availability: dict[tuple[int, ...], tuple[int, ...]] = {
+        (index,): (index,) for index in range(extent)
+    }
     return DataflowRegion(
         schedule,
+        (InputInterface(Port("input", source, beats), ScheduledInputRequirements(requirements)),),
         (
-            InputInterface(
-                Port("input", source, beats),
-                ScheduledInputRequirements({((index,), (index,)): 1 for index in range(extent)}),
+            OutputInterface(
+                Port("output", result, beats), ScheduledOutputAvailability(availability)
+            ),
+        ),
+    )
+
+
+def _network(producer: DataflowRegion, consumer: DataflowRegion) -> DataflowNetwork:
+    """The producer feeding the consumer, with one named edge between them."""
+
+    produced = producer.output_interface("output").port
+    return DataflowNetwork(
+        (NetworkNode(PRODUCER_NODE, producer), NetworkNode(CONSUMER_NODE, consumer)),
+        (
+            Edge(
+                LINK_EDGE,
+                RegionEndpoint(PRODUCER_NODE, "output"),
+                (
+                    SinkContract(
+                        RegionEndpoint(CONSUMER_NODE, "input"),
+                        PositionMap.identity(produced.beat_sequence.image),
+                    ),
+                ),
             ),
         ),
         (
-            OutputInterface(
-                Port("output", result, beats),
-                ScheduledOutputAvailability({(index,): (index,) for index in range(extent)}),
+            BoundaryContract(
+                "in",
+                RegionEndpoint(PRODUCER_NODE, "input"),
+                producer.input_interface("input").port.beat_sequence,
+            ),
+            BoundaryContract(
+                "out",
+                RegionEndpoint(CONSUMER_NODE, "output"),
+                consumer.output_interface("output").port.beat_sequence,
             ),
         ),
     )
@@ -115,30 +172,43 @@ class HardwareInputs:
     ``lanes`` is the Region-affecting decision, declared once by the semantics
     and imported here.  A Kernel that declared its own would be choosing a fold
     the Region was already built from.
+
+    The Regions, their computation contracts, and the Network arrive the same
+    way: as handles, so a Kernel names a declaration rather than a shape.
     """
 
     extent: Ref[int]
-    element_type: Ref[NumericElementType]
+    element_width: Ref[int]
     target_family: Ref[str]
     lanes: Ref[int]
-
-
-@dataclass(frozen=True)
-class Semantics:
-    """The logical half: two Regions and the values they were built from."""
-
-    design: OpDesign
-    inputs: HardwareInputs
     producer: Ref[DataflowRegion]
     consumer: Ref[DataflowRegion]
+    producer_computation: Ref[ComputationContract]
+    consumer_computation: Ref[ComputationContract]
+    network: Ref[DataflowNetwork]
 
 
-def _semantics() -> Semantics:
+def _semantics() -> tuple[OpDesign, HardwareInputs, QualifiedPath]:
+    """The logical half, plus the one problem path the caller has to supply.
+
+    ``element_type`` is returned as a path rather than folded into
+    ``HardwareInputs`` because no Kernel reads it: what a Kernel needs is the
+    width, and the width is a declared property derived from it.
+    """
+
     design = OpDesign("example.op", problem_namespace=OWNER)
     extent = design.graph_fact("extent", int)
     element_type = design.graph_fact("element_type", NumericElementType)
     target_family = design.target_fact("family", str, required=False)
     lanes = design.decision("lanes", int, domain=divisors_of(extent))
+    # The width is a declared property, not a projection applied on the way out
+    # to the RTL.  A parameter that needs bits names this.
+    element_width = design.derived(
+        "element_width",
+        int,
+        dependencies={"element_type": element_type},
+        evaluate=lambda element_type: element_type.bit_width,
+    )
     producer = design.derived(
         "producer_region",
         DataflowRegion,
@@ -151,11 +221,38 @@ def _semantics() -> Semantics:
         dependencies={"extent": extent},
         evaluate=lambda extent: _region(extent, "consumed"),
     )
-    return Semantics(
+    producer_computation = design.derived(
+        "producer_computation",
+        ComputationContract,
+        dependencies={},
+        evaluate=lambda: SCALED,
+    )
+    consumer_computation = design.derived(
+        "consumer_computation",
+        ComputationContract,
+        dependencies={},
+        evaluate=lambda: REDUCED,
+    )
+    network = design.derived(
+        "network",
+        DataflowNetwork,
+        dependencies={"producer": producer, "consumer": consumer},
+        evaluate=_network,
+    )
+    return (
         design,
-        HardwareInputs(extent, element_type, target_family, lanes),
-        producer,
-        consumer,
+        HardwareInputs(
+            extent,
+            element_width,
+            target_family,
+            lanes,
+            producer,
+            consumer,
+            producer_computation,
+            consumer_computation,
+            network,
+        ),
+        element_type.path,
     )
 
 
@@ -171,10 +268,15 @@ class SingleComponentKernel(HardwareKernel):
     @classmethod
     def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
         facts = design.inputs
-        design.covers("compute")
+        design.covers_region(
+            "compute",
+            region=facts.consumer,
+            computation=facts.consumer_computation,
+            implements=REDUCED,
+        )
         design.source("example", "rtl/single.sv")
         design.parameter("LANES", cast("Ref[object]", facts.lanes))
-        design.parameter("WIDTH", cast("Ref[object]", facts.element_type))
+        design.parameter("WIDTH", cast("Ref[object]", facts.element_width))
         design.constant("MODE", 0, why="this core has one mode; the parameter is vestigial")
 
     @classmethod
@@ -199,7 +301,12 @@ class MultiComponentKernel(HardwareKernel):
     @classmethod
     def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
         facts = design.inputs
-        design.covers("compute")
+        design.covers_region(
+            "compute",
+            region=facts.consumer,
+            computation=facts.consumer_computation,
+            implements=REDUCED,
+        )
         design.source("example", "rtl/multi_pkg.sv", "rtl/multi_core.sv", "rtl/multi.sv")
         pipelined = design.choice("pipelined", bool, domain=finite((False, True)))
         depth = design.derived(
@@ -236,9 +343,15 @@ class UpstreamKernel(HardwareKernel):
 
     @classmethod
     def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
-        design.covers("producer")
+        facts = design.inputs
+        design.covers_region(
+            "producer",
+            region=facts.producer,
+            computation=facts.producer_computation,
+            implements=SCALED,
+        )
         design.source("example", "rtl/upstream.sv")
-        design.parameter("LANES", cast("Ref[object]", design.inputs.lanes))
+        design.parameter("LANES", cast("Ref[object]", facts.lanes))
 
     @classmethod
     def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
@@ -253,9 +366,15 @@ class DownstreamKernel(HardwareKernel):
 
     @classmethod
     def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
-        design.covers("consumer")
+        facts = design.inputs
+        design.covers_region(
+            "consumer",
+            region=facts.consumer,
+            computation=facts.consumer_computation,
+            implements=REDUCED,
+        )
         design.source("example", "rtl/downstream.sv")
-        design.parameter("LANES", cast("Ref[object]", design.inputs.lanes))
+        design.parameter("LANES", cast("Ref[object]", facts.lanes))
 
     @classmethod
     def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
@@ -263,24 +382,34 @@ class DownstreamKernel(HardwareKernel):
 
 
 class FusedKernel(HardwareKernel):
-    """Case 4: both Regions and the edge between them, as one module.
-
-    The edge coverage is the whole point.  Two adjacent Kernels leave the
-    connection as a physical interface pair; this absorbs it, and the only
-    thing that says so is the declaration.
-    """
+    """Case 4: both Regions and the edge between them, as one module."""
 
     id = "fused"
     version = "1"
 
     @classmethod
     def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
-        design.covers("producer", "consumer", edges=("link",))
+        facts = design.inputs
+        design.covers_region(
+            "producer",
+            region=facts.producer,
+            computation=facts.producer_computation,
+            implements=SCALED,
+        )
+        design.covers_region(
+            "consumer",
+            region=facts.consumer,
+            computation=facts.consumer_computation,
+            implements=REDUCED,
+        )
+        design.absorbs_edge(
+            "link", network=facts.network, source_role="producer", sink_role="consumer"
+        )
         design.source("example", "rtl/fused.sv")
-        design.parameter("LANES", cast("Ref[object]", design.inputs.lanes))
+        design.parameter("LANES", cast("Ref[object]", facts.lanes))
         design.coverage_constraint(
             "extent_supported",
-            dependencies={"extent": design.inputs.extent},
+            dependencies={"extent": facts.extent},
             evaluate=lambda extent: (
                 True if extent <= 8 else reject("extent-too-wide", "the fused core stops at 8")
             ),
@@ -289,6 +418,33 @@ class FusedKernel(HardwareKernel):
     @classmethod
     def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("fused.core", "example.fused"),)
+
+
+class MiscomputingKernel(HardwareKernel):
+    """Claims the consumer Region while implementing the producer's arithmetic.
+
+    Nothing about its Region coverage is wrong -- it names the right
+    declaration.  Only the contract is, which is the failure no amount of
+    schedule checking would find.
+    """
+
+    id = "miscomputing"
+    version = "1"
+
+    @classmethod
+    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+        facts = design.inputs
+        design.covers_region(
+            "compute",
+            region=facts.consumer,
+            computation=facts.consumer_computation,
+            implements=SCALED,
+        )
+        design.source("example", "rtl/miscomputing.sv")
+
+    @classmethod
+    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+        return (PhysicalComponent("miscomputing.core", "example.miscomputing"),)
 
 
 # -- assembly ----------------------------------------------------------------
@@ -300,15 +456,36 @@ class Placed:
 
     engine: Engine
     point: DesignPoint
-    semantics: Semantics
+    inputs: HardwareInputs
     declarations: dict[str, HardwareKernelDeclaration]
     selection: HardwareKernelSelection
     specification: DesignSpaceSpec
 
-    def region(self, handle: Ref[DataflowRegion]) -> DataflowRegion:
+    def value(self, handle: Ref[object]) -> object:
         answer = self.engine.query_property(self.point, handle.path)
         assert isinstance(answer, Decided)
-        return cast(DataflowRegion, answer.value)
+        return answer.value
+
+    def region(self, handle: Ref[DataflowRegion]) -> DataflowRegion:
+        return cast(DataflowRegion, self.value(cast("Ref[object]", handle)))
+
+    @property
+    def producer(self) -> DataflowRegion:
+        return self.region(self.inputs.producer)
+
+    @property
+    def consumer(self) -> DataflowRegion:
+        return self.region(self.inputs.consumer)
+
+    def bind(
+        self,
+        name: str,
+        regions: dict[str, BoundRegion],
+        edges: dict[str, str] | None = None,
+    ) -> Answer[KernelBinding]:
+        return bind_hardware_kernel(
+            self.engine, self.declarations[name], self.point, regions, edges
+        )
 
 
 def _place(
@@ -317,57 +494,58 @@ def _place(
     *,
     family: str = "wide",
     pipelined: bool = False,
-    hardware_kernel: str = "single",
+    hardware_kernel: str | None = "single",
 ) -> Placed:
-    semantics = _semantics()
+    design, inputs, element_type = _semantics()
     kernels = {
-        kernel.id: declare_hardware_kernel(
-            kernel, hardware_namespace(OWNER, kernel.id), semantics.inputs
-        )[0]
-        for kernel in (UpstreamKernel, DownstreamKernel, FusedKernel)
+        kernel.id: declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
+        for kernel in (UpstreamKernel, DownstreamKernel, FusedKernel, MiscomputingKernel)
     }
     # Case 5's two alternatives live behind a selection instead, because
-    # choosing between them is a real choice; the other three have exactly one
+    # choosing between them is a real choice; the others have exactly one
     # coverer each and so get no decision at all.
     selection = HardwareKernelSelection(
         f"{OWNER}.compute",
         tuple(
-            declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), semantics.inputs)[
-                0
-            ]
+            declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
             for kernel in (SingleComponentKernel, MultiComponentKernel)
         ),
     )
-    engine = Engine()
     specification = assemble_specs(
-        (
-            semantics.design.spec(),
-            *(item.spec for item in kernels.values()),
-            selection.build_spec(),
-        )
+        (design.spec(), *(item.spec for item in kernels.values()), selection.build_spec())
     )
+    check_declared_references(specification, (*kernels.values(), *selection.kernels))
+    engine = Engine()
     space = engine.validate(specification)
     point = engine.start(
         space,
         {
-            semantics.inputs.extent.path: extent,
-            semantics.inputs.element_type.path: INT8,
-            semantics.inputs.target_family.path: family,
+            inputs.extent.path: extent,
+            element_type: INT8,
+            inputs.target_family.path: family,
         },
     )
-    point = engine.commit_assignments(
-        point,
-        {
-            semantics.inputs.lanes.path: lanes,
-            selection.kernel_path: hardware_kernel,
-            QualifiedPath(f"{hardware_namespace(OWNER, 'multi')}.pipelined"): pipelined,
-        },
-    ).point
-    return Placed(engine, point, semantics, kernels, selection, specification)
+    assignments: dict[QualifiedPath, object] = {inputs.lanes.path: lanes}
+    if hardware_kernel is not None:
+        # ``None`` leaves the physical choice open, which is the state a policy
+        # asks ``supported_kernels`` in.
+        assignments[selection.kernel_path] = hardware_kernel
+        assignments[QualifiedPath(f"{hardware_namespace(OWNER, 'multi')}.pipelined")] = pipelined
+    point = engine.commit_assignments(point, assignments).point
+    return Placed(engine, point, inputs, kernels, selection, specification)
 
 
-def _compute_role(placed: Placed) -> dict[str, object]:
-    return bound_regions((("compute", CONSUMER_NODE, placed.region(placed.semantics.consumer)),))
+def _compute_role(placed: Placed) -> dict[str, BoundRegion]:
+    return bound_regions((("compute", CONSUMER_NODE, placed.consumer),))
+
+
+def _both_roles(placed: Placed) -> dict[str, BoundRegion]:
+    return bound_regions(
+        (
+            ("producer", PRODUCER_NODE, placed.producer),
+            ("consumer", CONSUMER_NODE, placed.consumer),
+        )
+    )
 
 
 # -- case 1 ------------------------------------------------------------------
@@ -394,7 +572,7 @@ def test_a_bound_kernel_is_an_instance_of_the_class_that_declared_it() -> None:
 
 
 def test_every_declared_parameter_resolves_from_the_point() -> None:
-    """A decision, a problem field projected to its width, and a constant."""
+    """A decision, a declared width property, and a constant."""
 
     placed = _place(lanes=2, hardware_kernel="single")
     bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
@@ -429,7 +607,7 @@ def test_a_kernel_local_choice_reaches_its_derived_parameter() -> None:
     assert dict(plain_bound.value.parameters)["DEPTH"] == 2
     assert dict(piped_bound.value.parameters)["DEPTH"] == 4
     # ...and the Region is untouched by it.
-    assert plain.region(plain.semantics.consumer) == piped.region(piped.semantics.consumer)
+    assert plain.consumer == piped.consumer
 
 
 # -- case 3 ------------------------------------------------------------------
@@ -437,17 +615,11 @@ def test_a_kernel_local_choice_reaches_its_derived_parameter() -> None:
 
 def test_two_regions_two_independent_kernels() -> None:
     placed = _place()
-    upstream = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["upstream"],
-        placed.point,
-        bound_regions((("producer", PRODUCER_NODE, placed.region(placed.semantics.producer)),)),
+    upstream = placed.bind(
+        "upstream", bound_regions((("producer", PRODUCER_NODE, placed.producer),))
     )
-    downstream = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["downstream"],
-        placed.point,
-        bound_regions((("consumer", CONSUMER_NODE, placed.region(placed.semantics.consumer)),)),
+    downstream = placed.bind(
+        "downstream", bound_regions((("consumer", CONSUMER_NODE, placed.consumer),))
     )
     assert isinstance(upstream, Decided) and isinstance(downstream, Decided)
 
@@ -472,18 +644,7 @@ def test_neither_kernel_needs_a_selection_when_it_is_the_only_coverer() -> None:
 
 def test_two_regions_and_their_edge_covered_by_one_fused_kernel() -> None:
     placed = _place()
-    fused = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["fused"],
-        placed.point,
-        bound_regions(
-            (
-                ("producer", PRODUCER_NODE, placed.region(placed.semantics.producer)),
-                ("consumer", CONSUMER_NODE, placed.region(placed.semantics.consumer)),
-            )
-        ),
-        {"link": LINK_EDGE},
-    )
+    fused = placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
     assert isinstance(fused, Decided)
 
     assert fused.value.node_ids == (CONSUMER_NODE, PRODUCER_NODE)
@@ -495,39 +656,45 @@ def test_the_fused_kernel_covers_the_same_regions_the_separate_ones_do() -> None
     """One semantic result, two physical readings of it."""
 
     placed = _place()
-    producer = placed.region(placed.semantics.producer)
-    consumer = placed.region(placed.semantics.consumer)
     separate = tuple(
-        cast(
-            Decided[KernelBinding],
-            bind_hardware_kernel(
-                placed.engine, placed.declarations[name], placed.point, bound_regions((role,))
-            ),
-        ).value
+        cast(Decided[KernelBinding], placed.bind(name, bound_regions((role,)))).value
         for name, role in (
-            ("upstream", ("producer", PRODUCER_NODE, producer)),
-            ("downstream", ("consumer", CONSUMER_NODE, consumer)),
+            ("upstream", ("producer", PRODUCER_NODE, placed.producer)),
+            ("downstream", ("consumer", CONSUMER_NODE, placed.consumer)),
         )
     )
     fused = cast(
-        Decided[KernelBinding],
-        bind_hardware_kernel(
-            placed.engine,
-            placed.declarations["fused"],
-            placed.point,
-            bound_regions(
-                (
-                    ("producer", PRODUCER_NODE, producer),
-                    ("consumer", CONSUMER_NODE, consumer),
-                )
-            ),
-            {"link": LINK_EDGE},
-        ),
+        Decided[KernelBinding], placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
     ).value
 
-    covered_separately = tuple(sorted(item.node_ids[0] for item in separate))
-    assert covered_separately == tuple(sorted(fused.node_ids))
-    assert tuple(item.region for item in fused.regions) == (producer, consumer)
+    assert tuple(sorted(item.node_ids[0] for item in separate)) == tuple(sorted(fused.node_ids))
+    assert tuple(item.region for item in fused.regions) == (placed.producer, placed.consumer)
+
+
+def test_a_fused_kernel_validates_the_edge_against_the_selected_network() -> None:
+    """An edge id is a claim until the Network is asked."""
+
+    placed = _place()
+    absent = placed.bind("fused", _both_roles(placed), {"link": "no_such_edge"})
+    assert isinstance(absent, Unresolved)
+    assert any(item.code == "hardware-covered-edge-absent" for item in absent.findings)
+
+
+def test_a_fused_kernel_rejects_an_edge_that_runs_the_wrong_way() -> None:
+    """The roles are swapped, so the real edge no longer connects them."""
+
+    placed = _place()
+    swapped = bound_regions(
+        (
+            ("producer", CONSUMER_NODE, placed.consumer),
+            ("consumer", PRODUCER_NODE, placed.producer),
+        )
+    )
+    reversed_binding = placed.bind("fused", swapped, {"link": LINK_EDGE})
+    assert isinstance(reversed_binding, Unresolved)
+    codes = {item.code for item in reversed_binding.findings}
+    assert "hardware-coverage-region-not-the-declared-one" in codes
+    assert "hardware-covered-edge-misconnected" in codes
 
 
 # -- case 5 ------------------------------------------------------------------
@@ -537,8 +704,8 @@ def test_two_alternatives_over_one_region_leave_the_region_unchanged() -> None:
     single = _place(hardware_kernel="single")
     multi = _place(hardware_kernel="multi")
 
-    assert single.region(single.semantics.consumer) == multi.region(multi.semantics.consumer)
-    assert single.region(single.semantics.producer) == multi.region(multi.semantics.producer)
+    assert single.consumer == multi.consumer
+    assert single.producer == multi.producer
 
 
 def test_the_committed_alternative_is_the_one_that_binds() -> None:
@@ -553,9 +720,9 @@ def test_the_committed_alternative_is_the_one_that_binds() -> None:
 def test_a_pool_refuses_members_that_cover_different_shapes() -> None:
     """Two Kernels behind one decision must be alternatives, not two bindings."""
 
-    semantics = _semantics()
+    _, inputs, _ = _semantics()
     declarations = tuple(
-        declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), semantics.inputs)[0]
+        declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
         for kernel in (SingleComponentKernel, FusedKernel)
     )
     with pytest.raises(SpecAuthoringError) as raised:
@@ -563,16 +730,77 @@ def test_a_pool_refuses_members_that_cover_different_shapes() -> None:
     assert any(item.code == "hardware-selection-coverage-differs" for item in raised.value.issues)
 
 
-# -- the contract itself -----------------------------------------------------
+def test_policy_can_eliminate_unsupported_kernels_before_binding() -> None:
+    """The named coverage set answers "what can this target build" without binding."""
+
+    wide = _place(family="wide", hardware_kernel=None)
+    narrow = _place(family="narrow", hardware_kernel=None)
+
+    assert wide.selection.supported_kernels(wide.engine, wide.point) == ("single", "multi")
+    # ``multi`` requires the wide family; ``single`` declares no condition.
+    assert narrow.selection.supported_kernels(narrow.engine, narrow.point) == ("single",)
+
+
+def test_once_the_choice_is_committed_there_is_nothing_left_to_eliminate() -> None:
+    """Reporting rejected peers to a policy past switching would mislead it."""
+
+    placed = _place(family="wide", hardware_kernel="multi")
+    assert placed.selection.supported_kernels(placed.engine, placed.point) == ("multi",)
+
+
+def test_the_coverage_constraint_set_is_named_in_the_design_space() -> None:
+    placed = _place()
+    names = {item.name for item in placed.specification.constraint_sets}
+    assert placed.selection.coverage_constraint_set in names
+
+
+# -- coverage is a declaration, not a shape ----------------------------------
+
+
+def test_an_equal_looking_region_in_the_wrong_role_is_rejected() -> None:
+    """The two Regions are schedule-identical; only the declaration separates them."""
+
+    placed = _place()
+    assert placed.producer.schedule == placed.consumer.schedule
+    assert placed.producer != placed.consumer
+
+    misrouted = placed.bind(
+        "upstream", bound_regions((("producer", CONSUMER_NODE, placed.consumer),))
+    )
+    assert isinstance(misrouted, Unresolved)
+    assert any(
+        item.code == "hardware-coverage-region-not-the-declared-one" for item in misrouted.findings
+    )
+
+
+def test_the_explicitly_declared_region_binds() -> None:
+    placed = _place()
+    correct = placed.bind(
+        "upstream", bound_regions((("producer", PRODUCER_NODE, placed.producer),))
+    )
+    assert isinstance(correct, Decided)
+    assert correct.value.regions[0].region == placed.producer
+
+
+def test_the_computation_contract_is_checked_rather_than_inferred() -> None:
+    """Right Region, right schedule, wrong arithmetic.
+
+    ``MiscomputingKernel`` covers the declared consumer Region, so every
+    structural check passes.  What refuses it is the contract it says it
+    implements.
+    """
+
+    placed = _place()
+    wrong = placed.bind("miscomputing", _compute_role(placed))
+    assert isinstance(wrong, Unresolved)
+    assert any(item.code == "hardware-computation-contract-mismatch" for item in wrong.findings)
 
 
 def test_a_binding_must_fill_every_covered_role_and_no_other() -> None:
     placed = _place()
-    missing = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["fused"],
-        placed.point,
-        bound_regions((("producer", PRODUCER_NODE, placed.region(placed.semantics.producer)),)),
+    missing = placed.bind(
+        "fused",
+        bound_regions((("producer", PRODUCER_NODE, placed.producer),)),
         {"link": LINK_EDGE},
     )
     assert isinstance(missing, Unresolved)
@@ -583,63 +811,191 @@ def test_a_binding_must_fill_every_covered_edge() -> None:
     """A fused Kernel bound without its edge would silently become two."""
 
     placed = _place()
-    without = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["fused"],
-        placed.point,
-        bound_regions(
-            (
-                ("producer", PRODUCER_NODE, placed.region(placed.semantics.producer)),
-                ("consumer", CONSUMER_NODE, placed.region(placed.semantics.consumer)),
-            )
-        ),
-    )
+    without = placed.bind("fused", _both_roles(placed))
     assert isinstance(without, Unresolved)
     assert any(item.code == "hardware-coverage-edge-roles-mismatch" for item in without.findings)
 
 
-def test_a_kernel_that_does_not_cover_the_point_refuses_to_bind() -> None:
-    placed = _place(extent=16, lanes=2)
-    refused = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["fused"],
-        placed.point,
-        bound_regions(
-            (
-                ("producer", PRODUCER_NODE, placed.region(placed.semantics.producer)),
-                ("consumer", CONSUMER_NODE, placed.region(placed.semantics.consumer)),
+def test_an_absorbed_edge_must_run_between_covered_roles() -> None:
+    _, inputs, _ = _semantics()
+
+    class Disconnected(HardwareKernel):
+        id = "disconnected"
+
+        @classmethod
+        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+            facts = design.inputs
+            design.covers_region(
+                "producer",
+                region=facts.producer,
+                computation=facts.producer_computation,
+                implements=SCALED,
             )
-        ),
-        {"link": LINK_EDGE},
-    )
+            design.absorbs_edge(
+                "link", network=facts.network, source_role="producer", sink_role="elsewhere"
+            )
+
+    with pytest.raises(SpecAuthoringError) as raised:
+        declare_hardware_kernel(Disconnected, "example.disconnected", inputs)
+    assert any(item.code == "coverage-edge-role-unknown" for item in raised.value.issues)
+
+
+# -- refusal reasons survive -------------------------------------------------
+
+
+def test_a_kernel_that_does_not_cover_the_point_refuses_with_its_own_reason() -> None:
+    placed = _place(extent=16, lanes=2)
+    refused = placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
     assert isinstance(refused, Unresolved)
-    assert any(item.code == "hardware-coverage-refused" for item in refused.findings)
+    codes = {item.code for item in refused.findings}
+
+    assert "hardware-coverage-refused" in codes
+    # The reason the author wrote is what makes the refusal actionable, so it
+    # travels alongside the summary rather than being replaced by it.
+    assert "extent-too-wide" in codes
+    assert any("stops at 8" in item.message for item in refused.findings)
 
 
-def test_coverage_is_stated_rather_than_inferred_from_equal_shapes() -> None:
-    """The two synthetic Regions differ only in operand names.
+# -- parameters are declared, and only declared ------------------------------
 
-    Binding the wrong one is therefore not a shape error, and nothing in the
-    Kernel could detect it -- which is exactly why the assembly states the
-    association instead of the Kernel guessing it.
-    """
 
-    placed = _place()
-    producer = placed.region(placed.semantics.producer)
-    consumer = placed.region(placed.semantics.consumer)
-    assert producer != consumer
-    assert producer.schedule == consumer.schedule
+def test_an_undeclared_parameter_reference_is_caught_when_the_space_is_assembled() -> None:
+    """``Engine.validate`` cannot see this: the path is read, not declared."""
 
-    bound = bind_hardware_kernel(
-        placed.engine,
-        placed.declarations["upstream"],
-        placed.point,
-        bound_regions((("producer", CONSUMER_NODE, consumer),)),
+    design, inputs, _ = _semantics()
+    stray: Ref[object] = cast(
+        "Ref[object]", design.derived("stray", int, dependencies={}, evaluate=lambda: 1)
     )
-    # It binds: the Kernel was told this node holds the producer role, and it
-    # has no standing to disagree.  What it records is exactly what it was told.
+
+    class Reaching(HardwareKernel):
+        id = "reaching"
+
+        @classmethod
+        def define_design(cls, kernel_design: HardwareDesign[HardwareInputs]) -> None:
+            facts = kernel_design.inputs
+            kernel_design.covers_region(
+                "compute",
+                region=facts.consumer,
+                computation=facts.consumer_computation,
+                implements=REDUCED,
+            )
+            kernel_design.parameter("STRAY", stray)
+
+    declaration = declare_hardware_kernel(Reaching, "example.reaching", inputs)[0]
+    # Assemble *without* the scope that declares ``stray``.
+    specification = assemble_specs((declaration.spec,))
+    with pytest.raises(SpecAuthoringError) as raised:
+        check_declared_references(specification, (declaration,))
+    assert any(item.code == "hardware-reference-not-assembled" for item in raised.value.issues)
+
+
+def test_binding_reports_an_undeclared_reference_rather_than_raising() -> None:
+    """Belt and braces: if the assembly check was skipped, binding still answers."""
+
+    design, inputs, _ = _semantics()
+    stray: Ref[object] = cast(
+        "Ref[object]", design.derived("stray", int, dependencies={}, evaluate=lambda: 1)
+    )
+
+    class Reaching(HardwareKernel):
+        id = "reaching"
+
+        @classmethod
+        def define_design(cls, kernel_design: HardwareDesign[HardwareInputs]) -> None:
+            facts = kernel_design.inputs
+            kernel_design.covers_region(
+                "compute",
+                region=facts.consumer,
+                computation=facts.consumer_computation,
+                implements=REDUCED,
+            )
+            kernel_design.parameter("STRAY", stray)
+
+    declaration = declare_hardware_kernel(Reaching, "example.reaching", inputs)[0]
+    placed = _place()
+    answer = bind_hardware_kernel(placed.engine, declaration, placed.point, _compute_role(placed))
+    assert isinstance(answer, Unresolved)
+    assert any(item.code == "hardware-reference-not-declared" for item in answer.findings)
+
+
+def test_a_non_scalar_parameter_is_refused_rather_than_stringified() -> None:
+    """An element type reaching a parameter means a width property was owed."""
+
+    with pytest.raises(SpecAuthoringError) as raised:
+        scalar_parameters({"WIDTH": INT8})
+    assert any(item.code == "hardware-parameter-not-scalar" for item in raised.value.issues)
+
+
+def test_a_parameter_ownership_is_read_off_its_handle() -> None:
+    """Nothing restates where a value comes from, so nothing can misstate it."""
+
+    _, inputs, _ = _semantics()
+    declaration = declare_hardware_kernel(
+        SingleComponentKernel, hardware_namespace(OWNER, "single"), inputs
+    )[0]
+    ownership = {item.name: item.ownership for item in declaration.parameters}
+    assert ownership == {
+        "LANES": "decision",
+        "WIDTH": "derived_property",
+        "MODE": "constant",
+    }
+
+
+def test_a_constant_parameter_must_say_why_it_is_one() -> None:
+    _, inputs, _ = _semantics()
+
+    class Nameless(HardwareKernel):
+        id = "nameless"
+
+        @classmethod
+        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+            facts = design.inputs
+            design.covers_region(
+                "compute",
+                region=facts.consumer,
+                computation=facts.consumer_computation,
+                implements=REDUCED,
+            )
+            design.constant("MODE", 0, why="")
+
+    with pytest.raises(AuthoringError):
+        declare_hardware_kernel(Nameless, "example.nameless", inputs)
+
+
+# -- what a bound Kernel may see ---------------------------------------------
+
+
+def test_a_bound_kernel_does_not_carry_the_design_point() -> None:
+    """Elaboration that could read an undeclared field would decide out of band."""
+
+    placed = _place(hardware_kernel="multi")
+    bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
     assert isinstance(bound, Decided)
-    assert bound.value.regions[0].node_id == CONSUMER_NODE
+    kernel = bound.value.kernel
+
+    assert not hasattr(kernel, "point")
+    assert not hasattr(bound.value, "point")
+    assert not hasattr(kernel, "engine")
+
+
+def test_a_bound_kernel_sees_only_its_own_committed_choices() -> None:
+    placed = _place(hardware_kernel="multi", lanes=2)
+    bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
+    assert isinstance(bound, Decided)
+    paths = {str(path) for path in bound.value.kernel.assignments}
+
+    # Its own physical choice, and nothing of the semantics that configured it.
+    assert paths == {f"{hardware_namespace(OWNER, 'multi')}.pipelined"}
+    assert not any(path.endswith(".lanes") for path in paths)
+
+
+def test_an_imported_value_reaches_elaboration_only_as_a_declared_parameter() -> None:
+    placed = _place(hardware_kernel="multi", lanes=2)
+    bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
+    assert isinstance(bound, Decided)
+
+    assert dict(bound.value.parameters)["LANES"] == 2
+    assert set(bound.value.kernel.parameters) == {"LANES", "DEPTH", "PIPELINED"}
 
 
 def test_a_physical_kernel_cannot_declare_a_region() -> None:
@@ -650,27 +1006,18 @@ def test_a_physical_kernel_cannot_declare_a_region() -> None:
     assert not hasattr(HardwareDesign, "export")
 
 
-def test_a_constant_parameter_must_say_why_it_is_one() -> None:
-    semantics = _semantics()
-
-    class Nameless(HardwareKernel):
-        id = "nameless"
-
-        @classmethod
-        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
-            design.covers("compute")
-            design.constant("MODE", 0, why="")
-
-    with pytest.raises(AuthoringError):
-        declare_hardware_kernel(Nameless, "example.nameless", semantics.inputs)
+# -- evidence ----------------------------------------------------------------
 
 
-def test_a_parameter_ownership_is_read_off_its_handle() -> None:
-    """Nothing restates where a value comes from, so nothing can misstate it."""
+def test_the_origin_records_what_the_binding_is_without_the_graph() -> None:
+    placed = _place(hardware_kernel="multi")
+    bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
+    assert isinstance(bound, Decided)
+    origin = bound.value.origin()
 
-    semantics = _semantics()
-    declaration = declare_hardware_kernel(
-        SingleComponentKernel, hardware_namespace(OWNER, "single"), semantics.inputs
-    )[0]
-    ownership = {item.name: item.ownership for item in declaration.parameters}
-    assert ownership == {"LANES": "decision", "WIDTH": "problem_field", "MODE": "constant"}
+    assert origin.kernel_id == "multi"
+    assert origin.kernel_version == "3"
+    assert origin.covered_nodes == (CONSUMER_NODE,)
+    assert origin.computations == (("compute", "running_maximum:1"),)
+    assert dict(origin.parameters)["LANES"] == 2
+    assert ("example", "rtl/multi.sv") in origin.sources

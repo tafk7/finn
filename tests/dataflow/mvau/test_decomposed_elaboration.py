@@ -22,7 +22,7 @@ from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - fixtures come wit
     _model,
     _wrapped,
 )
-from finn.dataflow.design import QualifiedPath
+from finn.dataflow.design import Decided, QualifiedPath
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
@@ -51,7 +51,7 @@ from finn.dataflow.mvau.decomposed_provider import (
 from finn.dataflow.mvau.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.providers import MVAU_COMPUTE_ELABORATORS, elaborate_mvau
 from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION
+from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION, NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
@@ -158,6 +158,7 @@ def test_the_structure_is_the_network_the_kernels_assembled() -> None:
 def test_the_boundaries_are_the_networks_own() -> None:
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
+    assert isinstance(resolved.result, NetworkRef)
     network = resolved.result.network
 
     assert {item.id for item in elaboration.boundaries} == {item.id for item in network.boundaries}
@@ -233,9 +234,12 @@ def test_the_derived_parameters_are_read_not_recomputed() -> None:
         assert by_name[name].source is not None
 
     values = decomposed_provider_values(_resolved())
-    engine = _resolved().engine
+    resolved = _resolved()
     for name in ("VERSION", "SIGNED_ACTIVATIONS", "SEGMENTLEN"):
-        answer = engine.query_property(_resolved().point, by_name[name].source)
+        source = by_name[name].source
+        assert source is not None
+        answer = resolved.engine.query_property(resolved.point, source)
+        assert isinstance(answer, Decided)
         assert values[name] == answer.value
 
 
