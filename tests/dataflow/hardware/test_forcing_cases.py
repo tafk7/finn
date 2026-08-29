@@ -41,9 +41,11 @@ from finn.dataflow.authoring import (
     finite,
     reject,
 )
+from finn.dataflow.authoring.scope import semantics_for
 from finn.dataflow.design import (
     Answer,
     Decided,
+    DependencyKind,
     DesignPoint,
     DesignSpaceSpec,
     Engine,
@@ -447,6 +449,32 @@ class MiscomputingKernel(HardwareKernel):
         return (PhysicalComponent("miscomputing.core", "example.miscomputing"),)
 
 
+class ElsewhereKernel(HardwareKernel):
+    """Uses the ``compute`` role name for the *other* Region.
+
+    Nothing about it is malformed on its own.  It is only wrong as an
+    alternative to something that means a different Region by the same word.
+    """
+
+    id = "elsewhere"
+    version = "1"
+
+    @classmethod
+    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+        facts = design.inputs
+        design.covers_region(
+            "compute",
+            region=facts.producer,
+            computation=facts.producer_computation,
+            implements=SCALED,
+        )
+        design.source("example", "rtl/elsewhere.sv")
+
+    @classmethod
+    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+        return (PhysicalComponent("elsewhere.core", "example.elsewhere"),)
+
+
 # -- assembly ----------------------------------------------------------------
 
 
@@ -717,17 +745,55 @@ def test_the_committed_alternative_is_the_one_that_binds() -> None:
         assert len(bound.value.components()) == components
 
 
-def test_a_pool_refuses_members_that_cover_different_shapes() -> None:
-    """Two Kernels behind one decision must be alternatives, not two bindings."""
+def _pool(*kernels: type[HardwareKernel]) -> tuple[str, ...]:
+    """Build a pool from these Kernels and return why it was refused, if it was."""
 
     _, inputs, _ = _semantics()
     declarations = tuple(
         declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
-        for kernel in (SingleComponentKernel, FusedKernel)
+        for kernel in kernels
     )
-    with pytest.raises(SpecAuthoringError) as raised:
-        HardwareKernelSelection("example.mixed", declarations)
-    assert any(item.code == "hardware-selection-coverage-differs" for item in raised.value.issues)
+    try:
+        HardwareKernelSelection("example.pool", declarations)
+    except SpecAuthoringError as error:
+        return tuple(item.message for item in error.issues)
+    return ()
+
+
+def test_a_pool_refuses_members_that_cover_different_roles() -> None:
+    """Two Kernels behind one decision must be alternatives, not two bindings."""
+
+    reasons = _pool(SingleComponentKernel, FusedKernel)
+    assert reasons
+    assert any("covered by only one of them" in item for item in reasons)
+
+
+def test_a_pool_refuses_members_that_implement_different_arithmetic() -> None:
+    """The defect matching role names alone let through.
+
+    ``MiscomputingKernel`` covers the same role over the same Region
+    declaration as ``SingleComponentKernel``.  Only the contract differs, and
+    admitting it would let the physical choice change what the design computes
+    -- which is precisely what selecting a Kernel may never do.
+    """
+
+    reasons = _pool(SingleComponentKernel, MiscomputingKernel)
+    assert reasons
+    assert any("implements running_maximum:1 versus scaled_copy:1" in item for item in reasons)
+
+
+def test_a_pool_refuses_members_that_cover_different_region_declarations() -> None:
+    """Same role name, different Region: still not alternatives."""
+
+    reasons = _pool(SingleComponentKernel, ElsewhereKernel)
+    assert reasons
+    assert any("producer_region" in item and "consumer_region" in item for item in reasons)
+
+
+def test_a_pool_accepts_genuine_alternatives() -> None:
+    """The positive case, so the check above is not merely refusing everything."""
+
+    assert _pool(SingleComponentKernel, MultiComponentKernel) == ()
 
 
 def test_policy_can_eliminate_unsupported_kernels_before_binding() -> None:
@@ -916,6 +982,85 @@ def test_binding_reports_an_undeclared_reference_rather_than_raising() -> None:
     answer = bind_hardware_kernel(placed.engine, declaration, placed.point, _compute_role(placed))
     assert isinstance(answer, Unresolved)
     assert any(item.code == "hardware-reference-not-declared" for item in answer.findings)
+
+
+def _reaching(source: Ref[object], inputs: HardwareInputs) -> HardwareKernelDeclaration:
+    """One Kernel whose only interesting feature is the reference it makes."""
+
+    class Reaching(HardwareKernel):
+        id = "reaching"
+
+        @classmethod
+        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+            facts = design.inputs
+            design.covers_region(
+                "compute",
+                region=facts.consumer,
+                computation=facts.consumer_computation,
+                implements=REDUCED,
+            )
+            design.parameter("VALUE", source)
+
+    return declare_hardware_kernel(Reaching, "example.reaching", inputs)[0]
+
+
+def test_a_reference_naming_the_wrong_dependency_kind_is_refused() -> None:
+    """A DECISION handle onto a derived property.
+
+    The path exists, so a path-only check accepts it -- and then the value looks
+    like a decision nobody assigned, which is a symptom with no obvious cause.
+    """
+
+    design, inputs, _ = _semantics()
+    mislabelled: Ref[object] = Ref(
+        inputs.element_width.path, DependencyKind.DECISION, inputs.element_width.semantics
+    )
+    declaration = _reaching(mislabelled, inputs)
+    specification = assemble_specs((design.spec(), declaration.spec))
+
+    with pytest.raises(SpecAuthoringError) as raised:
+        check_declared_references(specification, (declaration,))
+    issue = next(
+        item for item in raised.value.issues if item.code == "hardware-reference-wrong-kind"
+    )
+    assert "derived_property" in issue.message
+
+
+def test_a_reference_under_a_false_type_contract_is_refused() -> None:
+    """A ``Ref[str]`` onto an integer property would deliver an int as a str."""
+
+    design, inputs, _ = _semantics()
+    mistyped: Ref[object] = Ref(
+        inputs.element_width.path, DependencyKind.PROPERTY, semantics_for(str)
+    )
+    declaration = _reaching(mistyped, inputs)
+    specification = assemble_specs((design.spec(), declaration.spec))
+
+    with pytest.raises(SpecAuthoringError) as raised:
+        check_declared_references(specification, (declaration,))
+    assert any(item.code == "hardware-reference-wrong-type" for item in raised.value.issues)
+
+
+def test_a_well_formed_reference_passes_the_same_check() -> None:
+    design, inputs, _ = _semantics()
+    declaration = _reaching(cast("Ref[object]", inputs.element_width), inputs)
+    check_declared_references(assemble_specs((design.spec(), declaration.spec)), (declaration,))
+
+
+def test_coverage_references_are_checked_too_not_only_parameters() -> None:
+    """A Kernel covering a Region the assembly never declared is as broken."""
+
+    _, inputs, _ = _semantics()
+    declaration = _reaching(cast("Ref[object]", inputs.element_width), inputs)
+    # Assemble the Kernel alone: its covered Region and computation handles now
+    # name nothing.
+    with pytest.raises(SpecAuthoringError) as raised:
+        check_declared_references(assemble_specs((declaration.spec,)), (declaration,))
+    missing = {item.path for item in raised.value.issues if "coverage" in item.message}
+    assert missing == {
+        "semantic.example.op.consumer_region",
+        "semantic.example.op.consumer_computation",
+    }
 
 
 def test_a_non_scalar_parameter_is_refused_rather_than_stringified() -> None:

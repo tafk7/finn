@@ -112,17 +112,22 @@ class HardwareKernelSelection:
                 )
             )
         if self.kernels:
-            shapes = {
-                (item.coverage.region_roles, item.coverage.edge_roles) for item in self.kernels
-            }
-            if len(shapes) > 1:
-                issues.append(
-                    SpecAuthoringIssue(
-                        "hardware-selection-coverage-differs",
-                        self.name,
-                        "pool members must cover the same Region and edge roles",
+            # Every member is compared against the first, and the reasons are
+            # reported rather than a bare inequality: "coverage differs" with no
+            # account of *how* is the kind of error people work around.
+            reference = self.kernels[0]
+            expected = reference.coverage.signature
+            for candidate in self.kernels[1:]:
+                reasons = expected.difference(candidate.coverage.signature)
+                if reasons:
+                    issues.append(
+                        SpecAuthoringIssue(
+                            "hardware-selection-coverage-differs",
+                            f"{self.name}.{candidate.id}",
+                            f"{candidate.id} does not cover what {reference.id} covers: "
+                            + "; ".join(reasons),
+                        )
                     )
-                )
         if issues:
             raise SpecAuthoringError(tuple(issues))
 

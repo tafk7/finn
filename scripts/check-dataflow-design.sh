@@ -13,10 +13,22 @@ RUFF_BIN=${RUFF_BIN:-ruff}
 MYPY_BIN=${MYPY_BIN:-mypy}
 
 cd "$FINN_ROOT"
-export PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
 
-"$PYTHON_BIN" -m pytest -q --confcutdir=tests/dataflow tests/dataflow
-"$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_mvau_cycle_estimate.py
+# The tests need qonnx importable.  Prefer the pinned checkout fetch-repos.sh
+# places under deps/, so the gate does not depend on the caller having installed
+# it, and fall back to whatever the environment provides.
+RUN_PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
+if [ -d "$FINN_ROOT/deps/qonnx/src" ]; then
+    RUN_PYTHONPATH="$RUN_PYTHONPATH:$FINN_ROOT/deps/qonnx/src"
+fi
+RUN_PYTHONPATH="$RUN_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
+
+# Deliberately *not* exported: mypy below must not see qonnx on PYTHONPATH.  It
+# ships no py.typed, so with it importable every qonnx import changes error code
+# and the existing `type: ignore[import-not-found]` comments read as unused --
+# dozens of false positives that have nothing to do with the change under test.
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/dataflow tests/dataflow
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_mvau_cycle_estimate.py
 
 DATAFLOW_SOURCES=(
     src/finn/analysis/verify_custom_nodes.py
@@ -30,7 +42,7 @@ DATAFLOW_SOURCES=(
 "$RUFF_BIN" format --check "${DATAFLOW_SOURCES[@]}"
 "$RUFF_BIN" check "${DATAFLOW_SOURCES[@]}"
 
-MYPYPATH=src:tests "$MYPY_BIN" \
+env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --strict \
     --explicit-package-bases \
     src/finn/analysis/verify_custom_nodes.py \

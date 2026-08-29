@@ -52,6 +52,7 @@ from finn.dataflow.design import (
     QualifiedPath,
     RequestError,
     Unresolved,
+    ValueSemantics,
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.region import DataflowRegion
@@ -226,10 +227,82 @@ class CoveragePattern:
         return next(item for item in self.regions if item.role == role)
 
     @property
-    def shape(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        """What two Kernels must share to be alternatives for one another."""
+    def signature(self) -> SemanticCoverageSignature:
+        """Exactly what two Kernels must share to be alternatives.
 
-        return (self.region_roles, self.edge_roles)
+        Matching role *names* is not enough, and treating it as enough was a
+        real defect: two Kernels could agree on ``("compute",)`` while pointing
+        at different Region declarations, or while implementing different
+        arithmetic over the same one.  Either would let the physical choice
+        change the semantics, which is the one thing selection may never do.
+
+        Roles are sorted, so declaring them in a different order does not make
+        two otherwise identical Kernels look like alternatives for nothing.
+        """
+
+        return SemanticCoverageSignature(
+            tuple(
+                sorted(
+                    (
+                        item.role,
+                        str(item.region.path),
+                        str(item.computation.path),
+                        item.implements.id,
+                        item.implements.version,
+                    )
+                    for item in self.regions
+                )
+            ),
+            tuple(
+                sorted(
+                    (item.role, str(item.network.path), item.source_role, item.sink_role)
+                    for item in self.edges
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SemanticCoverageSignature:
+    """The semantics one Kernel covers, as a comparable value.
+
+    Two Kernels are alternatives for one another exactly when these are equal:
+    same roles, over the same Region and computation declarations, implementing
+    the same contracts, with the same absorbed edges running the same way.
+    """
+
+    regions: tuple[tuple[str, str, str, str, str], ...]
+    edges: tuple[tuple[str, str, str, str], ...]
+
+    def difference(self, other: SemanticCoverageSignature) -> tuple[str, ...]:
+        """A short account of why two signatures are not the same.
+
+        Returned rather than formatted so the caller decides how loud to be;
+        an equality failure with no account of what differs is the kind of
+        authoring error people work around instead of fixing.
+        """
+
+        reasons: list[str] = []
+        mine = {item[0]: item[1:] for item in self.regions}
+        theirs = {item[0]: item[1:] for item in other.regions}
+        for role in sorted(set(mine) | set(theirs)):
+            if role not in mine or role not in theirs:
+                reasons.append(f"Region role {role!r} is covered by only one of them")
+            elif mine[role] != theirs[role]:
+                region, computation, contract, version = mine[role]
+                other_region, other_computation, other_contract, other_version = theirs[role]
+                if region != other_region:
+                    reasons.append(f"{role!r} covers {region} versus {other_region}")
+                if computation != other_computation:
+                    reasons.append(f"{role!r} reads {computation} versus {other_computation}")
+                if (contract, version) != (other_contract, other_version):
+                    reasons.append(
+                        f"{role!r} implements {contract}:{version} versus "
+                        f"{other_contract}:{other_version}"
+                    )
+        if self.edges != other.edges:
+            reasons.append("the absorbed edges differ")
+        return tuple(reasons)
 
 
 # -- physical parameters -----------------------------------------------------
@@ -465,37 +538,47 @@ class HardwareKernelDeclaration:
 
         owned = self._owned_paths
         issues: list[SpecAuthoringIssue] = []
-        for label, path in self.referenced_paths:
-            if self._is_local(path) and path not in owned:
+        for label, reference in self.references:
+            if self._is_local(reference.path) and reference.path not in owned:
                 issues.append(
                     SpecAuthoringIssue(
                         "hardware-reference-undeclared",
-                        str(path),
+                        str(reference.path),
                         f"{label} names a local path this Kernel does not declare",
                     )
                 )
         return issues
 
     @property
-    def referenced_paths(self) -> tuple[tuple[str, QualifiedPath], ...]:
-        """Every declaration this Kernel reads, as ``(what needs it, path)``.
+    def references(self) -> tuple[tuple[str, Ref[object]], ...]:
+        """Every declaration this Kernel reads, as ``(what needs it, handle)``.
 
-        Coverage handles are included: a Kernel whose covered Region property
-        does not exist is exactly as broken as one whose parameter source does
-        not, and both should be caught before a point is ever started.
+        The whole handle, not just the path.  A reference carries a dependency
+        kind and value semantics, and both are claims about the thing named: a
+        ``DECISION`` handle pointing at a derived property, or a ``Ref[str]``
+        pointing at an integer, are wrong in ways a path comparison cannot see.
+
+        Coverage handles are included alongside parameters -- a Kernel whose
+        covered Region property does not exist is exactly as broken as one whose
+        parameter source does not.
         """
 
-        referenced: list[tuple[str, QualifiedPath]] = []
+        referenced: list[tuple[str, Ref[object]]] = []
         for coverage in self.coverage.regions:
-            referenced.append((f"coverage {coverage.role!r} Region", coverage.region.path))
             referenced.append(
-                (f"coverage {coverage.role!r} computation", coverage.computation.path)
+                (f"coverage {coverage.role!r} Region", cast("Ref[object]", coverage.region))
+            )
+            referenced.append(
+                (
+                    f"coverage {coverage.role!r} computation",
+                    cast("Ref[object]", coverage.computation),
+                )
             )
         for edge in self.coverage.edges:
-            referenced.append((f"edge {edge.role!r} Network", edge.network.path))
+            referenced.append((f"edge {edge.role!r} Network", cast("Ref[object]", edge.network)))
         for parameter in self.parameters:
             if parameter.source is not None:
-                referenced.append((f"parameter {parameter.name!r}", parameter.source.path))
+                referenced.append((f"parameter {parameter.name!r}", parameter.source))
         return tuple(referenced)
 
     @property
@@ -510,29 +593,67 @@ def check_declared_references(
     specification: DesignSpaceSpec,
     declarations: Sequence[HardwareKernelDeclaration],
 ) -> None:
-    """Refuse any Kernel reference the assembled design space does not declare.
+    """Refuse any Kernel reference the assembled design space does not honour.
 
     ``Engine.validate()`` cannot catch this on its own: an imported path a
     Kernel merely *reads* is not part of the Kernel's own specification, so an
     assembly that forgot to include the declaring scope validates cleanly and
     then fails at binding time with an engine request error.  Asking here turns
     that into an authoring error, at the moment the mistake is made.
+
+    A reference is three claims, not one -- a path, a dependency kind, and value
+    semantics -- so all three are checked.  Comparing paths alone accepts a
+    ``DECISION`` handle onto a derived property, which then reads as a decision
+    nobody assigned, and a ``Ref[str]`` onto an integer property, which delivers
+    a value under a type contract it does not meet.  Both are silent.
     """
 
-    problem = {item.path for item in specification.problem_schema.fields}
-    decisions = {item.path for item in specification.decisions}
-    properties = {item.path for item in specification.properties}
+    declared: dict[DependencyKind, dict[QualifiedPath, ValueSemantics[object]]] = {
+        DependencyKind.PROBLEM: {
+            item.path: item.value_semantics for item in specification.problem_schema.fields
+        },
+        DependencyKind.DECISION: {
+            item.path: item.value_semantics for item in specification.decisions
+        },
+        DependencyKind.PROPERTY: {
+            item.path: item.value_semantics for item in specification.properties
+        },
+    }
     issues: list[SpecAuthoringIssue] = []
     for declaration in declarations:
-        for label, path in declaration.referenced_paths:
-            if path not in problem | decisions | properties:
-                issues.append(
-                    SpecAuthoringIssue(
-                        "hardware-reference-not-assembled",
-                        str(path),
-                        f"{declaration.id}: {label} names a path the design space does not declare",
+        for label, reference in declaration.references:
+            where = f"{declaration.id}: {label}"
+            matching = declared[reference.kind]
+            if reference.path in matching:
+                semantics = matching[reference.path]
+                if not reference.semantics.is_compatible_with(semantics):
+                    issues.append(
+                        SpecAuthoringIssue(
+                            "hardware-reference-wrong-type",
+                            str(reference.path),
+                            f"{where} reads it as {reference.semantics.name}, but it is "
+                            f"declared {semantics.name}",
+                        )
                     )
+                continue
+            # The path may exist as something else.  Saying which is the whole
+            # value of the check: naming the wrong kind is the failure that
+            # otherwise surfaces as an unrelated symptom much later.
+            elsewhere = tuple(
+                kind.value for kind, paths in declared.items() if reference.path in paths
+            )
+            issues.append(
+                SpecAuthoringIssue(
+                    "hardware-reference-wrong-kind"
+                    if elsewhere
+                    else "hardware-reference-not-assembled",
+                    str(reference.path),
+                    f"{where} reads it as a {reference.kind.value}, but the design space "
+                    f"declares it as {', '.join(elsewhere)}"
+                    if elsewhere
+                    else f"{where} names a path the design space does not declare",
                 )
+            )
     if issues:
         raise SpecAuthoringError(tuple(issues))
 
@@ -542,12 +663,17 @@ def check_declared_references(
 
 @dataclass(frozen=True)
 class KernelOrigin:
-    """What a bound Kernel is, in values that survive being written down.
+    """What a bound Kernel is, for evidence and provenance.
 
-    This is what evidence quotes and what an artifact identity will later be
-    computed from.  It deliberately carries no node names beyond the ones the
-    Kernel covers and no graph position: two equal configured Kernels at
-    different source nodes should differ here only where they physically differ.
+    This is what an association ledger quotes: which Kernel, at which placement,
+    covering which nodes and edges, configured how.
+
+    **It is not an artifact identity and must not become one.**  It carries the
+    placement namespace and the covered node and edge ids on purpose -- those
+    are what make it provenance -- and those are exactly the instance facts a
+    reusable artifact key has to exclude, or two identical configured Kernels at
+    different source nodes would never share a build.  Phase 5 introduces a
+    separate typed artifact-input identity over the physical inputs alone.
     """
 
     kernel_id: str
@@ -647,7 +773,11 @@ class HardwareKernel:
             ),
             tuple(sorted((str(path), value) for path, value in self.assignments.items())),
             tuple(sorted(self.parameters.items())),
-            tuple(sorted((item.root, item.path) for item in self.declaration.sources)),
+            # Compile order, not sorted: ``dotp_axi`` instantiates ``dotp``,
+            # which instantiates the DSP core.  The manifest is a sequence, and
+            # sorting it would record a different manifest that happens to name
+            # the same files.
+            tuple((item.root, item.path) for item in self.declaration.sources),
         )
 
     def __repr__(self) -> str:
