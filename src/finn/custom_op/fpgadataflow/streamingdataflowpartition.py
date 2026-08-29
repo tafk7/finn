@@ -93,9 +93,7 @@ class StreamingDataflowPartition(CustomOp):
         else:
             info_messages.append(
                 """The number of attributes is incorrect,
-            {} should have {} attributes""".format(
-                    self.onnx_node.op_type, num_of_attr
-                )
+            {} should have {} attributes""".format(self.onnx_node.op_type, num_of_attr)
             )
         # verify that all necessary attributes exist
         try:

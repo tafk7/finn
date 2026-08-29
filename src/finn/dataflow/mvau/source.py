@@ -441,6 +441,15 @@ def project_mvau_build_problem(
     return MappingProxyType(problem)
 
 
+#: The logical MVAU operations.  They project identical graph facts and differ
+#: only in which Kernels they select, which is not a source question.
+LOGICAL_MVAU_OP_TYPES = frozenset({"MvauDataflowOp", "DecomposedMvauDataflowOp"})
+
+
+def _is_logical_mvau(node: NodeProto) -> bool:
+    return node.op_type in LOGICAL_MVAU_OP_TYPES and node.domain == "finn.custom_op.dataflow"
+
+
 def _initializer_excludes_minimum(
     model: MVAUModelAccessor,
     weight_id: str,
@@ -649,7 +658,7 @@ def project_mvau_graph_source(
             )
         )
         return MVAUSourceProjection(None, {}, {}, tuple(findings))
-    logical_node = node.op_type == "MvauDataflowOp" and node.domain == "finn.custom_op.dataflow"
+    logical_node = _is_logical_mvau(node)
     if node.op_type not in {"MVAU", "MVAU_hls", "MVAU_rtl"} and not logical_node:
         findings.append(
             _finding(
@@ -1002,7 +1011,7 @@ def project_mvau_source(
     node = _find_source_node(model, source_node_id)
     if node is None or graph_projection.source_description is None:
         return graph_projection
-    logical_node = node.op_type == "MvauDataflowOp" and node.domain == "finn.custom_op.dataflow"
+    logical_node = _is_logical_mvau(node)
     findings = list(graph_projection.findings)
     runtime_writable = (
         False

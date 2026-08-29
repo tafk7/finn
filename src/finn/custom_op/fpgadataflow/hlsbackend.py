@@ -80,9 +80,7 @@ class HLSBackend(ABC):
         "Return list of all folders containing Verilog code for this node."
 
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        assert (
-            code_gen_dir != ""
-        ), """Node attribute "code_gen_dir_ipgen" is
+        assert code_gen_dir != "", """Node attribute "code_gen_dir_ipgen" is
         not set. Please run HLSSynthIP first."""
         verilog_path = "{}/project_{}/sol1/impl/verilog/".format(code_gen_dir, self.onnx_node.name)
         subcore_verilog_path = "{}/project_{}/sol1/impl/ip/hdl/ip/".format(
@@ -323,9 +321,7 @@ compilation transformations?
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
         inputs = {}
         for i, inp in enumerate(node.input):
@@ -368,9 +364,9 @@ compilation transformations?
             self.npy_to_dynamic_output(context)
             for o, outp in enumerate(node.output):
                 exp_oshape = tuple(self.get_normal_output_shape(o))
-                assert (
-                    context[outp].shape == exp_oshape
-                ), "cppsim did not produce expected output shape"
+                assert context[outp].shape == exp_oshape, (
+                    "cppsim did not produce expected output shape"
+                )
                 # binary -> bipolar if needed
                 if self.get_output_datatype(o) == DataType["BIPOLAR"]:
                     out = context[outp]
@@ -403,16 +399,14 @@ compilation transformations?
                 output = np.asarray([output], dtype=np.float32).reshape(*exp_oshape)
                 context[outp] = output
 
-                assert (
-                    context[outp].shape == exp_oshape
-                ), "Output shape doesn't match expected shape."
+                assert context[outp].shape == exp_oshape, (
+                    "Output shape doesn't match expected shape."
+                )
 
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
 
     @abstractmethod

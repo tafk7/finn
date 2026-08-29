@@ -200,9 +200,9 @@ class Lookup_hls(Lookup, HLSBackend):
             edt = DataType[self.get_nodeattr("EmbeddingType")]
             # obits = self.get_outstream_width()
             # packed_output_hls_type = "ap_uint<%d>" % obits
-            assert np.vectorize(edt.allowed)(
-                embeddings
-            ).all(), "Embeddings can't be expressed with type %s" % str(edt)
+            assert np.vectorize(edt.allowed)(embeddings).all(), (
+                "Embeddings can't be expressed with type %s" % str(edt)
+            )
             # reverse innertmost dim in embeddings to remain compatible with
             # how we normally encode the data in FINN
             embeddings_rev = np.flip(embeddings, -1)
@@ -241,9 +241,9 @@ class Lookup_hls(Lookup, HLSBackend):
 
     def execute_node(self, context, graph):
         mem_mode = self.get_nodeattr("mem_mode")
-        assert (
-            mem_mode == "internal_embedded"
-        ), "Only mem_mode=internal_embedded is supported for simulation of Lookup layer"
+        assert mem_mode == "internal_embedded", (
+            "Only mem_mode=internal_embedded is supported for simulation of Lookup layer"
+        )
         HLSBackend.execute_node(self, context, graph)
 
     def get_ap_int_max_w(self):

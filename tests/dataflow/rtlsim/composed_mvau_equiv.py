@@ -26,20 +26,50 @@ Usage, from ``finn/``::
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 
 import numpy as np
 
-from finn.xsi import (
-    close_rtlsim,
-    compile_sim_obj,
-    load_sim_obj,
-    reset_rtlsim,
-    rtlsim_multi_io,
+from finn.dataflow.authoring import assemble_specs
+from finn.dataflow.design import Decided, Engine
+from finn.dataflow.mvau.decomposed import (
+    ActivationReplayKernel,
+    DotProductKernel,
+    ParameterOwnership,
+    build_decomposed_mvau_pools,
 )
+from finn.dataflow.mvau_problem import (
+    MVAU_PROBLEM_SPEC,
+    MVAUComputationProfile,
+    MVAUDspBlock,
+    MVAUProblemPaths,
+)
+from finn.dataflow.design import DesignSpaceSpec, ProblemSchema
+from finn.dataflow.region import NumericElementType
+from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
 
-LIVENESS = 200000
+
+def mvau_operation_context() -> DesignSpaceSpec:
+    """The operation-owned declarations the two pools read.
+
+    The same context the pool tests assemble, restated here because this script
+    runs inside the container without the test tree on the path.
+    """
+
+    fields = tuple(
+        item
+        for item in MVAU_PROBLEM_SPEC.problem_schema.fields
+        if item.path != MVAUProblemPaths.SOURCE_DESCRIPTION
+    )
+    return DesignSpaceSpec(ProblemSchema(fields), properties=MVAU_PROBLEM_SPEC.properties)
+
+
+#: These designs settle in tens of ticks, so a generous budget only converts a
+#: deadlock into an hour of simulation before anyone finds out.
+LIVENESS = 20000
 
 #: What the fused golden compiles against: FINN's own ship-everything list.
 FUSED_SOURCES = (
@@ -62,37 +92,134 @@ COMPOSED_FINNLIB_SOURCES = (
     "dotp_8sx9_dsp58.sv",
 )
 
-#: ``(label, VERSION, PE, SIMD, MW, MH, activation bits, weight bits)``.
-#: VERSION 2 exercises the soft-vector core, 3 the packed DSP58 core.
+ACCU_WIDTH = 16
+CLOCK_PERIOD_NS = 4.0
+
+
+@dataclass(frozen=True)
+class Config:
+    """One design point to compare, named the way the design space names it."""
+
+    label: str
+    target: MVAUDspBlock
+    repetitions: int
+    matrix_width: int
+    matrix_height: int
+    pe: int
+    simd: int
+    pumping: bool = False
+    activation_bits: int = 8
+    weight_bits: int = 8
+
+    @property
+    def synapse_folds(self) -> int:
+        return self.matrix_width // self.simd
+
+    @property
+    def neuron_folds(self) -> int:
+        return self.matrix_height // self.pe
+
+
+#: DSP48E2 exercises the soft-vector core, DSP58 the packed one.  The last four
+#: cover what the earlier version of this harness did not: several repetitions
+#: (so the replay buffer has to reset between frames), and pumped compute.
 CONFIGS = [
-    ("softvec", 2, 2, 2, 4, 4, 8, 8),
-    ("packed", 3, 2, 2, 4, 4, 8, 8),
-    ("one_neuron_fold", 3, 4, 2, 4, 4, 8, 8),
-    ("one_synapse_fold", 3, 2, 4, 4, 4, 8, 8),
+    Config("softvec", MVAUDspBlock.DSP48E2, 1, 4, 4, 2, 2),
+    Config("packed", MVAUDspBlock.DSP58, 1, 4, 4, 2, 2),
+    Config("one_neuron_fold", MVAUDspBlock.DSP58, 1, 4, 4, 4, 2),
+    Config("one_synapse_fold", MVAUDspBlock.DSP58, 1, 4, 4, 2, 4),
+    Config("three_repetitions", MVAUDspBlock.DSP58, 3, 4, 4, 2, 2),
+    Config("repetitions_softvec", MVAUDspBlock.DSP48E2, 2, 8, 6, 3, 2),
+    Config("pumped", MVAUDspBlock.DSP58, 2, 8, 4, 2, 4, pumping=True),
 ]
 
-ACCU_WIDTH = 16
 
+def declared_parameters(config: Config) -> dict[str, object]:
+    """Resolve a real design point and read the values it declares.
 
-def _segment_length(simd: int, version: int) -> int:
-    """Match what the declared ``segment_length`` property would produce.
-
-    The property derives this from the target clock; the harness fixes a 5 ns
-    clock, which covers the full chain, so the chain length is the binding term.
+    This is the difference between "an arrangement that behaves the same" and
+    "the arrangement this design space asks for".  Every value below comes from
+    the point or the provider table; none is restated here.
     """
 
-    if version != 3:
-        return 0
-    return -(-simd // 3)
+    pools = build_decomposed_mvau_pools()
+    engine = Engine()
+    space = engine.validate(
+        assemble_specs(
+            (
+                mvau_operation_context(),
+                pools.dot_product.build_spec(),
+                pools.activation_replay.build_spec(),
+            )
+        )
+    )
+    activation = NumericElementType("int", config.activation_bits)
+    weight = NumericElementType("int", config.weight_bits)
+    accumulator = NumericElementType("int", ACCU_WIDTH)
+    point = engine.start(
+        space,
+        {
+            MVAUProblemPaths.REPETITIONS: config.repetitions,
+            MVAUProblemPaths.MATRIX_WIDTH: config.matrix_width,
+            MVAUProblemPaths.MATRIX_HEIGHT: config.matrix_height,
+            MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE: activation,
+            MVAUProblemPaths.WEIGHT_ELEMENT_TYPE: weight,
+            MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE: accumulator,
+            MVAUProblemPaths.OUTPUT_ELEMENT_TYPE: accumulator,
+            MVAUProblemPaths.COMPUTATION_PROFILE: MVAUComputationProfile.ACCUMULATOR_INTEGER,
+            MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE: True,
+            MVAUProblemPaths.RUNTIME_WRITABLE: False,
+            MVAUProblemPaths.TARGET_DSP_BLOCK: config.target,
+            MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: CLOCK_PERIOD_NS,
+        },
+    )
+    point = engine.commit_assignments(
+        point,
+        {
+            pools.dot_product.paths.kernel: DotProductKernel.id,
+            pools.activation_replay.paths.kernel: ActivationReplayKernel.id,
+            pools.pe.path: config.pe,
+            pools.simd.path: config.simd,
+            pools.compute_pumping.path: config.pumping,
+        },
+    ).point
+
+    feasible = engine.evaluate_constraint_set(point, pools.dot_product.feasibility_constraint_set)
+    if feasible.verdict is not True:
+        raise AssertionError(f"{config.label}: the design point is not feasible: {feasible}")
+
+    values: dict[str, object] = {}
+    for parameter in pools.provider_parameters():
+        if parameter.ownership is ParameterOwnership.CONSTANT:
+            values[parameter.name] = parameter.value
+            continue
+        assert parameter.source is not None
+        if parameter.ownership is ParameterOwnership.DECISION:
+            values[parameter.name] = point.assignments[parameter.source]
+        elif parameter.ownership is ParameterOwnership.PROBLEM:
+            raw = point.problem[parameter.source]
+            values[parameter.name] = raw.bit_width if isinstance(raw, NumericElementType) else raw
+        else:
+            answer = engine.query_property(point, parameter.source)
+            if not isinstance(answer, Decided):
+                raise AssertionError(f"{config.label}: {parameter.name} did not resolve: {answer}")
+            values[parameter.name] = answer.value
+    return values
 
 
-def _fused_top(name: str, config: tuple) -> str:
-    _label, version, pe, simd, mw, mh, act_w, w_w = config
-    return f"""
-module {name} #(
-    parameter WSTREAM = {(pe * simd * w_w + 7) // 8 * 8},
-    parameter ISTREAM = {(simd * act_w + 7) // 8 * 8},
-    parameter OSTREAM = {(pe * ACCU_WIDTH + 7) // 8 * 8}
+def _verilog(value: object) -> str:
+    return str(int(value)) if isinstance(value, bool) else str(value)
+
+
+def _ports(config: Config, values: dict[str, object]) -> str:
+    weight_bits = config.pe * config.simd * config.weight_bits
+    input_bits = config.simd * config.activation_bits
+    output_bits = config.pe * ACCU_WIDTH
+    del values
+    return f"""#(
+    parameter WSTREAM = {(weight_bits + 7) // 8 * 8},
+    parameter ISTREAM = {(input_bits + 7) // 8 * 8},
+    parameter OSTREAM = {(output_bits + 7) // 8 * 8}
 )(
     input  logic ap_clk,
     input  logic ap_clk2x,
@@ -106,14 +233,39 @@ module {name} #(
     output logic [OSTREAM-1:0] out0_V_tdata,
     output logic out0_V_tvalid,
     input  logic out0_V_tready
-);
+)"""
+
+
+def _shared_parameters(values: dict[str, object]) -> str:
+    """The parameters both wrappers take, from the declared values verbatim."""
+
+    return f""".VERSION({_verilog(values["VERSION"])}),
+        .PE({_verilog(values["PE"])}), .SIMD({_verilog(values["SIMD"])}),
+        .SEGMENTLEN({_verilog(values["SEGMENTLEN"])}),
+        .ACTIVATION_WIDTH({_verilog(values["ACTIVATION_WIDTH"])}),
+        .WEIGHT_WIDTH({_verilog(values["WEIGHT_WIDTH"])}),
+        .ACCU_WIDTH({_verilog(values["ACCU_WIDTH"])}),
+        .NARROW_WEIGHTS({_verilog(values["NARROW_WEIGHTS"])}),
+        .SIGNED_ACTIVATIONS({_verilog(values["SIGNED_ACTIVATIONS"])}),
+        .PUMPED_COMPUTE({_verilog(values["PUMPED_COMPUTE"])}),
+        .FORCE_BEHAVIORAL({_verilog(values["FORCE_BEHAVIORAL"])})"""
+
+
+def _fused_top(name: str, config: Config, values: dict[str, object]) -> str:
+    """The golden: one fused wrapper.
+
+    ``IS_MVU``, ``MW`` and ``MH`` are the fused wrapper's own parameters -- it
+    needs the geometry to size the replay it contains.  They are not part of
+    the declared dot-product parameter set, which is the decomposition showing
+    up in the parameter list.
+    """
+
+    return f"""
+module {name} {_ports(config, values)};
     mvu_vvu_axi #(
-        .IS_MVU(1), .VERSION({version}),
-        .MW({mw}), .MH({mh}), .PE({pe}), .SIMD({simd}),
-        .SEGMENTLEN({_segment_length(simd, version)}),
-        .ACTIVATION_WIDTH({act_w}), .WEIGHT_WIDTH({w_w}), .ACCU_WIDTH({ACCU_WIDTH}),
-        .NARROW_WEIGHTS(0), .SIGNED_ACTIVATIONS(1),
-        .PUMPED_COMPUTE(0), .FORCE_BEHAVIORAL(1)
+        .IS_MVU(1),
+        .MW({config.matrix_width}), .MH({config.matrix_height}),
+        {_shared_parameters(values)}
     ) core (
         .ap_clk(ap_clk), .ap_clk2x(ap_clk2x), .ap_rst_n(ap_rst_n),
         .s_axis_weights_tdata(in1_V_tdata),
@@ -130,37 +282,18 @@ endmodule
 """
 
 
-def _composed_top(name: str, config: tuple) -> str:
+def _composed_top(name: str, config: Config, values: dict[str, object]) -> str:
     """Replay feeding a dot product, wired exactly as the fused core wires them.
 
-    ``replay_buffer`` is instantiated with the parameters the declared derived
-    properties produce -- ``LEN = SF``, ``REP = NF``, ``W = SIMD * width`` --
-    and its ``olast`` becomes the dot product's ``tlast``.  ``ofin`` is left
+    Every parameter is the value the design point declares.  ``replay_buffer``
+    takes ``LEN``/``REP``/``W`` from the replay Kernel's derived properties, and
+    its ``olast`` becomes the dot product's ``tlast``.  ``ofin`` is left
     unconnected because the fused core never reads it either.
     """
 
-    _label, version, pe, simd, mw, mh, act_w, w_w = config
-    synapse_folds, neuron_folds = mw // simd, mh // pe
     return f"""
-module {name} #(
-    parameter WSTREAM = {(pe * simd * w_w + 7) // 8 * 8},
-    parameter ISTREAM = {(simd * act_w + 7) // 8 * 8},
-    parameter OSTREAM = {(pe * ACCU_WIDTH + 7) // 8 * 8}
-)(
-    input  logic ap_clk,
-    input  logic ap_clk2x,
-    input  logic ap_rst_n,
-    input  logic [WSTREAM-1:0] in1_V_tdata,
-    input  logic in1_V_tvalid,
-    output logic in1_V_tready,
-    input  logic [ISTREAM-1:0] in0_V_tdata,
-    input  logic in0_V_tvalid,
-    output logic in0_V_tready,
-    output logic [OSTREAM-1:0] out0_V_tdata,
-    output logic out0_V_tvalid,
-    input  logic out0_V_tready
-);
-    localparam int unsigned REPLAY_W = {simd * act_w};
+module {name} {_ports(config, values)};
+    localparam int unsigned REPLAY_W = {_verilog(values["W"])};
 
     uwire rst = !ap_rst_n;
     uwire [REPLAY_W-1:0] replayed_tdata;
@@ -169,7 +302,7 @@ module {name} #(
     uwire replayed_tready;
 
     replay_buffer #(
-        .LEN({synapse_folds}), .REP({neuron_folds}), .W(REPLAY_W)
+        .LEN({_verilog(values["LEN"])}), .REP({_verilog(values["REP"])}), .W(REPLAY_W)
     ) activation_replay (
         .clk(ap_clk), .rst(rst),
         .idat(in0_V_tdata[REPLAY_W-1:0]),
@@ -183,12 +316,8 @@ module {name} #(
     );
 
     dotp_axi #(
-        .VERSION({version}), .ACTIVATION_BROADCASTING(1),
-        .PE({pe}), .SIMD({simd}),
-        .SEGMENTLEN({_segment_length(simd, version)}),
-        .ACTIVATION_WIDTH({act_w}), .WEIGHT_WIDTH({w_w}), .ACCU_WIDTH({ACCU_WIDTH}),
-        .NARROW_WEIGHTS(0), .SIGNED_ACTIVATIONS(1),
-        .PUMPED_COMPUTE(0), .FORCE_BEHAVIORAL(1)
+        .ACTIVATION_BROADCASTING({_verilog(values["ACTIVATION_BROADCASTING"])}),
+        {_shared_parameters(values)}
     ) dot_product (
         .ap_clk(ap_clk), .ap_clk2x(ap_clk2x), .ap_rst_n(ap_rst_n),
         .s_axis_weights_tdata(in1_V_tdata),
@@ -235,55 +364,200 @@ def _sources(root: str, subdirectory: str, names: tuple[str, ...]) -> list[str]:
     return resolved
 
 
+#: Output beats accepted between stalls, and how long each stall lasts.
+BACKPRESSURE_PERIOD = 1
+BACKPRESSURE_TICKS = 5
+
+
+def _collect_with_backpressure(sim: object, stream: str, size: int, watchdog: object) -> object:
+    """Collect outputs while de-asserting ready every few accepted beats.
+
+    ``rtlsim_multi_io`` holds ready high forever, which never exercises the
+    stall path: the obligation is that the composition does not drop, duplicate
+    or reorder anything when the consumer is not listening, and a consumer that
+    always listens cannot show that.
+
+    The watchdog is reset on every accepted beat, exactly as the stock
+    collector does; a deliberate stall must not read as a hang.
+    """
+
+    class ThrottledCollector:
+        def __init__(self) -> None:
+            # The bus-port accessor lives on the engine, which is what
+            # SimEngine.collect_output passes its own collector as ``top``.
+            self.vld = sim.get_bus_port(stream, "tvalid")  # type: ignore[attr-defined]
+            self.rdy = sim.get_bus_port(stream, "tready")  # type: ignore[attr-defined]
+            self.dat = sim.get_bus_port(stream, "tdata")  # type: ignore[attr-defined]
+            self.buf: list[str] = []
+            self.stall = 0
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter(self.buf)
+
+        def __call__(self, _sim: object) -> object:
+            if self.stall > 0:
+                self.stall -= 1
+                return {self.rdy: "0"} if self.rdy.as_bool() else {}
+            if self.rdy.as_bool():
+                if self.vld.read().as_bool():
+                    watchdog.reset()  # type: ignore[attr-defined]
+                    self.buf.append(self.dat.read().as_hexstr())
+                    if len(self.buf) == size:
+                        return {self.rdy: "0"}
+                    if len(self.buf) % BACKPRESSURE_PERIOD == 0:
+                        self.stall = BACKPRESSURE_TICKS
+                        return {self.rdy: "0"}
+                return {}
+            if len(self.buf) < size:
+                return {self.rdy: "1"}
+            return None
+
+    collector = ThrottledCollector()
+    sim.enlist(collector)  # type: ignore[attr-defined]
+    return collector
+
+
 def _drive(
-    top_module: str, sources: list[str], top_path: str, stimulus: dict, expected: int
+    top_module: str,
+    sources: list[str],
+    top_path: str,
+    stimulus: dict,
+    expected: int,
+    *,
+    stalls: bool,
 ) -> list[int]:
+    """Compile and run one DUT, optionally stalling both sides of it.
+
+    Each call gets its own scratch directory and its own simulation object.
+    Sharing either -- two tops compiled into one directory, or one compiled
+    object loaded twice in a process -- segfaults inside XSI, so the compile
+    cost is paid per run deliberately rather than optimised away.
+    """
+
     with tempfile.TemporaryDirectory() as scratch:
         sim_dir, so_rel = compile_sim_obj(top_module, [*sources, top_path], scratch, behav=True)
-        sim = load_sim_obj(sim_dir, so_rel)
-        reset_rtlsim(sim)
-        local = {
-            "inputs": {key: list(value) for key, value in stimulus["inputs"].items()},
-            "outputs": {"out0": []},
-        }
-        rtlsim_multi_io(sim, local, expected, sname="_V", liveness_threshold=LIVENESS)
-        close_rtlsim(sim)
-        return local["outputs"]["out0"]
+        return _simulate(sim_dir, so_rel, stimulus, expected, stalls=stalls, label=top_module)
 
 
-def _run(config: tuple, finn_root: str, finnlib_root: str) -> bool:
-    label, _version, pe, simd, mw, mh, act_w, w_w = config
-    print(f"\n========== fixture 5: {label} ==========")
-    synapse_folds, neuron_folds = mw // simd, mh // pe
+def _simulate(
+    sim_dir: str,
+    so_rel: str,
+    stimulus: dict,
+    expected: int,
+    *,
+    stalls: bool,
+    label: str,
+) -> list[int]:
+    sim = load_sim_obj(sim_dir, so_rel)
+    reset_rtlsim(sim)
+    # Different throttles per stream, so the two inputs also arrive out of step
+    # with each other rather than in lockstep.
+    throttles = {"in0": (2, 3), "in1": (3, 2)} if stalls else {}
+    for name, values in stimulus["inputs"].items():
+        sim.stream_input(
+            f"{name}_V",
+            map(lambda value: f"{value:0x}", list(values)),
+            throttle=throttles.get(name, (float("inf"), 0)),
+        )
+    watchdog = sim.create_watchdog("out0_V timeout", LIVENESS)
+    if stalls:
+        collected = _collect_with_backpressure(sim, "out0_V", expected, watchdog)
+    else:
+        collected = sim.collect_output("out0_V", expected, watchdog=watchdog)
+    timeouts = sim.run()
+    if timeouts:
+        raise AssertionError(f"{label}: deadlock, watchdogs fired: {timeouts}")
+    result = [int(value, base=16) for value in collected]
+    if watchdog in sim.watchdogs:
+        sim.remove_watchdog(watchdog)
+    close_rtlsim(sim)
+    return result
+
+
+def _run(config: Config, finn_root: str, finnlib_root: str) -> bool:
+    print(f"\n========== fixture 5: {config.label} ==========")
+    values = declared_parameters(config)
+    synapse_folds, neuron_folds = config.synapse_folds, config.neuron_folds
+    passes = config.repetitions
+    expected = passes * neuron_folds
 
     generator = np.random.RandomState(0)
-    activation = [_random_word(generator, simd * act_w) for _ in range(synapse_folds)]
-    weight = [_random_word(generator, pe * simd * w_w) for _ in range(synapse_folds * neuron_folds)]
-    stimulus = {"inputs": {"in0": activation, "in1": weight}, "outputs": {"out0": []}}
+    activation = [
+        _random_word(generator, config.simd * config.activation_bits)
+        for _ in range(passes * synapse_folds)
+    ]
+    weight = [
+        _random_word(generator, config.pe * config.simd * config.weight_bits)
+        for _ in range(passes * synapse_folds * neuron_folds)
+    ]
+    stimulus = {"inputs": {"in0": activation, "in1": weight}}
     print(
-        f"  geometry: SF={synapse_folds} NF={neuron_folds} "
-        f"in0={len(activation)} in1={len(weight)} expect {neuron_folds} outputs"
+        f"  geometry: R={passes} SF={synapse_folds} NF={neuron_folds} "
+        f"in0={len(activation)} in1={len(weight)} expect {expected} outputs"
+    )
+    print(
+        "  declared: "
+        + " ".join(f"{name}={_verilog(value)}" for name, value in sorted(values.items()))
     )
 
-    with tempfile.TemporaryDirectory() as scratch:
-        fused_path = _write(scratch, "mvau_fused.sv", _fused_top("mvau_fused", config))
-        composed_path = _write(scratch, "mvau_composed.sv", _composed_top("mvau_composed", config))
-        fused_sources = _sources(finn_root, "finn-rtllib/mvu", FUSED_SOURCES)
-        composed_sources = [
-            *_sources(finn_root, "finn-rtllib/mvu", COMPOSED_FINN_SOURCES),
-            *_sources(finnlib_root, "rtl", COMPOSED_FINNLIB_SOURCES),
-        ]
+    fused_sources = _sources(finn_root, "finn-rtllib/mvu", FUSED_SOURCES)
+    composed_sources = [
+        *_sources(finn_root, "finn-rtllib/mvu", COMPOSED_FINN_SOURCES),
+        *_sources(finnlib_root, "rtl", COMPOSED_FINNLIB_SOURCES),
+    ]
 
-        fused = _drive("mvau_fused", fused_sources, fused_path, stimulus, neuron_folds)
-        composed = _drive("mvau_composed", composed_sources, composed_path, stimulus, neuron_folds)
-
-    print(f"  fused   : {fused}")
-    print(f"  composed: {composed}")
-    if fused == composed and len(fused) == neuron_folds:
-        print(f"  {label.upper()}: PASS (bit-identical, {neuron_folds} outputs)")
+    ok = True
+    for stalls in (False, True):
+        mode = "stalled" if stalls else "free-running"
+        with tempfile.TemporaryDirectory() as sources_dir:
+            fused_path = _write(
+                sources_dir, "mvau_fused.sv", _fused_top("mvau_fused", config, values)
+            )
+            composed_path = _write(
+                sources_dir, "mvau_composed.sv", _composed_top("mvau_composed", config, values)
+            )
+            fused = _drive(
+                "mvau_fused", fused_sources, fused_path, stimulus, expected, stalls=stalls
+            )
+            composed = _drive(
+                "mvau_composed", composed_sources, composed_path, stimulus, expected, stalls=stalls
+            )
+        matched = fused == composed and len(fused) == expected
+        print(f"  {mode:12} fused={fused}")
+        print(f"  {mode:12} composed={composed}")
+        if not matched:
+            print(f"  {config.label.upper()} ({mode}): FAIL")
+            ok = False
+    if ok:
+        print(f"  {config.label.upper()}: PASS (bit-identical, {expected} outputs, both modes)")
         return True
-    print(f"  {label.upper()}: FAIL")
     return False
+
+
+def _record_identity(finn_root: str, finnlib_root: str) -> None:
+    """Print what was actually compiled.
+
+    FinnLib comes from an ambient checkout, so a passing run means nothing
+    unless the result says which revision it passed against.
+    """
+
+    for label, root in (("finn", finn_root), ("finnlib", finnlib_root)):
+        try:
+            revision = subprocess.run(
+                ["git", "-C", root, "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            dirty = subprocess.run(
+                ["git", "-C", root, "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            revision, dirty = "unknown", ""
+        print(f"{label:8} {revision}{' (dirty)' if dirty else ''}  {root}")
 
 
 def main() -> int:
@@ -292,6 +566,7 @@ def main() -> int:
     if not os.path.isdir(os.path.join(finnlib_root, "rtl")):
         print(f"FinnLib RTL not found under {finnlib_root}; set FINNLIB_ROOT")
         return 2
+    _record_identity(finn_root, finnlib_root)
     ok = True
     for config in CONFIGS:
         ok &= _run(config, finn_root, finnlib_root)

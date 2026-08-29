@@ -4,7 +4,12 @@
 #
 # Fixture 5 runner. run-docker.sh word-splits its command, so this takes no
 # arguments and is passed as a single path.
-set -e
+# pipefail matters here: without it the exit status is tee's, so a failing
+# comparison would be reported as a pass by anything checking $?.
+set -euo pipefail
 cd "$FINN_ROOT"
-python tests/dataflow/rtlsim/composed_mvau_equiv.py 2>&1 | tee "$FINN_ROOT/_fixture5_out.txt"
-echo "EXIT=${PIPESTATUS[0]}" | tee -a "$FINN_ROOT/_fixture5_out.txt"
+status=0
+python tests/dataflow/rtlsim/composed_mvau_equiv.py 2>&1 \
+    | tee "$FINN_ROOT/_fixture5_out.txt" || status=$?
+echo "EXIT=$status" | tee -a "$FINN_ROOT/_fixture5_out.txt"
+exit "$status"

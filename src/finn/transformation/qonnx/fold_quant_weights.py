@@ -61,7 +61,7 @@ class FoldQuantWeights(Transformation):
                     # Check node validity
                     if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
                         raise ValueError(
-                            "Only Quant nodes with zero-point == 0 " "are currently supported."
+                            "Only Quant nodes with zero-point == 0 are currently supported."
                         )
                     if model.is_fork_node(n):
                         raise ValueError(
@@ -71,7 +71,7 @@ class FoldQuantWeights(Transformation):
                     target_node = model.find_direct_successors(n)
                     if target_node is None:
                         raise RuntimeError(
-                            "Weights quantized with the Quant node must have " "a successor node."
+                            "Weights quantized with the Quant node must have a successor node."
                         )
                     else:
                         target_node = target_node[0]
@@ -151,9 +151,9 @@ class FoldQuantWeights(Transformation):
                             # only support per-output channel scaling
                             # (i.e. all scale shape elems besides 0th must be 1s)
                             if len(scale.shape) > 1:
-                                assert (
-                                    np.prod(scale.shape[1:]) == 1
-                                ), "Can't fold scale beyond per-out-channel granularity"
+                                assert np.prod(scale.shape[1:]) == 1, (
+                                    "Can't fold scale beyond per-out-channel granularity"
+                                )
                             # collect all scaling in channels dim (since we constrain)
                             conv_out_shape[1] = -1
                             scale = scale.reshape(conv_out_shape)
@@ -164,9 +164,9 @@ class FoldQuantWeights(Transformation):
                             # only support per-output channel scaling
                             # (i.e. all scale shape elems besides 1st must be 1s)
                             if len(scale.shape) > 1:
-                                assert (
-                                    np.prod(scale.shape[2:]) == 1 and scale.shape[0] == 1
-                                ), "Can't fold scale beyond per-out-channel granularity"
+                                assert np.prod(scale.shape[2:]) == 1 and scale.shape[0] == 1, (
+                                    "Can't fold scale beyond per-out-channel granularity"
+                                )
                             # collect all scaling in channels dim (since we constrain)
                             conv_out_shape[1] = -1
                             scale = scale.reshape(conv_out_shape)
@@ -188,8 +188,7 @@ class FoldQuantWeights(Transformation):
                         successor = model.find_consumers(node_out)
                         if successor == []:
                             raise RuntimeError(
-                                "Can only constant fold scaled Quant weights "
-                                "if a successor exists."
+                                "Can only constant fold scaled Quant weights if a successor exists."
                             )
                         assert len(successor) == 1, "Only implemented for a single consumer"
                         successor = successor[0]

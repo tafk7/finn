@@ -589,12 +589,12 @@ class InsertAndSetFIFODepths(Transformation):
             reset_implementation(node_inst)
             del modified_mlo_nodes[node.name]
 
-        assert (
-            len(modified_extw_nodes) == 0 and len(fifos.keys()) == 0
-        ), "FIFO/FC nodes left untouched after model reconfiguration"
-        assert (
-            len(modified_mlo_nodes) == 0 and len(fifos.keys()) == 0
-        ), "FIFO/FC nodes left untouched after model reconfiguration"
+        assert len(modified_extw_nodes) == 0 and len(fifos.keys()) == 0, (
+            "FIFO/FC nodes left untouched after model reconfiguration"
+        )
+        assert len(modified_mlo_nodes) == 0 and len(fifos.keys()) == 0, (
+            "FIFO/FC nodes left untouched after model reconfiguration"
+        )
 
         # handle custom sizing for SWG FIFOs if desired
         if self.swg_exception:

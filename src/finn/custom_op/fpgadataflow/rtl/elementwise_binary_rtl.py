@@ -85,9 +85,9 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
             Try setting the preferred_impl_style to hls or enabling MLO"""
 
         if has_const:
-            assert (
-                self.get_nodeattr("mem_mode") == "internal_decoupled"
-            ), "Only internal_decoupled mode is supported for rtl elementwise ops with const inputs"
+            assert self.get_nodeattr("mem_mode") == "internal_decoupled", (
+                "Only internal_decoupled mode is supported for rtl elementwise ops with const inputs"
+            )
 
         # Resolve data types
         lhs_dtype = self.get_input_datatype(ind=0)
@@ -109,14 +109,14 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
                 f"Int/int path requires matching widths: "
                 f"A_WIDTH={lhs_dtype.bitwidth()}, B_WIDTH={rhs_dtype.bitwidth()}"
             )
-            assert (
-                lhs_dtype.signed() == rhs_dtype.signed()
-            ), "Int/int path requires matching signedness"
+            assert lhs_dtype.signed() == rhs_dtype.signed(), (
+                "Int/int path requires matching signedness"
+            )
             if op_name == '"MUL"':
                 max_w = 24 if lhs_dtype.signed() else 23
-                assert (
-                    lhs_dtype.bitwidth() <= max_w
-                ), f"Int MUL width {lhs_dtype.bitwidth()} exceeds DSP58 capacity ({max_w})"
+                assert lhs_dtype.bitwidth() <= max_w, (
+                    f"Int MUL width {lhs_dtype.bitwidth()} exceeds DSP58 capacity ({max_w})"
+                )
 
         # Validate output width matches RTL O_WIDTH derivation
         if both_int:
@@ -129,9 +129,9 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
                 f"got {out_dtype.bitwidth()}"
             )
         else:
-            assert (
-                out_dtype.bitwidth() == 32
-            ), f"Float path requires 32-bit output, got {out_dtype.bitwidth()}"
+            assert out_dtype.bitwidth() == 32, (
+                f"Float path requires 32-bit output, got {out_dtype.bitwidth()}"
+            )
 
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
@@ -139,7 +139,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         if has_const:
             self.generate_params(model, code_gen_dir)
 
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise'
+        rtlsrc = f"{os.environ['FINN_ROOT']}/finn-rtllib/eltwise"
         template_path = f"{rtlsrc}/eltwise_template.v"
         pe = self.get_nodeattr("PE")
 
@@ -185,7 +185,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise/'
+            rtllib_dir = f"{os.environ['FINN_ROOT']}/finn-rtllib/eltwise/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -398,13 +398,13 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
             lhs = context[node.input[0]]
             rhs = context[node.input[1]]
 
-            assert list(lhs.shape) == self.get_normal_input_shape(
-                ind=0
-            ), f"Input shape mismatch for {node.input[0]}"
+            assert list(lhs.shape) == self.get_normal_input_shape(ind=0), (
+                f"Input shape mismatch for {node.input[0]}"
+            )
             if self.rhs_style != "const":
-                assert list(rhs.shape) == self.get_normal_input_shape(
-                    ind=1
-                ), f"Input shape mismatch for {node.input[1]}"
+                assert list(rhs.shape) == self.get_normal_input_shape(ind=1), (
+                    f"Input shape mismatch for {node.input[1]}"
+                )
 
             out_shape = self.get_normal_output_shape(ind=0)
 

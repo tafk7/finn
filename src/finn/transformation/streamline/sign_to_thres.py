@@ -46,9 +46,7 @@ class ConvertSignToThres(Transformation):
                 sign_out_name = n.output[0]
                 # find consumer
                 consumer = model.find_consumer(sign_out_name)
-                assert (
-                    consumer is not None
-                ), """There is no consumer of the
+                assert consumer is not None, """There is no consumer of the
                 sign_out tensor."""
                 # create thresholds
                 thres_param_name = model.make_new_valueinfo_name()

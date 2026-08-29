@@ -305,9 +305,7 @@ class HWCustomOp(CustomOp):
         out_width = self.get_outstream_width(ind=ind)
         return roundup_to_integer_multiple(out_width, 8)
 
-    def generate_hdl_memstream(
-        self, fpgapart, pumped_memory=0, allow_missing_initializer=False
-    ):
+    def generate_hdl_memstream(self, fpgapart, pumped_memory=0, allow_missing_initializer=False):
         """Helper function to generate verilog code for memstream component.
         Currently utilized by MVAU, VVAU and HLS Thresholding layer."""
         ops = ["MVAU_hls", "MVAU_rtl", "VVAU_hls", "VVAU_rtl", "Thresholding_hls"]
@@ -470,12 +468,13 @@ class HWCustomOp(CustomOp):
         if exp_cycles == 0:
             # try to come up with an optimistic estimate
             exp_cycles = min(n_inps, n_outs)
-        assert (
-            exp_cycles <= period
-        ), "Period %d too short to characterize %s : expects min %d cycles" % (
-            period,
-            self.onnx_node.name,
-            exp_cycles,
+        assert exp_cycles <= period, (
+            "Period %d too short to characterize %s : expects min %d cycles"
+            % (
+                period,
+                self.onnx_node.name,
+                exp_cycles,
+            )
         )
         sim = self.get_rtlsim()
         if override_rtlsim_dict is not None:
@@ -516,12 +515,8 @@ class HWCustomOp(CustomOp):
             # blocks execute, which flush and close the fifo_gauge log files.
             self.close_rtlsim(sim)
         self.set_nodeattr("cycles_rtlsim", total_cycle_count)
-        assert (
-            total_cycle_count <= period
-        ), """Total cycle count from rtl simulation is higher than
-            specified period, please set the period higher than {}""".format(
-            total_cycle_count
-        )
+        assert total_cycle_count <= period, """Total cycle count from rtl simulation is higher than
+            specified period, please set the period higher than {}""".format(total_cycle_count)
         self.set_nodeattr("io_chrc_period", period)
         # call str() on stream tracers to get their outputs, and convert
         # to list of ints

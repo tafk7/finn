@@ -208,9 +208,9 @@ class Thresholding_hls(Thresholding, HLSBackend):
         """
         threshold_tensor = self.get_hw_compatible_threshold_tensor(weights)
         tdt = self.get_input_datatype(1)
-        assert np.vectorize(tdt.allowed)(
-            threshold_tensor
-        ).all(), "Thresholds can't be expressed with type %s" % str(tdt)
+        assert np.vectorize(tdt.allowed)(threshold_tensor).all(), (
+            "Thresholds can't be expressed with type %s" % str(tdt)
+        )
         if weight_file_mode == "hls_header":
             # save thresholds in thresh.h
             thresholds_hls_code = numpy_to_hls_code(
@@ -338,9 +338,7 @@ class Thresholding_hls(Thresholding, HLSBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
 
         # create a npy file fore each input of the node (in_ind is input index)
@@ -426,9 +424,7 @@ class Thresholding_hls(Thresholding, HLSBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
 
     def global_includes(self):
@@ -602,10 +598,10 @@ class Thresholding_hls(Thresholding, HLSBackend):
             # partition for parallel access along PE and N_THRES
             # dimensions (dims 1 and 3)
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=1")
+                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=1")
             )
             self.code_gen_dict["$PRAGMAS$"].append(
-                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds " "complete dim=3")
+                ("#pragma HLS ARRAY_PARTITION variable=threshs.m_thresholds complete dim=3")
             )
             # set resource type
             ram_style = self.get_nodeattr("ram_style")
@@ -616,11 +612,11 @@ class Thresholding_hls(Thresholding, HLSBackend):
             if pe < ich:
                 if ram_style == "distributed":
                     self.code_gen_dict["$PRAGMAS$"].append(
-                        ("#pragma HLS RESOURCE variable=threshs.m_thresholds " "core=ROM_2P_LUTRAM")
+                        ("#pragma HLS RESOURCE variable=threshs.m_thresholds core=ROM_2P_LUTRAM")
                     )
                 elif ram_style == "block":
                     self.code_gen_dict["$PRAGMAS$"].append(
-                        ("#pragma HLS RESOURCE variable=threshs.m_thresholds " "core=ROM_2P_BRAM")
+                        ("#pragma HLS RESOURCE variable=threshs.m_thresholds core=ROM_2P_BRAM")
                     )
                 elif ram_style == "ultra":
                     self.code_gen_dict["$PRAGMAS$"].append(
@@ -630,9 +626,7 @@ class Thresholding_hls(Thresholding, HLSBackend):
                 else:
                     raise Exception(
                         """Invalid value for attribute ram_style! Is currently set to: {}
-                    has to be set to one of ("block", "distributed", "ultra")""".format(
-                            ram_style
-                        )
+                    has to be set to one of ("block", "distributed", "ultra")""".format(ram_style)
                     )
         elif self.get_nodeattr("mem_mode") == "internal_decoupled":
             self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS INTERFACE axis port=in1_V")
@@ -801,9 +795,9 @@ class Thresholding_hls(Thresholding, HLSBackend):
             new_tdt = idt
             thresholds = model.get_initializer(self.onnx_node.input[1])
             threshold_tensor = self.get_hw_compatible_threshold_tensor(thresholds)
-            assert np.vectorize(new_tdt.allowed)(
-                threshold_tensor
-            ).all(), "Thresholds can't be expressed with type %s" % str(new_tdt)
+            assert np.vectorize(new_tdt.allowed)(threshold_tensor).all(), (
+                "Thresholds can't be expressed with type %s" % str(new_tdt)
+            )
             self.set_nodeattr("weightDataType", new_tdt.name)
             model.set_tensor_datatype(self.onnx_node.input[1], new_tdt)
             return new_tdt
