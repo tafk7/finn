@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.hardware import ComputationContract
 from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.region import DataflowRegion, NumericElementType
 
 
@@ -62,4 +63,47 @@ class ActivationReplayHardwareInputs:
     activation_element_type: Ref[NumericElementType]
 
 
-__all__ = ["ActivationReplayHardwareInputs", "DotProductHardwareInputs"]
+@dataclass(frozen=True)
+class FusedMatrixVectorHardwareInputs:
+    """What a Kernel covering *both* MVAU Regions may read.
+
+    Not the union of the other two bundles, and the differences are the point.
+
+    It carries a ``network`` handle, which neither of the others does. A Kernel
+    that absorbs the edge between two Regions has to name the Network that edge
+    lives in, so binding can check the connection really runs the way the
+    Kernel claims rather than trusting an id.
+
+    It carries the matrix geometry, which ``DotProductHardwareInputs`` does
+    not. ``MW`` and ``MH`` size the replay this core contains; the decomposed
+    dot product needs neither, because the replay it feeds from is a separate
+    Kernel that derives its own ``LEN`` and ``REP``. That difference in the
+    input bundle is the fusion, before a single parameter is declared.
+    """
+
+    replay_region: Ref[DataflowRegion]
+    replay_computation: Ref[ComputationContract]
+    compute_region: Ref[DataflowRegion]
+    compute_computation: Ref[ComputationContract]
+    #: The Network the absorbed activation edge runs in.
+    network: Ref[DataflowNetwork]
+    #: The geometry the internal replay is sized from.
+    matrix_width: Ref[int]
+    matrix_height: Ref[int]
+    #: The folding, imported rather than chosen -- as for every physical Kernel.
+    pe: Ref[int]
+    simd: Ref[int]
+    activation_element_type: Ref[NumericElementType]
+    weight_element_type: Ref[NumericElementType]
+    output_element_type: Ref[NumericElementType]
+    accumulator_element_type: Ref[NumericElementType]
+    narrow_weights: Ref[bool]
+    target_dsp_block: Ref[MVAUDspBlock]
+    target_clock_period_ns: Ref[float]
+
+
+__all__ = [
+    "ActivationReplayHardwareInputs",
+    "DotProductHardwareInputs",
+    "FusedMatrixVectorHardwareInputs",
+]

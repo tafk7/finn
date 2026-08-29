@@ -62,6 +62,10 @@ from finn.dataflow.region import NumericElementType
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]
 INT20 = DataType["INT20"]
+#: The A datapath is 25 bits on DSP48E1 and 27 on DSP48E2/DSP58, so these are
+#: the widths that exactly fill it and leave no room for a non-narrow sign bit.
+INT25 = DataType["INT25"]
+INT27 = DataType["INT27"]
 INT32 = DataType["INT32"]
 INT64 = DataType["INT64"]
 UINT8 = DataType["UINT8"]
@@ -438,12 +442,47 @@ def test_an_operand_wider_than_the_target_multiplier_is_refused() -> None:
     assert _feasible(activation=INT20, target=MVAUDspBlock.DSP58) is True
 
 
-def test_dsp48e1_needs_the_narrow_weight_promise() -> None:
-    """Coverage, not admission: the source is fine, this board is not."""
+@pytest.mark.parametrize(
+    ("target", "weight"),
+    [(MVAUDspBlock.DSP48E1, INT25), (MVAUDspBlock.DSP48E2, INT27), (MVAUDspBlock.DSP58, INT27)],
+)
+def test_weights_filling_the_a_port_need_the_narrow_promise(
+    target: MVAUDspBlock, weight: NumericElementType
+) -> None:
+    """Coverage, not admission: the source is fine, this board is not.
 
-    engine, point, pools = _point(target=MVAUDspBlock.DSP48E1, narrow=False)
+    The rule is the core's own lane calculation, not the target family. A
+    weight exactly as wide as the A datapath leaves no room for the sign bit a
+    non-narrow weight needs, so ``sliceLanes()`` computes ``bit_slack = -1``
+    and terminates elaboration. The narrow promise frees that bit.
+
+    Parameterized over the A width per family -- 25 bits on DSP48E1, 27 on the
+    other two -- because that width is the whole rule.
+    """
+
+    engine, point, pools = _point(
+        target=target, weight=weight, accumulator=INT32, output=INT32, narrow=False
+    )
     assert "narrow_weights_supported" in _rejected(engine, point, pools)
-    assert _feasible(target=MVAUDspBlock.DSP48E1, narrow=True) is True
+    assert (
+        _feasible(target=target, weight=weight, accumulator=INT32, output=INT32, narrow=True)
+        is True
+    )
+
+
+@pytest.mark.parametrize("target", [MVAUDspBlock.DSP48E1, MVAUDspBlock.DSP48E2, MVAUDspBlock.DSP58])
+def test_ordinary_weights_do_not_need_the_narrow_promise_on_any_target(
+    target: MVAUDspBlock,
+) -> None:
+    """The other half of the correction, and the one that was silently wrong.
+
+    The previous rule refused *every* non-narrow configuration on DSP48E1,
+    including eight-bit weights, which pack into two lanes with a bit to spare
+    and which baseline FINN builds routinely. Requiring a promise the hardware
+    does not need removes working designs from coverage.
+    """
+
+    assert _feasible(target=target, weight=INT8, narrow=False) is True
 
 
 def test_the_narrow_weight_rule_is_not_a_source_question() -> None:

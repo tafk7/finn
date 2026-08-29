@@ -18,7 +18,6 @@ family.  See the vocabulary note section 5.5.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, finite, reject
@@ -31,7 +30,8 @@ from finn.dataflow.hardware import (
 )
 from finn.dataflow.mvau.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.mvau.hardware.inputs import DotProductHardwareInputs
-from finn.dataflow.mvau.numeric import MVAUNumericTypes
+from finn.dataflow.mvau.lane_packing import pack_lanes
+from finn.dataflow.mvau.numeric import MVAUNumericTypes, RoleVerdict
 from finn.dataflow.mvau.rtl_parameters import (
     DSP_VERSION,
     dsp_version,
@@ -119,16 +119,7 @@ def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
 _SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
 
 
-@dataclass(frozen=True)
-class _RoleVerdict:
-    """One numeric role's answer, with the reason if it is a refusal."""
-
-    role: str
-    supported: bool
-    detail: str = ""
-
-
-def covers_numeric_types(types: MVAUNumericTypes) -> tuple[_RoleVerdict, ...]:
+def covers_numeric_types(types: MVAUNumericTypes) -> tuple[RoleVerdict, ...]:
     """This core's one authoritative datatype predicate, over every role.
 
     The single implementation behind both the physical coverage constraint and
@@ -163,19 +154,19 @@ def covers_numeric_types(types: MVAUNumericTypes) -> tuple[_RoleVerdict, ...]:
     for role, datatype in roles:
         if not _is_twos_complement_integer(datatype):
             verdicts.append(
-                _RoleVerdict(role, False, f"{datatype.name} is not a two's-complement integer")
+                RoleVerdict(role, False, f"{datatype.name} is not a two's-complement integer")
             )
             continue
         if role in _SIGNED_ROLES and not datatype.signed():
             verdicts.append(
-                _RoleVerdict(
+                RoleVerdict(
                     role,
                     False,
                     f"{datatype.name} is unsigned; the core declares this role signed",
                 )
             )
             continue
-        verdicts.append(_RoleVerdict(role, True))
+        verdicts.append(RoleVerdict(role, True))
     return tuple(verdicts)
 
 
@@ -244,14 +235,50 @@ def _width_supported(
     )
 
 
-def _narrow_weights_supported(target: MVAUDspBlock, narrow: bool) -> object:
-    """DSP48E1's narrower A port needs the minimum-value promise to pack.
+def _narrow_weights_supported(
+    target: MVAUDspBlock,
+    activation: NumericElementType,
+    weight: NumericElementType,
+    narrow: bool,
+) -> object:
+    """Whether these weights pack into the A port at all.
 
     Coverage, not admission: the source is perfectly expressible, the board just
     cannot build it without the stronger contract on the weights.
+
+    Asked of ``dotp.sv``'s own lane calculation rather than of the target
+    family.  This used to read ``narrow if target is DSP48E1 else True``, which
+    was wrong in both directions -- it admitted 27-bit non-narrow weights on
+    DSP48E2 and DSP58, which reach the generic ``dotp`` core and terminate in
+    ``sliceLanes()``, and it refused 8-bit non-narrow weights on DSP48E1, which
+    pack into three lanes with a bit to spare and which baseline FINN builds
+    routinely.
     """
 
-    return narrow if target is MVAUDspBlock.DSP48E1 else True
+    a_width, _b_width, _p_width = _DSP_WIDTHS[target]
+    weight_bits = element_width(weight)
+    if weight_bits > a_width:
+        # ``width_supported`` reports this; the packing is undefined past here
+        # and must not be asked, because the RTL's subtraction is unsigned.
+        return True
+    packing = pack_lanes(
+        a_width=a_width,
+        weight_width=weight_bits,
+        activation_width=element_width(activation),
+        narrow_weights=narrow,
+    )
+    if not packing.fits:
+        return reject(
+            "dotp-axi-weights-do-not-pack",
+            "these weights do not fit the DSP A datapath without the narrow-weight promise",
+            values={
+                "weight_width": weight_bits,
+                "a_datapath_width": a_width,
+                "narrow_weights": narrow,
+                "bit_slack": packing.slack,
+            },
+        )
+    return True
 
 
 class DotpAxiKernel(HardwareKernel):
@@ -362,7 +389,12 @@ class DotpAxiKernel(HardwareKernel):
         )
         design.coverage_constraint(
             "narrow_weights_supported",
-            dependencies={"target": facts.target_dsp_block, "narrow": facts.narrow_weights},
+            dependencies={
+                "target": facts.target_dsp_block,
+                "activation": facts.activation_element_type,
+                "weight": facts.weight_element_type,
+                "narrow": facts.narrow_weights,
+            },
             evaluate=_narrow_weights_supported,
         )
         design.coverage_constraint(

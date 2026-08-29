@@ -325,6 +325,18 @@ class DecomposedMVAUKernels:
     pe: Ref[int]
     simd: Ref[int]
     compute_pumping: Ref[bool]
+    #: The two Region declarations and what each is required to compute.
+    #:
+    #: Exposed because a Kernel covering *both* Regions has to name the same
+    #: two declarations these physical Kernels name one each, and rebuilding
+    #: their paths from the namespace convention would be a second statement of
+    #: where they live -- the kind that stays right until it does not.  This is
+    #: a pure addition: nothing new is declared, so the design space is
+    #: unchanged.
+    dot_product_region: Ref[DataflowRegion]
+    dot_product_computation: Ref[ComputationContract]
+    replay_region: Ref[DataflowRegion]
+    replay_computation: Ref[ComputationContract]
 
     @property
     def hardware(self) -> tuple[HardwareKernelDeclaration, ...]:
@@ -415,13 +427,18 @@ def build_decomposed_mvau_kernels(
         provenance=provenance,
     )
 
+    dot_product_region = dot_product_design.handle("region", DataflowRegion)
+    dot_product_computation = dot_product_design.handle("computation", ComputationContract)
+    replay_region = replay_design.handle("region", DataflowRegion)
+    replay_computation = replay_design.handle("computation", ComputationContract)
+
     applies = _decomposed_selected(compute_pool)
     dot_product_hardware, dotp_design = declare_hardware_kernel(
         DotpAxiKernel,
         hardware_namespace(HARDWARE_OWNER, DotpAxiKernel.id),
         DotProductHardwareInputs(
-            region=dot_product_design.handle("region", DataflowRegion),
-            computation=dot_product_design.handle("computation", ComputationContract),
+            region=dot_product_region,
+            computation=dot_product_computation,
             pe=pe,
             simd=simd,
             activation_element_type=problem.activation_element_type,
@@ -442,8 +459,8 @@ def build_decomposed_mvau_kernels(
         ReplayBufferKernel,
         hardware_namespace(HARDWARE_OWNER, ReplayBufferKernel.id),
         ActivationReplayHardwareInputs(
-            region=replay_design.handle("region", DataflowRegion),
-            computation=replay_design.handle("computation", ComputationContract),
+            region=replay_region,
+            computation=replay_computation,
             matrix_width=problem.matrix_width,
             matrix_height=problem.matrix_height,
             pe=pe,
@@ -470,6 +487,10 @@ def build_decomposed_mvau_kernels(
         pe,
         simd,
         dotp_design.handle("compute_pumping", bool),
+        dot_product_region,
+        dot_product_computation,
+        replay_region,
+        replay_computation,
     )
 
 

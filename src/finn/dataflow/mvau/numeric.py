@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 from finn.dataflow.region import NumericElementType
 
-__all__ = ["MVAUNumericTypes"]
+__all__ = ["MVAUNumericTypes", "RoleVerdict"]
 
 
 @dataclass(frozen=True)
@@ -51,3 +51,23 @@ class MVAUNumericTypes:
     weight: NumericElementType
     accumulator: NumericElementType
     output: NumericElementType
+
+
+@dataclass(frozen=True)
+class RoleVerdict:
+    """One numeric role's answer, with the reason if it is a refusal.
+
+    Shared *vocabulary*, not a shared answer.  Every Kernel that multiplies
+    reports per role rather than as one boolean, so a refusal can say which
+    operand was wrong -- and two Kernels reporting in the same shape is what
+    makes their answers comparable when one is checked against the other.
+
+    What is deliberately **not** shared is the function that produces these.
+    Each physical core owns its own predicate, because agreement between two
+    cores is a fact to be demonstrated per release rather than a structure to
+    be assumed once.
+    """
+
+    role: str
+    supported: bool
+    detail: str = ""
