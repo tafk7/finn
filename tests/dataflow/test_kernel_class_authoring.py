@@ -270,8 +270,22 @@ def test_the_other_subclass_demands_nothing_and_lists_its_own_providers() -> Non
 
 
 def test_there_is_no_second_public_kernel_noun() -> None:
-    assert not {"KernelBase", "KernelDefinition", "KernelInstance"} & set(authoring.__all__)
+    """The rule is one Kernel noun, not the absence of three particular names.
+
+    A contributor sees ``Kernel``; anything else ending in "Kernel" on the
+    authoring surface is a second thing they would have to learn, whatever it
+    happens to be called.  ``KernelDeclaration`` is the assembly record the
+    pool machinery passes around and is deliberately not offered here.
+    """
+
+    # The pool and the authoring scope are their own concepts, not Kernels.
+    machinery = {"KernelDesign", "KernelSelection", "KernelSelectionPaths"}
+    exported = set(authoring.__all__)
+    nouns = {name for name in exported if name.startswith("Kernel")} - machinery
+    assert nouns == {"Kernel", "KernelDemand", "KernelExport", "KernelProvider"}, nouns
+    assert "KernelDeclaration" not in exported
     assert not hasattr(authoring, "KernelInstance")
+    assert set(authoring.__all__) == {name for name in exported if hasattr(authoring, name)}
 
 
 # -- the scope's own rules ---------------------------------------------------
@@ -360,3 +374,75 @@ def test_a_kernel_that_declares_no_region_is_refused() -> None:
     _op, inputs, _selection = _pool()
     with pytest.raises(AuthoringError, match="declares no Region"):
         declare_kernel(Regionless, "probe", inputs)
+
+
+def test_binding_propagates_an_unresolved_demand_rather_than_dropping_it() -> None:
+    """A missing demand must not read as "this Kernel has no such requirement".
+
+    ``EvenComputeKernel`` demands a parameter port derived from the element
+    type.  Withhold that fact and the demand cannot resolve; binding has to say
+    so, because a consumer seeing ``demands == {}`` would conclude the Kernel
+    never needed one.
+    """
+
+    class TargetDemandingKernel(_ExampleComputeKernel):
+        id = "target_demanding"
+
+        @classmethod
+        def define_design(cls, design: KernelDesign[ComputeInputs]) -> None:
+            cls._common(design)
+            design.demand(
+                "parameter",
+                dependencies={
+                    "extent": design.inputs.extent,
+                    "family": design.inputs.target_family,
+                },
+                evaluate=lambda extent, family: Port(
+                    f"parameter_{family}",
+                    Operand("w", INT8, (extent,)),
+                    BeatSequence(1, tuple(((index,),) for index in range(extent))),
+                ),
+            )
+
+    op = OpDesign("example.op", problem_namespace="example")
+    inputs = ComputeInputs(
+        extent=op.graph_fact("extent", int),
+        element_type=op.graph_fact("element_type", NumericElementType),
+        target_family=op.target_fact("family", str, required=False),
+    )
+    pool = "probe.compute"
+    selection = KernelSelection(
+        pool,
+        (
+            declare_kernel(
+                TargetDemandingKernel, kernel_namespace(pool, "target_demanding"), inputs
+            ),
+        ),
+    )
+    engine = Engine()
+    space = engine.validate(assemble_specs((op.spec(), selection.build_spec())))
+    # The optional target fact is withheld, so the demanded port cannot be
+    # derived even though the problem is perfectly valid.
+    point = engine.start(space, {inputs.extent.path: 4, inputs.element_type.path: INT8})
+    point = engine.commit_assignments(
+        point,
+        {
+            selection.paths.kernel: "target_demanding",
+            QualifiedPath(f"{kernel_namespace(pool, 'target_demanding')}.lanes"): 2,
+        },
+    ).point
+
+    assert not isinstance(
+        engine.query_property(point, selection.paths.demand("parameter")), Decided
+    )
+    assert not isinstance(bind_kernel(engine, selection, point), Decided)
+
+
+def test_binding_ignores_a_pool_path_another_member_owns() -> None:
+    """Requiredness is per declaration: ``any`` never demanded a parameter."""
+
+    engine, selection, point = _resolved(4, "any", 2)
+    bound = bind_kernel(engine, selection, point)
+
+    assert isinstance(bound, Decided)
+    assert bound.value.demands == {}

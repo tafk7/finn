@@ -96,13 +96,26 @@ def _source_description_valid(value: object) -> bool:
         description.activation_operand_id,
         description.weight_operand_id,
         description.output_operand_id,
+        *description.fused_source_node_ids,
     )
-    if not all(type(name) is str and name for name in names):
-        return False
-    if description.threshold_operand_id is not None and not description.threshold_operand_id:
-        return False
-    shape = description.leading_shape
-    return bool(shape) and all(type(extent) is int and extent > 0 for extent in shape)
+    threshold_valid = description.threshold_operand_id is None or (
+        isinstance(description.threshold_operand_id, str) and bool(description.threshold_operand_id)
+    )
+    threshold_shape_valid = description.threshold_shape is None or all(
+        type(extent) is int and extent > 0 for extent in description.threshold_shape
+    )
+    # A threshold operand and its shape are one fact in two halves: having
+    # exactly one of them means the projection lost information.
+    threshold_pair_valid = (description.threshold_operand_id is None) == (
+        description.threshold_shape is None
+    )
+    return (
+        all(isinstance(name, str) and bool(name) for name in names)
+        and threshold_valid
+        and threshold_shape_valid
+        and threshold_pair_valid
+        and all(type(extent) is int and extent > 0 for extent in description.leading_shape)
+    )
 
 
 # -- the declared problem ----------------------------------------------------

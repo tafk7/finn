@@ -145,6 +145,11 @@ class KernelDeclaration:
     of paths over the same authored design.  ``owner`` records the class that
     authored it, so a resolved selection can hand back an instance of exactly
     that class.
+
+    It is an assembly record, not an authoring noun: a contributor writes a
+    ``Kernel`` subclass and never names this type.  It is deliberately absent
+    from ``finn.dataflow.authoring`` for that reason, and the pool machinery
+    that does need it imports it from here.
     """
 
     id: str
@@ -825,6 +830,14 @@ def bind_kernel(engine: Engine, selection: KernelSelection, point: DesignPoint) 
 
     The returned object is an instance of the class that declared the selected
     Kernel, or of ``Kernel`` itself for a declaration authored without one.
+
+    Every demand and export the *selected* declaration owns must resolve.  An
+    unresolved one propagates rather than being dropped: a Kernel bound with a
+    declared demand missing is indistinguishable from a Kernel that never
+    demanded it, and a consumer would read the absence as "no such requirement"
+    instead of "the requirement could not be answered".  Only the paths this
+    declaration itself owns are required, because a pool path belonging to a
+    different member is legitimately absent when this one is selected.
     """
 
     identity = selected_kernel(engine, selection, point)
@@ -838,13 +851,15 @@ def bind_kernel(engine: Engine, selection: KernelSelection, point: DesignPoint) 
     demands: dict[str, Port] = {}
     for interface in declaration.demand_interfaces:
         answer = engine.query_property(point, paths.demand(interface))
-        if isinstance(answer, Decided):
-            demands[interface] = cast(Port, answer.value)
+        if not isinstance(answer, Decided):
+            return answer
+        demands[interface] = cast(Port, answer.value)
     exports: dict[str, object] = {}
     for name in declaration.export_names:
         answer = engine.query_property(point, paths.export(name))
-        if isinstance(answer, Decided):
-            exports[name] = answer.value
+        if not isinstance(answer, Decided):
+            return answer
+        exports[name] = answer.value
     own = {item.path for item in declaration.spec.decisions}
     bound = declaration.owner or Kernel
     return Decided(

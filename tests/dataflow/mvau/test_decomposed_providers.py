@@ -29,6 +29,7 @@ from finn.dataflow.mvau.decomposed import (
     build_decomposed_mvau_pools,
 )
 from finn.dataflow.mvau_problem import (
+    MVAU_PROBLEM,
     MVAU_PROBLEM_PROVENANCE,
     MVAUComputationProfile,
     MVAUDspBlock,
@@ -130,29 +131,50 @@ def test_every_derived_parameter_actually_resolves() -> None:
         assert isinstance(engine.query_property(point, parameter.source), Decided), parameter.name
 
 
-def test_the_audit_covers_the_parameters_the_rtl_takes() -> None:
-    pools = build_decomposed_mvau_pools()
-    names = {item.name for item in pools.provider_parameters()}
+#: The module headers of ``finnlib/rtl/dotp_axi.sv`` and
+#: ``finn-rtllib/mvu/replay_buffer.sv``, excluding their ``localparam``
+#: deductions.  Exact, not a subset: a parameter the audit omits is one whose
+#: value the elaborator would have to invent, which is the failure section 9.1
+#: exists to prevent.
+DOTP_AXI_PARAMETERS = {
+    "VERSION",
+    "ACTIVATION_BROADCASTING",
+    "PE",
+    "SIMD",
+    "SEGMENTLEN",
+    "ACTIVATION_WIDTH",
+    "WEIGHT_WIDTH",
+    "ACCU_WIDTH",
+    "NARROW_WEIGHTS",
+    "SIGNED_ACTIVATIONS",
+    "PUMPED_COMPUTE",
+    "FORCE_BEHAVIORAL",
+}
+REPLAY_BUFFER_PARAMETERS = {"LEN", "REP", "W"}
 
-    assert names >= {
-        "PE",
-        "SIMD",
-        "PUMPED_COMPUTE",
-        "ACTIVATION_WIDTH",
-        "WEIGHT_WIDTH",
-        "ACCU_WIDTH",
-        "MW",
-        "MH",
-        "VERSION",
-        "SIGNED_ACTIVATIONS",
-        "SEGMENTLEN",
-        "NARROW_WEIGHTS",
-        "ACTIVATION_BROADCASTING",
-        "FORCE_BEHAVIORAL",
-        "LEN",
-        "REP",
-        "W",
+
+def test_the_audit_covers_exactly_the_parameters_the_rtl_takes() -> None:
+    pools = build_decomposed_mvau_pools()
+    problem = MVAU_PROBLEM
+
+    dot_product = {
+        item.name for item in DotProductKernel.provider_parameters(pools.dot_product_paths, problem)
     }
+    replay = {item.name for item in ActivationReplayKernel.provider_parameters(pools.replay_paths)}
+
+    assert dot_product == DOTP_AXI_PARAMETERS
+    assert replay == REPLAY_BUFFER_PARAMETERS
+
+
+def test_the_dot_product_takes_no_matrix_geometry() -> None:
+    """MW and MH were the fused wrapper's, only to size the replay it contained.
+
+    Their absence from ``dotp_axi`` is the decomposition visible in the
+    parameter list: that geometry is now the replay Kernel's ``LEN`` and ``REP``.
+    """
+
+    assert not {"MW", "MH"} & DOTP_AXI_PARAMETERS
+    assert REPLAY_BUFFER_PARAMETERS <= {"LEN", "REP", "W"}
 
 
 def test_the_providers_are_declared_on_the_kernels_they_realize() -> None:

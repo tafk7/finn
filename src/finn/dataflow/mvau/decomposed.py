@@ -38,6 +38,7 @@ from finn.dataflow.design import QualifiedPath
 from finn.dataflow.mvau_problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
+    MVAUComputationProfile,
     MVAUDspBlock,
     MVAUProblem,
 )
@@ -130,6 +131,7 @@ class DotProductInputs:
     weight_element_type: Ref[NumericElementType]
     output_element_type: Ref[NumericElementType]
     accumulator_element_type: Ref[NumericElementType]
+    computation_profile: Ref[MVAUComputationProfile]
     target_dsp_block: Ref[MVAUDspBlock]
     target_clock_period_ns: Ref[float]
     narrow_weights: Ref[bool]
@@ -168,19 +170,21 @@ class DotProductKernel(Kernel):
         # Everything the provider needs that is neither projected nor decided
         # is declared here, so no value reaches an artifact without appearing
         # in the design point first.
-        version = design.derived(
+        # The operation reads these back by name when it assembles the provider
+        # table, so they are declared rather than bound to locals.
+        design.derived(
             "dsp_version",
             int,
             dependencies={"target": facts.target_dsp_block},
             evaluate=lambda target: _DSP_VERSION[target],
         )
-        signed_activations = design.derived(
+        design.derived(
             "signed_activations",
             bool,
             dependencies={"activation": facts.activation_element_type},
             evaluate=lambda activation: activation.type_id == "int",
         )
-        segment_length = design.derived(
+        design.derived(
             "segment_length",
             int,
             dependencies={
@@ -190,9 +194,60 @@ class DotProductKernel(Kernel):
             },
             evaluate=_segment_length,
         )
-        design.export("dsp_version", version)
-        design.export("signed_activations", signed_activations)
-        design.export("segment_length", segment_length)
+        # -- what the source must be for this Kernel to serve it at all ----
+        # Answerable from graph facts alone, so they gate inference.
+        design.source_constraint(
+            "computation_supported",
+            dependencies={"profile": facts.computation_profile},
+            evaluate=lambda profile: profile is MVAUComputationProfile.ACCUMULATOR_INTEGER,
+        )
+        design.source_constraint(
+            "numeric_supported",
+            dependencies={
+                "activation": facts.activation_element_type,
+                "weight": facts.weight_element_type,
+            },
+            evaluate=_numeric_supported,
+        )
+        design.source_constraint(
+            "accumulator_output_type_supported",
+            dependencies={
+                "accumulator": facts.accumulator_element_type,
+                "output": facts.output_element_type,
+            },
+            evaluate=lambda accumulator, output: accumulator == output,
+        )
+
+        # -- what the provider can actually build --------------------------
+        # These read the target, a decision, or a derived property, so they are
+        # coverage questions rather than admission ones: a source this Kernel
+        # serves may still be unbuildable on a given board.
+        design.feasibility_constraint(
+            "target_supported",
+            dependencies={"target": facts.target_dsp_block},
+            evaluate=lambda target: target in _DSP_VERSION,
+        )
+        design.feasibility_constraint(
+            "width_supported",
+            dependencies={
+                "target": facts.target_dsp_block,
+                "activation": facts.activation_element_type,
+                "weight": facts.weight_element_type,
+                "accumulator": facts.accumulator_element_type,
+                "output": facts.output_element_type,
+            },
+            evaluate=_width_supported,
+        )
+        design.feasibility_constraint(
+            "narrow_weights_supported",
+            dependencies={"target": facts.target_dsp_block, "narrow": facts.narrow_weights},
+            evaluate=_narrow_weights_supported,
+        )
+        design.feasibility_constraint(
+            "pumping_supported",
+            dependencies={"pumping": pumping, "simd": simd},
+            evaluate=lambda pumping, simd: simd >= 2 if pumping else True,
+        )
         design.provider(DOT_PRODUCT_PROVIDER)
         design.region(
             dependencies={
@@ -243,8 +298,10 @@ class DotProductKernel(Kernel):
             ProviderParameter(
                 "ACCU_WIDTH", ParameterOwnership.PROBLEM, problem.accumulator_element_type.path
             ),
-            ProviderParameter("MW", ParameterOwnership.PROBLEM, problem.matrix_width.path),
-            ProviderParameter("MH", ParameterOwnership.PROBLEM, problem.matrix_height.path),
+            # No MW or MH: dotp_axi does not take them.  The fused wrapper did,
+            # only to derive SF and NF for the replay it contained -- which is
+            # now the replay Kernel's LEN and REP.  That absence is the
+            # decomposition showing up in the parameter list.
             ProviderParameter("VERSION", ParameterOwnership.DERIVED, design_paths.dsp_version),
             ProviderParameter(
                 "SIGNED_ACTIVATIONS",
@@ -275,6 +332,53 @@ class DotProductKernel(Kernel):
                 why="synthesis uses the inferred implementation; behavioural is a debug aid",
             ),
         )
+
+
+#: Multiplier operand and accumulator widths each DSP generation offers.
+_DSP_WIDTHS = {
+    MVAUDspBlock.DSP48E1: (25, 18, 48),
+    MVAUDspBlock.DSP48E2: (27, 18, 48),
+    MVAUDspBlock.DSP58: (27, 24, 58),
+}
+
+
+def _numeric_supported(activation: NumericElementType, weight: NumericElementType) -> object:
+    """The dot-product core multiplies integers, and needs at least two bits."""
+
+    return (
+        activation.type_id in {"int", "uint"}
+        and weight.type_id == "int"
+        and activation.bit_width >= 2
+        and weight.bit_width >= 2
+    )
+
+
+def _width_supported(
+    target: MVAUDspBlock,
+    activation: NumericElementType,
+    weight: NumericElementType,
+    accumulator: NumericElementType,
+    output: NumericElementType,
+) -> object:
+    """Whether the operands and accumulator fit the target's DSP datapath."""
+
+    a_width, b_width, p_width = _DSP_WIDTHS[target]
+    return (
+        2 <= weight.bit_width <= a_width
+        and 2 <= activation.bit_width <= b_width
+        and accumulator.bit_width <= p_width
+        and output.bit_width <= p_width
+    )
+
+
+def _narrow_weights_supported(target: MVAUDspBlock, narrow: bool) -> object:
+    """DSP48E1's narrower A port needs the minimum-value promise to pack.
+
+    This is coverage, not admission: the source is perfectly expressible, the
+    board just cannot build it without the stronger contract on the weights.
+    """
+
+    return narrow if target is MVAUDspBlock.DSP48E1 else True
 
 
 def _segment_length(clock_period_ns: float, pumping: bool, simd: int) -> object:
@@ -326,37 +430,26 @@ class ActivationReplayKernel(Kernel):
         )
         # The buffer's three parameters are the folding restated in the RTL's
         # own vocabulary, so they are derived, never decided.
-        design.export(
+        design.derived(
             "buffer_length",
-            design.derived(
-                "buffer_length",
-                int,
-                dependencies={"matrix_width": facts.matrix_width, "simd": facts.simd},
-                evaluate=lambda matrix_width, simd: matrix_width // simd,
-            ),
+            int,
+            dependencies={"matrix_width": facts.matrix_width, "simd": facts.simd},
+            evaluate=lambda matrix_width, simd: matrix_width // simd,
         )
-        design.export(
+        design.derived(
             "buffer_repetitions",
-            design.derived(
-                "buffer_repetitions",
-                int,
-                dependencies={"matrix_height": facts.matrix_height, "pe": facts.pe},
-                evaluate=lambda matrix_height, pe: matrix_height // pe,
-            ),
+            int,
+            dependencies={"matrix_height": facts.matrix_height, "pe": facts.pe},
+            evaluate=lambda matrix_height, pe: matrix_height // pe,
         )
-        design.export(
+        design.derived(
             "buffer_width",
-            design.derived(
-                "buffer_width",
-                int,
-                dependencies={
-                    "activation_element_type": facts.activation_element_type,
-                    "simd": facts.simd,
-                },
-                evaluate=lambda activation_element_type, simd: (
-                    simd * activation_element_type.bit_width
-                ),
-            ),
+            int,
+            dependencies={
+                "activation_element_type": facts.activation_element_type,
+                "simd": facts.simd,
+            },
+            evaluate=lambda activation_element_type, simd: simd * activation_element_type.bit_width,
         )
         design.provider(REPLAY_PROVIDER)
 
@@ -438,6 +531,7 @@ def build_decomposed_mvau_pools(
             weight_element_type=problem.weight_element_type,
             output_element_type=problem.output_element_type,
             accumulator_element_type=problem.accumulator_element_type,
+            computation_profile=problem.computation_profile,
             # Both are optional problem fields, but a provider parameter that
             # needs the target cannot be derived without it.  Requiring them at
             # the use site makes the engine answer Unresolved with the missing
