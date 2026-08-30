@@ -23,13 +23,11 @@ Both DUTs are compared to each other, not to a numeric golden, so the stimulus
 is raw random integers packed to the stream widths.  Any value reaches both
 identically; a mismatch can only mean the composition altered behaviour.
 
-**Each simulation runs in its own process.**  XSI keeps state that outlives
-``close_rtlsim``: the third ``load_sim_obj`` in a process hangs -- not the
-third load of the same object, the third load at all -- with no diagnostic and
-without the watchdog firing.  Isolating per configuration is not enough,
-because one configuration is already four simulations.  Compiling and running
-each one in a fresh interpreter removes the variable entirely and costs only
-process startup, which is nothing beside ``xelab``.
+**Each simulation runs in its own process**, which is ``rtl_transport``'s job
+and no longer this file's.  That module holds the marshalling, the
+backpressure collector and the watchdog handling, so fixture 8 -- which drives
+the same composed RTL against arithmetic instead of against the fused core --
+reuses the transport without reusing this comparison.
 
 Usage, from ``finn/``::
 
@@ -39,16 +37,13 @@ Usage, from ``finn/``::
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
-
 import numpy as np  # type: ignore[import-not-found]
 from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -72,7 +67,8 @@ from finn.dataflow.mvau.providers import elaborate_mvau
 from finn.dataflow.mvau_problem import MVAUDspBlock
 from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
-from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
+
+from dataflow.rtlsim.rtl_transport import drive, random_word
 
 #: The fused golden's sources, relative to ``finn-rtllib/mvu``.
 FUSED_SOURCES = (
@@ -86,7 +82,6 @@ FUSED_SOURCES = (
 
 ACCU_WIDTH = 16
 CLOCK_PERIOD_NS = 4.0
-LIVENESS = 4000
 
 
 def finn_root() -> str:
@@ -349,192 +344,7 @@ endmodule
 """
 
 
-# -- simulation --------------------------------------------------------------
-
-
-def _random_word(generator: np.random.RandomState, bits: int) -> int:
-    """A random integer of exactly ``bits`` bits.
-
-    Built from bytes rather than ``randint`` because a packed weight beat is
-    ``PE * SIMD * WEIGHT_WIDTH`` wide and reaches 64 bits at modest folding,
-    which ``randint`` cannot represent.
-    """
-
-    raw = int.from_bytes(bytes(generator.randint(0, 256, size=(bits + 7) // 8)), "little")
-    return raw & ((1 << bits) - 1)
-
-
-#: Output beats accepted between stalls, and how long each stall lasts.
-BACKPRESSURE_PERIOD = 1
-BACKPRESSURE_TICKS = 5
-
-
-def _collect_with_backpressure(sim: object, stream: str, size: int, watchdog: object) -> object:
-    """Collect outputs while de-asserting ready every few accepted beats.
-
-    ``rtlsim_multi_io`` holds ready high forever, which never exercises the
-    stall path: the obligation is that the composition does not drop, duplicate
-    or reorder anything when the consumer is not listening, and a consumer that
-    always listens cannot show that.
-
-    The watchdog is reset on every accepted beat, exactly as the stock
-    collector does; a deliberate stall must not read as a hang.
-    """
-
-    class ThrottledCollector:
-        def __init__(self) -> None:
-            # The bus-port accessor lives on the engine, which is what
-            # SimEngine.collect_output passes its own collector as ``top``.
-            self.vld = sim.get_bus_port(stream, "tvalid")  # type: ignore[attr-defined]
-            self.rdy = sim.get_bus_port(stream, "tready")  # type: ignore[attr-defined]
-            self.dat = sim.get_bus_port(stream, "tdata")  # type: ignore[attr-defined]
-            self.buf: list[str] = []
-            self.stall = 0
-
-        def __iter__(self):  # type: ignore[no-untyped-def]
-            return iter(self.buf)
-
-        def __call__(self, _sim: object) -> object:
-            if self.stall > 0:
-                self.stall -= 1
-                return {self.rdy: "0"} if self.rdy.as_bool() else {}
-            if self.rdy.as_bool():
-                if self.vld.read().as_bool():
-                    watchdog.reset()  # type: ignore[attr-defined]
-                    self.buf.append(self.dat.read().as_hexstr())
-                    if len(self.buf) == size:
-                        return {self.rdy: "0"}
-                    if len(self.buf) % BACKPRESSURE_PERIOD == 0:
-                        self.stall = BACKPRESSURE_TICKS
-                        return {self.rdy: "0"}
-                return {}
-            if len(self.buf) < size:
-                return {self.rdy: "1"}
-            return None
-
-    collector = ThrottledCollector()
-    sim.enlist(collector)  # type: ignore[attr-defined]
-    return collector
-
-
-def _drive(
-    top_module: str,
-    sources: list[str],
-    stimulus: dict[str, list[int]],
-    expected: int,
-    *,
-    stalls: bool,
-) -> list[int]:
-    """Compile and run one DUT, optionally stalling both sides of it.
-
-    **One simulation per process.**  XSI keeps state that ``close_rtlsim`` does
-    not release: the third ``load_sim_obj`` in a process hangs -- not the third
-    *of the same object*, the third at all -- with no diagnostic and without the
-    watchdog firing.  Isolating per configuration was not enough, because one
-    configuration is already four simulations.  So each one is compiled and run
-    by :func:`simulate_once` in a fresh interpreter, and this function only
-    marshals arguments across that boundary.
-    """
-
-    with tempfile.TemporaryDirectory() as scratch:
-        request = Path(scratch) / "request.json"
-        response = Path(scratch) / "response.json"
-        request.write_text(
-            json.dumps(
-                {
-                    "top_module": top_module,
-                    "sources": sources,
-                    "stimulus": stimulus,
-                    "expected": expected,
-                    "stalls": stalls,
-                }
-            )
-        )
-        completed = subprocess.run(
-            [
-                sys.executable,
-                __file__,
-                "--simulate",
-                str(request),
-                "--out",
-                str(response),
-            ],
-            check=False,
-        )
-        if completed.returncode != 0 or not response.is_file():
-            raise AssertionError(
-                f"{top_module}: simulation subprocess failed (exit {completed.returncode})"
-            )
-        payload = json.loads(response.read_text())
-        if payload.get("error"):
-            raise AssertionError(f"{top_module}: {payload['error']}")
-        return cast("list[int]", payload["output"])
-
-
-def simulate_once(request_path: str, response_path: str) -> int:
-    """Run exactly one simulation described by a JSON request, then exit.
-
-    The whole body of the process: compile, load, run, write the outputs.
-    Nothing else may load a simulation object here, which is the point.
-    """
-
-    request = json.loads(Path(request_path).read_text())
-    payload: dict[str, object]
-    try:
-        with tempfile.TemporaryDirectory() as scratch:
-            sim_dir, so_rel = compile_sim_obj(
-                request["top_module"], request["sources"], scratch, behav=True
-            )
-            payload = {
-                "output": _simulate(
-                    sim_dir,
-                    so_rel,
-                    request["stimulus"],
-                    request["expected"],
-                    stalls=request["stalls"],
-                    label=request["top_module"],
-                )
-            }
-    except Exception as failure:  # noqa: BLE001 - reported across the boundary
-        payload = {"error": f"{type(failure).__name__}: {failure}"}
-    Path(response_path).write_text(json.dumps(payload))
-    return 1 if payload.get("error") else 0
-
-
-def _simulate(
-    sim_dir: str,
-    so_rel: str,
-    stimulus: dict[str, list[int]],
-    expected: int,
-    *,
-    stalls: bool,
-    label: str,
-) -> list[int]:
-    sim = load_sim_obj(sim_dir, so_rel)
-    reset_rtlsim(sim)
-    # Different throttles per stream, so the two inputs also arrive out of step
-    # with each other rather than in lockstep.
-    throttles = {"in0": (2, 3), "in1": (3, 2)} if stalls else {}
-    for name, values in stimulus.items():
-        sim.stream_input(
-            f"{name}_V",
-            map(lambda value: f"{value:0x}", list(values)),
-            throttle=throttles.get(name, (float("inf"), 0)),
-        )
-    watchdog = sim.create_watchdog("out0_V timeout", LIVENESS)
-    if stalls:
-        collected = _collect_with_backpressure(sim, "out0_V", expected, watchdog)
-    else:
-        collected = sim.collect_output("out0_V", expected, watchdog=watchdog)
-    timeouts = sim.run()
-    if timeouts:
-        raise AssertionError(f"{label}: deadlock, watchdogs fired: {timeouts}")
-    # Both collectors are iterables of hex strings; neither is typed as one.
-    result = [int(value, base=16) for value in cast("Iterable[str]", collected)]
-    if watchdog in sim.watchdogs:
-        sim.remove_watchdog(watchdog)
-    close_rtlsim(sim)
-    return result
+# -- staging -----------------------------------------------------------------
 
 
 def _write(directory: str, name: str, text: str) -> str:
@@ -564,11 +374,11 @@ def run_one(config: Config, finn_root: str) -> bool:
 
     generator = np.random.RandomState(0)
     activation = [
-        _random_word(generator, config.simd * config.activation_bits)
+        random_word(generator, config.simd * config.activation_bits)
         for _ in range(passes * synapse_folds)
     ]
     weight = [
-        _random_word(generator, config.pe * config.simd * config.weight_bits)
+        random_word(generator, config.pe * config.simd * config.weight_bits)
         for _ in range(passes * synapse_folds * neuron_folds)
     ]
     stimulus = {"in0": activation, "in1": weight}
@@ -591,10 +401,10 @@ def run_one(config: Config, finn_root: str) -> bool:
             # The composed DUT is whatever the compiler emits, verbatim.
             composed_sources = list(write_decomposed_artifact(requirements, scratch))
             fused_path = _write(scratch, "mvau_fused.sv", _fused_top("mvau_fused", config, values))
-            fused = _drive(
+            fused = drive(
                 "mvau_fused", [*fused_sources, fused_path], stimulus, expected, stalls=stalls
             )
-            composed = _drive(
+            composed = drive(
                 requirements.top_module_name,
                 composed_sources,
                 stimulus,
@@ -645,21 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=sorted(CONFIGS_BY_LABEL),
         help="run only this configuration",
     )
-    parser.add_argument(
-        "--simulate",
-        metavar="REQUEST",
-        help="internal: run the one simulation this JSON request describes",
-    )
-    parser.add_argument("--out", metavar="RESPONSE", help="internal: where to write the result")
     arguments = parser.parse_args(argv)
-
-    # The simulation worker does nothing else -- no resolving, no printing --
-    # because loading a second simulation object in the same process is what
-    # this split exists to prevent.
-    if arguments.simulate is not None:
-        if arguments.out is None:
-            parser.error("--simulate requires --out")
-        return simulate_once(arguments.simulate, arguments.out)
 
     root = finn_root()
     library_root = str(finnlib_root(root))
