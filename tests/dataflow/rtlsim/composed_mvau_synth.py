@@ -40,7 +40,7 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     record_identity,
 )
 from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.composition import write_decomposed_artifact
+from finn.dataflow.mvau.hardware.composition import package_decomposed_artifact
 
 #: Synthesis is slow and mostly repeats itself, so only one configuration per
 #: DSP generation runs by default -- the generation is what changes the
@@ -104,19 +104,25 @@ def run_one(config: Config) -> int:
     print(f"\n========== fixture 6: {config.label} ==========")
     requirements = decomposed_requirements(config)
     with tempfile.TemporaryDirectory() as scratch:
-        directory = Path(scratch)
-        sources = list(write_decomposed_artifact(requirements, directory))
+        # Synthesize the *packaged* unit, not a directory chosen here: the OOC
+        # stage takes the packaged unit as its input, and a fixture that staged
+        # its own copy would be synthesizing something adjacent to what a
+        # consumer builds rather than the thing itself.
+        packaged = package_decomposed_artifact(requirements, scratch)
+        directory = Path(packaged.directory)
+        sources = list(packaged.files)
         report = directory / "utilization.rpt"
         script = directory / "synth.tcl"
         script.write_text(
             _tcl(
-                requirements.top_module_name,
+                packaged.top_module_name,
                 requirements.target_fpga_part,
                 sources,
                 report,
             )
         )
-        print(f"  top:  {requirements.top_module_name} on {requirements.target_fpga_part}")
+        print(f"  top:  {packaged.top_module_name} on {requirements.target_fpga_part}")
+        print(f"  unit: {directory.name}")
         completed = _run_vivado(directory, script)
         errors = [line for line in completed.stdout.splitlines() if line.startswith("ERROR:")]
         if any(_UNLICENSED in line for line in errors):

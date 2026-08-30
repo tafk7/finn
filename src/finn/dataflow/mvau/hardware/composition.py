@@ -710,13 +710,142 @@ def write_decomposed_artifact(
     return tuple(staged)
 
 
+# -- packaging ---------------------------------------------------------------
+
+#: Bumped when what a *packaged* unit is changes -- the staged layout or the
+#: instantiation command shape -- as distinct from what it was generated from.
+PACKAGING_SCHEMA_VERSION = "decomposed-packaging-v1"
+
+
+@dataclass(frozen=True)
+class PackagedDecomposedArtifact:
+    """The decomposed MVAU as a first-class stitchable unit.
+
+    Not an ``ipx::`` package.  RTL layers in FINN are not standalone IP:
+    ``PrepareIP`` produces filled Verilog to instantiate as a module, and
+    ``create_stitched_ip`` adds the codegen directory as an IP repository path
+    and emits ``create_bd_cell``.  This is the same shape, which is what makes
+    "package the generated wrapper as real IP" mean "make it stitchable" here.
+
+    ``templates.ip_package_tcl`` was the alternative and was rejected on the
+    ports: it infers one AXI stream in and one out, where this wrapper has
+    ``in0``, ``in1``, ``out0`` and an extra ``ap_clk2x``.  Those are reported
+    below rather than inferred, so a consumer that needs a real ``ipx::``
+    package later has the interface list to build one from -- an additional
+    stage over the same identity, not a redesign.
+    """
+
+    identity: ComposedArtifactIdentity
+    top_module_name: str
+    #: The staged directory, usable directly as an ``ip_path``.
+    directory: str
+    #: Every file to compile, in compile order, generated top last.
+    files: tuple[str, ...]
+    #: The generated top's own AXI-Stream ports, as elaborated.
+    stream_interfaces: tuple[MVAUPhysicalNumericInterface, ...]
+    #: Its clocks and reset, likewise -- ``ap_clk2x`` among them.
+    control_interfaces: tuple[MVAUPhysicalControlInterface, ...]
+
+    @property
+    def key(self) -> str:
+        """This *stage's* key: what was generated, plus how it is instantiated.
+
+        A stage of its own because its inputs are its own.  Re-rendering the
+        instantiation command differently produces the same generated source
+        and a different packaged unit, and a single key over both would call
+        that one thing.
+        """
+
+        material = "\n".join(
+            (
+                PACKAGING_SCHEMA_VERSION,
+                self.identity.key,
+                *self.instantiation_commands("INSTANCE"),
+            )
+        )
+        return content_hash(material.encode())
+
+    def instantiation_commands(self, instance_name: str) -> tuple[str, ...]:
+        """The IPI commands that place this unit, at a caller-chosen instance.
+
+        The instance name is an argument and not a field: it is placement, and
+        placement is what the whole phase took out of the artifact.  One
+        packaged unit instantiated twice is two cells over one build, which is
+        the reuse this was all for.
+
+        Clock and reset nets are the caller's -- they are the enclosing block
+        design's, and this unit cannot name them.  ``control_interfaces``
+        reports the pins that have to be driven, ``ap_clk2x`` included.
+        """
+
+        if not instance_name:
+            raise ValueError("an instantiated cell needs a name")
+        return (
+            *(f"add_files -norecurse {path}" for path in self.files),
+            f"create_bd_cell -type hier -reference {self.top_module_name} {instance_name}",
+        )
+
+
+def packaged_directory_name(identity: ComposedArtifactIdentity, top_module_name: str) -> str:
+    """Where a packaged unit lives: addressed by identity, readable by module.
+
+    The key alone would do and would be unreadable in a build tree; the module
+    name alone is a digest over the configuration and says nothing about the
+    sources or the builder.  Both, so that two artifacts differing only in
+    source content are visibly two directories.
+    """
+
+    return f"{top_module_name}_{identity.key[:16]}"
+
+
+def package_decomposed_artifact(
+    requirements: MVAUDecomposedArtifactRequirements,
+    repository_root: str | Path,
+    *,
+    store: ArtifactStore = NO_ARTIFACT_STORE,
+) -> PackagedDecomposedArtifact:
+    """Stage the decomposed artifact under an identity-addressed directory.
+
+    ``repository_root`` is the IP repository; the unit's own directory beneath
+    it is named from the identity rather than chosen by the caller, because a
+    caller-chosen path is how two builds of one artifact end up in two places
+    with nothing saying they are the same.
+    """
+
+    directory = Path(repository_root).resolve() / packaged_directory_name(
+        requirements.identity, requirements.top_module_name
+    )
+    files = write_decomposed_artifact(requirements, directory, store=store)
+    wrapper_id = f"{requirements.elaboration.source_scope_id}.compute.wrapper"
+    return PackagedDecomposedArtifact(
+        requirements.identity,
+        requirements.top_module_name,
+        str(directory),
+        files,
+        tuple(
+            item
+            for item in requirements.elaboration.numeric_interfaces
+            if item.component_id == wrapper_id
+        ),
+        tuple(
+            item
+            for item in requirements.elaboration.control_interfaces
+            if item.component_id == wrapper_id
+        ),
+    )
+
+
 __all__ = [
+    "PACKAGING_SCHEMA_VERSION",
     "WRAPPER_MODULE",
     "MVAUDecomposedArtifactRequirements",
+    "PackagedDecomposedArtifact",
     "build_decomposed_artifact_requirements",
     "compose",
     "decomposed_top_module_name",
     "elaborate_decomposed",
+    "package_decomposed_artifact",
+    "packaged_directory_name",
     "render_decomposed_wrapper",
     "write_decomposed_artifact",
 ]
