@@ -40,11 +40,14 @@ from finn.dataflow.mvau.elaboration import MVAUPhysicalDirection
 from finn.dataflow.hardware.identity import content_hash
 from finn.dataflow.mvau.hardware.composition import (
     INSTANTIATION_COMMAND_SCHEMA,
+    SYNTHESIS_LAYOUT,
     SYNTHESIS_RECIPE_SCHEMA,
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     package_decomposed_artifact,
     packaged_artifact_identity,
+    complete_decomposed_synthesis,
+    find_decomposed_synthesis,
     packaged_directory_name,
     prepare_decomposed_synthesis,
     render_clock_constraints,
@@ -416,7 +419,8 @@ def test_synthesis_materializes_into_its_own_directory(
     for source in packaged.files:
         assert source in script
     assert synthesis.report_path in script
-    assert not synthesis.reused
+    # A prepared run has no completed-ness to report; the type says so.
+    assert not hasattr(synthesis, "reused")
 
 
 def test_two_synthesis_runs_of_one_package_do_not_collide(
@@ -463,16 +467,110 @@ def test_a_synthesis_run_already_done_is_looked_up_and_not_repeated(
 
         def lookup(self, asked: ArtifactKey) -> StoredArtifact:
             self.asked.append(asked)
-            return StoredArtifact(asked.key, "/previously/synthesized", ("/previously/x.rpt",))
+            return StoredArtifact(
+                asked.key,
+                "/previously/synthesized",
+                tuple(f"/previously/synthesized/{name}" for name in SYNTHESIS_LAYOUT),
+            )
 
     store = _Hit()
-    reused = prepare_decomposed_synthesis(packaged, TARGET, output, store=store)
+    reused = find_decomposed_synthesis(packaged, TARGET, store=store)
 
+    assert reused is not None
     assert [item.key for item in store.asked] == [identity.key]
     assert reused.reused
     assert reused.directory == "/previously/synthesized"
-    assert reused.report_path.startswith("/previously/synthesized/")
+    assert reused.report_path == "/previously/synthesized/utilization.rpt"
     assert not output.exists()
+
+    assert find_decomposed_synthesis(packaged, TARGET) is None
+
+
+def test_a_synthesis_hit_must_be_the_declared_layout(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """The same hole the packaging stage had, one stage higher.
+
+    The hit path read only the store's *directory* and fabricated three
+    conventional names beneath it, so a store answering with the right key and
+    one unrelated file was accepted -- and three paths it had never supplied
+    were reported back as though they had been found.  Discarding the part of
+    the answer that says what was found is how a correct key still produces a
+    wrong hit.
+    """
+
+    packaged = package_decomposed_artifact(requirements, tmp_path)
+
+    def _store(directory: str, names: tuple[str, ...]) -> object:
+        class _Answer:
+            def lookup(self, asked: ArtifactKey) -> StoredArtifact:
+                return StoredArtifact(
+                    asked.key, directory, tuple(f"{directory}/{name}" for name in names)
+                )
+
+        return _Answer()
+
+    for names in (
+        ("not-the-report.bin",),
+        SYNTHESIS_LAYOUT[:-1],
+        (*SYNTHESIS_LAYOUT, "extra.rpt"),
+        tuple(reversed(SYNTHESIS_LAYOUT)),
+    ):
+        with pytest.raises(ValueError, match="layout this stage declares"):
+            find_decomposed_synthesis(
+                packaged,
+                TARGET,
+                store=_store("/cached/synth", names),  # type: ignore[arg-type]
+            )
+
+    # And files under some other directory than the one reported.
+    class _Elsewhere:
+        def lookup(self, asked: ArtifactKey) -> StoredArtifact:
+            return StoredArtifact(
+                asked.key,
+                "/cached/synth",
+                tuple(f"/cached/other/{name}" for name in SYNTHESIS_LAYOUT),
+            )
+
+    with pytest.raises(ValueError, match="layout this stage declares"):
+        find_decomposed_synthesis(packaged, TARGET, store=_Elsewhere())
+
+
+def test_a_prepared_run_is_not_a_completed_one(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """The two states are two types, because one flag was carrying both.
+
+    A prepared run has its inputs written and no report; a completed one has
+    outputs.  With a single value and a ``reused`` boolean, nothing in the type
+    said whether ``report_path`` named a file that exists -- and a "completed"
+    value could be fabricated from a directory alone, which is exactly how the
+    store's manifest came to be discarded.
+    """
+
+    packaged = package_decomposed_artifact(requirements, tmp_path)
+    prepared = prepare_decomposed_synthesis(packaged, TARGET, tmp_path)
+
+    assert Path(prepared.constraints_path).is_file()
+    assert Path(prepared.script_path).is_file()
+    assert not Path(prepared.report_path).exists()
+    assert not hasattr(prepared, "files")
+
+    # Completing it before the tool has run is refused: a run whose report was
+    # never written would otherwise be storable, and a later hit would hand a
+    # consumer a report that does not exist.
+    with pytest.raises(ValueError, match="did not produce"):
+        complete_decomposed_synthesis(prepared)
+
+    Path(prepared.report_path).write_text("| DSP48E2 | 2 |\n")
+    completed = complete_decomposed_synthesis(prepared)
+
+    assert completed.identity == prepared.identity
+    assert completed.files == tuple(
+        str(Path(prepared.directory) / name) for name in SYNTHESIS_LAYOUT
+    )
+    assert completed.report_path == prepared.report_path
+    assert not completed.reused
 
 
 def test_one_packaged_unit_synthesized_for_two_parts_is_two_results(

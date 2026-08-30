@@ -1085,16 +1085,33 @@ def render_clock_constraints(target: TargetIdentity) -> str:
     )
 
 
-@dataclass(frozen=True)
-class SynthesizedDecomposedArtifact:
-    """One out-of-context synthesis of a packaged unit, materialized.
+#: What a completed synthesis run holds, in a fixed order.
+#:
+#: Declared, so that a store's answer can be checked against it rather than
+#: taken on trust -- the same reason the packaged unit declares its layout.  A
+#: run also leaves tool droppings (``.Xil``, journals, checkpoints); those are
+#: the tool's and are not part of what this stage claims to produce.
+SYNTHESIS_LAYOUT = (
+    CONSTRAINTS_FILE_NAME,
+    SYNTHESIS_SCRIPT_FILE_NAME,
+    UTILIZATION_REPORT_FILE_NAME,
+)
 
-    Its own directory, named from its own key.  The packaged unit is immutable
-    and synthesis is a *different* stage over it, so writing a script, a
-    constraints file and a utilization report into the package directory would
-    both mutate the artifact and make two runs of one package -- another part,
-    another clock, another tool -- overwrite each other.  That is the
-    concrete cost of a stage that exists as a value and not as a place.
+
+def _in_directory(directory: str, layout: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(str(Path(directory) / name) for name in layout)
+
+
+@dataclass(frozen=True)
+class PreparedDecomposedSynthesis:
+    """A synthesis run that has been set up and not yet performed.
+
+    Distinct from :class:`SynthesizedDecomposedArtifact` on purpose.  One value
+    with a ``reused`` flag was carrying two different states -- inputs written
+    and no report yet, versus a completed result -- and a consumer could not
+    tell from the type whether ``report_path`` named a file that exists.  It
+    also let the store's answer be discarded, because a "completed" value could
+    be fabricated out of a directory alone.
     """
 
     identity: SynthesisArtifactIdentity
@@ -1105,16 +1122,91 @@ class SynthesizedDecomposedArtifact:
     sources: tuple[str, ...]
     constraints_path: str
     script_path: str
+    #: Where the report *will* be written.  It does not exist yet.
     report_path: str
-    reused: bool = False
 
     @property
     def key(self) -> str:
         return self.identity.key
 
 
+@dataclass(frozen=True)
+class SynthesizedDecomposedArtifact:
+    """One completed out-of-context synthesis of a packaged unit.
+
+    Its own directory, named from its own key.  The packaged unit is immutable
+    and synthesis is a *different* stage over it, so writing a script, a
+    constraints file and a report into the package directory would both mutate
+    the artifact and make two runs of one package -- another part, another
+    clock, another tool -- overwrite each other.
+
+    ``files`` is checked against :data:`SYNTHESIS_LAYOUT`, so a store answering
+    with the right key and the wrong contents is refused rather than believed.
+    """
+
+    identity: SynthesisArtifactIdentity
+    directory: str
+    top_module_name: str
+    files: tuple[str, ...]
+    reused: bool = False
+
+    def __post_init__(self) -> None:
+        expected = _in_directory(self.directory, SYNTHESIS_LAYOUT)
+        if self.files != expected:
+            raise ValueError(
+                "a completed synthesis must hold the layout this stage declares; "
+                f"{self.identity.key} expects {SYNTHESIS_LAYOUT} under "
+                f"{self.directory} and this holds {self.files}"
+            )
+
+    @property
+    def key(self) -> str:
+        return self.identity.key
+
+    def _named(self, name: str) -> str:
+        return self.files[SYNTHESIS_LAYOUT.index(name)]
+
+    @property
+    def constraints_path(self) -> str:
+        return self._named(CONSTRAINTS_FILE_NAME)
+
+    @property
+    def script_path(self) -> str:
+        return self._named(SYNTHESIS_SCRIPT_FILE_NAME)
+
+    @property
+    def report_path(self) -> str:
+        return self._named(UTILIZATION_REPORT_FILE_NAME)
+
+
 def synthesis_directory_name(identity: SynthesisArtifactIdentity, top_module_name: str) -> str:
     return f"{top_module_name}_synth_{identity.key[:16]}"
+
+
+def find_decomposed_synthesis(
+    packaged: PackagedDecomposedArtifact,
+    target: TargetIdentity,
+    *,
+    builder: BuilderIdentity = DEFAULT_BUILDER,
+    store: ArtifactStore = NO_ARTIFACT_STORE,
+) -> SynthesizedDecomposedArtifact | None:
+    """A run already done for this unit, part, clock, constraints and tool.
+
+    The store's manifest is *consumed*, not discarded.  An earlier version read
+    only the directory and fabricated three conventional file names beneath it,
+    so a store answering with the right key and a single unrelated file was
+    accepted and three paths it had never supplied were reported back.  That is
+    the wrong-hit this whole design is against, reached by ignoring the part of
+    the answer that says what was found.
+    """
+
+    identity = packaged.synthesis_identity(target, builder)
+    found = checked_lookup(store, identity)
+    if found is None:
+        return None
+    return SynthesizedDecomposedArtifact(
+        identity, found.directory, packaged.top_module_name, found.files, reused=True
+    )
 
 
 def prepare_decomposed_synthesis(
@@ -1123,35 +1215,17 @@ def prepare_decomposed_synthesis(
     output_root: str | Path,
     *,
     builder: BuilderIdentity = DEFAULT_BUILDER,
-    store: ArtifactStore = NO_ARTIFACT_STORE,
-) -> SynthesizedDecomposedArtifact:
+) -> PreparedDecomposedSynthesis:
     """Everything a synthesis run consumes, written where its key says.
 
-    Consults the store with the synthesis key -- so a run already done for this
-    unit, part, clock, constraints and tool is not done again -- and otherwise
-    materializes the script and constraints under a directory named from that
-    key.
-
-    It does not invoke anything.  Producing a script is not running a tool, and
-    keeping that line is what stops ``BuilderIdentity`` growing into the
-    execution adapter it was deliberately not made.
+    It does not invoke anything and it does not look anything up.  Producing a
+    script is not running a tool -- keeping that line is what stops
+    ``BuilderIdentity`` growing into the execution adapter it was deliberately
+    not made -- and the lookup is :func:`find_decomposed_synthesis`, which
+    returns a *completed* run rather than a prepared one.
     """
 
     identity = packaged.synthesis_identity(target, builder)
-    found = checked_lookup(store, identity)
-    if found is not None:
-        directory = Path(found.directory)
-        return SynthesizedDecomposedArtifact(
-            identity,
-            found.directory,
-            packaged.top_module_name,
-            packaged.files,
-            str(directory / CONSTRAINTS_FILE_NAME),
-            str(directory / SYNTHESIS_SCRIPT_FILE_NAME),
-            str(directory / UTILIZATION_REPORT_FILE_NAME),
-            reused=True,
-        )
-
     directory = Path(output_root).resolve() / synthesis_directory_name(
         identity, packaged.top_module_name
     )
@@ -1172,7 +1246,7 @@ def prepare_decomposed_synthesis(
         )
         + "\n"
     )
-    return SynthesizedDecomposedArtifact(
+    return PreparedDecomposedSynthesis(
         identity,
         str(directory),
         packaged.top_module_name,
@@ -1183,20 +1257,51 @@ def prepare_decomposed_synthesis(
     )
 
 
+def complete_decomposed_synthesis(
+    prepared: PreparedDecomposedSynthesis,
+) -> SynthesizedDecomposedArtifact:
+    """The run, once the tool has left its outputs behind.
+
+    Whoever invoked the tool says so by calling this, and it refuses unless the
+    declared layout is actually on disk.  A prepared run that turned into a
+    completed one without producing a report would otherwise be storable, and a
+    later hit would hand a consumer a report that was never written.
+    """
+
+    missing = tuple(
+        name for name in SYNTHESIS_LAYOUT if not (Path(prepared.directory) / name).is_file()
+    )
+    if missing:
+        raise ValueError(
+            f"synthesis under {prepared.directory} did not produce {missing}; "
+            "a run is not complete until its declared outputs exist"
+        )
+    return SynthesizedDecomposedArtifact(
+        prepared.identity,
+        prepared.directory,
+        prepared.top_module_name,
+        _in_directory(prepared.directory, SYNTHESIS_LAYOUT),
+    )
+
+
 __all__ = [
     "CONSTRAINTS_FILE_NAME",
     "INSTANTIATION_COMMAND_SCHEMA",
+    "SYNTHESIS_LAYOUT",
     "SYNTHESIS_RECIPE_SCHEMA",
     "SYNTHESIS_SCRIPT_FILE_NAME",
     "UTILIZATION_REPORT_FILE_NAME",
     "WRAPPER_MODULE",
     "MVAUDecomposedArtifactRequirements",
     "PackagedDecomposedArtifact",
+    "PreparedDecomposedSynthesis",
     "SynthesizedDecomposedArtifact",
     "build_decomposed_artifact_requirements",
     "compose",
     "decomposed_top_module_name",
     "elaborate_decomposed",
+    "complete_decomposed_synthesis",
+    "find_decomposed_synthesis",
     "prepare_decomposed_synthesis",
     "render_clock_constraints",
     "synthesis_directory_name",

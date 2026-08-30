@@ -38,10 +38,12 @@ and it is the only one of the two that a failed lookup can be explained from.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
+from string import Formatter
 from pathlib import Path
 
 from finn.dataflow.hardware.kernel import KernelBinding, scalar_parameters
@@ -105,6 +107,44 @@ def _encode(name: str, value: object) -> Scalar:
         f"{name} is a {type(value).__name__}, which has no stable serialization; "
         "a build-affecting choice must be a scalar or an Enum"
     )
+
+
+#: A word that is an absolute path.  Crude on purpose: a command *shape* has no
+#: business containing one at all, so anything that looks like one is refused
+#: rather than parsed.
+_ABSOLUTE_PATH = re.compile(r"(?:^|[\s{(\[=])[/~]\S")
+
+
+def _check_command_shape(recipe: str) -> None:
+    """A recipe must be a template, not a command someone already rendered.
+
+    Checked by *parsing*, because the earlier "does it contain a brace or a
+    newline" test passed anything multi-line -- including a fully rendered
+    script with absolute paths in it, which is precisely the root-dependence
+    the shape exists to keep out of the key.
+
+    Two conditions.  It has to name at least one substitution, since a rendered
+    command names none; and no literal part of it may contain an absolute path,
+    since a template that hard-codes one is root-dependent wherever its
+    placeholders are.
+    """
+
+    try:
+        parsed = tuple(Formatter().parse(recipe))
+    except ValueError as error:
+        raise ArtifactIdentityError(f"{recipe!r} is not a well-formed command shape") from error
+    if not any(field is not None for _, field, _, _ in parsed):
+        raise ArtifactIdentityError(
+            f"{recipe!r} names no substitution, so it is a rendered command rather "
+            "than a command shape; a rendered command carries materialized paths"
+        )
+    for literal, _, _, _ in parsed:
+        found = _ABSOLUTE_PATH.search(literal)
+        if found:
+            raise ArtifactIdentityError(
+                f"a command shape must not hard-code an absolute path, and "
+                f"{recipe!r} contains {found.group().strip()!r}"
+            )
 
 
 def _local_assignments(binding: KernelBinding) -> tuple[tuple[str, Scalar], ...]:
@@ -394,11 +434,7 @@ class SynthesisArtifactIdentity:
                 "a synthesis artifact needs its constraints and its command shape; "
                 "the target alone reproduces them only under one generator"
             )
-        if "\n" not in self.recipe and "{" not in self.recipe:
-            raise ArtifactIdentityError(
-                f"{self.recipe!r} does not look like a command shape; a rendered "
-                "command would carry materialized paths into the key"
-            )
+        _check_command_shape(self.recipe)
 
     @property
     def serialization(self) -> str:

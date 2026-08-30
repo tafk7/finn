@@ -42,6 +42,8 @@ from dataflow.rtlsim.composed_mvau_equiv import (
 from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
 from finn.dataflow.mvau.hardware.binding import finnlib_root
 from finn.dataflow.mvau.hardware.composition import (
+    complete_decomposed_synthesis,
+    find_decomposed_synthesis,
     package_decomposed_artifact,
     prepare_decomposed_synthesis,
 )
@@ -128,10 +130,14 @@ def run_one(config: Config) -> int:
         # packaged unit would mutate an immutable artifact, and two runs of one
         # package -- another part, another clock, another tool -- would
         # overwrite each other.
-        synthesis = prepare_decomposed_synthesis(packaged, target, scratch, builder=_builder())
+        builder = _builder()
+        done = find_decomposed_synthesis(packaged, target, builder=builder)
+        if done is not None:  # pragma: no cover - no store is configured here
+            print(f"  reuse: {Path(done.directory).name}")
+            return PASS
+        synthesis = prepare_decomposed_synthesis(packaged, target, scratch, builder=builder)
         directory = Path(synthesis.directory)
         report = Path(synthesis.report_path)
-        builder = synthesis.identity.builder
         print(f"  top:   {packaged.top_module_name} on {target.fpga_part}")
         print(f"  unit:  {Path(packaged.directory).name}")
         print(f"  clock: {target.clock_period_ns} ns")
@@ -158,6 +164,10 @@ def run_one(config: Config) -> int:
             print("\n".join(errors))
             print(f"  {config.label.upper()}: FAIL (synthesis reported errors)")
             return FAIL
+        # The run is only complete once its declared outputs exist, and saying
+        # so is the caller's job because the caller is what invoked the tool.
+        completed = complete_decomposed_synthesis(synthesis)
+        assert completed.report_path == str(report)
         cells = {name: int(count) for name, count in _UTILIZATION.findall(report.read_text())}
         # Count the per-primitive rows only.  The report also carries a summary
         # row that totals them, and adding it in reports twice the DSPs there
