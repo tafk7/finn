@@ -367,16 +367,38 @@ class SynthesisArtifactIdentity:
     that consumes them.  One packaged unit synthesized for two parts is two
     results over one source -- which is the reuse that keeping the part out of
     the lower stages buys.
+
+    ``constraints`` and ``recipe`` are the other two inputs, and leaving them
+    out was the same mistake the wrapper digest exists to prevent one stage up.
+    The clock period reproduces the constraint text under *today's* generator;
+    a change to that generator, or to the synthesis command's options, changes
+    what is built while every other field stays equal.  ``recipe`` is the
+    command *shape* and never a rendered command, for the same reason the
+    packaged layout is names and not paths.
     """
 
     upstream: str
     target: TargetIdentity
     builder: BuilderIdentity = DEFAULT_BUILDER
+    #: Content hash of the constraints the run is synthesized against.
+    constraints_digest: str = ""
+    #: The synthesis command shape, with paths and names held out.
+    recipe: str = ""
     schema_version: str = SYNTHESIS_ARTIFACT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if not self.upstream:
             raise ArtifactIdentityError("a synthesis artifact needs an upstream key")
+        if not self.constraints_digest or not self.recipe:
+            raise ArtifactIdentityError(
+                "a synthesis artifact needs its constraints and its command shape; "
+                "the target alone reproduces them only under one generator"
+            )
+        if "\n" not in self.recipe and "{" not in self.recipe:
+            raise ArtifactIdentityError(
+                f"{self.recipe!r} does not look like a command shape; a rendered "
+                "command would carry materialized paths into the key"
+            )
 
     @property
     def serialization(self) -> str:
@@ -386,6 +408,8 @@ class SynthesisArtifactIdentity:
                 ["upstream", self.upstream],
                 ["target", [self.target.fpga_part, self.target.clock_period_ns]],
                 ["builder", [self.builder.backend_id, self.builder.tool_version]],
+                ["constraints", self.constraints_digest],
+                ["recipe", self.recipe],
             ]
         )
 

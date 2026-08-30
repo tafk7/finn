@@ -41,7 +41,10 @@ from dataflow.rtlsim.composed_mvau_equiv import (
 )
 from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
 from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.composition import package_decomposed_artifact
+from finn.dataflow.mvau.hardware.composition import (
+    package_decomposed_artifact,
+    prepare_decomposed_synthesis,
+)
 from finn.util.basic import get_vivado_version
 
 #: Synthesis is slow and mostly repeats itself, so only one configuration per
@@ -67,46 +70,6 @@ _UNLICENSED = "A valid license was not found"
 #: Set on the per-configuration workers, which share the dispatcher's log and
 #: would otherwise repeat its header once per configuration.
 _IDENTITY_RECORDED = "FIXTURE6_IDENTITY_RECORDED"
-
-
-def _clock_constraints(target: TargetIdentity) -> str:
-    """The requested clock, as constraints synthesis is actually run against.
-
-    ``clock_period_ns`` was in :class:`SynthesisArtifactIdentity` before it was
-    an input to anything, which made the stage a value rather than a stage: two
-    periods keyed differently and produced identical results, because
-    unconstrained out-of-context synthesis optimizes against no timing target.
-
-    ``ap_clk2x`` is derived rather than chosen -- the pumped compute path runs
-    at twice the rate, and letting the fixture pick its own number would be the
-    fixture inventing a design input.
-    """
-
-    period = target.clock_period_ns
-    return (
-        f"create_clock -period {period} -name ap_clk [get_ports ap_clk]\n"
-        f"create_clock -period {period / 2} -name ap_clk2x [get_ports ap_clk2x]\n"
-    )
-
-
-def _tcl(
-    top: str, target: TargetIdentity, sources: list[str], constraints: Path, report: Path
-) -> str:
-    """Out-of-context synthesis of the packaged unit, against the requested clock.
-
-    The constraints are read *before* ``synth_design`` and not applied after
-    it.  Creating a clock on an already-synthesized netlist changes what timing
-    reports say and nothing about what was built -- which would leave the
-    period in the key while still not being an input to the run.
-    """
-
-    reads = "\n".join(f"read_verilog -sv {{{path}}}" for path in sources)
-    return f"""
-{reads}
-read_xdc {{{constraints}}}
-synth_design -top {top} -part {target.fpga_part} -mode out_of_context
-report_utilization -file {{{report}}}
-"""
 
 
 def _builder() -> BuilderIdentity:
@@ -159,23 +122,29 @@ def run_one(config: Config) -> int:
         # its own copy would be synthesizing something adjacent to what a
         # consumer builds rather than the thing itself.
         packaged = package_decomposed_artifact(requirements, scratch)
-        directory = Path(packaged.directory)
-        sources = list(packaged.files)
-        report = directory / "utilization.rpt"
-        # The stage identity for *this* run, built from the packaged unit and
-        # the two things synthesis actually adds: the device, and the tool.
         target = TargetIdentity(requirements.target_fpga_part, requirements.clock_period_ns)
-        synthesis = packaged.synthesis_identity(target, _builder())
-        constraints = directory / "clock.xdc"
-        constraints.write_text(_clock_constraints(target))
-        script = directory / "synth.tcl"
-        script.write_text(_tcl(packaged.top_module_name, target, sources, constraints, report))
-        print(f"  top:  {packaged.top_module_name} on {target.fpga_part}")
-        print(f"  unit: {directory.name}")
+        # The synthesis stage materializes into its *own* directory, named from
+        # its own key.  Writing a script, constraints and a report into the
+        # packaged unit would mutate an immutable artifact, and two runs of one
+        # package -- another part, another clock, another tool -- would
+        # overwrite each other.
+        synthesis = prepare_decomposed_synthesis(packaged, target, scratch, builder=_builder())
+        directory = Path(synthesis.directory)
+        report = Path(synthesis.report_path)
+        builder = synthesis.identity.builder
+        print(f"  top:   {packaged.top_module_name} on {target.fpga_part}")
+        print(f"  unit:  {Path(packaged.directory).name}")
         print(f"  clock: {target.clock_period_ns} ns")
-        print(f"  build: {synthesis.builder.backend_id} {synthesis.builder.tool_version}")
-        print(f"  key:  {synthesis.key}")
-        completed = _run_vivado(directory, script)
+        print(f"  build: {builder.backend_id} {builder.tool_version}")
+        print(f"  synth: {directory.name}")
+        print(f"  key:   {synthesis.key}")
+        # The packaged unit is untouched by this run, which is the whole point
+        # of the stage having a place of its own.
+        assert directory != Path(packaged.directory)
+        assert sorted(item.name for item in Path(packaged.directory).iterdir()) == sorted(
+            packaged.identity.layout
+        ), "synthesis wrote into the packaged unit"
+        completed = _run_vivado(directory, Path(synthesis.script_path))
         errors = [line for line in completed.stdout.splitlines() if line.startswith("ERROR:")]
         if any(_UNLICENSED in line for line in errors):
             print(f"  {config.label.upper()}: SKIPPED (no license for this device)")

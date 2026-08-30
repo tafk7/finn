@@ -935,9 +935,20 @@ class PackagedDecomposedArtifact:
         because this is the stage that consumes them.  One packaged unit
         synthesized for two parts is two results over one source, which is the
         reuse keeping them out of the lower stages buys.
+
+        The constraints and the command shape are inputs too, and they are
+        taken from this module rather than supplied: a caller that rendered its
+        own constraints and then keyed them would be keying its own text, which
+        is not the same claim.
         """
 
-        return SynthesisArtifactIdentity(self.identity.key, target, builder)
+        return SynthesisArtifactIdentity(
+            self.identity.key,
+            target,
+            builder,
+            content_hash(render_clock_constraints(target).encode()),
+            SYNTHESIS_RECIPE_SCHEMA,
+        )
 
     def instantiation_commands(self, instance_name: str) -> tuple[str, ...]:
         """The IPI commands that place this unit, at a caller-chosen instance.
@@ -1032,15 +1043,163 @@ def package_decomposed_artifact(
     )
 
 
+# -- out-of-context synthesis ------------------------------------------------
+
+#: The synthesis command, as a shape rather than as a command.
+#:
+#: In the key, so that changing an option -- ``-mode out_of_context`` above
+#: all -- changes what the stage is keyed on.  A *rendered* command would carry
+#: absolute source and report paths, which is the trap the packaged layout
+#: already avoids by holding names instead.
+SYNTHESIS_RECIPE_SCHEMA = "\n".join(
+    (
+        "{sources}",
+        "read_xdc {constraints}",
+        "synth_design -top {top} -part {part} -mode out_of_context",
+        "report_utilization -file {report}",
+    )
+)
+
+#: The two files a synthesis run reads that the packaged unit does not carry.
+CONSTRAINTS_FILE_NAME = "clock.xdc"
+SYNTHESIS_SCRIPT_FILE_NAME = "synth.tcl"
+UTILIZATION_REPORT_FILE_NAME = "utilization.rpt"
+
+
+def render_clock_constraints(target: TargetIdentity) -> str:
+    """The requested clock, as constraints synthesis is actually run against.
+
+    Here rather than in a fixture, because the constraint text is a build input
+    and therefore keyed.  A caller that rendered its own and then hashed it
+    would be keying its own text, which is a claim about the caller.
+
+    ``ap_clk2x`` is derived and not chosen: the pumped compute path runs at
+    twice the rate, and letting a caller pick a separate number for it would be
+    inventing a design input.
+    """
+
+    period = target.clock_period_ns
+    return (
+        f"create_clock -period {period} -name ap_clk [get_ports ap_clk]\n"
+        f"create_clock -period {period / 2} -name ap_clk2x [get_ports ap_clk2x]\n"
+    )
+
+
+@dataclass(frozen=True)
+class SynthesizedDecomposedArtifact:
+    """One out-of-context synthesis of a packaged unit, materialized.
+
+    Its own directory, named from its own key.  The packaged unit is immutable
+    and synthesis is a *different* stage over it, so writing a script, a
+    constraints file and a utilization report into the package directory would
+    both mutate the artifact and make two runs of one package -- another part,
+    another clock, another tool -- overwrite each other.  That is the
+    concrete cost of a stage that exists as a value and not as a place.
+    """
+
+    identity: SynthesisArtifactIdentity
+    #: Where this run's inputs and outputs live.  Never the packaged directory.
+    directory: str
+    top_module_name: str
+    #: The packaged unit's files, read from where they already are.
+    sources: tuple[str, ...]
+    constraints_path: str
+    script_path: str
+    report_path: str
+    reused: bool = False
+
+    @property
+    def key(self) -> str:
+        return self.identity.key
+
+
+def synthesis_directory_name(identity: SynthesisArtifactIdentity, top_module_name: str) -> str:
+    return f"{top_module_name}_synth_{identity.key[:16]}"
+
+
+def prepare_decomposed_synthesis(
+    packaged: PackagedDecomposedArtifact,
+    target: TargetIdentity,
+    output_root: str | Path,
+    *,
+    builder: BuilderIdentity = DEFAULT_BUILDER,
+    store: ArtifactStore = NO_ARTIFACT_STORE,
+) -> SynthesizedDecomposedArtifact:
+    """Everything a synthesis run consumes, written where its key says.
+
+    Consults the store with the synthesis key -- so a run already done for this
+    unit, part, clock, constraints and tool is not done again -- and otherwise
+    materializes the script and constraints under a directory named from that
+    key.
+
+    It does not invoke anything.  Producing a script is not running a tool, and
+    keeping that line is what stops ``BuilderIdentity`` growing into the
+    execution adapter it was deliberately not made.
+    """
+
+    identity = packaged.synthesis_identity(target, builder)
+    found = checked_lookup(store, identity)
+    if found is not None:
+        directory = Path(found.directory)
+        return SynthesizedDecomposedArtifact(
+            identity,
+            found.directory,
+            packaged.top_module_name,
+            packaged.files,
+            str(directory / CONSTRAINTS_FILE_NAME),
+            str(directory / SYNTHESIS_SCRIPT_FILE_NAME),
+            str(directory / UTILIZATION_REPORT_FILE_NAME),
+            reused=True,
+        )
+
+    directory = Path(output_root).resolve() / synthesis_directory_name(
+        identity, packaged.top_module_name
+    )
+    if directory == Path(packaged.directory):
+        raise ValueError("a synthesis run must not materialize into its packaged unit")
+    directory.mkdir(parents=True, exist_ok=True)
+    constraints = directory / CONSTRAINTS_FILE_NAME
+    constraints.write_text(render_clock_constraints(target))
+    report = directory / UTILIZATION_REPORT_FILE_NAME
+    script = directory / SYNTHESIS_SCRIPT_FILE_NAME
+    script.write_text(
+        SYNTHESIS_RECIPE_SCHEMA.format(
+            sources="\n".join(f"read_verilog -sv {{{path}}}" for path in packaged.files),
+            constraints=f"{{{constraints}}}",
+            top=packaged.top_module_name,
+            part=target.fpga_part,
+            report=f"{{{report}}}",
+        )
+        + "\n"
+    )
+    return SynthesizedDecomposedArtifact(
+        identity,
+        str(directory),
+        packaged.top_module_name,
+        packaged.files,
+        str(constraints),
+        str(script),
+        str(report),
+    )
+
+
 __all__ = [
+    "CONSTRAINTS_FILE_NAME",
     "INSTANTIATION_COMMAND_SCHEMA",
+    "SYNTHESIS_RECIPE_SCHEMA",
+    "SYNTHESIS_SCRIPT_FILE_NAME",
+    "UTILIZATION_REPORT_FILE_NAME",
     "WRAPPER_MODULE",
     "MVAUDecomposedArtifactRequirements",
     "PackagedDecomposedArtifact",
+    "SynthesizedDecomposedArtifact",
     "build_decomposed_artifact_requirements",
     "compose",
     "decomposed_top_module_name",
     "elaborate_decomposed",
+    "prepare_decomposed_synthesis",
+    "render_clock_constraints",
+    "synthesis_directory_name",
     "package_decomposed_artifact",
     "packaged_artifact_identity",
     "packaged_directory_name",

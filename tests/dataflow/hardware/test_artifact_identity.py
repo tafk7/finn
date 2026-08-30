@@ -81,6 +81,19 @@ def _kernel_with_assignments(
     )
 
 
+def _synthesis(**overrides: object) -> SynthesisArtifactIdentity:
+    """A stage-three identity, so a negative changes exactly one input."""
+
+    fields: dict[str, object] = {
+        "upstream": "packaged-key",
+        "target": TARGET,
+        "constraints_digest": content_hash(b"create_clock -period 4.0"),
+        "recipe": "{sources}\nsynth_design -top {top} -mode out_of_context",
+    }
+    fields.update(overrides)
+    return SynthesisArtifactIdentity(**fields)  # type: ignore[arg-type]
+
+
 def _identity(**overrides: object) -> KernelArtifactIdentity:
     """A hand-built identity, so a negative changes exactly one input."""
 
@@ -382,18 +395,19 @@ def test_neither_target_nor_builder_reaches_the_generated_source_key() -> None:
 def test_a_synthesis_identity_is_where_the_target_and_the_builder_land() -> None:
     """One packaged unit, several devices, several results."""
 
-    upstream = "packaged-key"
-    default = SynthesisArtifactIdentity(upstream, TARGET)
+    default = _synthesis()
 
     assert default.builder == DEFAULT_BUILDER
     assert default.builder.tool_version == "unspecified"
 
     moved = (
-        SynthesisArtifactIdentity("other-unit", TARGET),
-        SynthesisArtifactIdentity(upstream, TargetIdentity("xcku3p-ffva676-1-e", 4.0)),
-        SynthesisArtifactIdentity(upstream, TargetIdentity(TARGET.fpga_part, 5.0)),
-        SynthesisArtifactIdentity(upstream, TARGET, BuilderIdentity("vitis", "unspecified")),
-        SynthesisArtifactIdentity(upstream, TARGET, BuilderIdentity("vivado", "2025.1")),
+        _synthesis(upstream="other-unit"),
+        _synthesis(target=TargetIdentity("xcku3p-ffva676-1-e", 4.0)),
+        _synthesis(target=TargetIdentity(TARGET.fpga_part, 5.0)),
+        _synthesis(builder=BuilderIdentity("vitis", "unspecified")),
+        _synthesis(builder=BuilderIdentity("vivado", "2025.1")),
+        _synthesis(constraints_digest=content_hash(b"other")),
+        _synthesis(recipe="{sources}\nsynth_design -top {top} -mode default"),
     )
     assert len({item.key for item in moved} | {default.key}) == len(moved) + 1
 
@@ -406,12 +420,12 @@ def test_the_default_builder_does_not_read_the_environment() -> None:
     to tell from the value which shell produced it.
     """
 
-    baseline = SynthesisArtifactIdentity("unit", TARGET).key
+    baseline = _synthesis().key
 
     previous = os.environ.get("XILINX_VIVADO")
     os.environ["XILINX_VIVADO"] = "/tools/Xilinx/Vivado/2024.2"
     try:
-        assert SynthesisArtifactIdentity("unit", TARGET).key == baseline
+        assert _synthesis().key == baseline
     finally:
         if previous is None:
             del os.environ["XILINX_VIVADO"]

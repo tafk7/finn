@@ -37,18 +37,26 @@ from finn.dataflow.hardware import (
     TargetIdentity,
 )
 from finn.dataflow.mvau.elaboration import MVAUPhysicalDirection
+from finn.dataflow.hardware.identity import content_hash
 from finn.dataflow.mvau.hardware.composition import (
     INSTANTIATION_COMMAND_SCHEMA,
+    SYNTHESIS_RECIPE_SCHEMA,
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     package_decomposed_artifact,
     packaged_artifact_identity,
     packaged_directory_name,
+    prepare_decomposed_synthesis,
+    render_clock_constraints,
     staged_layout,
+    synthesis_directory_name,
 )
 from finn.dataflow.mvau.providers import elaborate_mvau
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
+
+#: The device the synthesis-stage tests key against.
+TARGET = TargetIdentity("xczu3eg-sbva484-1-e", 4.0)
 
 
 #: The port list of the generated module, read out of its own declaration.
@@ -323,13 +331,148 @@ def test_synthesis_is_a_stage_because_the_target_reaches_only_it() -> None:
 
     # And the stage below does separate them, which is the other half: one
     # package, two synthesis results.
-    keys = {
-        SynthesisArtifactIdentity(
-            unit.key, TargetIdentity(item.target_fpga_part, item.clock_period_ns)
-        ).key
-        for item in built
-    }
+    keys = set()
+    for item in built:
+        device = TargetIdentity(item.target_fpga_part, item.clock_period_ns)
+        keys.add(
+            SynthesisArtifactIdentity(
+                unit.key,
+                device,
+                constraints_digest=content_hash(render_clock_constraints(device).encode()),
+                recipe=SYNTHESIS_RECIPE_SCHEMA,
+            ).key
+        )
     assert len(keys) == 2
+
+
+def test_the_synthesis_key_covers_its_constraints_and_its_recipe(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """The target alone reproduces them under *today's* generator, and no more.
+
+    This is the same argument the wrapper digest settled one stage up: a change
+    to the constraint generator, or to a synthesis option like
+    ``-mode out_of_context``, changes what is built while every other field of
+    the key stays equal.  Recording only the clock period would leave both
+    outside.
+
+    The recipe is a *shape*.  A rendered command carries absolute source and
+    report paths, so keying it would make one run under two roots two runs --
+    the mistake the packaged layout already avoids by holding names.
+    """
+
+    packaged = package_decomposed_artifact(requirements, tmp_path)
+    identity = packaged.synthesis_identity(TARGET)
+
+    assert identity.constraints_digest == content_hash(render_clock_constraints(TARGET).encode())
+    assert identity.recipe == SYNTHESIS_RECIPE_SCHEMA
+    assert "-mode out_of_context" in identity.recipe
+    # A shape, so no materialized path can be in it.
+    assert str(tmp_path) not in identity.serialization
+
+    moved = (
+        replace(identity, constraints_digest=content_hash(b"other constraints")),
+        replace(identity, recipe=identity.recipe.replace("out_of_context", "default")),
+    )
+    assert len({item.key for item in moved} | {identity.key}) == 3
+
+    with pytest.raises(ArtifactIdentityError, match="command shape"):
+        replace(identity, recipe="synth_design -top top -part xc7z020clg400-1")
+    with pytest.raises(ArtifactIdentityError, match="constraints and its command shape"):
+        replace(identity, constraints_digest="")
+
+
+def test_synthesis_materializes_into_its_own_directory(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """The packaged unit is immutable, and synthesis is a different stage.
+
+    Writing the script, the constraints and the report into the package
+    directory was both a mutation of an artifact declared immutable and a
+    collision: two runs of one package -- another part, another clock, another
+    tool -- would overwrite each other's outputs in the one place.
+    """
+
+    packaged = package_decomposed_artifact(requirements, tmp_path)
+    before = sorted(item.name for item in Path(packaged.directory).iterdir())
+
+    synthesis = prepare_decomposed_synthesis(packaged, TARGET, tmp_path)
+
+    assert Path(synthesis.directory) != Path(packaged.directory)
+    assert Path(synthesis.directory).name == synthesis_directory_name(
+        synthesis.identity, packaged.top_module_name
+    )
+    assert synthesis.key.startswith(Path(synthesis.directory).name.rsplit("_", 1)[-1])
+    # The package is byte-for-byte what it was, and is still its declared layout.
+    assert sorted(item.name for item in Path(packaged.directory).iterdir()) == before
+    assert tuple(before) == tuple(sorted(packaged.identity.layout))
+
+    # The run's own inputs are written, and they name the packaged sources
+    # where they already are rather than copying them.
+    assert Path(synthesis.script_path).is_file()
+    assert Path(synthesis.constraints_path).is_file()
+    assert Path(synthesis.constraints_path).read_text() == render_clock_constraints(TARGET)
+    script = Path(synthesis.script_path).read_text()
+    for source in packaged.files:
+        assert source in script
+    assert synthesis.report_path in script
+    assert not synthesis.reused
+
+
+def test_two_synthesis_runs_of_one_package_do_not_collide(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """Three ways to be a different run, three directories, one package."""
+
+    packaged = package_decomposed_artifact(requirements, tmp_path)
+    runs = (
+        prepare_decomposed_synthesis(packaged, TARGET, tmp_path),
+        prepare_decomposed_synthesis(
+            packaged, TargetIdentity("xczu7ev-ffvc1156-2-e", TARGET.clock_period_ns), tmp_path
+        ),
+        prepare_decomposed_synthesis(packaged, TargetIdentity(TARGET.fpga_part, 5.0), tmp_path),
+        prepare_decomposed_synthesis(
+            packaged, TARGET, tmp_path, builder=BuilderIdentity("vivado", "2025.2")
+        ),
+    )
+
+    assert len({item.directory for item in runs}) == 4
+    assert len({item.key for item in runs}) == 4
+    assert {item.identity.upstream for item in runs} == {packaged.key}
+    # A different clock is a different constraints file, not just a different key.
+    assert Path(runs[0].constraints_path).read_text() != Path(runs[2].constraints_path).read_text()
+
+
+def test_a_synthesis_run_already_done_is_looked_up_and_not_repeated(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """The stage consults the seam with its own key, like every other stage.
+
+    Printing the key is not keying the stage.  This is the assertion that says
+    the key is consulted and the work skipped -- the same pair the packaging
+    stage has, at the stage that costs the most to repeat.
+    """
+
+    packaged = package_decomposed_artifact(requirements, tmp_path)
+    identity = packaged.synthesis_identity(TARGET)
+    output = tmp_path / "runs"
+
+    class _Hit:
+        def __init__(self) -> None:
+            self.asked: list[ArtifactKey] = []
+
+        def lookup(self, asked: ArtifactKey) -> StoredArtifact:
+            self.asked.append(asked)
+            return StoredArtifact(asked.key, "/previously/synthesized", ("/previously/x.rpt",))
+
+    store = _Hit()
+    reused = prepare_decomposed_synthesis(packaged, TARGET, output, store=store)
+
+    assert [item.key for item in store.asked] == [identity.key]
+    assert reused.reused
+    assert reused.directory == "/previously/synthesized"
+    assert reused.report_path.startswith("/previously/synthesized/")
+    assert not output.exists()
 
 
 def test_one_packaged_unit_synthesized_for_two_parts_is_two_results(
