@@ -108,7 +108,12 @@ class Case:
     activation: str
     weight: str
     accumulator: str
-    stimulus: str
+    #: How to fill each operand.  Two fields rather than one paired label,
+    #: because the cases below vary them independently: the minimum-weight case
+    #: says nothing about activations, and the unsigned case says nothing about
+    #: weights.
+    activation_values: str
+    weight_values: str
     why: str
     pumping: bool = False
     part_override: str | None = None
@@ -138,14 +143,34 @@ class Case:
         return DataType[self.accumulator]
 
 
+#: How an operand is filled.  Each kind exists because some case needs it and
+#: ``full`` would not reliably produce it.
+#:
+#: ``counting``  distinct ascending values -- only for the identity case, where
+#:               the answer has to be readable by eye.
+#: ``identity``  the identity matrix -- weights only, same case.
+#: ``full``      uniform over the datatype's whole range.
+#: ``negative``  uniform over ``[min, -1]``.  A datapath that treated operands
+#:               as unsigned agrees with a correct one on non-negatives, so a
+#:               sample that happens to be mostly positive proves less than it
+#:               looks; this removes the happening.
+#: ``narrow``    uniform over ``[min+1, max]`` -- never the minimum.  This is
+#:               what ``NARROW_WEIGHTS`` promises about, and it takes a
+#:               different RTL path.
+#: ``extremes``  uniform, with the minimum and the maximum planted.  For
+#:               weights this is the non-narrow path and the value the narrow
+#:               rule is precisely about; for activations it is the unsigned
+#:               dial, since a ``UINT8`` sample above 127 is the only thing
+#:               that distinguishes ``SIGNED_ACTIVATIONS`` from a stuck bit.
+STIMULUS_KINDS = ("counting", "identity", "full", "negative", "narrow", "extremes")
+
 #: The matrix, harness-trust first.
 #:
-#: ``INT32`` accumulators throughout except where the case is about the
-#: accumulator: an ``INT16`` accumulator over ``INT8`` operands and a
-#: four-deep dot product can reach 65024, which does not fit, and a fixture
-#: that overflowed would be measuring wrap-around while claiming to measure
-#: arithmetic.  Fixture 5 runs ``INT16`` and never notices, because two DUTs
-#: wrap identically.
+#: ``INT32`` accumulators throughout.  An ``INT16`` accumulator over ``INT8``
+#: operands and a four-deep dot product can reach 65024, which does not fit,
+#: and a fixture that overflowed would be measuring wrap-around while claiming
+#: to measure arithmetic.  Fixture 5 runs ``INT16`` and never notices, because
+#: two DUTs wrap identically.
 CASES = (
     Case(
         "identity",
@@ -158,6 +183,7 @@ CASES = (
         "INT8",
         "INT8",
         "INT32",
+        "counting",
         "identity",
         "the harness itself: with an identity matrix the output is the input, "
         "so a packing error is visible without arithmetic",
@@ -173,7 +199,8 @@ CASES = (
         "INT8",
         "INT8",
         "INT32",
-        "random",
+        "full",
+        "full",
         "the happy path, over several repetitions and both folds",
     ),
     Case(
@@ -187,8 +214,106 @@ CASES = (
         "INT8",
         "INT8",
         "INT32",
-        "random",
+        "full",
+        "full",
         "the same, on the soft-vector core rather than the packed one",
+    ),
+    # -- the discriminating matrix (Phase 6d) ---------------------------------
+    Case(
+        "unsigned_activations",
+        MVAUDspBlock.DSP58,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "UINT8",
+        "INT8",
+        "INT32",
+        "extremes",
+        "full",
+        "SIGNED_ACTIVATIONS is the dial telling the core what it is receiving; "
+        "an activation above 127 is the only thing that proves it is wired",
+    ),
+    Case(
+        "unsigned_activations_softvec",
+        MVAUDspBlock.DSP48E2,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "UINT8",
+        "INT8",
+        "INT32",
+        "extremes",
+        "full",
+        "the same dial on the other core -- the two take different RTL paths "
+        "and could read it differently",
+    ),
+    Case(
+        "all_negative",
+        MVAUDspBlock.DSP58,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "negative",
+        "negative",
+        "a correct two's-complement datapath from one that agrees on "
+        "non-negatives; every product here is positive and every operand is not",
+    ),
+    Case(
+        "minimum_signed_weight",
+        MVAUDspBlock.DSP58,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "full",
+        "extremes",
+        "the weight matrix contains -128, so NARROW_WEIGHTS is false and the "
+        "core takes its wide path -- the value the narrow promise is about",
+    ),
+    Case(
+        "narrow_weights",
+        MVAUDspBlock.DSP58,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "full",
+        "narrow",
+        "the same geometry with the minimum excluded, so NARROW_WEIGHTS is "
+        "true; both are accepted and they are not the same RTL",
+    ),
+    Case(
+        "narrow_weights_softvec",
+        MVAUDspBlock.DSP48E2,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "full",
+        "narrow",
+        "narrow packing on the soft-vector core, which is where Phase 4's "
+        "sliceLanes() correction actually applies",
     ),
 )
 
@@ -209,29 +334,67 @@ class _BuildConfig:
         return self.fpga_part
 
 
+def _filled(
+    kind: str,
+    datatype: object,
+    shape: tuple[int, ...],
+    generator: np.random.RandomState,
+) -> np.ndarray:
+    """One operand, filled the way its case asks for.
+
+    ``extremes`` and ``negative`` *plant* rather than hope.  A uniform sample
+    over ``UINT8`` almost always contains something above 127 and a uniform
+    sample over ``INT8`` almost always contains -128 -- but "almost always" is
+    not what a case whose whole reason is that value should rest on, and a
+    reseed would silently turn the case into a weaker one.
+    """
+
+    minimum, maximum = int(datatype.min()), int(datatype.max())  # type: ignore[attr-defined]
+    if kind == "identity":
+        rows, columns = shape
+        assert rows == columns, "an identity matrix needs a square shape"
+        return np.eye(rows, dtype=np.float32)
+    if kind == "counting":
+        # Distinct, small and ascending, so a reversed or transposed packing
+        # produces a visibly different vector rather than the same one.
+        size = int(np.prod(shape))
+        assert size <= maximum, "the counting stimulus must fit its datatype"
+        return (np.arange(size) + 1).reshape(shape).astype(np.float32)
+    if kind == "negative":
+        assert minimum < 0, "an unsigned operand has no negative values"
+        values = generator.randint(minimum, 0, size=shape)
+    elif kind == "narrow":
+        values = generator.randint(minimum + 1, maximum + 1, size=shape)
+    else:
+        values = generator.randint(minimum, maximum + 1, size=shape)
+    if kind == "extremes":
+        flat = values.reshape(-1)
+        assert flat.size >= 2, "planting both extremes needs at least two elements"
+        flat[0], flat[-1] = minimum, maximum
+        values = flat.reshape(shape)
+    return values.astype(np.float32)
+
+
 def _weights(case: Case, generator: np.random.RandomState) -> np.ndarray:
     """The weight matrix this case is about, in ONNX ``(MW, MH)`` orientation."""
 
-    shape = (case.matrix_width, case.matrix_height)
-    if case.stimulus == "identity":
-        assert case.matrix_width == case.matrix_height, "identity needs a square matrix"
-        return np.eye(case.matrix_width, dtype=np.float32)
-    low, high = int(case.weight_type.min()), int(case.weight_type.max())  # type: ignore[attr-defined]
-    return generator.randint(low, high + 1, size=shape).astype(np.float32)
+    return _filled(
+        case.weight_values,
+        case.weight_type,
+        (case.matrix_width, case.matrix_height),
+        generator,
+    )
 
 
 def _activations(case: Case, generator: np.random.RandomState) -> np.ndarray:
     """The activation matrix, in ``(repetitions, MW)``."""
 
-    shape = (case.repetitions, case.matrix_width)
-    if case.stimulus == "identity":
-        # Distinct, small, and non-symmetric, so a reversed or transposed
-        # packing produces a visibly different vector rather than the same one.
-        return (
-            (np.arange(case.repetitions * case.matrix_width) + 1).reshape(shape).astype(np.float32)
-        )
-    low, high = int(case.activation_type.min()), int(case.activation_type.max())  # type: ignore[attr-defined]
-    return generator.randint(low, high + 1, size=shape).astype(np.float32)
+    return _filled(
+        case.activation_values,
+        case.activation_type,
+        (case.repetitions, case.matrix_width),
+        generator,
+    )
 
 
 def _model(case: Case, weights: np.ndarray) -> ModelWrapper:
@@ -444,6 +607,15 @@ def run_one(case: Case) -> int:
     print(
         f"  types: {case.activation} x {case.weight} -> {case.accumulator}"
         f"  (PE={case.pe} SIMD={case.simd} R={case.repetitions})"
+    )
+    # The two dials the matrix exists to move.  Printed, because a case whose
+    # label says "unsigned" and whose SIGNED_ACTIVATIONS is 1 would otherwise
+    # pass while measuring the case beside it.
+    print(
+        f"  dials: SIGNED_ACTIVATIONS={int(values['SIGNED_ACTIVATIONS'])}"  # type: ignore[arg-type]
+        f" NARROW_WEIGHTS={int(values['NARROW_WEIGHTS'])}"  # type: ignore[arg-type]
+        f" VERSION={values['VERSION']}"
+        f" (in {case.activation_values}/{case.weight_values})"
     )
     print(f"  beats: in0={len(stimulus['in0'])} in1={len(stimulus['in1'])} out={expected_beats}")
 

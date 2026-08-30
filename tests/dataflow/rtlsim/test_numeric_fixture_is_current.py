@@ -76,7 +76,12 @@ def test_the_golden_is_the_operation_and_fits_the_accumulator(case: fixture.Case
 
 
 def _core(
-    case: fixture.Case, weights: list[int], activations: list[int], widths: dict
+    case: fixture.Case,
+    weights: list[int],
+    activations: list[int],
+    widths: dict,
+    *,
+    signed_activations: bool,
 ) -> list[int]:
     """What ``dotp_axi`` is documented to do with the beats it is given.
 
@@ -85,6 +90,12 @@ def _core(
     followed by this followed by unpack must reproduce the matrix product.  If
     it did not, the fixture's own arithmetic would be wrong before the RTL ever
     ran.
+
+    ``signed_activations`` is a parameter and not an assumption because that is
+    exactly what ``SIGNED_ACTIVATIONS`` is: the bus carries the same bits either
+    way and the dial says how to read them.  Writing it in as always-signed made
+    the ``UINT8`` cases fail here before a simulator was ever involved, which is
+    the split this module exists to make.
     """
 
     activation_width, weight_width, accumulator_width = (
@@ -109,10 +120,11 @@ def _core(
                         weight = fixture._decode(
                             (weight_beat >> offset) & ((1 << weight_width) - 1), weight_width
                         )
-                        activation = fixture._decode(
-                            (activation_beat >> (element * activation_width))
-                            & ((1 << activation_width) - 1),
-                            activation_width,
+                        raw = (activation_beat >> (element * activation_width)) & (
+                            (1 << activation_width) - 1
+                        )
+                        activation = (
+                            fixture._decode(raw, activation_width) if signed_activations else raw
                         )
                         lanes[lane] += weight * activation
             beat = 0
@@ -146,6 +158,7 @@ def test_packing_and_unpacking_reproduce_the_matrix_product(case: fixture.Case) 
         fixture.weight_beats(case, weights, widths["WEIGHT_WIDTH"]),
         fixture.activation_beats(case, activations, widths["ACTIVATION_WIDTH"]),
         widths,
+        signed_activations=bool(values["SIGNED_ACTIVATIONS"]),
     )
     assert len(beats) == case.repetitions * case.neuron_folds
     measured = fixture.unpack_output(case, beats, widths["ACCU_WIDTH"])
@@ -174,4 +187,85 @@ def test_every_case_says_what_it_discriminates() -> None:
 
     for case in fixture.CASES:
         assert case.why, case.label
+        assert case.activation_values in fixture.STIMULUS_KINDS, case.label
+        assert case.weight_values in fixture.STIMULUS_KINDS, case.label
     assert len({case.label for case in fixture.CASES}) == len(fixture.CASES)
+
+
+# -- the matrix moves the dials it claims to ------------------------------------
+
+
+def _dials(case: fixture.Case) -> dict[str, object]:
+    weights, _activations = _stimulus(case)
+    return dict(fixture.requirements_for(case, fixture._model(case, weights)).parameters)
+
+
+def test_the_unsigned_cases_actually_send_something_above_the_signed_maximum() -> None:
+    """``SIGNED_ACTIVATIONS`` off is only tested by a value that needs it.
+
+    A ``UINT8`` sample confined to 0..127 is indistinguishable from an ``INT8``
+    one, so the case would pass while measuring nothing.  ``extremes`` plants
+    the maximum for exactly this reason; here is the assertion that says so.
+    """
+
+    for label in ("unsigned_activations", "unsigned_activations_softvec"):
+        case = fixture.CASES_BY_LABEL[label]
+        _weights, activations = _stimulus(case)
+        assert activations.max() > 127, label
+        assert _dials(case)["SIGNED_ACTIVATIONS"] is False, label
+
+
+def test_the_signed_cases_still_declare_signed_activations() -> None:
+    """The other side of the same dial, so "it is always false" cannot pass."""
+
+    for case in fixture.CASES:
+        if case.activation.startswith("UINT"):
+            continue
+        assert _dials(case)["SIGNED_ACTIVATIONS"] is True, case.label
+
+
+def test_the_narrow_and_wide_weight_cases_are_a_pair() -> None:
+    """Both weight paths, and they are different paths.
+
+    ``minimum_signed_weight`` contains -128 so the packing cannot assume a
+    narrow range; ``narrow_weights`` excludes it so it can.  Same geometry,
+    same types, one bit apart in the parameter table -- which is what makes the
+    pair evidence about the rule rather than about two unrelated runs.
+    """
+
+    wide = fixture.CASES_BY_LABEL["minimum_signed_weight"]
+    narrow = fixture.CASES_BY_LABEL["narrow_weights"]
+    wide_weights, _ = _stimulus(wide)
+    narrow_weights, _ = _stimulus(narrow)
+    assert wide_weights.min() == -128
+    assert narrow_weights.min() > -128
+
+    assert _dials(wide)["NARROW_WEIGHTS"] is False
+    assert _dials(narrow)["NARROW_WEIGHTS"] is True
+    differing = {name for name, value in _dials(wide).items() if _dials(narrow).get(name) != value}
+    assert differing == {"NARROW_WEIGHTS"}
+
+
+def test_the_all_negative_case_is_all_negative() -> None:
+    """Otherwise it is the random case with a different name.
+
+    Every operand negative and therefore every product positive: a datapath
+    that read the operands as unsigned would agree with a correct one on
+    non-negative inputs and cannot agree here.
+    """
+
+    case = fixture.CASES_BY_LABEL["all_negative"]
+    weights, activations = _stimulus(case)
+    assert weights.max() < 0
+    assert activations.max() < 0
+
+
+def test_both_cores_are_represented_in_the_matrix() -> None:
+    """DSP48E2 takes the soft-vector path and DSP58 the packed one.
+
+    A matrix that only ran one of them would say nothing about the other, and
+    the dials above are read by both.
+    """
+
+    versions = {int(_dials(case)["VERSION"]) for case in fixture.CASES}  # type: ignore[arg-type]
+    assert {2, 3} <= versions
