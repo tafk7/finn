@@ -709,15 +709,21 @@ def check_declared_references(
 class KernelOrigin:
     """What a bound Kernel is, for evidence and provenance.
 
-    This is what an association ledger quotes: which Kernel, at which placement,
-    covering which nodes and edges, configured how.
+    This is what an association ledger quotes: which Kernel, covering which
+    nodes and edges *of its local semantic assembly*, configured how.
 
-    **It is not an artifact identity and must not become one.**  It carries the
-    placement namespace and the covered node and edge ids on purpose -- those
-    are what make it provenance -- and those are exactly the instance facts a
-    reusable artifact key has to exclude, or two identical configured Kernels at
-    different source nodes would never share a build.  Phase 5 introduces a
-    separate typed artifact-input identity over the physical inputs alone.
+    **It is binding provenance, not graph-occurrence identity**, and the
+    distinction was got wrong here once.  The names it carries are local: the
+    declaration namespace, and the node and edge ids of the Network the Kernel
+    was bound against.  For the decomposed MVAU those node ids are the fixed
+    ``replay`` and ``compute``, so two MVAUs at different graph positions
+    produce byte-equal origins.  Anything needing to tell two *occurrences*
+    apart has to read the enclosing scope, which this does not record.
+
+    **It is still not an artifact identity and must not become one.**  It is
+    sensitive to declaration paths and to field ordering, neither of which a
+    reusable artifact may depend on, and it says nothing about source content.
+    :mod:`finn.dataflow.hardware.identity` carries the staged artifact keys.
     """
 
     kernel_id: str

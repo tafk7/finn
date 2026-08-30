@@ -3,39 +3,39 @@
 
 """Phase 5d: the lookup seam, with no store behind it.
 
-The obligation is narrow and worth stating narrowly: the build path *consults*
-the seam, and *skips* on a hit.  Both are properties of the call path, so a
-question and a recorded answer demonstrate them; a store would add nothing to
-the evidence and a great deal to the surface.
+The obligation is narrow: something can be asked "is there an artifact for
+this identity", the default answers no, and an answer about a *different*
+artifact is refused rather than used.
 
-What a store must not be able to do quietly is answer for the wrong artifact.
-So the tests below are as much about what the seam is asked -- the identity,
-not a name, a path, or a source node -- as about what it replies.
+That last part is the whole reason this file is not three lines.  A store is
+the one component in the chain this layer does not control, and a hit is the
+one path where nothing else would notice a wrong answer -- so the check
+belongs here, not in a comment asking stores to behave.
+
+The build path's use of the seam is tested where the build path lives, in
+``dataflow/mvau/test_decomposed_packaging.py``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pytest
 
-from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.hardware import (
     NO_ARTIFACT_STORE,
     ArtifactKey,
     ArtifactStore,
+    ArtifactStoreError,
     EmptyArtifactStore,
+    PackagedArtifactIdentity,
     StoredArtifact,
+    checked_lookup,
 )
-from finn.dataflow.mvau.hardware.composition import (
-    MVAUDecomposedArtifactRequirements,
-    build_decomposed_artifact_requirements,
-    write_decomposed_artifact,
-)
-from finn.dataflow.mvau.providers import elaborate_mvau
 
-FINN_ROOT = Path(__file__).resolve().parents[3]
+
+def _identity(upstream: str = "upstream-key") -> PackagedArtifactIdentity:
+    return PackagedArtifactIdentity(upstream, ("a.sv", "top.sv"), "instantiate {module} {instance}")
 
 
 @dataclass
@@ -50,100 +50,100 @@ class _RecordingStore:
         return self.answer
 
 
-def _requirements(*, pe: int = 2) -> MVAUDecomposedArtifactRequirements:
-    resolved = _committed(_model(), pe=pe).resolve_dataflow(_context())
-    return build_decomposed_artifact_requirements(resolved, elaborate_mvau(resolved), FINN_ROOT)
-
-
-def _skip_without_finnlib(requirements: MVAUDecomposedArtifactRequirements) -> None:
-    if any(not Path(path).is_file() for path in requirements.finnlib_sources):
-        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
-
-
 # -- the default -------------------------------------------------------------
 
 
-def test_the_default_store_has_nothing_and_changes_nothing(tmp_path: Path) -> None:
-    """Adding the seam must not alter a single existing build."""
+def test_the_default_store_has_nothing() -> None:
+    """So adding the seam alters no existing build."""
 
-    requirements = _requirements()
-    _skip_without_finnlib(requirements)
-
-    assert NO_ARTIFACT_STORE.lookup(requirements.identity) is None
-    with_default = write_decomposed_artifact(requirements, tmp_path / "a")
-    explicit = write_decomposed_artifact(requirements, tmp_path / "b", store=EmptyArtifactStore())
-
-    assert [Path(item).name for item in with_default] == [Path(item).name for item in explicit]
-    assert all(Path(item).is_file() for item in with_default)
+    assert NO_ARTIFACT_STORE.lookup(_identity()) is None
+    assert checked_lookup(NO_ARTIFACT_STORE, _identity()) is None
 
 
-# -- the two properties that matter ------------------------------------------
+def test_the_default_store_is_a_seam_and_not_a_store() -> None:
+    """The drift this increment exists to prevent, as a failing test.
 
-
-def test_the_build_path_asks_the_store_before_it_writes(tmp_path: Path) -> None:
-    """Consulting it is the first half, and asking with the *identity* matters.
-
-    A seam keyed on the output directory, the module name, or the source node
-    would be just as easy to write and would answer for the wrong artifact.
+    §7.3 keeps a production cache out of scope, and the value of that line is
+    that the seam stays testable without one.  A default that grew somewhere to
+    put things would have quietly taken the scope with it.
     """
 
-    requirements = _requirements()
-    _skip_without_finnlib(requirements)
+    for forbidden in ("store", "put", "insert", "save", "evict", "clear", "path"):
+        assert not hasattr(NO_ARTIFACT_STORE, forbidden)
+    assert not vars(EmptyArtifactStore())
+
+
+def test_a_store_is_structural_and_needs_no_base_class() -> None:
+    """Anything with ``lookup`` is one, which is what keeps the seam a seam."""
+
+    double = _RecordingStore()
+    store: ArtifactStore = double
+    assert checked_lookup(store, _identity()) is None
+    assert double.asked == [_identity()]
+
+
+# -- the guarantee -----------------------------------------------------------
+
+
+def test_an_answer_about_another_artifact_is_refused() -> None:
+    """The finding this check was added for.
+
+    ``StoredArtifact`` has always carried its own key and nothing compared it
+    with the key that was asked for.  A store returning the wrong entry was
+    accepted in silence, and the build proceeded with somebody else's RTL --
+    the exact wrong hit the identity was introduced to prevent.
+    """
+
+    wrong = _RecordingStore(StoredArtifact("some-other-key", "/cached/wrong", ("/w/top.sv",)))
+    with pytest.raises(ArtifactStoreError) as raised:
+        checked_lookup(wrong, _identity())
+
+    # The message names both keys and where the bad entry was staged: a store
+    # that answers wrongly has to be findable, not just stopped.
+    assert "some-other-key" in str(raised.value)
+    assert _identity().key in str(raised.value)
+    assert "/cached/wrong" in str(raised.value)
+
+
+def test_a_mismatch_is_loud_rather_than_a_miss() -> None:
+    """Falling back to building would hide a broken store behind a slow build.
+
+    Tempting, because it is "safe" -- the output would be correct.  But the
+    store stays broken and every subsequent consumer keeps asking it, so the
+    one observable symptom of the defect is that the cache never helps.
+    """
+
+    wrong = _RecordingStore(StoredArtifact("elsewhere", "/cached", ("/cached/top.sv",)))
+    with pytest.raises(ArtifactStoreError):
+        checked_lookup(wrong, _identity())
+
+
+def test_a_hit_with_no_files_is_refused() -> None:
+    """An empty hit would skip the build and hand a synthesizer nothing."""
+
+    empty = _RecordingStore(StoredArtifact(_identity().key, "/cached", ()))
+    with pytest.raises(ArtifactStoreError, match="no files"):
+        checked_lookup(empty, _identity())
+
+
+def test_a_correct_hit_passes_through_unchanged() -> None:
+    """The check must not be so strict that a right answer fails it."""
+
+    entry = StoredArtifact(_identity().key, "/cached", ("/cached/a.sv", "/cached/top.sv"))
+    assert checked_lookup(_RecordingStore(entry), _identity()) is entry
+
+
+def test_two_identities_are_two_questions() -> None:
+    """The seam distinguishes what the identity distinguishes, and no less."""
+
     store = _RecordingStore()
-
-    write_decomposed_artifact(requirements, tmp_path, store=store)
-
-    assert len(store.asked) == 1
-    assert store.asked[0] == requirements.identity
-    assert store.asked[0].key == requirements.identity.key
-
-
-def test_a_hit_returns_the_stored_files_and_writes_nothing(tmp_path: Path) -> None:
-    """Skipping is the other half, and "wrote nothing" is the assertion.
-
-    Returning the right list while still staging every file would pass a
-    weaker test and buy nothing at all.
-    """
-
-    requirements = _requirements()
-    output = tmp_path / "output"
-    previous = ("/previously/built/dotp.sv", "/previously/built/top.sv")
-    store = _RecordingStore(
-        StoredArtifact(requirements.identity.key, "/previously/built", previous)
-    )
-
-    assert write_decomposed_artifact(requirements, output, store=store) == previous
-    assert not output.exists()
-
-
-def test_a_miss_builds_exactly_as_it_did(tmp_path: Path) -> None:
-    requirements = _requirements()
-    _skip_without_finnlib(requirements)
-
-    built = write_decomposed_artifact(requirements, tmp_path / "cold", store=_RecordingStore())
-    unstored = write_decomposed_artifact(requirements, tmp_path / "plain")
-
-    assert [Path(item).name for item in built] == [Path(item).name for item in unstored]
-
-
-def test_two_configurations_are_two_questions(tmp_path: Path) -> None:
-    """The seam distinguishes what the identity distinguishes, and no less.
-
-    A store that answered on the module name would conflate nothing here today,
-    but a store that answered on the *source node* would -- which is the whole
-    reason the identity is what is passed.
-    """
-
-    store = _RecordingStore()
-    for index, pe in enumerate((2, 4)):
-        requirements = _requirements(pe=pe)
-        _skip_without_finnlib(requirements)
-        write_decomposed_artifact(requirements, tmp_path / str(index), store=store)
+    for upstream in ("one", "two"):
+        checked_lookup(store, _identity(upstream))
 
     assert len({item.key for item in store.asked}) == 2
 
 
-# -- what the seam is, and is not --------------------------------------------
+# -- what the seam asks with -------------------------------------------------
 
 
 def test_the_seam_asks_for_a_key_that_can_explain_itself() -> None:
@@ -155,35 +155,11 @@ def test_the_seam_asks_for_a_key_that_can_explain_itself() -> None:
     against a bare string by accident.
     """
 
-    requirements = _requirements()
-    identity = requirements.identity
+    identity = _identity()
 
     assert isinstance(identity, ArtifactKey)
-    # The key is a digest; the serialization is what the digest was taken over,
-    # and it is the only one of the two a miss can be explained from.
     assert identity.key not in identity.serialization
-    for kernel in requirements.identity.kernels:
-        assert kernel.kernel_id in identity.serialization
-
-
-def test_the_default_store_is_a_seam_and_not_a_store() -> None:
-    """The drift this increment exists to prevent, as a failing test.
-
-    §7.3 keeps a production cache out of scope, and the value of that line is
-    that 5d stays testable without one.  A default that grew somewhere to put
-    things would have quietly taken the scope with it.
-    """
-
-    for forbidden in ("store", "put", "insert", "save", "evict", "clear", "path"):
-        assert not hasattr(NO_ARTIFACT_STORE, forbidden)
-    assert not vars(EmptyArtifactStore())
-
-
-def test_a_store_is_structural_and_needs_no_base_class() -> None:
-    """Anything with ``lookup`` is one, which is what keeps the seam a seam."""
-
-    store: ArtifactStore = _RecordingStore()
-    assert store.lookup(_requirements().identity) is None
+    assert identity.upstream in identity.serialization
 
 
 def test_a_stored_artifact_must_say_where_it_is() -> None:

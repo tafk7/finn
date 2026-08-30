@@ -51,9 +51,7 @@ from finn.dataflow.mvau.hardware.binding import (
     verify_manifest,
 )
 from finn.dataflow.hardware import (
-    BuilderIdentity,
     KernelArtifactIdentity,
-    TargetIdentity,
     composed_artifact_identity,
     kernel_artifact_identity,
 )
@@ -440,10 +438,14 @@ def test_writing_the_artifact_stages_every_declared_source(tmp_path: Path) -> No
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
 
     written = write_decomposed_artifact(requirements, tmp_path)
-    assert len(written) == len(requirements.source_dependencies) + 1
+    # Every declared source, the generated top, and the plain-Verilog shim that
+    # makes the top referenceable from a block design.
+    assert len(written) == len(requirements.source_dependencies) + 2
     assert all(Path(item).is_file() for item in written)
-    # The generated top instantiates everything before it, so it compiles last.
-    assert written[-1].endswith(requirements.wrapper_file_name)
+    # The generated top instantiates everything before it; the shim instantiates
+    # the top, so it compiles last of all.
+    assert written[-2].endswith(requirements.wrapper_file_name)
+    assert written[-1].endswith(requirements.stitch_file_name)
 
 
 def test_requirements_refuse_an_elaboration_from_another_point() -> None:
@@ -471,15 +473,18 @@ def test_the_requirements_carry_the_identity_of_what_they_build() -> None:
         resolved, elaborate_mvau(resolved), FINN_ROOT
     )
     bindings = bind_decomposed(resolved)
-    target = TargetIdentity(requirements.target_fpga_part, requirements.clock_period_ns)
 
     assert requirements.identity == composed_artifact_identity(
         tuple(
-            kernel_artifact_identity(binding, source_roots(FINN_ROOT), target=target)
+            kernel_artifact_identity(binding, source_roots(FINN_ROOT))
             for binding in bindings.bindings
         ),
         requirements.wrapper_source,
+        requirements.stitch_source,
     )
+    # The target and the builder are not in it: neither can change generated
+    # text, so both belong to the stages that consume them.
+    assert requirements.target_fpga_part not in requirements.identity.serialization
     # Compile order, and the replay feeds the dot product.
     assert tuple(item.kernel_id for item in requirements.identity.kernels) == (
         DECOMPOSED_MVAU_KERNELS.replay_hardware.id,
@@ -521,11 +526,7 @@ def test_the_module_name_separates_configurations_but_not_source_content() -> No
 
     def identity(pe: int) -> KernelArtifactIdentity:
         resolved = _committed(_model(), pe=pe).resolve_dataflow(_context())
-        return kernel_artifact_identity(
-            bind_decomposed(resolved).compute,
-            source_roots(FINN_ROOT),
-            target=TargetIdentity("xcvc1902-vsva2197-2MP-e-S", 4.0),
-        )
+        return kernel_artifact_identity(bind_decomposed(resolved).compute, source_roots(FINN_ROOT))
 
     two, four = identity(pe=2), identity(pe=4)
     assert decomposed_top_module_name((two,)) != decomposed_top_module_name((four,))
@@ -559,22 +560,29 @@ def test_the_identity_exists_before_anything_is_written(tmp_path: Path) -> None:
     assert requirements.identity == before
 
 
-def test_a_different_builder_moves_the_artifact_key_but_not_the_module_name() -> None:
-    """The two are taken over different material, and this is where it shows.
+def test_the_kernels_own_choices_reach_the_module_name() -> None:
+    """The name separates configurations, and a local choice is one.
 
-    The builder is a build input, so it keys.  It is not part of the
-    configuration the module is named for, so the same RTL keeps the same
-    module name across a tool bump -- which is what stops a Vivado upgrade from
-    rewriting every generated top.
+    ``compute_pumping`` is committed to the Kernel rather than driven in as a
+    parameter by anything above it.  It happens to reach an RTL parameter too,
+    which is why omitting it from the key was invisible -- but the name is
+    taken over the configuration, and a choice that changes elaboration is part
+    of that whether or not it also becomes a parameter.
     """
 
-    resolved = _resolved()
-    elaboration = elaborate_mvau(resolved)
-    default = build_decomposed_artifact_requirements(resolved, elaboration, FINN_ROOT)
-    bumped = build_decomposed_artifact_requirements(
-        resolved, elaboration, FINN_ROOT, builder=BuilderIdentity("vivado", "2025.1")
-    )
+    names = set()
+    identities = set()
+    for pumping in (False, True):
+        resolved = _committed(_model(), pumping=pumping).resolve_dataflow(_context())
+        built = build_decomposed_artifact_requirements(
+            resolved, elaborate_mvau(resolved), FINN_ROOT
+        )
+        names.add(built.top_module_name)
+        identities.add(built.identity.key)
+        compute = bind_decomposed(resolved).compute
+        assert dict(kernel_artifact_identity(compute, source_roots(FINN_ROOT)).assignments) == {
+            "compute_pumping": pumping
+        }
 
-    assert bumped.identity.key != default.identity.key
-    assert bumped.top_module_name == default.top_module_name
-    assert bumped.wrapper_source == default.wrapper_source
+    assert len(names) == 2
+    assert len(identities) == 2

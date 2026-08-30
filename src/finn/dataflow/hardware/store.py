@@ -81,10 +81,45 @@ class EmptyArtifactStore:
 NO_ARTIFACT_STORE: ArtifactStore = EmptyArtifactStore()
 
 
+class ArtifactStoreError(Exception):
+    """A store answered for something other than what it was asked about."""
+
+
+def checked_lookup(store: ArtifactStore, identity: ArtifactKey) -> StoredArtifact | None:
+    """Ask a store, and refuse an answer that is not about the question.
+
+    ``StoredArtifact`` carries its own key, and until this existed nothing
+    compared it with the key that was asked for -- so a store returning the
+    wrong entry was accepted silently and the build used somebody else's RTL.
+    That is precisely the wrong-hit the identity was introduced to prevent, so
+    leaving it to a store's good behaviour put the guarantee in the one place
+    this module does not control.
+
+    Loud rather than a miss.  A mismatch is a broken store, and falling back to
+    building would hide a defect behind a slow build.
+    """
+
+    found = store.lookup(identity)
+    if found is None:
+        return None
+    if found.key != identity.key:
+        raise ArtifactStoreError(
+            f"{type(store).__name__} was asked for {identity.key} and answered with "
+            f"{found.key}, staged at {found.directory}"
+        )
+    if not found.files:
+        raise ArtifactStoreError(
+            f"{type(store).__name__} reported a hit for {identity.key} with no files"
+        )
+    return found
+
+
 __all__ = [
     "NO_ARTIFACT_STORE",
     "ArtifactKey",
     "ArtifactStore",
+    "ArtifactStoreError",
     "EmptyArtifactStore",
     "StoredArtifact",
+    "checked_lookup",
 ]

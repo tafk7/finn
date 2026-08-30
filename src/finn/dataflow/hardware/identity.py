@@ -3,22 +3,36 @@
 
 """Artifact identity: what makes two builds of the same hardware one build.
 
-An identity is computed from the *physical build inputs alone* -- the Kernel
-family, the source files it compiles and their content, the parameters driven
-into them, the target, and the builder.  Two equal configured Kernels at
-different source nodes therefore key the same, which is the entire point:
-today ``top_module_name`` bakes the source node in, so identical hardware at
-two graph positions is built twice.
+An identity is computed from the *build inputs alone*, and it is computed
+per **stage**, because the stages do not consume the same inputs:
 
-What is excluded is as load-bearing as what is included.  ONNX node names, the
-dataflow scope id, source tensor names, graph position, and physical instance
-names never reach the key.  :class:`~finn.dataflow.hardware.KernelOrigin`
-carries exactly those -- it is provenance, and its docstring already forbids it
-becoming a key.  This is the other value it points at.
+```text
+generated source   Kernel family, its sources and their content, the physical
+                   parameters driven into them, its own committed choices
+packaged unit      the generated source, plus the staged layout and the shape
+                   of the command that instantiates it
+OOC synthesis      the packaged unit, plus the part, the clock, and the builder
+```
 
-The identity is a typed frozen value rather than a bare string.  A string is a
-fine *key*, and :attr:`KernelArtifactIdentity.key` is one, but "these two
-hashes differ" is not something a failing test can explain; the value is.
+Those boundaries are not a matter of taste.  ``render_decomposed_wrapper``
+never invokes Vivado, so the builder version cannot change one byte of
+generated source; and every way a target reaches the RTL is already a declared
+parameter (``VERSION``, ``SEGMENTLEN``), so two parts admitting the same
+parameters admit the same source.  Putting either into the source key would
+make identical text key differently and stop it being shared -- the mirror of
+the wrong-hit this design is against, and just as wrong.
+
+What is excluded from every stage is as load-bearing as what is included.
+ONNX node names, the dataflow scope id, source tensor names, graph position,
+and physical instance names never reach a key.  Neither does a materialized
+absolute path: an artifact does not become a different artifact because it was
+staged under another directory.
+:class:`~finn.dataflow.hardware.KernelOrigin` carries the placement facts --
+it is binding provenance, and this is the other value it points at.
+
+Each identity is a typed frozen value rather than a bare string.  ``key`` is a
+digest for addressing; ``serialization`` is what the digest was taken over,
+and it is the only one of the two that a failed lookup can be explained from.
 """
 
 from __future__ import annotations
@@ -26,24 +40,33 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 
 from finn.dataflow.hardware.kernel import KernelBinding, scalar_parameters
 
-#: Bumped when what the identity *contains* changes.  Without it, adding a
-#: field makes every prior identity look like a different design rather than
-#: like one this version cannot read.
-KERNEL_ARTIFACT_SCHEMA_VERSION = "kernel-artifact-identity-v1"
+#: Bumped when what an identity *contains* changes.  Without it, adding a field
+#: makes every prior identity look like a different design rather than like one
+#: this version cannot read.
+#:
+#: ``v2`` moved the target and the builder out to the stages that consume them.
+KERNEL_ARTIFACT_SCHEMA_VERSION = "kernel-artifact-identity-v2"
 
 #: The composed reading has its own schema, because it is its own value.
-COMPOSED_ARTIFACT_SCHEMA_VERSION = "composed-artifact-identity-v1"
+COMPOSED_ARTIFACT_SCHEMA_VERSION = "composed-artifact-identity-v2"
+
+#: Stage two: what was generated, plus how it is laid out and instantiated.
+PACKAGED_ARTIFACT_SCHEMA_VERSION = "packaged-artifact-identity-v1"
+
+#: Stage three: the packaged unit, plus the device it was synthesized for.
+SYNTHESIS_ARTIFACT_SCHEMA_VERSION = "synthesis-artifact-identity-v1"
 
 Scalar = bool | int | float | str
 
 
 class ArtifactIdentityError(Exception):
-    """A build input could not be read, so no identity can be computed."""
+    """A build input could not be read or represented, so no identity exists."""
 
 
 def content_hash(data: bytes) -> str:
@@ -54,6 +77,57 @@ def content_hash(data: bytes) -> str:
 
 def _canonical(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+
+
+def _encode(name: str, value: object) -> Scalar:
+    """One committed choice, as something a key can be taken over.
+
+    Scalars pass through.  An ``Enum`` becomes ``Type.MEMBER`` -- its *name*
+    and not its value, because two members sharing a value are two choices and
+    would otherwise key alike.  Anything else is refused rather than
+    stringified: ``str()`` on an arbitrary object is ``repr()`` by another
+    route, and ``repr()`` has no stability contract.
+    """
+
+    if isinstance(value, Enum):
+        return f"{type(value).__name__}.{value.name}"
+    if type(value) in (bool, int, float, str):
+        return value  # type: ignore[return-value]
+    raise ArtifactIdentityError(
+        f"{name} is a {type(value).__name__}, which has no stable serialization; "
+        "a build-affecting choice must be a scalar or an Enum"
+    )
+
+
+def _local_assignments(binding: KernelBinding) -> tuple[tuple[str, Scalar], ...]:
+    """A Kernel's own committed choices, under placement-independent names.
+
+    A Kernel placed twice has two namespaces over one authored design, so the
+    *qualified* path is a placement fact and the trailing name is not.  The
+    prefix is therefore stripped against the declaration's own namespace rather
+    than by splitting on the last dot, which would silently accept a path
+    belonging to something else.
+
+    These belong in the key because ``elaborate()`` is allowed to read them.
+    The MVAU happens to route its one local choice into an RTL parameter as
+    well, so this slice would be safe without them -- but the contract is that
+    a Kernel *may* let a local choice change its elaboration without that choice
+    becoming a parameter, and two such configurations must not collide.
+    """
+
+    namespace = binding.kernel.declaration.namespace
+    prefix = f"{namespace}."
+    encoded: list[tuple[str, Scalar]] = []
+    for path, value in binding.kernel.assignments.items():
+        text = str(path)
+        if not text.startswith(prefix):
+            raise ArtifactIdentityError(
+                f"{binding.kernel_id} committed {text}, which is not under its own "
+                f"namespace {namespace}; a Kernel owns only its local choices"
+            )
+        name = text[len(prefix) :]
+        encoded.append((name, _encode(f"{binding.kernel_id}.{name}", value)))
+    return tuple(sorted(encoded))
 
 
 @dataclass(frozen=True)
@@ -71,8 +145,9 @@ class BuilderIdentity:
 
     The cost of the choice, stated: nothing checks the supplied version against
     the tool that actually runs, so a caller that lies gets a wrong cache hit.
-    That is acceptable while nothing stores artifacts by this key, and it
-    becomes a real obligation for whoever adds a store.
+    It reaches only :class:`SynthesisArtifactIdentity`, which is the stage a
+    tool is actually invoked at, so the exposure is exactly as wide as the
+    claim.
     """
 
     backend_id: str
@@ -89,18 +164,19 @@ class BuilderIdentity:
 #: ``XILINX_VIVADO``.  Reading the environment here would look more honest and
 #: be less so: it would make the identity depend on ambient state, so the same
 #: inputs would key differently in a shell that happened to have the tool on
-#: its path.  A caller that cares about the tool version passes it, and
+#: its path.  A caller that cares passes it, and
 #: ``finn.util.basic.get_vivado_version`` is where it reads one from.
-#:
-#: ``unspecified`` is therefore a claim in its own right -- "nobody said" -- and
-#: two builds under different real Vivado versions share it.  That is the §7.4
-#: cost made visible rather than hidden behind a plausible-looking number.
 DEFAULT_BUILDER = BuilderIdentity("vivado", "unspecified")
 
 
 @dataclass(frozen=True)
 class TargetIdentity:
-    """The device and timing the artifact was built for."""
+    """The device and timing an artifact was *synthesized* for.
+
+    Not a generated-source input.  Every way a target reaches the RTL is
+    already a declared parameter, so two parts admitting the same parameters
+    admit the same text, and keying the text by part would stop them sharing it.
+    """
 
     fpga_part: str
     clock_period_ns: float
@@ -114,10 +190,11 @@ class TargetIdentity:
 class SourceIdentity:
     """One compiled file: where it was declared, and what was in it.
 
-    The content hash is not decoration.  A path is a location, and with
-    ``FINNLIB_ROOT`` pointed at a working clone, editing ``dotp.sv`` in place is
-    routine -- so a manifest of paths would keep the identity equal across a
-    change to the hardware itself.
+    The root is the *named* root -- ``finn``, ``finnlib`` -- and the path is
+    relative beneath it, so the identity does not move with the checkout.  The
+    content hash is not decoration: with ``FINNLIB_ROOT`` pointed at a working
+    clone, editing ``dotp.sv`` in place is routine, and a manifest of paths
+    would keep the identity equal across a change to the hardware itself.
     """
 
     root: str
@@ -127,7 +204,13 @@ class SourceIdentity:
 
 @dataclass(frozen=True)
 class KernelArtifactIdentity:
-    """What one bound Kernel builds, keyed by its physical inputs alone."""
+    """What one bound Kernel generates, keyed by its source inputs alone.
+
+    Canonical by construction.  The class is public and directly
+    constructible, so ordering cannot be left to whoever calls it: a table
+    written in another order is the same table, and two keys for it would be
+    the wrong-miss to match every wrong-hit elsewhere in this module.
+    """
 
     kernel_id: str
     kernel_version: str
@@ -135,12 +218,28 @@ class KernelArtifactIdentity:
     #: instantiates the DSP core.  A reordered manifest names the same files and
     #: is not the same build.
     sources: tuple[SourceIdentity, ...]
-    #: Sorted by name -- a parameter table is a mapping, so its order is not a
-    #: fact about the build the way compile order is.
+    #: Sorted on construction -- a parameter table is a mapping, so its order is
+    #: not a fact about the build the way compile order is.
     parameters: tuple[tuple[str, Scalar], ...]
-    target: TargetIdentity
-    builder: BuilderIdentity
+    #: The Kernel's own committed choices, likewise sorted, under names local to
+    #: the Kernel rather than to its placement.
+    assignments: tuple[tuple[str, Scalar], ...] = ()
     schema_version: str = KERNEL_ARTIFACT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.kernel_id or not self.kernel_version:
+            raise ValueError("an artifact identity needs a Kernel id and version")
+        # Encode *and store*, not merely validate: an ``Enum`` left in the tuple
+        # would pass a check and then fail at serialization, which is the same
+        # defect one call later and somewhere less obvious.
+        for attribute, label in (("parameters", "parameter"), ("assignments", "choice")):
+            table: tuple[tuple[str, object], ...] = getattr(self, attribute)
+            names = tuple(name for name, _ in table)
+            if len(names) != len(set(names)):
+                raise ArtifactIdentityError(f"a {label} is named twice")
+            object.__setattr__(
+                self, attribute, tuple(sorted((name, _encode(name, v)) for name, v in table))
+            )
 
     @property
     def serialization(self) -> str:
@@ -156,21 +255,20 @@ class KernelArtifactIdentity:
                 ["kernel", [self.kernel_id, self.kernel_version]],
                 ["sources", [[item.root, item.path, item.digest] for item in self.sources]],
                 ["parameters", [[name, value] for name, value in self.parameters]],
-                ["target", [self.target.fpga_part, self.target.clock_period_ns]],
-                ["builder", [self.builder.backend_id, self.builder.tool_version]],
+                ["choices", [[name, value] for name, value in self.assignments]],
             ]
         )
 
     @property
     def key(self) -> str:
-        """A directory name or lookup key: the hash of the serialization."""
+        """A lookup key: the hash of the serialization."""
 
         return content_hash(self.serialization.encode())
 
 
 @dataclass(frozen=True)
 class ComposedArtifactIdentity:
-    """Several bound Kernels plus a generated top, as one build.
+    """Several bound Kernels plus a generated top, as one generated source.
 
     The wrapper hash is not redundant with the Kernel identities.  The wrapper
     is *generated*, so a change to its generator changes the built hardware
@@ -187,6 +285,10 @@ class ComposedArtifactIdentity:
     wrapper_digest: str
     schema_version: str = COMPOSED_ARTIFACT_SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        if not self.kernels:
+            raise ArtifactIdentityError("a composed artifact needs at least one Kernel")
+
     @property
     def serialization(self) -> str:
         return _canonical(
@@ -194,6 +296,88 @@ class ComposedArtifactIdentity:
                 ["schema", self.schema_version],
                 ["kernels", [item.serialization for item in self.kernels]],
                 ["wrapper", self.wrapper_digest],
+            ]
+        )
+
+    @property
+    def key(self) -> str:
+        return content_hash(self.serialization.encode())
+
+
+@dataclass(frozen=True)
+class PackagedArtifactIdentity:
+    """Stage two: the generated source, laid out and made instantiable.
+
+    Its inputs are the *shape* of the packaging and never its materialization.
+    ``layout`` is the staged file names relative to the unit's own directory,
+    in compile order; ``command_schema`` is the instantiation command with the
+    module and instance held out.  Neither depends on where the unit was
+    written, so packaging the same requirements under two repository roots is
+    one artifact -- which it plainly is.
+
+    Computable before anything is staged, which is what lets it name the
+    directory and be looked up.  An identity that could only be formed after
+    the build would be a receipt, not a key.
+    """
+
+    upstream: str
+    layout: tuple[str, ...]
+    command_schema: str
+    schema_version: str = PACKAGED_ARTIFACT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.upstream or not self.command_schema:
+            raise ArtifactIdentityError("a packaged artifact needs an upstream key and a command")
+        for name in self.layout:
+            if "/" in name or "\\" in name or name in ("", ".", ".."):
+                raise ArtifactIdentityError(
+                    f"{name!r} is not a name relative to the unit directory; a packaged "
+                    "identity must not carry a materialized path"
+                )
+
+    @property
+    def serialization(self) -> str:
+        return _canonical(
+            [
+                ["schema", self.schema_version],
+                ["upstream", self.upstream],
+                ["layout", list(self.layout)],
+                ["command", self.command_schema],
+            ]
+        )
+
+    @property
+    def key(self) -> str:
+        return content_hash(self.serialization.encode())
+
+
+@dataclass(frozen=True)
+class SynthesisArtifactIdentity:
+    """Stage three: the packaged unit, built for a device by a tool.
+
+    This is where the target and the builder enter, because this is the stage
+    that consumes them.  One packaged unit synthesized for two parts is two
+    results over one source -- which is the reuse that keeping the part out of
+    the lower stages buys.
+    """
+
+    upstream: str
+    target: TargetIdentity
+    builder: BuilderIdentity = DEFAULT_BUILDER
+    schema_version: str = SYNTHESIS_ARTIFACT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.upstream:
+            raise ArtifactIdentityError("a synthesis artifact needs an upstream key")
+
+    @property
+    def serialization(self) -> str:
+        return _canonical(
+            [
+                ["schema", self.schema_version],
+                ["upstream", self.upstream],
+                ["target", [self.target.fpga_part, self.target.clock_period_ns]],
+                ["builder", [self.builder.backend_id, self.builder.tool_version]],
             ]
         )
 
@@ -227,16 +411,12 @@ def source_identities(
 
 
 def kernel_artifact_identity(
-    binding: KernelBinding,
-    roots: Mapping[str, Path],
-    *,
-    target: TargetIdentity,
-    builder: BuilderIdentity = DEFAULT_BUILDER,
+    binding: KernelBinding, roots: Mapping[str, Path]
 ) -> KernelArtifactIdentity:
-    """The artifact identity of one bound Kernel.
+    """The generated-source identity of one bound Kernel.
 
-    Everything it reads is either declared by the Kernel or supplied here.  It
-    never touches the binding's Regions, node ids, or edges -- those are the
+    Everything it reads is either declared by the Kernel or committed to it.
+    It never touches the binding's Regions, node ids, or edges -- those are the
     instance facts the key exists to exclude.
     """
 
@@ -245,31 +425,39 @@ def kernel_artifact_identity(
         binding.kernel_version,
         source_identities(binding, roots),
         scalar_parameters(dict(binding.parameters)),
-        target,
-        builder,
+        _local_assignments(binding),
     )
 
 
 def composed_artifact_identity(
-    kernels: tuple[KernelArtifactIdentity, ...], wrapper_source: str
+    kernels: tuple[KernelArtifactIdentity, ...], *generated: str
 ) -> ComposedArtifactIdentity:
-    """The artifact identity of several Kernels under one generated top."""
+    """The generated-source identity of several Kernels under one top.
 
-    if not kernels:
-        raise ArtifactIdentityError("a composed artifact needs at least one Kernel")
-    return ComposedArtifactIdentity(kernels, content_hash(wrapper_source.encode()))
+    Every generated text, not only the top.  Each is produced by a generator
+    that can change while the Kernel identities stay equal, so each one left
+    out is a way for the built hardware to move without the key moving.
+    """
+
+    if not generated:
+        raise ArtifactIdentityError("a composed artifact needs its generated text")
+    return ComposedArtifactIdentity(kernels, content_hash("\0".join(generated).encode()))
 
 
 __all__ = [
     "COMPOSED_ARTIFACT_SCHEMA_VERSION",
     "DEFAULT_BUILDER",
     "KERNEL_ARTIFACT_SCHEMA_VERSION",
+    "PACKAGED_ARTIFACT_SCHEMA_VERSION",
+    "SYNTHESIS_ARTIFACT_SCHEMA_VERSION",
     "ArtifactIdentityError",
     "BuilderIdentity",
     "ComposedArtifactIdentity",
     "KernelArtifactIdentity",
+    "PackagedArtifactIdentity",
     "Scalar",
     "SourceIdentity",
+    "SynthesisArtifactIdentity",
     "TargetIdentity",
     "composed_artifact_identity",
     "content_hash",

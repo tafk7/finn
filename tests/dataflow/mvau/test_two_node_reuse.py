@@ -176,7 +176,7 @@ def test_two_equal_nodes_build_one_artifact_and_reuse_it(
     packaged = []
     for requirements in built:
         unit = package_decomposed_artifact(requirements, tmp_path, store=store)
-        store.record(requirements.identity, unit.directory, unit.files)
+        store.record(unit.identity, unit.directory, unit.files)
         packaged.append(unit)
 
     assert (store.misses, store.hits) == (1, 1)
@@ -256,7 +256,7 @@ def test_a_differently_configured_node_is_a_second_build(tmp_path: Path) -> None
         if any(not Path(path).is_file() for path in requirements.finnlib_sources):
             pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
         unit = package_decomposed_artifact(requirements, tmp_path, store=store)
-        store.record(requirements.identity, unit.directory, unit.files)
+        store.record(unit.identity, unit.directory, unit.files)
         directories.add(unit.directory)
 
     assert (store.misses, store.hits) == (2, 0)

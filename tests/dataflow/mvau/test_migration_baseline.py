@@ -223,19 +223,27 @@ def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
 #: claim is a projection that did not move rather than a reviewer's reading of
 #: three digests that did.
 #:
-#: **Phase 5c moved the ``wrapper`` fingerprint, on every configuration, and
-#: nothing else.**  The generated top's module name was
-#: ``{source_node_id}_decomposed``, which is precisely why two identical MVAUs
-#: at different graph positions were two builds; it is now a digest over the
-#: Kernel configuration.  The name is inside the generated text, so every
-#: ``wrapper`` digest moves and ``TOP_MODULE_NAMES`` below moves with them.
+#: **Phase 5 moved ``wrapper`` and ``numeric_interfaces``, on every
+#: configuration, and nothing else.**  Two changes, both deliberate:
+#:
+#: - The generated top's module name was ``{source_node_id}_decomposed``, which
+#:   is precisely why two identical MVAUs at different graph positions were two
+#:   builds.  It is now a digest over the Kernel configuration -- parameters and
+#:   the Kernel's own committed choices -- and the name is inside the generated
+#:   text, so every ``wrapper`` digest moves and ``TOP_MODULE_NAMES`` with it.
+#: - The wrapper's stream interfaces were named ``in0_V_TDATA``, borrowed from
+#:   the uppercase convention of HLS-generated wrappers, while this top -- which
+#:   FINN generates -- declares ``in0_V_tdata``.  SystemVerilog identifiers are
+#:   case-sensitive, so the reported names were unusable for the one thing they
+#:   are reported for.  Nothing read them until the packaged unit began
+#:   publishing its ports, which is why the mismatch survived.
 #:
 #: Everything else held: both Regions, the Network, the source association, the
-#: manifest, the parameters, the components, the interfaces, the connections,
-#: the boundaries, and the normalized structure are byte-identical.  That is the
-#: check that says the change was confined to naming -- the physical structure
-#: still carries the placement, in the component ids, because an *instance* name
-#: legitimately depends on where the instance is.
+#: manifest, the parameters, the components, the control interfaces, the
+#: connections, the boundaries, and the normalized structure are byte-identical.
+#: That is the check saying the change was confined to naming -- the physical
+#: structure still carries the placement, in the component ids, because an
+#: *instance* name legitimately depends on where the instance is.
 #:
 #: ``softvec`` and ``packed`` share all three semantic fingerprints, and
 #: ``packed`` and ``three_repetitions`` share their parameters.  Both are the
@@ -258,12 +266,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "8162f7a7817c53be",
             "components": "7899fcc0bf491f02",
-            "numeric_interfaces": "b5c19bfdd4c9857f",
+            "numeric_interfaces": "600b06f72177b206",
             "control_interfaces": "b954f296f62e47fb",
             "connections": "315f5a4fead89a41",
             "boundaries": "d93fafe0914c3887",
             "associations": "43fc6c132eef7a09",
-            "wrapper": "b4c212d568326476",
+            "wrapper": "d520430c1c837505",
         },
     },
     "packed": {
@@ -281,12 +289,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "d6d573ebc9159065",
             "components": "f717e392f4c971f0",
-            "numeric_interfaces": "2dda613ec4084892",
+            "numeric_interfaces": "ccf1d5978d6060d0",
             "control_interfaces": "10974902328b4ddf",
             "connections": "f54a3d78f385b0ad",
             "boundaries": "86e8517e03945509",
             "associations": "13e3f529cead61a9",
-            "wrapper": "4f5b7faa662a39aa",
+            "wrapper": "3a1b47cd9f128f28",
         },
     },
     "one_neuron_fold": {
@@ -304,12 +312,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "201ffec0dc084a80",
             "components": "957680b992e6a76a",
-            "numeric_interfaces": "24ff33baade35484",
+            "numeric_interfaces": "13eca52b4516e4d1",
             "control_interfaces": "41dcdc2c96649be5",
             "connections": "c046ba0b8dd365c5",
             "boundaries": "667e8a513a7d78a8",
             "associations": "89e10da3576be82f",
-            "wrapper": "0108d42b4d647263",
+            "wrapper": "54214dc8db17a79d",
         },
     },
     "one_synapse_fold": {
@@ -327,12 +335,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "20ebdde09b7e74ee",
             "components": "9cd4ad7494cc3be7",
-            "numeric_interfaces": "091286e99a0a973c",
+            "numeric_interfaces": "7cb37c52567c60e9",
             "control_interfaces": "a247a182419bdd77",
             "connections": "23f3e9df21ba7d83",
             "boundaries": "9e64c3ee18cb4316",
             "associations": "7ea760bb4db7cd0b",
-            "wrapper": "90a9849a39612c26",
+            "wrapper": "d95a33c9e2ea5fba",
         },
     },
     "three_repetitions": {
@@ -350,12 +358,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "d6d573ebc9159065",
             "components": "173f4373497aea1b",
-            "numeric_interfaces": "a8dc8bf7e992d616",
+            "numeric_interfaces": "dc0fb768ed1434f4",
             "control_interfaces": "b5eb163f0011feb8",
             "connections": "bec46178ba047b3b",
             "boundaries": "a3b8ecd070f519e1",
             "associations": "e1345b911f15448d",
-            "wrapper": "4f5b7faa662a39aa",
+            "wrapper": "3a1b47cd9f128f28",
         },
     },
     "repetitions_softvec": {
@@ -373,12 +381,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "4d0ad578ed08cf0e",
             "components": "20a863e19a37ea4f",
-            "numeric_interfaces": "b3b8dcc324bf56c3",
+            "numeric_interfaces": "e7c09d1f896617e3",
             "control_interfaces": "d4db82222fd89522",
             "connections": "b7a0a11b90ebe3d1",
             "boundaries": "4050ecbd3636f989",
             "associations": "e31605b025b110ce",
-            "wrapper": "9bbcfe0ad8b5b096",
+            "wrapper": "5fe46859810a5f2f",
         },
     },
     "pumped": {
@@ -396,12 +404,12 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         "physical": {
             "parameters": "e7e05f66b02b4927",
             "components": "592ebb9e0f08c069",
-            "numeric_interfaces": "cd8c871d382dd36d",
+            "numeric_interfaces": "ba2650c0be5b970c",
             "control_interfaces": "95779a8114bf1f7f",
             "connections": "5323d92561033ffe",
             "boundaries": "d9dd74f985acabaf",
             "associations": "7807f51534e5f083",
-            "wrapper": "78cfac4db18a0159",
+            "wrapper": "79fbbf58d8e3142b",
         },
     },
 }
@@ -410,7 +418,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
 #: fingerprint above says something changed; this says what.
 SOFTVEC_WRAPPER = """// Generated by finn.dataflow.mvau.decomposed_provider -- do not edit.
 // The decomposed MVAU: finn replay_buffer -> finnlib dotp_axi.
-module mvau_decomposed_be215b77a8aa #(
+module mvau_decomposed_a5f98fea236b #(
     parameter WSTREAM = 32,
     parameter ISTREAM = 16,
     parameter OSTREAM = 32
@@ -492,13 +500,13 @@ endmodule
 #: records that they share every parameter, because the repetition extent never
 #: reaches either core.  Same configuration, same hardware, one build.
 TOP_MODULE_NAMES = {
-    "softvec": "mvau_decomposed_be215b77a8aa",
-    "packed": "mvau_decomposed_cc787a9f991c",
-    "one_neuron_fold": "mvau_decomposed_93addbb051da",
-    "one_synapse_fold": "mvau_decomposed_dcf89458b621",
-    "three_repetitions": "mvau_decomposed_cc787a9f991c",
-    "repetitions_softvec": "mvau_decomposed_34f195de7e64",
-    "pumped": "mvau_decomposed_367125aff474",
+    "softvec": "mvau_decomposed_a5f98fea236b",
+    "packed": "mvau_decomposed_1ec7bd1d954e",
+    "one_neuron_fold": "mvau_decomposed_f56a214981ec",
+    "one_synapse_fold": "mvau_decomposed_a8285b00ffbf",
+    "three_repetitions": "mvau_decomposed_1ec7bd1d954e",
+    "repetitions_softvec": "mvau_decomposed_29d2a7081c4d",
+    "pumped": "mvau_decomposed_a0fce60d0414",
 }
 
 

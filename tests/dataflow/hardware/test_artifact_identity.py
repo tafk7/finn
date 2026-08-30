@@ -19,6 +19,8 @@ import copy
 import os
 import subprocess
 import sys
+from dataclasses import replace
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -26,13 +28,17 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataflow.mvau.test_decomposed_op import NODE_ID, _committed, _context, _model
 from dataflow.mvau.test_fused_hardware import _place, _source_description
+from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.design import QualifiedPath
 from finn.dataflow.hardware import (
     DEFAULT_BUILDER,
     KERNEL_ARTIFACT_SCHEMA_VERSION,
     ArtifactIdentityError,
     BuilderIdentity,
+    HardwareKernel,
     KernelArtifactIdentity,
     SourceIdentity,
+    SynthesisArtifactIdentity,
     TargetIdentity,
     composed_artifact_identity,
     kernel_artifact_identity,
@@ -50,8 +56,29 @@ BUILDER = BuilderIdentity("vivado", "2024.2")
 TARGET = TargetIdentity("xcvc1902-vsva2197-2MP-e-S", 4.0)
 
 
+class _Resource(Enum):
+    """A stand-in for a real choice domain, to pin how an Enum is encoded."""
+
+    LUT = "lut"
+    DSP = "dsp"
+
+
 def _roots() -> dict[str, Path]:
     return source_roots(FINN_ROOT)
+
+
+def _kernel_with_assignments(
+    kernel: HardwareKernel, assignments: dict[QualifiedPath, object]
+) -> HardwareKernel:
+    """The same bound Kernel with its committed choices replaced.
+
+    Built through the real constructor rather than by patching an attribute, so
+    the substitute is the shape a Kernel actually has.
+    """
+
+    return type(kernel)(
+        kernel.declaration, kernel.regions, kernel.edges, assignments, kernel.parameters
+    )
 
 
 def _identity(**overrides: object) -> KernelArtifactIdentity:
@@ -65,8 +92,7 @@ def _identity(**overrides: object) -> KernelArtifactIdentity:
             SourceIdentity(FINNLIB_ROOT, "rtl/dotp_axi.sv", content_hash(b"outer")),
         ),
         "parameters": (("PE", 2), ("SIGNED_ACTIVATIONS", True), ("SIMD", 2)),
-        "target": TARGET,
-        "builder": BUILDER,
+        "assignments": (("compute_pumping", False),),
     }
     fields.update(overrides)
     return KernelArtifactIdentity(**fields)  # type: ignore[arg-type]
@@ -114,10 +140,8 @@ def test_every_build_input_moves_the_key() -> None:
             parameters=(("PE", 4), ("SIGNED_ACTIVATIONS", True), ("SIMD", 2))
         ),
         "parameter set": _identity(parameters=(("PE", 2), ("SIMD", 2))),
-        "target part": _identity(target=TargetIdentity("xcku3p-ffva676-1-e", 4.0)),
-        "clock period": _identity(target=TargetIdentity(TARGET.fpga_part, 5.0)),
-        "builder backend": _identity(builder=BuilderIdentity("vitis", "2024.2")),
-        "builder version": _identity(builder=BuilderIdentity("vivado", "2025.1")),
+        "choice value": _identity(assignments=(("compute_pumping", True),)),
+        "choice set": _identity(assignments=()),
         "schema version": _identity(schema_version="kernel-artifact-identity-v99"),
     }
 
@@ -146,19 +170,66 @@ def test_a_parameter_table_is_keyed_by_content_and_not_by_insertion_order() -> N
 
     A parameter table is a mapping; its order carries nothing.  Sources are a
     sequence; their order carries everything.  Both are tuples in the value, so
-    the distinction has to be asserted rather than read off the type.
+    the distinction has to be a *type invariant* rather than a convention the
+    factory happens to follow -- these classes are public and directly
+    constructible, and a caller building one by hand gets no factory.
+
+    An earlier version of this test passed its "scrambled" table through
+    ``sorted()`` before construction, so it compared a sorted table with a
+    sorted table and would have passed against a class that did nothing.  This
+    one scrambles for real.
     """
 
-    sorted_table = _identity()
+    canonical = _identity()
     scrambled = KernelArtifactIdentity(
-        sorted_table.kernel_id,
-        sorted_table.kernel_version,
-        sorted_table.sources,
-        tuple(sorted((("SIMD", 2), ("PE", 2), ("SIGNED_ACTIVATIONS", True)))),
-        sorted_table.target,
-        sorted_table.builder,
+        canonical.kernel_id,
+        canonical.kernel_version,
+        canonical.sources,
+        (("SIMD", 2), ("PE", 2), ("SIGNED_ACTIVATIONS", True)),
+        canonical.assignments,
     )
-    assert scrambled.key == sorted_table.key
+
+    assert scrambled.parameters == canonical.parameters
+    assert scrambled == canonical
+    assert scrambled.key == canonical.key
+
+
+def test_committed_choices_are_canonical_too() -> None:
+    """Same rule, same reason -- a choice table is a mapping as well."""
+
+    canonical = _identity(assignments=(("alpha", 1), ("beta", 2)))
+    scrambled = _identity(assignments=(("beta", 2), ("alpha", 1)))
+
+    assert scrambled.assignments == (("alpha", 1), ("beta", 2))
+    assert scrambled.key == canonical.key
+
+
+def test_a_table_naming_one_thing_twice_is_refused() -> None:
+    """Sorting would otherwise hide it, and the second value would be arbitrary."""
+
+    with pytest.raises(ArtifactIdentityError, match="parameter is named twice"):
+        _identity(parameters=(("PE", 2), ("PE", 4)))
+    with pytest.raises(ArtifactIdentityError, match="choice is named twice"):
+        _identity(assignments=(("pumping", True), ("pumping", False)))
+
+
+def test_a_value_with_no_stable_serialization_is_refused() -> None:
+    """``str()`` on an arbitrary object is ``repr()`` by another route.
+
+    ``repr()`` has no stability contract, so accepting one would put an
+    unstated one in the key.  Enums are the exception and are encoded by
+    *name*: two members sharing a value are two choices.
+    """
+
+    class _Opaque:
+        pass
+
+    with pytest.raises(ArtifactIdentityError, match="no stable serialization"):
+        _identity(parameters=(("PE", _Opaque()),))
+
+    encoded = _identity(assignments=(("resource", _Resource.LUT),))
+    assert "_Resource.LUT" in encoded.serialization
+    assert encoded.key != _identity(assignments=(("resource", _Resource.DSP),)).key
 
 
 def test_scalar_types_are_distinguished_in_the_key() -> None:
@@ -203,8 +274,7 @@ def test_the_schema_version_is_part_of_the_key() -> None:
 _DETERMINISM_PROGRAM = """
 import sys
 sys.path[:0] = ["src", "tests"]
-from finn.dataflow.hardware import BuilderIdentity, KernelArtifactIdentity, SourceIdentity, \
-    TargetIdentity
+from finn.dataflow.hardware import KernelArtifactIdentity, SourceIdentity
 from finn.dataflow.hardware.identity import content_hash
 
 identity = KernelArtifactIdentity(
@@ -214,9 +284,8 @@ identity = KernelArtifactIdentity(
         SourceIdentity("finnlib", "rtl/dotp.sv", content_hash(b"inner")),
         SourceIdentity("finnlib", "rtl/dotp_axi.sv", content_hash(b"outer")),
     ),
-    (("PE", 2), ("SIGNED_ACTIVATIONS", True), ("SIMD", 2)),
-    TargetIdentity("xcvc1902-vsva2197-2MP-e-S", 4.0),
-    BuilderIdentity("vivado", "2024.2"),
+    (("SIMD", 2), ("PE", 2), ("SIGNED_ACTIVATIONS", True)),
+    (("compute_pumping", False),),
 )
 print(identity.key)
 """
@@ -252,30 +321,51 @@ def test_the_key_is_the_same_in_a_fresh_process(seed: str) -> None:
     assert completed.stdout.strip() == expected
 
 
-# -- the builder label -------------------------------------------------------
+# -- the target and the builder reach only the stage that consumes them --------
 
 
-def test_an_unspecified_builder_is_the_named_default() -> None:
-    """The whole of 5b's contract, in two assertions.
+def test_neither_target_nor_builder_reaches_the_generated_source_key() -> None:
+    """The stage boundary, asserted where it would otherwise be assumed.
 
-    The default is a *label*, not a probe: it says ``unspecified`` rather than
-    reading ``XILINX_VIVADO``, so the identity is a function of its arguments
-    and of nothing ambient.  A caller that knows its tool version supplies it,
-    and supplying a different one moves the key -- which is what makes the
-    label load-bearing rather than decorative.
+    Neither can change generated text.  ``render_decomposed_wrapper`` does not
+    invoke Vivado, and every way a target reaches the RTL is already a declared
+    parameter -- ``VERSION`` and ``SEGMENTLEN`` are in the table.  Keying the
+    source by either would make identical text key differently and stop it
+    being shared: a wrong *miss*, and as wrong as the wrong hit.
     """
 
-    _, compute = _place().decomposed()
-    default = kernel_artifact_identity(compute, _roots(), target=TARGET)
+    zynq = _place(target=MVAUDspBlock.DSP48E2)
+    versal = _place(target=MVAUDspBlock.DSP58)
+    keys = tuple(
+        kernel_artifact_identity(place.decomposed()[1], _roots()).key for place in (zynq, versal)
+    )
+
+    # These two *do* differ, and through the parameter table rather than
+    # through a part string: the DSP generation changes ``VERSION``.
+    assert keys[0] != keys[1]
+    text = kernel_artifact_identity(zynq.decomposed()[1], _roots()).serialization
+    assert "xczu3eg" not in text and "xcvc1902" not in text
+    assert "vivado" not in text
+    assert "VERSION" in text
+
+
+def test_a_synthesis_identity_is_where_the_target_and_the_builder_land() -> None:
+    """One packaged unit, several devices, several results."""
+
+    upstream = "packaged-key"
+    default = SynthesisArtifactIdentity(upstream, TARGET)
 
     assert default.builder == DEFAULT_BUILDER
     assert default.builder.tool_version == "unspecified"
-    assert (
-        kernel_artifact_identity(
-            compute, _roots(), target=TARGET, builder=BuilderIdentity("vivado", "2024.2")
-        ).key
-        != default.key
+
+    moved = (
+        SynthesisArtifactIdentity("other-unit", TARGET),
+        SynthesisArtifactIdentity(upstream, TargetIdentity("xcku3p-ffva676-1-e", 4.0)),
+        SynthesisArtifactIdentity(upstream, TargetIdentity(TARGET.fpga_part, 5.0)),
+        SynthesisArtifactIdentity(upstream, TARGET, BuilderIdentity("vitis", "unspecified")),
+        SynthesisArtifactIdentity(upstream, TARGET, BuilderIdentity("vivado", "2025.1")),
     )
+    assert len({item.key for item in moved} | {default.key}) == len(moved) + 1
 
 
 def test_the_default_builder_does_not_read_the_environment() -> None:
@@ -286,13 +376,12 @@ def test_the_default_builder_does_not_read_the_environment() -> None:
     to tell from the value which shell produced it.
     """
 
-    _, compute = _place().decomposed()
-    baseline = kernel_artifact_identity(compute, _roots(), target=TARGET).key
+    baseline = SynthesisArtifactIdentity("unit", TARGET).key
 
     previous = os.environ.get("XILINX_VIVADO")
     os.environ["XILINX_VIVADO"] = "/tools/Xilinx/Vivado/2024.2"
     try:
-        assert kernel_artifact_identity(compute, _roots(), target=TARGET).key == baseline
+        assert SynthesisArtifactIdentity("unit", TARGET).key == baseline
     finally:
         if previous is None:
             del os.environ["XILINX_VIVADO"]
@@ -316,11 +405,61 @@ def test_the_builder_label_is_a_label_and_not_an_execution_adapter() -> None:
 # -- construction from a real binding ----------------------------------------
 
 
+def test_a_kernels_own_committed_choices_are_in_its_key() -> None:
+    """``elaborate()`` may read them, so they are build inputs.
+
+    The MVAU happens to route its one local choice into an RTL parameter as
+    well, which is what made this safe to omit and impossible to notice.  The
+    generic contract does not require that: a Kernel may let a local choice
+    change its elaboration without the choice becoming a parameter, and two
+    such configurations must not collide.
+
+    The names are local -- stripped against the declaration's own namespace --
+    because a *qualified* path is a placement fact.  A Kernel placed twice has
+    two namespaces over one authored design, so keying on the qualified path
+    would give one configuration two keys.
+    """
+
+    _, compute = _place().decomposed()
+    identity = kernel_artifact_identity(compute, _roots())
+    namespace = compute.kernel.declaration.namespace
+
+    assert compute.kernel.assignments, "this Kernel is meant to have a local choice"
+    assert identity.assignments == tuple(
+        sorted(
+            (str(path)[len(namespace) + 1 :], value)
+            for path, value in compute.kernel.assignments.items()
+        )
+    )
+    # Local, so the placement namespace is nowhere in the key.
+    assert namespace not in identity.serialization
+    for name, _ in identity.assignments:
+        assert "." not in name
+
+
+def test_a_choice_committed_outside_the_kernels_namespace_is_refused() -> None:
+    """A Kernel owns only its local choices, and a key may not assume otherwise.
+
+    Stripping by "everything after the last dot" would silently accept a path
+    belonging to something else and record it under a name that looks local.
+    """
+
+    _, compute = _place().decomposed()
+    intruder = replace(
+        compute,
+        kernel=_kernel_with_assignments(
+            compute.kernel, {QualifiedPath("somewhere.else.pumping"): True}
+        ),
+    )
+    with pytest.raises(ArtifactIdentityError, match="not under its own namespace"):
+        kernel_artifact_identity(intruder, _roots())
+
+
 def test_an_identity_is_built_from_the_kernels_declared_sources() -> None:
     """The manifest is hashed off the checkout, in the Kernel's own order."""
 
     _, compute = _place().decomposed()
-    identity = kernel_artifact_identity(compute, _roots(), target=TARGET, builder=BUILDER)
+    identity = kernel_artifact_identity(compute, _roots())
 
     declared = tuple((item.root, item.path) for item in compute.kernel.sources)
     assert tuple((item.root, item.path) for item in identity.sources) == declared
@@ -334,20 +473,13 @@ def test_an_identity_is_built_from_the_kernels_declared_sources() -> None:
 def test_an_unresolvable_source_root_is_refused_rather_than_guessed() -> None:
     _, compute = _place().decomposed()
     with pytest.raises(ArtifactIdentityError, match="does not resolve"):
-        kernel_artifact_identity(
-            compute, {FINN_ROOT_NAME: FINN_ROOT}, target=TARGET, builder=BUILDER
-        )
+        kernel_artifact_identity(compute, {FINN_ROOT_NAME: FINN_ROOT})
 
 
 def test_a_declared_source_this_checkout_lacks_is_refused(tmp_path: Path) -> None:
     _, compute = _place().decomposed()
     with pytest.raises(ArtifactIdentityError, match="cannot be read"):
-        kernel_artifact_identity(
-            compute,
-            {FINN_ROOT_NAME: FINN_ROOT, FINNLIB_ROOT: tmp_path},
-            target=TARGET,
-            builder=BUILDER,
-        )
+        kernel_artifact_identity(compute, {FINN_ROOT_NAME: FINN_ROOT, FINNLIB_ROOT: tmp_path})
 
 
 def test_a_wider_activation_moves_the_key_through_the_width_parameter() -> None:
@@ -366,8 +498,7 @@ def test_a_wider_activation_moves_the_key_through_the_width_parameter() -> None:
         activation=DataType["INT16"], accumulator=DataType["INT32"], output=DataType["INT32"]
     )
     identities = tuple(
-        kernel_artifact_identity(place.decomposed()[1], _roots(), target=TARGET, builder=BUILDER)
-        for place in (narrow, wide)
+        kernel_artifact_identity(place.decomposed()[1], _roots()) for place in (narrow, wide)
     )
 
     assert identities[0].key != identities[1].key
@@ -390,10 +521,9 @@ def test_the_two_physical_readings_of_one_network_key_differently() -> None:
     """
 
     placed = _place()
-    fused = kernel_artifact_identity(placed.fused(), _roots(), target=TARGET, builder=BUILDER)
+    fused = kernel_artifact_identity(placed.fused(), _roots())
     replay, compute = (
-        kernel_artifact_identity(binding, _roots(), target=TARGET, builder=BUILDER)
-        for binding in placed.decomposed()
+        kernel_artifact_identity(binding, _roots()) for binding in placed.decomposed()
     )
 
     assert len({fused.key, replay.key, compute.key}) == 3
@@ -415,10 +545,7 @@ def test_a_changed_wrapper_moves_the_composed_key_with_the_kernels_equal() -> No
     """
 
     placed = _place()
-    kernels = tuple(
-        kernel_artifact_identity(binding, _roots(), target=TARGET, builder=BUILDER)
-        for binding in placed.decomposed()
-    )
+    kernels = tuple(kernel_artifact_identity(binding, _roots()) for binding in placed.decomposed())
     first = composed_artifact_identity(kernels, "module top; endmodule\n")
     second = composed_artifact_identity(kernels, "module top; /* rewired */ endmodule\n")
 
@@ -430,8 +557,7 @@ def test_a_changed_wrapper_moves_the_composed_key_with_the_kernels_equal() -> No
 def test_the_composed_key_follows_its_kernels_and_their_order() -> None:
     placed = _place()
     replay, compute = (
-        kernel_artifact_identity(binding, _roots(), target=TARGET, builder=BUILDER)
-        for binding in placed.decomposed()
+        kernel_artifact_identity(binding, _roots()) for binding in placed.decomposed()
     )
     text = "module top; endmodule\n"
 
@@ -488,9 +614,7 @@ def test_two_source_nodes_with_one_configuration_share_one_identity() -> None:
     first, second = (bind_decomposed(resolved) for resolved in resolutions)
 
     for left, right in zip(first.bindings, second.bindings, strict=True):
-        assert kernel_artifact_identity(
-            left, _roots(), target=TARGET, builder=BUILDER
-        ) == kernel_artifact_identity(right, _roots(), target=TARGET, builder=BUILDER)
+        assert kernel_artifact_identity(left, _roots()) == kernel_artifact_identity(right, _roots())
         assert left.origin() == right.origin()
 
     built = tuple(
@@ -512,9 +636,7 @@ def test_no_instance_fact_reaches_the_serialization() -> None:
 
     description = _source_description(2)
     placed = _place(source_description=description)
-    text = kernel_artifact_identity(
-        placed.decomposed()[1], _roots(), target=TARGET, builder=BUILDER
-    ).serialization
+    text = kernel_artifact_identity(placed.decomposed()[1], _roots()).serialization
 
     # Every instance fact the description carries, named from the description
     # itself so a new field cannot be added without this test seeing it.
