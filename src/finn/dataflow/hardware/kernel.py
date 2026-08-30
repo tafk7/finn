@@ -880,7 +880,77 @@ class KernelBinding:
         return self.kernel.origin()
 
     def components(self) -> tuple[PhysicalComponent, ...]:
-        return type(self.kernel).elaborate(self)
+        """This Kernel's components, checked against what it declared.
+
+        The checked entry point, and the one every assembly should use.
+        ``elaborate`` is an ordinary classmethod: nothing stops its body from
+        computing a value and putting it in a component, and "elaboration makes
+        no design choice" was until now a property of the *binding* -- nothing
+        else is reachable -- rather than of the elaboration.  Unreachable is not
+        the same as unused, and a Kernel that derives ``LANES * 2`` on the way
+        out has invented a value nobody chose and nothing records.
+        """
+
+        return audit_elaboration(self, type(self.kernel).elaborate(self))
+
+
+# -- the elaboration audit ----------------------------------------------------
+
+
+def audit_elaboration(
+    binding: KernelBinding, components: tuple[PhysicalComponent, ...]
+) -> tuple[PhysicalComponent, ...]:
+    """Refuse a component carrying a parameter the Kernel did not declare.
+
+    What this establishes, precisely: **every parameter value leaving an
+    elaboration is one the design point already answered.**  A name the Kernel
+    never declared is refused, and a declared name carrying anything other than
+    its resolved value is refused -- so the four allowed ownership routes
+    (projected fact, committed decision, derived property, documented constant)
+    stay the only ways a number reaches hardware.
+
+    What it does *not* establish, and cannot: that elaboration makes no choice
+    at all.  A passing check catches specific violations, and an elaboration is
+    free to choose an instance name, a hierarchy, or how many components to emit
+    -- none of which is a design-space coordinate.  "No design choice inside
+    elaboration" is not provable by a test; this is the falsifiable part of it.
+
+    Deliberately not a ``Finding``: a Kernel whose elaboration invents a value
+    is an authoring defect in the Kernel, discovered at the moment it is used
+    rather than a point this Kernel does not cover.
+    """
+
+    resolved = dict(binding.parameters)
+    undeclared: list[str] = []
+    disagreeing: list[str] = []
+    for component in components:
+        for name, value in component.parameters:
+            if name not in resolved:
+                undeclared.append(f"{component.id}.{name}")
+            elif value != resolved[name]:
+                disagreeing.append(f"{component.id}.{name}={value!r} not {resolved[name]!r}")
+    issues = []
+    if undeclared:
+        issues.append(
+            SpecAuthoringIssue(
+                "hardware-elaboration-parameter-undeclared",
+                ", ".join(sorted(undeclared)),
+                f"{binding.kernel_id} elaborated a parameter it never declared; "
+                "declare it so the value has an owner in the design point",
+            )
+        )
+    if disagreeing:
+        issues.append(
+            SpecAuthoringIssue(
+                "hardware-elaboration-parameter-recomputed",
+                ", ".join(sorted(disagreeing)),
+                f"{binding.kernel_id} elaborated a declared parameter with a value "
+                "the binding did not resolve",
+            )
+        )
+    if issues:
+        raise SpecAuthoringError(tuple(issues))
+    return components
 
 
 def _role_findings(
@@ -1116,6 +1186,7 @@ __all__ = [
     "PhysicalComponent",
     "RegionCoverage",
     "SourceFile",
+    "audit_elaboration",
     "bind_hardware_kernel",
     "bound_regions",
     "check_declared_references",

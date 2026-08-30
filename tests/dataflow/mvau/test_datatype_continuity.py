@@ -254,6 +254,16 @@ def _wrapper_parameters(source: str) -> dict[str, int]:
     return found
 
 
+def _byte_aligned(bits: int) -> int:
+    """A ``tdata`` width, rounded up as the generator rounds it.
+
+    Restated here rather than imported: the generator's helper is private, and
+    a test that called it would agree with a generator that rounded wrongly.
+    """
+
+    return ((bits + 7) // 8) * 8
+
+
 def _operand_type(region: object, port_id: str) -> object:
     """The element type of one Region port, found by the port's own id."""
 
@@ -458,13 +468,15 @@ def test_the_output_type_reaches_no_kernel_parameter_and_sizes_the_top_instead()
     chain = _chain(_model())
     output = chain.annotation["output"]
     assert is_qonnx_datatype(output)
-    assert chain.wrapper_parameters["OSTREAM"] == output.bitwidth() * chain.parameters["PE"]  # type: ignore[attr-defined]
+    pe = chain.parameters["PE"]
+    assert isinstance(pe, int)
+    width = output.bitwidth()  # type: ignore[attr-defined]
+    assert chain.wrapper_parameters["OSTREAM"] == _byte_aligned(width * pe)
     # ...and that is the accumulator's width, because nothing else would fit
     # what the core drives.
-    assert (
-        chain.wrapper_parameters["OSTREAM"]
-        == chain.parameters["ACCU_WIDTH"] * (chain.parameters["PE"])
-    )
+    accumulator = chain.parameters["ACCU_WIDTH"]
+    assert isinstance(accumulator, int)
+    assert chain.wrapper_parameters["OSTREAM"] == _byte_aligned(accumulator * pe)
 
 
 @pytest.mark.parametrize("role", ROLES, ids=lambda item: item.label)
@@ -486,6 +498,12 @@ def test_each_role_sizes_the_wrapper_port_it_is_declared_to(role: _Role) -> None
     this says the width is *right* and not merely that it is what it is.  One
     activation beat is ``SIMD`` elements, one weight beat is ``SIMD * PE``, and
     one output beat is ``PE``.
+
+    Byte-aligned, because these are AXI-Stream ``tdata`` widths and the
+    generator rounds them up.  Written out rather than left to the arithmetic
+    happening to divide: every width here is a multiple of eight already, so an
+    unrounded expectation would pass today and mislead the first time a
+    non-byte-multiple element type reached it.
     """
 
     chain = _chain(_model())
@@ -495,7 +513,7 @@ def test_each_role_sizes_the_wrapper_port_it_is_declared_to(role: _Role) -> None
     width = _signature(chain.annotation[role.label])[1]
     assert isinstance(width, int)
     for name in role.wrapper_parameters:
-        assert chain.wrapper_parameters[name] == width * elements[name], name
+        assert chain.wrapper_parameters[name] == _byte_aligned(width * elements[name]), name
 
 
 # -- the defect this chain found -----------------------------------------------

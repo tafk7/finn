@@ -351,7 +351,10 @@ def _component(binding: KernelBinding, prefix: str, parent: str) -> MVAUPhysical
     placement prefix, and the generated wrapper the two cores live inside.
     """
 
-    (declared,) = type(binding.kernel).elaborate(binding)
+    # ``components()`` and not ``elaborate()``: the former audits what came
+    # back against what the Kernel declared, and calling the raw classmethod
+    # would take the one assembly that matters straight past the check.
+    (declared,) = binding.components()
     return MVAUPhysicalComponent(
         f"{prefix}.{declared.id}", declared.module, parent, declared.parameters
     )
