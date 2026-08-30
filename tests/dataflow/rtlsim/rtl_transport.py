@@ -54,10 +54,18 @@ def random_word(generator: np.random.RandomState, bits: int) -> int:
     Built from bytes rather than ``randint`` because a packed weight beat is
     ``PE * SIMD * WEIGHT_WIDTH`` wide and reaches 64 bits at modest folding,
     which ``randint`` cannot represent.
+
+    ``.astype(np.uint8).tobytes()`` and not ``bytes(...)``.  ``randint``
+    returns ``int64``, and ``bytes()`` on a numpy array reads its *buffer* --
+    eight bytes per value, seven of them zero.  A 32-bit word therefore came
+    out as one random low byte and 24 zero bits, so a four-lane weight beat had
+    three lanes stuck at zero and fixture 5 compared two DUTs on a quarter of
+    the stimulus it appeared to be using.  Nothing failed, because both DUTs
+    got the same impoverished stream.
     """
 
-    raw = int.from_bytes(bytes(generator.randint(0, 256, size=(bits + 7) // 8)), "little")
-    return raw & ((1 << bits) - 1)
+    raw = generator.randint(0, 256, size=(bits + 7) // 8).astype(np.uint8).tobytes()
+    return int.from_bytes(raw, "little") & ((1 << bits) - 1)
 
 
 def _collect_with_backpressure(sim: object, stream: str, size: int, watchdog: object) -> object:

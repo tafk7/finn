@@ -1116,17 +1116,7 @@ _FIXTURE_SHARED = (
 )
 
 
-#: The configurations fixture 5 measures *agreement* on.
-#:
-#: One is excluded, and the exclusion is the finding rather than a convenience.
-#: Fixture 5's ``dsp48e1`` carries a ``known_divergence``: the two cores do not
-#: agree there, and fixture 8 showed the fused one is the one that is wrong.
-#: Citing that run as evidence for this Kernel's parameters would be citing a
-#: disagreement as though it were a confirmation.
-AGREEING_CONFIGS = [config for config in CONFIGS if not config.known_divergence]
-
-
-@pytest.mark.parametrize("config", AGREEING_CONFIGS, ids=lambda item: item.label)
+@pytest.mark.parametrize("config", CONFIGS, ids=lambda item: item.label)
 def test_this_kernel_declares_what_fixture_five_already_measured(config: Config) -> None:
     """Tie the Kernel's parameters to the configurations that have RTL evidence.
 
@@ -1151,6 +1141,11 @@ def test_this_kernel_declares_what_fixture_five_already_measured(config: Config)
         simd=config.simd,
         target=config.target,
         pumping=config.pumping,
+        # Taken from the configuration, not defaulted.  ``dsp48e1`` runs 4-bit
+        # activations, and a citation placed at a width the fixture does not
+        # run would be citing a different point than the one it claims.
+        activation=DataType[f"INT{config.activation_bits}"],
+        weight=DataType[f"INT{config.weight_bits}"],
         narrow=True,
     )
     declared = dict(placed.fused().parameters)
@@ -1177,22 +1172,6 @@ def test_the_narrow_weight_parameter_is_what_the_fixture_actually_resolved() -> 
     """
 
     assert {declared_parameters(config)["NARROW_WEIGHTS"] for config in CONFIGS} == {True}
-
-
-def test_the_diverging_configuration_is_excluded_and_says_why() -> None:
-    """The exclusion above, asserted so it cannot silently widen.
-
-    Exactly one configuration is left out of the citation, and only because
-    fixture 5 records that the fused core computes the wrong values there.  A
-    second exclusion appearing without a divergence record would mean the
-    citation had quietly become optional.
-    """
-
-    excluded = [config for config in CONFIGS if config not in AGREEING_CONFIGS]
-    assert [config.label for config in excluded] == ["dsp48e1"]
-    assert all(config.known_divergence for config in excluded)
-    assert dict(_place(narrow=False).fused().parameters)["NARROW_WEIGHTS"] is False
-    assert dict(_place(narrow=True).fused().parameters)["NARROW_WEIGHTS"] is True
 
 
 # -- the datatype contract ---------------------------------------------------

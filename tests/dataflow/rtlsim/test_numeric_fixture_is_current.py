@@ -295,12 +295,13 @@ def test_the_dsp48e1_pair_differs_only_in_the_narrow_promise() -> None:
 def test_the_frame_boundary_pair_differs_only_in_the_dsp_generation() -> None:
     """The diagnostic pair, set up so its answer means something.
 
-    Fixture 5 fails on DSP48E1 from the second repetition and passes on every
-    other generation.  It compares two DUTs and cannot say which is right.
-    These two ask arithmetic the same question on both generations, so a
-    DSP48E1 failure with DSP58 passing points at the family, and both failing
-    points at the frame boundary.  Anything else about them differing would
-    make the comparison say nothing.
+    Built when fixture 5 failed on DSP48E1 from the second repetition while
+    passing on every other generation.  Fixture 5 compares two DUTs and cannot
+    say which is right; these ask arithmetic the same question on both
+    generations, so a DSP48E1 failure with DSP58 passing would point at the
+    family and both failing would point at the frame boundary.  Both passed,
+    which is what sent the search to fixture 5's stimulus.  Anything else about
+    them differing would make the comparison say nothing.
     """
 
     first = fixture.CASES_BY_LABEL["dsp48e1_frames"]

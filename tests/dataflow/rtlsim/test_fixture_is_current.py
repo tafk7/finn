@@ -19,10 +19,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np  # type: ignore[import-not-found]
 import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as fixture
-from dataflow.rtlsim import composed_mvau_numeric as numeric
+from dataflow.rtlsim.rtl_transport import random_word
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
 from finn.dataflow.mvau.hardware.binding import verify_manifest
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
@@ -95,43 +96,46 @@ def test_the_synthesis_path_is_the_one_that_is_built() -> None:
         assert fixture.declared_parameters(config)["FORCE_BEHAVIORAL"] == 0
 
 
-# -- the one recorded divergence -----------------------------------------------
+# -- the stimulus keeps the promises the design point makes --------------------
 
 
-def test_only_dsp48e1_diverges_and_it_says_what_settled_it() -> None:
-    """A divergence record is only admissible with an oracle behind it.
+def test_the_weight_stimulus_honours_the_declared_narrow_weights() -> None:
+    """The defect DSP48E1 exposed, as a check rather than a comment.
 
-    Fixture 5 compares two DUTs and cannot say which is right, so "these two
-    disagree and that is fine" would be an exemption rather than a finding.
-    What makes this one admissible is that fixture 8 ran the same geometry
-    against ``execute_node`` and said which side is wrong -- so the record has
-    to name that case, and this checks the case exists.
+    ``NARROW_WEIGHTS`` is derived from the model's weight initializer and tells
+    the core the datatype minimum will never arrive.  The streamed weights were
+    an independent random draw that could carry it anyway, so the point made a
+    promise the stimulus did not keep -- and ``mvu.sv``, which packs only
+    ``WEIGHT_WIDTH-1`` magnitude bits under that promise, diverged from a core
+    that tolerates it.  Two DUTs differing on a value neither is obliged to
+    handle is not a result about either.
     """
 
-    diverging = [config for config in fixture.CONFIGS if config.known_divergence]
-    assert [config.label for config in diverging] == ["dsp48e1"]
-
-    note = diverging[0].known_divergence
-    assert "dsp48e1_fixture5_point" in note
-    assert "execute_node" in note
-    adjudicator = numeric.CASES_BY_LABEL["dsp48e1_fixture5_point"]
-    # And it has to be the *same* design point, or it adjudicates something else.
-    config = fixture.CONFIGS_BY_LABEL["dsp48e1"]
-    assert adjudicator.target is config.target
-    assert adjudicator.repetitions == config.repetitions
-    assert adjudicator.matrix_width == config.matrix_width
-    assert adjudicator.matrix_height == config.matrix_height
-    assert adjudicator.pe == config.pe
-    assert adjudicator.simd == config.simd
-    assert adjudicator.activation == f"INT{config.activation_bits}"
-    assert adjudicator.weight == f"INT{config.weight_bits}"
-    assert adjudicator.accumulator == f"INT{fixture.ACCU_WIDTH}"
-
-
-def test_every_other_configuration_claims_plain_equivalence() -> None:
-    """So a second record cannot be added without being noticed here."""
-
     for config in fixture.CONFIGS:
-        if config.label == "dsp48e1":
-            continue
-        assert config.known_divergence == "", config.label
+        narrow = bool(fixture.declared_parameters(config)["NARROW_WEIGHTS"])
+        assert narrow, f"{config.label}: this check assumes the narrow promise"
+        generator = np.random.RandomState(0)
+        minimum = -(2 ** (config.weight_bits - 1))
+        mask = (1 << config.weight_bits) - 1
+        for _ in range(64):
+            beat = fixture._random_weight_beat(generator, config, narrow=narrow)
+            for lane in range(config.pe * config.simd):
+                raw = (beat >> (lane * config.weight_bits)) & mask
+                value = raw - (1 << config.weight_bits) if raw > (mask >> 1) else raw
+                assert value != minimum, config.label
+
+
+def test_a_random_word_is_random_in_every_byte() -> None:
+    """``bytes()`` on an ``int64`` numpy array reads its buffer, not its values.
+
+    Seven bytes in eight were zero, so a 32-bit weight beat was one random low
+    byte and 24 zero bits -- three of four lanes stuck at zero. Nothing failed,
+    because both DUTs were fed the same impoverished stream, which is exactly
+    why a fixture that only compares two implementations cannot notice.
+    """
+
+    generator = np.random.RandomState(0)
+    words = [random_word(generator, 64) for _ in range(64)]
+    for byte in range(8):
+        seen = {(word >> (byte * 8)) & 0xFF for word in words}
+        assert len(seen) > 1, f"byte {byte} never varies"

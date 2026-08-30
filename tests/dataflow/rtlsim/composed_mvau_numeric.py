@@ -373,18 +373,16 @@ CASES = (
         "the same on the narrow path, so the pair says the extra sign bit is "
         "what changed rather than the family",
     ),
-    # -- narrowing fixture 5's DSP48E1 disagreement ---------------------------
+    # -- what narrowed fixture 5's DSP48E1 disagreement -----------------------
     #
-    # Adding DSP48E1 to fixture 5's matrix made it FAIL: the fused core and the
-    # composed one agree on the first repetition and diverge from the second,
-    # on a configuration every other DSP generation matches.  Fixture 5 cannot
-    # say which of the two is right -- that is the whole reason this fixture
-    # exists -- so these two ask the arithmetic.
+    # Adding DSP48E1 to fixture 5 made it FAIL, and fixture 5 cannot say which
+    # of its two DUTs is right -- that is the whole reason this fixture exists.
+    # These asked the arithmetic, and the composed core was right in every one.
     #
-    # Same shape on both generations, so the answer separates "the composed
-    # core mishandles a frame boundary" from "the two cores disagree only on
-    # DSP48E1".  Three repetitions rather than two, because a defect that
-    # starts at the second frame should also be visible at the third.
+    # The cause turned out to be in fixture 5's own stimulus, which streamed a
+    # weight the declared NARROW_WEIGHTS promised would not occur; the
+    # production wrapper over the same core computes correctly. The cases stay
+    # because the coverage is real and was never run before.
     #
     # ``INT4`` activations against ``INT8`` weights, so an ``INT16``
     # accumulator does not wrap: fixture 5's own configuration overflows it,
@@ -403,8 +401,8 @@ CASES = (
         "INT16",
         "full",
         "narrow",
-        "three frames on DSP48E1 at fixture 5's accumulator width, which is "
-        "where fused and composed diverge",
+        "three frames on DSP48E1 at fixture 5's accumulator width, the "
+        "generation with no prior numerical evidence at all",
     ),
     Case(
         "dsp48e1_fixture5_point",
@@ -419,9 +417,9 @@ CASES = (
         "INT16",
         "full",
         "narrow",
-        "fixture 5's failing DSP48E1 configuration exactly, at a width where "
-        "the accumulator does not wrap -- so the mismatch it reports is not "
-        "about overflow and this says which of the two cores is right",
+        "fixture 5's DSP48E1 configuration exactly, at a width where the "
+        "accumulator does not wrap; this is the case that showed the composed "
+        "core computes correctly there and sent the search back to the stimulus",
     ),
     Case(
         "dsp58_frames",
@@ -436,8 +434,8 @@ CASES = (
         "INT16",
         "full",
         "narrow",
-        "the same three frames on a generation where fixture 5 agrees, so the "
-        "pair separates the frame boundary from the DSP family",
+        "the same three frames on another generation, so the pair separates a "
+        "frame-boundary defect from a family-specific one",
     ),
 )
 
