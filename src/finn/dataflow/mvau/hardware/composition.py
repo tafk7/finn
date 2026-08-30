@@ -896,10 +896,30 @@ class PackagedDecomposedArtifact:
     reused: bool = False
 
     def __post_init__(self) -> None:
-        if Path(self.directory) not in {Path(item).parent for item in self.files}:
+        """The materialization must be the one the identity describes.
+
+        The identity already declares the layout -- which files, named how, in
+        what compile order -- so a materialization is checkable against it
+        rather than merely plausible.  An earlier version asked only that
+        *some* file sit in the reported directory, which a store returning a
+        single unrelated file satisfied while the identity declared nine.
+
+        File contents are still the store's word.  Encoded structure is not.
+        """
+
+        directory = Path(self.directory)
+        outside = tuple(item for item in self.files if Path(item).parent != directory)
+        if outside:
             raise ValueError(
-                "a packaged unit's files must live in the directory it reports; "
-                f"{self.directory} does not hold {self.files}"
+                "every file of a packaged unit must live in the directory it "
+                f"reports; {directory} does not hold {outside}"
+            )
+        staged = tuple(Path(item).name for item in self.files)
+        if staged != self.identity.layout:
+            raise ValueError(
+                "a packaged unit's files must be the layout its identity declares, "
+                f"in compile order; {self.identity.key} declares "
+                f"{self.identity.layout} and this holds {staged}"
             )
 
     @property

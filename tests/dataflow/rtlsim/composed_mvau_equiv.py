@@ -113,6 +113,11 @@ class Config:
     pumping: bool = False
     activation_bits: int = 8
     weight_bits: int = 8
+    #: A specific device, when the default one for this DSP generation is not
+    #: the point.  Two parts of the same generation take the same parameters
+    #: and therefore the same generated source, which is what makes cross-part
+    #: reuse demonstrable at all.
+    part_override: str | None = None
 
     @property
     def synapse_folds(self) -> int:
@@ -124,7 +129,7 @@ class Config:
 
     @property
     def fpga_part(self) -> str:
-        return _PART_FOR_TARGET[self.target]
+        return self.part_override or _PART_FOR_TARGET[self.target]
 
 
 #: A part per DSP family, so the design point's target is the real target and

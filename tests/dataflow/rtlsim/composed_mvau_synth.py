@@ -39,8 +39,10 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     decomposed_requirements,
     record_identity,
 )
+from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
 from finn.dataflow.mvau.hardware.binding import finnlib_root
 from finn.dataflow.mvau.hardware.composition import package_decomposed_artifact
+from finn.util.basic import get_vivado_version
 
 #: Synthesis is slow and mostly repeats itself, so only one configuration per
 #: DSP generation runs by default -- the generation is what changes the
@@ -67,13 +69,61 @@ _UNLICENSED = "A valid license was not found"
 _IDENTITY_RECORDED = "FIXTURE6_IDENTITY_RECORDED"
 
 
-def _tcl(top: str, part: str, sources: list[str], report: Path) -> str:
+def _clock_constraints(target: TargetIdentity) -> str:
+    """The requested clock, as constraints synthesis is actually run against.
+
+    ``clock_period_ns`` was in :class:`SynthesisArtifactIdentity` before it was
+    an input to anything, which made the stage a value rather than a stage: two
+    periods keyed differently and produced identical results, because
+    unconstrained out-of-context synthesis optimizes against no timing target.
+
+    ``ap_clk2x`` is derived rather than chosen -- the pumped compute path runs
+    at twice the rate, and letting the fixture pick its own number would be the
+    fixture inventing a design input.
+    """
+
+    period = target.clock_period_ns
+    return (
+        f"create_clock -period {period} -name ap_clk [get_ports ap_clk]\n"
+        f"create_clock -period {period / 2} -name ap_clk2x [get_ports ap_clk2x]\n"
+    )
+
+
+def _tcl(
+    top: str, target: TargetIdentity, sources: list[str], constraints: Path, report: Path
+) -> str:
+    """Out-of-context synthesis of the packaged unit, against the requested clock.
+
+    The constraints are read *before* ``synth_design`` and not applied after
+    it.  Creating a clock on an already-synthesized netlist changes what timing
+    reports say and nothing about what was built -- which would leave the
+    period in the key while still not being an input to the run.
+    """
+
     reads = "\n".join(f"read_verilog -sv {{{path}}}" for path in sources)
     return f"""
 {reads}
-synth_design -top {top} -part {part} -mode out_of_context
+read_xdc {{{constraints}}}
+synth_design -top {top} -part {target.fpga_part} -mode out_of_context
 report_utilization -file {{{report}}}
 """
+
+
+def _builder() -> BuilderIdentity:
+    """The tool this run will actually use, read by the *caller*.
+
+    Identity construction stays a pure function of its arguments -- that is why
+    ``BuilderIdentity`` is a caller-supplied label rather than a probe.  A
+    caller that knows its tool version is expected to pass it, and this fixture
+    is one: it is about to invoke exactly this Vivado.  Reading it here is what
+    closes the gap between the label and the run, rather than leaving the
+    default ``unspecified`` to stand for a tool that was in fact identified.
+    """
+
+    version = get_vivado_version()
+    if version is None:
+        return DEFAULT_BUILDER
+    return BuilderIdentity("vivado", f"{version[0]}.{version[1]}")
 
 
 def _run_vivado(directory: Path, script: Path) -> subprocess.CompletedProcess[str]:
@@ -112,17 +162,19 @@ def run_one(config: Config) -> int:
         directory = Path(packaged.directory)
         sources = list(packaged.files)
         report = directory / "utilization.rpt"
+        # The stage identity for *this* run, built from the packaged unit and
+        # the two things synthesis actually adds: the device, and the tool.
+        target = TargetIdentity(requirements.target_fpga_part, requirements.clock_period_ns)
+        synthesis = packaged.synthesis_identity(target, _builder())
+        constraints = directory / "clock.xdc"
+        constraints.write_text(_clock_constraints(target))
         script = directory / "synth.tcl"
-        script.write_text(
-            _tcl(
-                packaged.top_module_name,
-                requirements.target_fpga_part,
-                sources,
-                report,
-            )
-        )
-        print(f"  top:  {packaged.top_module_name} on {requirements.target_fpga_part}")
+        script.write_text(_tcl(packaged.top_module_name, target, sources, constraints, report))
+        print(f"  top:  {packaged.top_module_name} on {target.fpga_part}")
         print(f"  unit: {directory.name}")
+        print(f"  clock: {target.clock_period_ns} ns")
+        print(f"  build: {synthesis.builder.backend_id} {synthesis.builder.tool_version}")
+        print(f"  key:  {synthesis.key}")
         completed = _run_vivado(directory, script)
         errors = [line for line in completed.stdout.splitlines() if line.startswith("ERROR:")]
         if any(_UNLICENSED in line for line in errors):

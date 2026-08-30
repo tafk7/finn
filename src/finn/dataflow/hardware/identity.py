@@ -82,15 +82,23 @@ def _canonical(value: object) -> str:
 def _encode(name: str, value: object) -> Scalar:
     """One committed choice, as something a key can be taken over.
 
-    Scalars pass through.  An ``Enum`` becomes ``Type.MEMBER`` -- its *name*
-    and not its value, because two members sharing a value are two choices and
-    would otherwise key alike.  Anything else is refused rather than
-    stringified: ``str()`` on an arbitrary object is ``repr()`` by another
-    route, and ``repr()`` has no stability contract.
+    Scalars pass through.  An ``Enum`` becomes
+    ``module.QualName.MEMBER`` -- its *name* and not its value, because two
+    members sharing a value are two choices and would otherwise key alike.
+    Anything else is refused rather than stringified: ``str()`` on an arbitrary
+    object is ``repr()`` by another route, and ``repr()`` has no stability
+    contract.
+
+    Fully qualified, and that is not tidiness.  The bare class name collides:
+    two unrelated ``Mode`` enums in different modules both encode as
+    ``Mode.X``, so two Kernels choosing genuinely different things would key
+    alike -- a wrong hit reached through the one field added specifically to
+    stop Kernel-local choices colliding.
     """
 
     if isinstance(value, Enum):
-        return f"{type(value).__name__}.{value.name}"
+        kind = type(value)
+        return f"{kind.__module__}.{kind.__qualname__}.{value.name}"
     if type(value) in (bool, int, float, str):
         return value  # type: ignore[return-value]
     raise ArtifactIdentityError(

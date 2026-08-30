@@ -57,6 +57,7 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     decomposed_requirements,
     record_identity,
 )
+from finn.dataflow.mvau.hardware.binding import finnlib_root
 from finn.dataflow.mvau.hardware.composition import package_decomposed_artifact
 
 #: One configuration is enough.  The claim is structural -- the command form and
@@ -230,7 +231,10 @@ def main() -> int:
     arguments = parser.parse_args()
 
     root = str(Path(__file__).resolve().parents[3])
-    record_identity(root, root)
+    # The resolved FinnLib checkout, not the FINN root again: the header exists
+    # so a passing run says which revisions it passed against, and reporting
+    # FINN's hash under both names says nothing about FinnLib at all.
+    record_identity(root, str(finnlib_root(root)))
 
     outcome = run_one(CONFIGS_BY_LABEL[arguments.config], root)
     counts = {PASS: "1 passed", FAIL: "1 failed", SKIP: "1 skipped"}

@@ -33,6 +33,7 @@ from finn.dataflow.hardware import (
     BuilderIdentity,
     PackagedArtifactIdentity,
     StoredArtifact,
+    SynthesisArtifactIdentity,
     TargetIdentity,
 )
 from finn.dataflow.mvau.elaboration import MVAUPhysicalDirection
@@ -293,18 +294,25 @@ def test_synthesis_is_a_stage_because_the_target_reaches_only_it() -> None:
     They do not belong there.  ``render_decomposed_wrapper`` emits the same
     text for any part that admits the same parameters, and every way a target
     reaches the RTL is already a declared parameter (``VERSION``,
-    ``SEGMENTLEN``).  So the target moved up to the stage that consumes it, and
-    the payoff is real: two parts now *share* a packaged unit instead of
-    keying two.
+    ``SEGMENTLEN``).  So the target moved up to the stage that consumes it.
+
+    Two *genuinely different devices* here, of the same DSP generation.  An
+    earlier version of this test used ``packed`` and ``three_repetitions``,
+    which share a part -- so it demonstrated repetition independence and called
+    it cross-part reuse.  Same generation, different silicon, one package is
+    the claim, and it needs two parts to be one.
     """
 
+    # Two Zynq UltraScale+ devices, both DSP48E2 -- so both take the same
+    # ``VERSION`` and the same generated source.
+    base = fixture.CONFIGS_BY_LABEL["softvec"]
+    devices = ("xczu3eg-sbva484-1-e", "xczu7ev-ffvc1156-2-e")
     built = tuple(
-        fixture.decomposed_requirements(fixture.CONFIGS_BY_LABEL[label])
-        for label in ("packed", "three_repetitions")
+        fixture.decomposed_requirements(replace(base, part_override=part)) for part in devices
     )
-    # Same parameters, same generated source -- the baseline already records it.
-    assert built[0].identity.key == built[1].identity.key
 
+    assert built[0].target_fpga_part != built[1].target_fpga_part
+    assert built[0].identity.key == built[1].identity.key
     packaged = tuple(packaged_artifact_identity(item) for item in built)
     assert packaged[0].key == packaged[1].key
 
@@ -312,6 +320,16 @@ def test_synthesis_is_a_stage_because_the_target_reaches_only_it() -> None:
     for item in built:
         assert item.target_fpga_part not in unit.serialization
         assert str(item.clock_period_ns) not in unit.serialization
+
+    # And the stage below does separate them, which is the other half: one
+    # package, two synthesis results.
+    keys = {
+        SynthesisArtifactIdentity(
+            unit.key, TargetIdentity(item.target_fpga_part, item.clock_period_ns)
+        ).key
+        for item in built
+    }
+    assert len(keys) == 2
 
 
 def test_one_packaged_unit_synthesized_for_two_parts_is_two_results(
@@ -426,7 +444,9 @@ def test_packaging_consults_the_store_like_every_other_build(
     """
 
     identity = packaged_artifact_identity(requirements)
-    previous = ("/previously/built/top.sv",)
+    # A hit has to be the layout the identity declares -- which is the point of
+    # declaring it -- so the double answers with exactly that.
+    previous = tuple(f"/previously/built/{name}" for name in identity.layout)
 
     class _Hit:
         def lookup(self, asked: ArtifactKey) -> StoredArtifact:
@@ -474,6 +494,57 @@ def test_a_store_answering_about_another_artifact_is_refused(
         package_decomposed_artifact(requirements, tmp_path, store=_WrongAnswer())
     with pytest.raises(ArtifactStoreError, match="no files"):
         package_decomposed_artifact(requirements, tmp_path, store=_EmptyAnswer())
+    assert not any(tmp_path.iterdir())
+
+
+def test_a_correctly_keyed_hit_must_still_be_the_declared_layout(
+    requirements: MVAUDecomposedArtifactRequirements, tmp_path: Path
+) -> None:
+    """The right key is not enough, and the gap was reachable.
+
+    ``checked_lookup`` compares keys, which stops a store answering *about*
+    another artifact.  It cannot check the answer's shape, because it is
+    generic over identities that have no layout.  So a store could return one
+    unrelated file under the correct key and be believed, while the identity
+    declared nine -- a wrong hit that survives the key check by satisfying it.
+
+    The layout is already in the identity, so the package boundary can hold it:
+    every file in the reported directory, named as declared, in compile order.
+    File *contents* remain the store's word; encoded structure does not.
+    """
+
+    identity = packaged_artifact_identity(requirements)
+
+    class _OneFile:
+        def lookup(self, asked: ArtifactKey) -> StoredArtifact:
+            return StoredArtifact(asked.key, "/cached/unit", ("/cached/unit/wrong.v",))
+
+    class _Elsewhere:
+        def lookup(self, asked: ArtifactKey) -> StoredArtifact:
+            return StoredArtifact(
+                asked.key,
+                "/cached/unit",
+                tuple(f"/cached/other/{name}" for name in identity.layout),
+            )
+
+    class _Reordered:
+        def lookup(self, asked: ArtifactKey) -> StoredArtifact:
+            return StoredArtifact(
+                asked.key,
+                "/cached/unit",
+                tuple(f"/cached/unit/{name}" for name in reversed(identity.layout)),
+            )
+
+    assert len(identity.layout) > 1
+    for store, expected in (
+        (_OneFile(), "layout its identity declares"),
+        (_Elsewhere(), "must live in the directory"),
+        # Compile order is part of the layout: the same files in another order
+        # name the same build and are not it.
+        (_Reordered(), "layout its identity declares"),
+    ):
+        with pytest.raises(ValueError, match=expected):
+            package_decomposed_artifact(requirements, tmp_path, store=store)
     assert not any(tmp_path.iterdir())
 
 

@@ -228,8 +228,38 @@ def test_a_value_with_no_stable_serialization_is_refused() -> None:
         _identity(parameters=(("PE", _Opaque()),))
 
     encoded = _identity(assignments=(("resource", _Resource.LUT),))
-    assert "_Resource.LUT" in encoded.serialization
+    assert f"{__name__}._Resource.LUT" in encoded.serialization
     assert encoded.key != _identity(assignments=(("resource", _Resource.DSP),)).key
+
+
+def test_two_enums_that_look_alike_are_not_one_choice() -> None:
+    """The bare class name collides, and the collision is a wrong hit.
+
+    An earlier version encoded ``Type.MEMBER``, so two unrelated ``Mode`` enums
+    in different modules both became ``Mode.FAST`` -- two Kernels choosing
+    genuinely different things keying alike, reached through the one field
+    added specifically to stop Kernel-local choices colliding.
+
+    Fully qualified now.  Both enums here are declared in the same module, so
+    ``__qualname__`` is what separates them; ``__module__`` is what separates
+    the cross-module case this stands in for.
+    """
+
+    class Outer:
+        class Mode(Enum):
+            FAST = "fast"
+
+    class Other:
+        class Mode(Enum):
+            FAST = "fast"
+
+    assert Outer.Mode.__name__ == Other.Mode.__name__
+    first = _identity(assignments=(("mode", Outer.Mode.FAST),))
+    second = _identity(assignments=(("mode", Other.Mode.FAST),))
+
+    assert first.key != second.key
+    assert "Outer.Mode.FAST" in first.serialization
+    assert "Other.Mode.FAST" in second.serialization
 
 
 def test_scalar_types_are_distinguished_in_the_key() -> None:
