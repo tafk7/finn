@@ -23,15 +23,18 @@ from typing import cast
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
 from finn.dataflow.hardware import (
     DEFAULT_BUILDER,
+    DEFAULT_VLNV,
     NO_ARTIFACT_STORE,
     ArtifactStore,
     BuilderIdentity,
     ComposedArtifactIdentity,
+    IpPackageArtifactIdentity,
     KernelArtifactIdentity,
     KernelBinding,
     PackagedArtifactIdentity,
     SynthesisArtifactIdentity,
     TargetIdentity,
+    VlnvIdentity,
     checked_lookup,
     composed_artifact_identity,
     kernel_artifact_identity,
@@ -74,6 +77,18 @@ from finn.dataflow.region import Port
 
 #: The generated top is FINN's own, not either Kernel's.
 WRAPPER_MODULE = "finn.dataflow.mvau.decomposed_wrapper"
+
+#: The wrapper's control signals, and which of the two clocks is primary.
+#:
+#: One authority, because two stages need it and they must not disagree.  The
+#: constraints generator names both clocks and states that the doubled one is
+#: *derived* -- half the period, never chosen separately -- and IP packaging
+#: has to say which clock the streams are synchronous to.  Answering that
+#: separately in each place would be two statements of one fact, and the one
+#: that reached the tool would win.
+PRIMARY_CLOCK = "ap_clk"
+DOUBLED_CLOCK = "ap_clk2x"
+RESET_SIGNAL = "ap_rst_n"
 
 _COMPOSITION_PATH = QualifiedPath("hardware.mvau.composition")
 
@@ -953,6 +968,27 @@ class PackagedDecomposedArtifact:
             SYNTHESIS_RECIPE_SCHEMA,
         )
 
+    def ip_package_identity(
+        self,
+        vlnv: VlnvIdentity = DEFAULT_VLNV,
+        fpga_part: str = "",
+        builder: BuilderIdentity = DEFAULT_BUILDER,
+    ) -> IpPackageArtifactIdentity:
+        """The other stage-three key: this unit as an IP-XACT component.
+
+        A sibling of :meth:`synthesis_identity`, not a step after it.  Both take
+        the packaged unit as upstream and neither reads the other, so the two
+        can be produced in either order or not at all.
+
+        No clock period.  Nothing in packaging reads one, and a key carrying a
+        value that cannot change what is produced is a way to *miss* a valid
+        reuse -- as wrong as a wrong hit and quieter.
+        """
+
+        return IpPackageArtifactIdentity(
+            self.identity.key, vlnv, fpga_part, builder, IP_PACKAGE_RECIPE_SCHEMA
+        )
+
     def instantiation_commands(self, instance_name: str) -> tuple[str, ...]:
         """The IPI commands that place this unit, at a caller-chosen instance.
 
@@ -1083,8 +1119,10 @@ def render_clock_constraints(target: TargetIdentity) -> str:
 
     period = target.clock_period_ns
     return (
-        f"create_clock -period {period} -name ap_clk [get_ports ap_clk]\n"
-        f"create_clock -period {period / 2} -name ap_clk2x [get_ports ap_clk2x]\n"
+        f"create_clock -period {period} -name {PRIMARY_CLOCK} "
+        f"[get_ports {PRIMARY_CLOCK}]\n"
+        f"create_clock -period {period / 2} -name {DOUBLED_CLOCK} "
+        f"[get_ports {DOUBLED_CLOCK}]\n"
     )
 
 
@@ -1287,25 +1325,373 @@ def complete_decomposed_synthesis(
     )
 
 
+# -- IP-XACT packaging -------------------------------------------------------
+#
+# What fixture 7 proves is that the unit is stitchable as a *module*:
+# ``add_files`` plus ``create_bd_cell -type module``.  That is enough for a
+# block design assembled by hand and not enough for FINN's own stitcher, which
+# resolves every layer through ``ip_repo_paths`` and ``create_bd_cell -type ip
+# -vlnv``.  This stage is the difference: the same sources, filed as an IP-XACT
+# component under a repository coordinate.
+#
+# It is a sibling of synthesis and not a step after it -- see
+# ``IpPackageArtifactIdentity``.
+
+#: The packaging command, as a shape rather than as a command.
+#:
+#: ``set_property top`` is explicit because the shim and the generated top are
+#: two candidates and Vivado's inference picks by heuristic; the unit already
+#: says which one a consumer references, so saying it here keeps the two
+#: answers from diverging.
+#:
+#: ``{interfaces}`` is where the unit's own reported names go.  Bus interfaces
+#: are inferred **from an explicit port list** and not by letting the packager
+#: guess: a component that recorded no AXI-Stream would present loose pins to a
+#: stitcher that connects interfaces, and it would do so silently.  Fixture 7
+#: saw the inference only because ``create_bd_cell -type module`` re-runs it on
+#: the source; a repository coordinate has to carry it.
+#:
+#: Naming the ports also puts the unit's reported signal names on the path a
+#: consumer actually uses -- which is exactly where fixture 7 found them wrong
+#: (``in0_V_TDATA`` for a pin spelled ``in0_V_tdata``).
+IP_PACKAGE_RECIPE_SCHEMA = "\n".join(
+    (
+        "create_project -in_memory -part {part}",
+        "set_property source_mgmt_mode All [current_project]",
+        "{sources}",
+        "update_compile_order -fileset sources_1",
+        "set_property top {top} [current_fileset]",
+        # No ``-taxonomy``.  It is a catalog category with no effect on what is
+        # produced, and its conventional value ``/UserIP`` reads as an absolute
+        # path to the command-shape check -- which is the check doing its job on
+        # a string that only looks like one.  Removing the option removes a
+        # decision rather than hiding it from the key.
+        # No ``-module``.  That flag names a *block design* to package -- it is
+        # what FINN's stitcher uses, because a stitched IP is a BD -- and given
+        # an RTL module name Vivado answers "[Ipptcl 7-538] The block design
+        # ... must be opened to package".  An RTL component is packaged from
+        # the project's top, which ``set_property top`` above fixes.
+        "ipx::package_project -root_dir {root} -vendor {vendor} -library {library} "
+        "-import_files -force",
+        "set core [ipx::current_core]",
+        "set_property version {version} $core",
+        "set_property display_name {top} $core",
+        "{interfaces}",
+        # Every bus parameter becomes user-resolvable.  Packaging an RTL module
+        # records whatever the packager inferred -- ``FREQ_HZ`` defaults to
+        # 100 MHz for a clock the component knows nothing about -- and a
+        # component that pins a frequency it never knew asserts something
+        # false: an enclosing design running at 250 MHz then fails validation
+        # over a number this unit had no business declaring.  FINN's own
+        # stitcher does exactly this, for exactly this reason.
+        "set_property value_resolve_type user "
+        "[ipx::get_bus_parameters -of [ipx::get_bus_interfaces -of $core]]",
+        "ipx::create_xgui_files $core",
+        "ipx::update_checksums $core",
+        "ipx::save_core $core",
+    )
+)
+
+#: The abstraction each reported interface is filed under.
+AXIS_ABSTRACTION = "xilinx.com:interface:axis_rtl:1.0"
+CONTROL_ABSTRACTION = {
+    MVAUPhysicalControlKind.CLOCK: "xilinx.com:signal:clock_rtl:1.0",
+    MVAUPhysicalControlKind.RESET: "xilinx.com:signal:reset_rtl:1.0",
+}
+
+
+def ip_interface_commands(packaged: PackagedDecomposedArtifact) -> tuple[str, ...]:
+    """One ``infer_bus_interface`` per interface the unit publishes.
+
+    Built from ``stream_interfaces`` and ``control_interfaces`` rather than
+    from a list written here.  A packaged unit that reported an interface it
+    did not have would previously fail only in a block design; now it fails in
+    its own component description, which is the earlier of the two.
+
+    A ``CONFIGURATION`` control has no signal abstraction and is skipped -- it
+    is a parameter rather than a pin, and inferring one would name something
+    that is not a port.
+    """
+
+    commands = [
+        f"ipx::infer_bus_interface "
+        f"{{{item.data_signal} {item.valid_signal} {item.ready_signal}}} "
+        f"{AXIS_ABSTRACTION} $core"
+        for item in packaged.stream_interfaces
+    ]
+    commands.extend(
+        f"ipx::infer_bus_interface {item.signal} {CONTROL_ABSTRACTION[item.kind]} $core"
+        for item in packaged.control_interfaces
+        if item.kind in CONTROL_ABSTRACTION
+    )
+    # Every stream is synchronous to the primary clock, and the component has
+    # to say so.  Without the association the packager records whatever
+    # ``FREQ_HZ`` it inferred -- 100 MHz, a number this unit never knew -- and
+    # an enclosing design running at anything else fails validation on it.  A
+    # component that pins a frequency it was never told is asserting something
+    # false; associating the clock is how it says "whatever drives me".
+    commands.extend(
+        f"ipx::associate_bus_interfaces -busif {_bus_name(item)} -clock {PRIMARY_CLOCK} $core"
+        for item in packaged.stream_interfaces
+    )
+    commands.append(
+        f"ipx::associate_bus_interfaces -clock {PRIMARY_CLOCK} -reset {RESET_SIGNAL} $core"
+    )
+    return tuple(commands)
+
+
+def _bus_name(interface: MVAUPhysicalNumericInterface) -> str:
+    """The interface name inference gives one stream.
+
+    ``<prefix>_tdata``/``_tvalid``/``_tready`` are grouped under ``<prefix>``,
+    so the name follows from the signals the unit already publishes rather than
+    from a table written here.
+    """
+
+    return interface.data_signal.rsplit("_", 1)[0]
+
+
+#: The IP-XACT description ``ipx::save_core`` leaves behind.  The name is fixed
+#: by the standard, which is why one file is a layout: a run that produced a
+#: directory without it produced no component.
+COMPONENT_FILE_NAME = "component.xml"
+IP_PACKAGE_SCRIPT_FILE_NAME = "package_ip.tcl"
+
+
+def ip_package_directory_name(identity: IpPackageArtifactIdentity, top_module_name: str) -> str:
+    return f"{top_module_name}_ip_{identity.key[:16]}"
+
+
+@dataclass(frozen=True)
+class PreparedIpPackage:
+    """A packaging run set up and not yet performed.
+
+    The same split as :class:`PreparedDecomposedSynthesis`, for the same
+    reason: one type with a flag would let a consumer read ``component_path``
+    without being able to tell from the type whether it names a file.
+    """
+
+    identity: IpPackageArtifactIdentity
+    #: The repository directory this component will occupy.  Never the packaged
+    #: unit's -- packaging reads that unit and must not write into it.
+    directory: str
+    top_module_name: str
+    #: What a consumer references once this is packaged.  The shim, because a
+    #: ``.sv`` top cannot be a block-design reference; see ``render_stitch_shim``.
+    reference_module_name: str
+    sources: tuple[str, ...]
+    script_path: str
+    component_path: str
+
+    @property
+    def key(self) -> str:
+        return self.identity.key
+
+    @property
+    def vlnv(self) -> str:
+        """The coordinate a stitcher resolves, in Vivado's own spelling."""
+
+        coordinate = self.identity.vlnv
+        return (
+            f"{coordinate.vendor}:{coordinate.library}:"
+            f"{self.reference_module_name}:{coordinate.version}"
+        )
+
+
+@dataclass(frozen=True)
+class PackagedIpComponent:
+    """One packaged IP-XACT component, as an IP repository would resolve it.
+
+    ``files`` is checked against the declared layout for the same reason the
+    synthesized artifact's is: a store answering with the right key and the
+    wrong contents is refused rather than believed.
+    """
+
+    identity: IpPackageArtifactIdentity
+    directory: str
+    top_module_name: str
+    reference_module_name: str
+    vlnv: str
+    files: tuple[str, ...]
+    reused: bool = False
+
+    def __post_init__(self) -> None:
+        expected = str(Path(self.directory) / COMPONENT_FILE_NAME)
+        if expected not in self.files:
+            raise ValueError(
+                "a packaged IP must hold the component description this stage "
+                f"declares; {self.identity.key} expects {expected} and this holds "
+                f"{self.files}"
+            )
+
+    @property
+    def key(self) -> str:
+        return self.identity.key
+
+    @property
+    def component_path(self) -> str:
+        return str(Path(self.directory) / COMPONENT_FILE_NAME)
+
+    def instantiation_commands(self, instance_name: str) -> tuple[str, ...]:
+        """How FINN's stitcher places a layer: a repository and a VLNV.
+
+        Deliberately *not* ``add_files`` plus ``-type module``, which is what
+        the packaged unit offers.  That form asks the enclosing project to
+        compile the sources itself; this one asks it to resolve a component,
+        which is the form ``CreateStitchedIP`` emits for every other layer.
+
+        ``set_property ip_repo_paths`` is emitted per call rather than once,
+        because a caller placing two cells has to be able to run each cell's
+        commands verbatim and get a working design -- exactly as the packaged
+        unit's ``add_files`` repeat.  Vivado takes the last value, so the caller
+        deduplicates if it wants to; nothing here depends on it.
+        """
+
+        if not instance_name:
+            raise ValueError("an instantiated cell needs a name")
+        return (
+            f"set_property ip_repo_paths {self.directory} [current_project]",
+            "update_ip_catalog -rebuild",
+            f"create_bd_cell -type ip -vlnv {self.vlnv} {instance_name}",
+        )
+
+
+def find_ip_package(
+    packaged: PackagedDecomposedArtifact,
+    fpga_part: str,
+    *,
+    vlnv: VlnvIdentity = DEFAULT_VLNV,
+    builder: BuilderIdentity = DEFAULT_BUILDER,
+    store: ArtifactStore = NO_ARTIFACT_STORE,
+) -> PackagedIpComponent | None:
+    """A component already packaged for this unit, coordinate, part and tool.
+
+    The store's manifest is consumed rather than reconstructed, for the reason
+    the synthesis lookup records: fabricating conventional file names under a
+    supplied directory accepts an answer that never contained them.
+    """
+
+    identity = packaged.ip_package_identity(vlnv, fpga_part, builder)
+    found = checked_lookup(store, identity)
+    if found is None:
+        return None
+    return PackagedIpComponent(
+        identity,
+        found.directory,
+        packaged.top_module_name,
+        packaged.stitch_module_name,
+        f"{vlnv.vendor}:{vlnv.library}:{packaged.stitch_module_name}:{vlnv.version}",
+        found.files,
+        reused=True,
+    )
+
+
+def prepare_ip_package(
+    packaged: PackagedDecomposedArtifact,
+    fpga_part: str,
+    output_root: str | Path,
+    *,
+    vlnv: VlnvIdentity = DEFAULT_VLNV,
+    builder: BuilderIdentity = DEFAULT_BUILDER,
+) -> PreparedIpPackage:
+    """Everything a packaging run consumes, written where its key says.
+
+    It invokes nothing.  Producing a ``.tcl`` is not running Vivado, and the
+    lookup is :func:`find_ip_package`, which returns a *packaged* component
+    rather than a prepared one.
+    """
+
+    identity = packaged.ip_package_identity(vlnv, fpga_part, builder)
+    directory = Path(output_root).resolve() / ip_package_directory_name(
+        identity, packaged.top_module_name
+    )
+    if directory == Path(packaged.directory):
+        raise ValueError("an IP package must not materialize into its packaged unit")
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / IP_PACKAGE_SCRIPT_FILE_NAME
+    script.write_text(
+        IP_PACKAGE_RECIPE_SCHEMA.format(
+            part=fpga_part,
+            sources="\n".join(f"add_files -norecurse {{{path}}}" for path in packaged.files),
+            top=packaged.stitch_module_name,
+            root=f"{{{directory}}}",
+            vendor=vlnv.vendor,
+            library=vlnv.library,
+            version=vlnv.version,
+            interfaces="\n".join(ip_interface_commands(packaged)),
+        )
+        + "\n"
+    )
+    return PreparedIpPackage(
+        identity,
+        str(directory),
+        packaged.top_module_name,
+        packaged.stitch_module_name,
+        packaged.files,
+        str(script),
+        str(directory / COMPONENT_FILE_NAME),
+    )
+
+
+def complete_ip_package(prepared: PreparedIpPackage) -> PackagedIpComponent:
+    """The run, once the tool has written a component description.
+
+    Whoever invoked Vivado says so by calling this, and it refuses unless the
+    component exists.  ``ipx::package_project`` also leaves ``xgui/`` and a
+    ``src/`` copy behind; those are the tool's and are reported as found rather
+    than declared, because their names are Vivado's to choose.
+    """
+
+    component = Path(prepared.component_path)
+    if not component.is_file():
+        raise ValueError(
+            f"packaging under {prepared.directory} produced no {COMPONENT_FILE_NAME}; "
+            "a run is not complete until its declared output exists"
+        )
+    return PackagedIpComponent(
+        prepared.identity,
+        prepared.directory,
+        prepared.top_module_name,
+        prepared.reference_module_name,
+        prepared.vlnv,
+        (str(component),),
+    )
+
+
 __all__ = [
+    "AXIS_ABSTRACTION",
+    "COMPONENT_FILE_NAME",
+    "CONTROL_ABSTRACTION",
     "CONSTRAINTS_FILE_NAME",
     "INSTANTIATION_COMMAND_SCHEMA",
+    "IP_PACKAGE_RECIPE_SCHEMA",
+    "IP_PACKAGE_SCRIPT_FILE_NAME",
     "SYNTHESIS_LAYOUT",
     "SYNTHESIS_RECIPE_SCHEMA",
     "SYNTHESIS_SCRIPT_FILE_NAME",
     "UTILIZATION_REPORT_FILE_NAME",
+    "DOUBLED_CLOCK",
+    "PRIMARY_CLOCK",
+    "RESET_SIGNAL",
     "WRAPPER_MODULE",
     "MVAUDecomposedArtifactRequirements",
     "PackagedDecomposedArtifact",
+    "PackagedIpComponent",
     "PreparedDecomposedSynthesis",
+    "PreparedIpPackage",
     "SynthesizedDecomposedArtifact",
     "build_decomposed_artifact_requirements",
     "compose",
     "decomposed_top_module_name",
     "elaborate_decomposed",
     "complete_decomposed_synthesis",
+    "complete_ip_package",
     "find_decomposed_synthesis",
+    "find_ip_package",
+    "ip_interface_commands",
+    "ip_package_directory_name",
     "prepare_decomposed_synthesis",
+    "prepare_ip_package",
     "render_clock_constraints",
     "synthesis_directory_name",
     "package_decomposed_artifact",

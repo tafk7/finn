@@ -12,7 +12,14 @@ generated source   Kernel family, its sources and their content, the physical
 packaged unit      the generated source, plus the staged layout and the shape
                    of the command that instantiates it
 OOC synthesis      the packaged unit, plus the part, the clock, and the builder
+IP-XACT package    the packaged unit, plus the VLNV, the part, and the builder
 ```
+
+The last two are *siblings*, not a chain.  Both consume the packaged unit and
+neither reads the other's output: packaging an IP does not need a utilization
+report, and synthesizing does not need a repository coordinate.  Making one
+depend on the other would put an input in a key that the stage never reads,
+which is the collapse the Phase 5 review rejected on the same grounds.
 
 Those boundaries are not a matter of taste.  ``render_decomposed_wrapper``
 never invokes Vivado, so the builder version cannot change one byte of
@@ -63,6 +70,15 @@ PACKAGED_ARTIFACT_SCHEMA_VERSION = "packaged-artifact-identity-v1"
 
 #: Stage three: the packaged unit, plus the device it was synthesized for.
 SYNTHESIS_ARTIFACT_SCHEMA_VERSION = "synthesis-artifact-identity-v1"
+
+#: Stage three, the other one: the packaged unit as an IP-XACT component.
+#:
+#: A *sibling* of synthesis rather than a stage after it.  Both consume the
+#: packaged unit and neither consumes the other -- packaging an IP does not
+#: need a utilization report, and synthesizing does not need a VLNV.  Stacking
+#: them would make the IP key depend on a synthesis run it never reads, which
+#: is the "moving upper-stage inputs downward" the Phase 5 review rejected.
+IP_PACKAGE_ARTIFACT_SCHEMA_VERSION = "ip-package-artifact-identity-v1"
 
 Scalar = bool | int | float | str
 
@@ -454,6 +470,105 @@ class SynthesisArtifactIdentity:
         return content_hash(self.serialization.encode())
 
 
+@dataclass(frozen=True)
+class VlnvIdentity:
+    """Vendor, library, name and version: what an IP repository indexes by.
+
+    A caller-supplied label, exactly like :class:`BuilderIdentity`.  It is a
+    *naming* decision -- which repository coordinate this unit occupies -- and
+    not something derivable from the RTL, so it is declared rather than probed.
+
+    ``name`` is deliberately absent: it is the packaged unit's top module, which
+    the stage already has.  A separately supplied name would be a second
+    authority for one fact, and the one that reached the ``.tcl`` would win.
+    """
+
+    vendor: str
+    library: str
+    version: str
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("vendor", self.vendor),
+            ("library", self.library),
+            ("version", self.version),
+        ):
+            if not value or any(character in value for character in ":/\\ "):
+                raise ArtifactIdentityError(
+                    f"an IP {label} must be a non-empty word without ':', '/' or spaces; "
+                    f"got {value!r}"
+                )
+
+
+#: What FINN's own stitcher would look this unit up as, if nothing said
+#: otherwise.  ``ipx::package_project`` defaults to these too.
+DEFAULT_VLNV = VlnvIdentity("amd", "finn", "1.0")
+
+
+@dataclass(frozen=True)
+class IpPackageArtifactIdentity:
+    """Stage three, sibling: the packaged unit as an IP-XACT component.
+
+    The same four terms as every other stage, which is the point of it looking
+    like the synthesis identity.  Its *key* is what a repository would resolve;
+    its *inputs* are the packaged unit, the coordinate it is filed under, the
+    part the packaging project is opened on, the tool, and the command shape;
+    its *place* is a directory named from that key; its *states* are prepared
+    and packaged.
+
+    The part is here and not merely on the caller because ``create_project``
+    takes one and an IP-XACT component records the families it was inferred
+    for.  Two parts therefore produce two component descriptions over one set
+    of sources -- which is exactly the relationship synthesis has to the same
+    unit, and the reason both live at this level rather than under it.
+
+    No clock period, though: nothing in packaging reads one.  Reusing
+    :class:`TargetIdentity` here would have put a value in the key that cannot
+    change what is produced, and a key that moves without the artifact moving
+    is a wrong *miss*.
+    """
+
+    upstream: str
+    vlnv: VlnvIdentity = DEFAULT_VLNV
+    fpga_part: str = ""
+    builder: BuilderIdentity = DEFAULT_BUILDER
+    #: The packaging command shape, with paths and names held out.
+    recipe: str = ""
+    schema_version: str = IP_PACKAGE_ARTIFACT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.upstream:
+            raise ArtifactIdentityError("an IP package artifact needs an upstream key")
+        if not self.fpga_part:
+            raise ArtifactIdentityError(
+                "an IP package artifact needs the part its project is opened on; "
+                "the component records what it was inferred for"
+            )
+        if not self.recipe:
+            raise ArtifactIdentityError(
+                "an IP package artifact needs its command shape; the VLNV alone "
+                "reproduces it only under one generator"
+            )
+        _check_command_shape(self.recipe)
+
+    @property
+    def serialization(self) -> str:
+        return _canonical(
+            [
+                ["schema", self.schema_version],
+                ["upstream", self.upstream],
+                ["vlnv", [self.vlnv.vendor, self.vlnv.library, self.vlnv.version]],
+                ["part", self.fpga_part],
+                ["builder", [self.builder.backend_id, self.builder.tool_version]],
+                ["recipe", self.recipe],
+            ]
+        )
+
+    @property
+    def key(self) -> str:
+        return content_hash(self.serialization.encode())
+
+
 def source_identities(
     binding: KernelBinding, roots: Mapping[str, Path]
 ) -> tuple[SourceIdentity, ...]:
@@ -515,18 +630,22 @@ def composed_artifact_identity(
 __all__ = [
     "COMPOSED_ARTIFACT_SCHEMA_VERSION",
     "DEFAULT_BUILDER",
+    "DEFAULT_VLNV",
+    "IP_PACKAGE_ARTIFACT_SCHEMA_VERSION",
     "KERNEL_ARTIFACT_SCHEMA_VERSION",
     "PACKAGED_ARTIFACT_SCHEMA_VERSION",
     "SYNTHESIS_ARTIFACT_SCHEMA_VERSION",
     "ArtifactIdentityError",
     "BuilderIdentity",
     "ComposedArtifactIdentity",
+    "IpPackageArtifactIdentity",
     "KernelArtifactIdentity",
     "PackagedArtifactIdentity",
     "Scalar",
     "SourceIdentity",
     "SynthesisArtifactIdentity",
     "TargetIdentity",
+    "VlnvIdentity",
     "composed_artifact_identity",
     "content_hash",
     "kernel_artifact_identity",

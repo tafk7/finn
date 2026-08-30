@@ -50,6 +50,7 @@ from finn.dataflow.mvau.hardware.composition import (
     elaborate_decomposed,
     package_decomposed_artifact,
     prepare_decomposed_synthesis,
+    prepare_ip_package,
     render_clock_constraints,
     render_decomposed_wrapper,
     render_stitch_shim,
@@ -73,6 +74,10 @@ AMBIENT_TYPES = (
 )
 
 #: The stages this module audits, in the order a build runs them.
+#:
+#: ``prepare_ip_package`` joined in Phase 6f and the drift check below caught
+#: its absence -- which is what that check is for: a generator added without
+#: being audited is a generator nobody asked what it reads.
 GENERATION_STAGES: tuple[Callable[..., object], ...] = (
     render_decomposed_wrapper,
     render_stitch_shim,
@@ -80,6 +85,7 @@ GENERATION_STAGES: tuple[Callable[..., object], ...] = (
     staged_layout,
     package_decomposed_artifact,
     prepare_decomposed_synthesis,
+    prepare_ip_package,
 )
 
 
