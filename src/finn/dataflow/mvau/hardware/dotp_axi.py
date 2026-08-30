@@ -167,7 +167,49 @@ def covers_numeric_types(types: MVAUNumericTypes) -> tuple[RoleVerdict, ...]:
             )
             continue
         verdicts.append(RoleVerdict(role, True))
-    return tuple(verdicts)
+    return _with_output_paired_to_accumulator(tuple(verdicts), types)
+
+
+def _with_output_paired_to_accumulator(
+    verdicts: tuple[RoleVerdict, ...], types: MVAUNumericTypes
+) -> tuple[RoleVerdict, ...]:
+    """The last clause of the role contract: the output *is* the accumulator.
+
+    Stated in the table above and never asked.  The core drives ``PE *
+    ACCU_WIDTH`` bits straight out of ``m_axis_output_tdata``, and the composed
+    wrapper sizes its own ``out0_V_tdata`` from the *output* element type -- so
+    an output that is not the accumulator produces a top whose port does not
+    match what the core was connected to.  Nothing truncates, converts, or
+    reports; the widths simply disagree.  ``INT32`` accumulator with ``INT24``
+    output generated a wrapper declaring ``OSTREAM = 48`` around a core driving
+    64 bits.
+
+    The semantic Kernels carry the same rule as a source constraint, which
+    gates *inference*.  A caller that commits a selection directly never passes
+    through inference, so until this was a coverage question the disagreement
+    reached a generated wrapper unremarked.
+
+    Applied only when both roles are otherwise fine, so that an unsigned
+    accumulator stays separately diagnosable instead of also reporting an
+    output that never had a chance to match it.
+    """
+
+    by_role = {verdict.role: verdict for verdict in verdicts}
+    if not (by_role["accumulator"].supported and by_role["output"].supported):
+        return verdicts
+    if types.output == types.accumulator:
+        return verdicts
+    return tuple(
+        RoleVerdict(
+            verdict.role,
+            False,
+            f"{types.output.name} is not the accumulator {types.accumulator.name}; "
+            "the core drives the accumulator straight out",
+        )
+        if verdict.role == "output"
+        else verdict
+        for verdict in verdicts
+    )
 
 
 def covers_operand_types(types: MVAUNumericTypes) -> bool:
