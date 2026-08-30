@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as fixture
+from dataflow.rtlsim import composed_mvau_numeric as numeric
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
 from finn.dataflow.mvau.hardware.binding import verify_manifest
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
@@ -92,3 +93,45 @@ def test_the_synthesis_path_is_the_one_that_is_built() -> None:
 
     for config in fixture.CONFIGS:
         assert fixture.declared_parameters(config)["FORCE_BEHAVIORAL"] == 0
+
+
+# -- the one recorded divergence -----------------------------------------------
+
+
+def test_only_dsp48e1_diverges_and_it_says_what_settled_it() -> None:
+    """A divergence record is only admissible with an oracle behind it.
+
+    Fixture 5 compares two DUTs and cannot say which is right, so "these two
+    disagree and that is fine" would be an exemption rather than a finding.
+    What makes this one admissible is that fixture 8 ran the same geometry
+    against ``execute_node`` and said which side is wrong -- so the record has
+    to name that case, and this checks the case exists.
+    """
+
+    diverging = [config for config in fixture.CONFIGS if config.known_divergence]
+    assert [config.label for config in diverging] == ["dsp48e1"]
+
+    note = diverging[0].known_divergence
+    assert "dsp48e1_fixture5_point" in note
+    assert "execute_node" in note
+    adjudicator = numeric.CASES_BY_LABEL["dsp48e1_fixture5_point"]
+    # And it has to be the *same* design point, or it adjudicates something else.
+    config = fixture.CONFIGS_BY_LABEL["dsp48e1"]
+    assert adjudicator.target is config.target
+    assert adjudicator.repetitions == config.repetitions
+    assert adjudicator.matrix_width == config.matrix_width
+    assert adjudicator.matrix_height == config.matrix_height
+    assert adjudicator.pe == config.pe
+    assert adjudicator.simd == config.simd
+    assert adjudicator.activation == f"INT{config.activation_bits}"
+    assert adjudicator.weight == f"INT{config.weight_bits}"
+    assert adjudicator.accumulator == f"INT{fixture.ACCU_WIDTH}"
+
+
+def test_every_other_configuration_claims_plain_equivalence() -> None:
+    """So a second record cannot be added without being noticed here."""
+
+    for config in fixture.CONFIGS:
+        if config.label == "dsp48e1":
+            continue
+        assert config.known_divergence == "", config.label

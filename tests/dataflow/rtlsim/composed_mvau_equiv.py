@@ -21,7 +21,21 @@ what the compiler actually builds, not of a lookalike assembled beside it.  The
 
 Both DUTs are compared to each other, not to a numeric golden, so the stimulus
 is raw random integers packed to the stream widths.  Any value reaches both
-identically; a mismatch can only mean the composition altered behaviour.
+identically; a mismatch means the two disagree -- and this fixture cannot say
+which of them is right.  Fixture 8 can, and one configuration now needs it.
+
+**DSP48E1 diverges, and the fused core is the one that is wrong.**  Adding the
+oldest DSP generation to the matrix in Phase 6e made this fail: the two agree
+on the first frame and disagree from the second, on a shape every other
+generation matches.  Fixture 8's ``dsp48e1_fixture5_point`` runs that exact
+geometry against ``MvauDataflowOp.execute_node`` and the composed core matches
+on every value in both modes, so the defect is in ``mvu_vvu_axi``/``mvu.sv``
+rather than in the decomposition.
+
+The configuration stays in the matrix and stays simulated.  It carries a
+``known_divergence`` that inverts the comparison and **fails if it ever agrees
+again**, so the note cannot outlive the defect.  Recording it as unsupported
+instead would have been the one outcome the Phase 6 plan rules out.
 
 **Each simulation runs in its own process**, which is ``rtl_transport``'s job
 and no longer this file's.  That module holds the marshalling, the
@@ -113,6 +127,17 @@ class Config:
     #: and therefore the same generated source, which is what makes cross-part
     #: reuse demonstrable at all.
     part_override: str | None = None
+    #: Why the two DUTs are *known* not to agree here, and what settled which
+    #: of them is right.
+    #:
+    #: Not an exemption.  A configuration carrying this is still simulated,
+    #: still prints both readings, and **fails if it stops diverging** -- which
+    #: is what keeps the note from outliving the defect it describes.  What it
+    #: changes is only the sign of the comparison, and only where an oracle
+    #: outside this fixture has already said which side is wrong.  A divergence
+    #: recorded without that adjudication would be exactly the "unsupported to
+    #: keep the gate green" the Phase 6 plan rules out.
+    known_divergence: str = ""
 
     @property
     def synapse_folds(self) -> int:
@@ -146,6 +171,30 @@ CONFIGS = [
     Config("three_repetitions", MVAUDspBlock.DSP58, 3, 4, 4, 2, 2),
     Config("repetitions_softvec", MVAUDspBlock.DSP48E2, 2, 8, 6, 3, 2),
     Config("pumped", MVAUDspBlock.DSP58, 2, 8, 4, 2, 4, pumping=True),
+    # DSP48E1 was in the part table from the start and in no configuration, so
+    # the oldest generation this Kernel covers had never been simulated at all.
+    # Phase 4 corrected the narrow-weight rule in both directions by reading
+    # ``sliceLanes()`` and recorded that it rested on arithmetic rather than on
+    # a measurement; this is where that is paid.
+    #
+    # Running it found something else: the two cores do not agree here, and the
+    # composed one is right.  See ``known_divergence``.
+    Config(
+        "dsp48e1",
+        MVAUDspBlock.DSP48E1,
+        2,
+        8,
+        4,
+        2,
+        2,
+        activation_bits=4,
+        known_divergence=(
+            "the fused mvu_vvu_axi core computes the wrong values on VERSION=1 "
+            "from the second frame onward; fixture 8's dsp48e1_fixture5_point "
+            "runs this exact geometry against execute_node and the composed "
+            "core matches on every value, in both modes"
+        ),
+    ),
 ]
 
 CONFIGS_BY_LABEL = {config.label: config for config in CONFIGS}
@@ -411,15 +460,37 @@ def run_one(config: Config, finn_root: str) -> bool:
                 expected,
                 stalls=stalls,
             )
-        matched = fused == composed and len(fused) == expected
+        complete = len(fused) == len(composed) == expected
+        matched = fused == composed and complete
         print(f"  {mode:12} fused={fused}")
         print(f"  {mode:12} composed={composed}")
+        if config.known_divergence:
+            # The sign of the comparison is inverted, and only here.  A recorded
+            # divergence that stopped diverging would mean the defect was fixed
+            # and this note is now describing something that is not true.
+            if not complete:
+                print(f"  {config.label.upper()} ({mode}): FAIL (wrong number of outputs)")
+                ok = False
+            elif matched:
+                print(
+                    f"  {config.label.upper()} ({mode}): FAIL -- the recorded divergence is "
+                    "gone, so the note above is stale and must be removed"
+                )
+                ok = False
+            continue
         if not matched:
             print(f"  {config.label.upper()} ({mode}): FAIL")
             ok = False
-    if ok:
-        print(f"  {config.label.upper()}: PASS (bit-identical, {expected} outputs, both modes)")
-    return ok
+    if not ok:
+        return False
+    if config.known_divergence:
+        # Printed in full every run.  A divergence nobody reads is a divergence
+        # nobody fixes, and the log is the only place this is visible.
+        print(f"  {config.label.upper()}: DIVERGES AS RECORDED, {expected} outputs, both modes")
+        print(f"    {config.known_divergence}")
+        return True
+    print(f"  {config.label.upper()}: PASS (bit-identical, {expected} outputs, both modes)")
+    return True
 
 
 def record_identity(finn_root: str, library_root: str) -> None:
@@ -468,6 +539,12 @@ def main(argv: list[str] | None = None) -> int:
         [CONFIGS_BY_LABEL[arguments.config]] if arguments.config is not None else list(CONFIGS)
     )
     ok = all([run_one(config, root) for config in configs])
+    diverging = [config.label for config in configs if config.known_divergence]
+    if diverging:
+        # In the summary, not only beside the configuration.  A green RESULT
+        # line with a defect buried two hundred lines above is how a known
+        # divergence becomes an unknown one.
+        print(f"\n{len(diverging)} configuration(s) diverge as recorded: {', '.join(diverging)}")
     print("\nRESULT:", "FIXTURE 5 PASS" if ok else "FIXTURE 5 FAIL")
     return 0 if ok else 1
 

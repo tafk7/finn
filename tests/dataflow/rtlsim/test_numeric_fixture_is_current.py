@@ -29,6 +29,7 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_numeric as fixture
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
+from finn.dataflow.mvau.lane_packing import a_datapath_width, pack_lanes
 
 
 def _stimulus(case: fixture.Case) -> tuple[np.ndarray, np.ndarray]:
@@ -260,12 +261,79 @@ def test_the_all_negative_case_is_all_negative() -> None:
     assert activations.max() < 0
 
 
-def test_both_cores_are_represented_in_the_matrix() -> None:
-    """DSP48E2 takes the soft-vector path and DSP58 the packed one.
+def test_every_dsp_generation_is_represented_in_the_matrix() -> None:
+    """All three, including the one that had never been run.
 
-    A matrix that only ran one of them would say nothing about the other, and
-    the dials above are read by both.
+    ``VERSION`` 1, 2 and 3 are DSP48E1, DSP48E2 and DSP58.  A matrix that ran
+    only two of them would say nothing about the third, and DSP48E1 is the
+    third: it was in the part table from the first fixture and in no
+    configuration until Phase 6e.
     """
 
     versions = {int(_dials(case)["VERSION"]) for case in fixture.CASES}  # type: ignore[arg-type]
-    assert {2, 3} <= versions
+    assert versions == {1, 2, 3}
+
+
+def test_the_dsp48e1_pair_differs_only_in_the_narrow_promise() -> None:
+    """Phase 4's correction, set up so that a failure names what is wrong.
+
+    The pre-Phase-4 rule was "DSP48E1 requires the narrow-weight promise", so
+    ``dsp48e1_minimum_weight`` is the configuration it refused.  Both are
+    covered now; if the RTL disagrees, the pair says whether the family or the
+    promise is the reason.
+    """
+
+    wide = fixture.CASES_BY_LABEL["dsp48e1_minimum_weight"]
+    narrow = fixture.CASES_BY_LABEL["dsp48e1_narrow"]
+    assert _dials(wide)["NARROW_WEIGHTS"] is False
+    assert _dials(narrow)["NARROW_WEIGHTS"] is True
+    assert _dials(wide)["VERSION"] == 1
+    differing = {name for name, value in _dials(wide).items() if _dials(narrow).get(name) != value}
+    assert differing == {"NARROW_WEIGHTS"}
+
+
+def test_the_frame_boundary_pair_differs_only_in_the_dsp_generation() -> None:
+    """The diagnostic pair, set up so its answer means something.
+
+    Fixture 5 fails on DSP48E1 from the second repetition and passes on every
+    other generation.  It compares two DUTs and cannot say which is right.
+    These two ask arithmetic the same question on both generations, so a
+    DSP48E1 failure with DSP58 passing points at the family, and both failing
+    points at the frame boundary.  Anything else about them differing would
+    make the comparison say nothing.
+    """
+
+    first = fixture.CASES_BY_LABEL["dsp48e1_frames"]
+    second = fixture.CASES_BY_LABEL["dsp58_frames"]
+    for field in (
+        "repetitions",
+        "matrix_width",
+        "matrix_height",
+        "pe",
+        "simd",
+        "activation",
+        "weight",
+        "accumulator",
+        "activation_values",
+        "weight_values",
+    ):
+        assert getattr(first, field) == getattr(second, field), field
+    assert first.target is not second.target
+    assert first.repetitions >= 3, "a defect at the second frame should show at the third too"
+
+
+def test_the_non_narrow_dsp48e1_weights_really_do_pack() -> None:
+    """The lane arithmetic, so a coverage refusal is a finding and not a skip.
+
+    ``pack_lanes`` is the model of ``sliceLanes()`` Phase 4 derived the rule
+    from.  It is *not* the fixture's expectation -- that comes from
+    ``execute_node`` -- but it is what says this case is meant to be buildable,
+    so a coverage refusal here would be the rule contradicting itself before
+    any tool ran.
+    """
+
+    packing = pack_lanes(
+        a_width=a_datapath_width(1), weight_width=8, activation_width=8, narrow_weights=False
+    )
+    assert packing.fits, packing
+    assert packing.lanes >= 2

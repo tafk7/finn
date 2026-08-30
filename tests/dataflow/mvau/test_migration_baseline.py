@@ -412,6 +412,35 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "wrapper": "79fbbf58d8e3142b",
         },
     },
+    # Added in Phase 6e, not moved.  DSP48E1 was in the part table from the
+    # first fixture and in no configuration, so the oldest DSP generation this
+    # Kernel covers had never been built or simulated -- and Phase 4's
+    # narrow-weight correction is specifically about it.  These values are
+    # therefore a *new* baseline rather than a migration sentinel: there is no
+    # earlier run for them to have held across.
+    "dsp48e1": {
+        "semantic": {
+            "replay_region": "61ad0c7b8e584bf0",
+            "dot_product_region": "c8fe92aebbcab70e",
+            "network": "292340e6d094781a",
+            "source_association": "2b4f3b3ec265d744",
+        },
+        "structure": {
+            "replay_region": "38ef9159c870e572",
+            "dot_product_region": "de2d4080cdecd6d0",
+            "network": "071d59c4e370e86c",
+        },
+        "physical": {
+            "parameters": "dd930e0bc4e28c2d",
+            "components": "041e87d8f9a372aa",
+            "numeric_interfaces": "f0c7e9f908845e35",
+            "control_interfaces": "6333b28c1701b1d6",
+            "connections": "29e9aa687d4f9558",
+            "boundaries": "1191293d372e4ea1",
+            "associations": "db02201f0eb01a83",
+            "wrapper": "9147811b654de063",
+        },
+    },
 }
 
 #: The generated top for one representative configuration, in full.  A moved
@@ -507,6 +536,7 @@ TOP_MODULE_NAMES = {
     "three_repetitions": "mvau_decomposed_1ec7bd1d954e",
     "repetitions_softvec": "mvau_decomposed_29d2a7081c4d",
     "pumped": "mvau_decomposed_a0fce60d0414",
+    "dsp48e1": "mvau_decomposed_bfe687759c44",
 }
 
 
@@ -522,6 +552,7 @@ DESIGN_POINTS = {
     "three_repetitions": ("DSP58", 3, 4, 4, 2, 2, False),
     "repetitions_softvec": ("DSP48E2", 2, 8, 6, 3, 2, False),
     "pumped": ("DSP58", 2, 8, 4, 2, 4, True),
+    "dsp48e1": ("DSP48E1", 2, 8, 4, 2, 2, False),
 }
 
 

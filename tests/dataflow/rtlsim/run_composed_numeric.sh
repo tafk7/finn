@@ -17,6 +17,9 @@ export PYTHONPATH="$FINN_ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 log="${FIXTURE8_LOG:-$FINN_ROOT/fixture8.log}"
 status=0
-python tests/dataflow/rtlsim/composed_mvau_numeric.py 2>&1 | tee "$log" || status=$?
+# FIXTURE8_CASE runs a single case, for narrowing a mismatch without
+# paying for the whole matrix.  Unset, the whole matrix runs.
+python tests/dataflow/rtlsim/composed_mvau_numeric.py \
+    ${FIXTURE8_CASE:+--case "$FIXTURE8_CASE"} 2>&1 | tee "$log" || status=$?
 echo "EXIT=$status" | tee -a "$log"
 exit "$status"

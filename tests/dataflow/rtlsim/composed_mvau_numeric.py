@@ -315,6 +315,130 @@ CASES = (
         "narrow packing on the soft-vector core, which is where Phase 4's "
         "sliceLanes() correction actually applies",
     ),
+    # -- DSP48E1, the rule that was never measured (Phase 6e) -----------------
+    #
+    # Phase 4 replaced "DSP48E1 requires the narrow-weight promise" with
+    # ``sliceLanes()``'s own arithmetic, which was wrong in both directions:
+    # the old rule refused 8-bit non-narrow weights on DSP48E1, which pack into
+    # two lanes with a bit to spare and which baseline FINN builds routinely.
+    # Phase 4 recorded that the correction rested on reading RTL rather than on
+    # running it.  These three run it -- and the expectation comes from
+    # ``execute_node``, not from the lane calculation the rule is derived from,
+    # because checking a rule against its own derivation proves nothing.
+    Case(
+        "dsp48e1",
+        MVAUDspBlock.DSP48E1,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "full",
+        "full",
+        "the oldest DSP generation this Kernel covers, which was in the part "
+        "table from the first fixture and in no configuration",
+    ),
+    Case(
+        "dsp48e1_minimum_weight",
+        MVAUDspBlock.DSP48E1,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "full",
+        "extremes",
+        "non-narrow 8-bit weights on DSP48E1 -- the exact configuration the "
+        "pre-Phase-4 rule refused and this one admits",
+    ),
+    Case(
+        "dsp48e1_narrow",
+        MVAUDspBlock.DSP48E1,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT8",
+        "INT8",
+        "INT32",
+        "full",
+        "narrow",
+        "the same on the narrow path, so the pair says the extra sign bit is "
+        "what changed rather than the family",
+    ),
+    # -- narrowing fixture 5's DSP48E1 disagreement ---------------------------
+    #
+    # Adding DSP48E1 to fixture 5's matrix made it FAIL: the fused core and the
+    # composed one agree on the first repetition and diverge from the second,
+    # on a configuration every other DSP generation matches.  Fixture 5 cannot
+    # say which of the two is right -- that is the whole reason this fixture
+    # exists -- so these two ask the arithmetic.
+    #
+    # Same shape on both generations, so the answer separates "the composed
+    # core mishandles a frame boundary" from "the two cores disagree only on
+    # DSP48E1".  Three repetitions rather than two, because a defect that
+    # starts at the second frame should also be visible at the third.
+    #
+    # ``INT4`` activations against ``INT8`` weights, so an ``INT16``
+    # accumulator does not wrap: fixture 5's own configuration overflows it,
+    # and two DUTs wrap identically while arithmetic does not.  The weight path
+    # is unchanged, which is where the narrow-weight packing lives.
+    Case(
+        "dsp48e1_frames",
+        MVAUDspBlock.DSP48E1,
+        3,
+        4,
+        4,
+        2,
+        2,
+        "INT4",
+        "INT8",
+        "INT16",
+        "full",
+        "narrow",
+        "three frames on DSP48E1 at fixture 5's accumulator width, which is "
+        "where fused and composed diverge",
+    ),
+    Case(
+        "dsp48e1_fixture5_point",
+        MVAUDspBlock.DSP48E1,
+        2,
+        8,
+        4,
+        2,
+        2,
+        "INT4",
+        "INT8",
+        "INT16",
+        "full",
+        "narrow",
+        "fixture 5's failing DSP48E1 configuration exactly, at a width where "
+        "the accumulator does not wrap -- so the mismatch it reports is not "
+        "about overflow and this says which of the two cores is right",
+    ),
+    Case(
+        "dsp58_frames",
+        MVAUDspBlock.DSP58,
+        3,
+        4,
+        4,
+        2,
+        2,
+        "INT4",
+        "INT8",
+        "INT16",
+        "full",
+        "narrow",
+        "the same three frames on a generation where fixture 5 agrees, so the "
+        "pair separates the frame boundary from the DSP family",
+    ),
 )
 
 CASES_BY_LABEL = {case.label: case for case in CASES}

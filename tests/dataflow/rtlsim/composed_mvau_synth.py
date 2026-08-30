@@ -57,7 +57,13 @@ from finn.util.basic import get_vivado_version
 #: plain development machine does not have.  It stays in the list because the
 #: DSP58 path deserves the check wherever the license exists; a missing licence
 #: is reported as SKIPPED, not as a pass and not as an RTL failure.
-DEFAULT_LABELS = ("softvec", "packed")
+#:
+#: ``dsp48e1`` joined in Phase 6e.  It is a third generation and therefore a
+#: third primitive to infer, and it is the one with no prior evidence at all:
+#: it was in the part table from the first fixture and in no configuration, so
+#: nothing had ever synthesized it.  ``xc7z020clg400-1`` is 7-series and needs
+#: no licensed feature.
+DEFAULT_LABELS = ("softvec", "packed", "dsp48e1")
 
 #: ``report_utilization`` prints a summary row (``DSPs``) and a detail row per
 #: primitive (``DSP48E2``, ``DSP58``, ...).  Summing them double-counts, so the
