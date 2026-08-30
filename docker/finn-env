@@ -105,6 +105,27 @@ def die(msg, code=1):
 # Shared resolution. Used by both the host and container sides.
 # --------------------------------------------------------------------------
 
+def hostpath(value):
+    """Expand `~` and make a host path absolute.
+
+    Necessary because a tilde only expands in a shell, unquoted, at the start of
+    a word. It never expands from inside a variable, and Docker Compose never
+    expands one in an env file. So `FINN_HOST_BUILD_DIR=~/builds` in the
+    environment becomes a bind mount whose target is a directory literally named
+    `~`, created in whatever the working directory is.
+
+    This is not hypothetical. This repository contains a stray `~/builds/`
+    directory of HLS output from 2026-07-22, and `.gitignore`'s `*~` rule --
+    which is there for editor backups -- hides it from `git status`.
+
+    Applied to every path this program emits, because those paths become mount
+    arguments.
+    """
+    if not value:
+        return value
+    return os.path.abspath(os.path.expanduser(value))
+
+
 def xilinx_layout(root, version):
     """Locate Vivado / Vitis / HLS within a Xilinx install.
 
@@ -182,9 +203,9 @@ def resolve_host(tier, backend):
     if tier not in TIERS:
         die("unknown tier %r; expected one of %s" % (tier, ", ".join(TIERS)), 2)
 
-    workspace_host = os.environ.get(
+    workspace_host = hostpath(os.environ.get(
         "FINN_ROOT",
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
     # sbx attaches every mount at its host path and offers no remapping, so the
     # policy is not a free choice there.
@@ -222,7 +243,7 @@ def resolve_host(tier, backend):
         }
         return out
 
-    root = os.environ.get("FINN_XILINX_PATH")
+    root = hostpath(os.environ.get("FINN_XILINX_PATH"))
     version = os.environ.get("FINN_XILINX_VERSION")
     if not root:
         die("FINN_XILINX_PATH is unset; tier %r requires it" % tier, 3)
@@ -252,7 +273,7 @@ def resolve_host(tier, backend):
     if "XILINX_HLS" in layout:
         out["env"]["HLS_PATH"] = layout["XILINX_HLS"]
 
-    platforms = os.environ.get("PLATFORM_REPO_PATHS")
+    platforms = hostpath(os.environ.get("PLATFORM_REPO_PATHS"))
     if platforms and os.path.isdir(platforms):
         # Skip when the root mount already covers it, so a launcher does not
         # emit an overlapping bind.
@@ -271,7 +292,7 @@ def resolve_host(tier, backend):
             out["egress"].append({"host": server["host"], "reason": "flexlm",
                                   "advertised_port": server["advertised_port"]})
         for path in files:
-            directory = os.path.dirname(path)
+            directory = os.path.dirname(hostpath(path))
             if not os.path.isdir(directory):
                 warn("licence path %s not found on the host; not mounted" % path)
                 continue
@@ -450,9 +471,12 @@ def cmd_inspect(args):
         # 1000 instead of the invoking user.
         sys.stdout.write("FINN_UID=%d\n" % os.getuid())
         sys.stdout.write("FINN_GID=%d\n" % os.getgid())
-        for key in ("FINN_XILINX_PATH", "FINN_HOST_BUILD_DIR", "FINN_PROFILE"):
+        # Path-valued, so expand. FINN_PROFILE is a name, so it is not.
+        for key in ("FINN_XILINX_PATH", "FINN_HOST_BUILD_DIR"):
             if os.environ.get(key):
-                sys.stdout.write("%s=%s\n" % (key, os.environ[key]))
+                sys.stdout.write("%s=%s\n" % (key, hostpath(os.environ[key])))
+        if os.environ.get("FINN_PROFILE"):
+            sys.stdout.write("FINN_PROFILE=%s\n" % os.environ["FINN_PROFILE"])
     return 0
 
 

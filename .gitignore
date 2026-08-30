@@ -27,6 +27,12 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Temporary and binary files
+# Editor backup files. NOTE this also matches a directory literally named `~`,
+# which is how a stray one went unnoticed here for a month: a tilde only expands
+# in a shell, unquoted, at the start of a word -- never from inside a variable,
+# and never in a Docker Compose env file. `FINN_HOST_BUILD_DIR=~/builds`
+# therefore produced a bind mount into a directory called `~`.
+# docker/finn-env now expands every path it emits; see hostpath() there.
 *~
 *.py[cod]
 *.so

@@ -354,3 +354,45 @@ def test_dev_uses_the_fixed_workspace_path(tmp_path):
     assert data["workspace"]["policy"] == "fixed"
     assert data["workspace"]["source"] == "/somewhere/finn"
     assert data["workspace"]["target"] == finn_env.FIXED_WORKSPACE
+
+
+# --------------------------------------------------------------------------
+# Host path hygiene.
+# --------------------------------------------------------------------------
+
+def test_hostpath_expands_tilde(monkeypatch):
+    """A tilde in a variable is never expanded by a shell or by Compose.
+
+    This repo contains a stray directory literally named `~`, holding HLS output
+    from a run where something passed `~/builds` through a variable. `.gitignore`
+    has `*~` for editor backups, which hides it from `git status`.
+
+    Every path finn-env emits becomes a mount argument, so every one is expanded
+    here.
+    """
+    monkeypatch.setenv("HOME", "/home/someone")
+    assert finn_env.hostpath("~/builds") == "/home/someone/builds"
+
+
+def test_hostpath_makes_relative_absolute():
+    assert finn_env.hostpath("x").startswith("/")
+
+
+def test_hostpath_passes_through_empty():
+    assert finn_env.hostpath("") == ""
+    assert finn_env.hostpath(None) is None
+
+
+def test_emitted_paths_have_no_tilde(tmp_path):
+    """End to end: a tilde in the environment must not reach the .env file."""
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "inspect", "--tier", "build", "--format", "sh"],
+        capture_output=True, text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
+             "FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1",
+             "FINN_HOST_BUILD_DIR": "~/builds", "FINN_ROOT": "~/finn"})
+    assert proc.returncode == 0, proc.stderr
+    for line in proc.stdout.splitlines():
+        assert "~" not in line, "tilde survived into the .env: %s" % line
+    assert "FINN_HOST_BUILD_DIR=/home/someone/builds" in proc.stdout
