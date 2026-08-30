@@ -223,6 +223,15 @@ def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
 #: claim is a projection that did not move rather than a reviewer's reading of
 #: three digests that did.
 #:
+#: **Phase 6g moved ``associations``, on every configuration, and nothing
+#: else.**  Clocks and reset had no association at all: only components,
+#: numeric interfaces and connections were recorded.  They carry no semantic
+#: port and never will -- no Region port is a clock -- but ``ap_clk2x`` exists
+#: because ``compute_pumping`` is a decision this design space carries, and a
+#: doubled clock with nothing saying which choice put it there is the gap the
+#: ledger exists to close.  Every other value here is byte-identical, which is
+#: what says the change was confined to provenance rather than to hardware.
+#:
 #: **Phase 5 moved ``wrapper`` and ``numeric_interfaces``, on every
 #: configuration, and nothing else.**  Two changes, both deliberate:
 #:
@@ -270,7 +279,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "b954f296f62e47fb",
             "connections": "315f5a4fead89a41",
             "boundaries": "d93fafe0914c3887",
-            "associations": "43fc6c132eef7a09",
+            "associations": "241ddc747084467d",
             "wrapper": "d520430c1c837505",
         },
     },
@@ -293,7 +302,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "10974902328b4ddf",
             "connections": "f54a3d78f385b0ad",
             "boundaries": "86e8517e03945509",
-            "associations": "13e3f529cead61a9",
+            "associations": "21630e0be348a3bc",
             "wrapper": "3a1b47cd9f128f28",
         },
     },
@@ -316,7 +325,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "41dcdc2c96649be5",
             "connections": "c046ba0b8dd365c5",
             "boundaries": "667e8a513a7d78a8",
-            "associations": "89e10da3576be82f",
+            "associations": "e9b13224ca793fb5",
             "wrapper": "54214dc8db17a79d",
         },
     },
@@ -339,7 +348,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "a247a182419bdd77",
             "connections": "23f3e9df21ba7d83",
             "boundaries": "9e64c3ee18cb4316",
-            "associations": "7ea760bb4db7cd0b",
+            "associations": "4c76088bab0624b1",
             "wrapper": "d95a33c9e2ea5fba",
         },
     },
@@ -362,7 +371,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "b5eb163f0011feb8",
             "connections": "bec46178ba047b3b",
             "boundaries": "a3b8ecd070f519e1",
-            "associations": "e1345b911f15448d",
+            "associations": "e17ae935e713038d",
             "wrapper": "3a1b47cd9f128f28",
         },
     },
@@ -385,7 +394,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "d4db82222fd89522",
             "connections": "b7a0a11b90ebe3d1",
             "boundaries": "4050ecbd3636f989",
-            "associations": "e31605b025b110ce",
+            "associations": "5bcff418a3f4b019",
             "wrapper": "5fe46859810a5f2f",
         },
     },
@@ -408,7 +417,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "95779a8114bf1f7f",
             "connections": "5323d92561033ffe",
             "boundaries": "d9dd74f985acabaf",
-            "associations": "7807f51534e5f083",
+            "associations": "6c2a6e9dc474ff53",
             "wrapper": "79fbbf58d8e3142b",
         },
     },
@@ -437,7 +446,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
             "control_interfaces": "6333b28c1701b1d6",
             "connections": "29e9aa687d4f9558",
             "boundaries": "1191293d372e4ea1",
-            "associations": "db02201f0eb01a83",
+            "associations": "8833f144f4625b70",
             "wrapper": "9147811b654de063",
         },
     },

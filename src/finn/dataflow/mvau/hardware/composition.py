@@ -639,6 +639,18 @@ def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUP
             )
             for item in connections
         ),
+        # Clocks and reset, which had no record at all until Phase 6g.
+        #
+        # They carry no semantic *port*, and that is right: no Region port is a
+        # clock, and the nets themselves are the enclosing design's -- this unit
+        # cannot name them.  But "no semantic referent" is not "no provenance".
+        # ``ap_clk2x`` exists because ``compute_pumping`` is a decision this
+        # design space carries, so a doubled clock with nothing saying which
+        # choice put it there is exactly the gap the association ledger exists
+        # to close.  The ports are explicitly empty rather than inherited,
+        # because inheriting the component's would claim a clock carries the
+        # activation stream.
+        *(association(item.id, by_component[item.component_id], ()) for item in controls),
     )
     return MVAUPhysicalElaboration(
         source_id,
