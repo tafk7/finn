@@ -17,8 +17,9 @@ therefore remain separate coordinates in one flat ``DesignSpaceSpec``.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Generic, TypeVar, cast
 
 from finn.dataflow.authoring.scope import (
@@ -198,9 +199,18 @@ class DesignRealization:
 
     design_id: str
     network: DataflowNetwork
-    bindings: tuple[HardwareKernel, ...]
+    kernels: Mapping[str, HardwareKernel]
     unabsorbed_edges: tuple[str, ...]
     boundaries: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kernels", MappingProxyType(dict(self.kernels)))
+
+    def kernel(self, placement: str) -> HardwareKernel:
+        try:
+            return self.kernels[placement]
+        except KeyError:
+            raise KeyError(f"no configured Kernel for placement {placement!r}") from None
 
 
 class DataflowDesign:
@@ -851,12 +861,14 @@ class DataflowDesignDeclaration:
                 )
             )
 
-        bindings: list[tuple[KernelPlacement, HardwareKernel]] = []
+        kernels: dict[str, HardwareKernel] = {}
+        active: list[str] = []
         findings: list[Finding] = []
         for placement in self.placements:
             answer = engine.query_property(point, placement.selected_kernel.path)
             if isinstance(answer, Absent):
                 continue
+            active.append(placement.name)
             if not isinstance(answer, Decided):
                 findings.extend(answer.findings)
                 continue
@@ -894,22 +906,108 @@ class DataflowDesignDeclaration:
                 continue
             bound = bind_hardware_kernel(engine, candidate, point, regions, edge_ids)
             if isinstance(bound, Decided):
-                bindings.append((placement, bound.value))
+                kernels[placement.name] = bound.value
             else:
                 findings.extend(bound.findings)
         if findings:
             return Unresolved(tuple(findings))
-        return _validate_realization(self.id, network, tuple(bindings))
+        return self.validate_realization(network, kernels, active_placements=tuple(active))
+
+    def validate_realization(
+        self,
+        network: DataflowNetwork,
+        kernels: Mapping[str, HardwareKernel],
+        *,
+        active_placements: Sequence[str] | None = None,
+    ) -> Answer[DesignRealization]:
+        """Validate one already-configured Kernel collection against this design."""
+
+        active_names = (
+            tuple(item.name for item in self.placements)
+            if active_placements is None
+            else tuple(active_placements)
+        )
+        by_name = {item.name: item for item in self.placements}
+        findings: list[Finding] = []
+        for name in sorted(set(active_names) - set(by_name)):
+            findings.append(
+                _finding(
+                    "design-active-placement-unknown",
+                    f"active placement {name!r} is not declared by design {self.id!r}",
+                    placement=name,
+                )
+            )
+        for name in sorted(set(active_names) - set(kernels)):
+            findings.append(
+                _finding(
+                    "design-placement-kernel-missing",
+                    f"active placement {name!r} has no configured Kernel",
+                    placement=name,
+                )
+            )
+        for name in sorted(set(kernels) - set(active_names)):
+            findings.append(
+                _finding(
+                    "design-placement-kernel-foreign",
+                    f"configured Kernel was supplied for inactive or unknown placement {name!r}",
+                    placement=name,
+                )
+            )
+        placed: dict[str, HardwareKernel] = {}
+        for name in active_names:
+            placement = by_name.get(name)
+            kernel = kernels.get(name)
+            if placement is None or kernel is None:
+                continue
+            candidate_ids = {item.id for item in placement.candidates}
+            if kernel.id not in candidate_ids:
+                findings.append(
+                    _finding(
+                        "design-placement-kernel-not-a-candidate",
+                        f"Kernel {kernel.id!r} is not a candidate for placement {name!r}",
+                        placement=name,
+                        kernel=kernel.id,
+                    )
+                )
+            expected_nodes = {item.node_id for item in placement.nodes}
+            if set(kernel.node_ids) != expected_nodes:
+                findings.append(
+                    _finding(
+                        "design-placement-node-coverage-mismatch",
+                        f"Kernel {kernel.id!r} does not cover placement {name!r} exactly",
+                        placement=name,
+                        expected=tuple(sorted(expected_nodes)),
+                        actual=kernel.node_ids,
+                    )
+                )
+            expected_edges = {item.edge_id for item in placement.edges}
+            if set(kernel.edge_ids) != expected_edges:
+                findings.append(
+                    _finding(
+                        "design-placement-edge-coverage-mismatch",
+                        f"Kernel {kernel.id!r} does not absorb placement {name!r} exactly",
+                        placement=name,
+                        expected=tuple(sorted(expected_edges)),
+                        actual=kernel.edge_ids,
+                    )
+                )
+            placed[name] = kernel
+        coverage = _validate_realization(self.id, network, placed)
+        if isinstance(coverage, Unresolved):
+            findings.extend(coverage.findings)
+        if findings:
+            return Unresolved(tuple(findings))
+        return coverage
 
 
 def _validate_realization(
     design_id: str,
     network: DataflowNetwork,
-    placed: tuple[tuple[KernelPlacement, HardwareKernel], ...],
+    placed: Mapping[str, HardwareKernel],
 ) -> Answer[DesignRealization]:
     findings: list[Finding] = []
-    node_counts = Counter(node for _placement, binding in placed for node in binding.node_ids)
-    edge_counts = Counter(edge for _placement, binding in placed for edge in binding.edge_ids)
+    node_counts = Counter(node for kernel in placed.values() for node in kernel.node_ids)
+    edge_counts = Counter(edge for kernel in placed.values() for edge in kernel.edge_ids)
     network_nodes = {item.id for item in network.nodes}
     network_edges = {item.id: item for item in network.edges}
 
@@ -952,7 +1050,7 @@ def _validate_realization(
                     count=count,
                 )
             )
-        absorber = next(binding for _placement, binding in placed if edge_id in binding.edge_ids)
+        absorber = next(kernel for kernel in placed.values() if edge_id in kernel.edge_ids)
         required = {edge.source.node_id, *(sink.endpoint.node_id for sink in edge.sinks)}
         covered = set(absorber.node_ids)
         if not required <= covered:
@@ -967,12 +1065,11 @@ def _validate_realization(
             )
     if findings:
         return Unresolved(tuple(findings))
-    bindings = tuple(binding for _placement, binding in placed)
     return Decided(
         DesignRealization(
             design_id,
             network,
-            bindings,
+            placed,
             tuple(sorted(set(network_edges) - set(edge_counts))),
             tuple(item.id for item in network.boundaries),
         )

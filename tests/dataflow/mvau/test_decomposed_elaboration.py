@@ -224,13 +224,13 @@ def test_the_binding_records_the_hardware_that_realized_each_region() -> None:
     """What the origin no longer says, the bindings do -- and more precisely."""
 
     bindings = bind_decomposed(_resolved())
-    assert bindings.compute.kernel_id == "dotp_axi"
-    assert bindings.replay.kernel_id == "replay_buffer"
-    assert bindings.compute.node_ids == ("compute",)
-    assert bindings.replay.node_ids == ("replay",)
+    assert bindings.kernel("compute").kernel_id == "dotp_axi"
+    assert bindings.kernel("replay").kernel_id == "replay_buffer"
+    assert bindings.kernel("compute").node_ids == ("compute",)
+    assert bindings.kernel("replay").node_ids == ("replay",)
     # Each Kernel was told which node fills its role, and recorded exactly that.
-    assert bindings.compute.regions["compute"].role == "compute"
-    assert bindings.replay.regions["replay"].role == "replay"
+    assert bindings.kernel("compute").regions["compute"].role == "compute"
+    assert bindings.kernel("replay").regions["replay"].role == "replay"
 
 
 def _association(source: str, physical_id: str) -> MVAUPhysicalAssociation:
@@ -318,8 +318,10 @@ def test_each_binding_states_the_arithmetic_it_implements() -> None:
     """Equal traffic does not imply equal computation, so both sides declare."""
 
     bindings = bind_decomposed(_resolved())
-    assert bindings.compute.origin().computations == (("compute", "mvau.dot_product:1"),)
-    assert bindings.replay.origin().computations == (("replay", "mvau.activation_replay:1"),)
+    assert bindings.kernel("compute").origin().computations == (("compute", "mvau.dot_product:1"),)
+    assert bindings.kernel("replay").origin().computations == (
+        ("replay", "mvau.activation_replay:1"),
+    )
 
 
 # -- parameter provenance ----------------------------------------------------
@@ -337,7 +339,7 @@ def test_every_parameter_reaching_the_rtl_came_from_the_point() -> None:
         item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
     }
     bindings = bind_decomposed(resolved)
-    resolved_names = {name for binding in bindings.bindings for name in binding.parameters}
+    resolved_names = {name for binding in bindings.kernels.values() for name in binding.parameters}
     assert resolved_names == declared
 
     wrapper = elaborate_mvau(resolved).component(
@@ -476,8 +478,8 @@ def test_the_requirements_carry_the_identity_of_what_they_build() -> None:
 
     assert requirements.identity == composed_artifact_identity(
         tuple(
-            kernel_artifact_identity(binding, source_roots(FINN_ROOT))
-            for binding in bindings.bindings
+            kernel_artifact_identity(bindings.kernel(placement), source_roots(FINN_ROOT))
+            for placement in ("replay", "compute")
         ),
         requirements.wrapper_source,
         requirements.stitch_source,
@@ -526,7 +528,9 @@ def test_the_module_name_separates_configurations_but_not_source_content() -> No
 
     def identity(pe: int) -> KernelArtifactIdentity:
         resolved = _committed(_model(), pe=pe).resolve_dataflow(_context())
-        return kernel_artifact_identity(bind_decomposed(resolved).compute, source_roots(FINN_ROOT))
+        return kernel_artifact_identity(
+            bind_decomposed(resolved).kernel("compute"), source_roots(FINN_ROOT)
+        )
 
     two, four = identity(pe=2), identity(pe=4)
     assert decomposed_top_module_name((two,)) != decomposed_top_module_name((four,))
@@ -579,7 +583,7 @@ def test_the_kernels_own_choices_reach_the_module_name() -> None:
         )
         names.add(built.top_module_name)
         identities.add(built.identity.key)
-        compute = bind_decomposed(resolved).compute
+        compute = bind_decomposed(resolved).kernel("compute")
         assert dict(kernel_artifact_identity(compute, source_roots(FINN_ROOT)).assignments) == {
             "compute_pumping": pumping
         }

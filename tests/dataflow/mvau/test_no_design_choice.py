@@ -184,8 +184,8 @@ def test_the_generated_wrapper_overrides_only_declared_parameters(
 
     bindings = bind_decomposed(_resolved_from(requirements))
     declared = {
-        "replay_buffer": dict(bindings.replay.parameters),
-        "dotp_axi": dict(bindings.compute.parameters),
+        "replay_buffer": dict(bindings.kernel("replay").parameters),
+        "dotp_axi": dict(bindings.kernel("compute").parameters),
     }
     overrides = _overrides(requirements.wrapper_source)
     assert set(overrides) == set(declared)

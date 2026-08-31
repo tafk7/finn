@@ -17,15 +17,16 @@ of this installation rather than of the hardware.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
+from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.hardware import HardwareKernel, bind_hardware_kernel, bound_regions
 from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_COMPUTE_SELECTION
 from finn.dataflow.mvau.compute_pool import MVAUComputeKernelId
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
+from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.mvau.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.mvau.hardware.replay_buffer import FINN_ROOT
@@ -77,21 +78,6 @@ def source_roots(finn_root: str | Path, finnlib: str | Path | None = None) -> di
     }
 
 
-@dataclass(frozen=True)
-class DecomposedBindings:
-    """Both halves of the decomposed slice, bound to the semantics they cover."""
-
-    network: DataflowNetwork
-    compute: HardwareKernel
-    replay: HardwareKernel
-
-    @property
-    def bindings(self) -> tuple[HardwareKernel, ...]:
-        """In compile order: the replay feeds the dot product."""
-
-        return (self.replay, self.compute)
-
-
 def _bind(
     resolved: MVAUResolvedDesign,
     declaration: HardwareKernelDeclaration,
@@ -122,7 +108,7 @@ def _bind(
     return answer.value
 
 
-def bind_decomposed(resolved: MVAUResolvedDesign) -> DecomposedBindings:
+def bind_decomposed(resolved: MVAUResolvedDesign) -> DesignRealization:
     """Bind the decomposed slice, refusing anything this hardware does not cover.
 
     The Region checks that used to live here are gone: ``bind_hardware_kernel``
@@ -156,27 +142,30 @@ def bind_decomposed(resolved: MVAUResolvedDesign) -> DecomposedBindings:
             "this hardware builds the two-node replay-plus-compute Network only",
             (("nodes", tuple(sorted(node_ids))),),
         )
-    return DecomposedBindings(
-        network,
-        _bind(
+    configured = {
+        "compute": _bind(
             resolved,
             DECOMPOSED_MVAU_KERNELS.dot_product_hardware,
             COMPUTE_ROLE,
             DOT_PRODUCT_NODE,
             network,
         ),
-        _bind(
+        "replay": _bind(
             resolved,
             DECOMPOSED_MVAU_KERNELS.replay_hardware,
             REPLAY_ROLE,
             REPLAY_NODE,
             network,
         ),
-    )
+    }
+    validated = MVAU_DOT_PRODUCT_DESIGN.design.validate_realization(network, configured)
+    if not isinstance(validated, Decided):
+        raise MVAUElaborationError(validated.findings)
+    return validated.value
 
 
 def resolved_manifest(
-    bindings: DecomposedBindings, roots: dict[str, Path]
+    realization: DesignRealization, roots: dict[str, Path]
 ) -> tuple[tuple[str, str], ...]:
     """Every declared source as ``(id, absolute path)``, in compile order.
 
@@ -186,8 +175,8 @@ def resolved_manifest(
 
     entries: list[tuple[str, str]] = []
     counts: dict[str, int] = {}
-    for binding in bindings.bindings:
-        for source in binding.sources:
+    for placement in ("replay", "compute"):
+        for source in realization.kernel(placement).sources:
             index = counts.get(source.root, 0)
             counts[source.root] = index + 1
             entries.append(
@@ -217,7 +206,6 @@ __all__ = [
     "FINNLIB_DEFAULT_SUBDIRECTORY",
     "FINNLIB_ROOT_VARIABLE",
     "REPLAY_ROLE",
-    "DecomposedBindings",
     "bind_decomposed",
     "finnlib_root",
     "resolved_manifest",

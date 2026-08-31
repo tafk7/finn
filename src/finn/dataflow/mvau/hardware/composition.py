@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
 from finn.dataflow.hardware import (
     DEFAULT_BUILDER,
@@ -65,7 +66,6 @@ from finn.dataflow.mvau.elaboration import (
 )
 from finn.dataflow.mvau.compute_kernels import MVAU_COMPUTE_SELECTION, MVAU_REPLAY_SELECTION
 from finn.dataflow.mvau.hardware.binding import (
-    DecomposedBindings,
     bind_decomposed,
     resolved_manifest,
     source_roots,
@@ -382,12 +382,21 @@ def elaborate_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboratio
     return compose(resolved, bindings)
 
 
-def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUPhysicalElaboration:
+def compose(
+    resolved: MVAUResolvedDesign, realization: DesignRealization
+) -> MVAUPhysicalElaboration:
     """Wire two bound Kernels into one physical elaboration."""
 
-    network = bindings.network
-    replay_region = next(iter(bindings.replay.regions.values())).region
-    compute_region = next(iter(bindings.compute.regions.values())).region
+    network = realization.network
+    replay = realization.kernel("replay")
+    compute = realization.kernel("compute")
+    if realization.unabsorbed_edges != (ACTIVATION_EDGE,):
+        raise _fail(
+            "mvau-dot-product-connection-obligation-mismatch",
+            "DotProduct must leave exactly its activation-replay edge for composition",
+        )
+    replay_region = replay.regions["replay"].region
+    compute_region = compute.regions["compute"].region
     activation_in = replay_region.input_interface("activation_in").port
     activation_out = replay_region.output_interface("activation_out").port
     dot_activation = compute_region.input_interface("activation").port
@@ -397,14 +406,14 @@ def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUP
     source_id = resolved.result.source_association.source_node_id
     prefix = f"{source_id}.compute"
     wrapper_id = f"{prefix}.wrapper"
-    replay_component = _component(bindings.replay, prefix, wrapper_id)
-    dot_component = _component(bindings.compute, prefix, wrapper_id)
+    replay_component = _component(replay, prefix, wrapper_id)
+    dot_component = _component(compute, prefix, wrapper_id)
     replay_id = replay_component.id
     dot_id = dot_component.id
 
     everything = {
-        **dict(bindings.replay.parameters),
-        **dict(bindings.compute.parameters),
+        **dict(replay.parameters),
+        **dict(compute.parameters),
     }
     components = (
         MVAUPhysicalComponent(
@@ -548,7 +557,7 @@ def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUP
         MVAUPhysicalConnection(
             "compute.replay_to_dot_product",
             (f"{replay_id}.activation_out", f"{dot_id}.activation"),
-            (ACTIVATION_EDGE,),
+            realization.unabsorbed_edges,
         ),
         MVAUPhysicalConnection(
             "compute.wrapper_weight", (f"{wrapper_id}.weight", f"{dot_id}.weight")
@@ -582,13 +591,13 @@ def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUP
     # nothing: it is a specific false statement about what realizes what.
     by_component = {
         replay_id: _provenance(
-            bindings.replay,
+            replay,
             ActivationReplayKernel.id,
             MVAU_REPLAY_SELECTION.paths.kernel,
             network,
         ),
         dot_id: _provenance(
-            bindings.compute,
+            compute,
             DotProductKernel.id,
             MVAU_COMPUTE_SELECTION.paths.kernel,
             network,
@@ -772,19 +781,24 @@ def build_decomposed_artifact_requirements(
             "mvau-decomposed-result-mismatch",
             "the elaboration does not belong to the selected semantic result",
         )
-    bindings = bind_decomposed(resolved)
+    realization = bind_decomposed(resolved)
     roots = source_roots(finn_root, finnlib)
-    kernels = tuple(kernel_artifact_identity(binding, roots) for binding in bindings.bindings)
+    kernels = tuple(
+        kernel_artifact_identity(realization.kernel(placement), roots)
+        for placement in ("replay", "compute")
+    )
     top = decomposed_top_module_name(kernels)
     wrapper = elaboration.component(
         f"{resolved.result.source_association.source_node_id}.compute.wrapper"
     )
-    replay_region = next(iter(bindings.replay.regions.values())).region
-    compute_region = next(iter(bindings.compute.regions.values())).region
+    replay = realization.kernel("replay")
+    compute = realization.kernel("compute")
+    replay_region = replay.regions["replay"].region
+    compute_region = compute.regions["compute"].region
     text = render_decomposed_wrapper(
         top,
-        dict(bindings.replay.parameters),
-        dict(bindings.compute.parameters),
+        dict(replay.parameters),
+        dict(compute.parameters),
         activation_bits=replay_region.input_interface("activation_in").port.logical_beat_bits,
         weight_bits=compute_region.input_interface("weight").port.logical_beat_bits,
         output_bits=compute_region.output_interface("output").port.logical_beat_bits,
@@ -800,7 +814,7 @@ def build_decomposed_artifact_requirements(
         elaboration.target_fpga_part,
         elaboration.target_clock_period_ns,
         wrapper.parameters,
-        resolved_manifest(bindings, roots),
+        resolved_manifest(realization, roots),
         f"{top}.sv",
         text,
         f"{top}_wrapper.v",

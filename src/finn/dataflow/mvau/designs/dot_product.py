@@ -23,9 +23,6 @@ from finn.dataflow.authoring.design import (
 )
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import DependencyKind, DesignSpaceSpec
-from finn.dataflow.hardware.kernel import HardwareKernel
-from finn.dataflow.mvau.hardware.binding import DecomposedBindings
-from finn.dataflow.mvau.hardware.composition import compose
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
@@ -163,22 +160,6 @@ def declare_dot_product_design(
     )
 
 
-def decomposed_bindings(realization: DesignRealization) -> DecomposedBindings:
-    """Present a validated DotProduct realization to the existing composer."""
-
-    if realization.design_id != DotProductDesign.id:
-        raise ValueError("only DotProductDesign has decomposed MVAU bindings")
-    by_kernel: dict[str, HardwareKernel] = {
-        binding.kernel_id: binding for binding in realization.bindings
-    }
-    try:
-        compute = by_kernel[DotpAxiKernel.id]
-        replay = by_kernel[ReplayBufferKernel.id]
-    except KeyError as error:
-        raise ValueError("DotProductDesign requires compute and replay Kernels") from error
-    return DecomposedBindings(realization.network, compute, replay)
-
-
 def compose_dot_product_design(
     resolved_source: MVAUResolvedDesign,
     realization: DesignRealization,
@@ -192,7 +173,9 @@ def compose_dot_product_design(
 
     if getattr(resolved_source.result, "network", None) != realization.network:
         raise ValueError("the source envelope and DotProduct realization name different Networks")
-    return compose(resolved_source, decomposed_bindings(realization))
+    from finn.dataflow.mvau.hardware.composition import compose  # noqa: PLC0415
+
+    return compose(resolved_source, realization)
 
 
 MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()
@@ -205,5 +188,4 @@ __all__ = [
     "MVAU_DOT_PRODUCT_DESIGN",
     "compose_dot_product_design",
     "declare_dot_product_design",
-    "decomposed_bindings",
 ]

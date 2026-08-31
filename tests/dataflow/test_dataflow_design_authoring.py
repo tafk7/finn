@@ -18,10 +18,12 @@ import finn.dataflow.authoring.design as design_authoring
 from finn.dataflow.authoring import OpDesign, Ref, divisors_of, finite
 from finn.dataflow.authoring.design import (
     DataflowDesign,
+    DataflowDesignDeclaration,
     DataflowDesignEntry,
     DataflowDesignInventory,
     DataflowDesignScope,
     DesignNode,
+    DesignRealization,
     InputSupplyAlternative,
     InputSupplyContext,
     SupplierAttachment,
@@ -39,6 +41,7 @@ from finn.dataflow.design import (
     Unresolved,
 )
 from finn.dataflow.hardware import (
+    BoundRegion,
     ComputationContract,
     HardwareDesign,
     HardwareKernel,
@@ -474,6 +477,40 @@ class FanoutIncompleteDesign(DataflowDesign):
         )
 
 
+class MultiplyAbsorbedDesign(DataflowDesign):
+    id = "multiply_absorbed"
+
+    @classmethod
+    def define(cls, design: DataflowDesignScope[DesignInputs]) -> None:
+        producer = design.region(
+            "producer",
+            node_id="producer",
+            dependencies={"extent": design.inputs.extent},
+            evaluate=lambda extent: _region(extent, "producer"),
+            computation=COPY,
+        )
+        consumer = design.region(
+            "consumer",
+            node_id="consumer",
+            dependencies={"extent": design.inputs.extent},
+            evaluate=lambda extent: _region(extent, "consumer"),
+            computation=COPY,
+        )
+        network = design.network(
+            dependencies={"producer": producer.region, "consumer": consumer.region},
+            evaluate=_chain,
+        )
+        edge = design.edge("link", edge_id="link", source=producer, sink=consumer, network=network)
+        for placement in ("first", "second"):
+            design.kernels(
+                placement,
+                covers=(producer, consumer),
+                absorbs=(edge,),
+                candidates=(DirectKernel,),
+                inputs=KernelInputs((producer, consumer), network=network),
+            )
+
+
 class SupplyDesign(DataflowDesign):
     node_id = "compute"
 
@@ -587,7 +624,7 @@ def test_one_design_one_region_one_kernel_and_no_gratuitous_kernel_choice() -> N
     realized = inventory.realize(engine, point)
     assert isinstance(realized, Decided)
     assert tuple(node.id for node in realized.value.network.nodes) == ("compute",)
-    assert tuple(binding.kernel_id for binding in realized.value.bindings) == ("direct",)
+    assert tuple(kernel.kernel_id for kernel in realized.value.kernels.values()) == ("direct",)
     assert not any(
         "hardware_kernel" in str(item.path) for item in inventory.specification.decisions
     )
@@ -620,11 +657,84 @@ def test_one_design_may_have_two_independent_placements() -> None:
     inventory, engine, point, _inputs = _inventory(TwoPlacementDesign)
     realized = inventory.realize(engine, point)
     assert isinstance(realized, Decided)
-    assert {binding.node_ids for binding in realized.value.bindings} == {
+    assert {kernel.node_ids for kernel in realized.value.kernels.values()} == {
         ("producer",),
         ("consumer",),
     }
     assert realized.value.unabsorbed_edges == ("link",)
+
+
+def _two_placement_realization() -> tuple[DataflowDesignDeclaration, DesignRealization]:
+    inventory, engine, point, _inputs = _inventory(TwoPlacementDesign)
+    realized = inventory.realize(engine, point)
+    assert isinstance(realized, Decided)
+    return inventory.declarations[0], realized.value
+
+
+def _with_regions(kernel: HardwareKernel, regions: dict[str, BoundRegion]) -> HardwareKernel:
+    return type(kernel)(
+        kernel.declaration,
+        regions,
+        kernel.edges,
+        kernel.assignments,
+        kernel.parameters,
+    )
+
+
+def test_realization_reports_a_missing_active_placement() -> None:
+    design, realization = _two_placement_realization()
+    answer = design.validate_realization(
+        realization.network,
+        {"producer": realization.kernel("producer")},
+    )
+    assert isinstance(answer, Unresolved)
+    codes = {item.code for item in answer.findings}
+    assert "design-placement-kernel-missing" in codes
+    assert "design-node-coverage-not-exact" in codes
+
+
+def test_realization_reports_duplicate_node_coverage() -> None:
+    design, realization = _two_placement_realization()
+    producer = realization.network.node("producer")
+    duplicate = _with_regions(
+        realization.kernel("consumer"),
+        {"consumer": BoundRegion("consumer", "producer", producer.region)},
+    )
+    answer = design.validate_realization(
+        realization.network,
+        {"producer": realization.kernel("producer"), "consumer": duplicate},
+    )
+    assert isinstance(answer, Unresolved)
+    codes = {item.code for item in answer.findings}
+    assert "design-placement-node-coverage-mismatch" in codes
+    assert "design-node-coverage-not-exact" in codes
+
+
+def test_realization_reports_foreign_node_coverage() -> None:
+    design, realization = _two_placement_realization()
+    consumer = realization.network.node("consumer")
+    foreign = _with_regions(
+        realization.kernel("consumer"),
+        {"consumer": BoundRegion("consumer", "foreign", consumer.region)},
+    )
+    answer = design.validate_realization(
+        realization.network,
+        {"producer": realization.kernel("producer"), "consumer": foreign},
+    )
+    assert isinstance(answer, Unresolved)
+    codes = {item.code for item in answer.findings}
+    assert "design-placement-node-coverage-mismatch" in codes
+    assert "design-foreign-node-coverage" in codes
+
+
+def test_realization_reports_a_kernel_for_an_unknown_placement() -> None:
+    design, realization = _two_placement_realization()
+    answer = design.validate_realization(
+        realization.network,
+        {**realization.kernels, "elsewhere": realization.kernel("producer")},
+    )
+    assert isinstance(answer, Unresolved)
+    assert "design-placement-kernel-foreign" in {item.code for item in answer.findings}
 
 
 def test_equal_coverage_kernel_alternatives_are_a_separate_coordinate() -> None:
@@ -644,7 +754,7 @@ def test_equal_coverage_kernel_alternatives_are_a_separate_coordinate() -> None:
     realized = inventory.realize(engine, point)
 
     assert isinstance(realized, Decided)
-    assert realized.value.bindings[0].kernel_id == "alternative"
+    assert realized.value.kernel("compute").kernel_id == "alternative"
     assert len({inventory.design_path, kernel, pipeline}) == 3
 
 
@@ -706,8 +816,8 @@ def test_two_designs_share_one_network_declaration_but_partition_it_differently(
     fused_realization = inventory.realize(engine, fused_point)
     assert isinstance(separate_realization, Decided)
     assert isinstance(fused_realization, Decided)
-    assert len(separate_realization.value.bindings) == 2
-    assert len(fused_realization.value.bindings) == 1
+    assert len(separate_realization.value.kernels) == 2
+    assert len(fused_realization.value.kernels) == 1
 
 
 def test_one_kernel_may_cover_two_regions_and_absorb_their_edge() -> None:
@@ -723,8 +833,8 @@ def test_one_kernel_may_cover_two_regions_and_absorb_their_edge() -> None:
     )
     realized = inventory.realize(engine, point)
     assert isinstance(realized, Decided)
-    assert realized.value.bindings[0].node_ids == ("consumer", "producer")
-    assert realized.value.bindings[0].edge_ids == ("link",)
+    assert realized.value.kernel("fused").node_ids == ("consumer", "producer")
+    assert realized.value.kernel("fused").edge_ids == ("link",)
     assert realized.value.unabsorbed_edges == ()
 
 
@@ -733,6 +843,15 @@ def test_absorbing_a_fanout_requires_covering_every_sink() -> None:
     realized = inventory.realize(engine, point)
     assert isinstance(realized, Unresolved)
     assert "design-absorbed-edge-incomplete-fanout" in {item.code for item in realized.findings}
+
+
+def test_realization_rejects_multiply_absorbed_edges() -> None:
+    inventory, engine, point, _inputs = _inventory(MultiplyAbsorbedDesign)
+    realized = inventory.realize(engine, point)
+    assert isinstance(realized, Unresolved)
+    codes = {item.code for item in realized.findings}
+    assert "design-edge-absorption-not-unique" in codes
+    assert "design-node-coverage-not-exact" in codes
 
 
 def test_a_semantic_only_design_is_model_valid_but_not_physically_realizable() -> None:
@@ -807,8 +926,11 @@ def test_active_supplier_placement_participates_in_exact_realization() -> None:
     realized = inventory.realize(engine, point)
 
     assert isinstance(realized, Decided)
-    assert {binding.kernel_id for binding in realized.value.bindings} == {"direct", "supplier"}
-    assert {node for binding in realized.value.bindings for node in binding.node_ids} == {
+    assert {kernel.kernel_id for kernel in realized.value.kernels.values()} == {
+        "direct",
+        "supplier",
+    }
+    assert {node for kernel in realized.value.kernels.values() for node in kernel.node_ids} == {
         "compute_a",
         "parameter_supplier",
     }

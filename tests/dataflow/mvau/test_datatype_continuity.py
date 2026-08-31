@@ -275,8 +275,11 @@ def _operand_type(region: object, port_id: str) -> object:
 
 def _chain(model: ModelWrapper) -> _Chain:
     resolved = _resolved(model)
-    bindings = bind_decomposed(resolved)
-    by_binding = {"replay": bindings.replay, "compute": bindings.compute}
+    realization = bind_decomposed(resolved)
+    by_binding = {
+        "replay": realization.kernel("replay"),
+        "compute": realization.kernel("compute"),
+    }
     requirements = build_decomposed_artifact_requirements(
         resolved, elaborate_decomposed(resolved), FINN_ROOT
     )
@@ -301,7 +304,7 @@ def _chain(model: ModelWrapper) -> _Chain:
         },
         {
             name: value
-            for binding in bindings.bindings
+            for binding in realization.kernels.values()
             for name, value in binding.parameters.items()
         },
         _wrapper_parameters(requirements.wrapper_source),
@@ -393,10 +396,10 @@ def test_the_kernel_covers_the_regions_carrying_those_operands() -> None:
     the compute Kernel does not actually cover would make the hop vacuous.
     """
 
-    bindings = bind_decomposed(_resolved(_model()))
+    realization = bind_decomposed(_resolved(_model()))
     covered = {
-        "replay": bindings.replay.regions["replay"].role,
-        "compute": bindings.compute.regions["compute"].role,
+        "replay": realization.kernel("replay").regions["replay"].role,
+        "compute": realization.kernel("compute").regions["compute"].role,
     }
     assert covered == {"replay": "replay", "compute": "compute"}
     for role in ROLES:

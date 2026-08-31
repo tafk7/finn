@@ -650,7 +650,9 @@ def test_two_source_nodes_with_one_configuration_share_one_identity() -> None:
     )
     first, second = (bind_decomposed(resolved) for resolved in resolutions)
 
-    for left, right in zip(first.bindings, second.bindings, strict=True):
+    for placement in ("replay", "compute"):
+        left = first.kernel(placement)
+        right = second.kernel(placement)
         assert kernel_artifact_identity(left, _roots()) == kernel_artifact_identity(right, _roots())
         assert left.origin() == right.origin()
 

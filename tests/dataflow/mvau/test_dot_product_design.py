@@ -28,7 +28,6 @@ from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKern
 from finn.dataflow.mvau.designs.dot_product import (
     MVAU_DOT_PRODUCT_DESIGN,
     compose_dot_product_design,
-    decomposed_bindings,
 )
 from finn.dataflow.mvau.hardware.binding import bind_decomposed, source_roots
 from finn.dataflow.mvau.hardware.composition import (
@@ -202,20 +201,20 @@ def test_dot_product_realization_matches_legacy_kernel_parameters_and_sources(
 ) -> None:
     compared = _side_by_side(geometry, pumping=pumping)
     old = bind_decomposed(compared.old_resolved)
-    new = decomposed_bindings(compared.realization)
+    new = compared.realization
 
     assert new.network == old.network
-    assert new.compute.kernel_id == old.compute.kernel_id == DotpAxiKernel.id
-    assert new.replay.kernel_id == old.replay.kernel_id == ReplayBufferKernel.id
-    assert new.compute.parameters == old.compute.parameters
-    assert new.replay.parameters == old.replay.parameters
-    assert new.compute.sources == old.compute.sources
-    assert new.replay.sources == old.replay.sources
-    assert tuple(item.region for item in new.compute.regions.values()) == tuple(
-        item.region for item in old.compute.regions.values()
+    assert new.kernel("compute").kernel_id == old.kernel("compute").kernel_id == DotpAxiKernel.id
+    assert new.kernel("replay").kernel_id == old.kernel("replay").kernel_id == ReplayBufferKernel.id
+    assert new.kernel("compute").parameters == old.kernel("compute").parameters
+    assert new.kernel("replay").parameters == old.kernel("replay").parameters
+    assert new.kernel("compute").sources == old.kernel("compute").sources
+    assert new.kernel("replay").sources == old.kernel("replay").sources
+    assert tuple(item.region for item in new.kernel("compute").regions.values()) == tuple(
+        item.region for item in old.kernel("compute").regions.values()
     )
-    assert tuple(item.region for item in new.replay.regions.values()) == tuple(
-        item.region for item in old.replay.regions.values()
+    assert tuple(item.region for item in new.kernel("replay").regions.values()) == tuple(
+        item.region for item in old.kernel("replay").regions.values()
     )
 
 
@@ -224,7 +223,7 @@ def test_dot_product_whole_design_realization_is_exact(
     geometry: tuple[int, int, int, int, int],
 ) -> None:
     realization = _side_by_side(geometry).realization
-    assert {node for binding in realization.bindings for node in binding.node_ids} == {
+    assert {node for kernel in realization.kernels.values() for node in kernel.node_ids} == {
         "compute",
         "replay",
     }
@@ -251,14 +250,14 @@ def test_dot_product_calls_the_existing_decomposed_composer_without_structural_c
 def test_dot_product_kernel_artifact_identity_matches_legacy() -> None:
     compared = _side_by_side(GEOMETRIES[0], pumping=True)
     old = bind_decomposed(compared.old_resolved)
-    new = decomposed_bindings(compared.realization)
+    new = compared.realization
     roots = source_roots(Path(__file__).parents[3])
 
-    assert kernel_artifact_identity(new.compute, roots) == kernel_artifact_identity(
-        old.compute, roots
+    assert kernel_artifact_identity(new.kernel("compute"), roots) == kernel_artifact_identity(
+        old.kernel("compute"), roots
     )
-    assert kernel_artifact_identity(new.replay, roots) == kernel_artifact_identity(
-        old.replay, roots
+    assert kernel_artifact_identity(new.kernel("replay"), roots) == kernel_artifact_identity(
+        old.kernel("replay"), roots
     )
 
 
@@ -270,16 +269,21 @@ def test_dot_product_wrapper_and_composed_artifact_identity_match_legacy() -> No
         old_elaboration,
         Path(__file__).parents[3],
     )
-    bindings = decomposed_bindings(compared.realization)
+    realization = compared.realization
     roots = source_roots(Path(__file__).parents[3])
-    kernels = tuple(kernel_artifact_identity(binding, roots) for binding in bindings.bindings)
+    kernels = tuple(
+        kernel_artifact_identity(realization.kernel(placement), roots)
+        for placement in ("replay", "compute")
+    )
     top = decomposed_top_module_name(kernels)
-    replay_region = bindings.replay.regions["replay"].region
-    compute_region = bindings.compute.regions["compute"].region
+    replay = realization.kernel("replay")
+    compute = realization.kernel("compute")
+    replay_region = replay.regions["replay"].region
+    compute_region = compute.regions["compute"].region
     wrapper = render_decomposed_wrapper(
         top,
-        dict(bindings.replay.parameters),
-        dict(bindings.compute.parameters),
+        dict(replay.parameters),
+        dict(compute.parameters),
         activation_bits=replay_region.input_interface("activation_in").port.logical_beat_bits,
         weight_bits=compute_region.input_interface("weight").port.logical_beat_bits,
         output_bits=compute_region.output_interface("output").port.logical_beat_bits,
