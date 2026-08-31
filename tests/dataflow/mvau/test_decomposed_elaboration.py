@@ -23,14 +23,10 @@ from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - fixtures come wit
     _model,
     _wrapped,
 )
-from finn.dataflow.design import QualifiedPath
-from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
     SOFT_VECTOR_PROVIDER_ID,
-    MVAUHlsResource,
-    MVAUWeightSource,
 )
 from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
@@ -38,6 +34,8 @@ from finn.dataflow.mvau.decomposed import (
     REPLAY_NODE,
     DotProductKernel,
 )
+from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.elaboration import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
@@ -69,7 +67,8 @@ from finn.dataflow.mvau.providers import (
     elaborate_mvau,
 )
 from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION, NetworkRef
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
+from finn.dataflow.ops.mvau import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
@@ -78,18 +77,19 @@ def _resolved() -> MVAUResolvedDesign:
     return _committed(_model()).resolve_dataflow(_context())
 
 
-def _softvec_resolved() -> MVAUResolvedDesign:
+def _batch_resolved() -> MVAUResolvedDesign:
     model = _model()
     operation = _wrapped(model)
     operation.initialize_dataflow_scope_id()
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     operation.commit_dataflow_assignments(
         _context(),
         {
-            MVAU_COMPUTE_SELECTION.paths.kernel: "rtl_softvec",
-            QualifiedPath("mvau.compute.rtl_softvec.pe"): 2,
-            QualifiedPath("mvau.compute.rtl_softvec.simd"): 2,
-            QualifiedPath("mvau.compute.rtl_softvec.compute_pumping"): False,
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+            MVAU_DESIGN_INVENTORY.inventory.design_path: BatchInterleavedDesign.id,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.pe.path: 2,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.simd.path: 2,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.interleave.path: 2,
+            MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
         },
     )
     return operation.resolve_dataflow(_context())
@@ -105,8 +105,7 @@ def _requirements(tmp_path: Path | None = None):  # type: ignore[no-untyped-def]
 # -- dispatch ----------------------------------------------------------------
 
 
-def test_elaboration_follows_the_selected_kernel() -> None:
-    """Two Kernels in one pool, two providers, one entry point."""
+def test_elaboration_follows_the_selected_design() -> None:
 
     decomposed = {item.implementation_id for item in elaborate_mvau(_resolved()).components}
     assert decomposed == {
@@ -115,8 +114,9 @@ def test_elaboration_follows_the_selected_kernel() -> None:
         "finn.dataflow.mvau.decomposed_wrapper",
     }
 
-    fused = {item.implementation_id for item in elaborate_mvau(_softvec_resolved()).components}
-    assert fused == {"finn-rtllib.mvu.mvu_vvu_axi", "finn.rtl.mvau.generated_wrapper"}
+    with pytest.raises(MVAUElaborationError) as deferred:
+        elaborate_mvau(_batch_resolved())
+    assert {item.code for item in deferred.value.findings} == {"mvau-dispatch-design-semantic-only"}
 
 
 def test_dispatch_is_split_between_the_migrated_and_legacy_paths() -> None:
@@ -140,30 +140,9 @@ def test_dispatch_is_split_between_the_migrated_and_legacy_paths() -> None:
     assert MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id).providers == ()
 
 
-def test_a_kernel_with_no_covered_provider_is_refused_not_guessed() -> None:
-    """``legacy_hls`` has a provider, but nothing here builds it."""
-
-    model = _model()
-    operation = _wrapped(model)
-    operation.initialize_dataflow_scope_id()
-    operation.commit_dataflow_assignments(
-        _context(),
-        {
-            MVAU_COMPUTE_SELECTION.paths.kernel: "legacy_hls",
-            QualifiedPath("mvau.compute.legacy_hls.pe"): 2,
-            QualifiedPath("mvau.compute.legacy_hls.simd"): 2,
-            QualifiedPath("mvau.compute.legacy_hls.resource"): MVAUHlsResource.LUT,
-            QualifiedPath("mvau.compute.legacy_hls.weight_source"): MVAUWeightSource.EMBEDDED,
-        },
-    )
-    with pytest.raises(MVAUElaborationError) as raised:
-        elaborate_mvau(operation.resolve_dataflow(_context()))
-    assert any("no-covered-provider" in item.code for item in raised.value.findings)
-
-
-def test_the_decomposed_hardware_refuses_a_fused_point() -> None:
+def test_the_decomposed_hardware_refuses_the_semantic_only_design() -> None:
     with pytest.raises(MVAUElaborationError):
-        elaborate_decomposed(_softvec_resolved())
+        elaborate_decomposed(_batch_resolved())
 
 
 # -- the physical structure --------------------------------------------------
@@ -214,7 +193,7 @@ def test_each_core_declares_its_own_control_signal_names() -> None:
 
 def test_the_origin_records_both_semantic_kernels_and_no_provider() -> None:
     origin = elaborate_mvau(_resolved()).origin
-    assert set(origin.kernel_ids) == {"dot_product", "activation_replay"}
+    assert set(origin.kernel_ids) == {"dotp_axi", "replay_buffer"}
     # The migrated path has no providers to record.  An empty tuple here is the
     # migration visible in the provenance.
     assert origin.provider_ids == ()
@@ -252,11 +231,11 @@ def test_each_component_is_associated_with_its_own_kernel_and_region_only() -> N
     replay = _association(source, "compute.replay")
     dot = _association(source, "compute.dot_product")
 
-    assert replay.kernel_ids == ("activation_replay", "replay_buffer")
+    assert replay.kernel_ids == ("replay_buffer",)
     assert replay.semantic_region_ids == (REPLAY_NODE,)
     assert {port.region_id for port in replay.semantic_ports} == {REPLAY_NODE}
 
-    assert dot.kernel_ids == ("dot_product", "dotp_axi")
+    assert dot.kernel_ids == ("dotp_axi",)
     assert dot.semantic_region_ids == (DOT_PRODUCT_NODE,)
     assert {port.region_id for port in dot.semantic_ports} == {DOT_PRODUCT_NODE}
 
@@ -271,17 +250,18 @@ def test_every_choice_behind_a_component_is_recorded_against_it() -> None:
     source = _resolved().result.source_association.source_node_id
     replay = {str(path) for path in _association(source, "compute.replay").decision_paths}
     dot = {str(path) for path in _association(source, "compute.dot_product").decision_paths}
-    folding = {"mvau.compute.dot_product.pe", "mvau.compute.dot_product.simd"}
+    folding = {"mvau.design.dot_product.pe", "mvau.design.dot_product.simd"}
 
     # Both cores are dimensioned by the folding, so both record it.
     assert folding <= replay
     assert folding <= dot
-    # Each records the selection that put it there.
-    assert "mvau.replay.kernel" in replay
-    assert "mvau.compute.kernel" in dot
-    # Pumping configured the dot product and nothing else.
-    assert "mvau.hardware.dotp_axi.compute_pumping" in dot
-    assert "mvau.hardware.dotp_axi.compute_pumping" not in replay
+    # One-candidate placements add no selection decisions. Pumping configured
+    # the dot product and nothing else.
+    assert "mvau.replay.kernel" not in replay
+    assert "mvau.compute.kernel" not in dot
+    pumping = "mvau.design.dot_product.compute.dotp_axi.compute_pumping"
+    assert pumping in dot
+    assert pumping not in replay
 
 
 def test_the_wrapper_and_the_internal_edge_span_both_bindings() -> None:
@@ -297,12 +277,7 @@ def test_the_wrapper_and_the_internal_edge_span_both_bindings() -> None:
 
     for item in (wrapper, edge):
         assert set(item.semantic_region_ids) == {REPLAY_NODE, DOT_PRODUCT_NODE}
-        assert set(item.kernel_ids) == {
-            "activation_replay",
-            "replay_buffer",
-            "dot_product",
-            "dotp_axi",
-        }
+        assert set(item.kernel_ids) == {"replay_buffer", "dotp_axi"}
     assert edge.semantic_edge_ids == (ACTIVATION_EDGE,)
 
 
@@ -310,7 +285,7 @@ def test_an_interface_is_associated_with_the_component_that_carries_it() -> None
     source = _resolved().result.source_association.source_node_id
     replay_input = _association(source, "compute.replay.activation_in")
 
-    assert replay_input.kernel_ids == ("activation_replay", "replay_buffer")
+    assert replay_input.kernel_ids == ("replay_buffer",)
     assert replay_input.semantic_ports == (MVAUSemanticPortRef(REPLAY_NODE, "activation_in"),)
 
 

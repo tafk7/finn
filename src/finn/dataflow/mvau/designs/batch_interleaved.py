@@ -18,7 +18,15 @@ from finn.dataflow.authoring.design import (
     declare_dataflow_design_inventory,
     singleton_network,
 )
-from finn.dataflow.authoring.scope import ConstraintRef, Ref, Scope, divisors_of, domain, reject
+from finn.dataflow.authoring.scope import (
+    ConstraintRef,
+    Ref,
+    Scope,
+    divisors_of,
+    domain,
+    reject,
+    unresolved,
+)
 from finn.dataflow.design import (
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,
@@ -99,6 +107,13 @@ def _interleave_available(
     matrix_height: int,
 ) -> bool:
     return gcd(repetitions, matrix_width * matrix_height) > 1
+
+
+def _physical_kernel_deferred() -> object:
+    return unresolved(
+        "mvau-batch-interleaved-kernel-deferred",
+        "BatchInterleavedDesign is semantic-only until the TiledMvuKernel vertical slice",
+    )
 
 
 def _weight_port(region: DataflowRegion) -> Port:
@@ -280,6 +295,12 @@ def declare_batch_interleaved_semantics(
         evaluate=lambda report: not cast(NetworkValidationReport, report),
         sets=(feasibility_constraint_set,),
     )
+    scope.constraint(
+        "physical_kernel_deferred",
+        dependencies={},
+        evaluate=_physical_kernel_deferred,
+        sets=(feasibility_constraint_set,),
+    )
     source_association = scope.derived(
         "core_source_association",
         MVAUSourceAssociation,
@@ -384,9 +405,15 @@ def declare_batch_interleaved_design(
     )
     inventory = declare_dataflow_design_inventory(
         "mvau",
-        (DataflowDesignEntry(BatchInterleavedDesign, BatchInterleavedDesignInputs(semantics)),),
+        (
+            DataflowDesignEntry(
+                BatchInterleavedDesign,
+                BatchInterleavedDesignInputs(semantics),
+                (semantics.spec, association_spec),
+            ),
+        ),
         input_supplies=(supply.declaration,),
-        shared_specs=(MVAU_PROBLEM_SPEC, semantics.spec, association_spec),
+        shared_specs=(MVAU_PROBLEM_SPEC,),
     )
     return BatchInterleavedDesignAssembly(
         semantics,

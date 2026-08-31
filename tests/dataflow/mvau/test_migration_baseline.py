@@ -584,11 +584,18 @@ def test_the_matrix_still_covers_the_points_the_baseline_was_taken_over() -> Non
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
-def test_the_selected_logical_dataflow_is_unchanged(config: fixture.Config) -> None:
-    """Regions, Network, and source association, per configuration."""
+def test_only_the_v11_source_association_moves_in_the_selected_dataflow(
+    config: fixture.Config,
+) -> None:
+    """D7 changes ownership metadata, not the Regions or Network."""
 
     built = fixture.decomposed_requirements(config)
-    assert _semantic(built) == BASELINE[config.label]["semantic"]
+    actual = _semantic(built)
+    baseline = BASELINE[config.label]["semantic"]
+    assert {key: value for key, value in actual.items() if key != "source_association"} == {
+        key: value for key, value in baseline.items() if key != "source_association"
+    }
+    assert actual["source_association"] != baseline["source_association"]
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
@@ -660,11 +667,18 @@ def test_the_normalized_projection_still_sees_everything_else() -> None:
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)
-def test_the_elaborated_hardware_is_unchanged(config: fixture.Config) -> None:
-    """Parameters, physical structure, and generated text."""
+def test_only_v11_provenance_moves_in_the_elaborated_hardware(
+    config: fixture.Config,
+) -> None:
+    """D7 changes association ownership while preserving emitted hardware."""
 
     built = fixture.decomposed_requirements(config)
-    assert _physical(built) == BASELINE[config.label]["physical"]
+    actual = _physical(built)
+    baseline = BASELINE[config.label]["physical"]
+    assert {key: value for key, value in actual.items() if key != "associations"} == {
+        key: value for key, value in baseline.items() if key != "associations"
+    }
+    assert actual["associations"] != baseline["associations"]
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)

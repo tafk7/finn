@@ -48,31 +48,11 @@ from finn.dataflow.ops.mvau import (
 from finn.dataflow.mvau_problem import MVAU_PROBLEM_PROVENANCE, MVAUProblemPaths
 from finn.dataflow.region import BeatSequence
 
-#: v4 renamed the decomposed pumping attribute to ``dataflow_dotp_axi_pumping``,
-#: following the choice to the physical Kernel that now owns it.  ``PE`` and
-#: ``SIMD`` kept their paths and attributes: they stayed with the Region, and
-#: churning a persisted name that means exactly what it did would be noise.
-#:
-#: v5 adopts QONNX datatypes.  This version labels the *operation's* schema, and
-#: four things about it changed:
-#:
-#: - the problem fields' value semantics (a new engine value domain);
-#: - the problem fingerprint encoding, from
-#:   ``{"numeric_element_type": [family, width]}`` to ``{"qonnx_datatype": name}``;
-#: - the Region value representation those fields flow into; and
-#: - persistence compatibility, since the old encoding is lossy and cannot be
-#:   migrated forward.
-#:
-#: Leaving this at v4 would have been the more dangerous kind of wrong: a v4
-#: node *is* still refused, but only incidentally, as a problem-fingerprint
-#: mismatch, while the family version went on asserting the schema was
-#: unchanged.  A version that no longer describes what it labels is worse than
-#: no version, because it is believed.
-#:
-#: Bumped separately from `MVAU_DECLARATION_FAMILY_VERSION`, which tracks the
-#: source-selection envelope; the two label different things and are allowed to
-#: move independently.
-MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v5"
+#: v6 is the deliberate pre-release cutover from semantic Kernel pools to the
+#: closed ``dot_product | batch_interleaved`` DataflowDesign inventory.  Its
+#: decision paths and node attributes are new; v5 nodes are rejected rather
+#: than interpreted through a migration codec.
+MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v6"
 
 
 @dataclass(frozen=True)
@@ -91,7 +71,7 @@ class MVAUDataflowBuildContext:
 
 
 class MvauDataflowOp(DataflowOp):
-    """Logical MVAU source operation backed by the current static superspace."""
+    """Logical MVAU source operation backed by the reviewed design inventory."""
 
     @classmethod
     def dataflow_family_id(cls) -> str:
@@ -128,6 +108,10 @@ class MvauDataflowOp(DataflowOp):
     @classmethod
     def artifact_readiness_profile(cls) -> str | None:
         return "artifact_inputs"
+
+    @classmethod
+    def feasibility_constraint_sets(cls) -> tuple[str, ...]:
+        return ("mvau_op_feasibility",)
 
     @classmethod
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:

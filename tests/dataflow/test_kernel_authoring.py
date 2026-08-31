@@ -7,11 +7,6 @@ from __future__ import annotations
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-import os
-from pathlib import Path
-import subprocess
-import sys
-
 import pytest
 
 from finn.dataflow.design import (
@@ -30,11 +25,7 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PATHS,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.source import (
-    make_mvau_selection_envelope,
-    parse_mvau_selection_envelope,
-    reconstitute_mvau_point,
-)
+from finn.dataflow.mvau.source import MVAUSourceAdapterError, make_mvau_selection_envelope
 from finn.dataflow.spec_algebra import SpecAuthoringError, assemble_specs
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from dataflow.mvau_op_facts import compute_pool_context
@@ -209,52 +200,13 @@ def _two_placed_mvau_design() -> tuple[
     return Engine().validate(spec), _compute_problem(), assignments
 
 
-def test_qualified_placed_mvau_paths_round_trip_across_processes(tmp_path: Path) -> None:
+def test_v11_persistence_rejects_legacy_qualified_kernel_paths() -> None:
     space, problem, assignments = _two_placed_mvau_design()
     engine = Engine()
     point = engine.commit_assignments(engine.start(space, problem), assignments).point
-    envelope = make_mvau_selection_envelope("graph.two_mvau", point)
-    envelope_path = tmp_path / "placed-selection.json"
-    envelope_path.write_text(envelope.to_json())
-
-    restored = reconstitute_mvau_point(
-        engine,
-        space,
-        problem,
-        parse_mvau_selection_envelope(envelope.to_json()),
-        source_scope_id="graph.two_mvau",
-    )
-    assert restored.assignments == point.assignments
-    assert all(path.value.startswith("graph.op") for path in restored.assignments)
-
-    code = """
-import sys
-from pathlib import Path
-from finn.dataflow.design import Engine
-from finn.dataflow.mvau.source import (
-    make_mvau_selection_envelope,
-    parse_mvau_selection_envelope,
-    reconstitute_mvau_point,
-)
-from dataflow.test_kernel_authoring import _two_placed_mvau_design
-space, problem, _assignments = _two_placed_mvau_design()
-engine = Engine()
-envelope = parse_mvau_selection_envelope(Path(sys.argv[1]).read_text())
-point = reconstitute_mvau_point(engine, space, problem, envelope, source_scope_id='graph.two_mvau')
-print(make_mvau_selection_envelope('graph.two_mvau', point).to_json())
-"""
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [str(Path.cwd() / "src"), str(Path.cwd() / "tests"), environment.get("PYTHONPATH", "")]
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", code, str(envelope_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-    assert completed.stdout.strip() == envelope.to_json()
+    with pytest.raises(MVAUSourceAdapterError) as rejected:
+        make_mvau_selection_envelope("graph.two_mvau", point)
+    assert {item.code for item in rejected.value.findings} == {"mvau-assignment-codec-missing"}
 
 
 def test_assembly_rejects_duplicate_declarations_deterministically() -> None:

@@ -12,7 +12,6 @@ re-decides a Region form, an implementation binding, or a delivery tile.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from math import prod
 from typing import cast
@@ -52,7 +51,9 @@ from finn.dataflow.hardware import check_declared_references
 from finn.dataflow.mvau.associations import (
     BindingLocalStateDestination,
     CoordinateMappingKind,
+    MVAUNetworkRef as NetworkRef,
     MVAUParameterTopology,
+    MVAURegionRef as RegionRef,
     MVAUSourceAssociation,
     SemanticOperandDestination,
     SourceOperandAssociation,
@@ -96,24 +97,8 @@ from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.region import BeatSequence, DataflowRegion, Port
 from finn.dataflow.resolution import (
     DATAFLOW_OP_RESULT_SEMANTICS,
-    NetworkRef as GenericNetworkRef,
-    RegionRef as GenericRegionRef,
 )
 from finn.dataflow.spec_algebra import assemble_specs
-
-
-@dataclass(frozen=True)
-class RegionRef(GenericRegionRef):
-    """Selected MVAU region with a typed source association."""
-
-    source_association: MVAUSourceAssociation
-
-
-@dataclass(frozen=True)
-class NetworkRef(GenericNetworkRef):
-    """Selected MVAU network with a typed source association."""
-
-    source_association: MVAUSourceAssociation
 
 
 DataflowOpResult = RegionRef | NetworkRef
@@ -132,6 +117,8 @@ class MVAUDataflowOpPaths:
     TARGET_FPGA_PART = MVAUProblemPaths.TARGET_FPGA_PART
     TARGET_CLOCK_PERIOD_NS = MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS
     EFFECTIVE_NARROW_WEIGHTS = MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS
+
+    DESIGN = QualifiedPath("mvau.design")
 
     COMPUTE_KERNEL = MVAU_COMPUTE_SELECTION.paths.kernel
     COMPUTE_REGION = MVAU_COMPUTE_SELECTION.paths.region
@@ -1057,14 +1044,22 @@ def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
     return assembled
 
 
-MVAU_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()
+MVAU_LEGACY_DATAFLOW_OP_SPEC = build_mvau_dataflow_op_spec()
 
-MVAU_SELECTIONS: tuple[KernelSelection, ...] = (
+MVAU_LEGACY_SELECTIONS: tuple[KernelSelection, ...] = (
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAU_WEIGHT_ADAPTER_SELECTION,
 )
+
+# Imported after the legacy declaration functions above so the comparison
+# surface remains available without putting a Provider-era dependency in the
+# new design modules.
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY  # noqa: E402
+
+MVAU_DATAFLOW_OP_SPEC = MVAU_DESIGN_INVENTORY.specification
+MVAU_SELECTIONS: tuple[KernelSelection, ...] = ()
 
 
 __all__ = [
@@ -1073,6 +1068,9 @@ __all__ = [
     "DataflowOpResult",
     "MVAU_COMPUTE_SELECTION",
     "MVAU_DATAFLOW_OP_SPEC",
+    "MVAU_DESIGN_INVENTORY",
+    "MVAU_LEGACY_DATAFLOW_OP_SPEC",
+    "MVAU_LEGACY_SELECTIONS",
     "MVAU_REPLAY_SELECTION",
     "MVAU_SELECTIONS",
     "MVAU_WEIGHT_ADAPTER_SELECTION",

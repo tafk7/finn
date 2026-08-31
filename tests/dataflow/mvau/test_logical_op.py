@@ -21,27 +21,16 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow.design import Decided, Engine, QualifiedPath
-from finn.dataflow.mvau.artifacts import (
-    MVAUWeightPayloadKind,
-    build_mvau_rtl_artifact_requirements,
-)
 from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.compute_kernels import (
-    BATCH_INTERLEAVED_PATHS,
-    LEGACY_HLS_PATHS,
-    PACKED_DSP_PATHS,
-    SOFT_VECTOR_PATHS,
-    MVAUComputeKernelId,
-    MVAUComputeKernelPathSet,
-    MVAUHlsResource,
-    MVAUWeightSource,
+from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.mvau.hardware.composition import build_decomposed_artifact_requirements
+from finn.dataflow.mvau.input_supply import (
+    EXTERNAL_SUPPLY,
+    FINN_RTL_MEMSTREAM_SUPPLY,
 )
-from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
-from finn.dataflow.mvau.regions import (
-    MVAURegionDeclaration,
-    construct_batch_interleaved_mvau_weight_port,
-)
+from finn.dataflow.mvau.providers import elaborate_mvau
 from finn.dataflow.mvau.source import (
     MVAUProjectionContext,
     MVAUResolvedDesign,
@@ -49,16 +38,10 @@ from finn.dataflow.mvau.source import (
     start_mvau_projection,
 )
 from finn.dataflow.op import DataflowBuildConfigView, DataflowOpError
-from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.ops.mvau import (
-    MVAU_COMPUTE_SELECTION,
     MVAU_DATAFLOW_OP_SPEC,
-    MVAU_WEIGHT_ADAPTER_SELECTION,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
-    MVAUParameterTopology,
     NetworkRef,
-    RegionRef,
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.ops.mvau_op import (
@@ -66,12 +49,7 @@ from finn.dataflow.ops.mvau_op import (
     MVAUDataflowBuildContext,
     MvauDataflowOp,
 )
-from finn.dataflow.parameters.supply_kernels import (
-    FINN_RTL_MEMSTREAM_PATHS,
-    CyclicRamStyle,
-    MVAUWeightSupplyKernelId,
-    WeightOrganization,
-)
+from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.region import BeatSequence
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
 from finn.dataflow.mvau_problem import MVAUProblemPaths
@@ -189,57 +167,40 @@ def _context(
     )
 
 
-_KERNEL_PATHS: dict[MVAUComputeKernelId, MVAUComputeKernelPathSet] = {
-    MVAUComputeKernelId.LEGACY_HLS: LEGACY_HLS_PATHS,
-    MVAUComputeKernelId.SOFT_VECTOR: SOFT_VECTOR_PATHS,
-    MVAUComputeKernelId.PACKED_DSP: PACKED_DSP_PATHS,
-    MVAUComputeKernelId.BATCH_INTERLEAVED_DSP: BATCH_INTERLEAVED_PATHS,
-}
-
-
-def _compute(
-    declaration: MVAURegionDeclaration,
-    topology: MVAUParameterTopology,
+def _dot_product(
     *,
-    kernel: MVAUComputeKernelId = MVAUComputeKernelId.SOFT_VECTOR,
+    supply: str = EXTERNAL_SUPPLY,
+    pe: int = 2,
+    simd: int = 2,
 ) -> dict[QualifiedPath | str, object]:
-    """Select one compute Kernel; the topology follows from the supply pool."""
-
-    paths = _KERNEL_PATHS[kernel]
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
     assignments: dict[QualifiedPath | str, object] = {
-        MVAU_COMPUTE_SELECTION.paths.kernel: kernel.value,
-        paths.pe: 2,
-        paths.simd: 2,
+        assembly.inventory.design_path: DotProductDesign.id,
+        assembly.dot_product.pe.path: pe,
+        assembly.dot_product.simd.path: simd,
+        assembly.compute_pumping.path: False,
+        assembly.input_supply.declaration.choice.path: supply,
     }
-    if kernel is MVAUComputeKernelId.LEGACY_HLS:
-        assignments[paths.resource] = MVAUHlsResource.LUT
-        assignments[paths.weight_source] = (
-            MVAUWeightSource.EMBEDDED
-            if declaration is MVAURegionDeclaration.STANDARD_EMBEDDED
-            else MVAUWeightSource.STREAMED
+    if supply == FINN_RTL_MEMSTREAM_SUPPLY:
+        assignments.update(
+            {
+                assembly.input_supply.settings.ram_style.path: CyclicRamStyle.BRAM,
+                assembly.input_supply.settings.pumped_memory.path: False,
+            }
         )
-    if kernel is MVAUComputeKernelId.BATCH_INTERLEAVED_DSP:
-        assignments[paths.interleave] = 2
-    if kernel in {MVAUComputeKernelId.SOFT_VECTOR, MVAUComputeKernelId.PACKED_DSP}:
-        assignments[paths.compute_pumping] = False
-    if topology is MVAUParameterTopology.DIRECT:
-        assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] = NO_KERNEL
     return assignments
 
 
-def _cyclic(
-    *,
-    organization: WeightOrganization = WeightOrganization.AS_DEMANDED,
-    adapter: str = NO_KERNEL,
-) -> dict[QualifiedPath | str, object]:
+def _batch_interleaved() -> dict[QualifiedPath | str, object]:
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
     return {
-        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
-            MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
-        ),
-        FINN_RTL_MEMSTREAM_PATHS.organization: organization,
-        FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
-        FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
-        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: adapter,
+        assembly.inventory.design_path: BatchInterleavedDesign.id,
+        assembly.batch_interleaved.pe.path: 2,
+        assembly.batch_interleaved.simd.path: 2,
+        assembly.batch_interleaved.interleave.path: 2,
+        assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
     }
 
 
@@ -273,7 +234,7 @@ def _assert_resolution_parity(
     assert current.point.assignments == expected.point.assignments
     assert current.result == expected.result
     assert current.source_association == expected.source_association
-    for set_name in ("mvau_op_structural", MVAU_COMPUTE_SELECTION.feasibility_constraint_set):
+    for set_name in ("mvau_op_structural", "mvau_op_feasibility"):
         assert current.engine.evaluate_constraint_set(
             current.point, set_name
         ) == expected.engine.evaluate_constraint_set(expected.point, set_name)
@@ -383,38 +344,25 @@ def test_every_mvau_decision_has_one_stable_node_attribute() -> None:
     assert len({codec.attribute_name for codec in codecs.values()}) == len(codecs)
     assert not set(codecs) & set(space.properties)
     assert not set(codecs) & set(space.constraints)
+    assert {codec.attribute_name for codec in codecs.values()} == {
+        "dataflow_design",
+        "dataflow_dot_product_pe",
+        "dataflow_dot_product_simd",
+        "dataflow_interleaved_pe",
+        "dataflow_interleaved_simd",
+        "dataflow_interleaved_batch",
+        "dataflow_weight_supply",
+        "dataflow_dotp_axi_pumping",
+        "dataflow_finn_rtl_memstream_ram_style",
+        "dataflow_finn_rtl_memstream_pumping",
+    }
     assert dict(operation.get_nodeattr_types()) == dict(operation.get_nodeattr_types())
 
 
-@pytest.mark.parametrize(
-    "declaration,topology,expected_type",
-    [
-        (
-            MVAURegionDeclaration.STANDARD_EMBEDDED,
-            MVAUParameterTopology.EMBEDDED,
-            RegionRef,
-        ),
-        (
-            MVAURegionDeclaration.STANDARD_STREAMED,
-            MVAUParameterTopology.DIRECT,
-            RegionRef,
-        ),
-    ],
-)
-def test_logical_mvau_region_topologies_match_standalone_resolution(
-    tmp_path: Path,
-    declaration: MVAURegionDeclaration,
-    topology: MVAUParameterTopology,
-    expected_type: type[RegionRef],
-) -> None:
+def test_dot_product_network_round_trips_through_node_persistence(tmp_path: Path) -> None:
     model = _model()
     operation = _wrapped(model)
-    kernel = (
-        MVAUComputeKernelId.LEGACY_HLS
-        if declaration is MVAURegionDeclaration.STANDARD_EMBEDDED
-        else MVAUComputeKernelId.SOFT_VECTOR
-    )
-    assignments = _compute(declaration, topology, kernel=kernel)
+    assignments = _dot_product()
     committed = operation.commit_dataflow_assignments(_context(), assignments)
     resolved = operation.resolve_dataflow(_context())
     expected = project_mvau_source(
@@ -429,35 +377,32 @@ def test_logical_mvau_region_topologies_match_standalone_resolution(
         source_scope_id=operation.dataflow_scope_id(),
     )
     assert isinstance(resolved, MVAUResolvedDesign)
-    assert isinstance(resolved.result, expected_type)
+    assert isinstance(resolved.result, NetworkRef)
+    assert {node.id for node in resolved.result.network.nodes} == {"compute", "replay"}
     assert resolved.point.problem == expected.problem_data
     assert resolved.point.assignments == committed.point.assignments
     assert resolved.result.source_association == resolved.source_association
     assert resolved.source_scope_id == operation.get_nodeattr(operation.SCOPE_ID_ATTR)
     _assert_resolution_parity(resolved, start_mvau_projection(expected, assignments))
-    path = tmp_path / f"{topology.value}.onnx"
+    path = tmp_path / "dot-product.onnx"
     model.save(path)
     restored = _wrapped(ModelWrapper(str(path))).resolve_dataflow(_context())
     _assert_resolution_parity(restored, resolved)
 
 
-def test_batch_interleaved_external_contract_resolves_directly(tmp_path: Path) -> None:
-    external = construct_batch_interleaved_mvau_weight_port(
-        4, 4, 4, DataType["INT8"], 2, 2, 2
-    ).beat_sequence
+def test_batch_interleaved_resolves_to_a_singleton_network(tmp_path: Path) -> None:
     model = _model()
     operation = _wrapped(model)
-    context = _context(part=VERSAL_PART, external_weight_sequence=external)
-    assignments = _compute(
-        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED,
-        MVAUParameterTopology.DIRECT,
-        kernel=MVAUComputeKernelId.BATCH_INTERLEAVED_DSP,
-    )
+    context = _context(part=VERSAL_PART)
+    assignments = _batch_interleaved()
     operation.commit_dataflow_assignments(context, assignments)
     resolved = operation.resolve_dataflow(context)
-    assert isinstance(resolved.result, RegionRef)
+    assert isinstance(resolved.result, NetworkRef)
+    assert tuple(node.id for node in resolved.result.network.nodes) == ("compute",)
     assessment = resolved.engine.evaluate_constraint_set(resolved.point, "mvau_op_structural")
     assert assessment.verdict is True
+    feasibility = resolved.engine.evaluate_constraint_set(resolved.point, "mvau_op_feasibility")
+    assert feasibility.verdict is None
     _assert_resolution_parity(resolved, _standalone(model, context, assignments))
     path = tmp_path / "batch-interleaved-direct.onnx"
     model.save(path)
@@ -465,40 +410,25 @@ def test_batch_interleaved_external_contract_resolves_directly(tmp_path: Path) -
     _assert_resolution_parity(restored, resolved)
 
 
-@pytest.mark.parametrize("adapter", [False, True])
-def test_cyclic_network_and_adapter_topologies_round_trip(tmp_path: Path, adapter: bool) -> None:
+def test_memstream_supplied_dot_product_round_trips_without_an_adapter(tmp_path: Path) -> None:
     model = _model()
     operation = _wrapped(model)
-    compute_declaration = (
-        MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
-        if adapter
-        else MVAURegionDeclaration.STANDARD_STREAMED
-    )
-    context = _context(part=VERSAL_PART if adapter else PART)
-    assignments = {
-        **_compute(
-            compute_declaration,
-            MVAUParameterTopology.CYCLIC,
-            kernel=(
-                MVAUComputeKernelId.BATCH_INTERLEAVED_DSP
-                if adapter
-                else MVAUComputeKernelId.SOFT_VECTOR
-            ),
-        ),
-        **_cyclic(
-            organization=WeightOrganization.STANDARD_FULL_TILE,
-            adapter=FULL_TILE_TO_CHUNKED if adapter else NO_KERNEL,
-        ),
-    }
+    context = _context()
+    assignments = _dot_product(supply=FINN_RTL_MEMSTREAM_SUPPLY)
     operation.commit_dataflow_assignments(context, assignments)
     original = operation.resolve_dataflow(context)
     assert isinstance(original.result, NetworkRef)
-    expected_nodes = (
-        ("compute", "delivery", "weight_adapter") if adapter else ("compute", "delivery")
-    )
-    assert tuple(node.id for node in original.result.network.nodes) == expected_nodes
+    assert {node.id for node in original.result.network.nodes} == {
+        "compute",
+        "delivery",
+        "replay",
+    }
+    assert {edge.id for edge in original.result.network.edges} == {
+        "activation_replay",
+        "weight",
+    }
     _assert_resolution_parity(original, _standalone(model, context, assignments))
-    path = tmp_path / f"cyclic-{adapter}.onnx"
+    path = tmp_path / "cyclic.onnx"
     model.save(path)
     restored = _wrapped(ModelWrapper(str(path))).resolve_dataflow(context)
     assert restored.point.assignments == original.point.assignments
@@ -506,16 +436,13 @@ def test_cyclic_network_and_adapter_topologies_round_trip(tmp_path: Path, adapte
     assert restored.source_scope_id == original.source_scope_id
 
 
-def test_node_backed_result_is_accepted_by_existing_provider_path() -> None:
+def test_node_backed_result_is_accepted_by_dot_product_physical_path() -> None:
     model = _model()
     operation = _wrapped(model)
-    operation.commit_dataflow_assignments(
-        _context(),
-        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
-    )
+    operation.commit_dataflow_assignments(_context(), _dot_product())
     resolved = operation.resolve_dataflow(_context())
-    elaboration = elaborate_mvau_rtl_softvec(resolved)
-    requirements = build_mvau_rtl_artifact_requirements(resolved, elaboration, model, Path.cwd())
+    elaboration = elaborate_mvau(resolved)
+    requirements = build_decomposed_artifact_requirements(resolved, elaboration, Path.cwd())
     assert elaboration.semantic_result == resolved.result
     assert requirements.elaboration.origin == elaboration.origin
 
@@ -524,17 +451,8 @@ def test_runtime_writable_policy_is_projected_from_build_context() -> None:
     model = _model(with_initializer=False)
     operation = _wrapped(model)
     context = _context(runtime_writable=True)
-    assignments = {
-        **_compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.CYCLIC),
-        **_cyclic(),
-    }
-    operation.commit_dataflow_assignments(context, assignments)
-    resolved = operation.resolve_dataflow(context)
-    elaboration = elaborate_mvau_rtl_softvec(resolved)
-    requirements = build_mvau_rtl_artifact_requirements(resolved, elaboration, model, Path.cwd())
-    assert resolved.point.problem[MVAUProblemPaths.RUNTIME_WRITABLE] is True
-    assert requirements.weight_payload_kind is MVAUWeightPayloadKind.RUNTIME_WRITABLE_LOCAL_STATE
-    assert requirements.weight_initializer is None
+    point = operation.hydrate_dataflow_point(context)
+    assert point.problem[MVAUProblemPaths.RUNTIME_WRITABLE] is True
 
 
 @pytest.mark.parametrize(
@@ -546,10 +464,7 @@ def test_logical_mvau_stale_graph_and_build_facts_are_rejected(
 ) -> None:
     model = _model()
     operation = _wrapped(model)
-    operation.commit_dataflow_assignments(
-        _context(),
-        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
-    )
+    operation.commit_dataflow_assignments(_context(), _dot_product())
     context = _context()
     if changed_fact == "shape":
         model.set_tensor_shape("activation", [2, 4])
@@ -571,52 +486,31 @@ def test_logical_mvau_stale_graph_and_build_facts_are_rejected(
     }
 
 
-def test_a_v4_node_is_rejected_for_its_family_version_not_incidentally() -> None:
-    """The operation-schema bump the QONNX datatype adoption owes.
-
-    ``v4`` was committed by the Region/Kernel Phase 1+3 work.  Adopting QONNX
-    datatypes changed the problem fields' value semantics, the problem
-    fingerprint encoding, the Region representation those fields flow into, and
-    persistence compatibility -- all of which this version labels.
-
-    A v4 node was already refused *incidentally*, as a problem-fingerprint
-    mismatch, while the family version went on asserting the schema was
-    unchanged.  That is the more dangerous kind of wrong, because a version
-    that no longer describes what it labels is believed.  So the refusal has to
-    name the family.
-    """
-
-    assert MVAU_DATAFLOW_OP_FAMILY_VERSION == "mvau-dataflow-op-v5"
+def test_a_v5_node_is_rejected_for_its_family_version_not_incidentally() -> None:
+    assert MVAU_DATAFLOW_OP_FAMILY_VERSION == "mvau-dataflow-op-v6"
 
     operation = _wrapped(_model())
-    operation.commit_dataflow_assignments(
-        _context(),
-        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
-    )
-    operation.set_nodeattr(operation.FAMILY_VERSION_ATTR, "mvau-dataflow-op-v4")
+    operation.commit_dataflow_assignments(_context(), _dot_product())
+    operation.set_nodeattr(operation.FAMILY_VERSION_ATTR, "mvau-dataflow-op-v5")
 
     with pytest.raises(DataflowOpError) as stale:
         operation.hydrate_dataflow_point(_context())
     assert {finding.code for finding in stale.value.findings} == {
         "dataflow-selection-family-mismatch"
     }
+    assert dict(stale.value.findings[0].values) == {
+        "actual_family": "finn.dataflow.mvau",
+        "actual_version": "mvau-dataflow-op-v5",
+        "expected_family": "finn.dataflow.mvau",
+        "expected_version": "mvau-dataflow-op-v6",
+    }
 
 
-def test_a_freshly_saved_v5_selection_reloads_with_its_datatypes_intact() -> None:
-    """Save and reload under the new schema, checked at the datatypes.
-
-    The companion to the rejection above: what v5 refuses to reinterpret it
-    must itself round-trip.  Compared as datatype *values*, since a canonical
-    name would compare equal to its datatype and so prove nothing.
-    """
-
+def test_a_freshly_saved_v6_selection_reloads_with_its_datatypes_intact() -> None:
     model = _model()
     operation = _wrapped(model)
-    operation.commit_dataflow_assignments(
-        _context(),
-        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
-    )
-    assert operation.get_nodeattr(operation.FAMILY_VERSION_ATTR) == "mvau-dataflow-op-v5"
+    operation.commit_dataflow_assignments(_context(), _dot_product())
+    assert operation.get_nodeattr(operation.FAMILY_VERSION_ATTR) == "mvau-dataflow-op-v6"
 
     point = operation.hydrate_dataflow_point(_context())
     for path in (
@@ -633,10 +527,7 @@ def test_a_freshly_saved_v5_selection_reloads_with_its_datatypes_intact() -> Non
 def test_logical_mvau_assignments_survive_fresh_process_reload(tmp_path: Path) -> None:
     model = _model()
     operation = _wrapped(model)
-    operation.commit_dataflow_assignments(
-        _context(),
-        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
-    )
+    operation.commit_dataflow_assignments(_context(), _dot_product())
     expected = operation.resolve_dataflow(_context())
     model_path = tmp_path / "logical-mvau.onnx"
     model.save(model_path)
@@ -684,19 +575,16 @@ print(json.dumps({
 def test_logical_mvau_node_rename_preserves_scope_selection_and_provider_lookup() -> None:
     model = _model()
     operation = _wrapped(model)
-    operation.commit_dataflow_assignments(
-        _context(),
-        _compute(MVAURegionDeclaration.STANDARD_STREAMED, MVAUParameterTopology.DIRECT),
-    )
+    operation.commit_dataflow_assignments(_context(), _dot_product())
     original = operation.resolve_dataflow(_context())
     operation.onnx_node.name = "renamed_mvau"
 
     renamed = operation.resolve_dataflow(_context())
     assert renamed.source_scope_id == original.source_scope_id
     assert renamed.result == original.result
-    elaboration = elaborate_mvau_rtl_softvec(renamed)
-    requirements = build_mvau_rtl_artifact_requirements(renamed, elaboration, model, Path.cwd())
-    assert requirements.source_scope_id == original.source_scope_id
+    elaboration = elaborate_mvau(renamed)
+    requirements = build_decomposed_artifact_requirements(renamed, elaboration, Path.cwd())
+    assert requirements.elaboration.source_scope_id == original.source_scope_id
 
 
 def test_logical_mvau_reference_execution() -> None:
@@ -757,11 +645,12 @@ def test_logical_mvau_fused_threshold_reference_execution() -> None:
 
 def test_partial_mvau_point_exposes_readiness_without_forcing_resolution() -> None:
     operation = _wrapped(_model())
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     operation.commit_dataflow_assignments(
         _context(),
         {
-            MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
-            SOFT_VECTOR_PATHS.pe: 2,
+            MVAU_DESIGN_INVENTORY.inventory.design_path: DotProductDesign.id,
+            MVAU_DESIGN_INVENTORY.dot_product.pe.path: 2,
         },
     )
     point = operation.hydrate_dataflow_point(_context())
@@ -773,10 +662,7 @@ def test_partial_mvau_point_exposes_readiness_without_forcing_resolution() -> No
 
 
 def test_logical_mvau_passes_shared_operation_conformance_harness(tmp_path: Path) -> None:
-    assignments = _compute(
-        MVAURegionDeclaration.STANDARD_STREAMED,
-        MVAUParameterTopology.DIRECT,
-    )
+    assignments = _dot_product()
     result = assert_dataflow_op_conforms(
         DataflowOpConformanceCase(
             model=_model(),
@@ -784,10 +670,10 @@ def test_logical_mvau_passes_shared_operation_conformance_harness(tmp_path: Path
             operation_type=MvauDataflowOp,
             config=_context(),
             complete_assignments=assignments,
-            rejected_assignments={SOFT_VECTOR_PATHS.pe: 3},
+            rejected_assignments={MVAU_DESIGN_INVENTORY.dot_product.pe.path: 3},
             reload_path=tmp_path / "mvau-conformance.onnx",
             stale_config=_context(clock=3.0),
             mutate_graph_problem=_change_mvau_shape,
         )
     )
-    assert isinstance(result.original.result, RegionRef)
+    assert isinstance(result.original.result, NetworkRef)

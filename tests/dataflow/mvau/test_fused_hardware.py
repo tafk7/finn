@@ -99,7 +99,7 @@ from finn.dataflow.mvau_problem import (
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau import (
-    MVAU_DATAFLOW_OP_SPEC,
+    MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     NetworkRef,

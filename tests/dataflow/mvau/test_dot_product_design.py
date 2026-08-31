@@ -50,6 +50,7 @@ from finn.dataflow.mvau_problem import (
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
+    MVAU_LEGACY_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     NetworkRef,
@@ -108,7 +109,7 @@ def _side_by_side(geometry: tuple[int, int, int, int, int], *, pumping: bool = F
     facts = _facts(geometry)
     pe, simd = geometry[3:]
     old_engine = Engine()
-    old_point = old_engine.start(old_engine.validate(MVAU_DATAFLOW_OP_SPEC), facts)
+    old_point = old_engine.start(old_engine.validate(MVAU_LEGACY_DATAFLOW_OP_SPEC), facts)
     old_point = old_engine.commit_assignments(
         old_point,
         {
@@ -309,7 +310,7 @@ def test_dot_product_wrapper_and_composed_artifact_identity_match_legacy() -> No
     assert composed_artifact_identity(kernels, wrapper, shim) == old_requirements.identity
 
 
-def test_production_mvau_has_not_imported_or_switched_to_dot_product_design() -> None:
+def test_production_mvau_has_switched_to_the_reviewed_design_inventory() -> None:
     source = Path(__file__).parents[3] / "src" / "finn" / "dataflow" / "ops" / "mvau.py"
     tree = ast.parse(source.read_text(), filename=str(source))
     imported = {
@@ -317,7 +318,7 @@ def test_production_mvau_has_not_imported_or_switched_to_dot_product_design() ->
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
-    assert "finn.dataflow.mvau.designs.dot_product" not in imported
+    assert "finn.dataflow.mvau.designs.inventory" in imported
     production_decisions = {item.path for item in MVAU_DATAFLOW_OP_SPEC.decisions}
-    assert MVAU_DOT_PRODUCT_DESIGN.semantics.pe.path not in production_decisions
-    assert MVAU_DOT_PRODUCT_DESIGN.compute_pumping.path not in production_decisions
+    assert MVAU_DOT_PRODUCT_DESIGN.semantics.pe.path in production_decisions
+    assert MVAU_DOT_PRODUCT_DESIGN.compute_pumping.path in production_decisions

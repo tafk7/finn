@@ -31,9 +31,10 @@ from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     REPLAY_NODE,
-    ActivationReplayKernel,
-    DotProductKernel,
 )
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.design import (
     Absent,
     ConstraintAssessment,
@@ -46,14 +47,8 @@ from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.op import DataflowOpError
-from finn.dataflow.ops.mvau import (
-    MVAU_WEIGHT_SUPPLY_SELECTION,
-    MVAUDataflowOpPaths,
-    NetworkRef,
-    SemanticOperandDestination,
-)
+from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, NetworkRef, SemanticOperandDestination
 from finn.dataflow.mvau.compute_kernels import (
-    DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
 )
@@ -137,16 +132,26 @@ def _wrapped(model: ModelWrapper) -> MvauDataflowOp:
 
 
 def _choices(*, pe: int = 2, simd: int = 2, pumping: bool = False) -> dict[QualifiedPath, object]:
-    pools = DECOMPOSED_MVAU_KERNELS
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
     return {
-        MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
-        MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
-        pools.pe.path: pe,
-        pools.simd.path: simd,
-        pools.compute_pumping.path: pumping,
-        # This slice takes its weights at the boundary; re-attaching the
-        # supplier is its own increment.
-        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+        assembly.inventory.design_path: DotProductDesign.id,
+        assembly.dot_product.pe.path: pe,
+        assembly.dot_product.simd.path: simd,
+        assembly.compute_pumping.path: pumping,
+        assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
+    }
+
+
+def _batch_interleaved_choices() -> dict[QualifiedPath, object]:
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
+    return {
+        assembly.inventory.design_path: "batch_interleaved",
+        assembly.batch_interleaved.pe.path: 2,
+        assembly.batch_interleaved.simd.path: 2,
+        assembly.batch_interleaved.interleave.path: 2,
+        assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
     }
 
 
@@ -234,7 +239,9 @@ def test_the_source_tensors_are_associated_with_the_nodes_that_carry_them() -> N
     tensors = {item.role: item.source_operand_id for item in association.operands}
     assert tensors == {"activation": "activation", "weight": "weights", "output": "output"}
     assert association.source_node_id == f"{NODE_ID}_scope"
-    assert association.compute_kernel_id == DotProductKernel.id
+    assert association.design_id == DotProductDesign.id
+    assert association.compute_kernel_id == "dotp_axi"
+    assert association.kernel_ids == ("dotp_axi", "replay_buffer")
 
 
 def test_the_association_names_the_operands_the_regions_actually_declare() -> None:
@@ -266,11 +273,11 @@ def test_the_selection_survives_a_save_and_reload(tmp_path: Path) -> None:
 
     reloaded = _wrapped(ModelWrapper(str(path)))
     assignments = reloaded.read_assignments()
-    pools = DECOMPOSED_MVAU_KERNELS
-    assert assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == DotProductKernel.id
-    assert assignments[MVAU_REPLAY_SELECTION.paths.kernel] == ActivationReplayKernel.id
-    assert assignments[pools.pe.path] == 2
-    assert assignments[pools.simd.path] == 4
+    assert assignments[MVAUDataflowOpPaths.DESIGN] == DotProductDesign.id
+    assert assignments[MVAU_DESIGN_INVENTORY.dot_product.pe.path] == 2
+    assert assignments[MVAU_DESIGN_INVENTORY.dot_product.simd.path] == 4
+    assert MVAU_COMPUTE_SELECTION.paths.kernel not in assignments
+    assert MVAU_REPLAY_SELECTION.paths.kernel not in assignments
 
     result = _result(reloaded)
     assert {node.id for node in result.network.nodes} == {REPLAY_NODE, DOT_PRODUCT_NODE}
@@ -293,13 +300,13 @@ def test_the_persisted_attributes_are_named_for_what_they_choose() -> None:
     names = {item.name for item in model.graph.node[0].attribute}
 
     assert {
-        # The compute choice persists under the pool's own attribute, because
-        # the decomposed member is one of that pool's members.
-        "dataflow_compute_kernel",
-        "dataflow_replay_kernel",
+        "dataflow_design",
+        "dataflow_weight_supply",
         "dataflow_dot_product_pe",
         "dataflow_dot_product_simd",
+        "dataflow_dotp_axi_pumping",
     } <= names
+    assert not {"dataflow_compute_kernel", "dataflow_replay_kernel"} & names
 
 
 def test_changing_the_graph_invalidates_the_saved_selection() -> None:
@@ -329,32 +336,32 @@ def test_every_folding_assembles_a_valid_network(pe: int, simd: int) -> None:
     assert len(network.nodes) == 2
 
 
-def test_the_decomposed_member_is_a_peer_of_the_kernels_it_replaces() -> None:
-    """One pool, one choice.  The decomposition is not a separate operation."""
+def test_dot_product_is_a_design_not_a_legacy_kernel_pool_member() -> None:
+    assert MVAU_DESIGN_INVENTORY.inventory.design_ids == (
+        "dot_product",
+        "batch_interleaved",
+    )
+    assert MvauDataflowOp.kernel_selections() == ()
 
-    assert "dot_product" in MVAU_COMPUTE_SELECTION.kernel_ids
-    assert {"rtl_softvec", "rtl_packed"} <= set(MVAU_COMPUTE_SELECTION.kernel_ids)
-    assert MVAU_REPLAY_SELECTION in MvauDataflowOp.kernel_selections()
 
-
-def test_a_fused_member_still_resolves_to_a_region() -> None:
-    """Adding the decomposed member changed nothing for the others."""
-
+def test_batch_interleaved_resolves_to_a_singleton_network() -> None:
     model = _model()
     operation = _wrapped(model)
     operation.initialize_dataflow_scope_id()
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     operation.commit_dataflow_assignments(
         _context(),
         {
-            MVAU_COMPUTE_SELECTION.paths.kernel: "rtl_softvec",
-            QualifiedPath("mvau.compute.rtl_softvec.pe"): 2,
-            QualifiedPath("mvau.compute.rtl_softvec.simd"): 2,
-            QualifiedPath("mvau.compute.rtl_softvec.compute_pumping"): False,
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+            MVAU_DESIGN_INVENTORY.inventory.design_path: "batch_interleaved",
+            MVAU_DESIGN_INVENTORY.batch_interleaved.pe.path: 2,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.simd.path: 2,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.interleave.path: 2,
+            MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
         },
     )
     result = operation.resolve_dataflow(_context()).result
-    assert not isinstance(result, NetworkRef)
+    assert isinstance(result, NetworkRef)
+    assert tuple(node.id for node in result.network.nodes) == ("compute",)
 
 
 # -- the operation's own verdict ---------------------------------------------
@@ -397,12 +404,11 @@ def test_the_association_and_the_network_are_both_checked() -> None:
     """
 
     assessment = _assessment(_committed(_model()), "mvau_op_structural")
-    for path in (
-        MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID,
-        MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED,
-        MVAU_REPLAY_SELECTION.paths.region_structurally_well_formed,
-    ):
-        assert assessment.answers[path] == Decided(True), path
+    assert assessment.answers[MVAUDataflowOpPaths.NETWORK_STRUCTURALLY_WELL_FORMED] == Decided(True)
+    point = _committed(_model()).hydrate_dataflow_point(_context())
+    assert isinstance(
+        Engine().query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION), Decided
+    )
 
 
 # -- replay is not optional --------------------------------------------------
@@ -416,7 +422,8 @@ def test_the_replay_kernel_cannot_be_declined() -> None:
     compute is decomposed -- the choice is withheld, not defaulted.
     """
 
-    assert NO_KERNEL not in MVAU_REPLAY_SELECTION.candidate_ids
+    decisions = set(MvauDataflowOp.validated_design_space().decisions)
+    assert MVAU_REPLAY_SELECTION.paths.kernel not in decisions
 
     operation = _wrapped(_model())
     operation.initialize_dataflow_scope_id()
@@ -427,22 +434,17 @@ def test_the_replay_kernel_cannot_be_declined() -> None:
 
 
 def test_the_replay_choice_does_not_apply_to_a_fused_member() -> None:
-    """It is mandatory where it applies and withheld everywhere else."""
+    """DotProduct declarations are inactive for BatchInterleavedDesign."""
 
     operation = _wrapped(_model())
     operation.initialize_dataflow_scope_id()
-    operation.commit_dataflow_assignments(
-        _context(),
-        {
-            MVAU_COMPUTE_SELECTION.paths.kernel: "rtl_softvec",
-            QualifiedPath("mvau.compute.rtl_softvec.pe"): 2,
-            QualifiedPath("mvau.compute.rtl_softvec.simd"): 2,
-            QualifiedPath("mvau.compute.rtl_softvec.compute_pumping"): False,
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
-        },
-    )
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
+    operation.commit_dataflow_assignments(_context(), _batch_interleaved_choices())
     point = operation.hydrate_dataflow_point(_context())
-    assert isinstance(Engine().query_property(point, MVAU_REPLAY_SELECTION.paths.region), Absent)
+    assert isinstance(
+        Engine().query_property(point, MVAU_DESIGN_INVENTORY.dot_product.replay_region.path),
+        Absent,
+    )
     assert Engine().evaluate_constraint_set(point, "mvau_op_structural").verdict is True
 
 
@@ -461,7 +463,7 @@ def test_structural_readiness_does_not_wait_on_a_physical_choice() -> None:
     semantic = {
         path: value
         for path, value in _choices().items()
-        if path != DECOMPOSED_MVAU_KERNELS.compute_pumping.path
+        if path != MVAU_DESIGN_INVENTORY.compute_pumping.path
     }
     operation.commit_dataflow_assignments(_context(), semantic)
     resolved = operation.resolve_dataflow(_context())
@@ -472,6 +474,6 @@ def test_structural_readiness_does_not_wait_on_a_physical_choice() -> None:
     assert engine.check_readiness(point, "artifact_inputs").ready is not True
 
     committed = engine.commit_assignments(
-        point, {DECOMPOSED_MVAU_KERNELS.compute_pumping.path: False}
+        point, {MVAU_DESIGN_INVENTORY.compute_pumping.path: False}
     ).point
     assert engine.check_readiness(committed, "artifact_inputs").ready is True

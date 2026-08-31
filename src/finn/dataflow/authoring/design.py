@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar, cast
 
@@ -1147,6 +1147,7 @@ class DataflowDesignEntry:
 
     design: type[DataflowDesign]
     inputs: object
+    specs: tuple[DesignSpaceSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1216,13 +1217,19 @@ def declare_dataflow_design_inventory(
         )
 
     declarations = tuple(
-        declare_dataflow_design(
-            entry.design,
-            f"{namespace}.design.{entry.design.id}",
-            entry.inputs,
-            input_supplies=supplies,
-        )[0]
+        replace(
+            declaration,
+            spec=assemble_specs((*entry.specs, declaration.spec)),
+        )
         for entry in declared_entries
+        for declaration in (
+            declare_dataflow_design(
+                entry.design,
+                f"{namespace}.design.{entry.design.id}",
+                entry.inputs,
+                input_supplies=supplies,
+            )[0],
+        )
     )
     design_path: QualifiedPath | None = None
     own_spec = DesignSpaceSpec()

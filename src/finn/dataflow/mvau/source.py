@@ -53,6 +53,7 @@ from finn.dataflow.ops.mvau import (
     DataflowOpResult,
     MVAU_COMPUTE_SELECTION,
     MVAU_DATAFLOW_OP_SPEC,
+    MVAU_LEGACY_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
@@ -87,25 +88,10 @@ _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
-#: v9 moved the decomposed compute's physical half onto its own Kernels: the
-#: pumping choice changed owner, path, and node attribute, and the coverage
-#: conditions it used to carry became the hardware's.  A v8 selection names
-#: ``dataflow_dot_product_pumping``, which no longer exists, so it is rejected
-#: rather than reinterpreted -- the value is the same but the thing that owns it
-#: is not, and silently rehoming a choice is how provenance stops being true.
-#:
-#: v10 adopts QONNX datatypes as the one datatype identity.  A v9 problem
-#: fingerprint encodes element types as ``{"numeric_element_type": [family,
-#: width]}``; v10 encodes ``{"qonnx_datatype": name}``.  Those are different
-#: values for the same fact and the old one is *lossy* -- a v9 fingerprint
-#: cannot distinguish the ``TERNARY`` problem it was taken from an ``INT2`` one
-#: -- so a v9 selection is rejected rather than migrated.  Deriving a v10 name
-#: from a v9 pair is exactly the reconstruction this change removes.
-#:
-#: Kept as a second bump rather than folded into v9: v9 is already committed and
-#: observable, and retroactively widening what it labels would make the version
-#: stop describing the tree that carries it.
-MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v10"
+#: v11 records the v6 DataflowDesign decision paths and Network-only result
+#: model.  The v10 semantic-Kernel envelope is rejected explicitly; no old
+#: selection is reinterpreted as a new design choice.
+MVAU_DECLARATION_FAMILY_VERSION = "mvau-source-composition-v11"
 MVAU_LOGICAL_SOURCE_NODEATTRS: Mapping[str, NodeAttributeType] = MappingProxyType(
     {
         "noActivation": ("i", False, 1, {0, 1}),
@@ -1150,14 +1136,21 @@ def start_mvau_projection(
     """Start, commit, and resolve one projected MVAU design."""
     if projection.blocking_findings:
         raise MVAUSourceAdapterError(projection.blocking_findings)
-    engine = Engine()
-    space = engine.validate(MVAU_DATAFLOW_OP_SPEC)
-    point = engine.start(space, projection.problem_data)
     commitments: dict[QualifiedPath | str, object] = {
         path: value for path, value in projection.imported_assignments.items()
     }
     if assignments is not None:
         commitments.update(assignments)
+    requested = {QualifiedPath.parse(path) for path in commitments}
+    legacy_paths = {item.path for item in MVAU_LEGACY_DATAFLOW_OP_SPEC.decisions}
+    specification = (
+        MVAU_LEGACY_DATAFLOW_OP_SPEC
+        if requested and requested <= legacy_paths
+        else MVAU_DATAFLOW_OP_SPEC
+    )
+    engine = Engine()
+    space = engine.validate(specification)
+    point = engine.start(space, projection.problem_data)
     if commitments:
         committed = engine.commit_assignments(point, commitments)
         failures = tuple(
@@ -1399,16 +1392,27 @@ def reconstitute_mvau_point(
     source_scope_id: str,
 ) -> DesignPoint:
     """Replay an envelope against an explicitly rebuilt MVAU-rooted design space."""
+    if envelope.declaration_family_version != MVAU_DECLARATION_FAMILY_VERSION:
+        raise MVAUSourceAdapterError(
+            (
+                _finding(
+                    FindingKind.REJECTION,
+                    "mvau-selection-family-version-incompatible",
+                    _PERSISTENCE_PATH,
+                    "stored selection uses an unsupported MVAU declaration family version",
+                    actual_version=envelope.declaration_family_version,
+                    expected_version=MVAU_DECLARATION_FAMILY_VERSION,
+                ),
+            )
+        )
     expected_header = (
         _ADAPTER_KEY,
         _FORMAT_VERSION,
-        MVAU_DECLARATION_FAMILY_VERSION,
         source_scope_id,
     )
     actual_header = (
         envelope.adapter_key,
         envelope.format_version,
-        envelope.declaration_family_version,
         envelope.source_scope_id,
     )
     if actual_header != expected_header:

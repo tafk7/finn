@@ -310,8 +310,8 @@ class _Provenance:
 
 def _provenance(
     kernel: HardwareKernel,
-    semantic_kernel_id: str,
-    selection: QualifiedPath,
+    semantic_kernel_id: str | None,
+    selection: QualifiedPath | None,
     network: DataflowNetwork,
 ) -> _Provenance:
     """Everything behind one bound Kernel: what it covers and what chose it.
@@ -335,13 +335,20 @@ def _provenance(
         tuple(
             dict.fromkeys(
                 (
-                    selection,
+                    *((selection,) if selection is not None else ()),
                     *sorted(kernel.assignments, key=str),
                     *kernel.declaration.imported_decisions,
                 )
             )
         ),
-        tuple(sorted({semantic_kernel_id, kernel.kernel_id})),
+        tuple(
+            sorted(
+                {
+                    kernel.kernel_id,
+                    *((semantic_kernel_id,) if semantic_kernel_id is not None else ()),
+                }
+            )
+        ),
     )
 
 
@@ -665,24 +672,28 @@ def compose(
     # merged record makes the replay component claim the dot product's Kernel
     # and the dot product claim the replay's, which is worse than saying
     # nothing: it is a specific false statement about what realizes what.
+    from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY  # noqa: PLC0415
+
+    design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
+    new_inventory = design_path is not None and design_path in resolved.point.design_space.decisions
     by_component = {
         replay_id: _provenance(
             replay,
-            ActivationReplayKernel.id,
-            MVAU_REPLAY_SELECTION.paths.kernel,
+            None if new_inventory else ActivationReplayKernel.id,
+            None if new_inventory else MVAU_REPLAY_SELECTION.paths.kernel,
             network,
         ),
         dot_id: _provenance(
             compute,
-            DotProductKernel.id,
-            MVAU_COMPUTE_SELECTION.paths.kernel,
+            None if new_inventory else DotProductKernel.id,
+            None if new_inventory else MVAU_COMPUTE_SELECTION.paths.kernel,
             network,
         ),
     }
     if delivery is not None:
         by_component[f"{source_id}.delivery.wrapper"] = _provenance(
             delivery,
-            FINN_RTL_MEMSTREAM_SUPPLY,
+            None if new_inventory else FINN_RTL_MEMSTREAM_SUPPLY,
             QualifiedPath("mvau.input.weight.supply"),
             network,
         )

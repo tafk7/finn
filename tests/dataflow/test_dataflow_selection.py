@@ -16,38 +16,23 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Decided, Engine, QualifiedPath
-from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.compute_kernels import (
-    LEGACY_HLS_PATHS,
-    MVAU_COMPUTE_SELECTION,
-    SOFT_VECTOR_PATHS,
-    MVAUComputeKernelId,
-    MVAUHlsResource,
-    MVAUWeightSource,
-)
-from finn.dataflow.mvau.compute_kernels import MVAU_REPLAY_SELECTION
+from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.ops.mvau import (
-    MVAU_WEIGHT_ADAPTER_SELECTION,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     NetworkRef,
-    RegionRef,
 )
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
-from finn.dataflow.parameters.supply_kernels import (
-    FINN_RTL_MEMSTREAM_PATHS,
-    MVAUWeightSupplyKernelId,
-    WeightOrganization,
-)
 from finn.transformation.fpgadataflow.select_dataflow_design import (
     DataflowSelectionContext,
     DataflowSelectionPolicy,
     ExplicitAssignmentsPolicy,
     FirstFeasiblePolicy,
     SelectDataflowDesign,
-    committed_kernel_ids,
 )
 
 PART = "xczu3eg-sbva484-1-e"
@@ -120,35 +105,36 @@ def _operation(model: ModelWrapper) -> MvauDataflowOp:
 
 
 def _direct_assignments() -> dict[QualifiedPath, object]:
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
     return {
-        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
-        SOFT_VECTOR_PATHS.pe: 2,
-        SOFT_VECTOR_PATHS.simd: 2,
-        SOFT_VECTOR_PATHS.compute_pumping: False,
-        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+        assembly.inventory.design_path: DotProductDesign.id,
+        assembly.dot_product.pe.path: 2,
+        assembly.dot_product.simd.path: 2,
+        assembly.compute_pumping.path: False,
+        assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
     }
 
 
 def _cyclic_assignments() -> dict[QualifiedPath, object]:
+    assembly = MVAU_DESIGN_INVENTORY
     return {
         **_direct_assignments(),
-        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
-            MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
-        ),
-        FINN_RTL_MEMSTREAM_PATHS.organization: WeightOrganization.AS_DEMANDED,
-        FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
-        FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
-        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: NO_KERNEL,
+        assembly.input_supply.declaration.choice.path: FINN_RTL_MEMSTREAM_SUPPLY,
+        assembly.input_supply.settings.ram_style.path: CyclicRamStyle.BRAM,
+        assembly.input_supply.settings.pumped_memory.path: False,
     }
 
 
 def _embedded_assignments() -> dict[QualifiedPath, object]:
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
     return {
-        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.LEGACY_HLS.value,
-        LEGACY_HLS_PATHS.pe: 2,
-        LEGACY_HLS_PATHS.simd: 2,
-        LEGACY_HLS_PATHS.resource: MVAUHlsResource.LUT,
-        LEGACY_HLS_PATHS.weight_source: MVAUWeightSource.EMBEDDED,
+        assembly.inventory.design_path: BatchInterleavedDesign.id,
+        assembly.batch_interleaved.pe.path: 2,
+        assembly.batch_interleaved.simd.path: 2,
+        assembly.batch_interleaved.interleave.path: 2,
+        assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
     }
 
 
@@ -169,7 +155,7 @@ def _run(
 def test_an_explicit_policy_reproduces_the_direct_point() -> None:
     lowered, transform = _run(ExplicitAssignmentsPolicy({SCOPE: _direct_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert isinstance(resolved.result, RegionRef)
+    assert isinstance(resolved.result, NetworkRef)
     assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.DIRECT
     assert transform.report.scope(SCOPE).committed
 
@@ -181,11 +167,11 @@ def test_an_explicit_policy_reproduces_the_cyclic_point() -> None:
     assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.CYCLIC
 
 
-def test_an_explicit_policy_reproduces_the_embedded_point() -> None:
+def test_an_explicit_policy_can_select_the_semantic_only_design() -> None:
     lowered, _ = _run(ExplicitAssignmentsPolicy({SCOPE: _embedded_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert isinstance(resolved.result, RegionRef)
-    assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.EMBEDDED
+    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result.source_association.design_id == BatchInterleavedDesign.id
 
 
 def test_a_policy_is_keyed_by_stable_operation_scope() -> None:
@@ -200,7 +186,7 @@ def test_invalid_policy_output_leaves_the_node_byte_identical() -> None:
     model = _model()
     before = model.graph.node[0].SerializeToString(deterministic=True)
     lowered, transform = _run(
-        ExplicitAssignmentsPolicy({SCOPE: {MVAU_COMPUTE_SELECTION.paths.kernel: "absent-kernel"}}),
+        ExplicitAssignmentsPolicy({SCOPE: {MVAUDataflowOpPaths.DESIGN: "absent-design"}}),
         model,
     )
     assert lowered.graph.node[0].SerializeToString(deterministic=True) == before
@@ -216,7 +202,7 @@ def test_the_reference_policy_commits_a_complete_coherent_point() -> None:
     lowered, transform = _run(FirstFeasiblePolicy())
     operation = _operation(lowered)
     resolved = operation.resolve_dataflow(_context())
-    assert isinstance(resolved.result, (RegionRef, NetworkRef))
+    assert isinstance(resolved.result, NetworkRef)
     report = transform.report.scope(SCOPE)
     assert report.structural_readiness is not None
     assert report.structural_readiness.ready is True
@@ -229,14 +215,9 @@ def test_readiness_and_feasibility_are_reported_separately() -> None:
     report = transform.report.scope(SCOPE)
     assert report.structural_readiness is not None
     assert report.artifact_readiness is not None
-    # One feasibility set per declared pool, named by the operation itself.
+    # One operation-level set covers the selected design and its placements.
     assert set(report.feasibility) == set(MvauDataflowOp.feasibility_constraint_sets())
-    assert set(report.feasibility) == {
-        MVAU_COMPUTE_SELECTION.feasibility_constraint_set,
-        MVAU_REPLAY_SELECTION.feasibility_constraint_set,
-        MVAU_WEIGHT_SUPPLY_SELECTION.feasibility_constraint_set,
-        MVAU_WEIGHT_ADAPTER_SELECTION.feasibility_constraint_set,
-    }
+    assert set(report.feasibility) == {"mvau_op_feasibility"}
 
 
 def test_enumeration_returns_whole_points_not_one_decision_at_a_time() -> None:
@@ -254,13 +235,13 @@ def test_enumeration_returns_whole_points_not_one_decision_at_a_time() -> None:
     points = context.feasible_points()
     assert points
     for point in points:
-        assert MVAU_COMPUTE_SELECTION.paths.kernel in point.assignments
+        assert MVAUDataflowOpPaths.DESIGN in point.assignments
+        assert point.assignments[MVAUDataflowOpPaths.DESIGN] == DotProductDesign.id
         result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
         assert isinstance(result, Decided)
 
 
-def test_a_supplier_veto_removes_joint_points_but_leaves_others() -> None:
-    """FinnLib cannot serve a runtime-written array; the RTL streamer can."""
+def test_runtime_writable_points_use_only_the_closed_supply_inventory() -> None:
 
     model = _model(with_initializer=False)
     operation = _operation(model)
@@ -276,10 +257,10 @@ def test_a_supplier_veto_removes_joint_points_but_leaves_others() -> None:
         "mvau_op_feasibility",
     )
     suppliers = {
-        point.assignments.get(MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel)
+        point.assignments.get(MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path)
         for point in context.feasible_points()
     }
-    assert MVAUWeightSupplyKernelId.FINNLIB_HLS_MEMSTREAM.value not in suppliers
+    assert suppliers == {EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY}
 
 
 def test_committed_choices_survive_save_and_reload(tmp_path: Path) -> None:
@@ -290,19 +271,10 @@ def test_committed_choices_survive_save_and_reload(tmp_path: Path) -> None:
     restored = _operation(ModelWrapper(str(path))).resolve_dataflow(_context())
     assert restored.point.assignments == original.point.assignments
     assert restored.result == original.result
-    identities = committed_kernel_ids(
-        restored.engine,
-        restored.point,
-        (
-            MVAU_COMPUTE_SELECTION.paths.selected_kernel,
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel,
-        ),
-    )
-    assert identities[MVAU_COMPUTE_SELECTION.paths.selected_kernel] == (
-        MVAUComputeKernelId.SOFT_VECTOR.value
-    )
-    assert identities[MVAU_WEIGHT_SUPPLY_SELECTION.paths.selected_kernel] == (
-        MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
+    assert restored.source_association.kernel_ids == (
+        "dotp_axi",
+        "replay_buffer",
+        FINN_RTL_MEMSTREAM_SUPPLY,
     )
 
 
@@ -312,12 +284,7 @@ def test_the_transform_needs_no_operation_specific_configuration() -> None:
     assert MvauDataflowOp.selection_constraint_set() == "mvau_op_feasibility"
     assert MvauDataflowOp.structural_readiness_profile() == "mvau_op_structural"
     assert MvauDataflowOp.artifact_readiness_profile() == "artifact_inputs"
-    assert MvauDataflowOp.kernel_selections() == (
-        MVAU_COMPUTE_SELECTION,
-        MVAU_REPLAY_SELECTION,
-        MVAU_WEIGHT_SUPPLY_SELECTION,
-        MVAU_WEIGHT_ADAPTER_SELECTION,
-    )
+    assert MvauDataflowOp.kernel_selections() == ()
 
 
 def test_a_policy_sees_every_scope_in_one_call() -> None:
@@ -347,9 +314,10 @@ def test_selection_does_not_mutate_the_node_class_or_domain() -> None:
 
 
 def test_a_partial_policy_leaves_an_explorable_point() -> None:
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     partial = {
-        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
-        SOFT_VECTOR_PATHS.pe: 2,
+        MVAU_DESIGN_INVENTORY.inventory.design_path: DotProductDesign.id,
+        MVAU_DESIGN_INVENTORY.dot_product.pe.path: 2,
     }
     lowered, transform = _run(ExplicitAssignmentsPolicy({SCOPE: partial}))
     operation = _operation(lowered)

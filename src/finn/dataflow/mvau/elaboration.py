@@ -390,6 +390,17 @@ def _selected_kernel_id(
 def mvau_elaboration_origin(resolved: MVAUResolvedDesign) -> MVAUElaborationOrigin:
     """Construct the exact immutable identity of an elaboration input point."""
 
+    from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY  # noqa: PLC0415
+
+    design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
+    if design_path is not None and design_path in resolved.point.design_space.decisions:
+        return MVAUElaborationOrigin(
+            MVAU_DECLARATION_FAMILY_VERSION,
+            mvau_problem_fingerprint(resolved.point.problem),
+            tuple(sorted(resolved.point.assignments.items(), key=lambda item: item[0])),
+            resolved.source_association.kernel_ids,
+        )
+
     compute_kernel_id = _selected_kernel_id(
         resolved,
         MVAU_COMPUTE_SELECTION.paths.selected_kernel,

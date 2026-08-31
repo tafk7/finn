@@ -13,6 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from finn.dataflow.design import QualifiedPath
+from finn.dataflow.resolution import NetworkRef as GenericNetworkRef
+from finn.dataflow.resolution import RegionRef as GenericRegionRef
+
 
 class MVAUParameterTopology(str, Enum):
     """The resolved shape of one parameter-supply arrangement."""
@@ -90,12 +94,31 @@ class MVAUSourceAssociation:
     compute_kernel_id: str = ""
     supply_kernel_id: str | None = None
     adapter_kernel_id: str | None = None
+    design_id: str = ""
+    decision_paths: tuple[QualifiedPath, ...] = ()
+    kernel_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MVAURegionRef(GenericRegionRef):
+    """Selected MVAU Region with a typed source association."""
+
+    source_association: MVAUSourceAssociation
+
+
+@dataclass(frozen=True)
+class MVAUNetworkRef(GenericNetworkRef):
+    """Selected MVAU Network with a typed source association."""
+
+    source_association: MVAUSourceAssociation
 
 
 __all__ = [
     "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "MVAUParameterTopology",
+    "MVAUNetworkRef",
+    "MVAURegionRef",
     "MVAUSourceAssociation",
     "SemanticOperandDestination",
     "SourceOperandAssociation",

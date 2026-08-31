@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase 6 gate: inference coverage comes from the Kernel pool, not the pass."""
+"""D7 gate: inference admission comes from the MVAU design inventory."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import inspect
 
 import numpy as np  # type: ignore[import-not-found]
@@ -17,15 +17,10 @@ from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Decided, Engine
-from finn.dataflow.kernels import KernelSelection, admissible_kernels
-from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.compute_kernels import (
-    LEGACY_HLS_PATHS,
-    MVAU_COMPUTE_SELECTION,
-    MVAUComputeKernelId,
-    MVAUHlsResource,
-    MVAUWeightSource,
-)
+from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.transformation.fpgadataflow import infer_mvau_dataflow
@@ -36,7 +31,6 @@ from finn.transformation.fpgadataflow.infer_mvau_dataflow import (
     recognize_mvau_candidates,
     source_nodes_of,
 )
-from finn.dataflow.mvau_problem import MVAUProblemPaths
 
 PART = "xczu3eg-sbva484-1-e"
 
@@ -200,14 +194,17 @@ def test_a_dynamic_weight_matmul_is_still_a_source_form() -> None:
     assert candidates[0].source_node_names == ("matmul0",)
 
 
-def test_a_float_matmul_is_recognized_but_no_kernel_admits_it() -> None:
-    """Datatype coverage lives in the pool, so the matcher does not screen it."""
+def test_a_float_matmul_is_recognized_by_the_semantic_only_design() -> None:
+    """Logical admission does not falsely claim a physical implementation."""
 
     model = _model(float_weights=True)
     assert len(recognize_mvau_candidates(model)) == 1
     lowered, transform = _lower(model)
-    assert transform.report.lowered == ()
-    assert transform.report.refused == (("matmul0",),)
+    assert transform.report.lowered
+    assert transform.report.refused == ()
+    assert mvau_source_admission(lowered, lowered.graph.node[0].name, _context()) == (
+        BatchInterleavedDesign.id,
+    )
 
 
 # -- lowering ----------------------------------------------------------------
@@ -238,11 +235,11 @@ def test_lowering_preserves_source_execution() -> None:
 
 def test_fused_lowering_preserves_source_execution() -> None:
     model = _model(fused=True)
-    activation = np.arange(8, dtype=np.float32).reshape(2, 4)
-    before = execute_onnx(model, {"activation": activation})
-    lowered, _ = _lower(model)
-    after = execute_onnx(lowered, {"activation": activation})
-    np.testing.assert_array_equal(after["output"], before["output"])
+    before = model.model.SerializeToString(deterministic=True)
+    lowered, transform = _lower(model)
+    assert transform.report.lowered == ()
+    assert transform.report.refused == (("matmul0", "threshold0"),)
+    assert lowered.model.SerializeToString(deterministic=True) == before
 
 
 def test_lowering_is_idempotent() -> None:
@@ -254,11 +251,11 @@ def test_lowering_is_idempotent() -> None:
 
 
 def test_a_refused_candidate_leaves_the_graph_byte_identical() -> None:
-    model = _model(activation_type="BINARY", weight_type="BINARY")
+    model = _model(fused=True)
     before = model.model.SerializeToString(deterministic=True)
     lowered, transform = _lower(model)
     assert transform.report.lowered == ()
-    assert transform.report.refused == (("matmul0",),)
+    assert transform.report.refused == (("matmul0", "threshold0"),)
     assert lowered.model.SerializeToString(deterministic=True) == before
 
 
@@ -272,59 +269,50 @@ def test_no_design_choice_is_persisted_during_lowering() -> None:
 
 
 def test_provenance_records_every_consumed_source_node() -> None:
-    lowered, _ = _lower(_model(fused=True))
+    lowered, _ = _lower(_model())
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
-    assert source_nodes_of(operation) == ("matmul0", "threshold0")
+    assert source_nodes_of(operation) == ("matmul0",)
     problem = operation.problem_instance(_context())
     description = problem[MVAUDataflowOpPaths.SOURCE_DESCRIPTION]
-    assert getattr(description, "fused_source_node_ids") == ("matmul0", "threshold0")
+    assert getattr(description, "fused_source_node_ids") == ("matmul0",)
 
 
-# -- admission comes from the pool -------------------------------------------
+# -- admission comes from the design inventory -------------------------------
 
 
-def test_admission_is_the_existential_union_over_the_kernel_pool() -> None:
+def test_admission_is_the_existential_union_over_the_design_inventory() -> None:
     lowered, _ = _lower(_model())
     admitted = mvau_source_admission(lowered, lowered.graph.node[0].name, _context())
-    assert MVAUComputeKernelId.SOFT_VECTOR.value in admitted
-    assert MVAUComputeKernelId.LEGACY_HLS.value in admitted
+    assert admitted == (DotProductDesign.id, BatchInterleavedDesign.id)
 
 
-def test_fused_admission_depends_on_kernel_owned_profile_support() -> None:
-    lowered, _ = _lower(_model(fused=True))
-    admitted = mvau_source_admission(lowered, lowered.graph.node[0].name, _context())
-    # Only the legacy HLS Kernel claims the fused-threshold profile today.
-    assert admitted == (MVAUComputeKernelId.LEGACY_HLS.value,)
+def test_fused_threshold_is_deferred_from_the_new_design_inventory() -> None:
+    _, transform = _lower(_model(fused=True))
+    assert transform.report.lowered == ()
+    assert {finding.code for finding in transform.report.findings} == {
+        "mvau-inference-no-admitting-design"
+    }
 
 
-def test_adding_and_removing_a_kernel_moves_admission_without_touching_the_pass() -> None:
-    """The RTL Kernels refuse a fused source; adding legacy HLS admits it."""
-
-    lowered, _ = _lower(_model(fused=True))
+def test_semantic_only_admission_does_not_make_a_build_point_feasible() -> None:
+    lowered, _ = _lower(_model(float_weights=True))
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     engine = Engine()
     point = engine.start(operation.validated_design_space(), operation.problem_instance(_context()))
-
-    rtl_only: KernelSelection = replace(
-        MVAU_COMPUTE_SELECTION,
-        kernels=tuple(
-            kernel
-            for kernel in MVAU_COMPUTE_SELECTION.kernels
-            if kernel.id != MVAUComputeKernelId.LEGACY_HLS.value
-        ),
-    )
-    assert admissible_kernels(engine, rtl_only, point) == ()
-
-    with_legacy: KernelSelection = replace(
-        rtl_only,
-        kernels=(
-            *rtl_only.kernels,
-            MVAU_COMPUTE_SELECTION.kernel(MVAUComputeKernelId.LEGACY_HLS.value),
-        ),
-    )
-    assert admissible_kernels(engine, with_legacy, point) == (MVAUComputeKernelId.LEGACY_HLS.value,)
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
+    point = engine.commit_assignments(
+        point,
+        {
+            MVAU_DESIGN_INVENTORY.inventory.design_path: BatchInterleavedDesign.id,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.pe.path: 2,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.simd.path: 2,
+            MVAU_DESIGN_INVENTORY.batch_interleaved.interleave.path: 2,
+            MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
+        },
+    ).point
+    assert engine.evaluate_constraint_set(point, "mvau_op_feasibility").verdict is not True
 
 
 def test_admission_does_not_depend_on_the_fpga_target() -> None:
@@ -347,20 +335,26 @@ def test_an_interleave_that_can_never_be_chosen_is_not_admitted() -> None:
 
     lowered, _ = _lower(_model(rows=1))
     admitted = mvau_source_admission(lowered, lowered.graph.node[0].name, _context())
-    assert MVAUComputeKernelId.BATCH_INTERLEAVED_DSP.value not in admitted
-    assert MVAUComputeKernelId.SOFT_VECTOR.value in admitted
+    assert admitted == (DotProductDesign.id,)
 
 
 def test_source_admission_never_reads_a_kernel_local_decision() -> None:
-    for kernel in MVAU_COMPUTE_SELECTION.kernels:
-        own = {item.path for item in kernel.spec.decisions}
-        by_path = {item.path: item for item in kernel.spec.constraints}
-        for path in kernel.source_admission_constraints:
-            constraint = by_path[path]
+    physical = {
+        MVAU_DESIGN_INVENTORY.compute_pumping.path,
+        MVAU_DESIGN_INVENTORY.input_supply.settings.ram_style.path,
+        MVAU_DESIGN_INVENTORY.input_supply.settings.pumped_memory.path,
+    }
+    for semantics in (
+        MVAU_DESIGN_INVENTORY.dot_product,
+        MVAU_DESIGN_INVENTORY.batch_interleaved,
+    ):
+        by_path = {item.path: item for item in semantics.spec.constraints}
+        for reference in semantics.source_constraints:
+            constraint = by_path[reference.path]
             dependencies = list(constraint.evaluator.dependencies)
             if constraint.applies_if is not None:
                 dependencies.extend(constraint.applies_if.dependencies)
-            assert not ({item.path for item in dependencies} & own), path
+            assert not ({item.path for item in dependencies} & physical), reference.path
 
 
 def test_the_transform_declares_no_datatype_or_target_switch() -> None:
@@ -371,7 +365,7 @@ def test_the_transform_declares_no_datatype_or_target_switch() -> None:
 
 @pytest.mark.parametrize("attribute", ["noActivation", "binaryXnorMode", "accDataType"])
 def test_source_semantics_are_carried_onto_the_logical_node(attribute: str) -> None:
-    lowered, _ = _lower(_model(fused=True))
+    lowered, _ = _lower(_model())
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     assert operation.get_nodeattr(attribute) is not None
@@ -380,28 +374,19 @@ def test_source_semantics_are_carried_onto_the_logical_node(attribute: str) -> N
 
 @pytest.mark.parametrize("bias", [0, -1, -2, 3])
 def test_a_representable_integer_bias_is_carried_and_preserved(bias: int) -> None:
-    """Unit scale with an integer bias is exactly what ActVal reproduces."""
+    """Fused activation remains recognized but is deferred by the inventory."""
 
     model = _model(fused=True, out_bias=float(bias), out_dtype="INT4")
-    activation = np.arange(8, dtype=np.float32).reshape(2, 4)
-    before = execute_onnx(model, {"activation": activation})["output"]
     lowered, transform = _lower(model)
-    assert transform.report.lowered
-    operation = lowered.get_customop_wrapper(lowered.graph.node[0])
-    assert isinstance(operation, MvauDataflowOp)
-    assert operation.get_nodeattr("ActVal") == bias
-    after = execute_onnx(lowered, {"activation": activation})["output"]
-    np.testing.assert_array_equal(after, before)
+    assert transform.report.lowered == ()
+    assert [node.op_type for node in lowered.graph.node] == ["MatMul", "MultiThreshold"]
 
 
 def test_a_bipolar_scale_and_bias_pair_is_carried_and_preserved() -> None:
     model = _model(fused=True, out_scale=2.0, out_bias=-1.0, out_dtype="BIPOLAR")
-    activation = np.arange(8, dtype=np.float32).reshape(2, 4)
-    before = execute_onnx(model, {"activation": activation})["output"]
     lowered, transform = _lower(model)
-    assert transform.report.lowered
-    after = execute_onnx(lowered, {"activation": activation})["output"]
-    np.testing.assert_array_equal(after, before)
+    assert transform.report.lowered == ()
+    assert [node.op_type for node in lowered.graph.node] == ["MatMul", "MultiThreshold"]
 
 
 @pytest.mark.parametrize(
@@ -443,13 +428,8 @@ def test_an_xnor_popcount_source_is_recognized_and_marked() -> None:
     assert len(candidates) == 1
     assert candidates[0].xnor_popcount is True
     lowered, transform = _lower(model)
-    assert transform.report.lowered
-    operation = lowered.get_customop_wrapper(lowered.graph.node[0])
-    assert isinstance(operation, MvauDataflowOp)
-    assert operation.get_nodeattr("binaryXnorMode") == 1
-    problem = operation.problem_instance(_context())
-    profile = problem[MVAUProblemPaths.COMPUTATION_PROFILE]
-    assert profile is MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR
+    assert transform.report.lowered == ()
+    assert transform.report.refused == (("matmul0",),)
 
 
 def test_a_lowered_node_still_resolves_once_kernels_are_selected() -> None:
@@ -457,14 +437,15 @@ def test_a_lowered_node_still_resolves_once_kernels_are_selected() -> None:
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     context = _context()
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     operation.commit_dataflow_assignments(
         context,
         {
-            MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.LEGACY_HLS.value,
-            LEGACY_HLS_PATHS.pe: 2,
-            LEGACY_HLS_PATHS.simd: 2,
-            LEGACY_HLS_PATHS.resource: MVAUHlsResource.LUT,
-            LEGACY_HLS_PATHS.weight_source: MVAUWeightSource.EMBEDDED,
+            MVAU_DESIGN_INVENTORY.inventory.design_path: DotProductDesign.id,
+            MVAU_DESIGN_INVENTORY.dot_product.pe.path: 2,
+            MVAU_DESIGN_INVENTORY.dot_product.simd.path: 2,
+            MVAU_DESIGN_INVENTORY.compute_pumping.path: False,
+            MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
         },
     )
     resolved = operation.resolve_dataflow(context)

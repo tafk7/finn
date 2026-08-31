@@ -987,13 +987,13 @@ def test_public_design_authoring_surface_excludes_compiled_metadata() -> None:
     }.isdisjoint(design_authoring.__all__)
 
 
-def test_existing_mvau_import_does_not_load_the_new_design_layer() -> None:
+def test_production_mvau_import_loads_the_new_design_layer() -> None:
     subprocess.run(
         (
             sys.executable,
             "-c",
             "import sys; import finn.dataflow.ops.mvau_op; "
-            "assert 'finn.dataflow.authoring.design' not in sys.modules",
+            "assert 'finn.dataflow.authoring.design' in sys.modules",
         ),
         check=True,
     )

@@ -64,13 +64,8 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
-from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.compute_kernels import (
-    DECOMPOSED_MVAU_KERNELS,
-    MVAU_COMPUTE_SELECTION,
-    MVAU_REPLAY_SELECTION,
-)
-from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.hardware.binding import finnlib_root
 from finn.dataflow.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
@@ -79,7 +74,7 @@ from finn.dataflow.mvau.hardware.composition import (
 )
 from finn.dataflow.mvau.providers import elaborate_mvau
 from finn.dataflow.mvau_problem import MVAUDspBlock
-from finn.dataflow.ops.mvau import MVAU_WEIGHT_SUPPLY_SELECTION
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 
 from dataflow.rtlsim.rtl_transport import drive, random_word
@@ -265,17 +260,15 @@ def decomposed_requirements(config: Config) -> MVAUDecomposedArtifactRequirement
     operation = model.get_customop_wrapper(model.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     operation.initialize_dataflow_scope_id()
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     operation.commit_dataflow_assignments(
         context,
         {
-            MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
-            MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
-            DECOMPOSED_MVAU_KERNELS.pe.path: config.pe,
-            DECOMPOSED_MVAU_KERNELS.simd.path: config.simd,
-            DECOMPOSED_MVAU_KERNELS.compute_pumping.path: config.pumping,
-            # Weights arrive at the boundary; re-attaching the supplier is
-            # increment G.
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
+            MVAU_DESIGN_INVENTORY.inventory.design_path: DotProductDesign.id,
+            MVAU_DESIGN_INVENTORY.dot_product.pe.path: config.pe,
+            MVAU_DESIGN_INVENTORY.dot_product.simd.path: config.simd,
+            MVAU_DESIGN_INVENTORY.compute_pumping.path: config.pumping,
+            MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
         },
     )
     resolved = operation.resolve_dataflow(context)

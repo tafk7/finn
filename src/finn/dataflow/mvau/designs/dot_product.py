@@ -23,7 +23,6 @@ from finn.dataflow.authoring.design import (
 )
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import DependencyKind, DesignSpaceSpec
-from finn.dataflow.op import dataflow_problem_fingerprint
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
@@ -158,10 +157,11 @@ def declare_dot_product_design(
             DataflowDesignEntry(
                 DotProductDesign,
                 DotProductDesignInputs(problem, semantics, narrow_weights),
+                (semantics.spec, association_spec),
             ),
         ),
         input_supplies=(supply.declaration,),
-        shared_specs=(MVAU_PROBLEM_SPEC, semantics.spec, association_spec),
+        shared_specs=(MVAU_PROBLEM_SPEC,),
     )
     declaration = inventory.declarations[0]
     compute = declaration.placement("compute").candidates[0]
@@ -195,14 +195,21 @@ def compose_dot_product_design(
         raise ValueError("the source envelope and DotProduct realization name different Networks")
     from finn.dataflow.mvau.elaboration import MVAUElaborationOrigin  # noqa: PLC0415
     from finn.dataflow.mvau.hardware.composition import compose  # noqa: PLC0415
-
-    origin = MVAUElaborationOrigin(
-        "mvau-dataflow-op-v6",
-        dataflow_problem_fingerprint(resolved_source.point.problem),
-        tuple(sorted(resolved_source.point.assignments.items(), key=lambda item: item[0])),
-        tuple(realization.kernel(name).kernel_id for name in realization.kernels),
+    from finn.dataflow.mvau.source import (  # noqa: PLC0415
+        MVAU_DECLARATION_FAMILY_VERSION,
+        mvau_problem_fingerprint,
     )
-    return compose(resolved_source, realization, origin=origin)
+
+    return compose(
+        resolved_source,
+        realization,
+        origin=MVAUElaborationOrigin(
+            MVAU_DECLARATION_FAMILY_VERSION,
+            mvau_problem_fingerprint(resolved_source.point.problem),
+            tuple(sorted(resolved_source.point.assignments.items(), key=lambda item: item[0])),
+            tuple(realization.kernel(name).kernel_id for name in realization.kernels),
+        ),
+    )
 
 
 MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()

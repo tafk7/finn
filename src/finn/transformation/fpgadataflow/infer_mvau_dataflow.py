@@ -4,12 +4,10 @@
 """Lower recognized MatMul sources to unresolved logical MVAU operations.
 
 Recognition and admission are kept apart.  This transform decides only whether
-a subgraph *is* an MVAU source form.  Whether any implementation could support
-that source is answered by the compute Kernel pool: the transform tentatively
-rewrites, projects the resulting logical node, and asks whether at least one
-Kernel's own source-admission constraints can still hold.  Adding a Kernel that
-covers a new datatype therefore widens coverage without editing this file, and
-no integer width, signedness, target, or implementation language appears here.
+a subgraph *is* an MVAU source form.  The operation's closed design inventory
+then answers whether at least one semantic design admits that source.  Physical
+buildability remains a separate design-realization question, so a semantic-only
+design never masquerades as an available implementation.
 """
 
 from __future__ import annotations
@@ -25,8 +23,7 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.transformation.base import Transformation  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
-from finn.dataflow.kernels import admissible_kernels
-from finn.dataflow.ops.mvau import MVAU_COMPUTE_SELECTION
+from finn.dataflow.mvau.designs.inventory import admissible_mvau_designs
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 
 #: Node attribute carrying every original source node a lowering consumed.
@@ -262,9 +259,9 @@ def mvau_source_admission(
     node_name: str,
     context: MVAUDataflowBuildContext,
 ) -> tuple[str, ...]:
-    """Return the compute Kernels that could support one lowered MVAU node.
+    """Return the semantic designs that could express one lowered MVAU node.
 
-    The answer is the Kernel pool's, not this module's.
+    The answer is the MVAU operation inventory's, not this transformation's.
     """
 
     node = next(item for item in model.graph.node if item.name == node_name)
@@ -273,14 +270,14 @@ def mvau_source_admission(
         raise TypeError("admission requires a logical MvauDataflowOp node")
     engine = Engine()
     point = engine.start(operation.validated_design_space(), operation.problem_instance(context))
-    return admissible_kernels(engine, MVAU_COMPUTE_SELECTION, point)
+    return admissible_mvau_designs(engine, point)
 
 
 class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
     """Rewrite recognized MVAU sources into unresolved logical operations.
 
     The rewrite is transactional per candidate: it is applied to a copy, the
-    copy is projected and checked for admission by at least one compute Kernel,
+    copy is projected and checked for admission by at least one MVAU design,
     and only then is it kept.  A refused candidate leaves the graph byte
     identical.  No design choice is persisted here.
     """
@@ -323,9 +320,9 @@ class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
                 findings.append(
                     Finding(
                         FindingKind.LIMITATION,
-                        "mvau-inference-no-admitting-kernel",
+                        "mvau-inference-no-admitting-design",
                         _INFERENCE_PATH,
-                        "no compute Kernel admits this MVAU source form",
+                        "no MVAU DataflowDesign admits this source form",
                         (("source_nodes", names),),
                     )
                 )

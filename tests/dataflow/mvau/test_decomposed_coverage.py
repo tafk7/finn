@@ -50,7 +50,7 @@ from finn.dataflow.mvau.hardware.dotp_axi import (
 )
 from finn.dataflow.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.ops.mvau import (
-    MVAU_DATAFLOW_OP_SPEC,
+    MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
 )
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,

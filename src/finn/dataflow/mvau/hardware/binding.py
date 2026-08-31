@@ -27,6 +27,7 @@ from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_COM
 from finn.dataflow.mvau.compute_pool import MVAUComputeKernelId
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.mvau.hardware.replay_buffer import FINN_ROOT
@@ -115,6 +116,19 @@ def bind_decomposed(resolved: MVAUResolvedDesign) -> DesignRealization:
     now verifies that the node's Region is the one the Kernel's coverage handle
     derives, which is the same claim made once instead of twice.
     """
+
+    design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
+    if design_path is not None and design_path in resolved.point.design_space.decisions:
+        selected_design = MVAU_DESIGN_INVENTORY.inventory.selected(resolved.point)
+        if not isinstance(selected_design, Decided) or selected_design.value.id != "dot_product":
+            raise _fail(
+                "mvau-decomposed-design-unsupported",
+                "this hardware realizes only DotProductDesign",
+            )
+        realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
+        if not isinstance(realization, Decided):
+            raise MVAUElaborationError(realization.findings)
+        return realization.value
 
     selected = resolved.engine.query_property(
         resolved.point, MVAU_COMPUTE_SELECTION.paths.selected_kernel

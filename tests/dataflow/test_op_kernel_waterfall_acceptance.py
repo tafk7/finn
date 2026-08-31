@@ -3,13 +3,12 @@
 
 """The final-acceptance chain of the Op/Kernel waterfall plan, end to end.
 
-MvauDataflowOp class      -> static compute and supplier Kernel pools
+MvauDataflowOp class      -> closed DataflowDesign inventory
 MvauDataflowOp instance   -> live graph/build ProblemInstance
-source inference          -> unresolved node admitted by Kernel constraints
-selection policy          -> compute Kernel + supplier Kernel + locals
-selected Kernels          -> Regions + demands
-assembly                  -> RegionRef or NetworkRef
-providers                 -> physical elaboration + artifacts
+source inference          -> unresolved node admitted by design constraints
+selection policy          -> design + supply + Kernel-local choices
+selected design           -> one flat Network and configured Kernels
+composition               -> physical elaboration + artifacts
 """
 
 from __future__ import annotations
@@ -25,33 +24,21 @@ from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Decided
-from finn.dataflow.kernels import NO_KERNEL, SelectedKernel
-from finn.dataflow.mvau.artifacts import build_mvau_rtl_artifact_requirements
-from finn.dataflow.mvau.compute_kernels import (
-    MVAU_COMPUTE_SELECTION,
-    SOFT_VECTOR_PATHS,
-    SOFT_VECTOR_PROVIDER_ID,
-    WEIGHT_INTERFACE,
-    MVAUComputeKernelId,
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.mvau.hardware.supplied_artifacts import (
+    build_supplied_artifact_requirements,
 )
-from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_REPLAY_SELECTION
-from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
+from finn.dataflow.mvau.input_supply import FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.mvau.providers import elaborate_mvau
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
-    MVAU_WEIGHT_ADAPTER_SELECTION,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     NetworkRef,
 )
 from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
-from finn.dataflow.parameters.supply_kernels import (
-    FINN_RTL_MEMSTREAM_PATHS,
-    MEMSTREAM_PROVIDER_ID,
-    MVAUWeightSupplyKernelId,
-    WeightOrganization,
-)
 from finn.transformation.fpgadataflow.infer_mvau_dataflow import (
     InferMVAUDataflowOp,
     source_nodes_of,
@@ -111,7 +98,7 @@ def test_the_waterfall_runs_from_source_matmul_to_artifact_requirements(
     activation = np.arange(16, dtype=np.float32).reshape(4, 4)
     expected = execute_onnx(source, {"activation": activation})["output"]
 
-    # source inference -> an unresolved logical node admitted by the pool
+    # source inference -> an unresolved logical node admitted by the inventory
     inference = InferMVAUDataflowOp(_context())
     model = source.transform(inference, cleanup=False)
     assert len(inference.report.lowered) == 1
@@ -125,21 +112,20 @@ def test_the_waterfall_runs_from_source_matmul_to_artifact_requirements(
         execute_onnx(model, {"activation": activation})["output"], expected
     )
 
-    # selection policy -> compute Kernel + supplier Kernel + local choices
+    # selection policy -> design + common supply + Kernel-local choices
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     policy = ExplicitAssignmentsPolicy(
         {
             scope_id: {
-                MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.SOFT_VECTOR.value,
-                SOFT_VECTOR_PATHS.pe: 2,
-                SOFT_VECTOR_PATHS.simd: 2,
-                SOFT_VECTOR_PATHS.compute_pumping: False,
-                MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
-                    MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
+                MVAU_DESIGN_INVENTORY.inventory.design_path: DotProductDesign.id,
+                MVAU_DESIGN_INVENTORY.dot_product.pe.path: 2,
+                MVAU_DESIGN_INVENTORY.dot_product.simd.path: 2,
+                MVAU_DESIGN_INVENTORY.compute_pumping.path: False,
+                MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: (
+                    FINN_RTL_MEMSTREAM_SUPPLY
                 ),
-                FINN_RTL_MEMSTREAM_PATHS.organization: WeightOrganization.AS_DEMANDED,
-                FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
-                FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
-                MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: NO_KERNEL,
+                MVAU_DESIGN_INVENTORY.input_supply.settings.ram_style.path: (CyclicRamStyle.BRAM),
+                MVAU_DESIGN_INVENTORY.input_supply.settings.pumped_memory.path: False,
             }
         }
     )
@@ -157,44 +143,37 @@ def test_the_waterfall_runs_from_source_matmul_to_artifact_requirements(
     for assessment in report.feasibility.values():
         assert assessment.verdict is True
 
-    # selected Kernels -> Regions + demands
+    # selected design -> Network and configured physical Kernels
     operation = _operation(model)
     resolved = operation.resolve_dataflow(_context())
     engine = resolved.engine
-    assert engine.query_property(
-        resolved.point, MVAU_COMPUTE_SELECTION.paths.selected_kernel
-    ) == Decided(
-        SelectedKernel(MVAU_COMPUTE_SELECTION.name, MVAUComputeKernelId.SOFT_VECTOR.value, "1")
-    )
-    demand = engine.query_property(
-        resolved.point, MVAU_COMPUTE_SELECTION.paths.demand(WEIGHT_INTERFACE)
-    )
-    supply_port = engine.query_property(
-        resolved.point, MVAU_WEIGHT_SUPPLY_SELECTION.paths.export("output_port")
-    )
-    assert isinstance(demand, Decided) and isinstance(supply_port, Decided)
-    assert demand.value == supply_port.value
+    realization = MVAU_DESIGN_INVENTORY.inventory.realize(engine, resolved.point)
+    assert isinstance(realization, Decided)
+    assert set(realization.value.kernels) == {"compute", "replay", "delivery"}
 
     # assembly -> NetworkRef, with the topology read back rather than chosen
     assert isinstance(resolved.result, NetworkRef)
     association = resolved.result.source_association
     assert association.parameter_topology is MVAUParameterTopology.CYCLIC
-    assert association.compute_kernel_id == MVAUComputeKernelId.SOFT_VECTOR.value
-    assert association.supply_kernel_id == MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
+    assert association.design_id == DotProductDesign.id
+    assert association.compute_kernel_id == "dotp_axi"
+    assert association.supply_kernel_id == FINN_RTL_MEMSTREAM_SUPPLY
     assert association.adapter_kernel_id is None
     assert association.fused_source_node_ids == ("matmul0",)
 
-    # providers -> physical elaboration + artifact requirements
-    elaboration = elaborate_mvau_rtl_softvec(resolved)
-    assert elaboration.origin.kernel_ids == (
-        MVAUComputeKernelId.SOFT_VECTOR.value,
-        MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value,
+    # configured Kernels -> physical elaboration + supplied artifact requirements
+    elaboration = elaborate_mvau(resolved)
+    assert elaboration.origin.kernel_ids == ("dotp_axi", "replay_buffer", "finn_rtl_memstream")
+    assert elaboration.origin.provider_ids == ()
+    weights = model.get_initializer("weights")
+    assert weights is not None
+    requirements = build_supplied_artifact_requirements(
+        resolved,
+        realization.value,
+        elaboration,
+        weights,
+        Path.cwd(),
     )
-    assert elaboration.origin.provider_ids == (
-        SOFT_VECTOR_PROVIDER_ID,
-        MEMSTREAM_PROVIDER_ID,
-    )
-    requirements = build_mvau_rtl_artifact_requirements(resolved, elaboration, model, Path.cwd())
     assert requirements.elaboration.origin == elaboration.origin
 
     # node-backed choices stay sparse, transactional, and reloadable
@@ -206,36 +185,8 @@ def test_the_waterfall_runs_from_source_matmul_to_artifact_requirements(
     assert restored.source_scope_id == resolved.source_scope_id
 
 
-def test_the_result_property_never_needs_a_topology_decision() -> None:
-    """Equal Regions keep distinct Kernels, and no choice grid remains."""
+def test_the_result_property_uses_only_the_frozen_v6_decisions() -> None:
 
     decisions = {str(item.path) for item in MVAU_DATAFLOW_OP_SPEC.decisions}
     assert str(MVAUDataflowOpPaths.PARAMETER_TOPOLOGY) not in decisions
-    identity_decisions = {
-        str(MVAU_COMPUTE_SELECTION.paths.kernel),
-        str(MVAU_REPLAY_SELECTION.paths.kernel),
-        str(MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel),
-        str(MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel),
-    }
-    assert identity_decisions <= decisions
-    owners = {
-        f"{selection.name}.{kernel.id}."
-        for selection in (
-            MVAU_COMPUTE_SELECTION,
-            MVAU_REPLAY_SELECTION,
-            MVAU_WEIGHT_SUPPLY_SELECTION,
-            MVAU_WEIGHT_ADAPTER_SELECTION,
-        )
-        for kernel in selection.kernels
-    } | {
-        # The physical Kernels own choices too.  They are in no selection --
-        # one covers each Region, so there is nothing to choose between -- but
-        # a decision of theirs is as owned as any other.
-        f"{kernel.namespace}."
-        for kernel in DECOMPOSED_MVAU_KERNELS.hardware
-    }
-    for path in decisions - identity_decisions:
-        # Everything else belongs to exactly one named Kernel, semantic or
-        # physical.  A decision belonging to none would be a free-floating
-        # choice the design space offers and nobody owns.
-        assert sum(path.startswith(owner) for owner in owners) == 1, path
+    assert decisions == {str(path) for path in MvauDataflowOp.decision_nodeattrs()}

@@ -32,6 +32,8 @@ from finn.dataflow.mvau.elaboration import (
     elaborate_mvau_rtl_softvec,
 )
 from finn.dataflow.mvau.hardware.composition import elaborate_decomposed
+from finn.dataflow.mvau.designs.dot_product import compose_dot_product_design
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau import MVAU_COMPUTE_SELECTION
 
@@ -60,6 +62,21 @@ def _fail(code: str, message: str, values: tuple[tuple[str, object], ...] = ()) 
 
 def elaborate_mvau(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboration:
     """Elaborate the selected compute Kernel, by whichever route it has."""
+
+    design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
+    if design_path is not None and design_path in resolved.point.design_space.decisions:
+        selected_design = MVAU_DESIGN_INVENTORY.inventory.selected(resolved.point)
+        if not isinstance(selected_design, Decided):
+            raise MVAUElaborationError(selected_design.findings)
+        if selected_design.value.id != "dot_product":
+            raise _fail(
+                "mvau-dispatch-design-semantic-only",
+                f"{selected_design.value.id} has no production physical Kernel",
+            )
+        realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
+        if not isinstance(realization, Decided):
+            raise MVAUElaborationError(realization.findings)
+        return compose_dot_product_design(resolved, realization.value)
 
     answer = resolved.engine.query_property(
         resolved.point, MVAU_COMPUTE_SELECTION.paths.selected_kernel

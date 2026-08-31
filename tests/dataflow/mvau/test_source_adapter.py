@@ -25,12 +25,15 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     MVAU_SOURCE_MAPPING,
     MVAULegacyImportMode,
     MVAUProjectionContext,
+    MVAUResolvedDesign,
     MVAUSourceAdapterError,
     MVAUSourceProjection,
     project_mvau_source,
@@ -137,6 +140,40 @@ def _project_preserving(model: ModelWrapper, part: str = ULTRASCALE_PART) -> MVA
         NODE_ID,
         _context(part),
         import_mode=MVAULegacyImportMode.PRESERVE_SPECIALIZATION,
+    )
+
+
+def _v11_assignments(*, supplied: bool = False) -> dict[QualifiedPath | str, object]:
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_path is not None
+    values: dict[QualifiedPath | str, object] = {
+        assembly.inventory.design_path: DotProductDesign.id,
+        assembly.dot_product.pe.path: 2,
+        assembly.dot_product.simd.path: 2,
+        assembly.compute_pumping.path: False,
+        assembly.input_supply.declaration.choice.path: (
+            FINN_RTL_MEMSTREAM_SUPPLY if supplied else EXTERNAL_SUPPLY
+        ),
+    }
+    if supplied:
+        values.update(
+            {
+                assembly.input_supply.settings.ram_style.path: CyclicRamStyle.BRAM,
+                assembly.input_supply.settings.pumped_memory.path: False,
+            }
+        )
+    return values
+
+
+def _v11_resolved(
+    model: ModelWrapper,
+    context: MVAUProjectionContext,
+    *,
+    supplied: bool = False,
+) -> MVAUResolvedDesign:
+    return start_mvau_projection(
+        project_mvau_source(model, NODE_ID, context),
+        _v11_assignments(supplied=supplied),
     )
 
 
@@ -299,13 +336,9 @@ def test_unsupported_and_ambiguous_legacy_attributes_are_explicit() -> None:
 
 
 def test_saved_choices_reconstitute_identically_in_a_fresh_process(tmp_path: Path) -> None:
-    model = _make_mvau_model(
-        op_type="MVAU_rtl",
-        mem_mode="internal_decoupled",
-        interleave=2,
-    )
-    context = _context(VERSAL_PART)
-    original = start_mvau_projection(_project_preserving(model, VERSAL_PART))
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    context = _context()
+    original = _v11_resolved(model, context, supplied=True)
     envelope = save_mvau_selection(model, NODE_ID, original.point)
     model_path = tmp_path / "selected.onnx"
     model.save(model_path)
@@ -341,7 +374,7 @@ print(json.dumps({
         [str(Path.cwd() / "src"), str(Path.cwd() / "tests"), environment.get("PYTHONPATH", "")]
     )
     completed = subprocess.run(
-        [sys.executable, "-c", code, str(model_path), VERSAL_PART],
+        [sys.executable, "-c", code, str(model_path), ULTRASCALE_PART],
         check=True,
         capture_output=True,
         text=True,
@@ -358,27 +391,11 @@ print(json.dumps({
     assert local_reload.point.assignments == original.point.assignments
 
 
-def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> None:
-    model = _make_mvau_model(
-        op_type="MVAU_rtl",
-        mem_mode="internal_decoupled",
-        interleave=2,
-    )
-    context = _context(VERSAL_PART)
+def test_supplied_composition_round_trips_without_an_adapter(tmp_path: Path) -> None:
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    context = _context()
     projection = project_mvau_source(model, NODE_ID, context)
-    assignments: dict[QualifiedPath | str, object] = {
-        MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.BATCH_INTERLEAVED_DSP.value,
-        BATCH_INTERLEAVED_PATHS.pe: 2,
-        BATCH_INTERLEAVED_PATHS.simd: 2,
-        BATCH_INTERLEAVED_PATHS.interleave: 2,
-        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: (
-            MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
-        ),
-        FINN_RTL_MEMSTREAM_PATHS.organization: WeightOrganization.STANDARD_FULL_TILE,
-        FINN_RTL_MEMSTREAM_PATHS.ram_style: CyclicRamStyle.BRAM,
-        FINN_RTL_MEMSTREAM_PATHS.pumped_memory: False,
-        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel: FULL_TILE_TO_CHUNKED,
-    }
+    assignments = _v11_assignments(supplied=True)
     original = start_mvau_projection(projection, assignments)
     assert isinstance(original.result, NetworkRef)
     save_mvau_selection(model, NODE_ID, original.point)
@@ -387,14 +404,7 @@ def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> Non
 
     stored = json.loads(model.get_metadata_prop(f"finn.dataflow.mvau.selection:{NODE_ID}"))
     stored_paths = {item["path"] for item in stored["assignments"]}
-    for path in (
-        MVAU_COMPUTE_SELECTION.paths.kernel,
-        BATCH_INTERLEAVED_PATHS.pe,
-        BATCH_INTERLEAVED_PATHS.simd,
-        MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel,
-        FINN_RTL_MEMSTREAM_PATHS.organization,
-        MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel,
-    ):
+    for path in assignments:
         assert str(path) in stored_paths
     assert not any(path.startswith(("semantic.", "constraint.")) for path in stored_paths)
 
@@ -405,11 +415,11 @@ def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> Non
     assert tuple(node.id for node in restored.result.network.nodes) == (
         "compute",
         "delivery",
-        "weight_adapter",
+        "replay",
     )
     assert tuple(edge.id for edge in restored.result.network.edges) == (
-        "adapter_to_compute",
-        "delivery_to_adapter",
+        "activation_replay",
+        "weight",
     )
     assert tuple(boundary.id for boundary in restored.result.network.boundaries) == (
         "activation",
@@ -421,9 +431,9 @@ def test_adapter_composition_round_trips_by_recomputation(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("changed_fact", ["shape", "datatype", "weights", "target"])
 def test_reconstitution_rejects_each_relevant_problem_change(changed_fact: str) -> None:
-    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
     context = _context()
-    original = start_mvau_projection(_project_preserving(model))
+    original = _v11_resolved(model, context)
     save_mvau_selection(model, NODE_ID, original.point)
     changed = ModelWrapper(model.model, make_deepcopy=True)
     changed_context = context
@@ -446,8 +456,8 @@ def test_reconstitution_rejects_each_relevant_problem_change(changed_fact: str) 
 
 
 def test_reconstitution_rejects_changed_declaration_family_version() -> None:
-    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
-    original = start_mvau_projection(_project_preserving(model))
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    original = _v11_resolved(model, _context())
     save_mvau_selection(model, NODE_ID, original.point)
     key = f"finn.dataflow.mvau.selection:{NODE_ID}"
     payload = json.loads(model.get_metadata_prop(key))
@@ -458,42 +468,38 @@ def test_reconstitution_rejects_changed_declaration_family_version() -> None:
         reconstitute_mvau_selection(model, NODE_ID, _context())
 
     assert {finding.code for finding in mismatch.value.findings} == {
-        "mvau-selection-envelope-incompatible"
+        "mvau-selection-family-version-incompatible"
+    }
+    assert dict(mismatch.value.findings[0].values) == {
+        "actual_version": "obsolete-family",
+        "expected_version": "mvau-source-composition-v11",
     }
 
 
-def test_reconstitution_rejects_a_v9_selection_rather_than_migrating_it() -> None:
-    """The QONNX datatype bump, tested at the version it actually rejects.
+def test_reconstitution_rejects_a_v10_selection_rather_than_migrating_it() -> None:
+    assert MVAU_DECLARATION_FAMILY_VERSION == "mvau-source-composition-v11"
 
-    ``obsolete-family`` above proves the mechanism works for *some* string.
-    This names the real predecessor, because a v9 envelope is the one someone
-    will genuinely have on disk and the one whose reinterpretation would be
-    silently wrong: v9 fingerprints element types as
-    ``{"numeric_element_type": [family, width]}``, which cannot distinguish the
-    ``TERNARY`` problem it was taken from an ``INT2`` one. Deriving a v10 name
-    from that pair is exactly the lossy reconstruction this migration removed,
-    so the selection is refused rather than migrated.
-    """
-
-    assert MVAU_DECLARATION_FAMILY_VERSION == "mvau-source-composition-v10"
-
-    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
-    original = start_mvau_projection(_project_preserving(model))
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    original = _v11_resolved(model, _context())
     save_mvau_selection(model, NODE_ID, original.point)
     key = f"finn.dataflow.mvau.selection:{NODE_ID}"
     payload = json.loads(model.get_metadata_prop(key))
-    payload["declaration_family_version"] = "mvau-source-composition-v9"
+    payload["declaration_family_version"] = "mvau-source-composition-v10"
     model.set_metadata_prop(key, json.dumps(payload))
 
     with pytest.raises(MVAUSourceAdapterError) as mismatch:
         reconstitute_mvau_selection(model, NODE_ID, _context())
 
     assert {finding.code for finding in mismatch.value.findings} == {
-        "mvau-selection-envelope-incompatible"
+        "mvau-selection-family-version-incompatible"
+    }
+    assert dict(mismatch.value.findings[0].values) == {
+        "actual_version": "mvau-source-composition-v10",
+        "expected_version": "mvau-source-composition-v11",
     }
 
 
-def test_a_saved_v10_selection_reloads_with_its_datatypes_intact() -> None:
+def test_a_saved_v11_selection_reloads_with_its_datatypes_intact() -> None:
     """Save and reload across the new encoding, end to end.
 
     The round trip that matters after the representation change: the persisted
@@ -502,8 +508,8 @@ def test_a_saved_v10_selection_reloads_with_its_datatypes_intact() -> None:
     datatypes anyway and so prove nothing.
     """
 
-    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
-    original = start_mvau_projection(_project_preserving(model))
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    original = _v11_resolved(model, _context())
     save_mvau_selection(model, NODE_ID, original.point)
 
     reloaded = reconstitute_mvau_selection(model, NODE_ID, _context())
@@ -522,8 +528,8 @@ def test_a_saved_v10_selection_reloads_with_its_datatypes_intact() -> None:
 
 
 def test_reconstitution_rejects_changed_problem_and_obsolete_choice(tmp_path: Path) -> None:
-    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded")
-    original = start_mvau_projection(_project_preserving(model))
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    original = _v11_resolved(model, _context())
     save_mvau_selection(model, NODE_ID, original.point)
 
     with pytest.raises(MVAUSourceAdapterError) as mismatch:
