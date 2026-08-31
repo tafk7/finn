@@ -82,8 +82,10 @@ def _initializer_file(
     return "" if runtime_writable else "memblock.dat"
 
 
-def _local_state_available(initializer_available: bool, runtime_writable: bool) -> bool:
-    return initializer_available or runtime_writable
+def _initializer_backed(initializer_available: bool) -> bool:
+    """Limit the v6 vertical slice to the initializer-backed path it proves."""
+
+    return initializer_available
 
 
 def _pumping_supported(output_port: Port, pumped_memory: bool) -> bool:
@@ -147,12 +149,9 @@ class FinnRtlMemstreamKernel(HardwareKernel):
             evaluate=_initializer_file,
         )
         design.coverage_constraint(
-            "local_state_available",
-            dependencies={
-                "initializer_available": inputs.initializer_available,
-                "runtime_writable": inputs.runtime_writable,
-            },
-            evaluate=_local_state_available,
+            "initializer_backed",
+            dependencies={"initializer_available": inputs.initializer_available},
+            evaluate=_initializer_backed,
         )
         design.coverage_constraint(
             "pumping_supported",

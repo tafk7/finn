@@ -72,6 +72,8 @@ def requirements_for(
     weights: np.ndarray,
     root: Path,
     case: Case = CASE,
+    *,
+    pumped_memory: bool = False,
 ) -> MVAUDecomposedArtifactRequirements:
     """Build the production supplied artifact used by every D6a hardware gate."""
 
@@ -109,7 +111,7 @@ def requirements_for(
             assembly.compute_pumping.path: case.pumping,
             assembly.input_supply.declaration.choice.path: FINN_RTL_MEMSTREAM_SUPPLY,
             assembly.input_supply.settings.ram_style.path: CyclicRamStyle.BRAM,
-            assembly.input_supply.settings.pumped_memory.path: False,
+            assembly.input_supply.settings.pumped_memory.path: pumped_memory,
         },
     ).point
     realized = assembly.inventory.realize(engine, point)
@@ -147,29 +149,31 @@ def main() -> int:
     weights = _weights(CASE, generator)
     activations = _activations(CASE, generator)
     expected = golden(_model(CASE, weights), activations, weights)
-    requirements = requirements_for(weights, root)
-    values = dict(requirements.parameters)
-    output_width = int(values["ACCU_WIDTH"])
-    activation_width = int(values["ACTIVATION_WIDTH"])
     expected_beats = CASE.repetitions * CASE.neuron_folds
-    for stalls in (False, True):
-        mode = "stalled" if stalls else "free-running"
-        with tempfile.TemporaryDirectory() as scratch:
-            written = write_decomposed_artifact(requirements, scratch)
-            sources = [path for path in written if Path(path).suffix in {".v", ".sv"}]
-            observed_beats = drive(
-                requirements.top_module_name,
-                sources,
-                {"in0": activation_beats(CASE, activations, activation_width)},
-                expected_beats,
-                stalls=stalls,
-                data_files=dict(requirements.data_files),
-            )
-        observed = unpack_output(CASE, observed_beats, output_width)
-        if not np.array_equal(observed, expected):
-            print(f"{mode}: FAIL\nexpected={expected}\nobserved={observed}")
-            return 1
-        print(f"{mode}: PASS ({expected_beats} output beats)")
+    for pumped_memory in (False, True):
+        requirements = requirements_for(weights, root, pumped_memory=pumped_memory)
+        values = dict(requirements.parameters)
+        output_width = int(values["ACCU_WIDTH"])
+        activation_width = int(values["ACTIVATION_WIDTH"])
+        pumping = "pumped" if pumped_memory else "unpumped"
+        for stalls in (False, True):
+            mode = "stalled" if stalls else "free-running"
+            with tempfile.TemporaryDirectory() as scratch:
+                written = write_decomposed_artifact(requirements, scratch)
+                sources = [path for path in written if Path(path).suffix in {".v", ".sv"}]
+                observed_beats = drive(
+                    requirements.top_module_name,
+                    sources,
+                    {"in0": activation_beats(CASE, activations, activation_width)},
+                    expected_beats,
+                    stalls=stalls,
+                    data_files=dict(requirements.data_files),
+                )
+            observed = unpack_output(CASE, observed_beats, output_width)
+            if not np.array_equal(observed, expected):
+                print(f"{pumping} {mode}: FAIL\nexpected={expected}\nobserved={observed}")
+                return 1
+            print(f"{pumping} {mode}: PASS ({expected_beats} output beats)")
     print("RESULT: D6A MEMSTREAM NUMERIC PASS")
     return 0
 

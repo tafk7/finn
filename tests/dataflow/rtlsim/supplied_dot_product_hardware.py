@@ -46,6 +46,10 @@ HARDWARE_CASE = replace(CASE, label="dot_product_memstream_hardware", target=MVA
 
 _UTILIZATION = re.compile(r"^\|\s*(DSP\w*)\s*\|\s*(\d+)\s*\|", re.MULTILINE)
 _SUMMARY_ROW = "DSPs"
+_BRAM_UTILIZATION = re.compile(
+    r"^\|\s*(Block RAM Tile|RAMB(?:18|36)(?:E\d)?(?:/FIFO)?\*?)\s*\|\s*([0-9.]+)\s*\|",
+    re.MULTILINE,
+)
 _ADDRESS_WIDTH_WARNING = re.compile(
     r"actual bit length .* differs from formal bit length .* "
     r"for port 's_axilite_(?:AWADDR|ARADDR)'"
@@ -174,7 +178,11 @@ def main(argv: list[str] | None = None) -> int:
             if inferred <= 0:
                 print(f"OOC synthesis: FAIL (no DSP primitive in {cells or 'report'})")
                 return FAIL
-            print(f"OOC synthesis: PASS ({inferred} DSP primitives)")
+            memories = {name: float(count) for name, count in _BRAM_UTILIZATION.findall(report)}
+            if not memories or max(memories.values()) <= 0:
+                print(f"OOC synthesis: FAIL (no BRAM resource in {memories or 'report'})")
+                return FAIL
+            print(f"OOC synthesis: PASS ({inferred} DSP primitives, BRAM resources {memories})")
 
         prepared_ip = prepare_ip_package(
             packaged, target.fpga_part, scratch / "ip", builder=builder

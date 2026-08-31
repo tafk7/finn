@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
+import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, DesignPoint, Engine, QualifiedPath, Unresolved
@@ -263,11 +264,12 @@ def test_memstream_source_association_moves_weights_to_delivery_local_state() ->
     assert weight.destination == BindingLocalStateDestination(DELIVERY_NODE, "weights")
 
 
-def test_memstream_requires_initializer_or_runtime_writability() -> None:
+@pytest.mark.parametrize("runtime_writable", (False, True))
+def test_v6_memstream_requires_initializer_backed_supply(runtime_writable: bool) -> None:
     engine, point = _point(
         FINN_RTL_MEMSTREAM_SUPPLY,
         initialized=False,
-        runtime_writable=False,
+        runtime_writable=runtime_writable,
     )
     answer = MVAU_DOT_PRODUCT_DESIGN.inventory.realize(engine, point)
     assert isinstance(answer, Unresolved)
