@@ -241,8 +241,7 @@ def test_enumeration_returns_whole_points_not_one_decision_at_a_time() -> None:
         assert isinstance(result, Decided)
 
 
-def test_runtime_writable_points_use_only_the_closed_supply_inventory() -> None:
-
+def test_initializer_free_runtime_writable_points_defer_memstream_supply() -> None:
     model = _model(with_initializer=False)
     operation = _operation(model)
     engine = Engine()
@@ -260,7 +259,7 @@ def test_runtime_writable_points_use_only_the_closed_supply_inventory() -> None:
         point.assignments.get(MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path)
         for point in context.feasible_points()
     }
-    assert suppliers == {EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY}
+    assert suppliers == {EXTERNAL_SUPPLY}
 
 
 def test_committed_choices_survive_save_and_reload(tmp_path: Path) -> None:
