@@ -99,7 +99,9 @@ FINN_DOCKER_TARGET_EXPLICIT="${FINN_DOCKER_TARGET+yes}"
 : "${IMAGENET_VAL_PATH:=}"
 : "${FINN_DOCKER_CACHE_DIR:=}"
 : "${FINN_SSH_KEY_DIR:=}"
-: "${FINN_HOST_BUILD_DIR:=/tmp/finn_dev_$(id -un | tr '[:upper:]' '[:lower:]')}"
+# FINN_HOST_BUILD_DIR is deliberately NOT defaulted here. finn-env resolves it
+# and creates it; this script had a fifth, different default
+# (/tmp/finn_dev_$USER) for the same question.
 
 # The build TARGET may be sbx-qualified; the TIER never is. Every capability
 # decision is a property of the tier, so `dev` means the same thing on both
@@ -219,14 +221,12 @@ RUN_ENV=".finn-run.env"
     echo "FINN_WORKSPACE_SOURCE=$SCRIPTPATH"
     echo "FINN_WORKSPACE_TARGET=$SCRIPTPATH"
     echo "FINN_ROOT=$SCRIPTPATH"
-    echo "FINN_HOST_BUILD_DIR=$FINN_HOST_BUILD_DIR"
     echo "FINN_PROFILE=$FINN_PROFILE"
     echo "FINN_DEPS=$FINN_DEPS"
     echo "JUPYTER_PORT=$JUPYTER_PORT"
     echo "NETRON_PORT=$NETRON_PORT"
     echo "GIT_DESCRIBE=$GIT_DESCRIBE"
 } >> "$RUN_ENV"
-mkdir -p "$FINN_HOST_BUILD_DIR"
 
 SERVICE="$FINN_TIER"
 COMPOSE_PROFILE=()

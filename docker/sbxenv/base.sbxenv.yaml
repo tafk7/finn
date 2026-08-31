@@ -23,6 +23,9 @@ kits:
 
 env:
   FINN_ROOT: "${FINN_WORKSPACE_SOURCE}"
+  # Inside the VM, deliberately -- not a host mount, so not the host default.
+  # A build tree that outlives the sandbox has nowhere to live. The uid in a
+  # sandbox is always agent(1000), so this needs no per-user suffix.
   FINN_BUILD_DIR: /tmp/finn_build
   FINN_DEPS: "${FINN_DEPS}"
 

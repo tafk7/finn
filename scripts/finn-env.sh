@@ -50,10 +50,12 @@ source "$FINN_ROOT/.venv/bin/activate"
 _finn_gecho "Activated FINN environment at $FINN_ROOT"
 
 # Set FINN environment variables
-# Use FINN_HOST_BUILD_DIR (consistent with Docker naming), also export as FINN_BUILD_DIR
-export FINN_HOST_BUILD_DIR="${FINN_HOST_BUILD_DIR:-/tmp/finn_local_$(whoami)}"
+# The build directory, from finn-env -- which resolves it and creates it. This
+# used to default to /tmp/finn_local_$(whoami), a fifth answer to a question
+# that should have one.
+eval "$("$FINN_ROOT/docker/finn-env" inspect --tier dev --format sh 2>/dev/null \
+        | grep '^FINN_HOST_BUILD_DIR=' | sed 's/^/export /')"
 export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
-mkdir -p "$FINN_BUILD_DIR"
 
 # Board files path
 export FINN_BOARD_FILES_PATH="$FINN_ROOT/deps/board_files"

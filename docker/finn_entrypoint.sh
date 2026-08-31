@@ -93,10 +93,10 @@ export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_fil
 # nothing but a KeyError, because finn.util.basic reads os.environ["FINN_BUILD_DIR"]
 # with no default and pytest turns that into 7 collection errors.
 #
-# run-docker.sh still passes an explicit FINN_HOST_BUILD_DIR and mounts it, so
-# artifacts survive the container there. This default only covers the bare
-# `docker run` / sbx case, where an in-container tmpdir is the right scope: a
-# build tree that outlives the sandbox has nowhere to live anyway.
+# Deliberately the SAME formula as finn-env's default, not a second opinion.
+# This is the last resort: a bare `docker run <image>` with no orchestration.
+# Every supported lane resolves and mounts a host directory before we get here,
+# so artifacts survive. If you change the formula, change it in finn-env too.
 export FINN_BUILD_DIR="${FINN_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
 mkdir -p "$FINN_BUILD_DIR" 2>/dev/null || true
 

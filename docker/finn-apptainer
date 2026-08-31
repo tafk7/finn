@@ -85,6 +85,10 @@ done
 REMOVE=0
 if [ "${1:-}" = "rm" ]; then REMOVE=1; shift; fi
 
+# build by default, unlike finn-sbx. This lane is a quick working environment
+# for someone on a cluster or the wrong distro; they want Vivado. There is no
+# containment story here to protect (see the header), so the narrow tier buys
+# nothing that would justify making tools the opt-in.
 TIER="${1:-build}"
 case "$TIER" in
     dev|build|build-xrt) shift || true ;;

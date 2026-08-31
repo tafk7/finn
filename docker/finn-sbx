@@ -47,6 +47,10 @@ command -v sbx >/dev/null || { recho "sbx not found on PATH"; exit 1; }
 REMOVE=0
 if [ "${1:-}" = "rm" ]; then REMOVE=1; shift; fi
 
+# dev by default. This lane exists for autonomous agents, and the narrow tier
+# is the one that needs no toolchain, no licence and no network grant. Asking
+# for tools should be explicit. (finn-apptainer defaults to `build` for the
+# opposite reason -- see its header.)
 TIER="${1:-dev}"
 case "$TIER" in
     dev|build|build-xrt) shift || true ;;

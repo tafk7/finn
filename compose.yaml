@@ -86,18 +86,24 @@ services:
       # env file so the legacy contract keeps mirroring the host path -- see the
       # note at the top of this file about FINN_ROOT differing between tiers.
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      # The build directory. Without this, dev had no FINN_BUILD_DIR and no
-      # mount, so finn_entrypoint.sh fell back to an in-container /tmp path and
-      # `--rm` deleted every generated artifact on exit. The old launcher
-      # mounted this unconditionally for every tier.
+      # The build directory. Comes from .env; finn-env resolves it AND creates
+      # it, because Docker would otherwise create a missing bind source as
+      # ROOT and the container could not write it.
       #
-      # This is scratch space, not host state in the sense the dev contract
-      # means: no toolchain, no licence, no secrets.
-      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
+      # create_host_path:false so a missing .env fails with a message that
+      # names itself, rather than silently landing artifacts in a container
+      # path that `--rm` then deletes -- which is what dev did before.
+      #
+      # Scratch space, not host state in the sense the dev contract means.
+      - type: bind
+        source: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        bind:
+          create_host_path: false
     working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
     environment:
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build:
@@ -122,16 +128,20 @@ services:
       # service, with an error that names itself, instead of silently binding a
       # directory Docker helpfully created.
       - type: bind
-        source: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
-        target: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
+        source: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        target: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
         read_only: true
         bind:
           create_host_path: false
-      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
+      - type: bind
+        source: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        bind:
+          create_host_path: false
     environment:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build-xrt:
@@ -147,17 +157,21 @@ services:
     volumes:
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
       - type: bind
-        source: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
-        target: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
+        source: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        target: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
         read_only: true
         bind:
           create_host_path: false
       - ${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:ro
-      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
+      - type: bind
+        source: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
+        bind:
+          create_host_path: false
     environment:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   notebook:
