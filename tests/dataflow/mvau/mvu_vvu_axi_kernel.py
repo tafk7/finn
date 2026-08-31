@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``MvuVvuAxiKernel``: FINN's fused ``mvu_vvu_axi`` covering *both* Regions.
+"""Test-only ``MvuVvuAxiKernel`` covering both DotProduct Regions.
 
 The forcing case for Phase 4 of the Region/Kernel binding migration, and the
 one that proves physical coverage is not one-to-one with Regions.  Where the

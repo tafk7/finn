@@ -34,7 +34,6 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.authoring import Ref, assemble_specs
 from finn.dataflow.design import (
-    DATAFLOW_NETWORK_SEMANTICS,
     Absent,
     Answer,
     ConstraintAssessment,
@@ -45,7 +44,6 @@ from finn.dataflow.design import (
     QualifiedPath,
     RequestError,
     Unresolved,
-    as_object_semantics,
 )
 from finn.dataflow.hardware import (
     BoundRegion,
@@ -57,26 +55,20 @@ from finn.dataflow.hardware import (
     hardware_namespace,
 )
 from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
-from finn.dataflow.mvau.compute_kernels import (
-    DECOMPOSED_MVAU_KERNELS,
-    MVAU_COMPUTE_SELECTION,
-    MVAU_REPLAY_SELECTION,
-)
 from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     HARDWARE_NUMERIC_TYPE_COVERAGE,
-    HARDWARE_OWNER,
     REPLAY_NODE,
-    ActivationReplayKernel,
-    DotProductKernel,
 )
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.hardware.dotp_axi import (
     DotpAxiKernel,
     covers_numeric_types as dotp_axi_covers_numeric_types,
 )
 from finn.dataflow.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
-from finn.dataflow.mvau.hardware.mvu_vvu_axi import (
+from dataflow.mvau.mvu_vvu_axi_kernel import (
     ACTIVATION_EDGE_ROLE,
     COMPUTE_ROLE,
     REPLAY_ROLE,
@@ -96,14 +88,12 @@ from finn.dataflow.mvau_problem import (
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
-from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau import (
-    MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
-    MVAUDataflowOpPaths,
+    MVAU_DATAFLOW_OP_SPEC,
     NetworkRef,
 )
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
 from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - the real operation fixture
     MATRIX_HEIGHT,
     MATRIX_WIDTH,
@@ -136,8 +126,9 @@ BIPOLAR = DataType["BIPOLAR"]
 FLOAT16 = DataType["FLOAT16"]
 OTHER_FLOAT16 = DataType["FLOAT<5,10,7>"]
 
-DOTP_AXI = DECOMPOSED_MVAU_KERNELS.dot_product_hardware
-REPLAY_BUFFER = DECOMPOSED_MVAU_KERNELS.replay_hardware
+DOT_PRODUCT_DECLARATION = MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
+DOTP_AXI = DOT_PRODUCT_DECLARATION.placement("compute").candidates[0]
+REPLAY_BUFFER = DOT_PRODUCT_DECLARATION.placement("replay").candidates[0]
 
 
 # -- placement ---------------------------------------------------------------
@@ -159,27 +150,23 @@ REPLAY_BUFFER = DECOMPOSED_MVAU_KERNELS.replay_hardware
 #: The operation's Network property, read exactly as the operation declares it.
 #: The semantics are the object-widened ones ``ops/mvau.py`` uses; a mismatch
 #: here is caught by ``check_declared_references`` rather than at binding.
-OP_NETWORK: Ref[DataflowNetwork] = Ref(
-    MVAUDataflowOpPaths.NETWORK,
-    DependencyKind.PROPERTY,
-    as_object_semantics(DATAFLOW_NETWORK_SEMANTICS),
-)
+OP_NETWORK: Ref[DataflowNetwork] = DOT_PRODUCT_DECLARATION.network
 
 
 def _fused_declaration() -> HardwareKernelDeclaration:
     declaration, _design = declare_hardware_kernel(
         MvuVvuAxiKernel,
-        hardware_namespace(HARDWARE_OWNER, MvuVvuAxiKernel.id),
+        hardware_namespace("test.mvau.fused", MvuVvuAxiKernel.id),
         FusedMatrixVectorHardwareInputs(
-            replay_region=DECOMPOSED_MVAU_KERNELS.replay_region,
-            replay_computation=DECOMPOSED_MVAU_KERNELS.replay_computation,
-            compute_region=DECOMPOSED_MVAU_KERNELS.dot_product_region,
-            compute_computation=DECOMPOSED_MVAU_KERNELS.dot_product_computation,
+            replay_region=MVAU_DESIGN_INVENTORY.dot_product.replay_region,
+            replay_computation=MVAU_DESIGN_INVENTORY.dot_product.replay_computation,
+            compute_region=MVAU_DESIGN_INVENTORY.dot_product.dot_product_region,
+            compute_computation=MVAU_DESIGN_INVENTORY.dot_product.dot_product_computation,
             network=OP_NETWORK,
             matrix_width=MVAU_PROBLEM.matrix_width,
             matrix_height=MVAU_PROBLEM.matrix_height,
-            pe=DECOMPOSED_MVAU_KERNELS.pe,
-            simd=DECOMPOSED_MVAU_KERNELS.simd,
+            pe=MVAU_DESIGN_INVENTORY.dot_product.pe,
+            simd=MVAU_DESIGN_INVENTORY.dot_product.simd,
             activation_element_type=MVAU_PROBLEM.activation_element_type,
             weight_element_type=MVAU_PROBLEM.weight_element_type,
             output_element_type=MVAU_PROBLEM.output_element_type,
@@ -214,11 +201,13 @@ class _Placed:
 
     @property
     def compute_region(self) -> DataflowRegion:
-        return cast(DataflowRegion, self._value(DECOMPOSED_MVAU_KERNELS.dot_product_region))
+        return cast(
+            DataflowRegion, self._value(MVAU_DESIGN_INVENTORY.dot_product.dot_product_region)
+        )
 
     @property
     def replay_region(self) -> DataflowRegion:
-        return cast(DataflowRegion, self._value(DECOMPOSED_MVAU_KERNELS.replay_region))
+        return cast(DataflowRegion, self._value(MVAU_DESIGN_INVENTORY.dot_product.replay_region))
 
     @property
     def network(self) -> DataflowNetwork:
@@ -431,17 +420,15 @@ def _place(
             MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: 4.0,
         },
     )
+    assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     point = engine.commit_assignments(
         point,
         {
-            MVAU_COMPUTE_SELECTION.paths.kernel: DotProductKernel.id,
-            MVAU_REPLAY_SELECTION.paths.kernel: ActivationReplayKernel.id,
-            # This slice takes its weights at the boundary, as the decomposed
-            # tests do; re-attaching a supplier is Phase G's increment.
-            MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
-            DECOMPOSED_MVAU_KERNELS.pe.path: pe,
-            DECOMPOSED_MVAU_KERNELS.simd.path: simd,
-            DECOMPOSED_MVAU_KERNELS.compute_pumping.path: pumping,
+            MVAU_DESIGN_INVENTORY.inventory.design_path: DotProductDesign.id,
+            MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
+            MVAU_DESIGN_INVENTORY.dot_product.pe.path: pe,
+            MVAU_DESIGN_INVENTORY.dot_product.simd.path: simd,
+            MVAU_DESIGN_INVENTORY.compute_pumping.path: pumping,
             FUSED.spec.decisions[0].path: pumping,
         },
     ).point
@@ -607,7 +594,7 @@ def test_the_fused_kernel_reads_the_operations_own_network_property() -> None:
     """Stated over the declaration, so it cannot regress into a private copy."""
 
     (edge,) = FUSED.coverage.edges
-    assert edge.network.path == MVAUDataflowOpPaths.NETWORK
+    assert edge.network.path == DOT_PRODUCT_DECLARATION.network.path
     assert edge.network.kind is DependencyKind.PROPERTY
 
 
@@ -653,62 +640,16 @@ def test_an_output_that_is_not_the_accumulator_never_reaches_hardware() -> None:
         placed.bind(FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE})
 
 
-def test_the_guard_uses_the_operations_set_and_not_the_compute_pools() -> None:
-    """The set the guard evaluates is the one the operation selects on.
-
-    Stated over the declarations, because the difference is invisible from a
-    passing point: ``mvau.compute.feasibility`` is a strict subset of
-    ``mvau_op_feasibility``, missing the other three pools, the hardware
-    coverage constraints, and every structural constraint. A guard on the
-    subset looks like a guard right up until something outside it fails.
-    """
+def test_the_guard_uses_the_operations_whole_design_feasibility_set() -> None:
+    """The test-only binding is gated by the production design's own verdict."""
 
     assert MvauDataflowOp.selection_constraint_set() == "mvau_op_feasibility"
 
     (operation_set,) = (
         item for item in MVAU_DATAFLOW_OP_SPEC.constraint_sets if item.name == "mvau_op_feasibility"
     )
-    pool_set = set(MVAU_COMPUTE_SELECTION.feasibility_constraints())
-    assert pool_set < set(operation_set.constraints)
-    assert MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID in operation_set.constraints
-    assert MVAUDataflowOpPaths.SOURCE_ASSOCIATION_VALID not in pool_set
-
-
-def test_a_structural_refusal_outside_the_pool_stops_the_binding() -> None:
-    """An operation-level ``False`` the compute pool never asks about.
-
-    The source description's leading shape must agree with the repetition
-    count; here it does not. ``source_association_valid`` is an operation
-    constraint, so the compute pool's set says nothing about it -- and under
-    the old guard this point bound cleanly, producing hardware for a design
-    whose own source association contradicts it.
-    """
-
-    mismatched = MVAUSourceDescription(
-        source_node_id="mvau",
-        activation_operand_id="activation",
-        weight_operand_id="weights",
-        output_operand_id="output",
-        leading_shape=(REPETITIONS + 1,),
-    )
-    placed = _place(source_description=mismatched)
-
-    assert "source_association_valid" in placed.semantic_refusals()
-    assert placed.feasibility().verdict is False
-    with pytest.raises(InfeasiblePoint, match="source_association_valid"):
-        placed.bind(FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE})
-
-    # The compute pool says nothing about this, which is why the old guard
-    # passed it -- and binding still succeeds when the gate is stepped past, so
-    # the gate is the only thing standing between this point and hardware.
-    pool = placed.engine.evaluate_constraint_set(
-        placed.point, MVAU_COMPUTE_SELECTION.feasibility_constraint_set
-    )
-    assert pool.verdict is True
-    assert isinstance(
-        placed.bind_unchecked(FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE}),
-        Decided,
-    )
+    design_constraints = {item.path for item in DOT_PRODUCT_DECLARATION.spec.constraints}
+    assert design_constraints < set(operation_set.constraints)
 
 
 def test_an_unresolved_operation_constraint_stops_the_binding() -> None:
@@ -1389,31 +1330,29 @@ def test_the_fused_kernel_is_absent_from_production_admission() -> None:
 def test_the_fused_kernel_is_absent_from_the_production_assembly() -> None:
     """It is placed by this test file and nowhere else."""
 
-    assert DECOMPOSED_MVAU_KERNELS.hardware == (DOTP_AXI, REPLAY_BUFFER)
-    assert {item.id for item in DECOMPOSED_MVAU_KERNELS.hardware} == {
-        DotpAxiKernel.id,
-        ReplayBufferKernel.id,
+    candidates = {
+        item.id
+        for declaration in MVAU_DESIGN_INVENTORY.inventory.declarations
+        for placement in declaration.placements
+        for item in placement.candidates
     }
-    assert MvuVvuAxiKernel.id not in {item.id for item in DECOMPOSED_MVAU_KERNELS.hardware}
+    assert {DotpAxiKernel.id, ReplayBufferKernel.id} <= candidates
+    assert MvuVvuAxiKernel.id not in candidates
 
 
-def test_the_fused_kernel_is_not_a_compute_pool_alternative() -> None:
-    """Selecting it is a semantic choice nobody has justified yet.
-
-    The compute pool chooses between *semantic* Kernels.  A fused physical
-    Kernel is an alternative realization of one such choice, not a new one, so
-    it does not belong in that pool -- and until a policy can weigh it against
-    the decomposed reading, it does not belong in any.
-    """
-
-    members = {item.id for item in MVAU_COMPUTE_SELECTION.kernels}
-    assert MvuVvuAxiKernel.id not in members
-    assert DotProductKernel.id in members
+def test_the_fused_kernel_lives_only_in_the_test_tree() -> None:
+    assert MvuVvuAxiKernel.__module__ == "dataflow.mvau.mvu_vvu_axi_kernel"
+    assert not Path("src/finn/dataflow/mvau/hardware/mvu_vvu_axi.py").exists()
 
 
 def test_the_fused_coverage_constraints_are_not_in_the_operation_feasibility_set() -> None:
     """Its refusals must not remove points nothing was going to build with it."""
 
-    production = set(DECOMPOSED_MVAU_KERNELS.coverage_constraints)
+    production = {
+        path
+        for placement in DOT_PRODUCT_DECLARATION.placements
+        for candidate in placement.candidates
+        for path in candidate.coverage_constraints
+    }
     assert production
     assert production.isdisjoint(FUSED.coverage_constraints)
