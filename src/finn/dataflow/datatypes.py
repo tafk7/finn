@@ -96,14 +96,17 @@ class QONNXDataType(Protocol):
 
     # PARTIAL.  Unlike everything above it, this is not defined for every QONNX
     # datatype: ``ScaledIntType`` raises.  It is declared because the stack does
-    # genuinely need a datatype's minimum representable value -- the
-    # narrow-weight promise is exactly "is the smallest weight the type's own
-    # minimum?" -- and hiding that behind a cast would hide the dependency too.
-    # Every caller must guard it.  Do not add further partial methods without
-    # the same treatment; ``get_hls_datatype_str`` in particular raises a bare
-    # ``AssertionError`` for arbitrary float formats, which no ``except``
+    # genuinely need a datatype's representable range -- the narrow-weight
+    # promise asks for the minimum, and the datatype-continuity audit compares
+    # both endpoints so a reduced representation cannot stand in for the live
+    # value. Hiding either call behind a cast would hide the dependency too.
+    # Every caller must guard partial uses. Do not add further partial methods
+    # without the same treatment; ``get_hls_datatype_str`` in particular raises
+    # a bare ``AssertionError`` for arbitrary float formats, which no ``except``
     # clause should be catching.
     def min(self) -> int | float: ...
+
+    def max(self) -> int | float: ...
 
 
 class DatatypeError(ValueError):

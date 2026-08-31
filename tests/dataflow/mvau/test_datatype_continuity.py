@@ -56,9 +56,9 @@ from dataflow.mvau.test_decomposed_op import (
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.design import QualifiedPath
+from finn.dataflow.mvau.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.hardware.binding import bind_decomposed
 from finn.dataflow.mvau.hardware.composition import (
-    MVAUElaborationError,
     build_decomposed_artifact_requirements,
     elaborate_decomposed,
 )
@@ -322,12 +322,12 @@ def _signature(value: object) -> tuple[object, ...]:
     assert is_qonnx_datatype(value), f"{value!r} is not a datatype value"
     datatype = value
     return (
-        datatype.name,  # type: ignore[attr-defined]
-        datatype.bitwidth(),  # type: ignore[attr-defined]
-        datatype.signed(),  # type: ignore[attr-defined]
-        datatype.min(),  # type: ignore[attr-defined]
-        datatype.max(),  # type: ignore[attr-defined]
-        datatype.is_integer(),  # type: ignore[attr-defined]
+        datatype.name,
+        datatype.bitwidth(),
+        datatype.signed(),
+        datatype.min(),
+        datatype.max(),
+        datatype.is_integer(),
     )
 
 
@@ -470,7 +470,7 @@ def test_the_output_type_reaches_no_kernel_parameter_and_sizes_the_top_instead()
     assert is_qonnx_datatype(output)
     pe = chain.parameters["PE"]
     assert isinstance(pe, int)
-    width = output.bitwidth()  # type: ignore[attr-defined]
+    width = output.bitwidth()
     assert chain.wrapper_parameters["OSTREAM"] == _byte_aligned(width * pe)
     # ...and that is the accumulator's width, because nothing else would fit
     # what the core drives.

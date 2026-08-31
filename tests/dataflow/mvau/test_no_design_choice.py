@@ -40,12 +40,12 @@ from dataflow.mvau import test_datatype_continuity as continuity
 from finn.dataflow.mvau.hardware import composition
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.hardware import TargetIdentity
+from finn.dataflow.mvau.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.hardware.binding import bind_decomposed
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
 from finn.dataflow.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
-    MVAUElaborationError,
     build_decomposed_artifact_requirements,
     elaborate_decomposed,
     package_decomposed_artifact,
@@ -56,6 +56,7 @@ from finn.dataflow.mvau.hardware.composition import (
     render_stitch_shim,
     staged_layout,
 )
+from finn.dataflow.mvau.source import MVAUResolvedDesign
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
@@ -322,7 +323,7 @@ def _parameter_value(source: str, name: str) -> int:
     raise AssertionError(f"no parameter {name!r} in this text")
 
 
-def _resolved_from(requirements: MVAUDecomposedArtifactRequirements) -> object:
+def _resolved_from(requirements: MVAUDecomposedArtifactRequirements) -> MVAUResolvedDesign:
     """The resolved design behind these requirements, rebuilt the same way.
 
     Rebuilt rather than carried, because ``MVAUDecomposedArtifactRequirements``
