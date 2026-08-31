@@ -80,6 +80,7 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/test_kernel_admission.py \
     tests/dataflow/test_authoring_op_design.py \
     tests/dataflow/test_authoring_scope.py \
+    tests/dataflow/test_dataflow_design_authoring.py \
     tests/dataflow/test_mvau_narrow_weights.py \
     tests/dataflow/test_mvau_problem_fields.py \
     tests/dataflow/test_dataflow_op.py \
