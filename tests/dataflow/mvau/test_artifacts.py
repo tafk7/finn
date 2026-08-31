@@ -23,7 +23,7 @@ from finn.dataflow.mvau.compat.artifacts import (
     build_mvau_rtl_artifact_requirements,
     simulate_mvau_rtl_artifact,
 )
-from finn.dataflow.mvau.elaboration import (
+from finn.dataflow.mvau.compat.elaboration import (
     elaborate_mvau_rtl_softvec,
     mvau_elaboration_origin,
 )
@@ -47,7 +47,7 @@ from finn.dataflow.mvau.compat.source import (
     start_legacy_mvau_projection,
 )
 from finn.dataflow.mvau.associations import MVAUNetworkRef as NetworkRef
-from finn.dataflow.mvau.associations import MVAURegionRef as RegionRef
+from finn.dataflow.mvau.compat.operation import RegionRef
 
 NODE_ID = "mvau_artifact"
 PART = "xczu3eg-sbva484-1-e"

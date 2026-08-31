@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
-from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.authoring.design import (
     DataflowDesignEntry,
     DataflowDesignInventory,
@@ -25,7 +24,11 @@ from finn.dataflow.design import (
     Engine,
     QualifiedPath,
 )
-from finn.dataflow.mvau.associations import MVAUNetworkRef, MVAUSourceAssociation
+from finn.dataflow.mvau.associations import (
+    MVAU_NETWORK_REF_SEMANTICS,
+    MVAUNetworkRef,
+    MVAUSourceAssociation,
+)
 from finn.dataflow.mvau.designs.batch_interleaved import (
     BatchInterleavedDesign,
     BatchInterleavedDesignInputs,
@@ -53,7 +56,7 @@ from finn.dataflow.mvau_problem import (
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import NetworkValidationReport, validate_network
-from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS
+from finn.dataflow.spec_algebra import assemble_specs
 
 MVAU_NETWORK_PATH = QualifiedPath("semantic.mvau.op.network")
 MVAU_NETWORK_VALIDATION_PATH = QualifiedPath("semantic.mvau.op.network_validation")
@@ -104,7 +107,7 @@ class MVAUDesignInventoryAssembly:
     network: Ref[DataflowNetwork]
     network_validation: Ref[NetworkValidationReport]
     source_association: Ref[MVAUSourceAssociation]
-    result: Ref[object]
+    result: Ref[MVAUNetworkRef]
     compute_pumping: Ref[bool]
     specification: DesignSpaceSpec
 
@@ -257,7 +260,7 @@ def declare_mvau_design_inventory(
     )
     result = operation.derived(
         "result",
-        DATAFLOW_OP_RESULT_SEMANTICS,
+        MVAU_NETWORK_REF_SEMANTICS,
         dependencies={"network": network, "source_association": source_association},
         evaluate=lambda network, source_association: MVAUNetworkRef(
             "mvau",

@@ -48,9 +48,8 @@ from finn.dataflow.mvau.semantics import (
     REPLAY_NODE,
 )
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.mvau.elaboration import (
+from finn.dataflow.mvau.physical import (
     MVAUElaborationError,
-    MVAUElaborationOrigin,
     MVAUPhysicalAssociation,
     MVAUPhysicalBoundary,
     MVAUPhysicalComponent,
@@ -395,8 +394,6 @@ def elaborate_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboratio
 def compose(
     resolved: MVAUResolvedDesign,
     realization: DesignRealization,
-    *,
-    origin: MVAUElaborationOrigin | None = None,
 ) -> MVAUPhysicalElaboration:
     """Wire two bound Kernels into one physical elaboration."""
 
@@ -749,7 +746,7 @@ def compose(
     )
     return MVAUPhysicalElaboration(
         source_id,
-        mvau_elaboration_origin(resolved) if origin is None else origin,
+        mvau_elaboration_origin(resolved, realization),
         resolved.result,
         cast(str, resolved.point.problem[MVAUProblemPaths.TARGET_FPGA_PART]),
         cast(float, resolved.point.problem[MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS]),
@@ -859,7 +856,8 @@ def build_decomposed_artifact_requirements(
     synthesizer needs them; they are simply not part of *this* key.
     """
 
-    if elaboration.origin != mvau_elaboration_origin(resolved):
+    realization = bind_decomposed(resolved)
+    if elaboration.origin != mvau_elaboration_origin(resolved, realization):
         raise _fail(
             "mvau-decomposed-origin-mismatch",
             "the elaboration was not produced from this exact selected point",
@@ -869,7 +867,6 @@ def build_decomposed_artifact_requirements(
             "mvau-decomposed-result-mismatch",
             "the elaboration does not belong to the selected semantic result",
         )
-    realization = bind_decomposed(resolved)
     roots = source_roots(finn_root, finnlib)
     kernels = tuple(
         kernel_artifact_identity(realization.kernel(placement), roots)

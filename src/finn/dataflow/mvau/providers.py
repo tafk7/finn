@@ -8,7 +8,7 @@ from __future__ import annotations
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.mvau.designs.dot_product import compose_dot_product_design
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.elaboration import MVAUElaborationError, MVAUPhysicalElaboration
+from finn.dataflow.mvau.physical import MVAUElaborationError, MVAUPhysicalElaboration
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 
 _DISPATCH_PATH = QualifiedPath("mvau.elaboration.dispatch")

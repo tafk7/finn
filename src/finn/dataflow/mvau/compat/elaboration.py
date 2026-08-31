@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical elaboration for the first selected MVAU RTL vertical slice."""
+"""Provider-era physical elaboration retained behind the compatibility boundary."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from finn.dataflow.mvau.compat.operation import (
     RegionRef,
 )
 from finn.dataflow.mvau.regions import MVAURegionDeclaration
-from finn.dataflow.mvau.source import MVAUResolvedDesign
+from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign as MVAUResolvedDesign
 from finn.dataflow.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     mvau_problem_fingerprint,

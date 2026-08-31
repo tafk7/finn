@@ -36,7 +36,7 @@ from finn.dataflow.hardware import (
     SynthesisArtifactIdentity,
     TargetIdentity,
 )
-from finn.dataflow.mvau.elaboration import MVAUPhysicalDirection
+from finn.dataflow.mvau.physical import MVAUPhysicalDirection
 from finn.dataflow.hardware.identity import content_hash
 from finn.dataflow.mvau.hardware.composition import (
     INSTANTIATION_COMMAND_SCHEMA,

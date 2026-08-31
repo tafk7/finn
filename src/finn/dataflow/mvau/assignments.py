@@ -12,7 +12,7 @@ from typing import TypeVar, cast
 
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.op import NodeAttrCodec
+from finn.dataflow.op_contracts import NodeAttrCodec
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 E = TypeVar("E", bound=Enum)

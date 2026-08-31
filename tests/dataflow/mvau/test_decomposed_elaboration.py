@@ -36,7 +36,7 @@ from finn.dataflow.mvau.decomposed import (
 )
 from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.elaboration import (
+from finn.dataflow.mvau.physical import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
     MVAUSemanticPortRef,

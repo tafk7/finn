@@ -6,20 +6,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import cast
 
 from onnx import NodeProto  # type: ignore[import-not-found]
 
-from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
+from finn.dataflow.design import Decided, DesignPoint, Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compat.operation import (
+    DataflowOpResult,
     MVAU_COMPUTE_SELECTION,
     MVAU_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
+    MVAUDataflowOpPaths,
 )
+from finn.dataflow.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_PATHS,
     LEGACY_HLS_PATHS,
@@ -33,7 +37,6 @@ from finn.dataflow.mvau.compute_kernels import (
 from finn.dataflow.mvau.source import (
     MVAUModelAccessor,
     MVAUProjectionContext,
-    MVAUResolvedDesign,
     MVAUSourceAdapterError,
     MVAUSourceProjection,
     _attribute_value,
@@ -42,7 +45,6 @@ from finn.dataflow.mvau.source import (
     _find_source_node,
     _initializer_excludes_minimum,
     project_mvau_source,
-    resolve_mvau_point,
 )
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from finn.dataflow.parameters.supply_kernels import (
@@ -52,8 +54,18 @@ from finn.dataflow.parameters.supply_kernels import (
     WeightOrganization,
 )
 from finn.dataflow.region import NumericElementType, element_width
+from finn.dataflow.resolution import ResolvedDataflowOp
 
 _ADAPTER_PATH = QualifiedPath("compiler.mvau.compat.source_adapter")
+
+
+@dataclass(frozen=True)
+class MVAULegacyResolvedDesign(ResolvedDataflowOp):
+    """Provider-era result envelope, including the retired Region alternative."""
+
+    result: DataflowOpResult
+    source_association: MVAUSourceAssociation
+    projection: MVAUSourceProjection
 
 
 class MVAULegacyImportMode(str, Enum):
@@ -263,7 +275,7 @@ def project_legacy_mvau_source(
 def start_legacy_mvau_projection(
     projection: MVAUSourceProjection,
     assignments: Mapping[QualifiedPath | str, object] | None = None,
-) -> MVAUResolvedDesign:
+) -> MVAULegacyResolvedDesign:
     """Resolve an explicitly imported legacy projection in the compatibility space."""
 
     if projection.blocking_findings:
@@ -298,11 +310,37 @@ def start_legacy_mvau_projection(
                 )
             )
         point = committed.point
-    return resolve_mvau_point(engine, point, projection)
+    return resolve_legacy_mvau_point(engine, point, projection)
+
+
+def resolve_legacy_mvau_point(
+    engine: Engine,
+    point: DesignPoint,
+    projection: MVAUSourceProjection,
+    *,
+    source_scope_id: str | None = None,
+) -> MVAULegacyResolvedDesign:
+    """Resolve a Provider-era Region-or-Network result inside compatibility."""
+
+    result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+    if not isinstance(result, Decided):
+        raise MVAUSourceAdapterError(result.findings)
+    selected = cast(DataflowOpResult, result.value)
+    association = selected.source_association
+    return MVAULegacyResolvedDesign(
+        engine,
+        point,
+        selected,
+        association,
+        source_scope_id or association.source_node_id,
+        projection,
+    )
 
 
 __all__ = [
     "MVAULegacyImportMode",
+    "MVAULegacyResolvedDesign",
     "project_legacy_mvau_source",
+    "resolve_legacy_mvau_point",
     "start_legacy_mvau_projection",
 ]

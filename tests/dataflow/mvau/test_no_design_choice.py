@@ -40,7 +40,7 @@ from dataflow.mvau import test_datatype_continuity as continuity
 from finn.dataflow.mvau.hardware import composition
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.hardware import TargetIdentity
-from finn.dataflow.mvau.elaboration import MVAUElaborationError
+from finn.dataflow.mvau.physical import MVAUElaborationError
 from finn.dataflow.mvau.hardware.binding import bind_decomposed
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel

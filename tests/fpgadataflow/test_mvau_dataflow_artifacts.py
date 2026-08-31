@@ -18,7 +18,7 @@ from finn.dataflow.mvau.compat.artifacts import (
     observe_mvau_rtl_artifact,
     simulate_mvau_rtl_artifact,
 )
-from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
+from finn.dataflow.mvau.compat.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.mvau.compat.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PATHS, MVAUComputeKernelId

@@ -25,16 +25,16 @@ from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.mvau.elaboration import (
+from finn.dataflow.mvau.compat.elaboration import (
     MVAUPhysicalElaboration,
     MVAUPhysicalNumericInterface,
     mvau_elaboration_origin,
 )
 from finn.dataflow.mvau.source import (
     MVAUModelAccessor,
-    MVAUResolvedDesign,
     tensor_value_fingerprint,
 )
+from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign as MVAUResolvedDesign
 from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,

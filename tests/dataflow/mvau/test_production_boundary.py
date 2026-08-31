@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
 
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.providers import __all__ as production_provider_exports
@@ -16,6 +18,7 @@ PRODUCTION_FILES = (
     ROOT / "ops" / "mvau.py",
     ROOT / "ops" / "mvau_op.py",
     ROOT / "mvau" / "source.py",
+    ROOT / "mvau" / "physical.py",
     ROOT / "mvau" / "input_supply.py",
     ROOT / "mvau" / "semantics.py",
     ROOT / "mvau" / "providers.py",
@@ -70,6 +73,32 @@ def test_removed_binding_wrappers_do_not_reappear_in_production() -> None:
 
 def test_production_elaboration_dispatch_exports_no_provider_registry() -> None:
     assert production_provider_exports == ["elaborate_mvau"]
+
+
+def test_production_elaboration_import_does_not_load_provider_era_modules() -> None:
+    forbidden = (
+        "finn.dataflow.kernels",
+        "finn.dataflow.mvau.compute_kernels",
+        "finn.dataflow.mvau.decomposed",
+        "finn.dataflow.mvau.compat.operation",
+        "finn.dataflow.parameters.supply_kernels",
+    )
+    script = "\n".join(
+        (
+            "import sys",
+            "import finn.dataflow.mvau.providers",
+            f"forbidden = {forbidden!r}",
+            "loaded = [name for name in forbidden if name in sys.modules]",
+            "raise SystemExit('loaded legacy modules: ' + ', '.join(loaded) if loaded else 0)",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_fused_kernel_is_absent_from_every_production_design_candidate() -> None:

@@ -31,7 +31,6 @@ from finn.dataflow.mvau.designs.dot_product import (
 )
 from finn.dataflow.mvau.hardware.binding import source_roots
 from finn.dataflow.mvau.compat.binding import bind_legacy_decomposed
-from finn.dataflow.mvau.elaboration import mvau_elaboration_origin
 from finn.dataflow.mvau.hardware.composition import (
     compose,
     decomposed_top_module_name,
@@ -251,7 +250,6 @@ def test_dot_product_calls_the_existing_decomposed_composer_without_structural_c
     old = compose(
         compared.old_resolved,
         bind_legacy_decomposed(compared.old_resolved),
-        origin=mvau_elaboration_origin(compared.old_resolved),
     )
     new = compose_dot_product_design(compared.old_resolved, compared.realization)
 

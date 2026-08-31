@@ -22,7 +22,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.mvau.elaboration import (
+from finn.dataflow.mvau.compat.elaboration import (
     MVAUElaborationError,
     MVAUPhysicalControlKind,
     elaborate_mvau_rtl_softvec,

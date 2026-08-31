@@ -23,11 +23,10 @@ from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.elaboration import MVAUElaborationError
+from finn.dataflow.mvau.physical import MVAUElaborationError
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.mvau.hardware.replay_buffer import FINN_ROOT
 from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.ops.mvau import NetworkRef
 
 _BINDING_PATH = QualifiedPath("hardware.mvau.decomposed")
 
@@ -83,11 +82,6 @@ def bind_decomposed(resolved: MVAUResolvedDesign) -> DesignRealization:
         raise _fail(
             "mvau-decomposed-design-unsupported",
             "this hardware realizes only DotProductDesign",
-        )
-    if not isinstance(resolved.result, NetworkRef):
-        raise _fail(
-            "mvau-decomposed-result-not-a-network",
-            "the decomposed Region must resolve to a replay-plus-compute Network",
         )
     realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
     if not isinstance(realization, Decided):

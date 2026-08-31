@@ -11,7 +11,6 @@ from finn.dataflow.mvau.associations import (
     CoordinateMappingKind,
     MVAUNetworkRef as NetworkRef,
     MVAUParameterTopology,
-    MVAURegionRef as RegionRef,
     MVAUSourceAssociation,
     SemanticOperandDestination,
     SourceOperandAssociation,
@@ -20,7 +19,7 @@ from finn.dataflow.mvau.associations import (
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau_problem import MVAUProblemPaths, MVAUSourceDescription
 
-DataflowOpResult = RegionRef | NetworkRef
+DataflowOpResult = NetworkRef
 
 
 class MVAUDataflowOpPaths:
@@ -65,7 +64,6 @@ __all__ = [
     "MVAUSourceAssociation",
     "MVAUSourceDescription",
     "NetworkRef",
-    "RegionRef",
     "SemanticOperandDestination",
     "SourceOperandAssociation",
     "SourceOperandDestination",

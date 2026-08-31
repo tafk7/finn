@@ -56,7 +56,7 @@ from dataflow.mvau.test_decomposed_op import (
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.mvau.elaboration import MVAUElaborationError
+from finn.dataflow.mvau.physical import MVAUElaborationError
 from finn.dataflow.mvau.hardware.binding import bind_decomposed
 from finn.dataflow.mvau.hardware.composition import (
     build_decomposed_artifact_requirements,

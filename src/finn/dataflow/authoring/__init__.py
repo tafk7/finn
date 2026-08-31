@@ -3,6 +3,9 @@
 
 """Public FINN dataflow authoring surface."""
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from finn.dataflow.authoring.op_design import (
     BUILD_OWNED,
     GRAPH_OWNED,
@@ -22,38 +25,6 @@ from finn.dataflow.authoring.scope import (
     unresolved,
 )
 from finn.dataflow.kernel import RegionDeclaration, build_kernel_semantic_declarations
-from finn.dataflow.authoring.kernel_design import (
-    FEASIBILITY,
-    SOURCE_ADMISSION,
-    KernelDesign,
-    declare_kernel,
-    declare_kernel_design,
-    kernel_namespace,
-)
-from finn.dataflow.kernels import (
-    NO_KERNEL,
-    SELECTED_KERNEL_SEMANTICS,
-    Kernel,
-    KernelDemand,
-    KernelExport,
-    KernelProvider,
-    KernelSelection,
-    KernelSelectionPaths,
-    SelectedKernel,
-    admissible_kernels,
-    bind_kernel,
-    selected_kernel,
-)
-from finn.dataflow.op import (
-    AssignmentMapping,
-    DataflowAssignmentCommit,
-    DataflowBuildConfigView,
-    DataflowOp,
-    DataflowOpError,
-    NodeAttrCodec,
-    NodeAttributeType,
-    dataflow_problem_fingerprint,
-)
 from finn.dataflow.resolution import DataflowOpResult, NetworkRef, RegionRef, ResolvedDataflowOp
 from finn.dataflow.selection import FiniteSelectionResult, enumerate_feasible_points
 from finn.dataflow.spec_algebra import (
@@ -62,6 +33,100 @@ from finn.dataflow.spec_algebra import (
     assemble_specs,
     gate_spec,
 )
+
+if TYPE_CHECKING:
+    from finn.dataflow.authoring.kernel_design import (
+        FEASIBILITY,
+        SOURCE_ADMISSION,
+        KernelDesign,
+        declare_kernel,
+        declare_kernel_design,
+        kernel_namespace,
+    )
+    from finn.dataflow.kernels import (
+        NO_KERNEL,
+        SELECTED_KERNEL_SEMANTICS,
+        Kernel,
+        KernelDemand,
+        KernelExport,
+        KernelProvider,
+        KernelSelection,
+        KernelSelectionPaths,
+        SelectedKernel,
+        admissible_kernels,
+        bind_kernel,
+        selected_kernel,
+    )
+    from finn.dataflow.op import (
+        AssignmentMapping,
+        DataflowAssignmentCommit,
+        DataflowBuildConfigView,
+        DataflowOp,
+        dataflow_problem_fingerprint,
+    )
+    from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
+
+_LAZY_EXPORTS = {
+    name: ("finn.dataflow.authoring.kernel_design", name)
+    for name in (
+        "FEASIBILITY",
+        "SOURCE_ADMISSION",
+        "KernelDesign",
+        "declare_kernel",
+        "declare_kernel_design",
+        "kernel_namespace",
+    )
+}
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.kernels", name)
+        for name in (
+            "NO_KERNEL",
+            "SELECTED_KERNEL_SEMANTICS",
+            "Kernel",
+            "KernelDemand",
+            "KernelExport",
+            "KernelProvider",
+            "KernelSelection",
+            "KernelSelectionPaths",
+            "SelectedKernel",
+            "admissible_kernels",
+            "bind_kernel",
+            "selected_kernel",
+        )
+    }
+)
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.op", name)
+        for name in (
+            "AssignmentMapping",
+            "DataflowAssignmentCommit",
+            "DataflowBuildConfigView",
+            "DataflowOp",
+            "dataflow_problem_fingerprint",
+        )
+    }
+)
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.op_contracts", name)
+        for name in ("DataflowOpError", "NodeAttrCodec", "NodeAttributeType")
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    """Load transitional authoring exports only when an old caller requests one."""
+
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "AssignmentMapping",

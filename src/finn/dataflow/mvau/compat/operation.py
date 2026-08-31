@@ -12,6 +12,7 @@ re-decides a Region form, an implementation binding, or a delivery tile.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from math import prod
 from typing import cast
@@ -53,7 +54,6 @@ from finn.dataflow.mvau.associations import (
     CoordinateMappingKind,
     MVAUNetworkRef as NetworkRef,
     MVAUParameterTopology,
-    MVAURegionRef as RegionRef,
     MVAUSourceAssociation,
     SemanticOperandDestination,
     SourceOperandAssociation,
@@ -97,8 +97,16 @@ from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.region import BeatSequence, DataflowRegion, Port
 from finn.dataflow.resolution import (
     DATAFLOW_OP_RESULT_SEMANTICS,
+    RegionRef as GenericRegionRef,
 )
 from finn.dataflow.spec_algebra import assemble_specs
+
+
+@dataclass(frozen=True)
+class RegionRef(GenericRegionRef):
+    """Provider-era selected Region with a typed source association."""
+
+    source_association: MVAUSourceAssociation
 
 
 DataflowOpResult = RegionRef | NetworkRef

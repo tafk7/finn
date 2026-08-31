@@ -25,12 +25,12 @@ from types import MappingProxyType
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.kernels import SelectedKernel
 from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PROVIDER_ID
-from finn.dataflow.mvau.elaboration import (
+from finn.dataflow.mvau.compat.elaboration import (
     MVAUElaborationError,
     MVAUPhysicalElaboration,
     elaborate_mvau_rtl_softvec,
 )
-from finn.dataflow.mvau.source import MVAUResolvedDesign
+from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign as MVAUResolvedDesign
 from finn.dataflow.mvau.compat.operation import MVAU_COMPUTE_SELECTION
 
 _DISPATCH_PATH = QualifiedPath("mvau.elaboration.dispatch")

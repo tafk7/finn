@@ -13,9 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.dataflow.design import QualifiedPath
+from finn.dataflow.design import QualifiedPath, ValueSemantics
 from finn.dataflow.resolution import NetworkRef as GenericNetworkRef
-from finn.dataflow.resolution import RegionRef as GenericRegionRef
 
 
 class MVAUParameterTopology(str, Enum):
@@ -100,25 +99,27 @@ class MVAUSourceAssociation:
 
 
 @dataclass(frozen=True)
-class MVAURegionRef(GenericRegionRef):
-    """Selected MVAU Region with a typed source association."""
-
-    source_association: MVAUSourceAssociation
-
-
-@dataclass(frozen=True)
 class MVAUNetworkRef(GenericNetworkRef):
     """Selected MVAU Network with a typed source association."""
 
     source_association: MVAUSourceAssociation
 
 
+MVAU_NETWORK_REF_SEMANTICS: ValueSemantics[MVAUNetworkRef] = ValueSemantics(
+    MVAUNetworkRef,
+    "MVAUNetworkRef",
+    lambda value: isinstance(value, MVAUNetworkRef),
+    lambda left, right: left == right,
+    lambda value: value,
+)
+
+
 __all__ = [
     "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "MVAUParameterTopology",
+    "MVAU_NETWORK_REF_SEMANTICS",
     "MVAUNetworkRef",
-    "MVAURegionRef",
     "MVAUSourceAssociation",
     "SemanticOperandDestination",
     "SourceOperandAssociation",

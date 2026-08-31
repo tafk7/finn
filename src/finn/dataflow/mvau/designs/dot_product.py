@@ -49,7 +49,7 @@ from finn.dataflow.mvau_problem import (
 from finn.dataflow.mvau.associations import MVAUSourceAssociation
 
 if TYPE_CHECKING:
-    from finn.dataflow.mvau.elaboration import MVAUPhysicalElaboration
+    from finn.dataflow.mvau.physical import MVAUPhysicalElaboration
     from finn.dataflow.mvau.source import MVAUResolvedDesign
 
 
@@ -193,23 +193,9 @@ def compose_dot_product_design(
 
     if getattr(resolved_source.result, "network", None) != realization.network:
         raise ValueError("the source envelope and DotProduct realization name different Networks")
-    from finn.dataflow.mvau.elaboration import MVAUElaborationOrigin  # noqa: PLC0415
     from finn.dataflow.mvau.hardware.composition import compose  # noqa: PLC0415
-    from finn.dataflow.mvau.source import (  # noqa: PLC0415
-        MVAU_DECLARATION_FAMILY_VERSION,
-        mvau_problem_fingerprint,
-    )
 
-    return compose(
-        resolved_source,
-        realization,
-        origin=MVAUElaborationOrigin(
-            MVAU_DECLARATION_FAMILY_VERSION,
-            mvau_problem_fingerprint(resolved_source.point.problem),
-            tuple(sorted(resolved_source.point.assignments.items(), key=lambda item: item[0])),
-            tuple(realization.kernel(name).kernel_id for name in realization.kernels),
-        ),
-    )
+    return compose(resolved_source, realization)
 
 
 MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()
