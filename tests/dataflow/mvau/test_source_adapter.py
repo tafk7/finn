@@ -31,7 +31,6 @@ from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_
 from finn.dataflow.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     MVAU_SOURCE_MAPPING,
-    MVAULegacyImportMode,
     MVAUProjectionContext,
     MVAUResolvedDesign,
     MVAUSourceAdapterError,
@@ -41,7 +40,11 @@ from finn.dataflow.mvau.source import (
     save_mvau_selection,
     start_mvau_projection,
 )
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.source import (
+    project_legacy_mvau_source,
+    start_legacy_mvau_projection,
+)
+from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
@@ -135,11 +138,10 @@ def _context(part: str = ULTRASCALE_PART) -> MVAUProjectionContext:
 
 
 def _project_preserving(model: ModelWrapper, part: str = ULTRASCALE_PART) -> MVAUSourceProjection:
-    return project_mvau_source(
+    return project_legacy_mvau_source(
         model,
         NODE_ID,
         _context(part),
-        import_mode=MVAULegacyImportMode.PRESERVE_SPECIALIZATION,
     )
 
 
@@ -210,7 +212,7 @@ def test_real_standard_embedded_node_projects_facts_and_explicit_choices() -> No
     assert MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel not in projection.imported_assignments
     # The topology is derived from those selections, never imported beside them.
     assert MVAUDataflowOpPaths.PARAMETER_TOPOLOGY not in projection.imported_assignments
-    resolved = start_mvau_projection(projection)
+    resolved = start_legacy_mvau_projection(projection)
     assert isinstance(resolved.result, RegionRef)
     assert tuple(interface.port.id for interface in resolved.result.region.inputs) == (
         "activation",
@@ -262,7 +264,7 @@ def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() ->
     assert projection.problem_data[MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES] == (
         CyclicTargetMemoryCapabilities(True)
     )
-    resolved = start_mvau_projection(projection)
+    resolved = start_legacy_mvau_projection(projection)
     assert isinstance(resolved.result, NetworkRef)
     assert tuple(node.id for node in resolved.result.network.nodes) == ("compute", "delivery")
 

@@ -16,14 +16,7 @@ from finn.dataflow.mvau.compute_kernels import (
     SOFT_VECTOR_PROVIDER_ID,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
-from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.mvau.source import (
-    MVAU_DECLARATION_FAMILY_VERSION,
-    mvau_problem_fingerprint,
-)
-from finn.dataflow.network import DataflowNetwork, RegionEndpoint
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
     MVAU_WEIGHT_ADAPTER_SELECTION,
@@ -33,6 +26,13 @@ from finn.dataflow.ops.mvau import (
     NetworkRef,
     RegionRef,
 )
+from finn.dataflow.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.mvau.source import MVAUResolvedDesign
+from finn.dataflow.mvau.source import (
+    MVAU_DECLARATION_FAMILY_VERSION,
+    mvau_problem_fingerprint,
+)
+from finn.dataflow.network import DataflowNetwork, RegionEndpoint
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     MEMSTREAM_PROVIDER_ID,

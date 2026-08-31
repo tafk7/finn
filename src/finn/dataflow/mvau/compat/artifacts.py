@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Typed artifact requirements for the first MVAU RTL soft-vector slice."""
+"""Provider-era artifact requirements for the MVAU RTL soft-vector slice."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from finn.dataflow.mvau.source import (
     MVAUResolvedDesign,
     tensor_value_fingerprint,
 )
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,

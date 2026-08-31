@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Emitted-artifact evidence for the FINN RTL soft-vector MVAU slice."""
+"""Provider-era evidence for the FINN RTL soft-vector MVAU slice."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 
-from finn.dataflow.mvau.artifacts import (
+from finn.dataflow.mvau.compat.artifacts import (
     MVAUBuiltRTLArtifact,
     MVAURTLSimulationObservation,
     MVAUStitchedSimulationObservation,

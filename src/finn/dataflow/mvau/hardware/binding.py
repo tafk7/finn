@@ -21,18 +21,12 @@ from pathlib import Path
 
 from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
-from finn.dataflow.hardware import HardwareKernel, bind_hardware_kernel, bound_regions
-from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
-from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_COMPUTE_SELECTION
-from finn.dataflow.mvau.compute_pool import MVAUComputeKernelId
-from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
-from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
+from finn.dataflow.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.mvau.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.mvau.hardware.replay_buffer import FINN_ROOT
 from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau import NetworkRef
 
 _BINDING_PATH = QualifiedPath("hardware.mvau.decomposed")
@@ -42,10 +36,6 @@ FINNLIB_DEFAULT_SUBDIRECTORY = "deps/finnlib"
 
 #: Environment override for a local working clone.
 FINNLIB_ROOT_VARIABLE = "FINNLIB_ROOT"
-
-#: Which Kernel role each Network node fills.  Stated here, once.
-COMPUTE_ROLE = "compute"
-REPLAY_ROLE = "replay"
 
 
 def _fail(
@@ -79,107 +69,30 @@ def source_roots(finn_root: str | Path, finnlib: str | Path | None = None) -> di
     }
 
 
-def _bind(
-    resolved: MVAUResolvedDesign,
-    declaration: HardwareKernelDeclaration,
-    role: str,
-    node_id: str,
-    network: DataflowNetwork,
-) -> HardwareKernel:
-    """Bind one Kernel to the node this assembly says fills its role."""
-
-    answer = bind_hardware_kernel(
-        resolved.engine,
-        declaration,
-        resolved.point,
-        bound_regions(((role, node_id, network.node(node_id).region),)),
-    )
-    if not isinstance(answer, Decided):
-        raise MVAUElaborationError(
-            answer.findings
-            or (
-                Finding(
-                    FindingKind.BLOCKER,
-                    "mvau-decomposed-kernel-unbound",
-                    _BINDING_PATH,
-                    f"{declaration.id} did not bind to the {role} node",
-                ),
-            )
-        )
-    return answer.value
-
-
 def bind_decomposed(resolved: MVAUResolvedDesign) -> DesignRealization:
-    """Bind the decomposed slice, refusing anything this hardware does not cover.
-
-    The Region checks that used to live here are gone: ``bind_hardware_kernel``
-    now verifies that the node's Region is the one the Kernel's coverage handle
-    derives, which is the same claim made once instead of twice.
-    """
+    """Return the configured Kernels of a resolved production DotProductDesign."""
 
     design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
-    if design_path is not None and design_path in resolved.point.design_space.decisions:
-        selected_design = MVAU_DESIGN_INVENTORY.inventory.selected(resolved.point)
-        if not isinstance(selected_design, Decided) or selected_design.value.id != "dot_product":
-            raise _fail(
-                "mvau-decomposed-design-unsupported",
-                "this hardware realizes only DotProductDesign",
-            )
-        realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
-        if not isinstance(realization, Decided):
-            raise MVAUElaborationError(realization.findings)
-        return realization.value
-
-    selected = resolved.engine.query_property(
-        resolved.point, MVAU_COMPUTE_SELECTION.paths.selected_kernel
-    )
-    if not isinstance(selected, Decided):
+    if design_path is None or design_path not in resolved.point.design_space.decisions:
         raise _fail(
-            "mvau-decomposed-compute-unresolved",
-            "the selected compute Kernel must resolve before binding",
+            "mvau-decomposed-legacy-point",
+            "production binding requires the v6 MVAU DataflowDesign inventory",
         )
-    if getattr(selected.value, "kernel_id", None) != MVAUComputeKernelId.DOT_PRODUCT.value:
+    selected_design = MVAU_DESIGN_INVENTORY.inventory.selected(resolved.point)
+    if not isinstance(selected_design, Decided) or selected_design.value.id != DotProductDesign.id:
         raise _fail(
-            "mvau-decomposed-kernel-unsupported",
-            "this hardware realizes only the decomposed dot-product Region",
+            "mvau-decomposed-design-unsupported",
+            "this hardware realizes only DotProductDesign",
         )
     if not isinstance(resolved.result, NetworkRef):
         raise _fail(
             "mvau-decomposed-result-not-a-network",
             "the decomposed Region must resolve to a replay-plus-compute Network",
         )
-    network = resolved.result.network
-    node_ids = {node.id for node in network.nodes}
-    if node_ids != {REPLAY_NODE, DOT_PRODUCT_NODE}:
-        raise _fail(
-            "mvau-decomposed-network-unsupported",
-            "this hardware builds the two-node replay-plus-compute Network only",
-            (("nodes", tuple(sorted(node_ids))),),
-        )
-    configured = {
-        "compute": _bind(
-            resolved,
-            DECOMPOSED_MVAU_KERNELS.dot_product_hardware,
-            COMPUTE_ROLE,
-            DOT_PRODUCT_NODE,
-            network,
-        ),
-        "replay": _bind(
-            resolved,
-            DECOMPOSED_MVAU_KERNELS.replay_hardware,
-            REPLAY_ROLE,
-            REPLAY_NODE,
-            network,
-        ),
-    }
-    validated = MVAU_DOT_PRODUCT_DESIGN.design.validate_realization(
-        network,
-        configured,
-        active_placements=("compute", "replay"),
-    )
-    if not isinstance(validated, Decided):
-        raise MVAUElaborationError(validated.findings)
-    return validated.value
+    realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
+    if not isinstance(realization, Decided):
+        raise MVAUElaborationError(realization.findings)
+    return realization.value
 
 
 def resolved_manifest(
@@ -220,10 +133,8 @@ def verify_manifest(entries: tuple[tuple[str, str], ...]) -> None:
 
 
 __all__ = [
-    "COMPUTE_ROLE",
     "FINNLIB_DEFAULT_SUBDIRECTORY",
     "FINNLIB_ROOT_VARIABLE",
-    "REPLAY_ROLE",
     "bind_decomposed",
     "finnlib_root",
     "resolved_manifest",

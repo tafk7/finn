@@ -49,7 +49,7 @@ from finn.dataflow.mvau.hardware.dotp_axi import (
     covers_operand_types as dotp_axi_covers_operand_types,
 )
 from finn.dataflow.mvau.numeric import MVAUNumericTypes
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.operation import (
     MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
 )
 from finn.dataflow.mvau_problem import (

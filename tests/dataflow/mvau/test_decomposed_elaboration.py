@@ -61,11 +61,8 @@ from finn.dataflow.mvau.hardware.composition import (
 )
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
 from finn.dataflow.mvau.hardware.replay_buffer import FINN_SOURCES
-from finn.dataflow.mvau.providers import (
-    MVAU_HARDWARE_ELABORATORS,
-    MVAU_PROVIDER_ELABORATORS,
-    elaborate_mvau,
-)
+from finn.dataflow.mvau.compat.providers import MVAU_PROVIDER_ELABORATORS
+from finn.dataflow.mvau.providers import elaborate_mvau
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau import NetworkRef
@@ -119,12 +116,7 @@ def test_elaboration_follows_the_selected_design() -> None:
     assert {item.code for item in deferred.value.findings} == {"mvau-dispatch-design-semantic-only"}
 
 
-def test_dispatch_is_split_between_the_migrated_and_legacy_paths() -> None:
-    """The decomposed member routes by Kernel id; the fused ones by provider.
-
-    A member in both tables would be ambiguous, and a provider entry no Kernel
-    publishes is dead dispatch.
-    """
+def test_provider_dispatch_is_confined_to_the_compatibility_boundary() -> None:
 
     published = {
         provider.id for kernel in MVAU_COMPUTE_SELECTION.kernels for provider in kernel.providers
@@ -132,11 +124,8 @@ def test_dispatch_is_split_between_the_migrated_and_legacy_paths() -> None:
     assert set(MVAU_PROVIDER_ELABORATORS) <= published
     assert SOFT_VECTOR_PROVIDER_ID in MVAU_PROVIDER_ELABORATORS
 
-    kernel_ids = {kernel.id for kernel in MVAU_COMPUTE_SELECTION.kernels}
-    assert set(MVAU_HARDWARE_ELABORATORS) <= kernel_ids
-    assert DotProductKernel.id in MVAU_HARDWARE_ELABORATORS
     # The migrated member declares no provider at all, so it cannot be reached
-    # through the legacy half even by accident.
+    # through the compatibility dispatcher even by accident.
     assert MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id).providers == ()
 
 

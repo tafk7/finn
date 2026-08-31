@@ -29,11 +29,12 @@ from finn.dataflow.mvau.designs.dot_product import (
     MVAU_DOT_PRODUCT_DESIGN,
     compose_dot_product_design,
 )
-from finn.dataflow.mvau.hardware.binding import bind_decomposed, source_roots
+from finn.dataflow.mvau.hardware.binding import source_roots
+from finn.dataflow.mvau.compat.binding import bind_legacy_decomposed
+from finn.dataflow.mvau.elaboration import mvau_elaboration_origin
 from finn.dataflow.mvau.hardware.composition import (
-    build_decomposed_artifact_requirements,
+    compose,
     decomposed_top_module_name,
-    elaborate_decomposed,
     render_decomposed_wrapper,
     render_stitch_shim,
 )
@@ -48,13 +49,13 @@ from finn.dataflow.mvau_problem import (
     MVAUSourceDescription,
 )
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.ops.mvau import (
-    MVAU_DATAFLOW_OP_SPEC,
+from finn.dataflow.mvau.compat.operation import (
     MVAU_LEGACY_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     NetworkRef,
 )
+from finn.dataflow.ops.mvau import MVAU_DATAFLOW_OP_SPEC
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]
@@ -211,7 +212,7 @@ def test_dot_product_realization_matches_legacy_kernel_parameters_and_sources(
     geometry: tuple[int, int, int, int, int], pumping: bool
 ) -> None:
     compared = _side_by_side(geometry, pumping=pumping)
-    old = bind_decomposed(compared.old_resolved)
+    old = bind_legacy_decomposed(compared.old_resolved)
     new = compared.realization
 
     assert new.network == old.network
@@ -247,7 +248,11 @@ def test_dot_product_calls_the_existing_decomposed_composer_without_structural_c
     pumping: bool,
 ) -> None:
     compared = _side_by_side(GEOMETRIES[0], pumping=pumping)
-    old = elaborate_decomposed(compared.old_resolved)
+    old = compose(
+        compared.old_resolved,
+        bind_legacy_decomposed(compared.old_resolved),
+        origin=mvau_elaboration_origin(compared.old_resolved),
+    )
     new = compose_dot_product_design(compared.old_resolved, compared.realization)
 
     assert new.semantic_result == old.semantic_result
@@ -260,7 +265,7 @@ def test_dot_product_calls_the_existing_decomposed_composer_without_structural_c
 
 def test_dot_product_kernel_artifact_identity_matches_legacy() -> None:
     compared = _side_by_side(GEOMETRIES[0], pumping=True)
-    old = bind_decomposed(compared.old_resolved)
+    old = bind_legacy_decomposed(compared.old_resolved)
     new = compared.realization
     roots = source_roots(Path(__file__).parents[3])
 
@@ -274,12 +279,7 @@ def test_dot_product_kernel_artifact_identity_matches_legacy() -> None:
 
 def test_dot_product_wrapper_and_composed_artifact_identity_match_legacy() -> None:
     compared = _side_by_side(GEOMETRIES[0], pumping=True)
-    old_elaboration = elaborate_decomposed(compared.old_resolved)
-    old_requirements = build_decomposed_artifact_requirements(
-        compared.old_resolved,
-        old_elaboration,
-        Path(__file__).parents[3],
-    )
+    old_realization = bind_legacy_decomposed(compared.old_resolved)
     realization = compared.realization
     roots = source_roots(Path(__file__).parents[3])
     kernels = tuple(
@@ -305,9 +305,34 @@ def test_dot_product_wrapper_and_composed_artifact_identity_match_legacy() -> No
         weight_bits=compute_region.input_interface("weight").port.logical_beat_bits,
         output_bits=compute_region.output_interface("output").port.logical_beat_bits,
     )
-    assert wrapper == old_requirements.wrapper_source
-    assert shim == old_requirements.stitch_source
-    assert composed_artifact_identity(kernels, wrapper, shim) == old_requirements.identity
+    old_kernels = tuple(
+        kernel_artifact_identity(old_realization.kernel(placement), roots)
+        for placement in ("replay", "compute")
+    )
+    old_top = decomposed_top_module_name(old_kernels)
+    old_replay = old_realization.kernel("replay")
+    old_compute = old_realization.kernel("compute")
+    old_replay_region = old_replay.regions["replay"].region
+    old_compute_region = old_compute.regions["compute"].region
+    old_wrapper = render_decomposed_wrapper(
+        old_top,
+        dict(old_replay.parameters),
+        dict(old_compute.parameters),
+        activation_bits=old_replay_region.input_interface("activation_in").port.logical_beat_bits,
+        weight_bits=old_compute_region.input_interface("weight").port.logical_beat_bits,
+        output_bits=old_compute_region.output_interface("output").port.logical_beat_bits,
+    )
+    old_shim = render_stitch_shim(
+        old_top,
+        activation_bits=old_replay_region.input_interface("activation_in").port.logical_beat_bits,
+        weight_bits=old_compute_region.input_interface("weight").port.logical_beat_bits,
+        output_bits=old_compute_region.output_interface("output").port.logical_beat_bits,
+    )
+    assert wrapper == old_wrapper
+    assert shim == old_shim
+    assert composed_artifact_identity(kernels, wrapper, shim) == composed_artifact_identity(
+        old_kernels, old_wrapper, old_shim
+    )
 
 
 def test_production_mvau_has_switched_to_the_reviewed_design_inventory() -> None:

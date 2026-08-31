@@ -11,7 +11,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.dataflow.mvau.artifacts import (
+from finn.dataflow.mvau.compat.artifacts import (
     build_mvau_rtl_artifact,
     build_mvau_rtl_artifact_requirements,
     observe_mvau_cyclic_stitched_artifact,
@@ -19,16 +19,17 @@ from finn.dataflow.mvau.artifacts import (
     simulate_mvau_rtl_artifact,
 )
 from finn.dataflow.mvau.elaboration import elaborate_mvau_rtl_softvec
-from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
+from finn.dataflow.mvau.compat.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PATHS, MVAUComputeKernelId
 from finn.dataflow.mvau.source import (
-    MVAULegacyImportMode,
     MVAUProjectionContext,
-    project_mvau_source,
-    start_mvau_projection,
 )
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.source import (
+    project_legacy_mvau_source,
+    start_legacy_mvau_projection,
+)
+from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
@@ -97,8 +98,8 @@ def _model(mem_mode: str) -> ModelWrapper:
 
 
 def _selected(model: ModelWrapper):
-    return start_mvau_projection(
-        project_mvau_source(
+    return start_legacy_mvau_projection(
+        project_legacy_mvau_source(
             model,
             NODE_ID,
             MVAUProjectionContext(
@@ -106,7 +107,6 @@ def _selected(model: ModelWrapper):
                 fpga_part=PART,
                 clock_period_ns=CLOCK_NS,
             ),
-            import_mode=MVAULegacyImportMode.PRESERVE_SPECIALIZATION,
         )
     )
 

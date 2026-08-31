@@ -29,15 +29,17 @@ from finn.dataflow.mvau.elaboration import (
 )
 from finn.dataflow.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
-    MVAULegacyImportMode,
     MVAUProjectionContext,
     MVAUResolvedDesign,
-    project_mvau_source,
-    start_mvau_projection,
     mvau_problem_fingerprint,
+    project_mvau_source,
+)
+from finn.dataflow.mvau.compat.source import (
+    project_legacy_mvau_source,
+    start_legacy_mvau_projection,
 )
 
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     NetworkRef,
@@ -99,13 +101,12 @@ def _context() -> MVAUProjectionContext:
 
 
 def _resolved(mem_mode: str, *, runtime_writable: bool = False) -> MVAUResolvedDesign:
-    projection = project_mvau_source(
+    projection = project_legacy_mvau_source(
         _model(mem_mode=mem_mode, runtime_writable=runtime_writable),
         NODE_ID,
         _context(),
-        import_mode=MVAULegacyImportMode.PRESERVE_SPECIALIZATION,
     )
-    return start_mvau_projection(projection)
+    return start_legacy_mvau_projection(projection)
 
 
 def test_compute_only_softvec_elaboration_has_typed_components_and_interfaces() -> None:
@@ -272,11 +273,11 @@ def test_elaboration_rejects_an_unselected_or_uncovered_kernel() -> None:
         SOFT_VECTOR_PATHS.simd: 2,
         MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel: NO_KERNEL,
     }
-    unresolved = start_mvau_projection(projection, incomplete)
+    unresolved = start_legacy_mvau_projection(projection, incomplete)
     with pytest.raises(MVAUElaborationError):
         elaborate_mvau_rtl_softvec(unresolved)
 
-    other_kernel = start_mvau_projection(
+    other_kernel = start_legacy_mvau_projection(
         projection,
         {
             MVAU_COMPUTE_SELECTION.paths.kernel: MVAUComputeKernelId.LEGACY_HLS.value,

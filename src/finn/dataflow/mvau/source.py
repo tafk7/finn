@@ -39,23 +39,9 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS, local_mvau_assignment_path
 from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.compute_kernels import (
-    BATCH_INTERLEAVED_PATHS,
-    LEGACY_HLS_PATHS,
-    PACKED_DSP_PATHS,
-    SOFT_VECTOR_PATHS,
-    MVAUComputeKernelId,
-    MVAUComputeKernelPathSet,
-    MVAUHlsResource,
-    MVAUWeightSource,
-)
 from finn.dataflow.ops.mvau import (
     DataflowOpResult,
-    MVAU_COMPUTE_SELECTION,
     MVAU_DATAFLOW_OP_SPEC,
-    MVAU_LEGACY_DATAFLOW_OP_SPEC,
-    MVAU_WEIGHT_ADAPTER_SELECTION,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
     MVAUSourceAssociation,
     MVAUSourceDescription,
@@ -63,13 +49,8 @@ from finn.dataflow.ops.mvau import (
 from finn.dataflow.resolution import ResolvedDataflowOp
 from finn.dataflow.op import DataflowOpError, NodeAttributeType
 from finn.dataflow.parameters.supply_kernels import (
-    FINN_RTL_MEMSTREAM_PATHS,
-    MVAUWeightSupplyKernelId,
-    CyclicRamStyle,
     CyclicTargetMemoryCapabilities,
-    WeightOrganization,
 )
-from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
 from finn.dataflow.datatypes import (
     DatatypeError,
@@ -86,6 +67,8 @@ from finn.dataflow.region import (
 
 _ADAPTER_PATH = QualifiedPath("compiler.mvau.source_adapter")
 _PERSISTENCE_PATH = QualifiedPath("compiler.mvau.selection")
+_LEGACY_COMPUTE_SELECTION_PATH = QualifiedPath("mvau.compute.kernel")
+_LEGACY_PARAMETER_TOPOLOGY_PATH = QualifiedPath("semantic.mvau.op.parameter_topology")
 _ADAPTER_KEY = "finn.dataflow.mvau"
 _FORMAT_VERSION = 1
 #: v11 records the v6 DataflowDesign decision paths and Network-only result
@@ -123,13 +106,6 @@ class MVAUModelAccessor(Protocol):
     def get_metadata_prop(self, key: str) -> str | None: ...
 
     def set_metadata_prop(self, key: str, value: str) -> None: ...
-
-
-class MVAULegacyImportMode(str, Enum):
-    """Whether legacy node specialization attributes become commitments."""
-
-    PROJECT_ONLY = "project_only"
-    PRESERVE_SPECIALIZATION = "preserve_specialization"
 
 
 @dataclass(frozen=True)
@@ -474,170 +450,6 @@ def _initializer_excludes_minimum(
     return minimum != minimum_type_value
 
 
-def _effective_narrow_weights(
-    excludes_minimum: bool | None,
-    runtime_writable: bool,
-    runtime_range_contract: bool | None,
-) -> bool:
-    """The projection-time mirror of the operation's derived property.
-
-    Legacy import must classify a specialized node into the compute pool before
-    any design point exists, so it needs the same answer the engine will later
-    derive.  Both read the same three facts in the same order.
-    """
-
-    if runtime_writable:
-        return bool(runtime_range_contract)
-    return bool(excludes_minimum)
-
-
-def _legacy_compute_kernel(
-    node: NodeProto,
-    target: MVAUDspBlock | None,
-    activation_type: NumericElementType,
-    weight_type: NumericElementType,
-    weights_narrow: bool,
-    interleave: int,
-    findings: list[Finding],
-) -> MVAUComputeKernelId | None:
-    """Classify one legacy specialized node into the static compute pool."""
-
-    if node.op_type == "MVAU_hls":
-        return MVAUComputeKernelId.LEGACY_HLS
-    if node.op_type != "MVAU_rtl":
-        return None
-    if interleave > 1:
-        return MVAUComputeKernelId.BATCH_INTERLEAVED_DSP
-    if target is None:
-        findings.append(
-            _finding(
-                FindingKind.AUTHORING,
-                "mvau-legacy-rtl-kernel-ambiguous",
-                MVAU_COMPUTE_SELECTION.paths.kernel,
-                "legacy RTL soft-vector versus packed selection requires target facts",
-            )
-        )
-        return None
-    if target is not MVAUDspBlock.DSP58:
-        return MVAUComputeKernelId.SOFT_VECTOR
-    weight_bits = element_width(weight_type)
-    activation_bits = element_width(activation_type)
-    lane_width = weight_bits + activation_bits - 1
-    lanes = (
-        1
-        if weight_bits == 27
-        else 1 + (27 - (0 if weights_narrow else 1) - weight_bits) // lane_width
-    )
-    packed = lanes <= 3 and weight_bits <= 8 and activation_bits <= 9
-    return MVAUComputeKernelId.PACKED_DSP if packed else MVAUComputeKernelId.SOFT_VECTOR
-
-
-def _legacy_hls_resource(node: NodeProto, findings: list[Finding]) -> MVAUHlsResource | None:
-    resource, present = _attribute(node, "resType")
-    if not present or resource == "auto":
-        findings.append(
-            _finding(
-                FindingKind.AUTHORING,
-                "mvau-legacy-resource-ambiguous",
-                LEGACY_HLS_PATHS.resource,
-                "legacy HLS resType does not identify LUT versus DSP arithmetic mapping",
-            )
-        )
-        return None
-    mapped = {"lut": MVAUHlsResource.LUT, "dsp": MVAUHlsResource.DSP}.get(cast(str, resource))
-    if mapped is None:
-        findings.append(
-            _finding(
-                FindingKind.LIMITATION,
-                "mvau-legacy-resource-unsupported",
-                LEGACY_HLS_PATHS.resource,
-                "legacy HLS resType has no arithmetic resource mapping",
-                value=str(resource),
-            )
-        )
-    return mapped
-
-
-_COMPUTE_KERNEL_PATHS: dict[MVAUComputeKernelId, MVAUComputeKernelPathSet] = {
-    MVAUComputeKernelId.LEGACY_HLS: LEGACY_HLS_PATHS,
-    MVAUComputeKernelId.SOFT_VECTOR: SOFT_VECTOR_PATHS,
-    MVAUComputeKernelId.PACKED_DSP: PACKED_DSP_PATHS,
-    MVAUComputeKernelId.BATCH_INTERLEAVED_DSP: BATCH_INTERLEAVED_PATHS,
-}
-
-
-def _legacy_assignments(
-    node: NodeProto,
-    mem_mode: str,
-    target: MVAUDspBlock | None,
-    activation_type: NumericElementType,
-    weight_type: NumericElementType,
-    weights_narrow: bool,
-    findings: list[Finding],
-) -> dict[QualifiedPath, object]:
-    """Import one legacy specialized node as Kernel-pool selections.
-
-    Legacy ``mem_mode`` is a statement about how the node was already realized,
-    so it maps onto a supplier selection and a Kernel-local weight source.  It
-    never becomes a topology decision beside the Kernels.
-    """
-
-    pe = cast(int, _attribute_value(node, "PE", 0))
-    simd = cast(int, _attribute_value(node, "SIMD", 0))
-    interleave = cast(int, _attribute_value(node, "TH", 1))
-    assignments: dict[QualifiedPath, object] = {}
-    kernel_id = _legacy_compute_kernel(
-        node, target, activation_type, weight_type, weights_narrow, interleave, findings
-    )
-    if kernel_id is None:
-        return assignments
-    paths = _COMPUTE_KERNEL_PATHS[kernel_id]
-    assignments[MVAU_COMPUTE_SELECTION.paths.kernel] = kernel_id.value
-    if pe > 0:
-        assignments[paths.pe] = pe
-    if simd > 0:
-        assignments[paths.simd] = simd
-    if kernel_id is MVAUComputeKernelId.BATCH_INTERLEAVED_DSP:
-        assignments[paths.interleave] = interleave
-    if kernel_id is MVAUComputeKernelId.LEGACY_HLS:
-        resource = _legacy_hls_resource(node, findings)
-        if resource is not None:
-            assignments[paths.resource] = resource
-        assignments[paths.weight_source] = (
-            MVAUWeightSource.EMBEDDED
-            if mem_mode == "internal_embedded"
-            else MVAUWeightSource.STREAMED
-        )
-    if kernel_id in {MVAUComputeKernelId.SOFT_VECTOR, MVAUComputeKernelId.PACKED_DSP}:
-        assignments[paths.compute_pumping] = bool(_attribute_value(node, "pumpedCompute", 0))
-    if mem_mode == "internal_decoupled":
-        supply = FINN_RTL_MEMSTREAM_PATHS
-        assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] = (
-            MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
-        )
-        assignments[supply.organization] = WeightOrganization.AS_DEMANDED
-        ram_style = cast(str, _attribute_value(node, "ram_style", "auto"))
-        try:
-            assignments[supply.ram_style] = CyclicRamStyle(ram_style)
-        except ValueError:
-            findings.append(
-                _finding(
-                    FindingKind.LIMITATION,
-                    "mvau-legacy-ram-style-unsupported",
-                    supply.ram_style,
-                    "legacy RAM style has no cyclic-supply mapping",
-                    value=ram_style,
-                )
-            )
-        assignments[supply.pumped_memory] = bool(_attribute_value(node, "pumpedMemory", 0))
-        assignments[MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel] = NO_KERNEL
-    elif mem_mode == "external":
-        # An embedded weight source leaves the supply pool inapplicable, so
-        # there is nothing to record there.
-        assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] = NO_KERNEL
-    return assignments
-
-
 def project_mvau_graph_source(
     model: MVAUModelAccessor,
     source_node_id: str,
@@ -780,12 +592,12 @@ def project_mvau_graph_source(
             (
                 (
                     cast(int, _attribute_value(node, "PE", 0)),
-                    MVAU_COMPUTE_SELECTION.paths.kernel,
+                    _LEGACY_COMPUTE_SELECTION_PATH,
                     "PE",
                 ),
                 (
                     cast(int, _attribute_value(node, "SIMD", 0)),
-                    MVAU_COMPUTE_SELECTION.paths.kernel,
+                    _LEGACY_COMPUTE_SELECTION_PATH,
                     "SIMD",
                 ),
             )
@@ -889,7 +701,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-source-delivery-mode-unsupported",
-                MVAUDataflowOpPaths.PARAMETER_TOPOLOGY,
+                _LEGACY_PARAMETER_TOPOLOGY_PATH,
                 "the current source adapter does not declare this delivery family",
                 mem_mode=mem_mode,
             )
@@ -914,7 +726,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.BLOCKER,
                 "mvau-source-interleave-invalid",
-                MVAU_COMPUTE_SELECTION.paths.kernel,
+                _LEGACY_COMPUTE_SELECTION_PATH,
                 "legacy TH must be a positive integer",
                 value=interleave,
             )
@@ -928,7 +740,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-source-interleave-combination-unsupported",
-                MVAU_COMPUTE_SELECTION.paths.kernel,
+                _LEGACY_COMPUTE_SELECTION_PATH,
                 "TH > 1 requires an RTL streamed MVAU source combination",
                 mem_mode=mem_mode,
                 op_type=node.op_type,
@@ -939,7 +751,7 @@ def project_mvau_graph_source(
             _finding(
                 FindingKind.LIMITATION,
                 "mvau-source-fused-rtl-unsupported",
-                MVAU_COMPUTE_SELECTION.paths.kernel,
+                _LEGACY_COMPUTE_SELECTION_PATH,
                 "legacy RTL MVAU does not implement the fused-threshold computation profile",
             )
         )
@@ -1003,13 +815,10 @@ def project_mvau_source(
     source_node_id: str,
     context: MVAUProjectionContext,
     *,
-    import_mode: MVAULegacyImportMode = MVAULegacyImportMode.PROJECT_ONLY,
     source_scope_id: str | None = None,
 ) -> MVAUSourceProjection:
     """Compose graph-owned and build-owned facts for one MVAU problem."""
 
-    if not isinstance(import_mode, MVAULegacyImportMode):
-        raise TypeError("import_mode must be an MVAULegacyImportMode")
     graph_projection = project_mvau_graph_source(
         model,
         source_node_id,
@@ -1098,33 +907,10 @@ def project_mvau_source(
         else:
             problem[MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM] = excludes_minimum
 
-    assignments: dict[QualifiedPath, object] = {}
-    if (
-        not logical_node
-        and import_mode is MVAULegacyImportMode.PRESERVE_SPECIALIZATION
-        and is_qonnx_datatype(activation_type)
-        and is_qonnx_datatype(weight_type)
-    ):
-        assignments = _legacy_assignments(
-            node,
-            mem_mode,
-            target,
-            activation_type,
-            weight_type,
-            _effective_narrow_weights(
-                excludes_minimum,
-                runtime_writable,
-                cast(
-                    "bool | None",
-                    problem.get(MVAUProblemPaths.RUNTIME_WEIGHT_RANGE_CONTRACT),
-                ),
-            ),
-            findings,
-        )
     return MVAUSourceProjection(
         graph_projection.source_description,
         problem,
-        assignments,
+        {},
         tuple(findings),
     )
 
@@ -1141,15 +927,8 @@ def start_mvau_projection(
     }
     if assignments is not None:
         commitments.update(assignments)
-    requested = {QualifiedPath.parse(path) for path in commitments}
-    legacy_paths = {item.path for item in MVAU_LEGACY_DATAFLOW_OP_SPEC.decisions}
-    specification = (
-        MVAU_LEGACY_DATAFLOW_OP_SPEC
-        if requested and requested <= legacy_paths
-        else MVAU_DATAFLOW_OP_SPEC
-    )
     engine = Engine()
-    space = engine.validate(specification)
+    space = engine.validate(MVAU_DATAFLOW_OP_SPEC)
     point = engine.start(space, projection.problem_data)
     if commitments:
         committed = engine.commit_assignments(point, commitments)
@@ -1538,7 +1317,6 @@ __all__ = [
     "MVAU_DECLARATION_FAMILY_VERSION",
     "MVAU_LOGICAL_SOURCE_NODEATTRS",
     "MVAU_SOURCE_MAPPING",
-    "MVAULegacyImportMode",
     "MVAUModelAccessor",
     "MVAUProjectionContext",
     "MVAUResolvedDesign",

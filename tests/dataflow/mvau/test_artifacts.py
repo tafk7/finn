@@ -16,7 +16,7 @@ from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.mvau.artifacts import (
+from finn.dataflow.mvau.compat.artifacts import (
     MVAUArtifactError,
     MVAUWeightPayloadKind,
     build_mvau_rtl_artifact,
@@ -27,7 +27,7 @@ from finn.dataflow.mvau.elaboration import (
     elaborate_mvau_rtl_softvec,
     mvau_elaboration_origin,
 )
-from finn.dataflow.mvau.evidence import collect_mvau_rtl_softvec_evidence
+from finn.dataflow.mvau.compat.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.mvau.compute_kernels import (
     LEGACY_HLS_PATHS,
     PACKED_DSP_PATHS,
@@ -36,15 +36,18 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.ops.mvau import MVAU_COMPUTE_SELECTION
+from finn.dataflow.mvau.compat.operation import MVAU_COMPUTE_SELECTION
 from finn.dataflow.mvau.source import (
-    MVAULegacyImportMode,
     MVAUProjectionContext,
     MVAUResolvedDesign,
     project_mvau_source,
-    start_mvau_projection,
 )
-from finn.dataflow.ops.mvau import NetworkRef, RegionRef
+from finn.dataflow.mvau.compat.source import (
+    project_legacy_mvau_source,
+    start_legacy_mvau_projection,
+)
+from finn.dataflow.mvau.associations import MVAUNetworkRef as NetworkRef
+from finn.dataflow.mvau.associations import MVAURegionRef as RegionRef
 
 NODE_ID = "mvau_artifact"
 PART = "xczu3eg-sbva484-1-e"
@@ -118,13 +121,12 @@ def _context(
 
 
 def _selected(model: ModelWrapper) -> MVAUResolvedDesign:
-    projection = project_mvau_source(
+    projection = project_legacy_mvau_source(
         model,
         NODE_ID,
         _context(),
-        import_mode=MVAULegacyImportMode.PRESERVE_SPECIALIZATION,
     )
-    return start_mvau_projection(projection)
+    return start_legacy_mvau_projection(projection)
 
 
 def _legacy_generate(
@@ -435,21 +437,21 @@ def test_artifact_requirements_reject_elaboration_from_another_selected_point() 
     kernel_assignments[LEGACY_HLS_PATHS.simd] = 2
     kernel_assignments[LEGACY_HLS_PATHS.resource] = MVAUHlsResource.DSP
     kernel_assignments[LEGACY_HLS_PATHS.weight_source] = MVAUWeightSource.STREAMED
-    mismatched_binding = start_mvau_projection(
+    mismatched_binding = start_legacy_mvau_projection(
         project_mvau_source(model, NODE_ID, _context()), kernel_assignments
     )
 
     pumping_assignments = dict(baseline_assignments)
     pumping_assignments[SOFT_VECTOR_PATHS.compute_pumping] = True
-    mismatched_pumping = start_mvau_projection(
+    mismatched_pumping = start_legacy_mvau_projection(
         project_mvau_source(model, NODE_ID, _context()), pumping_assignments
     )
 
-    mismatched_clock = start_mvau_projection(
+    mismatched_clock = start_legacy_mvau_projection(
         project_mvau_source(model, NODE_ID, _context(clock_period_ns=3.0)),
         baseline_assignments,
     )
-    mismatched_problem = start_mvau_projection(
+    mismatched_problem = start_legacy_mvau_projection(
         project_mvau_source(
             model, NODE_ID, _context(accumulator_owner="another.AccumulatorAnalysis")
         ),
@@ -496,11 +498,11 @@ def test_infeasible_but_ready_point_cannot_reach_artifact_requirements() -> None
     }
     assignments[SOFT_VECTOR_PATHS.simd] = 1
     assignments[SOFT_VECTOR_PATHS.compute_pumping] = False
-    feasible = start_mvau_projection(projection, assignments)
+    feasible = start_legacy_mvau_projection(projection, assignments)
     elaboration = elaborate_mvau_rtl_softvec(feasible)
 
     assignments[SOFT_VECTOR_PATHS.compute_pumping] = True
-    infeasible = start_mvau_projection(projection, assignments)
+    infeasible = start_legacy_mvau_projection(projection, assignments)
     assert infeasible.engine.check_readiness(infeasible.point, "artifact_inputs").ready is True
     forged_origin = replace(elaboration, origin=mvau_elaboration_origin(infeasible))
 
@@ -542,6 +544,6 @@ def test_soft_vector_and_packed_kernels_preserve_the_same_standard_region() -> N
         PACKED_DSP_PATHS.simd: 2,
         PACKED_DSP_PATHS.compute_pumping: False,
     }
-    packed = start_mvau_projection(projection, packed_assignments)
+    packed = start_legacy_mvau_projection(projection, packed_assignments)
     assert isinstance(packed.result, RegionRef)
     assert packed.result.region == original_region

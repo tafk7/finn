@@ -37,7 +37,7 @@ from finn.dataflow.mvau_problem import (
     MVAUSourceDescription,
 )
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.operation import (
     MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,

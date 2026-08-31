@@ -33,7 +33,6 @@ from finn.dataflow.mvau.input_supply import FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.mvau.providers import elaborate_mvau
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
-    MVAUDataflowOpPaths,
     MVAUParameterTopology,
     NetworkRef,
 )
@@ -188,5 +187,5 @@ def test_the_waterfall_runs_from_source_matmul_to_artifact_requirements(
 def test_the_result_property_uses_only_the_frozen_v6_decisions() -> None:
 
     decisions = {str(item.path) for item in MVAU_DATAFLOW_OP_SPEC.decisions}
-    assert str(MVAUDataflowOpPaths.PARAMETER_TOPOLOGY) not in decisions
+    assert "semantic.mvau.op.parameter_topology" not in decisions
     assert decisions == {str(path) for path in MvauDataflowOp.decision_nodeattrs()}

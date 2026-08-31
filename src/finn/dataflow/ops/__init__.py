@@ -4,11 +4,8 @@
 """FINN dataflow-operation design-space assemblies."""
 
 from finn.dataflow.ops.mvau import (
-    MVAU_COMPUTE_SELECTION,
     MVAU_DATAFLOW_OP_SPEC,
-    MVAU_SELECTIONS,
-    MVAU_WEIGHT_ADAPTER_SELECTION,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
+    MVAU_DESIGN_INVENTORY,
     BindingLocalStateDestination,
     CoordinateMappingKind,
     MVAUDataflowOpPaths,
@@ -23,11 +20,8 @@ from finn.dataflow.ops.mvau import (
 )
 
 __all__ = [
-    "MVAU_COMPUTE_SELECTION",
     "MVAU_DATAFLOW_OP_SPEC",
-    "MVAU_SELECTIONS",
-    "MVAU_WEIGHT_ADAPTER_SELECTION",
-    "MVAU_WEIGHT_SUPPLY_SELECTION",
+    "MVAU_DESIGN_INVENTORY",
     "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "MVAUDataflowOpPaths",

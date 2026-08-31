@@ -36,7 +36,7 @@ from finn.dataflow.mvau.compute_kernels import (
 from finn.dataflow.mvau.regions import construct_batch_interleaved_streamed_mvau_region
 from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.network_validation import NetworkValidationReport
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.mvau.compat.operation import (
     MVAU_COMPUTE_SELECTION,
     MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
     MVAU_WEIGHT_ADAPTER_SELECTION,
