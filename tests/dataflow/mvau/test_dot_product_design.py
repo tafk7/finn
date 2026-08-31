@@ -31,6 +31,7 @@ from finn.dataflow.mvau.designs.dot_product import (
 )
 from finn.dataflow.mvau.hardware.binding import source_roots
 from finn.dataflow.mvau.compat.binding import bind_legacy_decomposed
+from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign
 from finn.dataflow.mvau.hardware.composition import (
     compose,
     decomposed_top_module_name,
@@ -73,7 +74,7 @@ GEOMETRIES = (
 class SideBySide:
     old_engine: Engine
     old_point: DesignPoint
-    old_resolved: MVAUResolvedDesign
+    old_resolved: MVAULegacyResolvedDesign
     new_engine: Engine
     new_point: DesignPoint
     realization: DesignRealization
@@ -134,7 +135,7 @@ def _side_by_side(geometry: tuple[int, int, int, int, int], *, pumping: bool = F
         facts,
         {},
     )
-    old_resolved = MVAUResolvedDesign(
+    old_resolved = MVAULegacyResolvedDesign(
         old_engine,
         old_point,
         NetworkRef("mvau", old_network, old_association),
@@ -248,10 +249,12 @@ def test_dot_product_calls_the_existing_decomposed_composer_without_structural_c
 ) -> None:
     compared = _side_by_side(GEOMETRIES[0], pumping=pumping)
     old = compose(
-        compared.old_resolved,
+        cast(MVAUResolvedDesign, compared.old_resolved),
         bind_legacy_decomposed(compared.old_resolved),
     )
-    new = compose_dot_product_design(compared.old_resolved, compared.realization)
+    new = compose_dot_product_design(
+        cast(MVAUResolvedDesign, compared.old_resolved), compared.realization
+    )
 
     assert new.semantic_result == old.semantic_result
     assert new.components == old.components

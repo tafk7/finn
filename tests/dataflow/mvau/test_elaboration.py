@@ -30,11 +30,11 @@ from finn.dataflow.mvau.compat.elaboration import (
 from finn.dataflow.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     MVAUProjectionContext,
-    MVAUResolvedDesign,
     mvau_problem_fingerprint,
     project_mvau_source,
 )
 from finn.dataflow.mvau.compat.source import (
+    MVAULegacyResolvedDesign,
     project_legacy_mvau_source,
     start_legacy_mvau_projection,
 )
@@ -100,7 +100,7 @@ def _context() -> MVAUProjectionContext:
     )
 
 
-def _resolved(mem_mode: str, *, runtime_writable: bool = False) -> MVAUResolvedDesign:
+def _resolved(mem_mode: str, *, runtime_writable: bool = False) -> MVAULegacyResolvedDesign:
     projection = project_legacy_mvau_source(
         _model(mem_mode=mem_mode, runtime_writable=runtime_writable),
         NODE_ID,

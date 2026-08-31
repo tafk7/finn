@@ -39,10 +39,10 @@ from finn.dataflow.mvau.compute_kernels import (
 from finn.dataflow.mvau.compat.operation import MVAU_COMPUTE_SELECTION
 from finn.dataflow.mvau.source import (
     MVAUProjectionContext,
-    MVAUResolvedDesign,
     project_mvau_source,
 )
 from finn.dataflow.mvau.compat.source import (
+    MVAULegacyResolvedDesign,
     project_legacy_mvau_source,
     start_legacy_mvau_projection,
 )
@@ -120,7 +120,7 @@ def _context(
     )
 
 
-def _selected(model: ModelWrapper) -> MVAUResolvedDesign:
+def _selected(model: ModelWrapper) -> MVAULegacyResolvedDesign:
     projection = project_legacy_mvau_source(
         model,
         NODE_ID,

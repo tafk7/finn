@@ -43,6 +43,7 @@ DATAFLOW_SOURCES=(
 "$RUFF_BIN" check "${DATAFLOW_SOURCES[@]}"
 
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
+    --no-incremental \
     --strict \
     --explicit-package-bases \
     src/finn/analysis/verify_custom_nodes.py \
