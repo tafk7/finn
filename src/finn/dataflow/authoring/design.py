@@ -57,7 +57,6 @@ from finn.dataflow.hardware.kernel import (
     ComputationContract,
     HardwareKernel,
     HardwareKernelDeclaration,
-    KernelBinding,
     bind_hardware_kernel,
     check_declared_references,
 )
@@ -199,7 +198,7 @@ class DesignRealization:
 
     design_id: str
     network: DataflowNetwork
-    bindings: tuple[KernelBinding, ...]
+    bindings: tuple[HardwareKernel, ...]
     unabsorbed_edges: tuple[str, ...]
     boundaries: tuple[str, ...]
 
@@ -852,7 +851,7 @@ class DataflowDesignDeclaration:
                 )
             )
 
-        bindings: list[tuple[KernelPlacement, KernelBinding]] = []
+        bindings: list[tuple[KernelPlacement, HardwareKernel]] = []
         findings: list[Finding] = []
         for placement in self.placements:
             answer = engine.query_property(point, placement.selected_kernel.path)
@@ -906,7 +905,7 @@ class DataflowDesignDeclaration:
 def _validate_realization(
     design_id: str,
     network: DataflowNetwork,
-    placed: tuple[tuple[KernelPlacement, KernelBinding], ...],
+    placed: tuple[tuple[KernelPlacement, HardwareKernel], ...],
 ) -> Answer[DesignRealization]:
     findings: list[Finding] = []
     node_counts = Counter(node for _placement, binding in placed for node in binding.node_ids)

@@ -49,7 +49,7 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.hardware import (
     BoundRegion,
-    KernelBinding,
+    HardwareKernel,
     bind_hardware_kernel,
     bound_regions,
     check_declared_references,
@@ -278,7 +278,7 @@ class _Placed:
         declaration: HardwareKernelDeclaration,
         regions: dict[str, BoundRegion],
         edges: dict[str, str] | None = None,
-    ) -> Answer[KernelBinding]:
+    ) -> Answer[HardwareKernel]:
         """Bind, but only once the operation has accepted the point.
 
         ``verdict is True`` and nothing weaker: ``False`` is a refusal and
@@ -303,7 +303,7 @@ class _Placed:
         declaration: HardwareKernelDeclaration,
         regions: dict[str, BoundRegion],
         edges: dict[str, str] | None = None,
-    ) -> Answer[KernelBinding]:
+    ) -> Answer[HardwareKernel]:
         """Bind without the semantic gate, to reach a Kernel's own refusal.
 
         Needed for the datatype cases, and the reason is worth stating: in
@@ -331,7 +331,7 @@ class _Placed:
             )
         )
 
-    def fused(self, edges: dict[str, str] | None = None) -> KernelBinding:
+    def fused(self, edges: dict[str, str] | None = None) -> HardwareKernel:
         answer = self.bind(
             FUSED,
             self.both_roles(),
@@ -340,7 +340,7 @@ class _Placed:
         assert isinstance(answer, Decided), answer
         return answer.value
 
-    def decomposed(self) -> tuple[KernelBinding, KernelBinding]:
+    def decomposed(self) -> tuple[HardwareKernel, HardwareKernel]:
         replay = self.bind(
             REPLAY_BUFFER, bound_regions((("replay", REPLAY_NODE, self.replay_region),))
         )
@@ -495,10 +495,10 @@ def test_the_semantic_values_are_identical_across_both_bindings() -> None:
     placed = _place()
     replay, compute = placed.decomposed()
     fused = placed.fused()
-    covered = {item.role: item.region for item in fused.regions}
+    covered = {item.role: item.region for item in fused.regions.values()}
 
-    assert covered[REPLAY_ROLE] == replay.regions[0].region
-    assert covered[COMPUTE_ROLE] == compute.regions[0].region
+    assert covered[REPLAY_ROLE] == replay.regions[REPLAY_ROLE].region
+    assert covered[COMPUTE_ROLE] == compute.regions[COMPUTE_ROLE].region
     assert covered[REPLAY_ROLE] == placed.replay_region
     assert covered[COMPUTE_ROLE] == placed.compute_region
 
@@ -509,7 +509,7 @@ def test_the_absorbed_edge_is_the_one_the_network_declares() -> None:
 
     assert edge.source.node_id == REPLAY_NODE
     assert tuple(item.endpoint.node_id for item in edge.sinks) == (DOT_PRODUCT_NODE,)
-    assert placed.fused().edges == ((ACTIVATION_EDGE_ROLE, ACTIVATION_EDGE),)
+    assert placed.fused().edges == {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE}
 
 
 def test_the_fused_binding_leaves_no_node_of_the_network_uncovered() -> None:

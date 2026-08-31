@@ -24,7 +24,6 @@ from finn.dataflow.authoring.scope import Ref, finite, reject
 from finn.dataflow.hardware import (
     HardwareDesign,
     HardwareKernel,
-    KernelBinding,
     PhysicalComponent,
     scalar_parameters,
 )
@@ -474,14 +473,14 @@ class DotpAxiKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         """One ``dotp_axi`` instance.  Composition is the assembly's business."""
 
         return (
             PhysicalComponent(
                 "dot_product",
                 DOTP_AXI_MODULE,
-                scalar_parameters(dict(binding.parameters)),
+                scalar_parameters(dict(kernel.parameters)),
             ),
         )
 

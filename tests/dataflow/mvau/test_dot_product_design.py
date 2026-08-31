@@ -209,13 +209,13 @@ def test_dot_product_realization_matches_legacy_kernel_parameters_and_sources(
     assert new.replay.kernel_id == old.replay.kernel_id == ReplayBufferKernel.id
     assert new.compute.parameters == old.compute.parameters
     assert new.replay.parameters == old.replay.parameters
-    assert new.compute.kernel.sources == old.compute.kernel.sources
-    assert new.replay.kernel.sources == old.replay.kernel.sources
-    assert tuple(item.region for item in new.compute.regions) == tuple(
-        item.region for item in old.compute.regions
+    assert new.compute.sources == old.compute.sources
+    assert new.replay.sources == old.replay.sources
+    assert tuple(item.region for item in new.compute.regions.values()) == tuple(
+        item.region for item in old.compute.regions.values()
     )
-    assert tuple(item.region for item in new.replay.regions) == tuple(
-        item.region for item in old.replay.regions
+    assert tuple(item.region for item in new.replay.regions.values()) == tuple(
+        item.region for item in old.replay.regions.values()
     )
 
 
@@ -274,8 +274,8 @@ def test_dot_product_wrapper_and_composed_artifact_identity_match_legacy() -> No
     roots = source_roots(Path(__file__).parents[3])
     kernels = tuple(kernel_artifact_identity(binding, roots) for binding in bindings.bindings)
     top = decomposed_top_module_name(kernels)
-    replay_region = bindings.replay.regions[0].region
-    compute_region = bindings.compute.regions[0].region
+    replay_region = bindings.replay.regions["replay"].region
+    compute_region = bindings.compute.regions["compute"].region
     wrapper = render_decomposed_wrapper(
         top,
         dict(bindings.replay.parameters),

@@ -53,7 +53,7 @@ from hashlib import sha256
 from string import Formatter
 from pathlib import Path
 
-from finn.dataflow.hardware.kernel import KernelBinding, scalar_parameters
+from finn.dataflow.hardware.kernel import HardwareKernel, scalar_parameters
 
 #: Bumped when what an identity *contains* changes.  Without it, adding a field
 #: makes every prior identity look like a different design rather than like one
@@ -163,7 +163,7 @@ def _check_command_shape(recipe: str) -> None:
             )
 
 
-def _local_assignments(binding: KernelBinding) -> tuple[tuple[str, Scalar], ...]:
+def _local_assignments(kernel: HardwareKernel) -> tuple[tuple[str, Scalar], ...]:
     """A Kernel's own committed choices, under placement-independent names.
 
     A Kernel placed twice has two namespaces over one authored design, so the
@@ -179,18 +179,18 @@ def _local_assignments(binding: KernelBinding) -> tuple[tuple[str, Scalar], ...]
     becoming a parameter, and two such configurations must not collide.
     """
 
-    namespace = binding.kernel.declaration.namespace
+    namespace = kernel.declaration.namespace
     prefix = f"{namespace}."
     encoded: list[tuple[str, Scalar]] = []
-    for path, value in binding.kernel.assignments.items():
+    for path, value in kernel.assignments.items():
         text = str(path)
         if not text.startswith(prefix):
             raise ArtifactIdentityError(
-                f"{binding.kernel_id} committed {text}, which is not under its own "
+                f"{kernel.kernel_id} committed {text}, which is not under its own "
                 f"namespace {namespace}; a Kernel owns only its local choices"
             )
         name = text[len(prefix) :]
-        encoded.append((name, _encode(f"{binding.kernel_id}.{name}", value)))
+        encoded.append((name, _encode(f"{kernel.kernel_id}.{name}", value)))
     return tuple(sorted(encoded))
 
 
@@ -570,16 +570,16 @@ class IpPackageArtifactIdentity:
 
 
 def source_identities(
-    binding: KernelBinding, roots: Mapping[str, Path]
+    kernel: HardwareKernel, roots: Mapping[str, Path]
 ) -> tuple[SourceIdentity, ...]:
     """Hash every file the Kernel declares, in the order it declares them."""
 
     entries: list[SourceIdentity] = []
-    for source in binding.kernel.sources:
+    for source in kernel.sources:
         root = roots.get(source.root)
         if root is None:
             raise ArtifactIdentityError(
-                f"{binding.kernel_id} declares sources under {source.root!r}, "
+                f"{kernel.kernel_id} declares sources under {source.root!r}, "
                 "which this checkout does not resolve"
             )
         located = Path(root) / source.path
@@ -587,14 +587,14 @@ def source_identities(
             data = located.read_bytes()
         except OSError as error:
             raise ArtifactIdentityError(
-                f"{binding.kernel_id} declares {located}, which cannot be read"
+                f"{kernel.kernel_id} declares {located}, which cannot be read"
             ) from error
         entries.append(SourceIdentity(source.root, source.path, content_hash(data)))
     return tuple(entries)
 
 
 def kernel_artifact_identity(
-    binding: KernelBinding, roots: Mapping[str, Path]
+    kernel: HardwareKernel, roots: Mapping[str, Path]
 ) -> KernelArtifactIdentity:
     """The generated-source identity of one bound Kernel.
 
@@ -604,11 +604,11 @@ def kernel_artifact_identity(
     """
 
     return KernelArtifactIdentity(
-        binding.kernel_id,
-        binding.kernel_version,
-        source_identities(binding, roots),
-        scalar_parameters(dict(binding.parameters)),
-        _local_assignments(binding),
+        kernel.kernel_id,
+        kernel.kernel_version,
+        source_identities(kernel, roots),
+        scalar_parameters(dict(kernel.parameters)),
+        _local_assignments(kernel),
     )
 
 

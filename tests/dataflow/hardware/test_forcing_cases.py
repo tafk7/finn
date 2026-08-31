@@ -36,6 +36,7 @@ from typing import cast
 
 import pytest
 
+import finn.dataflow.hardware as hardware
 from finn.dataflow.authoring import (
     AuthoringError,
     OpDesign,
@@ -62,7 +63,6 @@ from finn.dataflow.hardware import (
     HardwareDesign,
     HardwareKernel,
     HardwareKernelSelection,
-    KernelBinding,
     PhysicalComponent,
     bind_hardware_kernel,
     bound_regions,
@@ -286,7 +286,7 @@ class SingleComponentKernel(HardwareKernel):
         design.constant("MODE", 0, why="this core has one mode; the parameter is vestigial")
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (
             PhysicalComponent(
                 "single.core", "example.single", scalar_parameters(dict(binding.parameters))
@@ -331,7 +331,7 @@ class MultiComponentKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         values = scalar_parameters(dict(binding.parameters))
         shell = PhysicalComponent("multi.shell", "example.multi", values)
         return (
@@ -360,7 +360,7 @@ class UpstreamKernel(HardwareKernel):
         design.parameter("LANES", cast("Ref[object]", facts.lanes))
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("upstream.core", "example.upstream"),)
 
 
@@ -383,7 +383,7 @@ class DownstreamKernel(HardwareKernel):
         design.parameter("LANES", cast("Ref[object]", facts.lanes))
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("downstream.core", "example.downstream"),)
 
 
@@ -422,7 +422,7 @@ class FusedKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("fused.core", "example.fused"),)
 
 
@@ -449,7 +449,7 @@ class MiscomputingKernel(HardwareKernel):
         design.source("example", "rtl/miscomputing.sv")
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("miscomputing.core", "example.miscomputing"),)
 
 
@@ -475,7 +475,7 @@ class ElsewhereKernel(HardwareKernel):
         design.source("example", "rtl/elsewhere.sv")
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("elsewhere.core", "example.elsewhere"),)
 
 
@@ -514,7 +514,7 @@ class Placed:
         name: str,
         regions: dict[str, BoundRegion],
         edges: dict[str, str] | None = None,
-    ) -> Answer[KernelBinding]:
+    ) -> Answer[HardwareKernel]:
         return bind_hardware_kernel(
             self.engine, self.declarations[name], self.point, regions, edges
         )
@@ -600,7 +600,12 @@ def test_a_bound_kernel_is_an_instance_of_the_class_that_declared_it() -> None:
     placed = _place(hardware_kernel="single")
     bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
     assert isinstance(bound, Decided)
-    assert isinstance(bound.value.kernel, SingleComponentKernel)
+    assert isinstance(bound.value, SingleComponentKernel)
+
+
+def test_no_public_kernel_binding_wrapper_remains() -> None:
+    assert "KernelBinding" not in hardware.__all__
+    assert not hasattr(hardware, "KernelBinding")
 
 
 def test_every_declared_parameter_resolves_from_the_point() -> None:
@@ -689,18 +694,21 @@ def test_the_fused_kernel_covers_the_same_regions_the_separate_ones_do() -> None
 
     placed = _place()
     separate = tuple(
-        cast(Decided[KernelBinding], placed.bind(name, bound_regions((role,)))).value
+        cast(Decided[HardwareKernel], placed.bind(name, bound_regions((role,)))).value
         for name, role in (
             ("upstream", ("producer", PRODUCER_NODE, placed.producer)),
             ("downstream", ("consumer", CONSUMER_NODE, placed.consumer)),
         )
     )
     fused = cast(
-        Decided[KernelBinding], placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
+        Decided[HardwareKernel], placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
     ).value
 
     assert tuple(sorted(item.node_ids[0] for item in separate)) == tuple(sorted(fused.node_ids))
-    assert tuple(item.region for item in fused.regions) == (placed.producer, placed.consumer)
+    assert tuple(item.region for item in fused.regions.values()) == (
+        placed.producer,
+        placed.consumer,
+    )
 
 
 def test_a_fused_kernel_validates_the_edge_against_the_selected_network() -> None:
@@ -849,7 +857,7 @@ def test_the_explicitly_declared_region_binds() -> None:
         "upstream", bound_regions((("producer", PRODUCER_NODE, placed.producer),))
     )
     assert isinstance(correct, Decided)
-    assert correct.value.regions[0].region == placed.producer
+    assert correct.value.regions["producer"].region == placed.producer
 
 
 def test_the_computation_contract_is_checked_rather_than_inferred() -> None:
@@ -1120,7 +1128,7 @@ def test_a_bound_kernel_does_not_carry_the_design_point() -> None:
     placed = _place(hardware_kernel="multi")
     bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
     assert isinstance(bound, Decided)
-    kernel = bound.value.kernel
+    kernel = bound.value
 
     assert not hasattr(kernel, "point")
     assert not hasattr(bound.value, "point")
@@ -1131,7 +1139,7 @@ def test_a_bound_kernel_sees_only_its_own_committed_choices() -> None:
     placed = _place(hardware_kernel="multi", lanes=2)
     bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
     assert isinstance(bound, Decided)
-    paths = {str(path) for path in bound.value.kernel.assignments}
+    paths = {str(path) for path in bound.value.assignments}
 
     # Its own physical choice, and nothing of the semantics that configured it.
     assert paths == {f"{hardware_namespace(OWNER, 'multi')}.pipelined"}
@@ -1144,7 +1152,7 @@ def test_an_imported_value_reaches_elaboration_only_as_a_declared_parameter() ->
     assert isinstance(bound, Decided)
 
     assert dict(bound.value.parameters)["LANES"] == 2
-    assert set(bound.value.kernel.parameters) == {"LANES", "DEPTH", "PIPELINED"}
+    assert set(bound.value.parameters) == {"LANES", "DEPTH", "PIPELINED"}
 
 
 def test_a_physical_kernel_cannot_declare_a_region() -> None:

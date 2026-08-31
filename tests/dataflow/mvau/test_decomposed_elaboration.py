@@ -229,8 +229,8 @@ def test_the_binding_records_the_hardware_that_realized_each_region() -> None:
     assert bindings.compute.node_ids == ("compute",)
     assert bindings.replay.node_ids == ("replay",)
     # Each Kernel was told which node fills its role, and recorded exactly that.
-    assert bindings.compute.regions[0].role == "compute"
-    assert bindings.replay.regions[0].role == "replay"
+    assert bindings.compute.regions["compute"].role == "compute"
+    assert bindings.replay.regions["replay"].role == "replay"
 
 
 def _association(source: str, physical_id: str) -> MVAUPhysicalAssociation:
@@ -337,7 +337,7 @@ def test_every_parameter_reaching_the_rtl_came_from_the_point() -> None:
         item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
     }
     bindings = bind_decomposed(resolved)
-    resolved_names = {name for binding in bindings.bindings for name, _ in binding.parameters}
+    resolved_names = {name for binding in bindings.bindings for name in binding.parameters}
     assert resolved_names == declared
 
     wrapper = elaborate_mvau(resolved).component(

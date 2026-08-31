@@ -25,7 +25,6 @@ from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.hardware import (
     HardwareDesign,
     HardwareKernel,
-    KernelBinding,
     PhysicalComponent,
     scalar_parameters,
 )
@@ -90,14 +89,14 @@ class ReplayBufferKernel(HardwareKernel):
         design.parameter("W", cast("Ref[object]", width))
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         """One ``replay_buffer`` instance."""
 
         return (
             PhysicalComponent(
                 "replay",
                 REPLAY_BUFFER_MODULE,
-                scalar_parameters(dict(binding.parameters)),
+                scalar_parameters(dict(kernel.parameters)),
             ),
         )
 

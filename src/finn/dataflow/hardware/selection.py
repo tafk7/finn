@@ -45,8 +45,8 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.hardware.kernel import (
     BoundRegion,
+    HardwareKernel,
     HardwareKernelDeclaration,
-    KernelBinding,
     bind_hardware_kernel,
 )
 from finn.dataflow.spec_algebra import (
@@ -275,7 +275,7 @@ class HardwareKernelSelection:
         point: DesignPoint,
         regions: Mapping[str, BoundRegion],
         edges: Mapping[str, str] | None = None,
-    ) -> Answer[KernelBinding]:
+    ) -> Answer[HardwareKernel]:
         """Bind whichever member this point committed to."""
 
         chosen = self.selected(engine, point)

@@ -42,7 +42,6 @@ from finn.dataflow.hardware import (
     ComputationContract,
     HardwareDesign,
     HardwareKernel,
-    KernelBinding,
     PhysicalComponent,
 )
 from finn.dataflow.network import (
@@ -222,7 +221,7 @@ class DirectKernel(HardwareKernel):
             )
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("direct", "synthetic.direct"),)
 
 
@@ -241,7 +240,7 @@ class AlternativeKernel(HardwareKernel):
         design.choice("pipeline", bool, domain=finite((False, True)))
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("alternative", "synthetic.alternative"),)
 
 
@@ -259,7 +258,7 @@ class SupplierKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("supplier", "synthetic.supplier"),)
 
 

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from finn.dataflow.authoring.scope import Ref
@@ -768,11 +769,11 @@ class HardwareKernel:
         raise NotImplementedError(f"{cls.__name__} does not define a design")
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         """The physical components this Kernel becomes at one binding.
 
         Elaboration makes no design choice.  Every value it may use is in the
-        binding, and nothing else is reachable from it.
+        configured Kernel, and nothing else is reachable from it.
         """
 
         raise NotImplementedError(f"{cls.__name__} does not elaborate")
@@ -786,12 +787,12 @@ class HardwareKernel:
         parameters: Mapping[str, object],
     ) -> None:
         self.declaration = declaration
-        self.regions = regions
-        self.edges = edges
+        self.regions = MappingProxyType(dict(regions))
+        self.edges = MappingProxyType(dict(edges))
         #: Only this Kernel's own committed choices.  A Kernel has no business
         #: reading another's, and no way to.
-        self.assignments = assignments
-        self.parameters = parameters
+        self.assignments = MappingProxyType(dict(assignments))
+        self.parameters = MappingProxyType(dict(parameters))
         # Instance attributes shadow the class-level family identity, so a
         # generically bound Kernel still answers correctly.
         self.id = declaration.id
@@ -805,6 +806,22 @@ class HardwareKernel:
         """The Region bound into one covered role."""
 
         return self.regions[role].region
+
+    @property
+    def kernel_id(self) -> str:
+        return self.id
+
+    @property
+    def kernel_version(self) -> str:
+        return self.version
+
+    @property
+    def node_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(item.node_id for item in self.regions.values()))
+
+    @property
+    def edge_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self.edges.values()))
 
     def origin(self) -> KernelOrigin:
         """The durable record of what this binding is."""
@@ -830,11 +847,16 @@ class HardwareKernel:
             tuple((item.root, item.path) for item in self.declaration.sources),
         )
 
+    def components(self) -> tuple[PhysicalComponent, ...]:
+        """Elaborate this configured Kernel and audit every emitted parameter."""
+
+        return audit_elaboration(self, type(self).elaborate(self))
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}(id={self.id!r}, covers={sorted(self.regions)})"
 
 
-# -- the binding -------------------------------------------------------------
+# -- configured coverage -----------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -846,59 +868,11 @@ class BoundRegion:
     region: DataflowRegion
 
 
-@dataclass(frozen=True)
-class KernelBinding:
-    """The selected relationship between semantics and one physical Kernel.
-
-    It records what was covered, by which Kernel identity, with which values --
-    everything an artifact identity and an association ledger need, and nothing
-    that would have to be recomputed to read it back.
-    """
-
-    kernel: HardwareKernel
-    regions: tuple[BoundRegion, ...]
-    edges: tuple[tuple[str, str], ...]
-    parameters: tuple[tuple[str, object], ...]
-
-    @property
-    def kernel_id(self) -> str:
-        return self.kernel.id
-
-    @property
-    def kernel_version(self) -> str:
-        return self.kernel.version
-
-    @property
-    def node_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(item.node_id for item in self.regions))
-
-    @property
-    def edge_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(edge_id for _, edge_id in self.edges))
-
-    def origin(self) -> KernelOrigin:
-        return self.kernel.origin()
-
-    def components(self) -> tuple[PhysicalComponent, ...]:
-        """This Kernel's components, checked against what it declared.
-
-        The checked entry point, and the one every assembly should use.
-        ``elaborate`` is an ordinary classmethod: nothing stops its body from
-        computing a value and putting it in a component, and "elaboration makes
-        no design choice" was until now a property of the *binding* -- nothing
-        else is reachable -- rather than of the elaboration.  Unreachable is not
-        the same as unused, and a Kernel that derives ``LANES * 2`` on the way
-        out has invented a value nobody chose and nothing records.
-        """
-
-        return audit_elaboration(self, type(self.kernel).elaborate(self))
-
-
 # -- the elaboration audit ----------------------------------------------------
 
 
 def audit_elaboration(
-    binding: KernelBinding, components: tuple[PhysicalComponent, ...]
+    kernel: HardwareKernel, components: tuple[PhysicalComponent, ...]
 ) -> tuple[PhysicalComponent, ...]:
     """Refuse a component carrying a parameter the Kernel did not declare.
 
@@ -920,7 +894,7 @@ def audit_elaboration(
     rather than a point this Kernel does not cover.
     """
 
-    resolved = dict(binding.parameters)
+    resolved = dict(kernel.parameters)
     undeclared: list[str] = []
     disagreeing: list[str] = []
     for component in components:
@@ -935,7 +909,7 @@ def audit_elaboration(
             SpecAuthoringIssue(
                 "hardware-elaboration-parameter-undeclared",
                 ", ".join(sorted(undeclared)),
-                f"{binding.kernel_id} elaborated a parameter it never declared; "
+                f"{kernel.kernel_id} elaborated a parameter it never declared; "
                 "declare it so the value has an owner in the design point",
             )
         )
@@ -944,7 +918,7 @@ def audit_elaboration(
             SpecAuthoringIssue(
                 "hardware-elaboration-parameter-recomputed",
                 ", ".join(sorted(disagreeing)),
-                f"{binding.kernel_id} elaborated a declared parameter with a value "
+                f"{kernel.kernel_id} elaborated a declared parameter with a value "
                 "the binding did not resolve",
             )
         )
@@ -1114,7 +1088,7 @@ def bind_hardware_kernel(
     point: DesignPoint,
     regions: Mapping[str, BoundRegion],
     edges: Mapping[str, str] | None = None,
-) -> Answer[KernelBinding]:
+) -> Answer[HardwareKernel]:
     """Bind one physical Kernel to the exact semantics it declared it covers.
 
     ``regions`` and ``edges`` map this Kernel's declared roles onto real node
@@ -1156,14 +1130,7 @@ def bind_hardware_kernel(
     local = {path: value for path, value in point.assignments.items() if path in owned}
     bound_type = declaration.owner or HardwareKernel
     instance = bound_type(declaration, dict(regions), supplied_edges, local, values)
-    return Decided(
-        KernelBinding(
-            instance,
-            tuple(regions[role] for role in declaration.coverage.region_roles),
-            tuple((role, supplied_edges[role]) for role in declaration.coverage.edge_roles),
-            tuple((name, values[name]) for name in sorted(values)),
-        )
-    )
+    return Decided(instance)
 
 
 def bound_regions(pairs: Sequence[tuple[str, str, DataflowRegion]]) -> dict[str, BoundRegion]:
@@ -1180,7 +1147,6 @@ __all__ = [
     "EdgeCoverage",
     "HardwareKernel",
     "HardwareKernelDeclaration",
-    "KernelBinding",
     "KernelOrigin",
     "KernelParameter",
     "PhysicalComponent",

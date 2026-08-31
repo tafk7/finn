@@ -35,7 +35,6 @@ from finn.dataflow.authoring.scope import Ref, finite, reject
 from finn.dataflow.hardware import (
     HardwareDesign,
     HardwareKernel,
-    KernelBinding,
     PhysicalComponent,
     scalar_parameters,
 )
@@ -481,7 +480,7 @@ class MvuVvuAxiKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         """One ``mvu_vvu_axi`` instance -- replay and compute in one component.
 
         This is where the fusion is visible as a *count*.  The decomposed path
@@ -494,7 +493,7 @@ class MvuVvuAxiKernel(HardwareKernel):
             PhysicalComponent(
                 "fused_compute",
                 MVU_VVU_AXI_MODULE,
-                scalar_parameters(dict(binding.parameters)),
+                scalar_parameters(dict(kernel.parameters)),
             ),
         )
 

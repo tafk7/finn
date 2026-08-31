@@ -19,7 +19,6 @@ import copy
 import os
 import subprocess
 import sys
-from dataclasses import replace
 from enum import Enum
 from pathlib import Path
 
@@ -466,13 +465,12 @@ def test_a_kernels_own_committed_choices_are_in_its_key() -> None:
 
     _, compute = _place().decomposed()
     identity = kernel_artifact_identity(compute, _roots())
-    namespace = compute.kernel.declaration.namespace
+    namespace = compute.declaration.namespace
 
-    assert compute.kernel.assignments, "this Kernel is meant to have a local choice"
+    assert compute.assignments, "this Kernel is meant to have a local choice"
     assert identity.assignments == tuple(
         sorted(
-            (str(path)[len(namespace) + 1 :], value)
-            for path, value in compute.kernel.assignments.items()
+            (str(path)[len(namespace) + 1 :], value) for path, value in compute.assignments.items()
         )
     )
     # Local, so the placement namespace is nowhere in the key.
@@ -489,12 +487,7 @@ def test_a_choice_committed_outside_the_kernels_namespace_is_refused() -> None:
     """
 
     _, compute = _place().decomposed()
-    intruder = replace(
-        compute,
-        kernel=_kernel_with_assignments(
-            compute.kernel, {QualifiedPath("somewhere.else.pumping"): True}
-        ),
-    )
+    intruder = _kernel_with_assignments(compute, {QualifiedPath("somewhere.else.pumping"): True})
     with pytest.raises(ArtifactIdentityError, match="not under its own namespace"):
         kernel_artifact_identity(intruder, _roots())
 
@@ -505,10 +498,10 @@ def test_an_identity_is_built_from_the_kernels_declared_sources() -> None:
     _, compute = _place().decomposed()
     identity = kernel_artifact_identity(compute, _roots())
 
-    declared = tuple((item.root, item.path) for item in compute.kernel.sources)
+    declared = tuple((item.root, item.path) for item in compute.sources)
     assert tuple((item.root, item.path) for item in identity.sources) == declared
     assert identity.kernel_id == compute.kernel_id
-    assert identity.parameters == compute.parameters
+    assert identity.parameters == tuple(sorted(compute.parameters.items()))
     for entry in identity.sources:
         located = _roots()[entry.root] / entry.path
         assert entry.digest == content_hash(located.read_bytes())

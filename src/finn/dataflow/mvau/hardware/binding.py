@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
-from finn.dataflow.hardware import KernelBinding, bind_hardware_kernel, bound_regions
+from finn.dataflow.hardware import HardwareKernel, bind_hardware_kernel, bound_regions
 from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_COMPUTE_SELECTION
 from finn.dataflow.mvau.compute_pool import MVAUComputeKernelId
@@ -82,11 +82,11 @@ class DecomposedBindings:
     """Both halves of the decomposed slice, bound to the semantics they cover."""
 
     network: DataflowNetwork
-    compute: KernelBinding
-    replay: KernelBinding
+    compute: HardwareKernel
+    replay: HardwareKernel
 
     @property
-    def bindings(self) -> tuple[KernelBinding, ...]:
+    def bindings(self) -> tuple[HardwareKernel, ...]:
         """In compile order: the replay feeds the dot product."""
 
         return (self.replay, self.compute)
@@ -98,7 +98,7 @@ def _bind(
     role: str,
     node_id: str,
     network: DataflowNetwork,
-) -> KernelBinding:
+) -> HardwareKernel:
     """Bind one Kernel to the node this assembly says fills its role."""
 
     answer = bind_hardware_kernel(
@@ -187,7 +187,7 @@ def resolved_manifest(
     entries: list[tuple[str, str]] = []
     counts: dict[str, int] = {}
     for binding in bindings.bindings:
-        for source in binding.kernel.sources:
+        for source in binding.sources:
             index = counts.get(source.root, 0)
             counts[source.root] = index + 1
             entries.append(

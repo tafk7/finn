@@ -4,7 +4,7 @@
 """Phase 6b: "elaboration makes no design choice", as a check rather than a claim.
 
 Item 9 of the migration plan's evidence list has been asserted since Phase 1
-and never tested.  The mechanism it rests on is real -- a ``KernelBinding``
+and never tested.  The mechanism it rests on is real -- a ``HardwareKernel``
 holds the covered Regions, the Kernel's own committed choices and its resolved
 parameters, and nothing else is reachable from it -- but unreachable is not the
 same as unused.  ``elaborate`` is an ordinary classmethod, and nothing stopped
@@ -38,7 +38,7 @@ from dataflow.hardware.test_forcing_cases import (
 )
 from finn.dataflow.design import Decided
 from finn.dataflow.hardware import (
-    KernelBinding,
+    HardwareKernel,
     PhysicalComponent,
     audit_elaboration,
     scalar_parameters,
@@ -48,7 +48,7 @@ from finn.dataflow.spec_algebra import SpecAuthoringError
 SOURCE_ROOT = Path(__file__).resolve().parents[3] / "src" / "finn" / "dataflow"
 
 
-def _binding() -> KernelBinding:
+def _binding() -> HardwareKernel:
     placed = _place(hardware_kernel="single")
     bound = placed.selection.bind(placed.engine, placed.point, _compute_role(placed))
     assert isinstance(bound, Decided)
@@ -78,7 +78,7 @@ def test_a_kernel_that_invents_a_parameter_is_refused(monkeypatch: pytest.Monkey
     which means two builds differing only in it would collide.
     """
 
-    def inventing(cls: type, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def inventing(cls: type, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         values = dict(binding.parameters)
         values["STAGES"] = 3
         return (PhysicalComponent("single.core", "example.single", scalar_parameters(values)),)
@@ -100,7 +100,7 @@ def test_a_kernel_that_recomputes_a_declared_parameter_is_refused(
     different one.  The key would then claim two unequal artifacts are one.
     """
 
-    def doubling(cls: type, binding: KernelBinding) -> tuple[PhysicalComponent, ...]:
+    def doubling(cls: type, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         values = dict(binding.parameters)
         values["LANES"] = int(str(values["LANES"])) * 2
         return (PhysicalComponent("single.core", "example.single", scalar_parameters(values)),)
@@ -150,7 +150,7 @@ def test_the_audit_says_nothing_about_names_hierarchy_or_component_count() -> No
 def test_nothing_in_the_source_tree_calls_the_unchecked_entry_point() -> None:
     """A check one call site can bypass is not a check.
 
-    ``KernelBinding.components`` is the audited entry point; ``elaborate`` is
+    ``HardwareKernel.components`` is the audited entry point; ``elaborate`` is
     the raw classmethod behind it.  The MVAU composition called the raw one,
     which is precisely the assembly that matters, so this scans for a
     regression rather than trusting the convention.

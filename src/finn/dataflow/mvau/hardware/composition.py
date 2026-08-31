@@ -29,8 +29,8 @@ from finn.dataflow.hardware import (
     BuilderIdentity,
     ComposedArtifactIdentity,
     IpPackageArtifactIdentity,
+    HardwareKernel,
     KernelArtifactIdentity,
-    KernelBinding,
     PackagedArtifactIdentity,
     SynthesisArtifactIdentity,
     TargetIdentity,
@@ -302,7 +302,7 @@ class _Provenance:
 
 
 def _provenance(
-    binding: KernelBinding,
+    kernel: HardwareKernel,
     semantic_kernel_id: str,
     selection: QualifiedPath,
     network: DataflowNetwork,
@@ -318,7 +318,7 @@ def _provenance(
     would be the provenance failure this exists to prevent.
     """
 
-    node_id = binding.regions[0].node_id
+    node_id = next(iter(kernel.regions.values())).node_id
     return _Provenance(
         (node_id,),
         tuple(
@@ -329,12 +329,12 @@ def _provenance(
             dict.fromkeys(
                 (
                     selection,
-                    *sorted(binding.kernel.assignments, key=str),
-                    *binding.kernel.declaration.imported_decisions,
+                    *sorted(kernel.assignments, key=str),
+                    *kernel.declaration.imported_decisions,
                 )
             )
         ),
-        tuple(sorted({semantic_kernel_id, binding.kernel_id})),
+        tuple(sorted({semantic_kernel_id, kernel.kernel_id})),
     )
 
 
@@ -358,7 +358,7 @@ def _merge(items: tuple[_Provenance, ...]) -> _Provenance:
     )
 
 
-def _component(binding: KernelBinding, prefix: str, parent: str) -> MVAUPhysicalComponent:
+def _component(kernel: HardwareKernel, prefix: str, parent: str) -> MVAUPhysicalComponent:
     """The Kernel's own component, placed under this source scope.
 
     A Kernel names itself ``dot_product`` and knows nothing about where that
@@ -369,7 +369,7 @@ def _component(binding: KernelBinding, prefix: str, parent: str) -> MVAUPhysical
     # ``components()`` and not ``elaborate()``: the former audits what came
     # back against what the Kernel declared, and calling the raw classmethod
     # would take the one assembly that matters straight past the check.
-    (declared,) = binding.components()
+    (declared,) = kernel.components()
     return MVAUPhysicalComponent(
         f"{prefix}.{declared.id}", declared.module, parent, declared.parameters
     )
@@ -386,8 +386,8 @@ def compose(resolved: MVAUResolvedDesign, bindings: DecomposedBindings) -> MVAUP
     """Wire two bound Kernels into one physical elaboration."""
 
     network = bindings.network
-    replay_region = bindings.replay.regions[0].region
-    compute_region = bindings.compute.regions[0].region
+    replay_region = next(iter(bindings.replay.regions.values())).region
+    compute_region = next(iter(bindings.compute.regions.values())).region
     activation_in = replay_region.input_interface("activation_in").port
     activation_out = replay_region.output_interface("activation_out").port
     dot_activation = compute_region.input_interface("activation").port
@@ -779,8 +779,8 @@ def build_decomposed_artifact_requirements(
     wrapper = elaboration.component(
         f"{resolved.result.source_association.source_node_id}.compute.wrapper"
     )
-    replay_region = bindings.replay.regions[0].region
-    compute_region = bindings.compute.regions[0].region
+    replay_region = next(iter(bindings.replay.regions.values())).region
+    compute_region = next(iter(bindings.compute.regions.values())).region
     text = render_decomposed_wrapper(
         top,
         dict(bindings.replay.parameters),

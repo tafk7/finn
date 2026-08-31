@@ -23,7 +23,7 @@ from finn.dataflow.authoring.design import (
 )
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import DependencyKind, DesignSpaceSpec
-from finn.dataflow.hardware.kernel import KernelBinding
+from finn.dataflow.hardware.kernel import HardwareKernel
 from finn.dataflow.mvau.hardware.binding import DecomposedBindings
 from finn.dataflow.mvau.hardware.composition import compose
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
@@ -168,7 +168,7 @@ def decomposed_bindings(realization: DesignRealization) -> DecomposedBindings:
 
     if realization.design_id != DotProductDesign.id:
         raise ValueError("only DotProductDesign has decomposed MVAU bindings")
-    by_kernel: dict[str, KernelBinding] = {
+    by_kernel: dict[str, HardwareKernel] = {
         binding.kernel_id: binding for binding in realization.bindings
     }
     try:

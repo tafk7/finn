@@ -293,11 +293,17 @@ def _chain(model: ModelWrapper) -> _Chain:
         annotation,
         {role.label: resolved.projection.problem_data[role.problem_path] for role in ROLES},
         {
-            (binding, interface): _operand_type(by_binding[binding].regions[0].region, interface)
+            (binding, interface): _operand_type(
+                next(iter(by_binding[binding].regions.values())).region, interface
+            )
             for role in ROLES
             for binding, interface in role.operands
         },
-        {name: value for binding in bindings.bindings for name, value in binding.parameters},
+        {
+            name: value
+            for binding in bindings.bindings
+            for name, value in binding.parameters.items()
+        },
         _wrapper_parameters(requirements.wrapper_source),
         {
             name: value
@@ -389,8 +395,8 @@ def test_the_kernel_covers_the_regions_carrying_those_operands() -> None:
 
     bindings = bind_decomposed(_resolved(_model()))
     covered = {
-        "replay": bindings.replay.regions[0].role,
-        "compute": bindings.compute.regions[0].role,
+        "replay": bindings.replay.regions["replay"].role,
+        "compute": bindings.compute.regions["compute"].role,
     }
     assert covered == {"replay": "replay", "compute": "compute"}
     for role in ROLES:
