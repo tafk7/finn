@@ -32,7 +32,7 @@ import json
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -123,6 +123,7 @@ def drive(
     expected: int,
     *,
     stalls: bool,
+    data_files: Mapping[str, str] | None = None,
 ) -> list[int]:
     """Compile and run one DUT in a fresh process, optionally stalling it.
 
@@ -141,6 +142,7 @@ def drive(
                     "stimulus": stimulus,
                     "expected": expected,
                     "stalls": stalls,
+                    "data_files": dict(data_files or {}),
                 }
             )
         )
@@ -169,6 +171,8 @@ def simulate_once(request_path: str, response_path: str) -> int:
     payload: dict[str, object]
     try:
         with tempfile.TemporaryDirectory() as scratch:
+            for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
+                (Path(scratch) / name).write_text(contents)
             sim_dir, so_rel = compile_sim_obj(
                 request["top_module"], request["sources"], scratch, behav=True
             )

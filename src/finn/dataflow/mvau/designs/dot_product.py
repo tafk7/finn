@@ -23,12 +23,18 @@ from finn.dataflow.authoring.design import (
 )
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import DependencyKind, DesignSpaceSpec
+from finn.dataflow.op import dataflow_problem_fingerprint
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
     DotProductHardwareInputs,
 )
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.mvau.input_supply import (
+    MVAUInputSupply,
+    declare_mvau_input_supply,
+    declare_supplied_source_association,
+)
 from finn.dataflow.mvau.semantics import (
     DOT_PRODUCT_NODE,
     REPLAY_NODE,
@@ -41,6 +47,7 @@ from finn.dataflow.mvau_problem import (
     MVAU_PROBLEM_SPEC,
     MVAUProblem,
 )
+from finn.dataflow.mvau.associations import MVAUSourceAssociation
 
 if TYPE_CHECKING:
     from finn.dataflow.mvau.elaboration import MVAUPhysicalElaboration
@@ -79,6 +86,8 @@ class DotProductDesign(DataflowDesign):
             computation=semantics.dot_product_computation,
         )
         design.use_network(semantics.network)
+        weight_interface = design.input_interface("compute.weight_interface", compute, "weight")
+        design.map_input("weight", boundary_id="weight", consumer=weight_interface)
         design.kernels(
             "compute",
             covers=(compute,),
@@ -118,9 +127,11 @@ class DotProductDesignAssembly:
     """The shared semantics and compiled design declared together once."""
 
     semantics: MVAUDotProductSemantics
+    input_supply: MVAUInputSupply
     inventory: DataflowDesignInventory
     design: DataflowDesignDeclaration
     compute_pumping: Ref[bool]
+    source_association: Ref[MVAUSourceAssociation]
 
     @property
     def specification(self) -> DesignSpaceSpec:
@@ -135,6 +146,12 @@ def declare_dot_product_design(
     """Declare DotProduct over the shared semantic handles without selecting it."""
 
     semantics = declare_dot_product_semantics(problem)
+    supply = declare_mvau_input_supply(problem)
+    source_association, association_spec = declare_supplied_source_association(
+        "mvau.design.dot_product",
+        semantics.source_association,
+        supply.declaration,
+    )
     inventory = declare_dataflow_design_inventory(
         "mvau",
         (
@@ -143,7 +160,8 @@ def declare_dot_product_design(
                 DotProductDesignInputs(problem, semantics, narrow_weights),
             ),
         ),
-        shared_specs=(MVAU_PROBLEM_SPEC, semantics.spec),
+        input_supplies=(supply.declaration,),
+        shared_specs=(MVAU_PROBLEM_SPEC, semantics.spec, association_spec),
     )
     declaration = inventory.declarations[0]
     compute = declaration.placement("compute").candidates[0]
@@ -154,9 +172,11 @@ def declare_dot_product_design(
         raise AssertionError("DotpAxiKernel must declare exactly one compute-pumping choice")
     return DotProductDesignAssembly(
         semantics,
+        supply,
         inventory,
         declaration,
         Ref(pumping[0].path, DependencyKind.DECISION, pumping[0].value_semantics),
+        source_association,
     )
 
 
@@ -173,9 +193,16 @@ def compose_dot_product_design(
 
     if getattr(resolved_source.result, "network", None) != realization.network:
         raise ValueError("the source envelope and DotProduct realization name different Networks")
+    from finn.dataflow.mvau.elaboration import MVAUElaborationOrigin  # noqa: PLC0415
     from finn.dataflow.mvau.hardware.composition import compose  # noqa: PLC0415
 
-    return compose(resolved_source, realization)
+    origin = MVAUElaborationOrigin(
+        "mvau-dataflow-op-v6",
+        dataflow_problem_fingerprint(resolved_source.point.problem),
+        tuple(sorted(resolved_source.point.assignments.items(), key=lambda item: item[0])),
+        tuple(realization.kernel(name).kernel_id for name in realization.kernels),
+    )
+    return compose(resolved_source, realization, origin=origin)
 
 
 MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()

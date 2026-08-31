@@ -158,7 +158,11 @@ def bind_decomposed(resolved: MVAUResolvedDesign) -> DesignRealization:
             network,
         ),
     }
-    validated = MVAU_DOT_PRODUCT_DESIGN.design.validate_realization(network, configured)
+    validated = MVAU_DOT_PRODUCT_DESIGN.design.validate_realization(
+        network,
+        configured,
+        active_placements=("compute", "replay"),
+    )
     if not isinstance(validated, Decided):
         raise MVAUElaborationError(validated.findings)
     return validated.value

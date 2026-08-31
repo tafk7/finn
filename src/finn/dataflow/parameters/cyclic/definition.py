@@ -27,6 +27,13 @@ class CyclicRamStyle(str, Enum):
     URAM = "ultra"
 
 
+class WeightOrganization(str, Enum):
+    """How stored parameters are ordered relative to the consumer demand."""
+
+    AS_DEMANDED = "as_demanded"
+    STANDARD_FULL_TILE = "standard_full_tile"
+
+
 @dataclass(frozen=True)
 class CyclicTargetMemoryCapabilities:
     """Target facts used by the current on-chip supply constraints."""
@@ -47,4 +54,5 @@ __all__ = [
     "CyclicParameterKernelPaths",
     "CyclicRamStyle",
     "CyclicTargetMemoryCapabilities",
+    "WeightOrganization",
 ]

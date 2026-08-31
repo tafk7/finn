@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 from typing import cast
 
 from finn.dataflow.authoring.design import DesignRealization
@@ -51,6 +52,7 @@ from finn.dataflow.mvau.decomposed import (
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.mvau.elaboration import (
     MVAUElaborationError,
+    MVAUElaborationOrigin,
     MVAUPhysicalAssociation,
     MVAUPhysicalBoundary,
     MVAUPhysicalComponent,
@@ -70,6 +72,11 @@ from finn.dataflow.mvau.hardware.binding import (
     resolved_manifest,
     source_roots,
     verify_manifest,
+)
+from finn.dataflow.mvau.input_supply import (
+    DELIVERY_EDGE,
+    DELIVERY_NODE,
+    FINN_RTL_MEMSTREAM_SUPPLY,
 )
 from finn.dataflow.mvau.source import MVAUResolvedDesign
 from finn.dataflow.mvau_problem import MVAUProblemPaths
@@ -383,14 +390,21 @@ def elaborate_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboratio
 
 
 def compose(
-    resolved: MVAUResolvedDesign, realization: DesignRealization
+    resolved: MVAUResolvedDesign,
+    realization: DesignRealization,
+    *,
+    origin: MVAUElaborationOrigin | None = None,
 ) -> MVAUPhysicalElaboration:
     """Wire two bound Kernels into one physical elaboration."""
 
     network = realization.network
     replay = realization.kernel("replay")
     compute = realization.kernel("compute")
-    if realization.unabsorbed_edges != (ACTIVATION_EDGE,):
+    delivery = realization.kernels.get("delivery")
+    expected_edges = (
+        (ACTIVATION_EDGE,) if delivery is None else tuple(sorted((ACTIVATION_EDGE, DELIVERY_EDGE)))
+    )
+    if realization.unabsorbed_edges != expected_edges:
         raise _fail(
             "mvau-dot-product-connection-obligation-mismatch",
             "DotProduct must leave exactly its activation-replay edge for composition",
@@ -415,7 +429,7 @@ def compose(
         **dict(replay.parameters),
         **dict(compute.parameters),
     }
-    components = (
+    components: tuple[MVAUPhysicalComponent, ...] = (
         MVAUPhysicalComponent(
             wrapper_id,
             WRAPPER_MODULE,
@@ -427,7 +441,7 @@ def compose(
         replay_component,
         dot_component,
     )
-    interfaces = (
+    interfaces: tuple[MVAUPhysicalNumericInterface, ...] = (
         _numeric(
             f"{wrapper_id}.activation",
             wrapper_id,
@@ -520,7 +534,7 @@ def compose(
     # ``replay_buffer`` predates the AXI naming and takes ``clk`` with an
     # active-high ``rst``; the generated wrapper is what inverts the reset and
     # bridges the two, so the model has to say which is which.
-    controls = (
+    controls: tuple[MVAUPhysicalControlInterface, ...] = (
         MVAUPhysicalControlInterface(
             f"{wrapper_id}.clock", wrapper_id, MVAUPhysicalControlKind.CLOCK, "ap_clk"
         ),
@@ -547,7 +561,7 @@ def compose(
             f"{dot_id}.reset", dot_id, MVAUPhysicalControlKind.RESET, "ap_rst_n"
         ),
     )
-    connections = (
+    connections: tuple[MVAUPhysicalConnection, ...] = (
         MVAUPhysicalConnection(
             "compute.wrapper_activation",
             (f"{wrapper_id}.activation", f"{replay_id}.activation_in"),
@@ -557,7 +571,7 @@ def compose(
         MVAUPhysicalConnection(
             "compute.replay_to_dot_product",
             (f"{replay_id}.activation_out", f"{dot_id}.activation"),
-            realization.unabsorbed_edges,
+            (ACTIVATION_EDGE,),
         ),
         MVAUPhysicalConnection(
             "compute.wrapper_weight", (f"{wrapper_id}.weight", f"{dot_id}.weight")
@@ -566,6 +580,68 @@ def compose(
             "compute.wrapper_output", (f"{dot_id}.output", f"{wrapper_id}.output")
         ),
     )
+    if delivery is not None:
+        delivery_region = next(iter(delivery.regions.values())).region
+        delivery_port = delivery_region.output_interface("weight").port
+        delivery_id = f"{source_id}.delivery.wrapper"
+        (declared_delivery,) = delivery.components()
+        delivery_component = MVAUPhysicalComponent(
+            delivery_id,
+            declared_delivery.module,
+            parameters=declared_delivery.parameters,
+        )
+        delivery_interface = _numeric(
+            f"{delivery_id}.weight",
+            delivery_id,
+            MVAUPhysicalDirection.OUTPUT,
+            delivery_port,
+            DELIVERY_NODE,
+            "m_axis_0_tdata",
+            "m_axis_0_tvalid",
+            "m_axis_0_tready",
+        )
+        delivery_controls = (
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.clock",
+                delivery_id,
+                MVAUPhysicalControlKind.CLOCK,
+                "ap_clk",
+            ),
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.clock2x",
+                delivery_id,
+                MVAUPhysicalControlKind.CLOCK,
+                "ap_clk2x",
+            ),
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.reset",
+                delivery_id,
+                MVAUPhysicalControlKind.RESET,
+                "ap_rst_n",
+            ),
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.configuration",
+                delivery_id,
+                MVAUPhysicalControlKind.CONFIGURATION,
+                "s_axilite",
+            ),
+            MVAUPhysicalControlInterface(
+                f"{delivery_id}.set_selector",
+                delivery_id,
+                MVAUPhysicalControlKind.CONFIGURATION,
+                "s_axis_0",
+            ),
+        )
+        components += (delivery_component,)
+        interfaces += (delivery_interface,)
+        controls += delivery_controls
+        connections += (
+            MVAUPhysicalConnection(
+                "network.delivery_to_compute",
+                (delivery_interface.id, f"{wrapper_id}.weight"),
+                (DELIVERY_EDGE,),
+            ),
+        )
     interfaces_by_id = {item.id: item for item in interfaces}
     boundary_interface = {
         (REPLAY_NODE, "activation_in"): f"{wrapper_id}.activation",
@@ -603,6 +679,13 @@ def compose(
             network,
         ),
     }
+    if delivery is not None:
+        by_component[f"{source_id}.delivery.wrapper"] = _provenance(
+            delivery,
+            FINN_RTL_MEMSTREAM_SUPPLY,
+            QualifiedPath("mvau.input.weight.supply"),
+            network,
+        )
     # The wrapper and every connection through it span both, so their record is
     # the union -- which is what a union is for, rather than the default.
     everything_covered = _merge(tuple(by_component.values()))
@@ -663,7 +746,7 @@ def compose(
     )
     return MVAUPhysicalElaboration(
         source_id,
-        mvau_elaboration_origin(resolved),
+        mvau_elaboration_origin(resolved) if origin is None else origin,
         resolved.result,
         cast(str, resolved.point.problem[MVAUProblemPaths.TARGET_FPGA_PART]),
         cast(float, resolved.point.problem[MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS]),
@@ -706,6 +789,8 @@ class MVAUDecomposedArtifactRequirements:
     #: What this artifact *is*, keyed by its physical inputs alone.  Computed
     #: before any builder runs, which is what makes it usable as a lookup.
     identity: ComposedArtifactIdentity
+    #: Non-HDL files consumed by generated RTL, as relative name and text.
+    data_files: tuple[tuple[str, str], ...] = ()
 
     @property
     def stitch_module_name(self) -> str:
@@ -834,6 +919,7 @@ def staged_layout(requirements: MVAUDecomposedArtifactRequirements) -> tuple[str
 
     return (
         *(f"{name}_{Path(path).name}" for name, path in requirements.source_dependencies),
+        *(name for name, _contents in requirements.data_files),
         requirements.wrapper_file_name,
         requirements.stitch_file_name,
     )
@@ -860,6 +946,10 @@ def write_decomposed_artifact(
     for name, path in requirements.source_dependencies:
         destination = output / f"{name}_{Path(path).name}"
         destination.write_bytes(Path(path).read_bytes())
+        staged.append(str(destination))
+    for name, contents in requirements.data_files:
+        destination = output / name
+        destination.write_text(contents)
         staged.append(str(destination))
     wrapper = output / requirements.wrapper_file_name
     wrapper.write_text(requirements.wrapper_source)
@@ -1070,15 +1160,22 @@ def package_decomposed_artifact(
 
     identity = packaged_artifact_identity(requirements)
     wrapper_id = f"{requirements.elaboration.source_scope_id}.compute.wrapper"
+    boundary_interfaces = {
+        boundary.interface_id for boundary in requirements.elaboration.boundaries
+    }
     interfaces = tuple(
         item
         for item in requirements.elaboration.numeric_interfaces
-        if item.component_id == wrapper_id
+        if item.id in boundary_interfaces
     )
-    controls = tuple(
+    selected_controls = tuple(
         item
         for item in requirements.elaboration.control_interfaces
-        if item.component_id == wrapper_id
+        if item.component_id == wrapper_id or item.kind is MVAUPhysicalControlKind.CONFIGURATION
+    )
+    controls = tuple(
+        next(item for item in selected_controls if (item.kind, item.signal) == identity)
+        for identity in dict.fromkeys((item.kind, item.signal) for item in selected_controls)
     )
     found = checked_lookup(store, identity)
     if found is not None:
@@ -1305,7 +1402,11 @@ def prepare_decomposed_synthesis(
     script = directory / SYNTHESIS_SCRIPT_FILE_NAME
     script.write_text(
         SYNTHESIS_RECIPE_SCHEMA.format(
-            sources="\n".join(f"read_verilog -sv {{{path}}}" for path in packaged.files),
+            sources="\n".join(
+                f"read_verilog -sv {{{path}}}"
+                for path in packaged.files
+                if Path(path).suffix in {".v", ".sv"}
+            ),
             constraints=f"{{{constraints}}}",
             top=packaged.top_module_name,
             part=target.fpga_part,
@@ -1313,6 +1414,9 @@ def prepare_decomposed_synthesis(
         )
         + "\n"
     )
+    for path in packaged.files:
+        if Path(path).suffix not in {".v", ".sv"}:
+            shutil.copy2(path, directory / Path(path).name)
     return PreparedDecomposedSynthesis(
         identity,
         str(directory),

@@ -39,6 +39,7 @@ from finn.dataflow.mvau.hardware.composition import (
 )
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,
@@ -150,6 +151,7 @@ def _side_by_side(geometry: tuple[int, int, int, int, int], *, pumping: bool = F
             assembly.semantics.pe.path: pe,
             assembly.semantics.simd.path: simd,
             assembly.compute_pumping.path: pumping,
+            assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
         },
     ).point
     realized = assembly.inventory.realize(new_engine, new_point)
@@ -176,18 +178,26 @@ def test_dot_product_is_selected_without_resolving_folding() -> None:
     assert isinstance(engine.query_property(point, assembly.design.network.path), Unresolved)
 
 
-def test_dot_product_owns_two_one_candidate_placements_without_selection_decisions() -> None:
+def test_dot_product_owns_two_core_placements_and_one_conditional_supply_placement() -> None:
     assembly = MVAU_DOT_PRODUCT_DESIGN
-    assert tuple(item.name for item in assembly.design.placements) == ("compute", "replay")
+    assert tuple(item.name for item in assembly.design.placements) == (
+        "compute",
+        "replay",
+        "delivery",
+    )
     assert tuple(placement.candidates[0].id for placement in assembly.design.placements) == (
         DotpAxiKernel.id,
         ReplayBufferKernel.id,
+        "finn_rtl_memstream",
     )
     decisions = {item.path for item in assembly.specification.decisions}
     assert decisions == {
         assembly.semantics.pe.path,
         assembly.semantics.simd.path,
         assembly.compute_pumping.path,
+        assembly.input_supply.declaration.choice.path,
+        assembly.input_supply.settings.ram_style.path,
+        assembly.input_supply.settings.pumped_memory.path,
     }
     assert assembly.compute_pumping.path == QualifiedPath(
         "mvau.design.dot_product.compute.dotp_axi.compute_pumping"

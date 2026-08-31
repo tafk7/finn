@@ -360,7 +360,7 @@ def declare_dot_product_semantics(
         sets=(feasibility_constraint_set,),
     )
     source_association = scope.derived(
-        "source_association",
+        "core_source_association",
         MVAUSourceAssociation,
         dependencies={
             "description": problem.source_description,

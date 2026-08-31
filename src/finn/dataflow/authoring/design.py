@@ -660,6 +660,7 @@ class InputSupplyDeclaration:
                 f"input.{mapping.source_operand}.{alternative.id}.network",
                 DATAFLOW_NETWORK_SEMANTICS,
                 dependencies={
+                    "consumer": mapping.consumer,
                     "network": prior,
                     "supply": self.choice,
                     "supplier": supplier,
@@ -677,6 +678,7 @@ def declare_input_supply(
     source_operand: str,
     alternatives: Sequence[InputSupplyAlternative],
     inputs: object = None,
+    configure: Callable[[Scope, Ref[str]], object] | None = None,
     external_id: str = "external",
 ) -> InputSupplyDeclaration:
     """Declare one closed supply decision owned by an enclosing Operation."""
@@ -690,8 +692,11 @@ def declare_input_supply(
     duplicates = duplicate_values(modes)
     if duplicates:
         raise AuthoringError(f"input supply modes are duplicated: {list(duplicates)}")
+    if configure is not None and inputs is not None:
+        raise AuthoringError("input supply accepts either inputs or configure, not both")
     scope = Scope(namespace)
     choice = scope.decision("supply", str, domain=finite(modes))
+    configured_inputs = configure(scope, choice) if configure is not None else inputs
     return InputSupplyDeclaration(
         id,
         version,
@@ -700,7 +705,7 @@ def declare_input_supply(
         choice,
         declared,
         scope.spec(),
-        inputs,
+        configured_inputs,
         external_id,
     )
 
@@ -710,7 +715,12 @@ def _attach_evaluator(
     mapping: DesignInput,
     attachment: SupplierAttachment,
 ) -> Callable[..., object]:
-    def attach(network: DataflowNetwork, supply: str, supplier: object) -> object:
+    def attach(
+        consumer: InputInterface,
+        network: DataflowNetwork,
+        supply: str,
+        supplier: object,
+    ) -> object:
         if supply != selected:
             return network
         if supplier is ABSENT:
@@ -718,6 +728,24 @@ def _attach_evaluator(
                 "design-active-supplier-absent",
                 f"input supply {selected!r} is selected but its Region is absent",
                 trace=(attachment.node.region,),
+            )
+        boundary = next(
+            (item for item in network.boundaries if item.id == mapping.boundary_id), None
+        )
+        if boundary is None:
+            return unresolved(
+                "design-supplied-boundary-absent",
+                f"input supply {selected!r} cannot find boundary {mapping.boundary_id!r}",
+                trace=(mapping.consumer,),
+            )
+        declared_consumer = network.node(boundary.endpoint.node_id).region.input_interface(
+            boundary.endpoint.port_id
+        )
+        if declared_consumer != consumer:
+            return unresolved(
+                "design-supply-consumer-mismatch",
+                "the mapped consumer interface does not equal the selected Network boundary",
+                trace=(mapping.consumer,),
             )
         return attach_supplier_network(
             network,
@@ -762,7 +790,14 @@ def _position_map(source: DataflowRegion, output: str, consumer: InputInterface)
     demanded = consumer.port.beat_sequence
     source_positions = tuple(position for beat in produced.beats for position in beat)
     sink_positions = tuple(position for beat in demanded.beats for position in beat)
-    return PositionMap(zip(source_positions, sink_positions))
+    if len(source_positions) != len(sink_positions):
+        raise AuthoringError("supplier and consumer BeatSequences have different field counts")
+    mapping: dict[tuple[int, ...], tuple[int, ...]] = {}
+    for source_position, sink_position in zip(source_positions, sink_positions):
+        previous = mapping.setdefault(source_position, sink_position)
+        if previous != sink_position:
+            raise AuthoringError("supplier-to-consumer position correspondence is not functional")
+    return PositionMap(mapping)
 
 
 def attach_supplier_network(

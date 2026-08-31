@@ -44,6 +44,7 @@ from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterKernelPaths,
     CyclicRamStyle,
     CyclicTargetMemoryCapabilities,
+    WeightOrganization,
 )
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from finn.dataflow.region import Port
@@ -56,13 +57,6 @@ class MVAUWeightSupplyKernelId(str, Enum):
 
     FINN_RTL_MEMSTREAM = "finn_rtl_memstream"
     FINNLIB_HLS_MEMSTREAM = "finnlib_hls_memstream"
-
-
-class WeightOrganization(str, Enum):
-    """Whether a supplier serves the demand exactly or its own full tile."""
-
-    AS_DEMANDED = "as_demanded"
-    STANDARD_FULL_TILE = "standard_full_tile"
 
 
 #: Selection name and path root of the weight-supply pool.
