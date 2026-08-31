@@ -46,10 +46,10 @@ x-common: &common
   # container wrote to the bind mount would be owned by uid 1000. `finn-env
   # inspect --format sh` emits both.
   user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
-  environment:
-    FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-    FINN_DEPS: ${FINN_DEPS:-frozen}
-    NUM_DEFAULT_WORKERS: ${NUM_DEFAULT_WORKERS:-4}
+  # NO `environment:` here. A YAML merge key does not deep-merge, so a service
+  # defining its own `environment:` replaces this wholesale -- and all four do.
+  # It looked like it was setting NUM_DEFAULT_WORKERS for every service and set
+  # it for none. `docker compose config dev` shows the resolved truth.
 
 # Everything an FPGA tier needs from the host, resolved by `finn-env inspect`.
 # Read-only throughout: the tools do not write into their own installation, and
@@ -86,9 +86,18 @@ services:
       # env file so the legacy contract keeps mirroring the host path -- see the
       # note at the top of this file about FINN_ROOT differing between tiers.
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
+      # The build directory. Without this, dev had no FINN_BUILD_DIR and no
+      # mount, so finn_entrypoint.sh fell back to an in-container /tmp path and
+      # `--rm` deleted every generated artifact on exit. The old launcher
+      # mounted this unconditionally for every tier.
+      #
+      # This is scratch space, not host state in the sense the dev contract
+      # means: no toolchain, no licence, no secrets.
+      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
     working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
     environment:
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build:
@@ -103,12 +112,26 @@ services:
         FINN_PROFILE: ${FINN_PROFILE:-py310}
     volumes:
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      - ${FINN_XILINX_PATH:?set FINN_XILINX_PATH, or generate .env with finn-env inspect}:${FINN_XILINX_PATH}:ro
-      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+      # NOT ${FINN_XILINX_PATH:?...}. Compose interpolates EVERY service in the
+      # file, not only the one you selected, so a `:?` here aborts
+      # `docker compose run --rm dev` on any machine with no Xilinx configured
+      # -- which is exactly the user the dev tier exists for. Same defect that
+      # made bake refuse every target until it was given -f docker-bake.hcl.
+      #
+      # create_host_path: false so an unset value fails when you START this
+      # service, with an error that names itself, instead of silently binding a
+      # directory Docker helpfully created.
+      - type: bind
+        source: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
+        target: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
     environment:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build-xrt:
@@ -123,13 +146,18 @@ services:
         FINN_PROFILE: ${FINN_PROFILE:-py310}
     volumes:
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      - ${FINN_XILINX_PATH:?set FINN_XILINX_PATH, or generate .env with finn-env inspect}:${FINN_XILINX_PATH}:ro
+      - type: bind
+        source: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
+        target: ${FINN_XILINX_PATH:-/FINN_XILINX_PATH-is-not-set}
+        read_only: true
+        bind:
+          create_host_path: false
       - ${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:ro
-      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+      - ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}:${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
     environment:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build}
+      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/tmp/finn_build_1000}
       FINN_DEPS: ${FINN_DEPS:-frozen}
 
   notebook:

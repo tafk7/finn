@@ -28,7 +28,15 @@ fact and then disagreed:
 
 None of these reproduced on the development machine, because it has one Xilinx
 version in one layout. A program that finds nothing cannot disagree with
-anything. That is why `run-docker.sh` went from about 900 lines to 262.
+anything.
+
+`run-docker.sh` went from **407 lines to 306** against `dev` — a 25% cut, bought
+with roughly +5,600 lines across the rest of the stack. An earlier version of
+this document said "900 lines to 262". That was wrong twice over: 900 was the
+launcher's peak *on this branch*, reached partway through when the sbx logic
+was still inline, so the figure measured a detour this work created and then
+removed. The value of the change is that the launcher now derives no host
+facts, not that it is shorter.
 
 The other five were documentation contradicting itself or the code. Those are
 listed under "Corrections" below, because a wrong comment costs as much as a

@@ -47,11 +47,10 @@
 #   docker buildx bake build-py310
 #   docker/finn-sbx build
 #
-# WHY THIS SHRANK FROM ~900 LINES. Everything it used to compute is computed
-# somewhere else now, exactly once. The three mount defects that started this
-# work were all the same failure -- two code paths deriving the same host fact
-# and drifting -- so a launcher that derives nothing cannot reproduce them.
-# See docs/containerization.md.
+# 407 lines on `dev`, 306 now. The point is not the count -- it is that this
+# script derives no host facts. The mount defects that started this work were
+# all one failure, two code paths deriving the same fact and drifting, and a
+# script that derives nothing cannot reproduce it. See docs/containerization.md.
 # ============================================================================
 
 set -uo pipefail

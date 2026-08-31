@@ -305,10 +305,11 @@ def test_sh_format_is_shell_assignments(tmp_path):
          "--format", "sh"],
         capture_output=True, text=True,
         env={"PATH": os.environ["PATH"], "FINN_ROOT": "/w/finn"})
-    assert "FINN_WORKSPACE_SOURCE=/w/finn" in proc.stdout
-    assert "FINN_WORKSPACE_TARGET=%s" % finn_env.FIXED_WORKSPACE in proc.stdout
+    # Values are single-quoted: three callers eval this output.
+    assert "FINN_WORKSPACE_SOURCE='/w/finn'" in proc.stdout
+    assert "FINN_WORKSPACE_TARGET='%s'" % finn_env.FIXED_WORKSPACE in proc.stdout
     # FINN_ROOT is the CONTAINER path, so it tracks the target, not the source.
-    assert "FINN_ROOT=%s" % finn_env.FIXED_WORKSPACE in proc.stdout
+    assert "FINN_ROOT='%s'" % finn_env.FIXED_WORKSPACE in proc.stdout
     # Compose cannot get these from the shell; see the comment in finn-env.
     assert "FINN_UID=" in proc.stdout
     assert "FINN_GID=" in proc.stdout
@@ -395,4 +396,62 @@ def test_emitted_paths_have_no_tilde(tmp_path):
     assert proc.returncode == 0, proc.stderr
     for line in proc.stdout.splitlines():
         assert "~" not in line, "tilde survived into the .env: %s" % line
-    assert "FINN_HOST_BUILD_DIR=/home/someone/builds" in proc.stdout
+    assert "FINN_HOST_BUILD_DIR='/home/someone/builds'" in proc.stdout
+
+
+# --------------------------------------------------------------------------
+# The `sh` output -- the format Compose and three eval sites consume.
+# --------------------------------------------------------------------------
+#
+# Every defect below was live and none was caught, because the existing tests
+# checked the JSON output while Compose reads the sh output.
+
+def test_sh_output_defaults_deps_to_frozen(tmp_path):
+    """The resolver emitted `auto` while every other site said `frozen`.
+
+    Because the documented recipe is `finn-env inspect --format sh > .env`, and
+    that value overrides ${FINN_DEPS:-frozen} in every compose service, the
+    single source of truth was turning off the determinism it exists to give.
+    """
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
+        capture_output=True, text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone"})
+    assert "FINN_DEPS='frozen'" in proc.stdout
+
+
+def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
+    """The dev contract, checked in the format that is actually consumed."""
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
+        capture_output=True, text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
+             "FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"})
+    assert "FINN_XILINX_PATH" not in proc.stdout
+    # ...and is present for a tier that may have a toolchain.
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "inspect", "--tier", "build", "--format", "sh"],
+        capture_output=True, text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
+             "FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"})
+    assert "FINN_XILINX_PATH=" in proc.stdout
+
+
+def test_sh_output_survives_eval_with_spaces():
+    """Three callers eval this output. A space used to truncate the value."""
+    assert finn_env.shquote("/a b/c") == "'/a b/c'"
+    proc = subprocess.run(
+        ["bash", "-c",
+         'eval "$(%s %s inspect --tier dev --format sh | sed \'s/^/export /\')"; '
+         'printf "%%s" "$FINN_WORKSPACE_SOURCE"' % (sys.executable, FINN_ENV)],
+        capture_output=True, text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
+             "FINN_ROOT": "/tmp/a b/finn"})
+    assert proc.stdout == "/tmp/a b/finn", proc.stderr
+
+
+def test_sh_output_is_not_an_injection_path():
+    """XILINXD_LICENSE_FILE passes through verbatim and is then eval'd."""
+    assert finn_env.shquote("x`id`") == "'x`id`'"
+    assert finn_env.shquote("a'b") == "'a'\\''b'"

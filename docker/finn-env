@@ -234,7 +234,16 @@ def resolve_host(tier, backend):
         "env": {"FINN_ROOT": workspace_target},
     }
 
-    deps = os.environ.get("FINN_DEPS", "auto").lower()
+    # `frozen`, matching finn_paths.DEFAULT_DEPS_MODE and every other site
+    # (compose, run-docker.sh, finn-sbx, the Dockerfile, devcontainer.json).
+    #
+    # This said "auto" until it was caught by review. Because the documented way
+    # to make a .env is `finn-env inspect --format sh > .env`, and because that
+    # value then OVERRIDES ${FINN_DEPS:-frozen} in every compose service, the
+    # single source of truth was quietly turning off the determinism it exists
+    # to provide. The design record argues at length that auto-under-a-
+    # deterministic-name is the worst combination; this reproduced it.
+    deps = os.environ.get("FINN_DEPS", "frozen").lower()
     out["env"]["FINN_DEPS"] = deps
 
     if tier == "dev":
@@ -458,6 +467,28 @@ def toolchain_env():
 # Subcommands.
 # --------------------------------------------------------------------------
 
+def shquote(value):
+    """Single-quote a value so it survives `eval`.
+
+    cmd_print has always done this; cmd_inspect did not, and three callers
+    eval its output -- finn-sbx, setup-local.sh and conformance.sh. A Xilinx
+    path containing a space therefore truncated silently:
+
+        $ eval "$(finn-env inspect --format sh | sed 's/^/export /')"
+        bash: export: `Xilinx/2025.1/Vivado': not a valid identifier
+        XILINX_VIVADO=[/tmp/My]
+
+    A half-set toolchain, no error the caller checks. It was also an injection
+    path: XILINXD_LICENSE_FILE passes through verbatim and is then eval'd, so a
+    backtick in it ran on the host.
+
+    One quoted format serves both consumers. Verified against compose 5.3.1:
+    `--env-file` strips surrounding single quotes, so PLAIN=/a b/c and
+    QUOTED='/a b/c' both resolve to the same value.
+    """
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
 def cmd_inspect(args):
     data = resolve_host(args.tier, args.backend)
     if args.format == "json":
@@ -465,21 +496,50 @@ def cmd_inspect(args):
         sys.stdout.write("\n")
     else:  # sh -- a .env file for Compose
         for key, value in sorted(data["env"].items()):
-            sys.stdout.write("%s=%s\n" % (key, value))
-        sys.stdout.write("FINN_WORKSPACE_SOURCE=%s\n" % data["workspace"]["source"])
-        sys.stdout.write("FINN_WORKSPACE_TARGET=%s\n" % data["workspace"]["target"])
+            sys.stdout.write("%s=%s\n" % (key, shquote(value)))
+        sys.stdout.write("FINN_WORKSPACE_SOURCE=%s\n" % shquote(data["workspace"]["source"]))
+        sys.stdout.write("FINN_WORKSPACE_TARGET=%s\n" % shquote(data["workspace"]["target"]))
         # Compose cannot get these from the shell: bash marks UID readonly and
         # exports neither, so ${UID} in a compose file silently resolves to its
         # default and every file written to a bind mount ends up owned by uid
         # 1000 instead of the invoking user.
         sys.stdout.write("FINN_UID=%d\n" % os.getuid())
         sys.stdout.write("FINN_GID=%d\n" % os.getgid())
+
+        # The build directory, resolved AND created.
+        #
+        # Creating it is a side effect in a resolver, which is not free, but the
+        # alternative is worse: Docker creates a missing bind source itself, as
+        # ROOT. The container then runs as the invoking user and cannot write
+        # it. That is not hypothetical -- adding a build-dir mount to the dev
+        # service without this turned a green suite into 319 PermissionErrors,
+        # and run-docker.sh already carries a comment warning about exactly this
+        # for the torch/HF cache.
+        #
+        # Per-uid by default so two users on one host do not collide.
+        build_dir = hostpath(os.environ.get(
+            "FINN_HOST_BUILD_DIR", "/tmp/finn_build_%d" % os.getuid()))
+        try:
+            os.makedirs(build_dir, exist_ok=True)
+        except OSError as exc:
+            warn("could not create the build directory %s (%s)" % (build_dir, exc))
+        sys.stdout.write("FINN_HOST_BUILD_DIR=%s\n" % shquote(build_dir))
         # Path-valued, so expand. FINN_PROFILE is a name, so it is not.
-        for key in ("FINN_XILINX_PATH", "FINN_HOST_BUILD_DIR"):
+        #
+        # FINN_XILINX_PATH is emitted only for the tiers that may have a
+        # toolchain. It used to be emitted unconditionally, so a
+        # `--tier dev` .env carried the host's Xilinx path -- breaking the dev
+        # contract in the ONE output format compose actually reads. The JSON
+        # output was always correct, which is why conformance test 2 passed:
+        # it checks JSON.
+        path_keys = []
+        if data["tier"] in FPGA_TIERS:
+            path_keys.append("FINN_XILINX_PATH")
+        for key in path_keys:
             if os.environ.get(key):
-                sys.stdout.write("%s=%s\n" % (key, hostpath(os.environ[key])))
+                sys.stdout.write("%s=%s\n" % (key, shquote(hostpath(os.environ[key]))))
         if os.environ.get("FINN_PROFILE"):
-            sys.stdout.write("FINN_PROFILE=%s\n" % os.environ["FINN_PROFILE"])
+            sys.stdout.write("FINN_PROFILE=%s\n" % shquote(os.environ["FINN_PROFILE"]))
     return 0
 
 
