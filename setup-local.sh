@@ -184,43 +184,35 @@ echo ""
 # Step 4: Install Python dependencies
 gecho "Step 4: Installing Python dependencies..."
 
-# Install from requirements.txt
+# The SAME pin files the image uses. Lane 3 previously carried 27 hardcoded
+# `pip install` lines duplicating docker/profiles/$FINN_PROFILE/tools.txt -- a
+# fourth copy of the pin set, in the branch whose purpose is removing extra
+# copies. It also installed the CUDA build of torch while the image
+# deliberately installs CPU, so "all lanes use the same dependency versions"
+# was false.
+: "${FINN_PROFILE:=py310}"
+PROFILE_DIR="${FINN_ROOT}/docker/profiles/${FINN_PROFILE}"
+[ -d "$PROFILE_DIR" ] || { recho "Unknown FINN_PROFILE '$FINN_PROFILE'"; exit 1; }
+
 pip install -r "${FINN_ROOT}/requirements.txt"
 gecho "  Installed requirements.txt"
 
-# Install PyTorch (matching Dockerfile versions)
-pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --extra-index-url https://download.pytorch.org/whl/cu126
-gecho "  Installed PyTorch"
+# CPU torch, matching docker/Dockerfile.finn. The CUDA wheels pull about 5 GB
+# of nvidia/* and triton that FINN never calls: it compiles networks, it does
+# not train them. If you want CUDA locally, install it yourself afterwards.
+pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+gecho "  Installed PyTorch (CPU)"
 
-# Install extra Python packages (from Dockerfile)
-pip install pygments==2.14.0
-pip install ipykernel==6.21.2
-pip install markupsafe==2.0.1
-pip install matplotlib==3.7.0
-pip install pytest-dependency==0.5.1
-pip install pytest-xdist[setproctitle]==3.2.0
-pip install pytest-parallel==0.1.1
-pip install netron
-pip install pandas==1.5.3
-pip install scikit-learn==1.2.1
-pip install tqdm==4.64.1
-pip install pytest==6.2.5
-pip install pytest-metadata==1.7.0
-pip install pytest-html==3.0.0
-pip install pytest-html-merger==0.0.8
-pip install pytest-cov==4.1.0
-pip install pyyaml==6.0.1
-pip install jupyter==1.0.0
-pip install 'anyio<4.13'
-pip install git+https://github.com/fbcotter/dataset_loading.git@0.0.4
-# finn-experimental deps
-pip install deap==1.3.1
-pip install mip==1.13.0
-pip install networkx==2.8
-# brevitas deps
-pip install dependencies==2.0.1
-pip install setuptools==68.2.2
-gecho "  Installed extra packages"
+PIP_CONSTRAINT="$PROFILE_DIR/constraints.txt" pip install -r "$PROFILE_DIR/tools.txt"
+if [ -f "$PROFILE_DIR/tools-force-post.txt" ]; then
+    pip install -r "$PROFILE_DIR/tools-force-post.txt"
+fi
+gecho "  Installed $FINN_PROFILE tool pins"
+
+# Same check the image build runs, for the same reason: a resolvable install is
+# not necessarily a consistent one.
+pip check || yecho "pip check reported conflicts; see above"
 
 # Install qonnx (with pyproject.toml workaround)
 # See: https://github.com/pypa/pip/issues/7953

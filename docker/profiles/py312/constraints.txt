@@ -1,7 +1,0 @@
-# Bounds that must hold across every install in this profile.
-#
-# anyio<4.13 is inherited from upstream. With pytest 7.4.4 the original reason
-# (_pytest.scope, added in pytest 7.0.0) no longer applies, so this pin may be
-# stale - worth retesting before relying on this profile.
-numpy<2
-anyio<4.13

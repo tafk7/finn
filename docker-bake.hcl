@@ -69,7 +69,10 @@ variable "V80PP_DEB_PACKAGE" { default = "" }
 # republishes `ubuntu:jammy` regularly, which would let image contents drift
 # under an unchanged FINN tag. Bump deliberately.
 #
-# status gates CI (see the `supported` and `experimental` groups):
+# `status` is retained for when a second profile returns. py312 lived here
+# until it was removed: it tracked an unfinished upstream PR, never built, and
+# cost ~350 lines across six files plus a FINN_PROFILE axis threaded through all
+# of them. Restoring it is this block plus a directory under docker/profiles.
 #   supported     must build and must pass its declared tests
 #   experimental  smoke-built; failures do not gate
 # ---------------------------------------------------------------------------
@@ -81,17 +84,6 @@ profiles = {
     ubuntu_tag  = "jammy-20230126"
     xrt_deb     = "xrt_202220.2.14.354_22.04-amd64-xrt"
     xrt_sha256  = "00f62fbf3e3b4972df96eb0a73191765f9a004c9cf86df9dff70450b32ccdbe0"
-  }
-  py312 = {
-    # Tracks upstream PR 1603 (Xilinx/finn upgrade/python_version), which is WIP.
-    # XRT sha256 is not pinned because the package has not been fetched and
-    # checksummed here; the build prints the observed digest so it can be filled
-    # in, and warns that the download was unverified.
-    status      = "experimental"
-    description = "Ubuntu 24.04 / Python 3.12 (tracks upstream PR 1603)"
-    ubuntu_tag  = "noble-20240801"
-    xrt_deb     = "xrt_202420.2.18.179_24.04-amd64-xrt"
-    xrt_sha256  = ""
   }
 }
 
@@ -194,7 +186,7 @@ target "tiers" {
   name     = replace("${tier}-${profile}", ".", "-")
   matrix = {
     tier    = ["dev", "build", "build-xrt", "sbx-dev", "sbx-build", "sbx-build-xrt"]
-    profile = ["py310", "py312"]
+    profile = ["py310"]
   }
   target = tier
   args   = common_args(profile)
@@ -217,11 +209,6 @@ group "supported" {
              "sbx-dev-py310", "sbx-build-py310", "sbx-build-xrt-py310"]
 }
 
-group "experimental" {
-  targets = ["dev-py312", "build-py312", "build-xrt-py312",
-             "sbx-dev-py312", "sbx-build-py312", "sbx-build-xrt-py312"]
-}
-
 group "docker" {
   targets = ["dev-py310", "build-py310", "build-xrt-py310"]
 }
@@ -231,5 +218,5 @@ group "sbx" {
 }
 
 group "all" {
-  targets = ["supported", "experimental"]
+  targets = ["supported"]
 }

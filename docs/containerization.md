@@ -338,6 +338,47 @@ wrapper, and run a bare `sbx exec`.
 
 ---
 
+### Licensing, and what the kit cannot express
+
+`XILINXD_LICENSE_FILE` takes two forms, and only one implies a mount:
+
+| Form | Mount | Network |
+|---|---|---|
+| `PORT@HOST` | none | TCP to the **host** |
+| `/path/to.lic` | the containing directory, `:ro` | none |
+
+**Grant the host, never `host:port`.** FLEXlm uses two connections: `lmgrd` on
+the advertised port is a directory service that hands back a second, usually
+ephemeral, port for the vendor daemon where the checkout happens. A port-scoped
+rule lets `lmutil lmstat` succeed while every real checkout fails with "A valid
+license was not found" — a thoroughly misleading error for a firewall problem.
+Verified by a real `synth_design`.
+
+The directory rather than the file, because a single-file bind cannot carry
+sibling state. **Unresolved:** the kit claims some FLEXlm setups write beside
+the licence, and both backends mount that directory `:ro`. Both cannot be true.
+Our licence testing used the floating form, which mounts nothing, so this is
+untested — conformance test 9.
+
+`.sbxenv.yaml` has **no network field**, and there is no allow-at-create flag
+(only `--deny-network`, sbx 0.38+). So the grant is a post-create step in
+`finn-sbx`, and it is the reason that script exists at all alongside the
+declarative files.
+
+### Why a kit and not the entrypoint
+
+`sbx exec` does not run the ENTRYPOINT, so nothing `finn_entrypoint.sh` exports
+reaches an exec session. The kit's `environment.variables` becomes **real
+process env**, which does:
+
+| Mechanism | `bash -c` | `sh -c` | bare exec |
+|---|---|---|---|
+| kit `environment.variables` | yes | yes | yes |
+| `/etc/sandbox-persistent.sh` | yes | no | no |
+
+The image still works with no kit at all: `finn_paths.py` resolves the same
+values from `WORKSPACE_DIR` at interpreter startup.
+
 ## Corrections
 
 Claims that were wrong, kept because the reasoning that produced them is a

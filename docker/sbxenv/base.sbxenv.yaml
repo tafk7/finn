@@ -1,71 +1,34 @@
 # FINN sandbox environment, base layer.
 #
-# The sbx peer of compose.yaml: it declares what a FINN sandbox IS, so that
-# `sbx env` owns create-or-attach instead of a hand-rolled script.
+# Layered with fpga.sbxenv.yaml for the toolchain tiers. Do not run this from
+# where it sits -- docker/finn-sbx copies it outside every mounted workspace
+# first, because an environment file the agent can edit is a file the agent can
+# use to widen its own next sandbox.
 #
-# Do not run this file from where it sits. `docker/finn-sbx` materialises it
-# into a state directory outside every mounted workspace and runs it there --
-# see WHY below. Layer it with fpga.sbxenv.yaml for the toolchain tiers:
-#
-#   docker/finn-sbx dev            base only
-#   docker/finn-sbx build          base + fpga
-#
-# WHY IT IS NOT COMMITTED AT THE REPO ROOT
-# ----------------------------------------
-# With direct mount the agent can write every file in its workspace. An
-# environment file inside the workspace is therefore a file the agent can edit
-# to change the shape of its own next sandbox -- more mounts, more egress. sbx's
-# documentation is explicit about this, and for a repo whose entire purpose is
-# sandboxed agent work it is not a hypothetical.
-#
-# So the committed artifact lives under docker/ (still inside the workspace, so
-# still editable) but is never the file `sbx env` reads. finn-sbx copies it to
-# $XDG_STATE_HOME/finn/sbxenv/<name>/ at launch. An agent editing this copy
-# changes nothing until a human re-runs finn-sbx, which re-materialises from
-# the committed version.
-#
-# EVERY ${VAR} IS INTERPOLATED FROM THE HOST by sbx, and finn-sbx exports them
-# from `finn-env inspect`. That is what keeps this file static and machine-
-# independent while still pointing at a per-host toolchain. Verified against
-# sbx v0.39.0 for name, workspace, kits and sandboxOptions.template -- the
-# release notes mention host interpolation but the field reference does not
-# document it, so treat it as tested rather than promised.
+# Every ${VAR} is interpolated from the host by sbx; finn-sbx exports them from
+# `finn-env inspect`. See docs/containerization.md, "The sbx template contract",
+# for what sbx does and does not interpolate, and why.
 
 schemaVersion: "1"
 
 name: "${FINN_SBX_NAME}"
-
-# `shell`, not a coding agent. The tier is a working environment; which agent
-# runs in it is the caller's business, and hardcoding one here would make this
-# file a statement about tooling rather than about FINN.
 agent: "${FINN_SBX_AGENT}"
 
-# Absolute, interpolated. A relative path would resolve from the materialised
-# copy's directory, not the repo.
+# Absolute: a relative path would resolve from the materialised copy, not the
+# repo. sbx mounts at the host path and cannot remap, so this is always mirror.
 workspace: "${FINN_WORKSPACE_SOURCE}"
 
 kits:
   - "${FINN_SBX_KIT}"
 
 env:
-  # sbx mounts at the host path and cannot remap, so the workspace policy is
-  # always `mirror` here regardless of the tier -- see D4 in
-  # docs/containerization.md.
   FINN_ROOT: "${FINN_WORKSPACE_SOURCE}"
-  # Scratch inside the VM. A build tree that outlives the sandbox has nowhere
-  # to live, and writing it into the mounted workspace is what this redesign
-  # removed.
   FINN_BUILD_DIR: /tmp/finn_build
-  # frozen: the baked wheels, so a sandbox is reproducible from its template.
   FINN_DEPS: "${FINN_DEPS}"
 
 sandboxOptions:
   template: "${FINN_SBX_TEMPLATE}"
-  # never, NOT the `always` default.
-  #
-  # The template is built locally and pushed into sbx's own image store with
-  # `sbx template load`; it does not exist in any registry. With the default
-  # policy sbx tries to pull `xilinx/finn:...` from Docker Hub and fails with a
-  # registry error, which reads like an authentication problem rather than a
-  # missing local load. `never` fails with the accurate message instead.
+  # never, not the `always` default: the template is built locally and loaded
+  # into sbx's own store, so a pull would fail with what looks like an auth
+  # error.
   pullPolicy: never

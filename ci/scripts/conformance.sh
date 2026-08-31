@@ -13,7 +13,7 @@
 # Every one corresponds to a defect that actually happened, or to a contract
 # that would erode silently without an assertion:
 #
-#   1  tiers build                    the baseline
+#   1  supported targets build        driven from the bake group, not a list
 #   2  dev needs nothing              the contract automation depends on
 #   3  fresh docker run               the path everyone already tests
 #   4  BARE docker exec               a live defect: `docker exec <c> vivado`
@@ -92,19 +92,22 @@ have_licence=0; [ -n "${XILINXD_LICENSE_FILE:-}${LM_LICENSE_FILE:-}" ] && have_l
 head_ "1. Supported targets build; experimental ones smoke-build"
 # ---------------------------------------------------------------------------
 if want 1 && [ "$have_docker" = 1 ]; then
-    for target in dev-py310 build-py310 sbx-dev-py310; do
-        if docker buildx bake -f docker-bake.hcl --load "$target" >/dev/null 2>&1; then
-            ok "supported target builds: $target"
-        else
-            bad "supported target FAILED to build: $target"
-        fi
-    done
-    # py312 is marked experimental in docker-bake.hcl -- it tracks an unfinished
-    # upstream PR. A failure here is reported, not fatal.
-    if docker buildx bake -f docker-bake.hcl --load dev-py312 >/dev/null 2>&1; then
-        ok "experimental target builds: dev-py312"
+    # Driven from the `supported` group in docker-bake.hcl, not a hardcoded
+    # list. That group exists to declare what CI must keep green; a second copy
+    # here could drift from it with nothing noticing -- which it had, naming
+    # three targets where the group names six.
+    targets=$(docker buildx bake -f docker-bake.hcl --print supported 2>/dev/null \
+              | python3 -c 'import json,sys;print(" ".join(sorted(json.load(sys.stdin)["target"])))' 2>/dev/null)
+    if [ -z "$targets" ]; then
+        bad "1: could not read the `supported` group from docker-bake.hcl"
     else
-        skip "experimental target dev-py312 does not build (does not gate)"
+        for target in $targets; do
+            if docker buildx bake -f docker-bake.hcl --load "$target" >/dev/null 2>&1; then
+                ok "supported target builds: $target"
+            else
+                bad "supported target FAILED to build: $target"
+            fi
+        done
     fi
 elif want 1; then
     skip "1: no docker daemon"

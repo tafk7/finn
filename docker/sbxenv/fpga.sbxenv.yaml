@@ -1,44 +1,23 @@
-# FINN sandbox environment, toolchain overlay.
-#
-# Layered over base.sbxenv.yaml for the `build` and `build-xrt` tiers:
+# FINN sandbox environment, toolchain overlay. Layered over base.sbxenv.yaml
+# for the build tiers:
 #
 #   sbx env run base.sbxenv.yaml fpga.sbxenv.yaml
 #
-# sbx merges nested mappings by key, concatenates lists, and lets later scalars
-# replace earlier ones. So this file adds the Xilinx mount and the toolchain
-# environment without restating anything from the base.
+# A separate file rather than a conditional, so the dev tier is narrow by
+# OMISSION -- it cannot widen because a variable happened to be set in the
+# caller's shell, which is the defect class this replaced.
 #
-# THIS IS THE CAPABILITY ESCALATION, AND IT IS A SEPARATE FILE ON PURPOSE.
-# The `dev` tier is defined by the absence of everything here: no toolchain
-# mount, no licence, no egress. Expressing that as "dev omits this file" rather
-# than as a conditional inside one file means the narrow profile cannot widen
-# because a variable happened to be set in the caller's shell -- which is the
-# bug class that produced the original mount defects.
-#
-# NOT EXPRESSIBLE HERE: the licence-server egress grant. `.sbxenv.yaml` has no
-# network field, so `sbx policy allow network --sandbox` stays a post-create
-# step in finn-sbx. `--deny-network` exists at create time (sbx >= 0.38) but
-# there is no allow-at-create counterpart. Verified against v0.39.0.
+# The licence-server network grant is not expressible here; .sbxenv.yaml has no
+# network field. finn-sbx applies it after create.
 
 additionalWorkspaces:
-  # The whole Xilinx ROOT, read-only.
-  #
-  # The root rather than $ROOT/$VERSION: AMD reorganised the install tree after
-  # 2024.2, and probing for one layout silently mounted nothing on sites using
-  # the other. Mounting the root sidesteps the question entirely.
-  #
-  # Read-only is the containment boundary. The tools do not write into their own
-  # installation -- verified by a real synth_design against a :ro mount -- and an
-  # agent with write access to 267 GB of proprietary, versioned, hard-to-restore
-  # state is the largest blast radius this sandbox has.
+  # The whole Xilinx root, read-only. The root rather than $ROOT/$VERSION
+  # because AMD reorganised the tree after 2024.2 and probing one layout
+  # silently mounted nothing on sites using the other.
   - path: "${FINN_XILINX_PATH}"
     readOnly: true
 
 env:
-  # Resolved by `finn-env inspect` on the host and exported by finn-sbx. The
-  # in-VM half of the toolchain -- sourcing settings64.sh, LD_PRELOAD, the
-  # fpo_v7_1 library paths -- is finn-env's job inside the sandbox, reached via
-  # the kit at startup and the transparent shims thereafter.
   XILINX_VIVADO: "${XILINX_VIVADO}"
   XILINX_VITIS: "${XILINX_VITIS}"
   XILINX_HLS: "${XILINX_HLS}"

@@ -59,62 +59,44 @@ mkdir -p "$FINN_BUILD_DIR"
 export FINN_BOARD_FILES_PATH="$FINN_ROOT/deps/board_files"
 
 # Xilinx tools setup
+# The Xilinx toolchain, resolved by docker/finn-env -- the same program the
+# container uses, and the same one setup-local.sh calls.
+#
+# This block used to be a fifth copy of the toolchain logic, and it carried the
+# same defect the others did:
+#
+#     export VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
+#
+# which is the PRE-2024.2 directory layout only. AMD reorganised the tree after
+# 2024.2, so on any recent installation this reported "Vivado not found" at a
+# path the user could see was wrong. finn-env probes both layouts.
+#
+# It also duplicated the LD_LIBRARY_PATH additions (lib/lnx64.o, fpo_v7_1) and
+# the XRT sourcing, both of which finn-env now owns.
 if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
-    # Determine and export tool paths
-    export VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
-    export VITIS_PATH="$FINN_XILINX_PATH/Vitis/$FINN_XILINX_VERSION"
-    export HLS_PATH="$FINN_XILINX_PATH/Vitis_HLS/$FINN_XILINX_VERSION"
+    eval "$("$FINN_ROOT/docker/finn-env" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
+    eval "$("$FINN_ROOT/docker/finn-env" print --format sh 2>/dev/null)"
+    export FINN_ENV_APPLIED=1
 
-    # Source Vitis (includes Vivado settings)
-    if [ -f "$VITIS_PATH/settings64.sh" ]; then
-        source "$VITIS_PATH/settings64.sh"
-        _finn_gecho "Sourced Vitis at $VITIS_PATH"
+    # The FLEXlm/libudev workaround. Baked as ENV in the image; on a bare host
+    # it has to be applied here. Without it a licence checkout dies with
+    # "realloc(): invalid pointer" inside udev_enumerate_scan_devices.
+    _finn_libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
+    if [ -n "$_finn_libudev" ]; then
+        export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$_finn_libudev"
+    fi
+    unset _finn_libudev
 
-        # Source XRT if available (for Alveo support)
-        export XILINX_XRT="${XILINX_XRT:-/opt/xilinx/xrt}"
-        if [ -f "$XILINX_XRT/setup.sh" ]; then
-            source "$XILINX_XRT/setup.sh"
-            _finn_gecho "Sourced XRT at $XILINX_XRT"
-        else
-            _finn_yecho "XRT not found at $XILINX_XRT (optional, for Alveo)"
-        fi
-    elif [ -f "$VIVADO_PATH/settings64.sh" ]; then
-        # Fall back to Vivado only
-        source "$VIVADO_PATH/settings64.sh"
-        _finn_gecho "Sourced Vivado at $VIVADO_PATH"
+    if [ -n "${XILINX_VIVADO:-}" ]; then
+        _finn_gecho "Xilinx toolchain configured (finn-env): $XILINX_VIVADO"
     else
-        _finn_yecho "Vivado not found at $VIVADO_PATH"
-    fi
-
-    # Source Vitis HLS
-    if [ -f "$HLS_PATH/settings64.sh" ]; then
-        source "$HLS_PATH/settings64.sh"
-        _finn_gecho "Sourced Vitis HLS at $HLS_PATH"
-    else
-        _finn_yecho "Vitis HLS not found at $HLS_PATH"
-    fi
-
-    # Set LD_LIBRARY_PATH for finn_xsi
-    if [ -n "$XILINX_VIVADO" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/lib/x86_64-linux-gnu/:${XILINX_VIVADO}/lib/lnx64.o"
-    fi
-
-    # FPO tools library path (for floating point operations)
-    if [ -d "$VITIS_PATH/lnx64/tools/fpo_v7_1" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$VITIS_PATH/lnx64/tools/fpo_v7_1"
-    fi
-    if [ -d "$HLS_PATH/lnx64/tools/fpo_v7_1" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$HLS_PATH/lnx64/tools/fpo_v7_1"
+        _finn_yecho "No Vivado found under $FINN_XILINX_PATH for $FINN_XILINX_VERSION"
     fi
 else
     _finn_yecho "FINN_XILINX_PATH and/or FINN_XILINX_VERSION not set"
-    _finn_yecho "Xilinx tools not available. Set these for synthesis support."
+    _finn_yecho "Vivado, Vitis, HLS and rtlsim are unavailable."
 fi
 
-# FlexLM workaround (may help with some Vivado licensing issues)
-export LD_PRELOAD="${LD_PRELOAD}:/lib/x86_64-linux-gnu/libudev.so.1"
-
-# Multiple Vivado instances workaround
 export XILINX_LOCAL_USER_DATA=no
 
 # Handle Xilinx init scripts if present

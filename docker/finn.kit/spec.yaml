@@ -1,64 +1,10 @@
-# FINN sbx kit.
+# FINN sbx kit. Delivers what cannot be baked, because it depends on where the
+# workspace is mounted -- known only at sandbox creation.
 #
-# Delivers the environment that cannot be baked into the image because it
-# depends on where the workspace is mounted, which is only known at sandbox
-# creation.
-#
-# Apply it at create time:
-#
-#   sbx create claude <repo> --template $(./run-docker.sh print-tag dev) \
-#       --kit docker/finn.kit
-#
-# LICENSING (build tiers)
-#
-# XILINXD_LICENSE_FILE takes either form, and both are passed with -e:
-#
-#   PORT@HOST     floating FLEXlm server. Nothing to mount. The sandbox needs
-#                 TCP egress to that host, granted narrowly and per-sandbox:
-#
-#                   sbx policy allow network --sandbox <name> <host>
-#
-#                 No open posture required - an earlier version of this comment
-#                 claimed otherwise and was wrong. Grant the HOST, not
-#                 host:port: FLEXlm uses two connections, lmgrd on the
-#                 advertised port and a second ephemeral port for the vendor
-#                 daemon where the checkout actually happens. A port-scoped
-#                 rule lets `lmutil lmstat` succeed and every real checkout
-#                 fail. Verified by a synth_design licence checkout.
-#   /path/to.lic  node-locked. sbx mounts extra host paths POSITIONALLY, so
-#                 mount the containing directory read-only at its own path and
-#                 the variable needs no rewriting:
-#
-#   sbx create claude <repo> <xilinx-version-dir>:ro <licence-dir>:ro \
-#       --kit docker/finn.kit -e XILINXD_LICENSE_FILE=/path/to.lic ...
-#
-# The directory rather than the file: a single-file bind mount cannot
-# accommodate sibling files, and some FLEXlm setups keep state beside the
-# licence.
-#
-# UNRESOLVED: both the docker and sbx paths mount that directory :ro, so if
-# anything genuinely needs to write there it would fail. Our licence testing
-# used the floating PORT@HOST form, which mounts nothing, so this path is
-# untested. Either the write claim is wrong or the mount policy is - resolve it
-# by testing a node-locked checkout against a named sbx version, not by editing
-# this comment. Tracked as conformance test 9 in ci/scripts/conformance.sh.
-#
-# WHY A KIT AND NOT THE ENTRYPOINT
-#
-# `sbx exec` starts a process directly in the container and does not go through
-# the image ENTRYPOINT, so nothing finn_entrypoint.sh exports is visible to an
-# exec session. `environment.variables` below becomes REAL process env, so it
-# reaches every invocation style - `bash -c`, `sh -c`, and a bare
-# `sbx exec <cmd>` with no shell at all. /etc/sandbox-persistent.sh reaches only
-# bash (and is sbx-managed, so the image must not write it).
-#
-# The image still works with no kit: finn_paths.py resolves the same values from
-# WORKSPACE_DIR at interpreter startup. The kit makes them available to
-# non-Python consumers too.
-#
-# SCHEMA: kit schemaVersion 2 (sbx >= 0.36). v1 used `commands:`; v2 uses
-# `setup:`. Both are accepted, but v1 is the legacy path, so new kits use v2.
-# Grammars must not be mixed: v1 fields in a v2 spec are rejected at decode.
+# See docs/containerization.md, "The sbx template contract", for the licensing
+# forms, the schema-version difference, and why this is a kit and not the
+# entrypoint.
+
 schemaVersion: "2"
 kind: mixin
 name: finn
@@ -88,31 +34,16 @@ setup:
     - command: ["sh", "-c", "mkdir -p /tmp/finn_build && chmod 1777 /tmp/finn_build"]
       user: "0"
 
-    # Publish the Xilinx toolchain environment to shell sessions.
+    # Resolve the toolchain once at startup, so the first shell does not pay
+    # for it. This is an OPTIMISATION -- BASH_ENV and the shims are what make
+    # correctness work. It delegates to finn-env rather than re-deriving.
     #
-    # `sbx exec` does not run the image ENTRYPOINT, so anything the entrypoint
-    # sources into PID 1 is invisible to every later session. The image handles
-    # that itself now -- BASH_ENV plus the transparent vendor-tool shims -- so
-    # this command is an OPTIMISATION, not the mechanism: it resolves the
-    # toolchain once at startup instead of letting the first shell pay for it.
-    #
-    # It delegates to finn-env rather than re-deriving anything. This block used
-    # to source settings64.sh itself, which made it a second implementation of
-    # logic that also lived in the entrypoint and (in a different form) in
-    # run-docker.sh. Every mount defect this redesign fixed came from exactly
-    # that shape.
-    #
-    # Constraints from the kit dispatcher, all learned the hard way:
-    #   - it STOPS the chain on a non-zero exit, so this must end with exit 0
-    #     or anything added after it is silently disabled;
-    #   - startup commands REPLAY on every restart, so this must be idempotent.
-    #     It writes /etc/finn-toolchain.sh whole and adds one guarded source
-    #     line, rather than appending to the sbx-managed file each time;
-    #   - /etc/sandbox-persistent.sh is sbx-managed. The image must never write
-    #     its CONTENT, but adding a source line at startup is how sbx expects a
-    #     kit to contribute.
-    #
-    # No-op on the dev tier, which mounts no toolchain.
+    # Three dispatcher constraints, each learned by breaking it:
+    #   - a non-zero exit STOPS the chain, silently disabling every command
+    #     after it, so this must end with exit 0;
+    #   - startup commands REPLAY on restart, so this must be idempotent;
+    #   - /etc/sandbox-persistent.sh is sbx-managed. Never write its content;
+    #     appending one source line at startup is how a kit contributes.
     - command:
         - bash
         - -c
