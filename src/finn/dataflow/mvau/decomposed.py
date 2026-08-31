@@ -62,21 +62,27 @@ from finn.dataflow.mvau.compute_pool import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import (
-    DotpAxiKernel,
-    covers_operand_types as dotp_axi_covers_operand_types,
-)
+from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
     DotProductHardwareInputs,
 )
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.mvau.regions import (
     MVAURegionDeclaration,
     construct_activation_replay_region,
     construct_dot_product_region,
     construct_standard_mvau_weight_port,
+)
+from finn.dataflow.mvau.semantics import (
+    ACTIVATION_EDGE,
+    DOT_PRODUCT_NODE,
+    HARDWARE_NUMERIC_TYPE_COVERAGE,
+    REPLAY_NODE,
+    accumulator_output_type_supported,
+    construct_decomposed_mvau_network,
+    dot_product_computation_supported,
+    some_dot_product_hardware_covers_numeric_types,
 )
 from finn.dataflow.mvau_problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
@@ -84,16 +90,7 @@ from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,
     MVAUProblem,
 )
-from finn.dataflow.network import (
-    BoundaryContract,
-    DataflowNetwork,
-    Edge,
-    NetworkNode,
-    PositionMap,
-    RegionEndpoint,
-    SinkContract,
-)
-from finn.dataflow.region import DataflowRegion, NumericElementType, Port
+from finn.dataflow.region import DataflowRegion, NumericElementType
 
 #: Replay is its own pool because it is a second node, not a second compute
 #: choice: it is present exactly when the decomposed compute member is selected.
@@ -101,31 +98,8 @@ from finn.dataflow.region import DataflowRegion, NumericElementType, Port
 #: one compute pool, beside the fused Kernels it replaces.
 REPLAY_POOL = "mvau.replay"
 
-#: Node ids inside the assembled Network.
-REPLAY_NODE = "replay"
-DOT_PRODUCT_NODE = "compute"
-
-#: The single internal edge.
-ACTIVATION_EDGE = "activation_replay"
-
 #: Where the two physical Kernels are placed.
 HARDWARE_OWNER = "mvau.hardware"
-
-#: Every physical Kernel that can cover the dot-product Region, as its
-#: graph-answerable datatype predicate over the *complete* numeric signature.
-#:
-#: This is the inventory the transitional admission bridge in
-#: ``DotProductKernel`` quantifies over.  It exists because inference asks an
-#: existential question -- can *anything* build this? -- that
-#: ``admissible_kernels`` cannot yet put to physical Kernels.  Each entry is a
-#: reduction of the same function that Kernel's own coverage constraint uses, so
-#: the bridge and the coverage cannot answer differently.
-#:
-#: The signature is complete on purpose: an inventory asked only about
-#: activation and weight would admit an integer dot product with a
-#: floating-point accumulator, which is exactly the hole the signature closed on
-#: the coverage side.
-HARDWARE_NUMERIC_TYPE_COVERAGE = (dotp_axi_covers_operand_types,)
 
 
 @dataclass(frozen=True)
@@ -182,7 +156,7 @@ class DotProductKernel(Kernel):
         design.source_constraint(
             "computation_supported",
             dependencies={"profile": facts.computation_profile},
-            evaluate=lambda profile: profile is MVAUComputationProfile.ACCUMULATOR_INTEGER,
+            evaluate=dot_product_computation_supported,
         )
         design.source_constraint(
             "accumulator_output_type_supported",
@@ -190,7 +164,7 @@ class DotProductKernel(Kernel):
                 "accumulator": facts.accumulator_element_type,
                 "output": facts.output_element_type,
             },
-            evaluate=lambda accumulator, output: accumulator == output,
+            evaluate=accumulator_output_type_supported,
         )
         # TRANSITIONAL, and not a property of this Region.
         #
@@ -214,10 +188,7 @@ class DotProductKernel(Kernel):
                 "accumulator": facts.accumulator_element_type,
                 "output": facts.output_element_type,
             },
-            evaluate=lambda activation, weight, accumulator, output: any(
-                covers(MVAUNumericTypes(activation, weight, accumulator, output))
-                for covers in HARDWARE_NUMERIC_TYPE_COVERAGE
-            ),
+            evaluate=some_dot_product_hardware_covers_numeric_types,
         )
 
         design.region(
@@ -491,55 +462,6 @@ def build_decomposed_mvau_kernels(
         dot_product_computation,
         replay_region,
         replay_computation,
-    )
-
-
-def construct_decomposed_mvau_network(
-    replay_region: DataflowRegion, dot_product_region: DataflowRegion
-) -> DataflowNetwork:
-    """Assemble replay and dot product into one Network.
-
-    One internal edge under an identity position map over the expanded image.
-    The three external boundaries are the same ``BeatSequence`` values the
-    monolithic standard streamed Region presented, which is what makes the
-    decomposition invisible from outside.
-    """
-
-    produced: Port = replay_region.output_interface("activation_out").port
-    return DataflowNetwork(
-        (
-            NetworkNode(REPLAY_NODE, replay_region),
-            NetworkNode(DOT_PRODUCT_NODE, dot_product_region),
-        ),
-        (
-            Edge(
-                ACTIVATION_EDGE,
-                RegionEndpoint(REPLAY_NODE, "activation_out"),
-                (
-                    SinkContract(
-                        RegionEndpoint(DOT_PRODUCT_NODE, "activation"),
-                        PositionMap.identity(produced.beat_sequence.image),
-                    ),
-                ),
-            ),
-        ),
-        (
-            BoundaryContract(
-                "activation",
-                RegionEndpoint(REPLAY_NODE, "activation_in"),
-                replay_region.input_interface("activation_in").port.beat_sequence,
-            ),
-            BoundaryContract(
-                "weight",
-                RegionEndpoint(DOT_PRODUCT_NODE, "weight"),
-                dot_product_region.input_interface("weight").port.beat_sequence,
-            ),
-            BoundaryContract(
-                "output",
-                RegionEndpoint(DOT_PRODUCT_NODE, "output"),
-                dot_product_region.output_interface("output").port.beat_sequence,
-            ),
-        ),
     )
 
 

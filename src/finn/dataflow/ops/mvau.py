@@ -49,6 +49,15 @@ from finn.dataflow.kernels import (
     SelectedKernel,
 )
 from finn.dataflow.hardware import check_declared_references
+from finn.dataflow.mvau.associations import (
+    BindingLocalStateDestination,
+    CoordinateMappingKind,
+    MVAUParameterTopology,
+    MVAUSourceAssociation,
+    SemanticOperandDestination,
+    SourceOperandAssociation,
+    SourceOperandDestination,
+)
 from finn.dataflow.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     FULL_TILE_WEIGHT_EXPORT,
@@ -91,87 +100,6 @@ from finn.dataflow.resolution import (
     RegionRef as GenericRegionRef,
 )
 from finn.dataflow.spec_algebra import assemble_specs
-
-
-class MVAUParameterTopology(str, Enum):
-    """The derived shape of one resolved parameter supply arrangement.
-
-    This is a reading of the selected Kernels, not a choice made beside them.
-    """
-
-    EMBEDDED = "embedded"
-    DIRECT = "direct"
-    CYCLIC = "cyclic"
-
-
-class CoordinateMappingKind(str, Enum):
-    """Explicit source-to-region coordinate transformations used by MVAU."""
-
-    FLATTEN_LEADING = "flatten_leading"
-    TRANSPOSE_2D = "transpose_2d"
-    BINDING_LOCAL_STATE = "binding_local_state"
-
-
-@dataclass(frozen=True)
-class SemanticOperandDestination:
-    """Qualified operand destination in a selected region or network node."""
-
-    owner_id: str
-    operand_id: str
-
-
-@dataclass(frozen=True)
-class BindingLocalStateDestination:
-    """Qualified binding-local state destination."""
-
-    owner_id: str
-    state_id: str
-
-
-SourceOperandDestination = SemanticOperandDestination | BindingLocalStateDestination
-
-
-@dataclass(frozen=True)
-class SourceOperandAssociation:
-    """Explicit association from one source operand to a semantic or binding target."""
-
-    role: str
-    source_operand_id: str
-    destination: SourceOperandDestination
-    mapping: CoordinateMappingKind
-    source_shape: tuple[int, ...]
-    destination_shape: tuple[int, ...]
-
-    def map_position(self, position: tuple[int, ...]) -> tuple[int, ...]:
-        if len(position) != len(self.source_shape) or any(
-            index < 0 or index >= extent for index, extent in zip(position, self.source_shape)
-        ):
-            raise ValueError("source position is outside source shape")
-        if self.mapping is CoordinateMappingKind.FLATTEN_LEADING:
-            leading = position[:-1]
-            flattened = 0
-            for index, extent in zip(leading, self.source_shape[:-1]):
-                flattened = flattened * extent + index
-            return (flattened, position[-1])
-        if self.mapping is CoordinateMappingKind.TRANSPOSE_2D:
-            if len(position) != 2:
-                raise ValueError("transpose mapping requires a rank-two position")
-            return (position[1], position[0])
-        return position
-
-
-@dataclass(frozen=True)
-class MVAUSourceAssociation:
-    """Source provenance and operand mappings for one selected MVAU result."""
-
-    source_node_id: str
-    fused_source_node_ids: tuple[str, ...]
-    region_declaration_id: str
-    parameter_topology: MVAUParameterTopology
-    operands: tuple[SourceOperandAssociation, ...]
-    compute_kernel_id: str = ""
-    supply_kernel_id: str | None = None
-    adapter_kernel_id: str | None = None
 
 
 @dataclass(frozen=True)
