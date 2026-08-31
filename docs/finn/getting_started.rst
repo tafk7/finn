@@ -4,8 +4,49 @@
 Getting Started
 ***************
 
-Three ways to run FINN
-======================
+
+Quickstart
+==========
+
+1. Install Docker. <<Claude, hyperlink or put the best command that will automatically get buildx and compose>>
+2. Configure Docker to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
+
+3. Set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``. These give the
+   directory and the version of your Xilinx tools, for example
+   ``FINN_XILINX_PATH=/opt/Xilinx`` and ``FINN_XILINX_VERSION=2022.2``.
+4. Clone the FINN compiler: ``git clone https://github.com/Xilinx/finn/``. Go
+   into the new directory.
+5. Run ``./run-docker.sh quicktest verify`` to verify the installation.
+   Warnings during the tests are normal. FINN uses warnings to tell you about
+   some conditions. The installation is correct if all tests pass.
+6. Optional: for board setup, obey the instructions in :ref:`PYNQ board first-time setup`, :ref:`Vitis-based Alveo first-time setup` or :ref:`Slash-based Alveo first-time setup`.
+7. Optional: set up a `Vivado/Vitis license`_.
+8. See :ref:`Running FINN in Docker` for the other ways to run the compiler.
+
+
+
+
+Environment Configuration
+=========================
+
+FINN provides docker containers for easy environment configuration, with image presets 
+for different types of development work.
+
+<<Claude put small table here showing dev/build/build-xrt splits>>
+
+For standard development, use of hte 
+
+
+It's also possible to setup the required dependenciess locally on your system using
+``./setup-local.sh``, provided that your system meets the requirements.
+
+
+
+For Agentic development, we recommend using using the images with docker sbx for proper 
+sandboxing and isolation.
+
+
+
 
 FINN runs in three ways. Each way has a different purpose. Select the way that
 agrees with your task.
@@ -33,38 +74,11 @@ agrees with your task.
 The three ways use the same dependency versions, the same image tiers and the
 same toolchain resolver. A result in one way is therefore correct in the others.
 
-**Do not run an autonomous agent in the Docker container.** The container does
-separate processes and files, and it removes many Linux capabilities. But it
-uses the same kernel as the host, and it can reach each address that the host
-can reach. Docker has no list of permitted destinations. An agent can therefore
-send data out, and text in its input can tell it to. Use the sbx sandbox
-instead. :ref:`Running FINN in Docker` gives the full comparison.
 
 FINN does not supply Vivado, Vitis or Vitis HLS. Install these tools yourself.
 FINN mounts your installation read-only.
 
-Quickstart
-==========
 
-1. Install Docker. Configure it to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
-2. Install the Docker Buildx and Docker Compose plugins. Docker Desktop and the
-   Docker packages contain them. The distribution package ``docker.io`` does not:
-
-   .. code-block:: bash
-
-     sudo apt install docker-buildx-plugin docker-compose-plugin
-
-3. Set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``. These give the
-   directory and the version of your Xilinx tools, for example
-   ``FINN_XILINX_PATH=/opt/Xilinx`` and ``FINN_XILINX_VERSION=2022.2``.
-4. Clone the FINN compiler: ``git clone https://github.com/Xilinx/finn/``. Go
-   into the new directory.
-5. Run ``./run-docker.sh quicktest verify`` to verify the installation.
-   Warnings during the tests are normal. FINN uses warnings to tell you about
-   some conditions. The installation is correct if all tests pass.
-6. Optional: for board setup, obey the instructions in :ref:`PYNQ board first-time setup`, :ref:`Vitis-based Alveo first-time setup` or :ref:`Slash-based Alveo first-time setup`.
-7. Optional: set up a `Vivado/Vitis license`_.
-8. See :ref:`Running FINN in Docker` for the other ways to run the compiler.
 
 
 How do I use FINN?
@@ -95,6 +109,7 @@ Jupyter notebook tutorials <https://github.com/Xilinx/finn/tree/main/notebooks/e
 steps and adding calls to new transformations as needed.
 Once you have a working flow, you can implement a command line entry for this
 by using the "advanced mode" described in the :ref:`command_line` section.
+
 
 Running FINN in Docker
 ======================
@@ -185,7 +200,7 @@ The three tiers are the same in all three ways. Select one with
 
   * - Tier
     - Adds
-    - Necessary from the host
+    - Host requirements
   * - ``dev``
     - Python, FINN and its dependencies
     - **Nothing** but the repository
@@ -194,14 +209,8 @@ The three tiers are the same in all three ways. Select one with
     - Xilinx installation, licence
   * - ``build-xrt``
     - XRT, V80 support
-    - Also the platform repository
+    - Xilinx installation, licence
 
-The ``dev`` tier is defined by what it does not have. It has no toolchain
-mount, no licence and no FINN network access. An agent or a new contributor can
-therefore use it with no configuration.
-
-RTL simulation uses the ``xsim`` tool of Vivado, not XRT. Use ``build`` for RTL
-simulation.
 
 Environment variables
 **********************

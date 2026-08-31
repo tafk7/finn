@@ -27,6 +27,7 @@
 #   8  awkward workspace path         both policies survive spaces (NOT the
 #                                     launcher -- see the note at test 8)
 #   9  node-locked licence with :ro   UNRESOLVED contradiction in the kit
+#  11  apptainer runs the image      a fourth runtime, with different rules
 #  10  lane 3 resolves a toolchain    the bare-host lane has the fewest users
 #                                     and the least coverage, so it is the one
 #                                     that rots silently
@@ -50,7 +51,7 @@ head_() { echo; echo "=== $* ==="; }
 # loses every increment, which is how a red run can print a green total. Keep
 # every ok/bad call in the current shell.
 
-WANT="${*:-1 2 3 4 5 6 7 8 9 10}"
+WANT="${*:-1 2 3 4 5 6 7 8 9 10 11}"
 want () { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo local)
@@ -389,6 +390,41 @@ if want 10; then
         bad "setup-local.sh has hardcoded the pre-2024.2 Xilinx layout again"
     else
         ok "setup-local.sh delegates layout resolution to finn-env"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+head_ "11. Apptainer/Singularity runs the image"
+# ---------------------------------------------------------------------------
+# A fourth runtime, and the third that does NOT run the image ENTRYPOINT. Same
+# property as tests 4 and 5, checked in the bare form for the same reason.
+#
+# Needs a .sif, which takes about eight minutes to convert. Skipped rather than
+# built, because the suite should stay runnable in a few minutes.
+if want 11; then
+    runtime=""
+    for c in apptainer singularity; do command -v "$c" >/dev/null 2>&1 && { runtime="$c"; break; }; done
+    if [ -z "$runtime" ]; then
+        skip "11: neither apptainer nor singularity on PATH"
+    else
+        tag=$(tag_for "${FINN_TIER:-build}" 2>/dev/null)
+        sif="${XDG_CACHE_HOME:-$HOME/.cache}/finn/sif/$(printf '%s' "$tag" | tr '/:' '__').sif"
+        if [ ! -f "$sif" ]; then
+            skip "11: no .sif cached for $tag (make one with docker/finn-apptainer build)"
+        else
+            if timeout 180 "$runtime" exec "$sif" python -c 'import sys' >/dev/null 2>&1; then
+                ok "apptainer runs the image"
+            else
+                bad "apptainer cannot run the image"
+            fi
+            # The workspace policy MUST be mirror here. Apptainer cannot remap a
+            # mount, so a fixed FINN_ROOT names a directory that was never
+            # mounted and `import finn` fails with ModuleNotFoundError.
+            pol=$(./docker/finn-env inspect --tier dev --backend apptainer 2>/dev/null \
+                  | python3 -c 'import json,sys;print(json.load(sys.stdin)["workspace"]["policy"])' 2>/dev/null)
+            [ "$pol" = "mirror" ] && ok "apptainer backend resolves the mirror workspace policy" \
+                                  || bad "apptainer backend resolved policy '$pol', expected mirror"
+        fi
     fi
 fi
 

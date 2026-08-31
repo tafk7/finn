@@ -191,13 +191,12 @@ case "${1:-}" in
     ;;
 esac
 
+# FINN_SINGULARITY keeps working, and now means more than it did. It used to
+# require a .sif you had built yourself, because nothing here could build one;
+# docker/finn-apptainer can, so the variable is an override rather than the only
+# way in.
 if [ -n "$FINN_SINGULARITY" ]; then
-    recho "FINN_SINGULARITY is no longer supported by this script."
-    recho "It worked by string-substituting the docker argument list (-v -> -B),"
-    recho "and that list belongs to compose now, not to this script. To run under"
-    recho "Singularity, build the flags from the resolver directly:"
-    recho "  ./docker/finn-env inspect --tier $FINN_TIER --format json"
-    exit 1
+    exec "$SCRIPTPATH/docker/finn-apptainer" "$FINN_TIER" -- "$@"
 fi
 
 # ----------------------------------------------------------------------------

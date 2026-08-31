@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Run FINN under Apptainer or Singularity.
+#
+#   docker/finn-apptainer [dev|build|build-xrt] [-- command...]
+#   docker/finn-apptainer build                    a shell
+#   docker/finn-apptainer build -- vivado -version one command
+#   docker/finn-apptainer rm build                 delete the cached .sif
+#
+# For machines where Docker is not available -- typically shared HPC, where a
+# root daemon is not permitted. Apptainer needs no daemon and no privilege.
+#
+# SCOPE: this does the two things the tool cannot do for itself -- convert a
+# locally built image into a .sif, and turn `finn-env inspect` into bind and
+# environment arguments. Everything else is Apptainer's own behaviour.
+#
+# THIS IS NOT A CONTAINMENT BOUNDARY. Read the next section before using it for
+# anything you would otherwise use the sbx sandbox for.
+#
+# ---------------------------------------------------------------------------
+# MEASURED BEHAVIOUR, against singularity-ce 4.1.1
+# ---------------------------------------------------------------------------
+# Apptainer is an HPC tool. It assumes it is running your code on your behalf,
+# so it is deliberately permeable in ways Docker is not. Verified on this host:
+#
+#   You are yourself.       uid 50113526, with every one of your host groups.
+#                           No uid mapping, so no permission mismatch on a bind
+#                           mount -- the problem that bites Docker Compose.
+#   $HOME is mounted.       Which means a Xilinx installation under $HOME is
+#                           visible to EVERY tier, including dev. On this host
+#                           `vivado` ran from the DEV image, because the tools
+#                           live in /home/tkeller/Xilinx.
+#   $PWD and /tmp mounted.  So FINN_ROOT resolves from cwd with no help, and
+#                           FINN_BUILD_DIR lands on the host /tmp.
+#   Host environment is inherited WHOLESALE. XILINXD_LICENSE_FILE from the
+#                           invoking shell reaches the container untouched.
+#   The root filesystem is read-only.
+#   The network is the host's. No namespace, so no port publishing.
+#
+# The consequence worth stating plainly: **the dev tier's containment does not
+# hold here.** It has no toolchain baked in, but the toolchain and the licence
+# arrive anyway, through $HOME and the inherited environment. For isolation,
+# this way of running belongs beside the bare host, not beside Docker.
+#
+# --cleanenv below is therefore for PREDICTABILITY, not security. It stops the
+# invoking shell from silently changing what runs, so the environment is
+# exactly what finn-env resolved. It does not make this a sandbox, and nothing
+# here can.
+
+set -euo pipefail
+
+SCRIPT=$(readlink -f "$0")
+DOCKER_DIR=$(dirname "$SCRIPT")
+REPO=$(dirname "$DOCKER_DIR")
+
+# Capture the CALLER's directory before moving to the repo. Apptainer starts the
+# container in $PWD, and a user running `finn-apptainer build -- vivado -source
+# x.tcl` from a build directory expects to find x.tcl. Using $PWD after the `cd`
+# below silently starts every command in the repo root instead, and the symptom
+# is "couldn't read file" naming a file that plainly exists.
+CALLER_PWD="$PWD"
+cd "$REPO"
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
+gecho () { echo "${GREEN}$1${NC}"; }
+recho () { echo "${RED}$1${NC}" >&2; }
+yecho () { echo "${YELLOW}$1${NC}" >&2; }
+
+# apptainer first: it is the current name. Ubuntu ships the Sylabs fork as
+# `singularity` (singularity-ce), and the CLI is compatible for what we use.
+RUNTIME=""
+for candidate in apptainer singularity; do
+    command -v "$candidate" >/dev/null 2>&1 && { RUNTIME="$candidate"; break; }
+done
+[ -n "$RUNTIME" ] || {
+    recho "Neither apptainer nor singularity found on PATH."
+    recho "  Ubuntu:  sudo apt install singularity-container"
+    recho "  Or:      https://github.com/apptainer/apptainer/releases"
+    exit 1
+}
+
+# --------------------------------------------------------------------------
+# Arguments
+# --------------------------------------------------------------------------
+
+REMOVE=0
+if [ "${1:-}" = "rm" ]; then REMOVE=1; shift; fi
+
+TIER="${1:-build}"
+case "$TIER" in
+    dev|build|build-xrt) shift || true ;;
+    --|"") TIER="build" ;;
+    *) recho "Usage: $0 [rm] [dev|build|build-xrt] [-- command...]"; exit 2 ;;
+esac
+[ "${1:-}" = "--" ] && shift
+
+: "${FINN_PROFILE:=py310}"
+: "${FINN_DEPS:=frozen}"
+
+# --------------------------------------------------------------------------
+# The .sif
+# --------------------------------------------------------------------------
+
+GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo local)
+GIT_DESCRIBE_DIRTY=$(git describe --always --tags --dirty 2>/dev/null || echo local)
+export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
+
+BAKE_TARGET="${TIER}-${FINN_PROFILE}"
+TAG=$(docker buildx bake -f docker-bake.hcl --print "$BAKE_TARGET" 2>/dev/null \
+      | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$BAKE_TARGET']['tags'][0])" 2>/dev/null || true)
+[ -n "$TAG" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
+
+# Keyed on the tag, so a rebuild produces a new .sif rather than reusing a stale
+# one. Under the cache directory because it is regenerable -- deleting it costs
+# time, never data.
+SIF_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/finn/sif"
+SIF="$SIF_DIR/$(printf '%s' "$TAG" | tr '/:' '__').sif"
+
+if [ "$REMOVE" = 1 ]; then
+    rm -f "$SIF"
+    gecho "Removed $SIF"
+    exit 0
+fi
+
+# FINN_SINGULARITY keeps its original meaning: a path to a .sif you built
+# yourself. It used to be the ONLY way to use this path, because nothing here
+# could build one.
+if [ -n "${FINN_SINGULARITY:-}" ]; then
+    [ -f "$FINN_SINGULARITY" ] || { recho "FINN_SINGULARITY=$FINN_SINGULARITY does not exist"; exit 1; }
+    SIF="$FINN_SINGULARITY"
+    gecho "Using the image given by FINN_SINGULARITY: $SIF"
+elif [ -f "$SIF" ]; then
+    gecho "Using the cached image $SIF"
+    gecho "($0 rm $TIER to rebuild it)"
+else
+    # Conversion needs Docker, which the machine that RUNS this may not have.
+    # That is normal and expected: build the .sif on a machine with Docker, copy
+    # the single file to the cluster, and point FINN_SINGULARITY at it there.
+    command -v docker >/dev/null 2>&1 || {
+        recho "No cached .sif at $SIF, and Docker is not available to build one."
+        recho "Build it on a machine that has Docker:"
+        recho "  docker/finn-apptainer $TIER"
+        recho "then copy the .sif here and set FINN_SINGULARITY to its path."
+        exit 1
+    }
+    gecho "Building $BAKE_TARGET"
+    docker buildx bake -f docker-bake.hcl --load "$BAKE_TARGET" \
+        || { recho "docker buildx bake $BAKE_TARGET failed"; exit 1; }
+
+    mkdir -p "$SIF_DIR"
+    TAR=$(mktemp -t finn-sif-XXXXXX.tar)
+    trap 'rm -f "$TAR"' EXIT
+    # Measured: about 1 minute to export and 7 to convert, for the dev tier.
+    # The result is roughly a quarter of the Docker image, because a SIF is a
+    # compressed squashfs.
+    gecho "Exporting $TAG (about a minute)"
+    docker save "$TAG" -o "$TAR" || { recho "docker save failed"; exit 1; }
+    gecho "Converting to $SIF (several minutes; this is the slow step)"
+    "$RUNTIME" build --force "$SIF" "docker-archive://$TAR" \
+        || { recho "$RUNTIME build failed"; exit 1; }
+    rm -f "$TAR"; trap - EXIT
+fi
+
+# --------------------------------------------------------------------------
+# Binds and environment, from the one resolver
+# --------------------------------------------------------------------------
+
+# --backend apptainer, which forces the mirror workspace policy. Apptainer
+# mounts every path at its own location and cannot remap, so a fixed FINN_ROOT
+# would name a directory that was never mounted -- `import finn` then fails with
+# ModuleNotFoundError and nothing points at the cause.
+INSPECT=$("$REPO/docker/finn-env" inspect --tier "$TIER" --backend apptainer --format json) || {
+    recho "finn-env inspect failed"; exit 1
+}
+
+ARGS=()
+# --cleanenv: see the header. Apptainer inherits the whole invoking environment
+# otherwise, so what runs would depend on the caller's shell.
+ARGS+=(--cleanenv)
+# The workspace is already present -- Apptainer mounts $PWD -- but be explicit,
+# so this does not depend on where the caller happened to be standing.
+ARGS+=(--pwd "$CALLER_PWD")
+# And bind it, unless it is already inside a directory Apptainer mounts for us.
+# $HOME and /tmp are automatic; anywhere else is not.
+case "$CALLER_PWD" in
+    "$HOME"/*|/tmp/*|"$HOME"|/tmp) ;;
+    *) ARGS+=(-B "$CALLER_PWD:$CALLER_PWD") ;;
+esac
+
+while IFS=$'\t' read -r src dst mode; do
+    [ -n "$src" ] || continue
+    if [ "$mode" = "ro" ]; then ARGS+=(-B "$src:$dst:ro"); else ARGS+=(-B "$src:$dst"); fi
+done < <(printf '%s' "$INSPECT" | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["mounts"]:
+    print("%s\t%s\t%s" % (m["source"], m["target"], m["mode"]))')
+
+while IFS=$'\t' read -r key value; do
+    [ -n "$key" ] || continue
+    ARGS+=(--env "$key=$value")
+done < <(printf '%s' "$INSPECT" | python3 -c '
+import json, sys
+for k, v in sorted(json.load(sys.stdin)["env"].items()):
+    print("%s\t%s" % (k, v))')
+
+# The FLEXlm/libudev workaround is baked as ENV in the build stage of the image,
+# so it survives the conversion and needs nothing here. --cleanenv does not
+# remove the image environment, only the caller's.
+
+if [ "$TIER" != "dev" ]; then
+    hosts=$(printf '%s' "$INSPECT" | python3 -c \
+        'import json,sys;print(" ".join(g["host"] for g in json.load(sys.stdin)["egress"]))')
+    # No policy to apply: the network is the host's. Say so once, rather than
+    # letting a reader assume the licence grant happened as it does under sbx.
+    [ -n "$hosts" ] && gecho "Licence server: $hosts (reached directly; there is no network policy here)"
+fi
+
+set -- "${@:-}"
+if [ "$#" -gt 0 ] && [ -n "$1" ]; then
+    exec "$RUNTIME" exec "${ARGS[@]}" "$SIF" "$@"
+fi
+exec "$RUNTIME" shell "${ARGS[@]}" "$SIF"

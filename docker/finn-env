@@ -207,9 +207,12 @@ def resolve_host(tier, backend):
         "FINN_ROOT",
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-    # sbx attaches every mount at its host path and offers no remapping, so the
-    # policy is not a free choice there.
-    if backend == "sbx" or tier in FPGA_TIERS:
+    # sbx and Apptainer both attach every mount at its host path and offer no
+    # remapping, so the policy is not a free choice on either. Apptainer goes
+    # further and mounts $PWD and $HOME automatically. Getting this wrong is not
+    # subtle: a fixed FINN_ROOT under Apptainer points at a directory that was
+    # never mounted, and `import finn` fails with ModuleNotFoundError.
+    if backend in ("sbx", "apptainer") or tier in FPGA_TIERS:
         policy = "mirror"
     else:
         policy = DEFAULT_DEV_WORKSPACE_POLICY
@@ -518,7 +521,8 @@ def main():
     p = sub.add_parser("inspect", help="host-side resolution (JSON)")
     p.add_argument("--tier", default=os.environ.get("FINN_DOCKER_TARGET", "dev"),
                    choices=TIERS)
-    p.add_argument("--backend", default="docker", choices=("docker", "sbx"))
+    p.add_argument("--backend", default="docker",
+                   choices=("docker", "sbx", "apptainer"))
     p.add_argument("--format", default="json", choices=("json", "sh"))
     p.set_defaults(func=cmd_inspect)
 
