@@ -2,8 +2,10 @@ bitstring==4.2.3
 clize==5.0.1
 dataclasses-json==0.5.7
 gspread==3.6.0
+hypothesis==6.167.1
 importlib-resources==6.1.0
 ipython==8.12.2
+msgspec==0.21.1
 numpy==1.24.1
 onnx==1.17.0
 onnxoptimizer
@@ -14,6 +16,7 @@ protobuf==5.29.6
 psutil==5.9.4
 pybind11==2.10.0
 pyscaffold==4.6
+pyslang==11.0.0
 scipy==1.10.1
 setupext-janitor>=1.1.2
 sigtools==4.0.1

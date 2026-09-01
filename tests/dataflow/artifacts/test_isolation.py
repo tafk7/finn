@@ -28,11 +28,17 @@ from pathlib import Path
 import pytest
 
 #: Third-party packages ``artifacts`` may import at runtime (Design 1 §19.1).
-#: Both implement a published specification and are confined to a boundary
-#: where replacing them moves no artifact key.  ``pyslang`` is deliberately
-#: absent: §19.1 scopes it to test and authoring use, so admitting it here
-#: would be a promotion nobody decided.
-APPROVED_DEPENDENCIES = frozenset({"msgspec", "jinja2", "markupsafe"})
+#:
+#: Each implements a published specification and is confined to a boundary
+#: where replacing it moves no artifact key -- which is §19.1's own test for
+#: whether a dependency may be adopted at all.  ``pyslang`` is here by a
+#: decision rather than by drift: §19.1 scoped it to test and authoring use,
+#: and the A7 checker is a build-time consumer, which is exactly the condition
+#: that section names for promoting it.
+#:
+#: The list is short on purpose.  Adding to it is a decision somebody makes;
+#: this test is what stops it being one nobody notices.
+APPROVED_DEPENDENCIES = frozenset({"msgspec", "jinja2", "markupsafe", "pyslang"})
 
 #: The one package prefix inside FINN that ``artifacts`` may name.
 OWN_PACKAGE = "finn.dataflow.artifacts"

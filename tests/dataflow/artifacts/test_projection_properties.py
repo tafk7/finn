@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 #
-# hypothesis is not a declared dependency yet (see the docstring), so mypy
-# cannot see it and reads every `@given` as an untyped decorator.  Waived here
-# and nowhere else; when the dependency is declared, delete this line.
+# The mypy gate's interpreter has no hypothesis installed, so it reads every
+# `@given` as an untyped decorator.  The same situation qonnx is in throughout
+# this tree.  Waived here and nowhere else.
 # mypy: disable-error-code="import-not-found, untyped-decorator"
 
 """A1: the projection's two properties, over generated values rather than chosen ones.
@@ -13,9 +13,9 @@ the claim itself, which is what §6.1 rests on: *for any* ``Derivation``, the
 preimage carries no mapping and no untagged number, and the key is a function
 of the declared inputs and nothing else.
 
-``hypothesis`` is not yet declared in the repository's requirements -- doing so
-means editing a file this effort does not own -- so the module skips where it
-is absent.  Everything it asserts is also covered by a hand-written case in
+``hypothesis`` is declared in ``requirements.txt`` but the container image
+predates that line, so the module skips where it is absent rather than
+erroring.  Everything it asserts is also covered by a hand-written case in
 ``test_projection.py``; these find the cases nobody wrote.
 """
 
