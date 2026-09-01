@@ -8,17 +8,19 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
-from finn.dataflow.authoring.design import (
+from finn.dataflow.authoring.inventory import (
+    DataflowOpAuthoring,
     DataflowDesignEntry,
     DataflowDesignInventory,
+    declare_dataflow_op_authoring,
     declare_dataflow_design_inventory,
+    selected_design_metadata,
 )
-from finn.dataflow.authoring.scope import ConstraintRef, Ref, Scope, unresolved
+from finn.dataflow.authoring.scope import Ref, Scope, unresolved
 from finn.dataflow.design import (
     ABSENT,
     DATAFLOW_NETWORK_SEMANTICS,
     NETWORK_VALIDATION_REPORT_SEMANTICS,
-    DependencyKind,
     DesignPoint,
     DesignSpaceSpec,
     Engine,
@@ -39,10 +41,8 @@ from finn.dataflow.mvau.designs.dot_product import (
     DotProductDesign,
     DotProductDesignInputs,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiHandles
 from finn.dataflow.mvau.input_supply import (
-    FINN_RTL_MEMSTREAM_SUPPLY,
     MVAUInputSupply,
     declare_mvau_input_supply,
     declare_supplied_source_association,
@@ -56,7 +56,6 @@ from finn.dataflow.mvau_problem import (
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import NetworkValidationReport, validate_network
-from finn.dataflow.spec_algebra import assemble_specs
 
 MVAU_NETWORK_PATH = QualifiedPath("semantic.mvau.op.network")
 MVAU_NETWORK_VALIDATION_PATH = QualifiedPath("semantic.mvau.op.network_validation")
@@ -109,6 +108,7 @@ class MVAUDesignInventoryAssembly:
     source_association: Ref[MVAUSourceAssociation]
     result: Ref[MVAUNetworkRef]
     compute_pumping: Ref[bool]
+    authoring: DataflowOpAuthoring
     specification: DesignSpaceSpec
 
 
@@ -139,39 +139,31 @@ def declare_mvau_design_inventory(
                 DotProductDesign,
                 DotProductDesignInputs(problem, dot_product, narrow_weights),
                 (dot_product.spec, dot_association_spec),
+                (dot_product.pe, dot_product.simd),
+                dot_product.feasibility_constraints,
             ),
             DataflowDesignEntry(
                 BatchInterleavedDesign,
                 BatchInterleavedDesignInputs(batch_interleaved),
                 (batch_interleaved.spec, batch_association_spec),
+                (
+                    batch_interleaved.pe,
+                    batch_interleaved.simd,
+                    batch_interleaved.interleave,
+                ),
+                batch_interleaved.feasibility_constraints,
             ),
         ),
         input_supplies=(supply.declaration,),
         shared_specs=(MVAU_PROBLEM_SPEC,),
     )
-    if inventory.design_path is None:
+    if inventory.design_selection is None:
         raise AssertionError("the MVAU inventory must expose its two-design choice")
-    design_decision = next(
-        item for item in inventory.specification.decisions if item.path == inventory.design_path
-    )
-    design: Ref[str] = Ref(
-        design_decision.path,
-        DependencyKind.DECISION,
-        design_decision.value_semantics,
-    )
+    design = inventory.design_selection
     dot_declaration = inventory.declaration(DotProductDesign.id)
     batch_declaration = inventory.declaration(BatchInterleavedDesign.id)
     compute = dot_declaration.placement("compute").candidates[0]
-    pumping = tuple(
-        item for item in compute.spec.decisions if item.path.value.endswith(".compute_pumping")
-    )
-    if len(pumping) != 1:
-        raise AssertionError("DotpAxiKernel must declare exactly one compute-pumping choice")
-    compute_pumping: Ref[bool] = Ref(
-        pumping[0].path,
-        DependencyKind.DECISION,
-        pumping[0].value_semantics,
-    )
+    compute_pumping = compute.typed_handles(DotpAxiHandles).compute_pumping
 
     operation = Scope("mvau.op")
     network = cast(
@@ -193,45 +185,36 @@ def declare_mvau_design_inventory(
         supply_mode: str,
         dot_product: object,
         batch_interleaved: object,
+        dot_compute: object,
+        dot_replay: object,
+        dot_delivery: object,
+        batch_compute: object,
+        batch_delivery: object,
     ) -> object:
         selected = cast(
             MVAUSourceAssociation,
             _selected_value(design, dot_product, batch_interleaved),
         )
-        decisions = [design_decision.path, supply.declaration.choice.path]
-        kernels: list[str] = []
-        if design == DotProductDesign.id:
-            decisions.extend((dot_product_semantics.pe.path, dot_product_semantics.simd.path))
-            decisions.append(compute_pumping.path)
-            kernels.extend((DotpAxiKernel.id, ReplayBufferKernel.id))
-            compute_kernel_id = DotpAxiKernel.id
-        else:
-            decisions.extend(
-                (
-                    batch_interleaved_semantics.pe.path,
-                    batch_interleaved_semantics.simd.path,
-                    batch_interleaved_semantics.interleave.path,
-                )
-            )
-            compute_kernel_id = ""
-        if supply_mode == FINN_RTL_MEMSTREAM_SUPPLY:
-            decisions.extend(
-                (
-                    supply.settings.ram_style.path,
-                    supply.settings.pumped_memory.path,
-                )
-            )
-            kernels.append(FINN_RTL_MEMSTREAM_SUPPLY)
+        metadata = selected_design_metadata(
+            inventory,
+            design,
+            supply_modes={supply.declaration.source_operand: supply_mode},
+            placement_selections={
+                (DotProductDesign.id, "compute"): dot_compute,
+                (DotProductDesign.id, "replay"): dot_replay,
+                (DotProductDesign.id, "delivery"): dot_delivery,
+                (BatchInterleavedDesign.id, "compute"): batch_compute,
+                (BatchInterleavedDesign.id, "delivery"): batch_delivery,
+            },
+        )
         return replace(
             selected,
-            compute_kernel_id=compute_kernel_id,
-            design_id=design,
-            decision_paths=tuple(decisions),
-            kernel_ids=tuple(kernels),
+            compute_kernel_id=metadata.kernel_id("compute") or "",
+            design_id=metadata.design_id,
+            decision_paths=metadata.decision_paths,
+            kernel_ids=metadata.kernel_ids,
         )
 
-    dot_product_semantics = dot_product
-    batch_interleaved_semantics = batch_interleaved
     source_association = operation.derived(
         "source_association",
         MVAUSourceAssociation,
@@ -240,6 +223,13 @@ def declare_mvau_design_inventory(
             "supply_mode": supply.declaration.choice,
             "dot_product": dot_association.allow_absent(),
             "batch_interleaved": batch_association.allow_absent(),
+            "dot_compute": dot_declaration.placement("compute").selected_kernel.allow_absent(),
+            "dot_replay": dot_declaration.placement("replay").selected_kernel.allow_absent(),
+            "dot_delivery": dot_declaration.placement("delivery").selected_kernel.allow_absent(),
+            "batch_compute": batch_declaration.placement("compute").selected_kernel.allow_absent(),
+            "batch_delivery": batch_declaration.placement(
+                "delivery"
+            ).selected_kernel.allow_absent(),
         },
         evaluate=selected_association,
     )
@@ -269,39 +259,18 @@ def declare_mvau_design_inventory(
         ),
     )
 
-    all_design_constraints = tuple(
-        ConstraintRef(item.path)
-        for declaration in inventory.declarations
-        for item in declaration.spec.constraints
+    authoring = declare_dataflow_op_authoring(
+        inventory,
+        operation,
+        result=cast("Ref[object]", result),
+        source_association=cast("Ref[object]", source_association),
+        structural_properties=(network, network_validation, source_association, result),
+        structural_constraints=(network_valid,),
+        structural_constraint_set=MVAU_STRUCTURAL_CONSTRAINT_SET,
+        feasibility_constraint_set=MVAU_FEASIBILITY_CONSTRAINT_SET,
+        structural_readiness_profile=MVAU_STRUCTURAL_READINESS,
+        artifact_readiness_profile=MVAU_ARTIFACT_READINESS,
     )
-    operation.include_in(MVAU_FEASIBILITY_CONSTRAINT_SET, *all_design_constraints)
-    structural_decisions = (
-        design,
-        dot_product.pe,
-        dot_product.simd,
-        batch_interleaved.pe,
-        batch_interleaved.simd,
-        batch_interleaved.interleave,
-        supply.declaration.choice,
-    )
-    operation.readiness_profile(
-        MVAU_STRUCTURAL_READINESS,
-        decisions=structural_decisions,
-        properties=(network, network_validation, source_association, result),
-        constraints=(network_valid,),
-    )
-    operation.readiness_profile(
-        MVAU_ARTIFACT_READINESS,
-        decisions=(
-            *structural_decisions,
-            compute_pumping,
-            supply.settings.ram_style,
-            supply.settings.pumped_memory,
-        ),
-        properties=(network, network_validation, source_association, result),
-        constraints=(*all_design_constraints, network_valid),
-    )
-    specification = assemble_specs((inventory.specification, operation.spec()))
     return MVAUDesignInventoryAssembly(
         dot_product,
         batch_interleaved,
@@ -314,7 +283,8 @@ def declare_mvau_design_inventory(
         source_association,
         result,
         compute_pumping,
-        specification,
+        authoring,
+        authoring.specification,
     )
 
 

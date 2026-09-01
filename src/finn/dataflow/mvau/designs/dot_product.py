@@ -20,8 +20,8 @@ from finn.dataflow.authoring.design import (
     declare_dataflow_design_inventory,
 )
 from finn.dataflow.authoring.scope import Ref
-from finn.dataflow.design import DependencyKind, DesignSpaceSpec
-from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
+from finn.dataflow.design import DesignSpaceSpec
+from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiHandles, DotpAxiKernel
 from finn.dataflow.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
     DotProductHardwareInputs,
@@ -152,6 +152,8 @@ def declare_dot_product_design(
                 DotProductDesign,
                 DotProductDesignInputs(problem, semantics, narrow_weights),
                 (semantics.spec, association_spec),
+                (semantics.pe, semantics.simd),
+                semantics.feasibility_constraints,
             ),
         ),
         input_supplies=(supply.declaration,),
@@ -159,17 +161,12 @@ def declare_dot_product_design(
     )
     declaration = inventory.declarations[0]
     compute = declaration.placement("compute").candidates[0]
-    pumping = tuple(
-        item for item in compute.spec.decisions if item.path.value.endswith(".compute_pumping")
-    )
-    if len(pumping) != 1:
-        raise AssertionError("DotpAxiKernel must declare exactly one compute-pumping choice")
     return DotProductDesignAssembly(
         semantics,
         supply,
         inventory,
         declaration,
-        Ref(pumping[0].path, DependencyKind.DECISION, pumping[0].value_semantics),
+        compute.typed_handles(DotpAxiHandles).compute_pumping,
         source_association,
     )
 

@@ -31,6 +31,7 @@ from finn.dataflow.mvau_problem import (
 )
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.resolution import NetworkRef
+from finn.dataflow.ops.mvau_op import MvauDataflowOp
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]
@@ -117,6 +118,34 @@ def test_v6_inventory_has_only_the_frozen_decision_paths() -> None:
         "mvau.input.weight.finn_rtl_memstream.ram_style",
         "mvau.input.weight.finn_rtl_memstream.pumped_memory",
     }
+
+
+def test_mvau_op_uses_the_inventory_backed_authoring_assembly() -> None:
+    assert MvauDataflowOp.dataflow_authoring() is MVAU_DESIGN_INVENTORY.authoring
+    assert MvauDataflowOp.build_design_space_spec() is MVAU_DESIGN_INVENTORY.specification
+    assert MvauDataflowOp.result_path() == MVAU_DESIGN_INVENTORY.result.path
+    assert MvauDataflowOp.source_association_path() == MVAU_DESIGN_INVENTORY.source_association.path
+
+
+def test_structural_metadata_does_not_require_physical_kernel_choices() -> None:
+    assembly = MVAU_DESIGN_INVENTORY
+    engine, point = _start()
+    assert assembly.inventory.design_selection is not None
+    point = engine.commit_assignments(
+        point,
+        {
+            assembly.inventory.design_selection.path: DotProductDesign.id,
+            assembly.dot_product.pe.path: 3,
+            assembly.dot_product.simd.path: 2,
+            assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
+        },
+    ).point
+
+    association = engine.query_property(point, assembly.source_association.path)
+    assert isinstance(association, Decided)
+    assert assembly.compute_pumping.path not in point.assignments
+    assert engine.check_readiness(point, MVAU_STRUCTURAL_READINESS).ready is True
+    assert engine.check_readiness(point, MVAU_ARTIFACT_READINESS).ready is None
 
 
 def test_unselected_design_declarations_are_absent() -> None:

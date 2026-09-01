@@ -120,6 +120,35 @@ def test_production_mvau_import_graph_is_acyclic() -> None:
     assert cycles == set()
 
 
+def test_operation_specific_authoring_does_not_reconstruct_compiled_declarations() -> None:
+    operation_files = (
+        ROOT / "ops" / "mvau.py",
+        ROOT / "ops" / "mvau_op.py",
+        ROOT / "mvau" / "designs" / "dot_product.py",
+        ROOT / "mvau" / "designs" / "batch_interleaved.py",
+        ROOT / "mvau" / "designs" / "inventory.py",
+    )
+    forbidden_calls = {"Ref", "assemble_specs"}
+    for path in operation_files:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert not calls & forbidden_calls, path
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr not in {
+                "constraints",
+                "decisions",
+            }:
+                continue
+            assert not (isinstance(node.value, ast.Attribute) and node.value.attr == "spec"), (
+                path,
+                node.attr,
+            )
+
+
 def test_production_elaboration_dispatch_exports_no_provider_registry() -> None:
     assert production_provider_exports == ["elaborate_mvau"]
 

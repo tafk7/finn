@@ -410,6 +410,8 @@ def declare_batch_interleaved_design(
                 BatchInterleavedDesign,
                 BatchInterleavedDesignInputs(semantics),
                 (semantics.spec, association_spec),
+                (semantics.pe, semantics.simd, semantics.interleave),
+                semantics.feasibility_constraints,
             ),
         ),
         input_supplies=(supply.declaration,),

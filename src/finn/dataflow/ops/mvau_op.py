@@ -22,10 +22,11 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 from finn.dataflow.authoring import (
     DataflowBuildConfigView,
     DataflowOp,
+    DataflowOpAuthoring,
     NodeAttrCodec,
     NodeAttributeType,
 )
-from finn.dataflow.design import DesignSpaceSpec, Engine, Finding, FindingKind, QualifiedPath
+from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS
 from finn.dataflow.mvau.projection import (
     MVAU_LOGICAL_SOURCE_NODEATTRS,
@@ -39,7 +40,7 @@ from finn.dataflow.mvau.projection import (
     resolve_mvau_point,
 )
 from finn.dataflow.ops.mvau import (
-    MVAU_DATAFLOW_OP_SPEC,
+    MVAU_DESIGN_INVENTORY,
     MVAUDataflowOpPaths,
     MVAUSourceDescription,
 )
@@ -80,32 +81,8 @@ class MvauDataflowOp(DataflowOp):
         return MVAU_DATAFLOW_OP_FAMILY_VERSION
 
     @classmethod
-    def build_design_space_spec(cls) -> DesignSpaceSpec:
-        return MVAU_DATAFLOW_OP_SPEC
-
-    @classmethod
-    def result_path(cls) -> QualifiedPath:
-        return MVAUDataflowOpPaths.RESULT
-
-    @classmethod
-    def source_association_path(cls) -> QualifiedPath:
-        return MVAUDataflowOpPaths.SOURCE_ASSOCIATION
-
-    @classmethod
-    def selection_constraint_set(cls) -> str | None:
-        return "mvau_op_feasibility"
-
-    @classmethod
-    def structural_readiness_profile(cls) -> str | None:
-        return "mvau_op_structural"
-
-    @classmethod
-    def artifact_readiness_profile(cls) -> str | None:
-        return "artifact_inputs"
-
-    @classmethod
-    def feasibility_constraint_sets(cls) -> tuple[str, ...]:
-        return ("mvau_op_feasibility",)
+    def dataflow_authoring(cls) -> DataflowOpAuthoring:
+        return MVAU_DESIGN_INVENTORY.authoring
 
     @classmethod
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:
