@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from abc import abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
@@ -19,6 +18,13 @@ from uuid import uuid4
 from onnx import AttributeProto  # type: ignore[import-not-found]
 from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 
+from finn.dataflow.authoring.compiler import (
+    CompiledDataflowOperation,
+    compile_dataflow_operation,
+)
+from finn.dataflow.authoring.persistence import DecisionStorageCodec
+from finn.dataflow.authoring.projection import project_build, project_graph
+from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import (
     Decided,
     DesignPoint,
@@ -143,30 +149,65 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
 
     wants_model = True
 
+    family_id: ClassVar[str] = ""
+    family_version: ClassVar[str] = ""
+    declaration_namespace: ClassVar[str] = ""
+    uses_class_authoring: ClassVar[bool] = False
+    result_member: ClassVar[str] = "result"
+    source_association_member: ClassVar[str] = "source_association"
+    persistence: ClassVar[tuple[object, ...]] = ()
+    selection_constraints: ClassVar[str | None] = None
+    structural_readiness: ClassVar[str | None] = None
+    artifact_readiness: ClassVar[str | None] = None
+    feasibility_constraints: ClassVar[tuple[str, ...]] = ()
+
     SCOPE_ID_ATTR: ClassVar[str] = "dataflow_scope_id"
     FAMILY_ID_ATTR: ClassVar[str] = "dataflow_family_id"
     FAMILY_VERSION_ATTR: ClassVar[str] = "dataflow_family_version"
+    PERSISTENCE_FORMAT_ATTR: ClassVar[str] = "dataflow_persistence_format"
+    PERSISTENCE_FORMAT_VERSION: ClassVar[str] = "1"
     PROBLEM_FINGERPRINT_ATTR: ClassVar[str] = "dataflow_problem_fingerprint"
     RESERVED_NODEATTRS: ClassVar[frozenset[str]] = frozenset(
         {
             SCOPE_ID_ATTR,
             FAMILY_ID_ATTR,
             FAMILY_VERSION_ATTR,
+            PERSISTENCE_FORMAT_ATTR,
             PROBLEM_FINGERPRINT_ATTR,
         }
     )
     _space_cache: ClassVar[dict[type[DataflowOp], DesignSpace]] = {}
+    _compiled_cache: ClassVar[dict[type[DataflowOp], CompiledDataflowOperation]] = {}
     _space_cache_lock: ClassVar[RLock] = RLock()
 
     @classmethod
-    @abstractmethod
     def dataflow_family_id(cls) -> str:
         """Return the stable operation-family identity."""
 
+        if cls.family_id:
+            return cls.family_id
+        raise NotImplementedError(f"{cls.__name__} does not declare a dataflow family id")
+
     @classmethod
-    @abstractmethod
     def dataflow_family_version(cls) -> str:
         """Return the version covering paths, meanings, and persistence codecs."""
+
+        if cls.family_version:
+            return cls.family_version
+        raise NotImplementedError(f"{cls.__name__} does not declare a dataflow family version")
+
+    @classmethod
+    def compiled_dataflow_operation(cls) -> CompiledDataflowOperation | None:
+        """Return the cached direct class compilation, when this family uses it."""
+
+        if not cls.uses_class_authoring:
+            return None
+        with cls._space_cache_lock:
+            compiled = cls._compiled_cache.get(cls)
+            if compiled is None:
+                compiled = compile_dataflow_operation(cls)
+                cls._compiled_cache[cls] = compiled
+            return compiled
 
     @classmethod
     def dataflow_authoring(cls) -> DataflowOpAuthoring | None:
@@ -185,24 +226,35 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     def build_design_space_spec(cls) -> DesignSpaceSpec:
         """Return the node-independent static superspace for this operation."""
 
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.specification
         return cls._required_authoring().specification
 
     @classmethod
     def result_path(cls) -> QualifiedPath:
         """Return the selected ``NetworkRef`` property path."""
 
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.result.path
         return cls._required_authoring().result.path
 
     @classmethod
     def source_association_path(cls) -> QualifiedPath:
         """Return the source-association property path."""
 
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.source_association.path
         return cls._required_authoring().source_association.path
 
     @classmethod
-    @abstractmethod
-    def decision_nodeattrs(cls) -> Mapping[QualifiedPath, NodeAttrCodec]:
+    def decision_nodeattrs(cls) -> Mapping[QualifiedPath, DecisionStorageCodec]:
         """Map every persistent decision to one stable node attribute."""
+
+        compiled = cls.compiled_dataflow_operation()
+        return {} if compiled is None else compiled.persistence
 
     # -- selection contract ------------------------------------------------
     #
@@ -217,6 +269,9 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         """Return the constraint set a complete design point must satisfy."""
 
         authored = cls.dataflow_authoring()
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.selection_constraint_set
         return None if authored is None else authored.selection_constraint_set
 
     @classmethod
@@ -224,6 +279,9 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         """Return the profile answering whether the semantic result is ready."""
 
         authored = cls.dataflow_authoring()
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.structural_readiness_profile
         return None if authored is None else authored.structural_readiness_profile
 
     @classmethod
@@ -231,6 +289,9 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         """Return the profile answering whether artifacts can be built."""
 
         authored = cls.dataflow_authoring()
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.artifact_readiness_profile
         return None if authored is None else authored.artifact_readiness_profile
 
     @classmethod
@@ -238,6 +299,9 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         """Return the per-pool feasibility sets, reported separately."""
 
         authored = cls.dataflow_authoring()
+        compiled = cls.compiled_dataflow_operation()
+        if compiled is not None:
+            return compiled.feasibility_constraint_sets
         if authored is not None:
             return authored.feasibility_constraint_sets
         return ()
@@ -246,7 +310,8 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:
         """Return source-semantic node attributes declared by the subclass."""
 
-        return {}
+        compiled = cls.compiled_dataflow_operation()
+        return {} if compiled is None else compiled.projection.source_nodeattrs
 
     @classmethod
     def validated_design_space(cls) -> DesignSpace:
@@ -295,6 +360,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
 
         with cls._space_cache_lock:
             cls._space_cache.pop(cls, None)
+            cls._compiled_cache.pop(cls, None)
 
     def attach_model(self, model: ModelWrapper) -> DataflowOp:
         self._model = model
@@ -314,15 +380,37 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
             )
         return cast("ModelWrapper", model)
 
-    @abstractmethod
     def project_graph_problem(self) -> Mapping[QualifiedPath, object]:
         """Project problem facts owned by the attached graph and target node."""
 
-    @abstractmethod
+        compiled = type(self).compiled_dataflow_operation()
+        if compiled is None:
+            raise NotImplementedError(f"{type(self).__name__} does not declare graph projection")
+        projected = project_graph(
+            compiled.projection,
+            self,
+            self._attached_model(),
+            self.onnx_node,
+            self.dataflow_scope_id(),
+        )
+        if projected.findings:
+            raise DataflowOpError(projected.findings)
+        compiled.problem_provenance.check_graph_projection(projected.values)
+        return projected.values
+
     def project_build_problem(
         self, config: DataflowBuildConfigView
     ) -> Mapping[QualifiedPath, object]:
         """Project problem facts owned by the build invocation."""
+
+        compiled = type(self).compiled_dataflow_operation()
+        if compiled is None:
+            raise NotImplementedError(f"{type(self).__name__} does not declare build projection")
+        projected = project_build(compiled.projection, config)
+        if projected.findings:
+            raise DataflowOpError(projected.findings)
+        compiled.problem_provenance.check_build_projection(projected.values)
+        return projected.values
 
     def combine_problem_data(
         self,
@@ -358,6 +446,45 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         )
         return point.problem
 
+    def validate_declared_source(self) -> Mapping[QualifiedPath, object]:
+        """Project only graph-owned declarations for ordinary QONNX verification."""
+
+        self._attached_model()
+        return self.project_graph_problem()
+
+    def declared_source_value(self, member: str) -> object:
+        """Read one projected class-member fact without exposing model access."""
+
+        compiled = type(self).compiled_dataflow_operation()
+        if compiled is None:
+            raise NotImplementedError(
+                f"{type(self).__name__} does not use class-authored source declarations"
+            )
+        ref = compiled.declarations.ref(member)
+        projected = self.validate_declared_source()
+        try:
+            return projected[ref.path]
+        except KeyError:
+            raise DataflowOpError(
+                (
+                    _finding(
+                        FindingKind.REJECTION,
+                        "dataflow-source-value-absent",
+                        f"declared source value {member!r} is absent",
+                        path=ref.path,
+                    ),
+                )
+            ) from None
+
+    def declared_tensor_shape(self, role: str) -> tuple[int, ...]:
+        value = self.declared_source_value(f"{role}.shape")
+        if not isinstance(value, tuple) or not all(type(item) is int for item in value):
+            raise TypeError(f"declared tensor {role!r} did not project a concrete shape")
+        return cast("tuple[int, ...]", value)
+
+    def declared_tensor_datatype(self, role: str) -> object:
+        return self.declared_source_value(f"{role}.datatype")
+
     def get_nodeattr_types(self) -> Mapping[str, NodeAttributeType]:
         attrs = dict(type(self).source_nodeattr_types())
         attrs.update(
@@ -368,6 +495,8 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                 self.PROBLEM_FINGERPRINT_ATTR: ("s", False, "", None),
             }
         )
+        if type(self).compiled_dataflow_operation() is not None:
+            attrs[self.PERSISTENCE_FORMAT_ATTR] = ("s", False, "", None)
         attrs.update(
             {
                 codec.attribute_name: codec.nodeattr_definition
@@ -380,12 +509,14 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         return next((item for item in self.onnx_node.attribute if item.name == name), None)
 
     @staticmethod
-    def _attribute_scalar(attribute: AttributeProto) -> int | str:
+    def _attribute_scalar(attribute: AttributeProto) -> int | float | str:
         if attribute.type == AttributeProto.INT:
             return int(attribute.i)
         if attribute.type == AttributeProto.STRING:
             return cast(bytes, attribute.s).decode("utf-8")
-        raise ValueError("dataflow assignment attributes must be integer or string scalars")
+        if attribute.type == AttributeProto.FLOAT:
+            return float(attribute.f)
+        raise ValueError("dataflow assignment attributes must be scalar values")
 
     def read_assignments(self) -> Mapping[QualifiedPath, object]:
         """Decode only physically present decision attributes."""
@@ -530,6 +661,20 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                     ),
                 )
             )
+        if type(self).compiled_dataflow_operation() is not None:
+            format_version = self._metadata_value(self.PERSISTENCE_FORMAT_ATTR)
+            if format_version != self.PERSISTENCE_FORMAT_VERSION:
+                raise DataflowOpError(
+                    (
+                        _finding(
+                            FindingKind.REJECTION,
+                            "dataflow-selection-format-mismatch",
+                            "saved choices use another persistence format version",
+                            actual_version=format_version,
+                            expected_version=self.PERSISTENCE_FORMAT_VERSION,
+                        ),
+                    )
+                )
         expected_fingerprint = dataflow_problem_fingerprint(problem)
         if fingerprint != expected_fingerprint:
             raise DataflowOpError(
@@ -633,11 +778,41 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
             self.dataflow_scope_id(),
         )
 
+    def realize_dataflow(self, config: DataflowBuildConfigView) -> DesignRealization:
+        """Resolve and exactly bind the selected class-authored Design inventory."""
+
+        compiled = type(self).compiled_dataflow_operation()
+        if compiled is None or compiled.inventory is None:
+            raise DataflowOpError(
+                (
+                    _finding(
+                        FindingKind.REQUEST,
+                        "dataflow-realization-unavailable",
+                        "this operation does not expose a compiler-owned Design inventory",
+                    ),
+                )
+            )
+        resolved = self.resolve_dataflow(config)
+        answer = compiled.inventory.realize(resolved.engine, resolved.point)
+        if not isinstance(answer, Decided):
+            raise DataflowOpError(answer.findings)
+        if not isinstance(answer.value, DesignRealization):
+            raise DataflowOpError(
+                (
+                    _finding(
+                        FindingKind.AUTHORING,
+                        "dataflow-realization-type-invalid",
+                        "the selected Design did not produce a DesignRealization",
+                    ),
+                )
+            )
+        return answer.value
+
     def _encode_assignments(
         self, assignments: Mapping[QualifiedPath, object]
-    ) -> dict[str, int | str]:
+    ) -> dict[str, int | float | str]:
         codecs = type(self).decision_nodeattrs()
-        encoded: dict[str, int | str] = {}
+        encoded: dict[str, int | float | str] = {}
         for path, value in assignments.items():
             codec = codecs.get(path)
             if codec is None:
@@ -682,6 +857,8 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
             self.FAMILY_VERSION_ATTR: type(self).dataflow_family_version(),
             self.PROBLEM_FINGERPRINT_ATTR: dataflow_problem_fingerprint(problem),
         }
+        if type(self).compiled_dataflow_operation() is not None:
+            metadata[self.PERSISTENCE_FORMAT_ATTR] = self.PERSISTENCE_FORMAT_VERSION
         snapshot = self.onnx_node.SerializeToString(deterministic=True)
         try:
             if replace:
@@ -769,6 +946,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         names = {
             self.FAMILY_ID_ATTR,
             self.FAMILY_VERSION_ATTR,
+            self.PERSISTENCE_FORMAT_ATTR,
             self.PROBLEM_FINGERPRINT_ATTR,
         }
         names.update(codec.attribute_name for codec in type(self).decision_nodeattrs().values())

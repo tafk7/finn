@@ -13,6 +13,22 @@ from finn.dataflow.authoring.op_design import (
     ProblemProvenance,
     Provenance,
 )
+from finn.dataflow.authoring.persistence import Persist, PortableCodec
+from finn.dataflow.authoring.projection import (
+    Attribute,
+    BuildFact,
+    BuildFlag,
+    BuildString,
+    InputTensor,
+    NoInitializer,
+    OptionalInitializer,
+    OutputTensor,
+    RequiredInitializer,
+    SourceScope,
+    TargetClockPeriod,
+    TargetFpgaPart,
+    TensorShape,
+)
 from finn.dataflow.authoring.declarations import (
     Choice,
     Condition,
@@ -40,6 +56,7 @@ from finn.dataflow.authoring.scope import (
 )
 
 if TYPE_CHECKING:
+    from finn.dataflow.authoring.compiler import ClosedDesigns, UsesDesign
     from finn.dataflow.authoring.design import (
         DataflowDesign,
         DataflowDesignScope,
@@ -64,6 +81,9 @@ if TYPE_CHECKING:
     from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {}
+_LAZY_EXPORTS.update(
+    {name: ("finn.dataflow.authoring.compiler", name) for name in ("ClosedDesigns", "UsesDesign")}
+)
 _LAZY_EXPORTS.update(
     {
         name: ("finn.dataflow.authoring.design", name)
@@ -125,8 +145,13 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "AssignmentMapping",
     "AuthoringError",
+    "Attribute",
     "BUILD_OWNED",
+    "BuildFact",
+    "BuildFlag",
+    "BuildString",
     "Choice",
+    "ClosedDesigns",
     "Condition",
     "ConstraintRef",
     "DataflowAssignmentCommit",
@@ -141,16 +166,28 @@ __all__ = [
     "GRAPH_OWNED",
     "InputSupplyAlternative",
     "InputSupplyDeclaration",
+    "InputTensor",
     "Imported",
     "NodeAttrCodec",
     "NodeAttributeType",
+    "NoInitializer",
     "OpDesign",
+    "OptionalInitializer",
+    "OutputTensor",
+    "Persist",
+    "PortableCodec",
     "ProblemProvenance",
     "Problem",
     "Provenance",
     "Ref",
     "Readiness",
+    "RequiredInitializer",
     "Scope",
+    "SourceScope",
+    "TargetClockPeriod",
+    "TargetFpgaPart",
+    "TensorShape",
+    "UsesDesign",
     "dataflow_problem_fingerprint",
     "class_divisors_of",
     "constraint",

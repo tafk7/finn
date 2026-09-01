@@ -27,6 +27,7 @@ from finn.dataflow.resolution import NetworkRef
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
 
 from dataflow.synthetic_op import (
+    ClassAuthoredDataflowOp,
     SyntheticDataflowOp,
     SyntheticMode,
     SyntheticPaths,
@@ -61,6 +62,12 @@ def _model(extent: int = 4, op_type: str = "SyntheticDataflowOp") -> ModelWrappe
     )
     model.set_tensor_datatype("x", DataType["INT8"])
     model.set_tensor_datatype("y", DataType["INT8"])
+    return model
+
+
+def _class_authored_model(extent: int = 4) -> ModelWrapper:
+    model = _model(extent, op_type="ClassAuthoredDataflowOp")
+    model.graph.node[0].attribute.append(helper.make_attribute("enabled", 1))
     return model
 
 
@@ -110,6 +117,39 @@ def test_modelwrapper_attaches_exact_model_and_bare_wrapper_rejects_evaluation()
     with pytest.raises(DataflowOpError) as missing:
         bare.problem_instance(_config())
     assert {finding.code for finding in missing.value.findings} == {"dataflow-model-required"}
+
+
+def test_direct_class_frontend_projects_and_persists_without_custom_hooks(
+    tmp_path: Path,
+) -> None:
+    model = _class_authored_model()
+    operation = model.get_customop_wrapper(model.graph.node[0])
+    assert isinstance(operation, ClassAuthoredDataflowOp)
+    assert "project_graph_problem" not in ClassAuthoredDataflowOp.__dict__
+    assert "project_build_problem" not in ClassAuthoredDataflowOp.__dict__
+    assert "build_design_space_spec" not in ClassAuthoredDataflowOp.__dict__
+    assert "decision_nodeattrs" not in ClassAuthoredDataflowOp.__dict__
+
+    problem = operation.problem_instance(_config())
+    assert problem[QualifiedPath("problem.class_authored.data.tensor_id")] == "x"
+    assert problem[QualifiedPath("problem.class_authored.data.shape")] == (4,)
+    assert problem[QualifiedPath("problem.class_authored.output.tensor_id")] == "y"
+    assert problem[QualifiedPath("problem.target.clock_period_ns")] == 5.0
+
+    operation.commit_dataflow_assignments(_config(), {QualifiedPath("class_authored.lanes"): 2})
+    resolved = operation.resolve_dataflow(_config())
+    assert resolved.result.network.node("compute").region.inputs[0].port.operand.shape == (4,)
+    assert resolved.source_association == "synthetic-scope"
+
+    path = tmp_path / "class-authored.onnx"
+    model.save(path)
+    restored_model = ModelWrapper(str(path))
+    restored = restored_model.get_customop_wrapper(restored_model.graph.node[0])
+    assert isinstance(restored, ClassAuthoredDataflowOp)
+    restored_result = restored.resolve_dataflow(_config())
+    assert restored_result.point.assignments == resolved.point.assignments
+    assert restored_result.result == resolved.result
+    assert restored_result.source_scope_id == resolved.source_scope_id
 
 
 def test_static_space_cache_is_per_subclass_and_context_independent() -> None:

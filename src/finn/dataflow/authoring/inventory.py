@@ -84,6 +84,7 @@ class DataflowDesignDeclaration:
     input_mappings: tuple[DesignInput, ...]
     hardware: tuple[CompiledKernelDeclaration, ...]
     owner: type[DataflowDesign]
+    exports: Mapping[str, Ref[object]] = field(default_factory=dict, repr=False, compare=False)
     decision_handles: tuple[Ref[object], ...] = field(default=(), repr=False, compare=False)
     constraint_handles: tuple[ConstraintRef, ...] = field(default=(), repr=False, compare=False)
 
@@ -281,6 +282,7 @@ def declare_dataflow_design(
         scope.input_mappings,
         scope.hardware_declarations,
         design,
+        scope.handles,
         scope.decision_handles,
         (
             *scope.constraint_handles,

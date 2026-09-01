@@ -83,12 +83,15 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/hardware \
     tests/dataflow/mvau \
     tests/dataflow/parameters \
+    tests/dataflow/channelwise_affine_op.py \
     tests/dataflow/synthetic_op.py \
     tests/dataflow/mvau_op_facts.py \
     tests/dataflow/normalized_structure.py \
     tests/dataflow/test_datatypes.py \
     tests/dataflow/test_authoring_op_design.py \
     tests/dataflow/test_authoring_scope.py \
+    tests/dataflow/test_channelwise_affine_op.py \
+    tests/dataflow/test_class_declarations.py \
     tests/dataflow/test_dataflow_design_authoring.py \
     tests/dataflow/test_mvau_narrow_weights.py \
     tests/dataflow/test_mvau_problem_fields.py \
@@ -96,4 +99,5 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/test_network.py \
     tests/dataflow/test_network_validation.py \
     tests/dataflow/test_mvau_inference.py \
-    tests/dataflow/test_dataflow_selection.py
+    tests/dataflow/test_dataflow_selection.py \
+    tests/dataflow/test_portable_persistence.py

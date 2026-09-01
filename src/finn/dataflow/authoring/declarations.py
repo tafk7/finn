@@ -77,6 +77,17 @@ class DeclarationTemplate(Generic[T]):
             raise ValueError("a declaration must be available to at least one layer")
 
 
+class DeclarationGroup:
+    """Immutable composite that contributes several leaf declarations."""
+
+    layers: frozenset[DeclarationLayer] = ALL_LAYERS
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        raise NotImplementedError
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class Imported(DeclarationTemplate[T]):
     """A typed handle supplied by the enclosing compiler layer."""
@@ -345,6 +356,8 @@ class CompiledClassDeclarations:
     namespace: str
     scope: Scope
     members: Mapping[str, Ref[object] | ConstraintRef]
+    groups: Mapping[str, DeclarationGroup]
+    template_members: Mapping[int, str]
     declaring_classes: Mapping[str, type[object]]
 
     def ref(self, member_name: str) -> Ref[object]:
@@ -377,60 +390,114 @@ def _value_signature(template: DeclarationTemplate[Any]) -> tuple[object, str]:
 
 def _collect_class_declarations(
     owner: type[object], layer: DeclarationLayer
-) -> tuple[tuple[CollectedDeclaration, ...], Mapping[int, str]]:
+) -> tuple[
+    tuple[CollectedDeclaration, ...],
+    Mapping[int, str],
+    Mapping[str, DeclarationGroup],
+]:
     """Collect effective declarations in deterministic base-to-leaf order."""
 
-    effective: OrderedDict[str, tuple[DeclarationTemplate[Any], type[object]]] = OrderedDict()
+    effective: OrderedDict[
+        str, tuple[DeclarationTemplate[Any] | DeclarationGroup, type[object]]
+    ] = OrderedDict()
     aliases: dict[int, str] = {}
     for declaring_class in reversed(owner.__mro__):
         if declaring_class is object:
             continue
         for member_name, value in declaring_class.__dict__.items():
             previous = effective.get(member_name)
-            if previous is not None and not isinstance(value, DeclarationTemplate):
+            if previous is not None and not isinstance(
+                value, (DeclarationTemplate, DeclarationGroup)
+            ):
                 raise AuthoringError(
                     f"{declaring_class.__name__}.{member_name} replaces a declaration with "
                     f"{type(value).__name__}"
                 )
-            if not isinstance(value, DeclarationTemplate):
+            if not isinstance(value, (DeclarationTemplate, DeclarationGroup)):
                 continue
-            template = value
-            if layer not in template.layers:
+            template_or_group = value
+            if layer not in template_or_group.layers:
                 raise AuthoringError(
-                    f"{declaring_class.__name__}.{member_name} is a {template.kind.value} "
-                    f"declaration unavailable on the {layer.value} layer"
+                    f"{declaring_class.__name__}.{member_name} is unavailable on the "
+                    f"{layer.value} layer"
                 )
             if previous is not None:
                 old, old_class = previous
-                if old.kind is not template.kind:
+                compatible = (
+                    isinstance(old, DeclarationTemplate)
+                    and isinstance(template_or_group, DeclarationTemplate)
+                    and old.kind is template_or_group.kind
+                ) or (
+                    isinstance(old, DeclarationGroup)
+                    and isinstance(template_or_group, DeclarationGroup)
+                    and type(old) is type(template_or_group)
+                )
+                if not compatible:
+                    old_kind = (
+                        old.kind.value
+                        if isinstance(old, DeclarationTemplate)
+                        else type(old).__name__
+                    )
+                    new_kind = (
+                        template_or_group.kind.value
+                        if isinstance(template_or_group, DeclarationTemplate)
+                        else type(template_or_group).__name__
+                    )
                     raise AuthoringError(
                         f"{declaring_class.__name__}.{member_name} cannot override "
-                        f"{old_class.__name__}.{member_name}: {old.kind.value} and "
-                        f"{template.kind.value} are incompatible declaration kinds"
+                        f"{old_class.__name__}.{member_name}: {old_kind} and "
+                        f"{new_kind} are incompatible declaration kinds"
                     )
-                if _value_signature(old) != _value_signature(template):
+                if (
+                    isinstance(old, DeclarationTemplate)
+                    and isinstance(template_or_group, DeclarationTemplate)
+                    and _value_signature(old) != _value_signature(template_or_group)
+                ):
                     raise AuthoringError(
                         f"{declaring_class.__name__}.{member_name} cannot override "
                         f"{old_class.__name__}.{member_name} with incompatible value semantics"
                     )
-                aliases[id(old)] = member_name
-            effective[member_name] = (template, declaring_class)
-            aliases[id(template)] = member_name
+                if isinstance(old, DeclarationTemplate):
+                    aliases[id(old)] = member_name
+                else:
+                    for child_name, child in old.declaration_items(member_name):
+                        aliases[id(child)] = child_name
+            effective[member_name] = (template_or_group, declaring_class)
+            if isinstance(template_or_group, DeclarationTemplate):
+                aliases[id(template_or_group)] = member_name
+            else:
+                for child_name, child in template_or_group.declaration_items(member_name):
+                    aliases[id(child)] = child_name
 
     stable_names: dict[str, str] = {}
     collected: list[CollectedDeclaration] = []
-    for member_name, (template, declaring_class) in effective.items():
-        stable_name = template.stable_name or member_name
-        previous_member = stable_names.get(stable_name)
-        if previous_member is not None and previous_member != member_name:
-            raise AuthoringError(
-                f"{owner.__name__}.{member_name} and {owner.__name__}.{previous_member} "
-                f"both declare stable name {stable_name!r}"
+    groups: dict[str, DeclarationGroup] = {}
+    for member_name, (template_or_group, declaring_class) in effective.items():
+        leaves = (
+            ((member_name, template_or_group),)
+            if isinstance(template_or_group, DeclarationTemplate)
+            else template_or_group.declaration_items(member_name)
+        )
+        if isinstance(template_or_group, DeclarationGroup):
+            groups[member_name] = template_or_group
+        for leaf_name, template in leaves:
+            stable_name = template.stable_name or leaf_name
+            previous_member = stable_names.get(stable_name)
+            if previous_member is not None and previous_member != leaf_name:
+                raise AuthoringError(
+                    f"{owner.__name__}.{leaf_name} and {owner.__name__}.{previous_member} "
+                    f"both declare stable name {stable_name!r}"
+                )
+            stable_names[stable_name] = leaf_name
+            collected.append(
+                CollectedDeclaration(leaf_name, stable_name, template, declaring_class)
             )
-        stable_names[stable_name] = member_name
-        collected.append(CollectedDeclaration(member_name, stable_name, template, declaring_class))
 
-    return tuple(collected), MappingProxyType(dict(aliases))
+    return (
+        tuple(collected),
+        MappingProxyType(dict(aliases)),
+        MappingProxyType(groups),
+    )
 
 
 def collect_class_declarations(
@@ -438,7 +505,7 @@ def collect_class_declarations(
 ) -> tuple[CollectedDeclaration, ...]:
     """Collect effective declarations without retaining compiler state."""
 
-    declarations, _aliases = _collect_class_declarations(owner, layer)
+    declarations, _aliases, _groups = _collect_class_declarations(owner, layer)
     return declarations
 
 
@@ -584,7 +651,7 @@ def compile_class_declarations(
 ) -> CompiledClassDeclarations:
     """Bind one class's immutable declaration templates under ``namespace``."""
 
-    declarations, aliases = _collect_class_declarations(owner, layer)
+    declarations, aliases, groups = _collect_class_declarations(owner, layer)
     scope: Scope = OpDesign(namespace) if layer is DeclarationLayer.OP else Scope(namespace)
     bound: OrderedDict[str, Ref[object] | ConstraintRef] = OrderedDict()
     imported = imports or {}
@@ -691,6 +758,8 @@ def compile_class_declarations(
         namespace,
         scope,
         MappingProxyType(dict(bound)),
+        groups,
+        aliases,
         MappingProxyType({item.member_name: item.declaring_class for item in declarations}),
     )
 
@@ -703,6 +772,7 @@ __all__ = [
     "Condition",
     "DeclarationKind",
     "DeclarationLayer",
+    "DeclarationGroup",
     "DeclarationTemplate",
     "DependentDomain",
     "Derived",

@@ -24,6 +24,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from inspect import signature
+from types import MappingProxyType
 from typing import Generic, TypeVar, cast
 
 from finn.dataflow.design import (
@@ -456,6 +457,27 @@ class Scope:
         handle: Ref[T] = Ref(path, DependencyKind.PROPERTY, semantics)
         return self._remember(name, handle)
 
+    def derived_evaluator(
+        self,
+        name: str,
+        value_type: type[T] | ValueSemantics[T],
+        *,
+        evaluate: EvaluatorSpec[Answer[object]],
+        applies_if: EvaluatorSpec[Answer[bool]] | None = None,
+    ) -> Ref[T]:
+        """Declare a property from an already restricted evaluator.
+
+        Adapter compiler aggregation has a data-dependent number of inputs and
+        therefore cannot spell a normal Python function signature in advance.
+        The evaluator still receives only its declared ``DependencyView``.
+        """
+
+        semantics = semantics_for(value_type)
+        path = self.semantic_path(name)
+        self._properties.append(DerivedProperty(path, semantics, evaluate, applies_if))
+        handle: Ref[T] = Ref(path, DependencyKind.PROPERTY, semantics)
+        return self._remember(name, handle)
+
     def constraint(
         self,
         name: str,
@@ -539,6 +561,12 @@ class Scope:
 
     def constraints_in(self, group: str) -> tuple[ConstraintRef, ...]:
         return tuple(ConstraintRef(path) for path in self._sets.get(group, ()))
+
+    @property
+    def handles(self) -> Mapping[str, Ref[object]]:
+        """Immutable compiler view of declarations keyed by local member name."""
+
+        return MappingProxyType(dict(self._handles))
 
     @property
     def decision_handles(self) -> tuple[Ref[object], ...]:

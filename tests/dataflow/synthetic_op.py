@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from collections.abc import Mapping
@@ -32,7 +33,22 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
-from finn.dataflow.authoring import DataflowBuildConfigView, DataflowOp, NodeAttrCodec
+from finn.dataflow.authoring import (
+    Attribute,
+    Choice,
+    DataflowBuildConfigView,
+    DataflowOp,
+    InputTensor,
+    NoInitializer,
+    NodeAttrCodec,
+    OutputTensor,
+    Persist,
+    SourceScope,
+    TargetClockPeriod,
+    TensorShape,
+    derived,
+    finite_values,
+)
 from finn.dataflow.authoring.design import singleton_network
 from finn.dataflow.region import (
     BeatSequence,
@@ -48,12 +64,75 @@ from finn.dataflow.region import (
 )
 from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, NetworkRef
 
-__all__ = ["SyntheticDataflowOp", "ZeroDecisionDataflowOp"]
+__all__ = ["ClassAuthoredDataflowOp", "SyntheticDataflowOp", "ZeroDecisionDataflowOp"]
 
 
 class SyntheticMode(str, Enum):
     FIRST = "first"
     SECOND = "second"
+
+
+class ClassAuthoredDataflowOp(DataflowOp):
+    """Small operation using only the direct class-centered frontend."""
+
+    family_id = "test.class_authored"
+    family_version = "1"
+    declaration_namespace = "class_authored"
+    uses_class_authoring = True
+
+    source_scope_id = SourceScope()
+    enabled = Attribute("enabled", bool, default=True)
+    data = InputTensor(
+        "data",
+        index=0,
+        shape=TensorShape(rank=1),
+        initializer=NoInitializer(),
+    )
+    output = OutputTensor("output", index=0, shape=TensorShape(rank=1))
+    clock = TargetClockPeriod()
+    lanes = Choice(int, domain=finite_values(1, 2, 4))
+
+    @derived(source_scope_id, value_type=str)
+    def source_association(source_scope_id: str) -> str:
+        return source_scope_id
+
+    @derived(data.shape, lanes, source_association, value_type=DATAFLOW_OP_RESULT_SEMANTICS)
+    def result(
+        shape: tuple[int, ...],
+        lanes: int,
+        source_association: str,
+    ) -> NetworkRef:
+        del lanes
+        return NetworkRef(
+            "class_authored",
+            singleton_network("compute", _region(shape[0])),
+            source_association,
+        )
+
+    persistence = (Persist(lanes, "dataflow_class_lanes"),)
+
+    def make_shape_compatible_op(self, model: ModelWrapper) -> NodeProto:
+        shape = model.get_tensor_shape(self.onnx_node.input[0])
+        if shape is None:
+            raise ValueError("class-authored input shape is unavailable")
+        return self.make_const_shape_op(shape)
+
+    def infer_node_datatype(self, model: ModelWrapper) -> None:
+        model.set_tensor_datatype(
+            self.onnx_node.output[0], model.get_tensor_datatype(self.onnx_node.input[0])
+        )
+
+    def execute_node(self, context: dict[str, npt.NDArray], graph: GraphProto) -> None:
+        del graph
+        context[self.onnx_node.output[0]] = np.asarray(context[self.onnx_node.input[0]]).copy()
+
+    def verify_node(self) -> None:
+        self.problem_instance(_ClassAuthoredConfig())
+
+
+@dataclass(frozen=True)
+class _ClassAuthoredConfig:
+    synth_clk_period_ns: float = 5.0
 
 
 class SyntheticPaths:
