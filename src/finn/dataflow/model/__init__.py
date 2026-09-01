@@ -3,6 +3,9 @@
 
 """Declarative frontend for constructing ordinary dataflow design-space specs."""
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from finn.dataflow.model.compiler import compile_space
 from finn.dataflow.model.declarations import (
     AuthoringError,
@@ -25,6 +28,24 @@ from finn.dataflow.model.declarations import (
     unresolved,
 )
 
+if TYPE_CHECKING:
+    from finn.dataflow.model.kernel import Kernel, Parameter, configure_kernel
+
+_LAZY_EXPORTS = {
+    name: ("finn.dataflow.model.kernel", name)
+    for name in ("Kernel", "Parameter", "configure_kernel")
+}
+
+
+def __getattr__(name: str) -> object:
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
 __all__ = [
     "AuthoringError",
     "Constraint",
@@ -33,12 +54,15 @@ __all__ = [
     "Derived",
     "Domain",
     "Input",
+    "Kernel",
+    "Parameter",
     "Problem",
     "Readiness",
     "Space",
     "Use",
     "constraint",
     "compile_space",
+    "configure_kernel",
     "derived",
     "divisors_of",
     "domain",
