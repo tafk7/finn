@@ -45,16 +45,17 @@ from finn.dataflow.design import (
     Answer,
     Decided,
     DependencyKind,
-    DependencyRef,
     DesignPoint,
-    DesignSpaceSpec,
     Engine,
     Finding,
     FindingKind,
     QualifiedPath,
     RequestError,
     Unresolved,
-    ValueSemantics,
+)
+from finn.dataflow.hardware._declaration import (
+    HardwareKernelDeclaration,
+    check_declared_references,
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.region import DataflowRegion
@@ -460,249 +461,6 @@ class SourceFile:
             raise ValueError("a source file needs a root and a path")
 
 
-# -- the declaration ---------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class HardwareKernelDeclaration:
-    """Everything one physical Kernel owns locally, as engine declarations.
-
-    The static half: what the Kernel declares, before any point exists.  A
-    contributor writes a ``HardwareKernel`` subclass and never constructs or
-    imports this; it is what ``declare_hardware_kernel`` returns, and it is
-    kept out of the package's public surface for that reason.
-    """
-
-    id: str
-    version: str
-    #: The path namespace this placement owns.  A Kernel placed twice has two
-    #: namespaces over one authored design, so the namespace is what says which
-    #: local paths are this placement's.
-    namespace: str
-    spec: DesignSpaceSpec
-    coverage: CoveragePattern
-    parameters: tuple[KernelParameter, ...] = ()
-    coverage_constraints: tuple[QualifiedPath, ...] = ()
-    sources: tuple[SourceFile, ...] = ()
-    owner: type[HardwareKernel] | None = None
-
-    def __post_init__(self) -> None:
-        issues: list[SpecAuthoringIssue] = []
-        if not self.id:
-            issues.append(
-                SpecAuthoringIssue("hardware-kernel-id-empty", "kernel", "Kernel id is empty")
-            )
-        if not self.version:
-            issues.append(
-                SpecAuthoringIssue("hardware-kernel-version-empty", self.id, "version is empty")
-            )
-        declared = {item.path for item in self.spec.constraints}
-        for path in self.coverage_constraints:
-            if path not in declared:
-                issues.append(
-                    SpecAuthoringIssue(
-                        "hardware-coverage-constraint-missing",
-                        str(path),
-                        "the Kernel does not declare this coverage constraint",
-                    )
-                )
-        for duplicate in duplicate_values(tuple(item.name for item in self.parameters)):
-            issues.append(
-                SpecAuthoringIssue(
-                    "hardware-parameter-duplicate",
-                    f"{self.id}.{duplicate}",
-                    f"physical parameter {duplicate!r} is declared twice",
-                )
-            )
-        issues.extend(self._local_reference_issues())
-        if issues:
-            raise SpecAuthoringError(tuple(issues))
-
-    @property
-    def _owned_paths(self) -> set[QualifiedPath]:
-        return {
-            *(item.path for item in self.spec.decisions),
-            *(item.path for item in self.spec.properties),
-        }
-
-    def _is_local(self, path: QualifiedPath) -> bool:
-        # A decision lands at ``<namespace>.<name>`` and a derived property at
-        # ``semantic.<namespace>.<name>``, so locality is either of those forms.
-        return str(path).startswith((f"{self.namespace}.", f"semantic.{self.namespace}."))
-
-    def _local_reference_issues(self) -> list[SpecAuthoringIssue]:
-        """A local reference must name something this Kernel really declares.
-
-        Imported references are legitimately absent from this spec -- that is
-        what importing means -- so they are checked against the assembled design
-        space instead, by :func:`check_declared_references`.
-        """
-
-        owned = self._owned_paths
-        issues: list[SpecAuthoringIssue] = []
-        for label, reference in self.references:
-            if self._is_local(reference.path) and reference.path not in owned:
-                issues.append(
-                    SpecAuthoringIssue(
-                        "hardware-reference-undeclared",
-                        str(reference.path),
-                        f"{label} names a local path this Kernel does not declare",
-                    )
-                )
-        return issues
-
-    @property
-    def references(self) -> tuple[tuple[str, Ref[object]], ...]:
-        """Every declaration this Kernel reads, as ``(what needs it, handle)``.
-
-        The whole handle, not just the path.  A reference carries a dependency
-        kind and value semantics, and both are claims about the thing named: a
-        ``DECISION`` handle pointing at a derived property, or a ``Ref[str]``
-        pointing at an integer, are wrong in ways a path comparison cannot see.
-
-        Coverage handles are included alongside parameters -- a Kernel whose
-        covered Region property does not exist is exactly as broken as one whose
-        parameter source does not.
-        """
-
-        referenced: list[tuple[str, Ref[object]]] = []
-        for coverage in self.coverage.regions:
-            referenced.append(
-                (f"coverage {coverage.role!r} Region", cast("Ref[object]", coverage.region))
-            )
-            referenced.append(
-                (
-                    f"coverage {coverage.role!r} computation",
-                    cast("Ref[object]", coverage.computation),
-                )
-            )
-        for edge in self.coverage.edges:
-            referenced.append((f"edge {edge.role!r} Network", cast("Ref[object]", edge.network)))
-        for parameter in self.parameters:
-            if parameter.source is not None:
-                referenced.append((f"parameter {parameter.name!r}", parameter.source))
-        return tuple(referenced)
-
-    @property
-    def imported_decisions(self) -> tuple[QualifiedPath, ...]:
-        """Every decision this Kernel reads but does not own.
-
-        Both routes count, and each catches what the other misses.  A fold can
-        reach a Kernel through a derived property without ever being a parameter
-        -- ``SIMD`` sizes the replay buffer that way, and appears in none of its
-        three RTL parameters -- or it can be driven straight into the RTL and
-        read nowhere else, which is how ``PE`` reaches ``dotp_axi``.  Scanning
-        only the specification loses the second; only the parameters, the first.
-
-        Provenance is what this is for.  Hardware whose record omits the folding
-        it was built around is hardware nobody can trace.
-        """
-
-        owned = {item.path for item in self.spec.decisions}
-        found = [
-            path
-            for path, kind in self._read_declarations()
-            if kind is DependencyKind.DECISION and path not in owned
-        ]
-        return tuple(dict.fromkeys(found))
-
-    def _read_declarations(self) -> list[tuple[QualifiedPath, DependencyKind]]:
-        """Every declaration this Kernel reads, by whichever route."""
-
-        groups: list[tuple[DependencyRef, ...]] = []
-        for decision in self.spec.decisions:
-            groups.append(decision.domain.dependencies)
-            if decision.applies_if is not None:
-                groups.append(decision.applies_if.dependencies)
-        for item in self.spec.properties:
-            groups.append(item.evaluator.dependencies)
-            if item.applies_if is not None:
-                groups.append(item.applies_if.dependencies)
-        for constraint in self.spec.constraints:
-            groups.append(constraint.evaluator.dependencies)
-            if constraint.applies_if is not None:
-                groups.append(constraint.applies_if.dependencies)
-        read = [(item.path, item.kind) for group in groups for item in group]
-        read.extend((item.path, item.kind) for _, item in self.references)
-        return read
-
-    @property
-    def parameter_names(self) -> tuple[str, ...]:
-        return tuple(item.name for item in self.parameters)
-
-    def parameter(self, name: str) -> KernelParameter | None:
-        return next((item for item in self.parameters if item.name == name), None)
-
-
-def check_declared_references(
-    specification: DesignSpaceSpec,
-    declarations: Sequence[HardwareKernelDeclaration],
-) -> None:
-    """Refuse any Kernel reference the assembled design space does not honour.
-
-    ``Engine.validate()`` cannot catch this on its own: an imported path a
-    Kernel merely *reads* is not part of the Kernel's own specification, so an
-    assembly that forgot to include the declaring scope validates cleanly and
-    then fails at binding time with an engine request error.  Asking here turns
-    that into an authoring error, at the moment the mistake is made.
-
-    A reference is three claims, not one -- a path, a dependency kind, and value
-    semantics -- so all three are checked.  Comparing paths alone accepts a
-    ``DECISION`` handle onto a derived property, which then reads as a decision
-    nobody assigned, and a ``Ref[str]`` onto an integer property, which delivers
-    a value under a type contract it does not meet.  Both are silent.
-    """
-
-    declared: dict[DependencyKind, dict[QualifiedPath, ValueSemantics[object]]] = {
-        DependencyKind.PROBLEM: {
-            item.path: item.value_semantics for item in specification.problem_schema.fields
-        },
-        DependencyKind.DECISION: {
-            item.path: item.value_semantics for item in specification.decisions
-        },
-        DependencyKind.PROPERTY: {
-            item.path: item.value_semantics for item in specification.properties
-        },
-    }
-    issues: list[SpecAuthoringIssue] = []
-    for declaration in declarations:
-        for label, reference in declaration.references:
-            where = f"{declaration.id}: {label}"
-            matching = declared[reference.kind]
-            if reference.path in matching:
-                semantics = matching[reference.path]
-                if not reference.semantics.is_compatible_with(semantics):
-                    issues.append(
-                        SpecAuthoringIssue(
-                            "hardware-reference-wrong-type",
-                            str(reference.path),
-                            f"{where} reads it as {reference.semantics.name}, but it is "
-                            f"declared {semantics.name}",
-                        )
-                    )
-                continue
-            # The path may exist as something else.  Saying which is the whole
-            # value of the check: naming the wrong kind is the failure that
-            # otherwise surfaces as an unrelated symptom much later.
-            elsewhere = tuple(
-                kind.value for kind, paths in declared.items() if reference.path in paths
-            )
-            issues.append(
-                SpecAuthoringIssue(
-                    "hardware-reference-wrong-kind"
-                    if elsewhere
-                    else "hardware-reference-not-assembled",
-                    str(reference.path),
-                    f"{where} reads it as a {reference.kind.value}, but the design space "
-                    f"declares it as {', '.join(elsewhere)}"
-                    if elsewhere
-                    else f"{where} names a path the design space does not declare",
-                )
-            )
-    if issues:
-        raise SpecAuthoringError(tuple(issues))
-
-
 # -- the Kernel --------------------------------------------------------------
 
 
@@ -758,7 +516,7 @@ class HardwareKernel:
     version: str = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[Any]) -> None:
+    def define_design(cls, design: HardwareDesign[Any]) -> object:
         """Declare this Kernel's coverage, choices, parameters, and sources.
 
         The scope carries the typed inputs the covered semantics wired in, so a

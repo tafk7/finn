@@ -18,6 +18,7 @@ family.  See the vocabulary note section 5.5.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, finite, reject
@@ -72,6 +73,13 @@ _DSP_WIDTHS = {
 #: is the ``TERNARY``-lowered-as-``INT2`` defect, and naming the families
 #: explicitly is what closes it.
 _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
+
+
+@dataclass(frozen=True)
+class DotpAxiHandles:
+    """Typed handles exported by the Kernel authoring declaration."""
+
+    compute_pumping: Ref[bool]
 
 
 def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
@@ -329,7 +337,7 @@ class DotpAxiKernel(HardwareKernel):
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[DotProductHardwareInputs]) -> None:
+    def define_design(cls, design: HardwareDesign[DotProductHardwareInputs]) -> DotpAxiHandles:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -471,6 +479,7 @@ class DotpAxiKernel(HardwareKernel):
             0,
             why="synthesis uses the inferred implementation; behavioural is a debug aid",
         )
+        return DotpAxiHandles(pumping)
 
     @classmethod
     def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
@@ -487,6 +496,7 @@ class DotpAxiKernel(HardwareKernel):
 
 __all__ = [
     "DOTP_AXI_MODULE",
+    "DotpAxiHandles",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
     "DotpAxiKernel",

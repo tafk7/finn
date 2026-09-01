@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
-from finn.dataflow.authoring.design import (
+from finn.dataflow.authoring.input_supply import (
     InputSupplyAlternative,
     InputSupplyContext,
     InputSupplyDeclaration,

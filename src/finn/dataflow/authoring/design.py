@@ -16,14 +16,13 @@ therefore remain separate coordinates in one flat ``DesignSpaceSpec``.
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
-from types import MappingProxyType
+from dataclasses import dataclass, field, replace
 from typing import Any, Generic, TypeVar, cast
 
 from finn.dataflow.authoring.scope import (
     AuthoringError,
+    ConstraintRef,
     Dependencies,
     DomainFactory,
     Ref,
@@ -32,6 +31,11 @@ from finn.dataflow.authoring.scope import (
     finite,
     predicate,
     unresolved,
+)
+from finn.dataflow.authoring.realization import (
+    DESIGN_REALIZATION_PATH,
+    DesignRealization,
+    validate_realization,
 )
 from finn.dataflow.design import (
     ABSENT,
@@ -85,8 +89,6 @@ from finn.dataflow.spec_algebra import (
 )
 
 In = TypeVar("In")
-
-DESIGN_REALIZATION_PATH = QualifiedPath("hardware.design_realization")
 
 _COMPUTATION_SEMANTICS = as_object_semantics(
     ValueSemantics.immutable_nominal(ComputationContract, name="ComputationContract")
@@ -192,25 +194,9 @@ class KernelPlacement:
                 return candidate
         raise KeyError(f"{kernel_id!r} is not a candidate for placement {self.name!r}")
 
-
-@dataclass(frozen=True)
-class DesignRealization:
-    """One resolved Network and the bindings that cover it exactly."""
-
-    design_id: str
-    network: DataflowNetwork
-    kernels: Mapping[str, HardwareKernel]
-    unabsorbed_edges: tuple[str, ...]
-    boundaries: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "kernels", MappingProxyType(dict(self.kernels)))
-
-    def kernel(self, placement: str) -> HardwareKernel:
-        try:
-            return self.kernels[placement]
-        except KeyError:
-            raise KeyError(f"no configured Kernel for placement {placement!r}") from None
+    @property
+    def kernel_ids(self) -> tuple[str, ...]:
+        return tuple(candidate.id for candidate in self.candidates)
 
 
 class DataflowDesign:
@@ -623,6 +609,7 @@ class InputSupplyDeclaration:
     spec: DesignSpaceSpec
     inputs: object
     external_id: str = "external"
+    decision_handles: tuple[Ref[object], ...] = field(default=(), repr=False, compare=False)
 
     @property
     def modes(self) -> tuple[str, ...]:
@@ -707,6 +694,7 @@ def declare_input_supply(
         scope.spec(),
         configured_inputs,
         external_id,
+        scope.decision_handles,
     )
 
 
@@ -868,6 +856,8 @@ class DataflowDesignDeclaration:
     input_mappings: tuple[DesignInput, ...]
     hardware: tuple[HardwareKernelDeclaration, ...]
     owner: type[DataflowDesign]
+    decision_handles: tuple[Ref[object], ...] = field(default=(), repr=False, compare=False)
+    constraint_handles: tuple[ConstraintRef, ...] = field(default=(), repr=False, compare=False)
 
     def placement(self, name: str) -> KernelPlacement:
         for placement in self.placements:
@@ -1027,88 +1017,12 @@ class DataflowDesignDeclaration:
                     )
                 )
             placed[name] = kernel
-        coverage = _validate_realization(self.id, network, placed)
+        coverage = validate_realization(self.id, network, placed)
         if isinstance(coverage, Unresolved):
             findings.extend(coverage.findings)
         if findings:
             return Unresolved(tuple(findings))
         return coverage
-
-
-def _validate_realization(
-    design_id: str,
-    network: DataflowNetwork,
-    placed: Mapping[str, HardwareKernel],
-) -> Answer[DesignRealization]:
-    findings: list[Finding] = []
-    node_counts = Counter(node for kernel in placed.values() for node in kernel.node_ids)
-    edge_counts = Counter(edge for kernel in placed.values() for edge in kernel.edge_ids)
-    network_nodes = {item.id for item in network.nodes}
-    network_edges = {item.id: item for item in network.edges}
-
-    for node in sorted(network_nodes):
-        count = node_counts[node]
-        if count != 1:
-            findings.append(
-                _finding(
-                    "design-node-coverage-not-exact",
-                    f"Network node {node!r} is covered {count} times instead of once",
-                    node=node,
-                    count=count,
-                )
-            )
-    for node in sorted(set(node_counts) - network_nodes):
-        findings.append(
-            _finding(
-                "design-foreign-node-coverage",
-                f"configured Kernels cover foreign node {node!r}",
-                node=node,
-            )
-        )
-    for edge_id, count in sorted(edge_counts.items()):
-        edge = network_edges.get(edge_id)
-        if edge is None:
-            findings.append(
-                _finding(
-                    "design-foreign-edge-absorption",
-                    f"configured Kernels absorb foreign edge {edge_id!r}",
-                    edge=edge_id,
-                )
-            )
-            continue
-        if count != 1:
-            findings.append(
-                _finding(
-                    "design-edge-absorption-not-unique",
-                    f"Network edge {edge_id!r} is absorbed {count} times",
-                    edge=edge_id,
-                    count=count,
-                )
-            )
-        absorber = next(kernel for kernel in placed.values() if edge_id in kernel.edge_ids)
-        required = {edge.source.node_id, *(sink.endpoint.node_id for sink in edge.sinks)}
-        covered = set(absorber.node_ids)
-        if not required <= covered:
-            findings.append(
-                _finding(
-                    "design-absorbed-edge-incomplete-fanout",
-                    f"Kernel {absorber.kernel_id!r} absorbs edge {edge_id!r} without "
-                    "covering its source and every sink",
-                    edge=edge_id,
-                    missing=tuple(sorted(required - covered)),
-                )
-            )
-    if findings:
-        return Unresolved(tuple(findings))
-    return Decided(
-        DesignRealization(
-            design_id,
-            network,
-            placed,
-            tuple(sorted(set(network_edges) - set(edge_counts))),
-            tuple(item.id for item in network.boundaries),
-        )
-    )
 
 
 def declare_dataflow_design(
@@ -1137,6 +1051,15 @@ def declare_dataflow_design(
         scope.input_mappings,
         scope.hardware_declarations,
         design,
+        scope.decision_handles,
+        (
+            *scope.constraint_handles,
+            *(
+                constraint
+                for declaration in scope.hardware_declarations
+                for constraint in declaration.constraint_handles
+            ),
+        ),
     )
     return declaration, scope
 
@@ -1148,6 +1071,8 @@ class DataflowDesignEntry:
     design: type[DataflowDesign]
     inputs: object
     specs: tuple[DesignSpaceSpec, ...] = ()
+    decision_handles: tuple[Ref[object], ...] = ()
+    constraint_handles: tuple[ConstraintRef, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1159,10 +1084,52 @@ class DataflowDesignInventory:
     input_supplies: tuple[InputSupplyDeclaration, ...]
     design_path: QualifiedPath | None
     specification: DesignSpaceSpec
+    design_selection: Ref[str] | None = field(default=None, repr=False, compare=False)
 
     @property
     def design_ids(self) -> tuple[str, ...]:
         return tuple(item.id for item in self.declarations)
+
+    @property
+    def constraint_handles(self) -> tuple[ConstraintRef, ...]:
+        return tuple(
+            dict.fromkeys(
+                constraint
+                for declaration in self.declarations
+                for constraint in declaration.constraint_handles
+            )
+        )
+
+    @property
+    def structural_decisions(self) -> tuple[Ref[object], ...]:
+        return (
+            *((self.design_selection,) if self.design_selection is not None else ()),
+            *(
+                handle
+                for declaration in self.declarations
+                for handle in declaration.decision_handles
+            ),
+            *(supply.choice for supply in self.input_supplies),
+        )
+
+    @property
+    def artifact_decisions(self) -> tuple[Ref[object], ...]:
+        return (
+            *self.structural_decisions,
+            *(
+                handle
+                for declaration in self.declarations
+                for placement in declaration.placements
+                for candidate in placement.candidates
+                for handle in candidate.decision_handles
+            ),
+            *(
+                handle
+                for supply in self.input_supplies
+                for handle in supply.decision_handles
+                if handle.path != supply.choice.path
+            ),
+        )
 
     def declaration(self, design_id: str) -> DataflowDesignDeclaration:
         for declaration in self.declarations:
@@ -1220,6 +1187,11 @@ def declare_dataflow_design_inventory(
         replace(
             declaration,
             spec=assemble_specs((*entry.specs, declaration.spec)),
+            decision_handles=(*entry.decision_handles, *declaration.decision_handles),
+            constraint_handles=(
+                *entry.constraint_handles,
+                *declaration.constraint_handles,
+            ),
         )
         for entry in declared_entries
         for declaration in (
@@ -1232,6 +1204,7 @@ def declare_dataflow_design_inventory(
         )
     )
     design_path: QualifiedPath | None = None
+    design_selection: Ref[str] | None = None
     own_spec = DesignSpaceSpec()
     design_specs: tuple[DesignSpaceSpec, ...]
     if len(declarations) == 1:
@@ -1240,6 +1213,7 @@ def declare_dataflow_design_inventory(
         selector = Scope(namespace)
         choice = selector.decision("design", str, domain=finite(ids))
         design_path = choice.path
+        design_selection = choice
         own_spec = selector.spec()
         design_specs = tuple(
             gate_spec(
@@ -1267,6 +1241,7 @@ def declare_dataflow_design_inventory(
         supplies,
         design_path,
         specification,
+        design_selection,
     )
 
 

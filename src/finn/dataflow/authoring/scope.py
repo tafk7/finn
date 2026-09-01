@@ -540,6 +540,20 @@ class Scope:
     def constraints_in(self, group: str) -> tuple[ConstraintRef, ...]:
         return tuple(ConstraintRef(path) for path in self._sets.get(group, ()))
 
+    @property
+    def decision_handles(self) -> tuple[Ref[object], ...]:
+        """Declared decisions in authoring order, without inspecting a spec."""
+
+        return tuple(
+            handle for handle in self._handles.values() if handle.kind is DependencyKind.DECISION
+        )
+
+    @property
+    def constraint_handles(self) -> tuple[ConstraintRef, ...]:
+        """Declared constraints in authoring order, without inspecting a spec."""
+
+        return tuple(ConstraintRef(item.path) for item in self._constraints)
+
     def spec(self) -> DesignSpaceSpec:
         """Return the ordinary engine specification this scope declared."""
 

@@ -265,6 +265,11 @@ def _semantics() -> tuple[OpDesign, HardwareInputs, QualifiedPath]:
 # -- the Kernels -------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class MultiComponentHandles:
+    pipelined: Ref[bool]
+
+
 class SingleComponentKernel(HardwareKernel):
     """Case 1: one covered Region, one instantiated module."""
 
@@ -305,7 +310,7 @@ class MultiComponentKernel(HardwareKernel):
     version = "3"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> MultiComponentHandles:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -329,6 +334,7 @@ class MultiComponentKernel(HardwareKernel):
             dependencies={"family": facts.target_family.allow_absent()},
             evaluate=lambda family: family == "wide",
         )
+        return MultiComponentHandles(pipelined)
 
     @classmethod
     def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
@@ -594,6 +600,17 @@ def test_one_region_one_kernel_one_component() -> None:
     assert binding.edge_ids == ()
     assert len(binding.components()) == 1
     assert binding.components()[0].module == "example.single"
+
+
+def test_kernel_owned_choice_is_retrieved_through_a_typed_handle() -> None:
+    placed = _place(hardware_kernel="multi")
+    declaration = placed.selection.kernel("multi")
+    handles = declaration.typed_handles(MultiComponentHandles)
+
+    assert handles.pipelined.path == QualifiedPath("example.multi.pipelined")
+    assert handles.pipelined in declaration.decision_handles
+    with pytest.raises(TypeError, match="declares MultiComponentHandles"):
+        declaration.typed_handles(HardwareInputs)
 
 
 def test_a_bound_kernel_is_an_instance_of_the_class_that_declared_it() -> None:

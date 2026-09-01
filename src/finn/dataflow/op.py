@@ -36,6 +36,7 @@ from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttri
 from finn.dataflow.resolution import NetworkRef, RegionRef, ResolvedDataflowOp
 
 if TYPE_CHECKING:
+    from finn.dataflow.authoring.inventory import DataflowOpAuthoring
     from finn.dataflow.kernels import KernelSelection
     from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
@@ -161,19 +162,35 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         """Return the version covering paths, meanings, and persistence codecs."""
 
     @classmethod
-    @abstractmethod
+    def dataflow_authoring(cls) -> DataflowOpAuthoring | None:
+        """Return the inventory-backed declaration assembly, when adopted."""
+
+        return None
+
+    @classmethod
+    def _required_authoring(cls) -> DataflowOpAuthoring:
+        authored = cls.dataflow_authoring()
+        if authored is None:
+            raise NotImplementedError(f"{cls.__name__} does not declare dataflow authoring")
+        return authored
+
+    @classmethod
     def build_design_space_spec(cls) -> DesignSpaceSpec:
         """Return the node-independent static superspace for this operation."""
 
+        return cls._required_authoring().specification
+
     @classmethod
-    @abstractmethod
     def result_path(cls) -> QualifiedPath:
         """Return the selected ``RegionRef | NetworkRef`` property path."""
 
+        return cls._required_authoring().result.path
+
     @classmethod
-    @abstractmethod
     def source_association_path(cls) -> QualifiedPath:
         """Return the source-association property path."""
+
+        return cls._required_authoring().source_association.path
 
     @classmethod
     @abstractmethod
@@ -198,24 +215,30 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     def selection_constraint_set(cls) -> str | None:
         """Return the constraint set a complete design point must satisfy."""
 
-        return None
+        authored = cls.dataflow_authoring()
+        return None if authored is None else authored.selection_constraint_set
 
     @classmethod
     def structural_readiness_profile(cls) -> str | None:
         """Return the profile answering whether the semantic result is ready."""
 
-        return None
+        authored = cls.dataflow_authoring()
+        return None if authored is None else authored.structural_readiness_profile
 
     @classmethod
     def artifact_readiness_profile(cls) -> str | None:
         """Return the profile answering whether artifacts can be built."""
 
-        return None
+        authored = cls.dataflow_authoring()
+        return None if authored is None else authored.artifact_readiness_profile
 
     @classmethod
     def feasibility_constraint_sets(cls) -> tuple[str, ...]:
         """Return the per-pool feasibility sets, reported separately."""
 
+        authored = cls.dataflow_authoring()
+        if authored is not None:
+            return authored.feasibility_constraint_sets
         return tuple(selection.feasibility_constraint_set for selection in cls.kernel_selections())
 
     @classmethod

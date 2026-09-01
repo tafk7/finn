@@ -15,7 +15,15 @@ from typing import cast
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 import finn.dataflow.authoring.design as design_authoring
-from finn.dataflow.authoring import OpDesign, Ref, divisors_of, finite
+from finn.dataflow.authoring import (
+    OpDesign,
+    Ref,
+    Scope,
+    declare_dataflow_op_authoring,
+    divisors_of,
+    finite,
+    selected_design_metadata,
+)
 from finn.dataflow.authoring.design import (
     DataflowDesign,
     DataflowDesignDeclaration,
@@ -32,6 +40,7 @@ from finn.dataflow.authoring.design import (
     declare_input_supply,
 )
 from finn.dataflow.design import (
+    ABSENT,
     Absent,
     Decided,
     DesignPoint,
@@ -259,6 +268,7 @@ class SupplierKernel(HardwareKernel):
             computation=node.computation,
             implements=SUPPLY,
         )
+        design.coverage_constraint("available", dependencies={}, evaluate=lambda: True)
 
     @classmethod
     def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
@@ -945,6 +955,137 @@ def test_one_operation_supply_declaration_serves_two_designs() -> None:
     assert all(
         tuple(mapping.source_operand for mapping in declaration.input_mappings) == ("parameter",)
         for declaration in inventory.declarations
+    )
+
+
+def test_inventory_owns_selected_design_decision_and_kernel_metadata() -> None:
+    inventory, engine, point, _inputs = _inventory(SupplyDesignA, SupplyDesignB, supply=True)
+    assert inventory.design_selection is not None
+    supply = inventory.input_supplies[0]
+    point = _commit(
+        engine,
+        point,
+        {
+            inventory.design_selection.path: SupplyDesignA.id,
+            supply.choice.path: "buffer",
+        },
+    )
+    selections: dict[tuple[str, str], object] = {}
+    for declaration in inventory.declarations:
+        for placement in declaration.placements:
+            answer = engine.query_property(point, placement.selected_kernel.path)
+            selections[(declaration.id, placement.name)] = (
+                answer.value if isinstance(answer, Decided) else ABSENT
+            )
+
+    metadata = selected_design_metadata(
+        inventory,
+        SupplyDesignA.id,
+        supply_modes={"parameter": "buffer"},
+        placement_selections=selections,
+    )
+
+    assert metadata.design_id == SupplyDesignA.id
+    assert metadata.decision_paths == (
+        inventory.design_selection.path,
+        supply.choice.path,
+    )
+    assert metadata.placements == (
+        ("compute", DirectKernel.id),
+        ("input.parameter.buffer.placement", SupplierKernel.id),
+    )
+    assert metadata.kernel_ids == (DirectKernel.id, SupplierKernel.id)
+    assert metadata.kernel_id("compute") == DirectKernel.id
+
+    external_inventory, external_engine, external_point, _inputs = _inventory(
+        SupplyDesignA, SupplyDesignB, supply=True
+    )
+    assert external_inventory.design_selection is not None
+    external_supply = external_inventory.input_supplies[0]
+    external_point = _commit(
+        external_engine,
+        external_point,
+        {
+            external_inventory.design_selection.path: SupplyDesignA.id,
+            external_supply.choice.path: external_supply.external_id,
+        },
+    )
+    external_selections: dict[tuple[str, str], object] = {}
+    for declaration in external_inventory.declarations:
+        for placement in declaration.placements:
+            answer = external_engine.query_property(external_point, placement.selected_kernel.path)
+            external_selections[(declaration.id, placement.name)] = (
+                answer.value if isinstance(answer, Decided) else ABSENT
+            )
+    external = selected_design_metadata(
+        external_inventory,
+        SupplyDesignA.id,
+        supply_modes={"parameter": external_supply.external_id},
+        placement_selections=external_selections,
+    )
+    assert external.kernel_ids == (DirectKernel.id,)
+
+
+def test_inventory_aggregates_candidate_constraints_without_spec_scanning() -> None:
+    plain, _engine, _point, _inputs = _inventory(SupplyDesignA)
+    supplied, _engine, _point, _inputs = _inventory(SupplyDesignA, SupplyDesignB, supply=True)
+
+    assert plain.constraint_handles == ()
+    assert len(supplied.constraint_handles) == 2
+    assert all(str(item.path).endswith(".available") for item in supplied.constraint_handles)
+
+
+def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> None:
+    inventory, _engine, _point, _inputs = _inventory(SupplyDesignA, SupplyDesignB, supply=True)
+    operation = Scope("synthetic.op_result")
+    selected_network = operation.derived(
+        "network",
+        DataflowNetwork,
+        dependencies={"network": inventory.declaration(SupplyDesignA.id).network},
+        evaluate=lambda network: network,
+    )
+    source_association = operation.derived(
+        "source_association",
+        str,
+        dependencies={},
+        evaluate=lambda: "synthetic",
+    )
+    structurally_valid = operation.constraint(
+        "structurally_valid",
+        dependencies={"network": selected_network},
+        evaluate=lambda network: isinstance(network, DataflowNetwork),
+    )
+
+    authored = declare_dataflow_op_authoring(
+        inventory,
+        operation,
+        result=cast("Ref[object]", selected_network),
+        source_association=cast("Ref[object]", source_association),
+        structural_properties=(selected_network, source_association),
+        structural_constraints=(structurally_valid,),
+        structural_constraint_set="synthetic_structural",
+        feasibility_constraint_set="synthetic_feasibility",
+        structural_readiness_profile="synthetic_structural",
+        artifact_readiness_profile="synthetic_artifacts",
+    )
+
+    assert authored.result is selected_network
+    assert authored.source_association is source_association
+    constraint_set = next(
+        item
+        for item in authored.specification.constraint_sets
+        if item.name == "synthetic_feasibility"
+    )
+    assert constraint_set.constraints == (
+        *(item.path for item in inventory.constraint_handles),
+        structurally_valid.path,
+    )
+    profiles = {item.name: item for item in authored.specification.readiness_profiles}
+    assert profiles["synthetic_structural"].decisions == tuple(
+        item.path for item in inventory.structural_decisions
+    )
+    assert profiles["synthetic_artifacts"].decisions == tuple(
+        item.path for item in inventory.artifact_decisions
     )
 
 

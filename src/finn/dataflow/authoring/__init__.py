@@ -38,9 +38,19 @@ if TYPE_CHECKING:
     from finn.dataflow.authoring.design import (
         DataflowDesign,
         DataflowDesignScope,
+    )
+    from finn.dataflow.authoring.input_supply import (
         InputSupplyAlternative,
         InputSupplyDeclaration,
+    )
+    from finn.dataflow.authoring.inventory import (
+        DataflowOpAuthoring,
+        DataflowDesignEntry,
+        DataflowDesignInventory,
+        DesignSelectionMetadata,
         declare_dataflow_design_inventory,
+        declare_dataflow_op_authoring,
+        selected_design_metadata,
     )
     from finn.dataflow.authoring.kernel_design import (
         FEASIBILITY,
@@ -90,9 +100,26 @@ _LAZY_EXPORTS.update(
         for name in (
             "DataflowDesign",
             "DataflowDesignScope",
-            "InputSupplyAlternative",
-            "InputSupplyDeclaration",
+        )
+    }
+)
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.authoring.input_supply", name)
+        for name in ("InputSupplyAlternative", "InputSupplyDeclaration")
+    }
+)
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.authoring.inventory", name)
+        for name in (
+            "DataflowOpAuthoring",
+            "DataflowDesignEntry",
+            "DataflowDesignInventory",
+            "DesignSelectionMetadata",
             "declare_dataflow_design_inventory",
+            "declare_dataflow_op_authoring",
+            "selected_design_metadata",
         )
     }
 )
@@ -155,8 +182,11 @@ __all__ = [
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
     "DataflowDesign",
+    "DataflowDesignEntry",
+    "DataflowDesignInventory",
     "DataflowDesignScope",
     "DataflowOp",
+    "DataflowOpAuthoring",
     "DataflowOpError",
     "DataflowOpResult",
     "FEASIBILITY",
@@ -171,6 +201,7 @@ __all__ = [
     "KernelSelectionPaths",
     "InputSupplyAlternative",
     "InputSupplyDeclaration",
+    "DesignSelectionMetadata",
     "NO_KERNEL",
     "NetworkRef",
     "NodeAttrCodec",
@@ -196,6 +227,7 @@ __all__ = [
     "declare_kernel",
     "declare_kernel_design",
     "declare_dataflow_design_inventory",
+    "declare_dataflow_op_authoring",
     "divisors_of",
     "domain",
     "enumerate_feasible_points",
@@ -204,5 +236,6 @@ __all__ = [
     "kernel_namespace",
     "reject",
     "selected_kernel",
+    "selected_design_metadata",
     "unresolved",
 ]

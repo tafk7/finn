@@ -43,10 +43,10 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
+from finn.dataflow.hardware._declaration import HardwareKernelDeclaration
 from finn.dataflow.hardware.kernel import (
     BoundRegion,
     HardwareKernel,
-    HardwareKernelDeclaration,
     bind_hardware_kernel,
 )
 from finn.dataflow.spec_algebra import (

@@ -37,12 +37,12 @@ from finn.dataflow.authoring.scope import (
     T,
 )
 from finn.dataflow.design import Answer, DesignSpaceSpec, EvaluatorSpec, ValueSemantics
+from finn.dataflow.hardware._declaration import HardwareKernelDeclaration
 from finn.dataflow.hardware.kernel import (
     ComputationContract,
     CoveragePattern,
     EdgeCoverage,
     HardwareKernel,
-    HardwareKernelDeclaration,
     KernelParameter,
     RegionCoverage,
     SourceFile,
@@ -257,7 +257,7 @@ def declare_hardware_kernel(
     if not kernel.id:
         raise AuthoringError(f"{kernel.__name__} must set a Kernel id")
     design: HardwareDesign[object] = HardwareDesign(namespace, inputs)
-    kernel.define_design(design)
+    handles = kernel.define_design(design)
     declared = design.spec()
     spec = gate_spec(declared, applies_if) if applies_if is not None else declared
     return HardwareKernelDeclaration(
@@ -270,6 +270,9 @@ def declare_hardware_kernel(
         tuple(item.path for item in design.constraints_in(COVERAGE)),
         design.declared_sources,
         kernel,
+        handles,
+        design.decision_handles,
+        design.constraint_handles,
     ), design
 
 
