@@ -64,18 +64,18 @@ class Parameter(Generic[T]):
     """One scalar physical parameter sourced from a declaration or constant."""
 
     source: ValueSource[T] | None
-    constant: object
+    fixed_value: object
     why: str
     stable_name: str | None
 
     def __init__(self, source: ValueSource[T], *, name: str | None = None) -> None:
         object.__setattr__(self, "source", source)
-        object.__setattr__(self, "constant", _MISSING)
+        object.__setattr__(self, "fixed_value", _MISSING)
         object.__setattr__(self, "why", "")
         object.__setattr__(self, "stable_name", name)
 
     @classmethod
-    def constant_value(
+    def constant(
         cls,
         value: T,
         *,
@@ -86,7 +86,7 @@ class Parameter(Generic[T]):
             raise AuthoringError("a constant physical parameter must say why it is constant")
         built = object.__new__(cls)
         object.__setattr__(built, "source", None)
-        object.__setattr__(built, "constant", value)
+        object.__setattr__(built, "fixed_value", value)
         object.__setattr__(built, "why", why)
         object.__setattr__(built, "stable_name", name)
         return built
@@ -284,7 +284,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
                     physical_name,
                     template,
                     None,
-                    template.constant,
+                    template.fixed_value,
                     template.why,
                 )
             )
