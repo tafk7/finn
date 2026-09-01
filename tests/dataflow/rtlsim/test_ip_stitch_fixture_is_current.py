@@ -22,10 +22,8 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as equiv
 from dataflow.rtlsim import composed_mvau_ip_stitch as fixture
-from finn.dataflow.ops.mvau.artifacts._implementation import (
-    package_decomposed_artifact,
-    prepare_ip_package,
-)
+from finn.dataflow.ops.mvau.artifacts.ipxact import prepare_ip_package
+from finn.dataflow.ops.mvau.artifacts.package import package_decomposed_artifact
 
 
 @pytest.fixture(name="packaged")

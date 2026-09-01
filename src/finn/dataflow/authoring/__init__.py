@@ -24,13 +24,6 @@ from finn.dataflow.authoring.scope import (
     reject,
     unresolved,
 )
-from finn.dataflow.selection import FiniteSelectionResult, enumerate_feasible_points
-from finn.dataflow.spec_algebra import (
-    SpecAuthoringError,
-    SpecAuthoringIssue,
-    assemble_specs,
-    gate_spec,
-)
 
 if TYPE_CHECKING:
     from finn.dataflow.authoring.design import (
@@ -42,13 +35,10 @@ if TYPE_CHECKING:
         InputSupplyDeclaration,
     )
     from finn.dataflow.authoring.inventory import (
-        DataflowOpAuthoring,
         DataflowDesignEntry,
         DataflowDesignInventory,
-        DesignSelectionMetadata,
         declare_dataflow_design_inventory,
         declare_dataflow_op_authoring,
-        selected_design_metadata,
     )
     from finn.dataflow.op import (
         AssignmentMapping,
@@ -79,13 +69,10 @@ _LAZY_EXPORTS.update(
     {
         name: ("finn.dataflow.authoring.inventory", name)
         for name in (
-            "DataflowOpAuthoring",
             "DataflowDesignEntry",
             "DataflowDesignInventory",
-            "DesignSelectionMetadata",
             "declare_dataflow_design_inventory",
             "declare_dataflow_op_authoring",
-            "selected_design_metadata",
         )
     }
 )
@@ -110,7 +97,7 @@ _LAZY_EXPORTS.update(
 
 
 def __getattr__(name: str) -> object:
-    """Load transitional authoring exports only when an old caller requests one."""
+    """Load dependency-heavy authoring entry points on first use."""
 
     target = _LAZY_EXPORTS.get(name)
     if target is None:
@@ -133,13 +120,10 @@ __all__ = [
     "DataflowDesignInventory",
     "DataflowDesignScope",
     "DataflowOp",
-    "DataflowOpAuthoring",
     "DataflowOpError",
-    "FiniteSelectionResult",
     "GRAPH_OWNED",
     "InputSupplyAlternative",
     "InputSupplyDeclaration",
-    "DesignSelectionMetadata",
     "NodeAttrCodec",
     "NodeAttributeType",
     "OpDesign",
@@ -147,18 +131,12 @@ __all__ = [
     "Provenance",
     "Ref",
     "Scope",
-    "SpecAuthoringError",
-    "SpecAuthoringIssue",
-    "assemble_specs",
     "dataflow_problem_fingerprint",
     "declare_dataflow_design_inventory",
     "declare_dataflow_op_authoring",
     "divisors_of",
     "domain",
-    "enumerate_feasible_points",
     "finite",
-    "gate_spec",
     "reject",
-    "selected_design_metadata",
     "unresolved",
 ]

@@ -24,8 +24,8 @@ from finn.dataflow.design import Decided, Engine, QualifiedPath
 from finn.dataflow.ops.mvau.problem import MVAUComputationProfile
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.artifacts._implementation import build_decomposed_artifact_requirements
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
 from finn.dataflow.ops.mvau.input_supply import (
     EXTERNAL_SUPPLY,
     FINN_RTL_MEMSTREAM_SUPPLY,
@@ -38,11 +38,8 @@ from finn.dataflow.ops.mvau.source import (
     start_mvau_projection,
 )
 from finn.dataflow.op import DataflowBuildConfigView, DataflowOpError
-from finn.dataflow.ops.mvau import (
-    MVAU_DATAFLOW_OP_SPEC,
-    MVAUDataflowOpPaths,
-    NetworkRef,
-)
+from finn.dataflow.design import NetworkRef
+from finn.dataflow.ops.mvau.inventory import MVAU_DATAFLOW_OP_SPEC, MVAUDataflowOpPaths
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.ops.mvau.op import (
     MVAU_DATAFLOW_OP_FAMILY_VERSION,

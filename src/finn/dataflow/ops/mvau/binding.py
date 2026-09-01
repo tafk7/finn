@@ -16,10 +16,10 @@ of this installation rather than of the hardware.
 
 from __future__ import annotations
 
-from finn.dataflow.authoring.design import DesignRealization
+from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 from finn.dataflow.ops.mvau.artifacts.roots import (
     FINNLIB_DEFAULT_SUBDIRECTORY,

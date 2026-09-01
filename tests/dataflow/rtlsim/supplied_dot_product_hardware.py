@@ -29,12 +29,14 @@ from dataflow.rtlsim.composed_mvau_numeric import DspBlock, _weights
 from dataflow.rtlsim.supplied_dot_product_numeric import CASE, requirements_for
 from finn.dataflow.artifacts import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
 from finn.dataflow.ops.mvau.binding import finnlib_root
-from finn.dataflow.ops.mvau.artifacts._implementation import (
-    complete_decomposed_synthesis,
+from finn.dataflow.ops.mvau.artifacts.ipxact import (
     complete_ip_package,
-    package_decomposed_artifact,
-    prepare_decomposed_synthesis,
     prepare_ip_package,
+)
+from finn.dataflow.ops.mvau.artifacts.package import package_decomposed_artifact
+from finn.dataflow.ops.mvau.artifacts.synthesis import (
+    complete_decomposed_synthesis,
+    prepare_decomposed_synthesis,
 )
 from finn.util.basic import get_vivado_version
 

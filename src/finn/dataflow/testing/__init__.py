@@ -5,9 +5,13 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
+import subprocess
+import sys
 
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-found]
@@ -42,6 +46,77 @@ class DataflowOpConformanceResult:
 
     original: ResolvedDataflowOp
     restored: ResolvedDataflowOp
+
+
+def assert_fresh_import_avoids(module: str, forbidden_modules: tuple[str, ...]) -> None:
+    """Import ``module`` in a fresh process and reject forbidden transitive imports."""
+
+    script = "\n".join(
+        (
+            "from importlib import import_module",
+            "import sys",
+            f"import_module({module!r})",
+            f"forbidden = {forbidden_modules!r}",
+            "loaded = [name for name in forbidden if name in sys.modules]",
+            "raise SystemExit('loaded forbidden modules: ' + ', '.join(loaded) if loaded else 0)",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def assert_no_raw_declaration_construction(paths: tuple[Path, ...]) -> None:
+    """Keep operation declarations above the raw engine construction boundary."""
+
+    forbidden_calls = {
+        "Constraint",
+        "Decision",
+        "DependencyRef",
+        "DerivedProperty",
+        "EvaluatorSpec",
+        "ProblemField",
+        "Ref",
+        "assemble_specs",
+    }
+    for path in paths:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        imports = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        assert not any(
+            module == "finn.dataflow._engine" or module.startswith("finn.dataflow._engine.")
+            for module in imports
+        ), path
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert not calls & forbidden_calls, path
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr not in {
+                "constraints",
+                "decisions",
+            }:
+                continue
+            assert not (isinstance(node.value, ast.Attribute) and node.value.attr == "spec"), (
+                path,
+                node.attr,
+            )
+
+
+def assert_public_surface(module_name: str, expected: tuple[str, ...]) -> None:
+    """Require one explicit public spelling for every supported concept."""
+
+    module = import_module(module_name)
+    assert tuple(module.__all__) == expected
 
 
 def _expects_dataflow_error(action: Callable[[], object], code: str | None = None) -> None:
@@ -138,5 +213,8 @@ def assert_dataflow_op_conforms(
 __all__ = [
     "DataflowOpConformanceCase",
     "DataflowOpConformanceResult",
+    "assert_fresh_import_avoids",
+    "assert_no_raw_declaration_construction",
     "assert_dataflow_op_conforms",
+    "assert_public_surface",
 ]

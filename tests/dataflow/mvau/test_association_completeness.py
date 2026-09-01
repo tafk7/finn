@@ -36,9 +36,9 @@ import pytest
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
-from finn.dataflow.ops.mvau.artifacts import _implementation as composition
-from finn.dataflow.ops.mvau.artifacts._implementation import elaborate_decomposed
-from finn.dataflow.ops.mvau import NetworkRef
+from finn.dataflow.ops.mvau import elaboration as composition
+from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
+from finn.dataflow.design import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
@@ -208,4 +208,5 @@ def test_the_fused_reading_has_no_elaborator_and_that_is_the_open_half() -> None
     """
 
     assert not hasattr(composition, "elaborate_fused")
-    assert [name for name in composition.__all__ if "elaborate" in name] == ["elaborate_decomposed"]
+    assert hasattr(composition, "elaborate_decomposed")
+    assert [name for name in composition.__all__ if "elaborate" in name] == ["elaborate_mvau"]

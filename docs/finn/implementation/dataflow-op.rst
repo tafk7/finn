@@ -1,200 +1,238 @@
 Adding a DataflowOp
 ===================
 
-``DataflowOp`` is FINN's model-aware source-operation bridge for the new
-dataflow design stack. It is separate from ``HWCustomOp``: a logical operation
-describes the source tensor function and assembles a static design family,
-while Kernel definitions describe complete logical regions and implementation
-providers perform physical elaboration and artifact generation.
+``DataflowOp`` is FINN's model-aware bridge from a source graph operation to a
+closed family of logical dataflow designs. It is separate from
+``HWCustomOp``. A source operation owns graph/build projection and persisted
+design decisions; each ``DataflowDesign`` owns one flat ``DataflowNetwork``;
+physical ``Kernel`` candidates implement named placements in that Network.
 
-Use the public authoring imports:
-
-.. code-block:: python
-
-   from finn.dataflow.authoring import DataflowOp, NodeAttrCodec
-
-A subclass supplies a stable family ID and version, one node-independent
-``DesignSpaceSpec``, the selected-result and source-association paths, and an
-explicit mapping from persistent decision paths to ONNX attributes. The MVAU
-reference implementation is ``finn.dataflow.ops.mvau_op.MvauDataflowOp`` and
-is registered in the ``finn.custom_op.dataflow`` ONNX domain.
-
-A minimal complete subclass has this shape. ``TINY_SPEC`` and ``TinyPaths``
-are ordinary declarations built with ``finn.dataflow.design``; the result
-property must produce a ``RegionRef`` or ``NetworkRef``.
-
-.. code-block:: python
-
-   class TinyDataflowOp(DataflowOp):
-       @classmethod
-       def dataflow_family_id(cls):
-           return "example.tiny"
-
-       @classmethod
-       def dataflow_family_version(cls):
-           return "1"
-
-       @classmethod
-       def build_design_space_spec(cls):
-           return TINY_SPEC
-
-       @classmethod
-       def result_path(cls):
-           return TinyPaths.RESULT
-
-       @classmethod
-       def source_association_path(cls):
-           return TinyPaths.SOURCE_ASSOCIATION
-
-       @classmethod
-       def decision_nodeattrs(cls):
-           return {TinyPaths.LANES: NodeAttrCodec.integer("dataflow_lanes")}
-
-       def project_graph_problem(self):
-           model = self._attached_model()
-           return {TinyPaths.SHAPE: tuple(model.get_tensor_shape(self.onnx_node.input[0]))}
-
-       def project_build_problem(self, config):
-           return {TinyPaths.CLOCK_NS: float(config.synth_clk_period_ns)}
-
-       def make_shape_compatible_op(self, model):
-           return self.make_const_shape_op(model.get_tensor_shape(self.onnx_node.input[0]))
-
-       def infer_node_datatype(self, model):
-           model.set_tensor_datatype(
-               self.onnx_node.output[0],
-               model.get_tensor_datatype(self.onnx_node.input[0]),
-           )
-
-       def execute_node(self, context, graph):
-           context[self.onnx_node.output[0]] = context[self.onnx_node.input[0]].copy()
-
-       def verify_node(self):
-           if len(self.onnx_node.input) != 1 or len(self.onnx_node.output) != 1:
-               raise ValueError("TinyDataflowOp requires one input and one output")
-
-Register it through the custom domain's public export list:
-
-.. code-block:: python
-
-   # finn/custom_op/dataflow/__init__.py
-   from my_package.tiny import TinyDataflowOp
-
-   __all__ = ["TinyDataflowOp"]
-
-The ONNX ``op_type`` must match the class name and the node domain must resolve
-to that Python package.
-
-Model-aware construction
-------------------------
-
-Always obtain a dataflow operation from its owning ``ModelWrapper``:
-
-.. code-block:: python
-
-   op = model.get_customop_wrapper(node)
-   resolved = op.resolve_dataflow(build_config)
-
-``DataflowOp.wants_model`` is true. A wrapper created with bare
-``getCustomOp(node)`` can inspect attributes, but projection, hydration, and
-resolution reject it because tensor shapes, datatypes, initializers, and graph
-relationships belong to the live model.
-
-Static family and live problem
-------------------------------
-
-``build_design_space_spec`` must depend only on class-level declarations. FINN
-validates and caches that space once per subclass. Per-node evaluation is
-separate:
+The final contributor stack is:
 
 .. code-block:: text
 
-   DataflowOp subclass
-       -> static DesignSpaceSpec
+   DataflowOp
+       -> DataflowDesign inventory
+           -> one selected flat DataflowNetwork
+               -> configured Kernel placements
+                   -> physical elaboration and artifacts
 
-   attached node + ModelWrapper + DataflowBuildConfig
-       -> current ProblemInstance
+A one-Region implementation is still represented by a singleton Network.
+Production operations always resolve to ``NetworkRef``; a bare Region is never
+an operation result.
 
-   physically present decision attributes
-       -> sparse assignments
+Public imports
+--------------
 
-   space + problem + assignments
-       -> RegionRef | NetworkRef
+Use the declaration-time authoring façade when defining an operation or
+design:
 
-Implement ``project_graph_problem`` for graph-owned facts and
-``project_build_problem`` for target and invocation facts. Projection is
-read-only and is repeated on demand; do not cache facts from a mutable model
-without an explicit model revision identity.
+.. code-block:: python
+
+   from finn.dataflow.authoring import (
+       DataflowDesign,
+       DataflowDesignScope,
+       DataflowOp,
+       NodeAttrCodec,
+       OpDesign,
+       Ref,
+       finite,
+       reject,
+       unresolved,
+   )
+
+Use the evaluation-time façade when selecting or inspecting a resolved
+operation:
+
+.. code-block:: python
+
+   from finn.dataflow.design import Engine, DesignPoint, NetworkRef, ResolvedDataflowOp
+
+Physical implementations use:
+
+.. code-block:: python
+
+   from finn.dataflow.kernels import Kernel, KernelScope
+
+Do not construct raw engine declarations in an operation package, inspect a
+compiled ``DesignSpaceSpec`` to recover handles, or reconstruct ``Ref`` values
+from paths. ``Scope``, ``DataflowDesignScope``, and the inventory compiler own
+that bookkeeping.
+
+Declaring the operation problem
+-------------------------------
+
+An ``OpDesign`` declares graph-, analysis-, target-, and build-owned facts once
+for the operation family. Projection supplies live values from the attached
+``ModelWrapper`` and build context. The static declaration graph must not read
+an ONNX node or cache facts from a mutable model.
+
+Always obtain an operation through its owning model:
+
+.. code-block:: python
+
+   operation = model.get_customop_wrapper(node)
+   resolved = operation.resolve_dataflow(build_config)
+
+``DataflowOp.wants_model`` is true. A wrapper created with bare
+``getCustomOp(node)`` may inspect attributes, but graph projection, hydration,
+and resolution reject it because tensor shapes, datatypes, initializers, and
+graph relationships belong to the live model.
+
+Declaring a design
+------------------
+
+A design declares exactly one Network and its physical placements. The Network
+is semantic: it contains Regions, edges, and boundaries, not RTL components or
+tool settings.
+
+.. code-block:: python
+
+   class ExampleDesign(DataflowDesign):
+       id = "example"
+       version = "1"
+
+       @classmethod
+       def define(cls, design: DataflowDesignScope[ExampleInputs]) -> None:
+           lanes = design.choice("lanes", int, domain=finite((1, 2, 4)))
+           compute = design.region(
+               "compute",
+               node_id="compute",
+               dependencies={"lanes": lanes},
+               evaluate=construct_example_region,
+               computation=EXAMPLE_COMPUTATION,
+           )
+           design.singleton_network(compute)
+           design.kernels(
+               "compute",
+               covers=(compute,),
+               candidates=(ExampleKernel,),
+               inputs=ExampleKernelInputs(compute.region, compute.computation, lanes),
+           )
+
+The operation's ``DataflowDesignInventory`` owns design selection, active
+placement metadata, constraint/readiness aggregation, and configured Kernel
+identities. Operation code may add genuinely operation-specific properties or
+constraints, but must not scan ``spec.decisions`` or assemble a second metadata
+inventory beside the authoritative one.
+
+Conditional input supply
+------------------------
+
+An operation-level input-supply declaration can apply to every design that maps
+the same source operand. The generic authoring layer handles conditional
+Region, edge, boundary, and placement attachment. An inactive supplier is
+``Absent``; it is not a missing active placement.
+
+The MVAU operation owns the current concrete policy:
+
+.. code-block:: text
+
+   weight supply = external | finn_rtl_memstream
+
+The generic mechanism does not discover suppliers or adapters globally. MVAU's
+``weight``/``delivery``/``weights`` identities, cyclic parameter Region,
+initializer association, and ``SETS=1`` memstream wrapper remain MVAU-local.
+
+Declaring a Kernel
+------------------
+
+A ``Kernel`` is a reusable physical implementation of an already-declared
+computation/interface contract. It owns physical choices, coverage
+constraints, parameters, source manifests, and component elaboration. It does
+not choose logical topology, source policy, or graph occurrence.
+
+.. code-block:: python
+
+   class ExampleKernel(Kernel):
+       id = "example_rtl"
+       version = "1"
+
+       @classmethod
+       def define_design(cls, kernel: KernelScope[ExampleKernelInputs]) -> None:
+           kernel.covers_region(
+               "compute",
+               kernel.inputs.region,
+               kernel.inputs.computation,
+           )
+           kernel.parameter("LANES", kernel.inputs.lanes)
+           kernel.source("finn", "path/to/example.sv")
+
+       @classmethod
+       def elaborate(cls, configured: Kernel):
+           return (...,)
+
+Compiled Kernel declarations and candidate-selection records are private
+implementation values. A contributor supplies Kernel classes to a design
+placement and uses typed handles returned by the Kernel definition for any
+Kernel-owned choices.
+
+Graph admission and physical feasibility
+----------------------------------------
+
+Three questions remain separate:
+
+``semantic recognition``
+   Does the graph describe the source operation?
+
+``graph-stage build admission``
+   For at least one applicable design/supply trial, does every active placement
+   retain a candidate after evaluating all graph-answerable Kernel coverage
+   constraints?
+
+``resolved physical feasibility``
+   With target, build, design, supply, and Kernel choices known, do all selected
+   Kernel coverage constraints pass?
+
+Target/build-dependent constraints are deferred during graph inference rather
+than treated as passed or failed. Both stages use the same Kernel-owned
+predicates; do not copy datatype or width checks into an operation or
+transformation.
 
 Persistent decisions
 --------------------
 
 Use ``NodeAttrCodec.integer``, ``boolean``, ``string``, or ``finite_enum`` for
-each decision that persists at operation scope. Attribute presence means that
-a decision is committed. QONNX's optional attribute default is only a storage
-default and is never treated as a design choice.
+each operation-scope decision that persists. Attribute presence means a
+decision is committed. QONNX optional defaults are storage defaults, not design
+choices.
 
-Use ``commit_dataflow_assignments`` for additive commitments and
-``replace_dataflow_assignments`` for a complete replacement. Both validate the
-entire request through the engine and encode every value before changing the
-node. A rejected request leaves the serialized node unchanged.
-``clear_dataflow_assignments`` removes only dataflow decisions and their
-identity metadata.
+``commit_dataflow_assignments`` adds commitments and
+``replace_dataflow_assignments`` replaces the full persisted selection. Both
+validate and encode the complete request before mutating the node. A rejected
+request leaves its serialized bytes unchanged.
 
-The node records a stable scope ID, family ID, family version, and problem
-fingerprint beside its sparse choices. Hydration rejects a changed family,
-graph fact, target fact, or invocation fact instead of silently interpreting
-old choices against a different problem. Regions, networks, constraints,
-readiness results, elaborations, and artifacts are always recomputed and are
-never stored as node attributes.
+The node stores a stable scope ID, family ID/version, problem fingerprint, and
+the v6 decision attributes. Regions, Networks, configured Kernels,
+elaborations, and artifacts are recomputed. v5/v10 persistence is rejected
+explicitly; v6/v11 is the supported schema pair.
 
-Scope identity exists independently of selection. A lowering pass should put a
-new ``dataflow_scope_id`` on the node when it creates the logical operation, or
-call ``initialize_dataflow_scope_id`` explicitly before evaluation. Clearing or
-replacing choices preserves that ID. An ordinary protobuf copy intentionally
-retains the same identity; a rewrite that creates a semantically distinct clone
-must call ``renew_dataflow_scope_id``, which assigns a fresh ID and clears the
-copied selection. Renaming ``node.name`` does not change the scope identity or
-invalidate a selection.
+MVAU reference operation
+------------------------
 
-MVAU build context
-------------------
-
-The MVAU operation accepts a normal ``DataflowBuildConfig`` when target part
-and clock are sufficient. ``MVAUDataflowBuildContext`` wraps that configuration
-when an invocation also supplies runtime-writable-weight policy, an external
-weight ``BeatSequence``, or an explicit initialized-URAM capability override:
+The canonical operation import is:
 
 .. code-block:: python
 
-   from finn.custom_op.dataflow import MVAUDataflowBuildContext
+   from finn.dataflow.ops.mvau import MVAUDataflowBuildContext, MvauDataflowOp
 
-   context = MVAUDataflowBuildContext(
-       build_config,
-       runtime_writable_weights=True,
-       external_weight_sequence=weight_sequence,
-   )
-   resolved = op.resolve_dataflow(context)
+``MVAUDataflowBuildContext`` wraps a normal FINN build configuration when the
+invocation also supplies runtime-writable-weight policy, an external weight
+``BeatSequence``, or an initialized-URAM capability override.
 
-These values remain problem facts. The explicit decisions stored through the
-MVAU codec inventory are the three Kernel-pool identities -- compute, weight
-supply, and weight adapter -- and the local choices owned by whichever Kernel
-each pool selected: PE, SIMD, the legacy HLS arithmetic resource and weight
-source, batch interleave, compute pumping, supplier organization, RAM style,
-and memory pumping. The parameter topology and the connection shape are not
-stored, because they are read back from the selected Kernels rather than
-chosen beside them.
+MVAU offers two semantic designs: production ``dot_product`` and semantic-only
+``batch_interleaved``. Production hardware uses the reusable DotpAxi,
+ReplayBuffer, and FINN RTL memstream Kernels from ``finn.dataflow.kernels``.
+The old Provider/semantic-Kernel framework is not a compatibility path and is
+not importable. Legacy FINN HWCustomOps remain available only as independent
+comparison oracles.
 
 Testing a contribution
 ----------------------
 
-``finn.dataflow.testing.assert_dataflow_op_conforms`` exercises the common
-operation lifecycle: model attachment, deterministic read-only projection,
-absent-versus-default behavior, rejected-write atomicity, partial and complete
-save/reload hydration, stale-problem rejection, and
-``RegionRef | NetworkRef`` result discipline. A new operation should run this
-harness in addition to operation-specific exact schedule, requirement,
-availability, and ``BeatSequence`` tests.
+``finn.dataflow.testing.assert_dataflow_op_conforms`` exercises model
+attachment, deterministic projection, transactional writes, save/reload
+hydration, stale-problem rejection, and the Network-only result boundary.
 
 .. code-block:: python
 
@@ -203,56 +241,18 @@ availability, and ``BeatSequence`` tests.
        assert_dataflow_op_conforms,
    )
 
-   result = assert_dataflow_op_conforms(
+   assert_dataflow_op_conforms(
        DataflowOpConformanceCase(
            model=model,
-           node_name="tiny0",
-           operation_type=TinyDataflowOp,
+           node_name="example0",
+           operation_type=ExampleDataflowOp,
            config=build_config,
-           complete_assignments={TinyPaths.LANES: 4},
-           rejected_assignments={TinyPaths.LANES: 3},
-           reload_path=tmp_path / "tiny.onnx",
-           stale_config=changed_build_config,
+           complete_assignments=complete,
+           rejected_assignments=rejected,
+           reload_path=tmp_path / "example.onnx",
        )
    )
 
-Declaring the selection contract
---------------------------------
-
-A ``DataflowOp`` family names its own Kernel pools and the constraint set and
-readiness profiles a caller should ask about, so the generic selection
-transform needs no per-operation configuration:
-
-.. code-block:: python
-
-   @classmethod
-   def kernel_selections(cls) -> tuple[KernelSelection, ...]:
-       return (TINY_COMPUTE_SELECTION,)
-
-   @classmethod
-   def selection_constraint_set(cls) -> str | None:
-       return "tiny_op_feasibility"
-
-   @classmethod
-   def structural_readiness_profile(cls) -> str | None:
-       return "tiny_op_structural"
-
-``feasibility_constraint_sets`` defaults to one set per declared pool, so a
-report keeps each pool's answer separate.
-
-Adding a Kernel
----------------
-
-A new Kernel is justified by a meaningfully different microarchitectural
-organization, interface demand, scheduling mechanism, or local decision set --
-not by a parameter value, and not by a different source language or generator.
-A second way to build the same Kernel is a provider, declared on that Kernel.
-
-Source-admission constraints must be answerable from problem data alone;
-``Kernel`` refuses one that reads any of that Kernel's own decisions. Target
-facts therefore belong in ``feasibility_constraints``, not in admission, so
-that inference coverage does not depend on the board.
-
-Standard ONNX lowering, fusion discovery, and implementation providers are
-separate extension points. A ``DataflowOp`` must not import legacy hardware
-operations, vendor tools, elaborators, or artifact builders.
+Operation-specific tests must additionally pin exact Region/Network values,
+source associations, configured Kernel identities and parameters, artifact
+identities/layouts, and numerical/tool behavior for any changed physical path.

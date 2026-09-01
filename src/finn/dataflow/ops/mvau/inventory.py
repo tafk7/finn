@@ -58,6 +58,7 @@ from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM_PROVENANCE,
     MVAU_PROBLEM_SPEC,
     MVAUProblem,
+    MVAUProblemPaths,
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import NetworkValidationReport, validate_network
@@ -71,6 +72,28 @@ MVAU_STRUCTURAL_CONSTRAINT_SET = "mvau_op_structural"
 MVAU_FEASIBILITY_CONSTRAINT_SET = "mvau_op_feasibility"
 MVAU_STRUCTURAL_READINESS = "mvau_op_structural"
 MVAU_ARTIFACT_READINESS = "artifact_inputs"
+
+
+class MVAUDataflowOpPaths:
+    """Stable v6 operation paths and projected problem aliases."""
+
+    SOURCE_DESCRIPTION = MVAUProblemPaths.SOURCE_DESCRIPTION
+    ACCUMULATOR_TYPE_ANALYSIS_OWNER = MVAUProblemPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER
+    WEIGHT_INITIALIZER_FINGERPRINT = MVAUProblemPaths.WEIGHT_INITIALIZER_FINGERPRINT
+    THRESHOLD_INITIALIZER_FINGERPRINT = MVAUProblemPaths.THRESHOLD_INITIALIZER_FINGERPRINT
+    EXTERNAL_WEIGHT_SEQUENCE = MVAUProblemPaths.EXTERNAL_WEIGHT_SEQUENCE
+    TARGET_FPGA_PART = MVAUProblemPaths.TARGET_FPGA_PART
+    TARGET_CLOCK_PERIOD_NS = MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS
+    EFFECTIVE_NARROW_WEIGHTS = MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS
+
+    DESIGN = QualifiedPath("mvau.design")
+    SOURCE_ASSOCIATION = MVAU_SOURCE_ASSOCIATION_PATH
+    NETWORK = MVAU_NETWORK_PATH
+    NETWORK_VALIDATION = MVAU_NETWORK_VALIDATION_PATH
+    RESULT = MVAU_RESULT_PATH
+    NETWORK_STRUCTURALLY_WELL_FORMED = QualifiedPath(
+        "constraint.mvau.op.network_structurally_well_formed"
+    )
 
 
 def _selected_value(
@@ -294,6 +317,13 @@ def declare_mvau_design_inventory(
 
 
 MVAU_DESIGN_INVENTORY = declare_mvau_design_inventory()
+MVAU_DATAFLOW_OP_SPEC = MVAU_DESIGN_INVENTORY.specification
+
+
+def build_mvau_dataflow_op_spec() -> DesignSpaceSpec:
+    """Return the reviewed v6 operation specification."""
+
+    return MVAU_DATAFLOW_OP_SPEC
 
 
 def admissible_mvau_designs(engine: Engine, point: DesignPoint) -> tuple[str, ...]:
@@ -330,6 +360,8 @@ def mvau_build_admission(engine: Engine, point: DesignPoint) -> GraphBuildAdmiss
 __all__ = [
     "MVAU_ARTIFACT_READINESS",
     "MVAU_DESIGN_INVENTORY",
+    "MVAU_DATAFLOW_OP_SPEC",
+    "MVAUDataflowOpPaths",
     "MVAU_FEASIBILITY_CONSTRAINT_SET",
     "MVAU_NETWORK_PATH",
     "MVAU_NETWORK_VALIDATION_PATH",
@@ -338,6 +370,7 @@ __all__ = [
     "MVAU_STRUCTURAL_CONSTRAINT_SET",
     "MVAU_STRUCTURAL_READINESS",
     "MVAUDesignInventoryAssembly",
+    "build_mvau_dataflow_op_spec",
     "admissible_mvau_designs",
     "declare_mvau_design_inventory",
     "mvau_build_admission",

@@ -11,11 +11,8 @@ from enum import Enum
 from itertools import product
 from typing import cast
 
-from finn.dataflow.authoring.design import (
-    DataflowDesignInventory,
-    KernelPlacement,
-    PlacementSelection,
-)
+from finn.dataflow.authoring.design import KernelPlacement, PlacementSelection
+from finn.dataflow.authoring.inventory import DataflowDesignInventory
 from finn.dataflow.authoring.op_design import GRAPH_OWNED, ProblemProvenance
 from finn.dataflow.design import (
     Absent,

@@ -13,7 +13,7 @@ from finn.dataflow.design import Absent, Decided, DesignPoint, Engine, Qualified
 from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import (
+from finn.dataflow.ops.mvau.inventory import (
     MVAU_ARTIFACT_READINESS,
     MVAU_DESIGN_INVENTORY,
     MVAU_FEASIBILITY_CONSTRAINT_SET,

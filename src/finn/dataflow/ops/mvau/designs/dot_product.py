@@ -1,11 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The production-intended replay-plus-dot-product ``DataflowDesign``.
-
-D3 declares and validates this path beside the legacy semantic-Kernel flow. It
-does not switch ``MVAUDataflowOp`` selection or persistence; that remains D7.
-"""
+"""The production replay-plus-dot-product ``DataflowDesign``."""
 
 from __future__ import annotations
 
@@ -13,10 +9,12 @@ from dataclasses import dataclass
 
 from finn.dataflow.authoring.design import (
     DataflowDesign,
+    DataflowDesignScope,
+)
+from finn.dataflow.authoring.inventory import (
     DataflowDesignDeclaration,
     DataflowDesignEntry,
     DataflowDesignInventory,
-    DataflowDesignScope,
     declare_dataflow_design_inventory,
 )
 from finn.dataflow.authoring.scope import Ref

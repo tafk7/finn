@@ -56,12 +56,14 @@ from dataflow.rtlsim.composed_mvau_equiv import (
 )
 from finn.dataflow.artifacts import DEFAULT_BUILDER, BuilderIdentity
 from finn.dataflow.ops.mvau.binding import finnlib_root
-from finn.dataflow.ops.mvau.artifacts._implementation import (
-    PackagedDecomposedArtifact,
+from finn.dataflow.ops.mvau.artifacts.ipxact import (
     complete_ip_package,
     find_ip_package,
-    package_decomposed_artifact,
     prepare_ip_package,
+)
+from finn.dataflow.ops.mvau.artifacts.package import (
+    PackagedDecomposedArtifact,
+    package_decomposed_artifact,
 )
 from finn.util.basic import get_vivado_version
 

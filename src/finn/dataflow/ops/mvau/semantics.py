@@ -9,9 +9,8 @@ contracts, the external weight demand, the flat Network, source association,
 source admission, and semantic readiness.  Physical Kernels are deliberately
 absent.
 
-The legacy semantic-Kernel path remains live during D2.  It calls the same
-constructors and admission predicates, which lets tests compare both paths at
-the same point before D3 begins consuming these handles.
+These declarations are shared by the operation inventory and
+``DotProductDesign`` without introducing a second physical coverage authority.
 """
 
 from __future__ import annotations

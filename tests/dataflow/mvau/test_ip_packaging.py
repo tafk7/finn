@@ -36,23 +36,27 @@ from finn.dataflow.artifacts import (
     StoredArtifact,
     VlnvIdentity,
 )
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.ipxact import (
     AXIS_ABSTRACTION,
     COMPONENT_FILE_NAME,
     IP_PACKAGE_RECIPE_SCHEMA,
     IP_PACKAGE_SCRIPT_FILE_NAME,
-    MVAUDecomposedArtifactRequirements,
-    PackagedDecomposedArtifact,
     PackagedIpComponent,
-    build_decomposed_artifact_requirements,
     complete_ip_package,
-    elaborate_decomposed,
     find_ip_package,
     ip_interface_commands,
     ip_package_directory_name,
-    package_decomposed_artifact,
     prepare_ip_package,
 )
+from finn.dataflow.ops.mvau.artifacts.package import (
+    PackagedDecomposedArtifact,
+    package_decomposed_artifact,
+)
+from finn.dataflow.ops.mvau.artifacts.source import (
+    MVAUDecomposedArtifactRequirements,
+    build_decomposed_artifact_requirements,
+)
+from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 PART = "xcvc1902-vsva2197-2MP-e-S"

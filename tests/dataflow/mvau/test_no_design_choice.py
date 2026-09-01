@@ -37,25 +37,29 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataflow.mvau import test_datatype_continuity as continuity
-from finn.dataflow.ops.mvau.artifacts import _implementation as composition
+from finn.dataflow.ops.mvau.artifacts import ipxact, package, render, source, synthesis
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.artifacts import TargetIdentity
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 from finn.dataflow.ops.mvau.binding import bind_decomposed
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.ops.mvau.artifacts._implementation import (
-    MVAUDecomposedArtifactRequirements,
-    build_decomposed_artifact_requirements,
-    elaborate_decomposed,
-    package_decomposed_artifact,
-    prepare_decomposed_synthesis,
-    prepare_ip_package,
-    render_clock_constraints,
+from finn.dataflow.ops.mvau.artifacts.ipxact import prepare_ip_package
+from finn.dataflow.ops.mvau.artifacts.package import package_decomposed_artifact
+from finn.dataflow.ops.mvau.artifacts.render import (
     render_decomposed_wrapper,
     render_stitch_shim,
+)
+from finn.dataflow.ops.mvau.artifacts.source import (
+    MVAUDecomposedArtifactRequirements,
+    build_decomposed_artifact_requirements,
     staged_layout,
 )
+from finn.dataflow.ops.mvau.artifacts.synthesis import (
+    prepare_decomposed_synthesis,
+    render_clock_constraints,
+)
+from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
@@ -88,6 +92,8 @@ GENERATION_STAGES: tuple[Callable[..., object], ...] = (
     prepare_decomposed_synthesis,
     prepare_ip_package,
 )
+
+ARTIFACT_STAGE_MODULES = (render, source, package, synthesis, ipxact)
 
 
 @pytest.fixture(name="requirements")
@@ -124,14 +130,17 @@ def test_no_generation_stage_takes_a_whole_compilation_state(
 def test_the_stage_list_is_the_whole_public_generation_surface() -> None:
     """A list that drifts behind the module tests nothing about what was added.
 
-    Every public callable in ``composition`` whose name renders, stages or
+    Every public callable in the artifact stage modules whose name renders, stages or
     prepares is audited above -- so a new generator has to be added here or
     this fails.
     """
 
     prefixes = ("render_", "staged_", "package_", "prepare_")
     public = {
-        name for name in composition.__all__ if any(name.startswith(prefix) for prefix in prefixes)
+        name
+        for module in ARTIFACT_STAGE_MODULES
+        for name in module.__all__
+        if any(name.startswith(prefix) for prefix in prefixes)
     }
     assert public == {stage.__name__ for stage in GENERATION_STAGES}
 

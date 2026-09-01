@@ -30,7 +30,7 @@ from finn.dataflow.ops.mvau.semantics import (
 )
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.physical import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
@@ -48,18 +48,18 @@ from finn.dataflow.artifacts import (
     composed_artifact_identity,
     kernel_artifact_identity,
 )
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.source import (
     build_decomposed_artifact_requirements,
     decomposed_top_module_name,
-    elaborate_decomposed,
     write_decomposed_artifact,
 )
+from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
 from finn.dataflow.kernels.dotp_axi import FINNLIB_SOURCES
 from finn.dataflow.kernels.replay_buffer import FINN_SOURCES
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
-from finn.dataflow.ops.mvau import NetworkRef
+from finn.dataflow.design import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 

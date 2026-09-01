@@ -30,7 +30,7 @@ from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.source import (
     MVAUDecomposedArtifactRequirements,
     write_decomposed_artifact,
 )
@@ -46,7 +46,7 @@ from finn.dataflow.ops.mvau.problem import (
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
-from finn.dataflow.ops.mvau import NetworkRef
+from finn.dataflow.design import NetworkRef
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 CASE = Case(

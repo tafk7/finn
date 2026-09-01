@@ -22,10 +22,10 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 from finn.dataflow.authoring import (
     DataflowBuildConfigView,
     DataflowOp,
-    DataflowOpAuthoring,
     NodeAttrCodec,
     NodeAttributeType,
 )
+from finn.dataflow.authoring.inventory import DataflowOpAuthoring
 from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS
 from finn.dataflow.ops.mvau.projection import (
@@ -39,12 +39,15 @@ from finn.dataflow.ops.mvau.projection import (
     project_mvau_graph_source,
     resolve_mvau_point,
 )
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.ops.mvau.inventory import (
     MVAU_DESIGN_INVENTORY,
     MVAUDataflowOpPaths,
+)
+from finn.dataflow.ops.mvau.problem import (
+    MVAU_PROBLEM_PROVENANCE,
+    MVAUProblemPaths,
     MVAUSourceDescription,
 )
-from finn.dataflow.ops.mvau.problem import MVAU_PROBLEM_PROVENANCE, MVAUProblemPaths
 from finn.dataflow.region import BeatSequence
 
 #: v6 is the deliberate pre-release cutover from semantic Kernel pools to the

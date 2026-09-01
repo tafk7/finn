@@ -38,20 +38,24 @@ from finn.dataflow.artifacts import (
 )
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalDirection
 from finn.dataflow.artifacts.identity import content_hash
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.package import (
     INSTANTIATION_COMMAND_SCHEMA,
-    SYNTHESIS_LAYOUT,
-    SYNTHESIS_RECIPE_SCHEMA,
-    MVAUDecomposedArtifactRequirements,
-    build_decomposed_artifact_requirements,
     package_decomposed_artifact,
     packaged_artifact_identity,
+    packaged_directory_name,
+)
+from finn.dataflow.ops.mvau.artifacts.source import (
+    MVAUDecomposedArtifactRequirements,
+    build_decomposed_artifact_requirements,
+    staged_layout,
+)
+from finn.dataflow.ops.mvau.artifacts.synthesis import (
+    SYNTHESIS_LAYOUT,
+    SYNTHESIS_RECIPE_SCHEMA,
     complete_decomposed_synthesis,
     find_decomposed_synthesis,
-    packaged_directory_name,
     prepare_decomposed_synthesis,
     render_clock_constraints,
-    staged_layout,
     synthesis_directory_name,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau

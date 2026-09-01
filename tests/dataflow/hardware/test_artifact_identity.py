@@ -45,7 +45,7 @@ from finn.dataflow.artifacts import (
 from finn.dataflow.artifacts.identity import content_hash
 from finn.dataflow.kernels import Kernel
 from finn.dataflow.ops.mvau.binding import bind_decomposed, source_roots
-from finn.dataflow.ops.mvau.artifacts._implementation import build_decomposed_artifact_requirements
+from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.kernels.replay_buffer import FINN_ROOT as FINN_ROOT_NAME
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau

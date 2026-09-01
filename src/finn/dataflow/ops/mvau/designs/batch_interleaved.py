@@ -11,12 +11,14 @@ from typing import cast
 
 from finn.dataflow.authoring.design import (
     DataflowDesign,
+    DataflowDesignScope,
+    singleton_network,
+)
+from finn.dataflow.authoring.inventory import (
     DataflowDesignDeclaration,
     DataflowDesignEntry,
     DataflowDesignInventory,
-    DataflowDesignScope,
     declare_dataflow_design_inventory,
-    singleton_network,
 )
 from finn.dataflow.authoring.scope import (
     ConstraintRef,
@@ -373,8 +375,8 @@ class BatchInterleavedDesign(DataflowDesign):
         design.use_network(semantics.network)
         weight_interface = design.input_interface("compute.weight_interface", compute, "weight")
         design.map_input("weight", boundary_id="input.weight", consumer=weight_interface)
-        # D12 deliberately keeps this design semantic-only.  TiledMvuKernel is
-        # a separately reviewed future vertical slice, not a hidden fallback.
+        # This design is deliberately semantic-only. TiledMvuKernel is a
+        # separately reviewed future vertical slice, not a hidden fallback.
         design.kernels("compute", covers=(compute,), candidates=())
 
 

@@ -58,10 +58,8 @@ from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 from finn.dataflow.ops.mvau.binding import bind_decomposed
-from finn.dataflow.ops.mvau.artifacts._implementation import (
-    build_decomposed_artifact_requirements,
-    elaborate_decomposed,
-)
+from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
+from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.ops.mvau.op import MvauDataflowOp

@@ -18,8 +18,8 @@ IP-XACT package    the packaged unit, plus the VLNV, the part, and the builder
 The last two are *siblings*, not a chain.  Both consume the packaged unit and
 neither reads the other's output: packaging an IP does not need a utilization
 report, and synthesizing does not need a repository coordinate.  Making one
-depend on the other would put an input in a key that the stage never reads,
-which is the collapse the Phase 5 review rejected on the same grounds.
+depend on the other would put an input in a key that the stage never reads and
+would prevent valid reuse without making the result more precise.
 
 Those boundaries are not a matter of taste.  ``render_decomposed_wrapper``
 never invokes Vivado, so the builder version cannot change one byte of
@@ -76,8 +76,7 @@ SYNTHESIS_ARTIFACT_SCHEMA_VERSION = "synthesis-artifact-identity-v1"
 #: A *sibling* of synthesis rather than a stage after it.  Both consume the
 #: packaged unit and neither consumes the other -- packaging an IP does not
 #: need a utilization report, and synthesizing does not need a VLNV.  Stacking
-#: them would make the IP key depend on a synthesis run it never reads, which
-#: is the "moving upper-stage inputs downward" the Phase 5 review rejected.
+#: them would make the IP key depend on a synthesis run it never reads.
 IP_PACKAGE_ARTIFACT_SCHEMA_VERSION = "ip-package-artifact-identity-v1"
 
 Scalar = bool | int | float | str
@@ -348,9 +347,8 @@ class ComposedArtifactIdentity:
     while every Kernel identity stays equal -- exactly the wrong-cache-hit a
     naive composition of sub-identities misses.
 
-    (The Phase 5 plan named this ``DecomposedArtifactIdentity``.  Composition
-    is not MVAU vocabulary and this layer knows nothing about the decomposed
-    MVAU, so the generic name is used here.)
+    Composition is not MVAU vocabulary and this layer knows nothing about the
+    decomposed MVAU, so the identity has a generic name.
     """
 
     #: In compile order, for the same reason the source manifest is.

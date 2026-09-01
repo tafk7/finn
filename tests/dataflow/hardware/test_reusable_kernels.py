@@ -14,8 +14,10 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow.authoring import OpDesign, Ref, finite
 from finn.dataflow.authoring.design import (
     DataflowDesign,
-    DataflowDesignEntry,
     DataflowDesignScope,
+)
+from finn.dataflow.authoring.inventory import (
+    DataflowDesignEntry,
     declare_dataflow_design_inventory,
 )
 from finn.dataflow.computation import (

@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 
 import finn.dataflow.design as design
+from finn.dataflow.testing import (
+    assert_fresh_import_avoids,
+    assert_no_raw_declaration_construction,
+    assert_public_surface,
+)
 
 
 def _run_import_check(source: str) -> None:
@@ -19,63 +24,29 @@ def _run_import_check(source: str) -> None:
 def test_public_design_api_is_deliberate_and_pinned() -> None:
     assert set(design.__all__) == {
         "ABSENT",
-        "DATAFLOW_NETWORK_SEMANTICS",
-        "DATAFLOW_REGION_SEMANTICS",
-        "NETWORK_VALIDATION_REPORT_SEMANTICS",
-        # Datatype fields are declared by every operation, so their value
-        # semantics belong on the supported surface alongside the Region's.
-        # Without this an author has to reach into ``design.region`` to say
-        # "this problem field is a datatype", which reads as internal.
-        "QONNX_DATATYPE_SEMANTICS",
-        "QONNX_DATATYPE_VALUE_SEMANTICS",
-        "REGION_VALIDATION_REPORT_SEMANTICS",
-        "AbsenceMode",
         "Absent",
         "Answer",
         "CommitResult",
-        "Constraint",
         "ConstraintAssessment",
-        "ConstraintSet",
-        "DataflowRegion",
-        "DataflowNetwork",
         "DataflowOpResult",
         "Decided",
-        "Decision",
-        "DecisionDomain",
         "DecisionState",
-        "DependencyKind",
-        "DependencyRef",
-        "DependencyView",
-        "DerivedProperty",
         "DesignPoint",
         "DesignSpace",
-        "DesignSpaceSpec",
         "Engine",
         "EvaluationError",
-        "EvaluatorSpec",
         "Finding",
         "FindingKind",
         "ItemOutcome",
-        "NetworkValidationIssue",
-        "NetworkValidationReport",
         "NetworkRef",
-        "ProblemField",
-        "ProblemSchema",
         "ProposalAdoptionMode",
         "ProposalAdoptionResult",
         "QualifiedPath",
         "ReadinessAssessment",
-        "ReadinessProfile",
-        "RegionValidationIssue",
-        "RegionValidationReport",
         "RequestError",
         "ResolvedDataflowOp",
         "Unresolved",
         "ValidationError",
-        "ValueSemantics",
-        "as_object_semantics",
-        "validate_region",
-        "validate_network",
     }
 
 
@@ -112,16 +83,104 @@ def test_resolved_operation_values_have_an_evaluation_time_canonical_import() ->
 
 def test_authoring_facade_exposes_design_declaration_entry_points() -> None:
     authoring = import_module("finn.dataflow.authoring")
-    implementation = import_module("finn.dataflow.authoring.design")
+    design_implementation = import_module("finn.dataflow.authoring.design")
+    supply_implementation = import_module("finn.dataflow.authoring.input_supply")
+    inventory_implementation = import_module("finn.dataflow.authoring.inventory")
 
-    assert authoring.DataflowDesign is implementation.DataflowDesign
-    assert authoring.DataflowDesignScope is implementation.DataflowDesignScope
-    assert authoring.InputSupplyAlternative is implementation.InputSupplyAlternative
-    assert authoring.InputSupplyDeclaration is implementation.InputSupplyDeclaration
+    assert authoring.DataflowDesign is design_implementation.DataflowDesign
+    assert authoring.DataflowDesignScope is design_implementation.DataflowDesignScope
+    assert authoring.InputSupplyAlternative is supply_implementation.InputSupplyAlternative
+    assert authoring.InputSupplyDeclaration is supply_implementation.InputSupplyDeclaration
     assert (
         authoring.declare_dataflow_design_inventory
-        is implementation.declare_dataflow_design_inventory
+        is inventory_implementation.declare_dataflow_design_inventory
     )
+
+
+def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
+    assert_public_surface(
+        "finn.dataflow.authoring",
+        (
+            "AssignmentMapping",
+            "AuthoringError",
+            "BUILD_OWNED",
+            "ConstraintRef",
+            "DataflowAssignmentCommit",
+            "DataflowBuildConfigView",
+            "DataflowDesign",
+            "DataflowDesignEntry",
+            "DataflowDesignInventory",
+            "DataflowDesignScope",
+            "DataflowOp",
+            "DataflowOpError",
+            "GRAPH_OWNED",
+            "InputSupplyAlternative",
+            "InputSupplyDeclaration",
+            "NodeAttrCodec",
+            "NodeAttributeType",
+            "OpDesign",
+            "ProblemProvenance",
+            "Provenance",
+            "Ref",
+            "Scope",
+            "dataflow_problem_fingerprint",
+            "declare_dataflow_design_inventory",
+            "declare_dataflow_op_authoring",
+            "divisors_of",
+            "domain",
+            "finite",
+            "reject",
+            "unresolved",
+        ),
+    )
+
+
+def test_operation_namespaces_have_one_narrow_public_entry() -> None:
+    assert_public_surface("finn.dataflow.ops", ())
+    assert_public_surface(
+        "finn.dataflow.ops.mvau",
+        ("MVAUDataflowBuildContext", "MvauDataflowOp"),
+    )
+
+
+def test_final_facades_do_not_eagerly_load_operations() -> None:
+    for module in (
+        "finn.dataflow.design",
+        "finn.dataflow.authoring",
+        "finn.dataflow.artifacts",
+        "finn.dataflow.kernels",
+        "finn.dataflow.testing",
+        "finn.dataflow.ops",
+        "finn.dataflow.ops.mvau",
+    ):
+        assert_fresh_import_avoids(
+            module,
+            (
+                "finn.dataflow.ops.mvau.op",
+                "finn.dataflow.ops.mvau.inventory",
+            )
+            if module != "finn.dataflow.ops.mvau.op"
+            else (),
+        )
+
+
+def test_runtime_modules_do_not_construct_domain_declarations() -> None:
+    root = Path(__file__).parents[3]
+    assert_no_raw_declaration_construction(
+        (
+            root / "src" / "finn" / "dataflow" / "op.py",
+            root / "src" / "finn" / "dataflow" / "resolution.py",
+            root / "src" / "finn" / "dataflow" / "selection.py",
+            root / "src" / "finn" / "transformation" / "fpgadataflow" / "select_dataflow_design.py",
+        )
+    )
+
+
+def test_authoring_implementation_responsibilities_are_physically_split() -> None:
+    authoring = import_module("finn.dataflow.authoring")
+    assert authoring.DataflowDesign.__module__ == "finn.dataflow.authoring.design"
+    assert authoring.InputSupplyDeclaration.__module__ == "finn.dataflow.authoring.input_supply"
+    assert authoring.DataflowDesignInventory.__module__ == "finn.dataflow.authoring.inventory"
 
 
 def test_private_engine_has_no_finn_or_region_imports() -> None:

@@ -41,7 +41,7 @@ class DotProductNumericTypes:
 
     Complete QONNX datatypes, never cached widths or signedness flags: those
     are *queries* on a datatype, and caching them here would rebuild the
-    reduced family-and-width pair this migration removed.
+    reduced family-and-width pair that would erase operation role.
 
     The threshold role belongs to the fused-threshold signature, when that
     computation is implemented; this one is the accumulator-output form.

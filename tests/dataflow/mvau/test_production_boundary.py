@@ -10,8 +10,17 @@ from pathlib import Path
 import subprocess
 import sys
 
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.elaboration import __all__ as production_provider_exports
+from finn.dataflow.ops.mvau.artifacts.ipxact import PreparedIpPackage
+from finn.dataflow.ops.mvau.artifacts.package import PackagedDecomposedArtifact
+from finn.dataflow.ops.mvau.artifacts.render import render_decomposed_wrapper
+from finn.dataflow.ops.mvau.artifacts.source import MVAUDecomposedArtifactRequirements
+from finn.dataflow.ops.mvau.artifacts.synthesis import PreparedDecomposedSynthesis
+from finn.dataflow.testing import (
+    assert_fresh_import_avoids,
+    assert_no_raw_declaration_construction,
+)
 
 ROOT = Path(__file__).parents[3] / "src" / "finn" / "dataflow"
 PRODUCTION_FILES = (
@@ -23,13 +32,15 @@ PRODUCTION_FILES = (
     ROOT / "ops" / "mvau" / "origin.py",
     ROOT / "ops" / "mvau" / "assignments.py",
     ROOT / "ops" / "mvau" / "associations.py",
+    ROOT / "ops" / "mvau" / "binding.py",
+    ROOT / "ops" / "mvau" / "inventory.py",
     ROOT / "ops" / "mvau" / "input_supply.py",
     ROOT / "ops" / "mvau" / "regions.py",
     ROOT / "ops" / "mvau" / "physical.py",
     ROOT / "ops" / "mvau" / "semantics.py",
     ROOT / "ops" / "mvau" / "elaboration.py",
     *(ROOT / "ops" / "mvau" / "designs").glob("*.py"),
-    *(ROOT / "ops" / "mvau" / "hardware").glob("*.py"),
+    *(ROOT / "ops" / "mvau" / "artifacts").glob("*.py"),
 )
 FORBIDDEN_MODULES = {
     "finn.dataflow.mvau.compat",
@@ -137,59 +148,21 @@ def test_operation_specific_authoring_does_not_reconstruct_compiled_declarations
         ROOT / "ops" / "mvau" / "op.py",
         ROOT / "ops" / "mvau" / "designs" / "dot_product.py",
         ROOT / "ops" / "mvau" / "designs" / "batch_interleaved.py",
-        ROOT / "ops" / "mvau" / "designs" / "inventory.py",
+        ROOT / "ops" / "mvau" / "inventory.py",
     )
-    forbidden_calls = {"Ref", "assemble_specs"}
-    for path in operation_files:
-        tree = ast.parse(path.read_text(), filename=str(path))
-        calls = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert not calls & forbidden_calls, path
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Attribute) or node.attr not in {
-                "constraints",
-                "decisions",
-            }:
-                continue
-            assert not (isinstance(node.value, ast.Attribute) and node.value.attr == "spec"), (
-                path,
-                node.attr,
-            )
+    assert_no_raw_declaration_construction(operation_files)
 
 
 def test_production_elaboration_dispatch_exports_no_provider_registry() -> None:
     assert production_provider_exports == ["elaborate_mvau"]
 
 
-def _assert_fresh_import_avoids_provider_era_modules(module: str) -> None:
-    script = "\n".join(
-        (
-            "from importlib import import_module",
-            "import sys",
-            f"import_module({module!r})",
-            f"forbidden = {FORBIDDEN_RUNTIME_MODULES!r}",
-            "loaded = [name for name in forbidden if name in sys.modules]",
-            "raise SystemExit('loaded legacy modules: ' + ', '.join(loaded) if loaded else 0)",
-        )
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-
-
 def test_production_elaboration_import_does_not_load_provider_era_modules() -> None:
-    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.ops.mvau.elaboration")
+    assert_fresh_import_avoids("finn.dataflow.ops.mvau.elaboration", FORBIDDEN_RUNTIME_MODULES)
 
 
 def test_production_mvau_op_import_does_not_load_provider_era_modules() -> None:
-    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.ops.mvau.op")
+    assert_fresh_import_avoids("finn.dataflow.ops.mvau.op", FORBIDDEN_RUNTIME_MODULES)
 
 
 def test_operation_namespace_does_not_eagerly_load_mvau() -> None:
@@ -212,7 +185,10 @@ def test_relocated_production_module_paths_are_absent() -> None:
         (
             "import importlib.util",
             "old = ('finn.dataflow.ops.mvau_op', 'finn.dataflow.mvau.source', "
-            "'finn.dataflow.mvau.designs.inventory', 'finn.dataflow.mvau.hardware.composition')",
+            "'finn.dataflow.mvau.designs.inventory', 'finn.dataflow.mvau.hardware.composition', "
+            "'finn.dataflow.ops.mvau.designs.inventory', "
+            "'finn.dataflow.ops.mvau.artifacts._implementation', "
+            "'finn.dataflow.ops.mvau.composition')",
             "present = []",
             "for name in old:",
             "    try:",
@@ -279,6 +255,14 @@ def test_physical_kernel_vocabulary_has_one_canonical_package() -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_artifact_stage_implementations_have_one_owner_each() -> None:
+    assert render_decomposed_wrapper.__module__.endswith(".artifacts.render")
+    assert MVAUDecomposedArtifactRequirements.__module__.endswith(".artifacts.source")
+    assert PackagedDecomposedArtifact.__module__.endswith(".artifacts.package")
+    assert PreparedDecomposedSynthesis.__module__.endswith(".artifacts.synthesis")
+    assert PreparedIpPackage.__module__.endswith(".artifacts.ipxact")
 
 
 def test_weight_adapter_forcing_code_is_test_only() -> None:

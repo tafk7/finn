@@ -42,7 +42,6 @@ from finn.dataflow.authoring import (
     AuthoringError,
     OpDesign,
     Ref,
-    assemble_specs,
     divisors_of,
     finite,
     reject,
@@ -71,7 +70,7 @@ from finn.dataflow.kernels import (
     scalar_parameters,
 )
 from finn.dataflow.kernels.selection import KernelCandidateSelection
-from finn.dataflow.kernels.kernel import CompiledKernelDeclaration
+from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -94,7 +93,7 @@ from finn.dataflow.region import (
     ScheduleLevel,
     element_width as element_width_of,
 )
-from finn.dataflow.spec_algebra import SpecAuthoringError
+from finn.dataflow.spec_algebra import SpecAuthoringError, assemble_specs
 
 INT8 = DataType["INT8"]
 OWNER = "example"

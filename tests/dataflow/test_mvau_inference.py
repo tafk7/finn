@@ -20,13 +20,13 @@ from finn.dataflow.authoring.admission import AdmissionVerdict, resolved_physica
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import (
+from finn.dataflow.ops.mvau.inventory import (
     MVAU_DESIGN_INVENTORY,
     admissible_mvau_designs,
     mvau_build_admission,
 )
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
-from finn.dataflow.ops.mvau import MVAUDataflowOpPaths
+from finn.dataflow.ops.mvau.inventory import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.transformation.fpgadataflow import infer_mvau_dataflow
 from finn.transformation.fpgadataflow.infer_mvau_dataflow import (

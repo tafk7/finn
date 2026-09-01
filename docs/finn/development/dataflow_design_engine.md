@@ -1,164 +1,190 @@
-# Dataflow design engine
+# Dataflow design architecture
 
-The supported authoring surface for dataflow design spaces is
-`finn.dataflow.design`. Domain adapters should not import
-`finn.dataflow._engine` directly. The private engine remains domain-neutral and
-uses only the Python standard library; region knowledge is confined to the
-public design adapter.
+FINN's dataflow stack separates semantic models, declaration-time authoring,
+evaluation, physical Kernels, and artifacts.
 
-The model-aware source-operation surface is `finn.dataflow.authoring`.
-`DataflowOp` subclasses are loaded through
-`ModelWrapper.get_customop_wrapper`, project live graph and build facts into a
-problem instance, and persist only explicitly committed decisions as node
-attributes. See `../implementation/dataflow-op.rst` for the contributor guide.
-The implementation began from reviewed FINN baseline
-`28ed4d9736b2447471995f139db8f3e068d262ce`. Its model-aware QONNX dependency
-is pinned to `tafk7/qonnx` commit
-`46b69021e3a38b57c636f6941a52d809c8928a7b`.
+```text
+Region / Network model -----------+
+                                   |
+private design engine ------------+--> declaration-time authoring
+                                         |
+                                         +--> flat DesignSpaceSpec
+                                         +--> DataflowDesign inventory
+                                                   |
+ONNX/QONNX integration --> DataflowOp -------------+
+                                                   |
+                                                   v
+                              DesignPoint / NetworkRef / realization
+                                                   |
+                                                   v
+                                   elaboration --> artifacts
+```
 
-A concrete microarchitecture is selected once, as a Kernel. `MVAU_COMPUTE_SELECTION`
-is the compute pool and holds four: `legacy_hls`, `rtl_softvec`, `rtl_packed`,
-and `rtl_batch_interleaved_dsp58`. Each derives exactly one Region per complete
-set of its own local choices, so there is no Region-declaration choice above the
-Kernels and no binding choice below them. The batch-interleaved Kernel derives
-the `(batch, nf, sf, t)` schedule with exact activation and weight requirements,
-ordinary vector-major activation/output sequences, and a chunked weight
-sequence. Legacy HLS keeps embedded versus streamed weights as one local
-boundary choice, because its generated unit reads the weight array inside its
-own schedule either way.
+The Region/Network model and the private engine are independent inputs to the
+authoring layer. Neither depends on the other.
 
-Several Kernels may derive equal Regions: soft-vector and packed DSP do, for
-equal semantic choices. Region equality deliberately does not erase Kernel
-identity, constraints, cost, or provider inventory.
+## Canonical packages
 
-PE, SIMD, interleave, compute pumping, and the legacy HLS arithmetic resource
-are Kernel-local decisions, owned by the Kernel that uses them. Structural
-validation remains a separate derived report and constraint, so structural
-readiness never requires any feasibility answer.
+`finn.dataflow`
+: Semantic Region and Network values plus validation. Importing these values
+  does not load the engine, authoring, Kernels, or operations.
 
-Kernel feasibility records conservative capability checks, not formal
-realizability witnesses. A `KernelInstance` can therefore be constructed for a
-fully selected point whose separately queried feasibility constraint set is
-false; callers must not treat instance construction as buildability.
+`finn.dataflow.authoring`
+: Declaration-time API for `DataflowOp`, `DataflowDesign`, scopes, typed
+  `Ref` values, domains, rejection/unresolved helpers, and conditional input
+  supply.
 
-The compatibility module `finn.dataflow.mvau_design` continues to expose the
-earlier constructor names, and `MVAU_DESIGN_SPACE_SPEC` in
-`finn.dataflow.mvau.legacy_design` retains the original six-field problem
-schema and `mvau.pe`/`mvau.simd` paths as a standalone fixture. It is not part
-of the Kernel pool.
+`finn.dataflow.design`
+: Evaluation-time API for `Engine`, `DesignPoint`, answers, findings,
+  requests, diagnostics, `NetworkRef`, and `ResolvedDataflowOp`.
+  `finn.dataflow._engine` remains private and domain-neutral.
 
-`accumulator_element_type` is projected problem data computed by FINN's
-existing numeric-range analysis before this design-space query; it is not an
-independent design choice. Accumulator-output profiles require it to equal the
-selected output element type. Fused-threshold profiles additionally require a
-threshold source, its real shape, initializer availability, and a representation
-at least as wide as the accumulator.
+`finn.dataflow.kernels`
+: Physical `Kernel`, `KernelScope`, coverage, configured bindings, components,
+  and source manifests. Compiled declarations and candidate-selection records
+  are private implementation details.
 
-`finn.dataflow.parameters.supply_kernels` holds the weight-supply pool:
-`finn_rtl_memstream` and `finnlib_hls_memstream`. Each derives a rank-zero
-local-state source from the demand the selected compute Kernel published, so
-there is no duplicated delivery tile. One supplier-local choice remains because
-it is a real alternative: serve the demand exactly, or emit the natural
-full-tile sequence and require the separately selected adapter Kernel. RAM
-style, memory pumping, and initialization rules belong to the supplier that
-exposes them.
+`finn.dataflow.artifacts`
+: Generic artifact identities and checked storage. Operation-specific payload
+  rendering and tool-stage state remain with the operation that owns them.
 
-`finn.dataflow.kernels` is the public Kernel authoring surface. A `Kernel`
-declares one microarchitecture family with its local decisions, feasibility and
-source-admission constraints, Region derivation, interface demands, exports,
-and provider inventory. A `KernelSelection` is one static Op-class-owned pool
-behind a single identity decision; `SelectedKernel` is the durable identity a
-design point records, and `KernelInstance` is the operation-bound view binding
-that Kernel to its local assignments, Region, demands, and providers. An
-optional pool may select the reserved `NO_KERNEL` member, which is how an
-absent supplier is expressed without inventing a topology choice.
+`finn.dataflow.ops.mvau`
+: The public MVAU `DataflowOp` and build-context façade. Internal declarations,
+  projection, persistence, realization, elaboration, and artifact payloads live
+  in precise leaves beneath this package.
 
-Source admission is decision-free by construction: `Kernel` refuses a
-source-admission constraint that reads one of its own decisions, which is what
-makes `admissible_kernels` a genuine existential answer over problem data
-alone. Target facts are therefore excluded from admission and asked at
-selection time, so inference coverage does not change with the board.
+`finn.dataflow.testing`
+: Reusable contributor conformance checks, including the Network-only
+  operation lifecycle and fresh-import/declaration-boundary helpers.
 
-`finn.dataflow.spec_algebra` contains the generic flat-spec algebra those
-surfaces share: path-prefixed placement with explicitly shared problem fields,
-applicability gating, and assembly of ordinary flat `DesignSpaceSpec` values.
-The authoring layer does not add a Kernel primitive to the engine.
+## Authoring boundary
 
-`finn.dataflow.network` and `finn.dataflow.network_validation` implement the
-flat acyclic network contract with qualified endpoints, explicit tensor-position
-maps, exact beat-sequence compatibility, exposed boundaries, and ordered
-channels without physical capacity fields. `finn.dataflow.ops.mvau` uses that
-foundation to assemble the selected Kernels, while keeping source-to-region
-coordinate mappings outside the normalized region.
+Operation-specific authoring may declare domain decisions, properties,
+constraints, and explicit dependencies. It may not:
 
-The parameter topology is derived, not decided. Whether the result is a
-`RegionRef` or a `NetworkRef` follows from which Kernels were selected: an
-embedded compute Region, or a streamed one with no supplier, yields a region
-reference; a selected supplier yields a network. Direct connection is
-established by exact endpoint compatibility, and the adapter is an ordinary
-optional Kernel that is refused when the endpoints already match.
+- construct raw engine `Decision`, `DerivedProperty`, `Constraint`,
+  `ProblemField`, `DependencyRef`, or `EvaluatorSpec` values;
+- reconstruct a `Ref` from a path/kind/semantics triple;
+- inspect `spec.decisions` or `spec.constraints` to recover handles;
+- manually aggregate constraints, readiness, or selected Kernel metadata that
+  the design inventory already owns; or
+- call `assemble_specs` to rebuild generic inventory structure.
 
-`finn.transformation.fpgadataflow.infer_mvau_dataflow` lowers recognized MVAU
-sources to unresolved logical nodes. It decides only whether a subgraph is a
-source form; whether any implementation supports it is the compute pool's
-answer, so the pass contains no datatype, width, target, or language switch.
-`finn.transformation.fpgadataflow.select_dataflow_design` is the replaceable
-selection-policy seam. It is operation-generic: each `DataflowOp` family names
-its own Kernel pools, constraint set, and readiness profiles, and a policy sees
-the whole model and every operation scope in one call.
+`DataflowDesignInventory` is authoritative for its design-selection handle,
+selected Network, active placements, configured Kernel identities, active
+decision metadata, constraint aggregation, and realization readiness.
+Structural metadata is available before physical choices such as compute
+pumping are committed; fully configured parameters remain realization/artifact
+facts.
 
-MVAU source associations are topology-aware. Embedded weights identify
-compute-local binding state, direct weights identify the compute region's `W`
-operand, and cyclic weights identify delivery-local state while the network
-edge separately relates the delivery output to the compute input. Semantic
-destinations are region- or node-qualified; source identities never enter the
-normalized region.
+The generic authoring implementation may use raw engine declarations internally
+to compile the contributor-facing scopes into one ordinary flat
+`DesignSpaceSpec`. No new engine primitive is introduced.
 
-The legacy MVAU cycle estimate now follows the analytically derived logical work
-count for both standard and batch-interleaved execution: interleaving
-reorganizes the `R * NF * SF` points but does not multiply them by `TH`. The
-focused regression checks this formula; comparison against tiled RTL simulation
-remains deferred to hardware-enabled measurement work.
+## Network-only operation results
 
-Run the focused local verification with:
+Every production `DataflowOp` resolves to `finn.dataflow.design.NetworkRef`.
+A design with one Region returns a singleton Network. `RegionRef` and the old
+`RegionRef | NetworkRef` operation boundary do not exist.
+
+The Network is semantic and flat: nodes are Regions, edges carry exact
+position/beat correspondence, and boundaries expose logical interfaces.
+Physical components, clocks, buses, and tool state are introduced only after a
+design point is resolved.
+
+## Kernel candidates and admission
+
+A design placement owns its candidate Kernel classes. There is no global
+Kernel registry. Candidate-backed admission answers three separate questions:
+
+1. **Semantic recognition:** does the graph describe the source operation?
+2. **Graph-stage build admission:** does every active placement retain at least
+   one candidate after evaluating all graph-answerable coverage constraints?
+3. **Resolved physical feasibility:** after target/build/design/Kernel choices
+   are known, do all selected Kernel constraints pass?
+
+Constraint classification follows transitive problem provenance. A graph-pure
+rejection eliminates a candidate. Missing graph-owned information is
+unresolved. Target/build-dependent constraints are explicitly deferred during
+inference and must later return a positive verdict. Both stages invoke the same
+Kernel-owned predicates.
+
+DotpAxi, ReplayBuffer, and FINN RTL memstream are reusable concrete Kernels.
+Their input records contain computation/interface, target, and physical facts,
+not MVAU node roles, source policy, decision paths, or persisted attributes.
+Synthetic non-MVAU designs bind all three as promotion conformance cases.
+
+## MVAU design inventory
+
+MVAU declares one operation-owned weight-supply policy and two designs:
+
+```text
+design = dot_product | batch_interleaved
+weight supply = external | finn_rtl_memstream
+```
+
+`dot_product` is the production replay-plus-dot-product Network. Its compute and
+replay placements use the shared DotpAxi and ReplayBuffer Kernels. Selecting
+`finn_rtl_memstream` conditionally adds the cyclic parameter-delivery Region,
+edge, boundary changes, local-state association, and memstream placement.
+
+`batch_interleaved` is a valid semantic singleton-Network design without a
+production physical candidate. It may be selected for modeling, but automatic
+build admission does not claim it is physically realizable.
+
+Inactive supplier Regions and placements are `Absent`. Active placement
+realization validates exact node coverage, absorbed edges (including complete
+fan-out), unabsorbed connection obligations, boundaries, and configured Kernel
+candidates.
+
+## Persistence and identities
+
+MVAU persistence is v6 at the node-attribute layer and v11 at the source
+envelope layer. v5/v10 is rejected explicitly. Regions, Networks, configured
+Kernels, and artifacts are recomputed rather than serialized into ONNX.
+
+Artifact identity excludes source occurrence and placement. Stable encoded
+tokens preserve pre-move identities such as
+`finn.dataflow.mvau_problem.MVAUDspBlock`; Python package cleanup does not move
+v6 fingerprints or artifact keys.
+
+MVAU's artifact implementation has explicit modules for wrapper rendering,
+source staging, packaged-unit state, OOC synthesis, IP-XACT packaging, and
+memstream-specific payloads. Prepared and completed tool states are distinct
+types, and every completed artifact is checked against its declared layout.
+
+## Compatibility boundary
+
+The internal Provider/semantic-Kernel framework, old MVAU compatibility tree,
+old supply Kernels, and Region-or-Network result alternative are deleted. The
+`finn.dataflow.kernels` name now means physical Kernels only.
+
+External legacy FINN `MVAU_hls`/`MVAU_rtl` HWCustomOps remain available as
+independent comparison oracles. They are not a production compatibility path
+for the new `DataflowOp` stack. The fused `MvuVvuAxiKernel` remains test-only.
+
+## Verification
+
+Run the focused software gate with:
 
 ```bash
 ./scripts/check-dataflow-design.sh
 ```
 
+Physical or artifact-stage changes additionally require sequential Vivado
+fixtures 5–9 and both memstream gates. Closure evidence records one clean FINN
+revision, the pinned FinnLib revision, Python/pytest/Ruff/mypy versions, and
+Vivado 2025.2.
+
 ## Engine migration provenance
 
 The private engine was migrated from the Project Kernels scratchpad at revision
-`fba51ae01f26c1d53cf89ec51cf6bb88b2e4cbec`. The combined SHA-256 digest of the
-source, tests, and examples used as the migration baseline was
+`fba51ae01f26c1d53cf89ec51cf6bb88b2e4cbec`. The combined SHA-256 digest of
+the source, tests, and examples used as the migration baseline was
 `1b4c3156594c8b1ef1f067b0e25e083b12f0145ef970f84e534374f410432e96`.
 
 On 2026-08-26, the original author confirmed that the engine was their original
 work, written for inclusion in FINN, and authorized its distribution under
-FINN's BSD-3-Clause license. Migrated Python files use the approved FINN header:
-
-```text
-Copyright (C) 2026, Advanced Micro Devices, Inc.
-SPDX-License-Identifier: BSD-3-Clause
-```
-
-The standalone `design_space` package is retained only as the historical
-migration source. FINN's implementation under `finn.dataflow._engine` is the
-live authority.
-
-The migrated core and parity fixtures are excluded from FINN's Black/isort
-hooks so their source remains mechanically comparable with the recorded
-baseline. The focused check applies Ruff formatting and linting to those paths
-using the repository configuration.
-
-The recorded migration baseline is:
-
-| Check | Result |
-|---|---|
-| Standalone tests | 68 passed |
-| Package-root API | 36 exported names |
-| Public `Engine` API | 15 methods |
-| Runtime imports | Python standard library only |
-| Ruff formatting and lint | clean |
-| Strict mypy | clean |
-| Supported private-core Python versions | 3.10–3.13 |
+FINN's BSD-3-Clause license. The standalone `design_space` package is retained
+only as historical migration provenance; `finn.dataflow._engine` is the live
+private implementation.

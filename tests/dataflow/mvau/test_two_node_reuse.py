@@ -34,10 +34,10 @@ from dataflow.mvau.test_decomposed_op import (
     _context,
 )
 from finn.dataflow.artifacts import ArtifactKey, StoredArtifact
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.package import package_decomposed_artifact
+from finn.dataflow.ops.mvau.artifacts.source import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
-    package_decomposed_artifact,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 from finn.dataflow.ops.mvau.op import MvauDataflowOp

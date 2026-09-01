@@ -11,7 +11,7 @@ derivation, and a source manifest -- and it owns none of the logical dataflow,
 which the Region declarations upstream of it already fixed.
 
 The name is deliberate and temporary.  ``finn.dataflow.kernels.Kernel`` still
-means the *semantic* thing during the migration, so this one is spelled out
+can be confused with a semantic declaration, so this one is spelled out
 until that one is renamed and this becomes simply the Kernel.
 
 **Coverage names a declaration, not a shape.**  A Kernel does not say "I
@@ -883,7 +883,6 @@ __all__ = [
     "CoveragePattern",
     "EdgeCoverage",
     "Kernel",
-    "CompiledKernelDeclaration",
     "KernelOrigin",
     "KernelParameter",
     "PhysicalComponent",

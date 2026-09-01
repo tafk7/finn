@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import TypeVar, cast
 
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.op_contracts import NodeAttrCodec
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 

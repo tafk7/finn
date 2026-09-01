@@ -32,7 +32,7 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.authoring import Ref, assemble_specs
+from finn.dataflow.authoring import Ref
 from finn.dataflow.design import (
     Absent,
     Answer,
@@ -54,14 +54,14 @@ from finn.dataflow.kernels import (
     declare_kernel,
     kernel_namespace,
 )
-from finn.dataflow.kernels.kernel import CompiledKernelDeclaration
+from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
 from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     REPLAY_NODE,
 )
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.kernels.dotp_axi import (
     DotpAxiKernel,
     covers_numeric_types as dotp_axi_covers_numeric_types,
@@ -87,10 +87,8 @@ from finn.dataflow.ops.mvau.problem import (
 )
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.ops.mvau import (
-    MVAU_DATAFLOW_OP_SPEC,
-    NetworkRef,
-)
+from finn.dataflow.design import NetworkRef
+from finn.dataflow.ops.mvau.inventory import MVAU_DATAFLOW_OP_SPEC
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - the real operation fixture
     MATRIX_HEIGHT,
@@ -101,6 +99,7 @@ from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - the real operatio
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.region import DataflowRegion, NumericElementType
+from finn.dataflow.spec_algebra import assemble_specs
 
 #: The one repetition count these tests use; the claim is structural.
 REPETITIONS = 2

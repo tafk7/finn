@@ -39,13 +39,15 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS, local_mvau_assignment_path
-from finn.dataflow.ops.mvau import (
+from finn.dataflow.ops.mvau.associations import (
+    MVAUNetworkRef,
+    MVAUSourceAssociation,
+)
+from finn.dataflow.ops.mvau.inventory import (
     MVAU_DATAFLOW_OP_SPEC,
     MVAUDataflowOpPaths,
-    NetworkRef,
-    MVAUSourceAssociation,
-    MVAUSourceDescription,
 )
+from finn.dataflow.ops.mvau.problem import MVAUSourceDescription
 from finn.dataflow.resolution import ResolvedDataflowOp
 from finn.dataflow.op_contracts import DataflowOpError, NodeAttributeType
 from finn.dataflow.parameters.cyclic.definition import (
@@ -206,7 +208,7 @@ class MVAUSourceProjection:
 class MVAUResolvedDesign(ResolvedDataflowOp):
     """A re-created design point and its recomputed selected semantics."""
 
-    result: NetworkRef
+    result: MVAUNetworkRef
     source_association: MVAUSourceAssociation
     projection: MVAUSourceProjection
 
@@ -966,7 +968,7 @@ def resolve_mvau_point(
     result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
     if not isinstance(result, Decided):
         raise MVAUSourceAdapterError(result.findings)
-    selected = cast(NetworkRef, result.value)
+    selected = cast(MVAUNetworkRef, result.value)
     association = selected.source_association
     return MVAUResolvedDesign(
         engine,

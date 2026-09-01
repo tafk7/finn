@@ -56,9 +56,9 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 from dataflow.rtlsim.composed_mvau_equiv import CLOCK_PERIOD_NS, finn_root, record_identity
 from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.binding import finnlib_root
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.source import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     write_decomposed_artifact,

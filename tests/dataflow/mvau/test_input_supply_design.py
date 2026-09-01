@@ -27,14 +27,14 @@ from finn.dataflow.kernels.finn_rtl_memstream import (
     FINN_MEMSTREAM_SOURCES,
     FinnRtlMemstreamKernel,
 )
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.ipxact import prepare_ip_package
+from finn.dataflow.ops.mvau.artifacts.package import package_decomposed_artifact
+from finn.dataflow.ops.mvau.artifacts.source import (
     MVAUDecomposedArtifactRequirements,
-    package_decomposed_artifact,
-    prepare_decomposed_synthesis,
-    prepare_ip_package,
     staged_layout,
     write_decomposed_artifact,
 )
+from finn.dataflow.ops.mvau.artifacts.synthesis import prepare_decomposed_synthesis
 from finn.dataflow.ops.mvau.artifacts.supplied import (
     build_supplied_artifact_requirements,
 )
@@ -53,7 +53,7 @@ from finn.dataflow.ops.mvau.problem import (
     MVAUSourceDescription,
 )
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.ops.mvau import NetworkRef
+from finn.dataflow.ops.mvau.associations import MVAUNetworkRef as NetworkRef
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 INT8 = DataType["INT8"]

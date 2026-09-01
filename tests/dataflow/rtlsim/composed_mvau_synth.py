@@ -41,10 +41,10 @@ from dataflow.rtlsim.composed_mvau_equiv import (
 )
 from finn.dataflow.artifacts import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
 from finn.dataflow.ops.mvau.binding import finnlib_root
-from finn.dataflow.ops.mvau.artifacts._implementation import (
+from finn.dataflow.ops.mvau.artifacts.package import package_decomposed_artifact
+from finn.dataflow.ops.mvau.artifacts.synthesis import (
     complete_decomposed_synthesis,
     find_decomposed_synthesis,
-    package_decomposed_artifact,
     prepare_decomposed_synthesis,
 )
 from finn.util.basic import get_vivado_version

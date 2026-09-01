@@ -25,7 +25,7 @@ import pytest
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from dataflow.rtlsim.rtl_transport import random_word
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.binding import verify_manifest
 from finn.dataflow.kernels.dotp_axi import FINNLIB_SOURCES
 

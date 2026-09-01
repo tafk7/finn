@@ -14,7 +14,7 @@ from typing import cast
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-import finn.dataflow.authoring.design as design_authoring
+import finn.dataflow.authoring as dataflow_authoring
 from finn.dataflow.authoring import (
     OpDesign,
     Ref,
@@ -22,25 +22,29 @@ from finn.dataflow.authoring import (
     declare_dataflow_op_authoring,
     divisors_of,
     finite,
-    selected_design_metadata,
 )
 from finn.dataflow.authoring.admission import AdmissionVerdict, graph_stage_build_admission
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.authoring.design import (
     DataflowDesign,
-    DataflowDesignDeclaration,
-    DataflowDesignEntry,
-    DataflowDesignInventory,
     DataflowDesignScope,
     DesignNode,
-    DesignRealization,
+)
+from finn.dataflow.authoring.input_supply import (
     InputSupplyAlternative,
     InputSupplyContext,
     SupplierAttachment,
-    declare_dataflow_design,
-    declare_dataflow_design_inventory,
     declare_input_supply,
 )
+from finn.dataflow.authoring.inventory import (
+    DataflowDesignDeclaration,
+    DataflowDesignEntry,
+    DataflowDesignInventory,
+    declare_dataflow_design,
+    declare_dataflow_design_inventory,
+    selected_design_metadata,
+)
+from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import (
     ABSENT,
     Absent,
@@ -1249,7 +1253,7 @@ def test_public_design_authoring_surface_excludes_compiled_metadata() -> None:
         "DataflowDesignScope",
         "InputSupplyAlternative",
         "declare_dataflow_design_inventory",
-    } <= set(design_authoring.__all__)
+    } <= set(dataflow_authoring.__all__)
     assert {
         "DataflowDesignDeclaration",
         "CompiledKernelDeclaration",
@@ -1259,7 +1263,7 @@ def test_public_design_authoring_surface_excludes_compiled_metadata() -> None:
         "KernelSelection",
         "PlacementSelection",
         "RegionRef",
-    }.isdisjoint(design_authoring.__all__)
+    }.isdisjoint(dataflow_authoring.__all__)
 
 
 def test_production_mvau_import_loads_the_new_design_layer() -> None:

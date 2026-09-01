@@ -33,7 +33,7 @@ from finn.dataflow.ops.mvau.semantics import (
     REPLAY_NODE,
 )
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.design import (
     Absent,
@@ -45,7 +45,11 @@ from finn.dataflow.design import (
 from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
-from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, NetworkRef, SemanticOperandDestination
+from finn.dataflow.ops.mvau.associations import (
+    MVAUNetworkRef as NetworkRef,
+    SemanticOperandDestination,
+)
+from finn.dataflow.ops.mvau.inventory import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region
