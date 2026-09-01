@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.realization import DesignRealization
-from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
+from finn.dataflow.design import (
+    Decided,
+    DependencyKind,
+    DesignPoint,
+    Finding,
+    FindingKind,
+    QualifiedPath,
+)
 from finn.dataflow.kernels import Kernel, PhysicalComponent
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau.artifacts.render import WRAPPER_MODULE, byte_aligned
@@ -83,6 +90,7 @@ def _provenance(
     semantic_kernel_id: str | None,
     selection: QualifiedPath | None,
     network: DataflowNetwork,
+    point: DesignPoint,
 ) -> _Provenance:
     """Everything behind one bound Kernel: what it covers and what chose it.
 
@@ -96,6 +104,30 @@ def _provenance(
     """
 
     node_id = next(iter(kernel.regions.values())).node_id
+    pending = [
+        (reference.kind, reference.path) for _label, reference in kernel.declaration.references
+    ]
+    imported: list[QualifiedPath] = []
+    visited: set[tuple[DependencyKind, QualifiedPath]] = set()
+    while pending:
+        kind, path = pending.pop()
+        key = (kind, path)
+        if key in visited:
+            continue
+        visited.add(key)
+        if kind is DependencyKind.DECISION:
+            if path not in kernel.assignments:
+                imported.append(path)
+            continue
+        if kind is not DependencyKind.PROPERTY:
+            continue
+        declaration = point.design_space.properties.get(path)
+        if declaration is None:
+            continue
+        pending.extend((item.kind, item.path) for item in declaration.evaluator.dependencies)
+        if declaration.applies_if is not None:
+            pending.extend((item.kind, item.path) for item in declaration.applies_if.dependencies)
+
     return _Provenance(
         (node_id,),
         tuple(
@@ -107,7 +139,7 @@ def _provenance(
                 (
                     *((selection,) if selection is not None else ()),
                     *sorted(kernel.assignments, key=str),
-                    *kernel.declaration.imported_decisions,
+                    *imported,
                 )
             )
         ),
@@ -142,7 +174,7 @@ def _merge(items: tuple[_Provenance, ...]) -> _Provenance:
     )
 
 
-def _component(kernel: Kernel, prefix: str, parent: str) -> PhysicalComponent:
+def _component(kernel: Kernel, prefix: str, parent: str, component_id: str) -> PhysicalComponent:
     """The Kernel's own component, placed under this source scope.
 
     A Kernel names itself ``dot_product`` and knows nothing about where that
@@ -155,7 +187,7 @@ def _component(kernel: Kernel, prefix: str, parent: str) -> PhysicalComponent:
     # would take the one assembly that matters straight past the check.
     (declared,) = kernel.components()
     return PhysicalComponent(
-        f"{prefix}.{declared.id}",
+        f"{prefix}.{component_id}",
         declared.module,
         parameters=declared.parameters,
         parent=parent,
@@ -198,8 +230,8 @@ def compose(
     source_id = resolved.result.source_association.source_node_id
     prefix = f"{source_id}.compute"
     wrapper_id = f"{prefix}.wrapper"
-    replay_component = _component(replay, prefix, wrapper_id)
-    dot_component = _component(compute, prefix, wrapper_id)
+    replay_component = _component(replay, prefix, wrapper_id, "replay")
+    dot_component = _component(compute, prefix, wrapper_id, "dot_product")
     replay_id = replay_component.id
     dot_id = dot_component.id
 
@@ -449,12 +481,14 @@ def compose(
             None,
             None,
             network,
+            resolved.point,
         ),
         dot_id: _provenance(
             compute,
             None,
             None,
             network,
+            resolved.point,
         ),
     }
     if delivery is not None:
@@ -463,6 +497,7 @@ def compose(
             None,
             QualifiedPath("mvau.input.weight.supply"),
             network,
+            resolved.point,
         )
     # The wrapper and every connection through it span both, so their record is
     # the union -- which is what a union is for, rather than the default.

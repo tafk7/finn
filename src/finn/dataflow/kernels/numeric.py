@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The complete numeric signature of one MVAU computation.
+"""The complete numeric signature of one folded dot-product computation.
 
 A physical Kernel's datatype coverage is asked about *all four* operand roles at
 once, through this one value.
@@ -37,7 +37,7 @@ __all__ = ["DotProductNumericTypes", "RoleVerdict"]
 
 @dataclass(frozen=True)
 class DotProductNumericTypes:
-    """Every numeric role in one MVAU computation.
+    """Every numeric role in one dot-product computation.
 
     Complete QONNX datatypes, never cached widths or signedness flags: those
     are *queries* on a datatype, and caching them here would rebuild the

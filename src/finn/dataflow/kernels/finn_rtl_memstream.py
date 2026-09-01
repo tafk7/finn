@@ -47,6 +47,7 @@ class FinnRtlMemstreamInputs:
     target_memory_capabilities: Ref[CyclicTargetMemoryCapabilities]
     ram_style: Ref[CyclicRamStyle]
     pumped_memory: Ref[bool]
+    sets: Ref[int]
 
 
 def _depth(output_port: Port) -> int:
@@ -83,7 +84,7 @@ def _initializer_file(
 
 
 def _initializer_backed(initializer_available: bool) -> bool:
-    """Limit the v6 vertical slice to the initializer-backed path it proves."""
+    """Limit this implementation to its currently proven initializer-backed path."""
 
     return initializer_available
 
@@ -172,7 +173,7 @@ class FinnRtlMemstreamKernel(Kernel):
             evaluate=_uram_initialization_supported,
         )
         design.parameter("DEPTH", cast("Ref[object]", depth))
-        design.constant("SETS", 1, why="the initial MVAU policy serves one weight matrix")
+        design.parameter("SETS", cast("Ref[object]", inputs.sets))
         design.parameter("WIDTH", cast("Ref[object]", width))
         design.parameter("INIT_FILE", cast("Ref[object]", init_file))
         design.parameter("RAM_STYLE", cast("Ref[object]", ram_style_name))
@@ -185,7 +186,7 @@ class FinnRtlMemstreamKernel(Kernel):
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
         return (
             PhysicalComponent(
-                "delivery",
+                "memstream",
                 FINN_MEMSTREAM_MODULE,
                 scalar_parameters(dict(kernel.parameters)),
             ),

@@ -41,6 +41,7 @@ from finn.dataflow.ops.mvau.problem import (
     MVAUProblem,
 )
 from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
+from finn.dataflow.region import element_width
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class DotProductDesign(DataflowDesign):
             covers=(compute,),
             candidates=(DotpAxiKernel,),
             inputs=DotProductKernelInputs(
+                role=compute.role,
                 region=semantics.dot_product_region,
                 computation=semantics.dot_product_computation,
                 pe=semantics.pe,
@@ -95,18 +97,38 @@ class DotProductDesign(DataflowDesign):
                 target_clock_period_ns=inputs.problem.target_clock_period_ns,
             ),
         )
+        replay_length = design.derived(
+            "replay.length",
+            int,
+            dependencies={"matrix_width": inputs.problem.matrix_width, "simd": semantics.simd},
+            evaluate=lambda matrix_width, simd: matrix_width // simd,
+        )
+        replay_repetitions = design.derived(
+            "replay.repetitions",
+            int,
+            dependencies={"matrix_height": inputs.problem.matrix_height, "pe": semantics.pe},
+            evaluate=lambda matrix_height, pe: matrix_height // pe,
+        )
+        replay_width = design.derived(
+            "replay.width",
+            int,
+            dependencies={
+                "activation_type": inputs.problem.activation_element_type,
+                "simd": semantics.simd,
+            },
+            evaluate=lambda activation_type, simd: simd * element_width(activation_type),
+        )
         design.kernels(
             "replay",
             covers=(replay,),
             candidates=(ReplayBufferKernel,),
             inputs=ReplayBufferInputs(
+                role=replay.role,
                 region=semantics.replay_region,
                 computation=semantics.replay_computation,
-                matrix_width=inputs.problem.matrix_width,
-                matrix_height=inputs.problem.matrix_height,
-                pe=semantics.pe,
-                simd=semantics.simd,
-                activation_element_type=inputs.problem.activation_element_type,
+                length=replay_length,
+                repetitions=replay_repetitions,
+                width=replay_width,
             ),
         )
 

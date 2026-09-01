@@ -30,7 +30,7 @@ from finn.dataflow.kernels import (
     PhysicalComponent,
     scalar_parameters,
 )
-from finn.dataflow.region import DataflowRegion, NumericElementType, element_width
+from finn.dataflow.region import DataflowRegion
 
 #: FINN's half of the composition, relative to the FINN root, in compile order.
 FINN_ROOT = "finn"
@@ -47,13 +47,12 @@ REPLAY_BUFFER_MODULE = "finn-rtllib.mvu.replay_buffer"
 class ReplayBufferInputs:
     """Operation-neutral traffic and folding facts consumed by replay hardware."""
 
+    role: str
     region: Ref[DataflowRegion]
     computation: Ref[ComputationContract]
-    matrix_width: Ref[int]
-    matrix_height: Ref[int]
-    pe: Ref[int]
-    simd: Ref[int]
-    activation_element_type: Ref[NumericElementType]
+    length: Ref[int]
+    repetitions: Ref[int]
+    width: Ref[int]
 
 
 class ReplayBufferKernel(Kernel):
@@ -66,7 +65,7 @@ class ReplayBufferKernel(Kernel):
     def define_design(cls, design: KernelScope[ReplayBufferInputs]) -> None:
         facts = design.inputs
         design.covers_region(
-            "replay",
+            facts.role,
             region=facts.region,
             computation=facts.computation,
             implements=ACTIVATION_REPLAY_COMPUTATION,
@@ -74,32 +73,9 @@ class ReplayBufferKernel(Kernel):
         )
         design.source(FINN_ROOT, *FINN_SOURCES)
 
-        length = design.derived(
-            "buffer_length",
-            int,
-            dependencies={"matrix_width": facts.matrix_width, "simd": facts.simd},
-            evaluate=lambda matrix_width, simd: matrix_width // simd,
-        )
-        repetitions = design.derived(
-            "buffer_repetitions",
-            int,
-            dependencies={"matrix_height": facts.matrix_height, "pe": facts.pe},
-            evaluate=lambda matrix_height, pe: matrix_height // pe,
-        )
-        width = design.derived(
-            "buffer_width",
-            int,
-            dependencies={
-                "activation_element_type": facts.activation_element_type,
-                "simd": facts.simd,
-            },
-            evaluate=lambda activation_element_type, simd: (
-                simd * element_width(activation_element_type)
-            ),
-        )
-        design.parameter("LEN", cast("Ref[object]", length))
-        design.parameter("REP", cast("Ref[object]", repetitions))
-        design.parameter("W", cast("Ref[object]", width))
+        design.parameter("LEN", cast("Ref[object]", facts.length))
+        design.parameter("REP", cast("Ref[object]", facts.repetitions))
+        design.parameter("W", cast("Ref[object]", facts.width))
 
     @classmethod
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
@@ -107,7 +83,7 @@ class ReplayBufferKernel(Kernel):
 
         return (
             PhysicalComponent(
-                "replay",
+                "replay_buffer",
                 REPLAY_BUFFER_MODULE,
                 scalar_parameters(dict(kernel.parameters)),
             ),

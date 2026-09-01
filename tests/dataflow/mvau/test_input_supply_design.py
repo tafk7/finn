@@ -13,7 +13,15 @@ import numpy as np  # type: ignore[import-not-found]
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.design import Absent, Decided, DesignPoint, Engine, QualifiedPath, Unresolved
+from finn.dataflow.design import (
+    Absent,
+    Decided,
+    DependencyKind,
+    DesignPoint,
+    Engine,
+    QualifiedPath,
+    Unresolved,
+)
 from finn.dataflow.artifacts import TargetIdentity, kernel_artifact_identity
 from finn.dataflow.ops.mvau.associations import (
     BindingLocalStateDestination,
@@ -247,7 +255,12 @@ def test_memstream_parameters_match_the_resolved_design_point() -> None:
         "WIDTH": 32,
     }
     assert delivery.components()[0].module == FINN_MEMSTREAM_MODULE
+    assert delivery.components()[0].id == "memstream"
     assert tuple(source.path for source in delivery.sources) == FINN_MEMSTREAM_SOURCES
+    sets = delivery.declaration.parameter("SETS")
+    assert sets is not None and sets.source is not None
+    assert sets.source.kind is DependencyKind.PROPERTY
+    assert sets.source.path.value.endswith("input.weight.finn_rtl_memstream.sets")
 
 
 def test_memstream_source_association_moves_weights_to_delivery_local_state() -> None:

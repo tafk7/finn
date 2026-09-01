@@ -86,6 +86,13 @@ def _declare_finn_rtl_memstream(context: InputSupplyContext) -> SupplierAttachme
         computation=CYCLIC_PARAMETER_DELIVERY,
         applies_if=context.applies_if,
     )
+    sets = context.design.derived(
+        context.name("sets"),
+        int,
+        dependencies={},
+        evaluate=lambda: 1,
+        applies_if=context.applies_if,
+    )
     context.design.kernels(
         "delivery",
         covers=(delivery,),
@@ -100,6 +107,7 @@ def _declare_finn_rtl_memstream(context: InputSupplyContext) -> SupplierAttachme
             target_memory_capabilities=settings.problem.target_memory_capabilities,
             ram_style=settings.ram_style,
             pumped_memory=settings.pumped_memory,
+            sets=sets,
         ),
         applies_if=context.applies_if,
     )

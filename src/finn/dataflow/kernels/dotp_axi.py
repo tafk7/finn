@@ -77,6 +77,7 @@ _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
 class DotProductKernelInputs:
     """Operation-neutral contracts and facts consumed by ``DotpAxiKernel``."""
 
+    role: str
     region: Ref[DataflowRegion]
     computation: Ref[ComputationContract]
     pe: Ref[int]
@@ -355,7 +356,7 @@ class DotpAxiKernel(Kernel):
     def define_design(cls, design: KernelScope[DotProductKernelInputs]) -> DotpAxiHandles:
         facts = design.inputs
         design.covers_region(
-            "compute",
+            facts.role,
             region=facts.region,
             computation=facts.computation,
             implements=DOT_PRODUCT_COMPUTATION,
@@ -485,8 +486,8 @@ class DotpAxiKernel(Kernel):
             "ACTIVATION_BROADCASTING",
             1,
             why=(
-                "this slice covers the MVU form only; the VVU form is a separate "
-                "question that must not be decided from the Boolean alone"
+                "this implementation broadcasts one activation vector across its "
+                "parallel output lanes"
             ),
         )
         design.constant(
@@ -502,7 +503,7 @@ class DotpAxiKernel(Kernel):
 
         return (
             PhysicalComponent(
-                "dot_product",
+                "dotp_axi",
                 DOTP_AXI_MODULE,
                 scalar_parameters(dict(kernel.parameters)),
             ),
