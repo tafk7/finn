@@ -89,6 +89,8 @@ class _CompiledSpace(Generic[S]):
     inputs: tuple[tuple[str, _Ref[object]], ...]
     members: tuple[tuple[str, _Ref[object]], ...]
     exports: tuple[tuple[str, _Ref[object]], ...]
+    children: tuple[tuple[str, _CompiledSpace[Space]], ...] = ()
+    extension: object | None = None
 
     def member(self, name: str) -> _Ref[object]:
         try:
@@ -103,6 +105,12 @@ class _CompiledSpace(Generic[S]):
             return dict(self.exports)[name]
         except KeyError:
             raise AuthoringError(f"{self.owner.__name__} does not export {name!r}") from None
+
+    def child(self, name: str) -> _CompiledSpace[Space]:
+        try:
+            return dict(self.children)[name]
+        except KeyError:
+            raise AuthoringError(f"{self.owner.__name__} has no child Use {name!r}") from None
 
 
 def _path(prefix: str, name: str) -> QualifiedPath:
@@ -163,6 +171,23 @@ class _Compilation:
         self.allow_problem = allow_problem
         self.declarations = declared_members(space_type)
         self.names = {id(value): name for name, value in self.declarations}
+        declaration_types = (
+            Problem,
+            Input,
+            Decision,
+            Derived,
+            Constraint,
+            ConstraintGroup,
+            Readiness,
+            Use,
+        )
+        self.alias_names: dict[int, str] = {}
+        for base in reversed(space_type.__mro__):
+            if not issubclass(base, Space) or base is Space:
+                continue
+            for name, value in base.__dict__.items():
+                if isinstance(value, declaration_types):
+                    self.alias_names[id(value)] = name
         self.refs: dict[int, _Ref[object]] = {}
         self.constraints: dict[int, QualifiedPath] = {}
         self.uses: dict[int, _CompiledSpace[Space]] = {}
@@ -200,14 +225,25 @@ class _Compilation:
             for name, declaration in self.declarations
             if isinstance(declaration, Input)
         )
-        return _CompiledSpace(
+        compiled = _CompiledSpace(
             self.space_type,
             self.namespace,
             specification,
             bound_inputs,
             members,
             exports,
+            tuple(
+                (name, self.uses[id(declaration)])
+                for name, declaration in self.declarations
+                if isinstance(declaration, Use)
+            ),
         )
+        finalized = self.space_type._finalize_compilation(compiled)
+        if not isinstance(finalized, _CompiledSpace):
+            raise AuthoringError(
+                f"{self.space_type.__name__} returned a non-Space compilation result"
+            )
+        return finalized
 
     def _validate_inputs(self) -> None:
         expected = {
@@ -260,6 +296,13 @@ class _Compilation:
                 )
             elif isinstance(declaration, Constraint):
                 self.constraints[id(declaration)] = _path(f"constraint.{self.namespace}", name)
+        effective = dict(self.declarations)
+        for identity, member_name in self.alias_names.items():
+            declaration = effective[member_name]
+            if isinstance(declaration, ValueSource):
+                self.refs[identity] = self.refs[id(declaration)]
+            elif isinstance(declaration, Constraint):
+                self.constraints[identity] = self.constraints[id(declaration)]
 
     def _source_ref(self, source: ValueSource[object]) -> _Ref[object]:
         if isinstance(source, ChildValue):

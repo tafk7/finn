@@ -120,6 +120,17 @@ def test_incompatible_value_override_is_rejected() -> None:
         declared_members(Broken)
 
 
+def test_a_non_declaration_cannot_silently_hide_an_inherited_declaration() -> None:
+    class Base(Space):
+        value = Input(int)
+
+    class Broken(Base):
+        value = 3
+
+    with pytest.raises(AuthoringError, match="replaces a declaration with int"):
+        declared_members(Broken)
+
+
 def test_export_must_name_an_effective_value_member() -> None:
     orphan = Input(int)
 

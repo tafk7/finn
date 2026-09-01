@@ -122,6 +122,13 @@ class Space:
     """Base class for a declarative, reusable design-space specification."""
 
     exports: tuple[ValueSource[object], ...] = ()
+    _implicit_exports: tuple[str, ...] = ()
+
+    @classmethod
+    def _finalize_compilation(cls, compiled: object) -> object:
+        """Private specialization hook; generic Spaces leave the result unchanged."""
+
+        return compiled
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -414,15 +421,25 @@ def declared_members(space_type: type[Space]) -> tuple[tuple[str, Declaration], 
     """Collect effective declarations in deterministic inherited order."""
 
     ordered: dict[str, Declaration] = {}
-    owners: dict[str, type[Space]] = {}
+    declaration_types = (
+        Problem,
+        Input,
+        Decision,
+        Derived,
+        Constraint,
+        ConstraintGroup,
+        Readiness,
+        Use,
+    )
     for base in reversed(space_type.__mro__):
         if not issubclass(base, Space) or base is Space:
             continue
         for name, value in base.__dict__.items():
-            if not isinstance(
-                value,
-                (Problem, Input, Decision, Derived, Constraint, ConstraintGroup, Readiness, Use),
-            ):
+            if not isinstance(value, declaration_types):
+                if name in ordered:
+                    raise AuthoringError(
+                        f"{base.__name__}.{name} replaces a declaration with {type(value).__name__}"
+                    )
                 continue
             if name in ordered and type(value) is not type(ordered[name]):
                 raise AuthoringError(
@@ -437,8 +454,6 @@ def declared_members(space_type: type[Space]) -> tuple[tuple[str, Declaration], 
                         f"{previous.value_semantics.name} to {value.value_semantics.name}"
                     )
             ordered[name] = cast(Declaration, value)
-            owners[name] = base
-    del owners
     return tuple(ordered.items())
 
 
@@ -450,13 +465,20 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
         id(value): name for name, value in members.items() if isinstance(value, ValueSource)
     }
     exported: dict[str, ValueSource[object]] = {}
+    for name in space_type._implicit_exports:
+        declaration = members.get(name)
+        if not isinstance(declaration, ValueSource):
+            raise AuthoringError(
+                f"{space_type.__name__} implicitly exports {name!r}, which is not a value member"
+            )
+        exported[name] = declaration
     for value in space_type.exports:
-        name = by_identity.get(id(value))
-        if name is None:
+        export_name = by_identity.get(id(value))
+        if export_name is None:
             raise AuthoringError(
                 f"{space_type.__name__} exports a value that is not an effective class member"
             )
-        exported[name] = cast(ValueSource[object], members[name])
+        exported[export_name] = cast(ValueSource[object], members[export_name])
     return exported
 
 
