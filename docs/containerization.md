@@ -306,14 +306,6 @@ An explicit wrapper does not fix it. A generic agent or CI system issues the bar
 command and has no reason to know FINN's calling convention; requiring it moves
 the special case to the caller instead of removing it.
 
-**Most values do not need these mechanisms.** `XILINX_VIVADO`, `VIVADO_PATH`,
-`XILINXD_LICENSE_FILE`, `FINN_ROOT` and `LD_PRELOAD` are all resolved on the host
-and passed as container environment, which a bare exec inherits. Only three
-values remain: `PATH`, `PYTHONPATH` and `LD_LIBRARY_PATH`, about 1.4 kB, produced
-by AMD's `settings64.sh`. Those could in principle be computed host-side too, but
-XRT forces the mechanism regardless — XRT is installed *in the image*, so the
-host may have none.
-
 **All three apply the same file: `docker/finn-toolchain.sh`.** It finds the
 settings scripts from the environment, sources them, adds the two library paths
 `settings64.sh` omits (`lib/lnx64.o` for `finn_xsi`'s simulation kernel,

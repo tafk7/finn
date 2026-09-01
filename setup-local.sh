@@ -242,10 +242,10 @@ gecho "Step 5: Checking Xilinx tools..."
 XILINX_AVAILABLE=0
 
 if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
-    # Resolution is delegated to docker/finn-env, which is NOT container-specific
-    # -- `print` and `exec` just resolve and source a toolchain wherever they
-    # run. All three supported lanes (docker, sbx, bare host) therefore share
-    # one implementation.
+    # Two steps, and the split is the point: docker/finn-env probes the host
+    # and says WHERE the tools are, docker/finn-toolchain.sh applies them. The
+    # image sources that same second file, so every lane applies the toolchain
+    # through identical code.
     #
     # This block used to hardcode
     #
@@ -272,8 +272,7 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
 
     if [ "$XILINX_AVAILABLE" -eq 1 ]; then
         # Source the toolchain into THIS shell, the same way the container does.
-        eval "$("${FINN_ROOT}/docker/finn-env" print --format sh 2>/dev/null)"
-        export FINN_ENV_APPLIED=1
+        . "${FINN_ROOT}/docker/finn-toolchain.sh"
         # The FLEXlm/libudev workaround. Baked as ENV in the container image;
         # on a bare host it has to be applied here. Without it a licence
         # checkout dies with "realloc(): invalid pointer" inside

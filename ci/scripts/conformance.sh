@@ -105,7 +105,7 @@ if want 1 && [ "$have_docker" = 1 ]; then
     targets=$(docker buildx bake -f docker-bake.hcl --print supported 2>/dev/null \
               | python3 -c 'import json,sys;print(" ".join(sorted(json.load(sys.stdin)["target"])))' 2>/dev/null)
     if [ -z "$targets" ]; then
-        bad "1: could not read the `supported` group from docker-bake.hcl"
+        bad "1: could not read the 'supported' group from docker-bake.hcl"
     else
         for target in $targets; do
             if docker buildx bake -f docker-bake.hcl --load "$target" >/dev/null 2>&1; then
