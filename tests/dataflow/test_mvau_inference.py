@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import inspect
+from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 import pytest
@@ -33,6 +34,7 @@ from finn.transformation.fpgadataflow.infer_mvau_dataflow import (
     SOURCE_NODES_ATTR,
     InferMVAUDataflowOp,
     mvau_source_admission,
+    mvau_source_admission_report,
     recognize_mvau_candidates,
     source_nodes_of,
 )
@@ -353,6 +355,17 @@ def test_supported_datatypes_are_build_admitted_without_a_target() -> None:
     assert mvau_source_admission(lowered, lowered.graph.node[0].name, _context(None)) == (
         DotProductDesign.id,
     )
+    assert transform.report.admissions
+    public = transform.report.admissions[0][1]
+    assert public == mvau_source_admission_report(
+        lowered, lowered.graph.node[0].name, _context(None)
+    )
+    assert any(
+        candidate.deferred_constraints
+        for trial in public.trials
+        for placement in trial.placements
+        for candidate in placement.candidates
+    )
 
 
 def test_unsupported_datatypes_are_rejected_without_a_target() -> None:
@@ -364,6 +377,20 @@ def test_unsupported_datatypes_are_rejected_without_a_target() -> None:
     assert transform.report.lowered == ()
     assert transform.report.refused == (("matmul0",),)
     assert [node.op_type for node in lowered.graph.node] == ["MatMul"]
+    assert transform.report.admissions
+    codes = {finding.code for finding in transform.report.findings}
+    assert "dotp-axi-numeric-types-unsupported" in codes
+    assert "mvau-inference-candidate-graph-rejected" in codes
+    detailed = next(
+        finding
+        for finding in transform.report.findings
+        if finding.code == "mvau-inference-candidate-graph-rejected"
+    )
+    values = dict(detailed.values)
+    assert values["placement"] == "compute"
+    assert values["candidate"] == "dotp_axi"
+    graph_constraints = cast("tuple[object, ...]", values["graph_constraints"])
+    assert any(str(path).endswith("operand_types_supported") for path in graph_constraints)
 
 
 def test_target_constraints_are_deferred_then_required_for_resolved_feasibility() -> None:

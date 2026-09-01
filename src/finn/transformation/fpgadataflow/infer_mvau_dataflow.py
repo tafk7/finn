@@ -22,6 +22,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.transformation.base import Transformation  # type: ignore[import-not-found]
 
+from finn.dataflow.authoring.admission import AdmissionVerdict, GraphBuildAdmission
 from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.inventory import mvau_build_admission
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
@@ -67,6 +68,7 @@ class MVAUInferenceReport:
     lowered: tuple[str, ...] = ()
     refused: tuple[tuple[str, ...], ...] = ()
     findings: tuple[Finding, ...] = field(default_factory=tuple)
+    admissions: tuple[tuple[tuple[str, ...], GraphBuildAdmission], ...] = ()
 
 
 #: Source operators whose tensor function is a dense matrix product.
@@ -264,13 +266,108 @@ def mvau_source_admission(
     The answer is the MVAU operation inventory's, not this transformation's.
     """
 
+    return mvau_source_admission_report(model, node_name, context).admitted_designs
+
+
+def mvau_source_admission_report(
+    model: ModelWrapper,
+    node_name: str,
+    context: MVAUDataflowBuildContext,
+) -> GraphBuildAdmission:
+    """Return the complete candidate-backed admission report for one logical node."""
+
     node = next(item for item in model.graph.node if item.name == node_name)
     operation = model.get_customop_wrapper(node)
     if not isinstance(operation, MvauDataflowOp):
         raise TypeError("admission requires a logical MvauDataflowOp node")
     engine = Engine()
     point = engine.start(operation.validated_design_space(), operation.problem_instance(context))
-    return mvau_build_admission(engine, point).admitted_designs
+    return mvau_build_admission(engine, point)
+
+
+def _contextual_finding(
+    finding: Finding,
+    *,
+    source_nodes: tuple[str, ...],
+    design_id: str,
+    supply_modes: tuple[tuple[str, str], ...],
+    placement: str,
+    candidate_id: str | None = None,
+) -> Finding:
+    return Finding(
+        finding.kind,
+        finding.code,
+        finding.path,
+        finding.message,
+        (
+            *finding.values,
+            ("source_nodes", source_nodes),
+            ("design", design_id),
+            ("supply_modes", supply_modes),
+            ("placement", placement),
+            *(((("candidate", candidate_id),)) if candidate_id is not None else ()),
+        ),
+        finding.trace,
+    )
+
+
+def _admission_findings(
+    report: GraphBuildAdmission, source_nodes: tuple[str, ...]
+) -> tuple[Finding, ...]:
+    findings: list[Finding] = []
+    for trial in report.trials:
+        for placement in trial.placements:
+            findings.extend(
+                _contextual_finding(
+                    finding,
+                    source_nodes=source_nodes,
+                    design_id=trial.design_id,
+                    supply_modes=trial.supply_modes,
+                    placement=placement.placement,
+                )
+                for finding in placement.findings
+            )
+            for candidate in placement.candidates:
+                findings.extend(
+                    _contextual_finding(
+                        finding,
+                        source_nodes=source_nodes,
+                        design_id=trial.design_id,
+                        supply_modes=trial.supply_modes,
+                        placement=placement.placement,
+                        candidate_id=candidate.candidate_id,
+                    )
+                    for finding in candidate.findings
+                )
+                if candidate.verdict is AdmissionVerdict.ADMITTED:
+                    continue
+                kind = (
+                    FindingKind.REJECTION
+                    if candidate.verdict is AdmissionVerdict.REJECTED
+                    else FindingKind.LIMITATION
+                )
+                findings.append(
+                    Finding(
+                        kind,
+                        (
+                            "mvau-inference-candidate-graph-rejected"
+                            if candidate.verdict is AdmissionVerdict.REJECTED
+                            else "mvau-inference-candidate-graph-unresolved"
+                        ),
+                        _INFERENCE_PATH,
+                        "an MVAU Kernel candidate did not pass graph-stage admission",
+                        (
+                            ("source_nodes", source_nodes),
+                            ("design", trial.design_id),
+                            ("supply_modes", trial.supply_modes),
+                            ("placement", placement.placement),
+                            ("candidate", candidate.candidate_id),
+                            ("graph_constraints", candidate.graph_constraints),
+                            ("deferred_constraints", candidate.deferred_constraints),
+                        ),
+                    )
+                )
+    return tuple(findings)
 
 
 class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
@@ -291,6 +388,7 @@ class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
         lowered: list[str] = []
         refused: list[tuple[str, ...]] = []
         findings: list[Finding] = []
+        admissions: list[tuple[tuple[str, ...], GraphBuildAdmission]] = []
         current = model
         for candidate in recognize_mvau_candidates(model):
             scope_id = f"mvau_{uuid4().hex}"
@@ -303,7 +401,7 @@ class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
             _apply_candidate(trial, trial_candidate, scope_id)
             node_name = f"MvauDataflowOp_{scope_id}"
             try:
-                admitted = mvau_source_admission(trial, node_name, self.context)
+                admission = mvau_source_admission_report(trial, node_name, self.context)
             except Exception as exc:  # noqa: BLE001 - reported, never swallowed
                 findings.append(
                     Finding(
@@ -316,7 +414,9 @@ class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
                 )
                 refused.append(names)
                 continue
-            if not admitted:
+            admissions.append((names, admission))
+            if not admission.admitted_designs:
+                findings.extend(_admission_findings(admission, names))
                 findings.append(
                     Finding(
                         FindingKind.LIMITATION,
@@ -330,7 +430,12 @@ class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]
                 continue
             current = trial
             lowered.append(node_name)
-        self.report = MVAUInferenceReport(tuple(lowered), tuple(refused), tuple(findings))
+        self.report = MVAUInferenceReport(
+            tuple(lowered),
+            tuple(refused),
+            tuple(findings),
+            tuple(admissions),
+        )
         if not lowered:
             return model, False
         model.model.CopyFrom(current.model)
@@ -367,6 +472,7 @@ __all__: Sequence[str] = [
     "MVAUSourceCandidate",
     "SOURCE_NODES_ATTR",
     "mvau_source_admission",
+    "mvau_source_admission_report",
     "recognize_mvau_candidates",
     "source_nodes_of",
 ]
