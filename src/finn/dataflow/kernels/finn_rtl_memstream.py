@@ -10,13 +10,13 @@ from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, unresolved
 from finn.dataflow.design import ABSENT
-from finn.dataflow.hardware import (
-    HardwareDesign,
-    HardwareKernel,
+from finn.dataflow.kernels import (
+    KernelScope,
+    Kernel,
     PhysicalComponent,
     scalar_parameters,
 )
-from finn.dataflow.hardware.kernel import ComputationContract
+from finn.dataflow.computation import ComputationContract
 from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicRamStyle,
@@ -110,14 +110,14 @@ def _uram_initialization_supported(
     ).supports_initialized_uram
 
 
-class FinnRtlMemstreamKernel(HardwareKernel):
+class FinnRtlMemstreamKernel(Kernel):
     """FINN's generated, optionally writable cyclic memory streamer."""
 
     id = "finn_rtl_memstream"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[FinnRtlMemstreamInputs]) -> None:
+    def define_design(cls, design: KernelScope[FinnRtlMemstreamInputs]) -> None:
         inputs = design.inputs
         design.covers_region(
             inputs.role,
@@ -182,7 +182,7 @@ class FinnRtlMemstreamKernel(HardwareKernel):
         design.source(FINN_MEMSTREAM_ROOT, *FINN_MEMSTREAM_SOURCES)
 
     @classmethod
-    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
         return (
             PhysicalComponent(
                 "delivery",

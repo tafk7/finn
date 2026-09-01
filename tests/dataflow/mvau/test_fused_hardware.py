@@ -45,16 +45,16 @@ from finn.dataflow.design import (
     RequestError,
     Unresolved,
 )
-from finn.dataflow.hardware import (
+from finn.dataflow.kernels import (
     BoundRegion,
-    HardwareKernel,
-    bind_hardware_kernel,
+    Kernel,
+    bind_kernel,
     bound_regions,
     check_declared_references,
-    declare_hardware_kernel,
-    hardware_namespace,
+    declare_kernel,
+    kernel_namespace,
 )
-from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
+from finn.dataflow.kernels.kernel import CompiledKernelDeclaration
 from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
@@ -62,30 +62,30 @@ from finn.dataflow.ops.mvau.semantics import (
 )
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.hardware.dotp_axi import (
+from finn.dataflow.kernels.dotp_axi import (
     DotpAxiKernel,
     covers_numeric_types as dotp_axi_covers_numeric_types,
 )
-from finn.dataflow.ops.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
 from dataflow.mvau.mvu_vvu_axi_kernel import (
     ACTIVATION_EDGE_ROLE,
     COMPUTE_ROLE,
     REPLAY_ROLE,
+    FusedMatrixVectorHardwareInputs,
     MvuVvuAxiKernel,
     covers_numeric_types as fused_covers_numeric_types,
 )
 from dataflow.rtlsim.composed_mvau_equiv import CONFIGS, Config, declared_parameters
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes, RoleVerdict
+from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
+from finn.dataflow.kernels.numeric import DotProductNumericTypes, RoleVerdict
 from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
     MVAUComputationProfile,
-    MVAUDspBlock,
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
@@ -151,10 +151,10 @@ REPLAY_BUFFER = DOT_PRODUCT_DECLARATION.placement("replay").candidates[0]
 OP_NETWORK: Ref[DataflowNetwork] = DOT_PRODUCT_DECLARATION.network
 
 
-def _fused_declaration() -> HardwareKernelDeclaration:
-    declaration, _design = declare_hardware_kernel(
+def _fused_declaration() -> CompiledKernelDeclaration:
+    declaration, _design = declare_kernel(
         MvuVvuAxiKernel,
-        hardware_namespace("test.mvau.fused", MvuVvuAxiKernel.id),
+        kernel_namespace("test.mvau.fused", MvuVvuAxiKernel.id),
         FusedMatrixVectorHardwareInputs(
             replay_region=MVAU_DESIGN_INVENTORY.dot_product.replay_region,
             replay_computation=MVAU_DESIGN_INVENTORY.dot_product.replay_computation,
@@ -219,7 +219,7 @@ class _Placed:
         Binding asks a Kernel's coverage and nothing else, which is correct --
         a Kernel has no business re-litigating whether the source was
         expressible. But it means a fixture that hands a point straight to
-        ``bind_hardware_kernel`` has skipped the gate the production path runs
+        ``bind_kernel`` has skipped the gate the production path runs
         first, and can therefore bind hardware to a design the operation would
         have refused outright.
 
@@ -262,10 +262,10 @@ class _Placed:
 
     def bind(
         self,
-        declaration: HardwareKernelDeclaration,
+        declaration: CompiledKernelDeclaration,
         regions: dict[str, BoundRegion],
         edges: dict[str, str] | None = None,
-    ) -> Answer[HardwareKernel]:
+    ) -> Answer[Kernel]:
         """Bind, but only once the operation has accepted the point.
 
         ``verdict is True`` and nothing weaker: ``False`` is a refusal and
@@ -287,10 +287,10 @@ class _Placed:
 
     def bind_unchecked(
         self,
-        declaration: HardwareKernelDeclaration,
+        declaration: CompiledKernelDeclaration,
         regions: dict[str, BoundRegion],
         edges: dict[str, str] | None = None,
-    ) -> Answer[HardwareKernel]:
+    ) -> Answer[Kernel]:
         """Bind without the semantic gate, to reach a Kernel's own refusal.
 
         Needed for the datatype cases, and the reason is worth stating: in
@@ -308,7 +308,7 @@ class _Placed:
         a multiplier that cannot produce them.
         """
 
-        return bind_hardware_kernel(self.engine, declaration, self.point, regions, edges)
+        return bind_kernel(self.engine, declaration, self.point, regions, edges)
 
     def both_roles(self) -> dict[str, BoundRegion]:
         return bound_regions(
@@ -318,7 +318,7 @@ class _Placed:
             )
         )
 
-    def fused(self, edges: dict[str, str] | None = None) -> HardwareKernel:
+    def fused(self, edges: dict[str, str] | None = None) -> Kernel:
         answer = self.bind(
             FUSED,
             self.both_roles(),
@@ -327,7 +327,7 @@ class _Placed:
         assert isinstance(answer, Decided), answer
         return answer.value
 
-    def decomposed(self) -> tuple[HardwareKernel, HardwareKernel]:
+    def decomposed(self) -> tuple[Kernel, Kernel]:
         replay = self.bind(
             REPLAY_BUFFER, bound_regions((("replay", REPLAY_NODE, self.replay_region),))
         )
@@ -370,7 +370,7 @@ def _place(
     weight: NumericElementType = INT8,
     accumulator: NumericElementType = INT16,
     output: NumericElementType = INT16,
-    target: MVAUDspBlock | object = MVAUDspBlock.DSP58,
+    target: DspBlock | object = DspBlock.DSP58,
     matrix_width: int = 8,
     matrix_height: int = 4,
     pe: int = 2,
@@ -752,10 +752,10 @@ def test_the_matching_accumulator_and_output_still_binds() -> None:
 
 @pytest.mark.parametrize(
     ("target", "weight"),
-    [(MVAUDspBlock.DSP48E2, INT27), (MVAUDspBlock.DSP58, INT27)],
+    [(DspBlock.DSP48E2, INT27), (DspBlock.DSP58, INT27)],
 )
 def test_weights_that_fill_the_a_port_are_refused_without_the_narrow_promise(
-    target: MVAUDspBlock, weight: NumericElementType
+    target: DspBlock, weight: NumericElementType
 ) -> None:
     """Reproduces a binding that would have died inside the RTL.
 
@@ -811,7 +811,7 @@ def test_a_rejecting_coverage_constraint_makes_the_operation_refuse() -> None:
         weight=INT27,
         accumulator=INT32,
         output=INT32,
-        target=MVAUDspBlock.DSP48E2,
+        target=DspBlock.DSP48E2,
         narrow=False,
     )
     assessment = placed.feasibility()
@@ -825,8 +825,8 @@ def test_a_rejecting_coverage_constraint_makes_the_operation_refuse() -> None:
     assert refused not in assessment.not_applicable
 
 
-@pytest.mark.parametrize("target", [MVAUDspBlock.DSP48E1, MVAUDspBlock.DSP48E2, MVAUDspBlock.DSP58])
-def test_ordinary_weights_pack_without_the_narrow_promise(target: MVAUDspBlock) -> None:
+@pytest.mark.parametrize("target", [DspBlock.DSP48E1, DspBlock.DSP48E2, DspBlock.DSP58])
+def test_ordinary_weights_pack_without_the_narrow_promise(target: DspBlock) -> None:
     """The over-refusal half.
 
     The old rule required the narrow promise for every DSP48E1 configuration.
@@ -872,7 +872,7 @@ def test_the_two_cores_pack_lanes_identically() -> None:
     first if one Kernel started asking a different question.
     """
 
-    for target in (MVAUDspBlock.DSP48E1, MVAUDspBlock.DSP48E2, MVAUDspBlock.DSP58):
+    for target in (DspBlock.DSP48E1, DspBlock.DSP48E2, DspBlock.DSP58):
         for weight in (INT8, INT25, INT27):
             for narrow in (False, True):
                 placed = _place(
@@ -1122,7 +1122,7 @@ def _verdicts(
     accumulator: NumericElementType = INT16,
     output: NumericElementType = INT16,
 ) -> dict[str, RoleVerdict]:
-    types = MVAUNumericTypes(activation, weight, accumulator, output)
+    types = DotProductNumericTypes(activation, weight, accumulator, output)
     return {item.role: item for item in fused_covers_numeric_types(types)}
 
 
@@ -1275,16 +1275,16 @@ def test_the_fused_kernel_owns_its_predicate_rather_than_delegating() -> None:
 #: Every signature worth comparing the two cores over: the supported baseline,
 #: each role made unsigned, each role made floating, and the special encodings.
 _COMPARISON = (
-    MVAUNumericTypes(INT8, INT8, INT16, INT16),
-    MVAUNumericTypes(UINT8, INT8, INT16, INT16),
-    MVAUNumericTypes(INT8, DataType["UINT8"], INT16, INT16),
-    MVAUNumericTypes(INT8, INT8, UINT16, UINT16),
-    MVAUNumericTypes(FLOAT16, INT8, INT16, INT16),
-    MVAUNumericTypes(INT8, FLOAT16, INT16, INT16),
-    MVAUNumericTypes(INT8, INT8, FLOAT16, FLOAT16),
-    MVAUNumericTypes(INT8, TERNARY, INT16, INT16),
-    MVAUNumericTypes(BIPOLAR, INT8, INT16, INT16),
-    MVAUNumericTypes(INT8, INT2, INT16, INT16),
+    DotProductNumericTypes(INT8, INT8, INT16, INT16),
+    DotProductNumericTypes(UINT8, INT8, INT16, INT16),
+    DotProductNumericTypes(INT8, DataType["UINT8"], INT16, INT16),
+    DotProductNumericTypes(INT8, INT8, UINT16, UINT16),
+    DotProductNumericTypes(FLOAT16, INT8, INT16, INT16),
+    DotProductNumericTypes(INT8, FLOAT16, INT16, INT16),
+    DotProductNumericTypes(INT8, INT8, FLOAT16, FLOAT16),
+    DotProductNumericTypes(INT8, TERNARY, INT16, INT16),
+    DotProductNumericTypes(BIPOLAR, INT8, INT16, INT16),
+    DotProductNumericTypes(INT8, INT2, INT16, INT16),
 )
 
 

@@ -54,9 +54,9 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     decomposed_requirements,
     record_identity,
 )
-from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.artifacts import DEFAULT_BUILDER, BuilderIdentity
+from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     PackagedDecomposedArtifact,
     complete_ip_package,
     find_ip_package,

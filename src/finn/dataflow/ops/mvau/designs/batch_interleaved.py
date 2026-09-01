@@ -33,7 +33,7 @@ from finn.dataflow.design import (
     NETWORK_VALIDATION_REPORT_SEMANTICS,
     DesignSpaceSpec,
 )
-from finn.dataflow.hardware import ComputationContract
+from finn.dataflow.computation import ComputationContract
 from finn.dataflow.ops.mvau.associations import (
     CoordinateMappingKind,
     MVAUParameterTopology,
@@ -41,7 +41,7 @@ from finn.dataflow.ops.mvau.associations import (
     SemanticOperandDestination,
     SourceOperandAssociation,
 )
-from finn.dataflow.ops.mvau.computation import DOT_PRODUCT_COMPUTATION
+from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.ops.mvau.input_supply import (
     MVAUInputSupply,
     declare_mvau_input_supply,

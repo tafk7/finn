@@ -36,7 +36,7 @@ from finn.dataflow.artifacts import (
     StoredArtifact,
     VlnvIdentity,
 )
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     AXIS_ABSTRACTION,
     COMPONENT_FILE_NAME,
     IP_PACKAGE_RECIPE_SCHEMA,

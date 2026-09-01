@@ -3,7 +3,7 @@
 
 """MVAU wrapper and stitch-shim rendering boundary."""
 
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     WRAPPER_MODULE,
     render_decomposed_wrapper,
     render_stitch_shim,

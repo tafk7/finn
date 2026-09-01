@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from finn.dataflow.design import Answer, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.hardware.kernel import HardwareKernel
+from finn.dataflow.kernels.kernel import Kernel
 from finn.dataflow.network import DataflowNetwork
 
 DESIGN_REALIZATION_PATH = QualifiedPath("hardware.design_realization")
@@ -33,14 +33,14 @@ class DesignRealization:
 
     design_id: str
     network: DataflowNetwork
-    kernels: Mapping[str, HardwareKernel]
+    kernels: Mapping[str, Kernel]
     unabsorbed_edges: tuple[str, ...]
     boundaries: tuple[str, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kernels", MappingProxyType(dict(self.kernels)))
 
-    def kernel(self, placement: str) -> HardwareKernel:
+    def kernel(self, placement: str) -> Kernel:
         try:
             return self.kernels[placement]
         except KeyError:
@@ -50,7 +50,7 @@ class DesignRealization:
 def validate_realization(
     design_id: str,
     network: DataflowNetwork,
-    placed: Mapping[str, HardwareKernel],
+    placed: Mapping[str, Kernel],
 ) -> Answer[DesignRealization]:
     """Validate exact node, edge, fan-out, and boundary coverage."""
 

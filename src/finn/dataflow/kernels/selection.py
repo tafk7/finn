@@ -6,7 +6,7 @@
 A selection exists only when there is a real choice to make: several Kernels
 cover one design point and a policy, a measurement, or a target requirement has
 to pick.  When exactly one Kernel covers a point, there is no decision and none
-is invented -- ``bind_hardware_kernel`` is called directly and the binding is
+is invented -- ``bind_kernel`` is called directly and the binding is
 derived.  A gratuitous decision would make the design space claim a degree of
 freedom that does not exist.
 
@@ -43,11 +43,11 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
-from finn.dataflow.hardware._declaration import HardwareKernelDeclaration
-from finn.dataflow.hardware.kernel import (
+from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
+from finn.dataflow.kernels.kernel import (
     BoundRegion,
-    HardwareKernel,
-    bind_hardware_kernel,
+    Kernel,
+    bind_kernel,
 )
 from finn.dataflow.spec_algebra import (
     SpecAuthoringError,
@@ -57,9 +57,7 @@ from finn.dataflow.spec_algebra import (
     gate_spec,
 )
 
-HARDWARE_KERNEL_ID_SEMANTICS = as_object_semantics(
-    ValueSemantics.immutable_nominal(str, name="HardwareKernelId")
-)
+KERNEL_ID_SEMANTICS = as_object_semantics(ValueSemantics.immutable_nominal(str, name="KernelId"))
 
 
 def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
@@ -75,7 +73,7 @@ def _finite_domain(values: tuple[object, ...]) -> DecisionDomain:
 
 
 @dataclass(frozen=True)
-class HardwareKernelSelection:
+class KernelCandidateSelection:
     """One pool of physical Kernels covering equal semantics.
 
     Every member must cover the same roles.  A pool whose members covered
@@ -84,7 +82,7 @@ class HardwareKernelSelection:
     """
 
     name: str
-    kernels: tuple[HardwareKernelDeclaration, ...]
+    kernels: tuple[CompiledKernelDeclaration, ...]
     applies_if: EvaluatorSpec[Answer[bool]] | None = None
 
     def __post_init__(self) -> None:
@@ -151,7 +149,7 @@ class HardwareKernelSelection:
 
         return f"{self.name}.coverage"
 
-    def kernel(self, kernel_id: str) -> HardwareKernelDeclaration:
+    def kernel(self, kernel_id: str) -> CompiledKernelDeclaration:
         for candidate in self.kernels:
             if candidate.id == kernel_id:
                 return candidate
@@ -161,7 +159,7 @@ class HardwareKernelSelection:
         """The applicability of declarations owned by one pool member."""
 
         reference = DependencyRef.decision(
-            f"{self.name}.selected", self.kernel_path, HARDWARE_KERNEL_ID_SEMANTICS
+            f"{self.name}.selected", self.kernel_path, KERNEL_ID_SEMANTICS
         )
         outer = self.applies_if
 
@@ -185,7 +183,7 @@ class HardwareKernelSelection:
             decisions=(
                 Decision(
                     self.kernel_path,
-                    HARDWARE_KERNEL_ID_SEMANTICS,
+                    KERNEL_ID_SEMANTICS,
                     _finite_domain(cast("tuple[object, ...]", self.kernel_ids)),
                     applies_if=self.applies_if,
                 ),
@@ -275,16 +273,16 @@ class HardwareKernelSelection:
         point: DesignPoint,
         regions: Mapping[str, BoundRegion],
         edges: Mapping[str, str] | None = None,
-    ) -> Answer[HardwareKernel]:
+    ) -> Answer[Kernel]:
         """Bind whichever member this point committed to."""
 
         chosen = self.selected(engine, point)
         if not isinstance(chosen, Decided):
             return Unresolved(chosen.findings)
-        return bind_hardware_kernel(engine, self.kernel(chosen.value), point, regions, edges)
+        return bind_kernel(engine, self.kernel(chosen.value), point, regions, edges)
 
 
 __all__ = [
-    "HARDWARE_KERNEL_ID_SEMANTICS",
-    "HardwareKernelSelection",
+    "KERNEL_ID_SEMANTICS",
+    "KernelCandidateSelection",
 ]

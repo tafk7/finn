@@ -21,11 +21,11 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow.design import Decided, Engine, QualifiedPath
-from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.problem import MVAUComputationProfile
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.hardware.composition import build_decomposed_artifact_requirements
+from finn.dataflow.ops.mvau.artifacts._implementation import build_decomposed_artifact_requirements
 from finn.dataflow.ops.mvau.input_supply import (
     EXTERNAL_SUPPLY,
     FINN_RTL_MEMSTREAM_SUPPLY,

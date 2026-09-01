@@ -10,8 +10,8 @@ from pathlib import Path
 
 from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
-from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.ops.mvau.hardware.replay_buffer import FINN_ROOT
+from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
+from finn.dataflow.kernels.replay_buffer import FINN_ROOT
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 
 _SOURCE_PATH = QualifiedPath("hardware.mvau.decomposed")

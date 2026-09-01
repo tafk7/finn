@@ -57,8 +57,8 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     decomposed_requirements,
     record_identity,
 )
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.composition import package_decomposed_artifact
+from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.ops.mvau.artifacts._implementation import package_decomposed_artifact
 
 #: One configuration is enough.  The claim is structural -- the command form and
 #: the pin names -- and neither varies with folding or DSP generation.  A Zynq

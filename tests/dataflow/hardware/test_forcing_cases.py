@@ -30,13 +30,14 @@ from __future__ import annotations
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.computation import ComputationContract
 
 from dataclasses import dataclass
 from typing import cast
 
 import pytest
 
-import finn.dataflow.hardware as hardware
+import finn.dataflow.kernels as hardware
 from finn.dataflow.authoring import (
     AuthoringError,
     OpDesign,
@@ -57,21 +58,20 @@ from finn.dataflow.design import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.hardware import (
+from finn.dataflow.kernels import (
     BoundRegion,
-    ComputationContract,
-    HardwareDesign,
-    HardwareKernel,
-    HardwareKernelSelection,
+    KernelScope,
+    Kernel,
     PhysicalComponent,
-    bind_hardware_kernel,
+    bind_kernel,
     bound_regions,
     check_declared_references,
-    declare_hardware_kernel,
-    hardware_namespace,
+    declare_kernel,
+    kernel_namespace,
     scalar_parameters,
 )
-from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
+from finn.dataflow.kernels.selection import KernelCandidateSelection
+from finn.dataflow.kernels.kernel import CompiledKernelDeclaration
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -270,14 +270,14 @@ class MultiComponentHandles:
     pipelined: Ref[bool]
 
 
-class SingleComponentKernel(HardwareKernel):
+class SingleComponentKernel(Kernel):
     """Case 1: one covered Region, one instantiated module."""
 
     id = "single"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -291,7 +291,7 @@ class SingleComponentKernel(HardwareKernel):
         design.constant("MODE", 0, why="this core has one mode; the parameter is vestigial")
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (
             PhysicalComponent(
                 "single.core", "example.single", scalar_parameters(dict(binding.parameters))
@@ -299,7 +299,7 @@ class SingleComponentKernel(HardwareKernel):
         )
 
 
-class MultiComponentKernel(HardwareKernel):
+class MultiComponentKernel(Kernel):
     """Case 2: one covered Region, a shell around a core and a buffer.
 
     Also the pool alternative for case 5: it covers exactly what
@@ -310,7 +310,7 @@ class MultiComponentKernel(HardwareKernel):
     version = "3"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> MultiComponentHandles:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> MultiComponentHandles:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -337,7 +337,7 @@ class MultiComponentKernel(HardwareKernel):
         return MultiComponentHandles(pipelined)
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         values = scalar_parameters(dict(binding.parameters))
         shell = PhysicalComponent("multi.shell", "example.multi", values)
         return (
@@ -347,14 +347,14 @@ class MultiComponentKernel(HardwareKernel):
         )
 
 
-class UpstreamKernel(HardwareKernel):
+class UpstreamKernel(Kernel):
     """Case 3, first half: covers the producer Region and nothing else."""
 
     id = "upstream"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "producer",
@@ -366,18 +366,18 @@ class UpstreamKernel(HardwareKernel):
         design.parameter("LANES", cast("Ref[object]", facts.lanes))
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("upstream.core", "example.upstream"),)
 
 
-class DownstreamKernel(HardwareKernel):
+class DownstreamKernel(Kernel):
     """Case 3, second half: covers the consumer Region and nothing else."""
 
     id = "downstream"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "consumer",
@@ -389,18 +389,18 @@ class DownstreamKernel(HardwareKernel):
         design.parameter("LANES", cast("Ref[object]", facts.lanes))
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("downstream.core", "example.downstream"),)
 
 
-class FusedKernel(HardwareKernel):
+class FusedKernel(Kernel):
     """Case 4: both Regions and the edge between them, as one module."""
 
     id = "fused"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "producer",
@@ -428,11 +428,11 @@ class FusedKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("fused.core", "example.fused"),)
 
 
-class MiscomputingKernel(HardwareKernel):
+class MiscomputingKernel(Kernel):
     """Claims the consumer Region while implementing the producer's arithmetic.
 
     Nothing about its Region coverage is wrong -- it names the right
@@ -444,7 +444,7 @@ class MiscomputingKernel(HardwareKernel):
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -455,11 +455,11 @@ class MiscomputingKernel(HardwareKernel):
         design.source("example", "rtl/miscomputing.sv")
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("miscomputing.core", "example.miscomputing"),)
 
 
-class ElsewhereKernel(HardwareKernel):
+class ElsewhereKernel(Kernel):
     """Uses the ``compute`` role name for the *other* Region.
 
     Nothing about it is malformed on its own.  It is only wrong as an
@@ -470,7 +470,7 @@ class ElsewhereKernel(HardwareKernel):
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -481,7 +481,7 @@ class ElsewhereKernel(HardwareKernel):
         design.source("example", "rtl/elsewhere.sv")
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("elsewhere.core", "example.elsewhere"),)
 
 
@@ -495,8 +495,8 @@ class Placed:
     engine: Engine
     point: DesignPoint
     inputs: HardwareInputs
-    declarations: dict[str, HardwareKernelDeclaration]
-    selection: HardwareKernelSelection
+    declarations: dict[str, CompiledKernelDeclaration]
+    selection: KernelCandidateSelection
     specification: DesignSpaceSpec
 
     def value(self, handle: Ref[object]) -> object:
@@ -520,10 +520,8 @@ class Placed:
         name: str,
         regions: dict[str, BoundRegion],
         edges: dict[str, str] | None = None,
-    ) -> Answer[HardwareKernel]:
-        return bind_hardware_kernel(
-            self.engine, self.declarations[name], self.point, regions, edges
-        )
+    ) -> Answer[Kernel]:
+        return bind_kernel(self.engine, self.declarations[name], self.point, regions, edges)
 
 
 def _place(
@@ -536,16 +534,16 @@ def _place(
 ) -> Placed:
     design, inputs, element_type = _semantics()
     kernels = {
-        kernel.id: declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
+        kernel.id: declare_kernel(kernel, kernel_namespace(OWNER, kernel.id), inputs)[0]
         for kernel in (UpstreamKernel, DownstreamKernel, FusedKernel, MiscomputingKernel)
     }
     # Case 5's two alternatives live behind a selection instead, because
     # choosing between them is a real choice; the others have exactly one
     # coverer each and so get no decision at all.
-    selection = HardwareKernelSelection(
+    selection = KernelCandidateSelection(
         f"{OWNER}.compute",
         tuple(
-            declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
+            declare_kernel(kernel, kernel_namespace(OWNER, kernel.id), inputs)[0]
             for kernel in (SingleComponentKernel, MultiComponentKernel)
         ),
     )
@@ -568,7 +566,7 @@ def _place(
         # ``None`` leaves the physical choice open, which is the state a policy
         # asks ``supported_kernels`` in.
         assignments[selection.kernel_path] = hardware_kernel
-        assignments[QualifiedPath(f"{hardware_namespace(OWNER, 'multi')}.pipelined")] = pipelined
+        assignments[QualifiedPath(f"{kernel_namespace(OWNER, 'multi')}.pipelined")] = pipelined
     point = engine.commit_assignments(point, assignments).point
     return Placed(engine, point, inputs, kernels, selection, specification)
 
@@ -711,14 +709,14 @@ def test_the_fused_kernel_covers_the_same_regions_the_separate_ones_do() -> None
 
     placed = _place()
     separate = tuple(
-        cast(Decided[HardwareKernel], placed.bind(name, bound_regions((role,)))).value
+        cast(Decided[Kernel], placed.bind(name, bound_regions((role,)))).value
         for name, role in (
             ("upstream", ("producer", PRODUCER_NODE, placed.producer)),
             ("downstream", ("consumer", CONSUMER_NODE, placed.consumer)),
         )
     )
     fused = cast(
-        Decided[HardwareKernel], placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
+        Decided[Kernel], placed.bind("fused", _both_roles(placed), {"link": LINK_EDGE})
     ).value
 
     assert tuple(sorted(item.node_ids[0] for item in separate)) == tuple(sorted(fused.node_ids))
@@ -774,16 +772,15 @@ def test_the_committed_alternative_is_the_one_that_binds() -> None:
         assert len(bound.value.components()) == components
 
 
-def _pool(*kernels: type[HardwareKernel]) -> tuple[str, ...]:
+def _pool(*kernels: type[Kernel]) -> tuple[str, ...]:
     """Build a pool from these Kernels and return why it was refused, if it was."""
 
     _, inputs, _ = _semantics()
     declarations = tuple(
-        declare_hardware_kernel(kernel, hardware_namespace(OWNER, kernel.id), inputs)[0]
-        for kernel in kernels
+        declare_kernel(kernel, kernel_namespace(OWNER, kernel.id), inputs)[0] for kernel in kernels
     )
     try:
-        HardwareKernelSelection("example.pool", declarations)
+        KernelCandidateSelection("example.pool", declarations)
     except SpecAuthoringError as error:
         return tuple(item.message for item in error.issues)
     return ()
@@ -914,11 +911,11 @@ def test_a_binding_must_fill_every_covered_edge() -> None:
 def test_an_absorbed_edge_must_run_between_covered_roles() -> None:
     _, inputs, _ = _semantics()
 
-    class Disconnected(HardwareKernel):
+    class Disconnected(Kernel):
         id = "disconnected"
 
         @classmethod
-        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+        def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
             facts = design.inputs
             design.covers_region(
                 "producer",
@@ -931,7 +928,7 @@ def test_an_absorbed_edge_must_run_between_covered_roles() -> None:
             )
 
     with pytest.raises(SpecAuthoringError) as raised:
-        declare_hardware_kernel(Disconnected, "example.disconnected", inputs)
+        declare_kernel(Disconnected, "example.disconnected", inputs)
     assert any(item.code == "coverage-edge-role-unknown" for item in raised.value.issues)
 
 
@@ -962,11 +959,11 @@ def test_an_undeclared_parameter_reference_is_caught_when_the_space_is_assembled
         "Ref[object]", design.derived("stray", int, dependencies={}, evaluate=lambda: 1)
     )
 
-    class Reaching(HardwareKernel):
+    class Reaching(Kernel):
         id = "reaching"
 
         @classmethod
-        def define_design(cls, kernel_design: HardwareDesign[HardwareInputs]) -> None:
+        def define_design(cls, kernel_design: KernelScope[HardwareInputs]) -> None:
             facts = kernel_design.inputs
             kernel_design.covers_region(
                 "compute",
@@ -976,7 +973,7 @@ def test_an_undeclared_parameter_reference_is_caught_when_the_space_is_assembled
             )
             kernel_design.parameter("STRAY", stray)
 
-    declaration = declare_hardware_kernel(Reaching, "example.reaching", inputs)[0]
+    declaration = declare_kernel(Reaching, "example.reaching", inputs)[0]
     # Assemble *without* the scope that declares ``stray``.
     specification = assemble_specs((declaration.spec,))
     with pytest.raises(SpecAuthoringError) as raised:
@@ -992,11 +989,11 @@ def test_binding_reports_an_undeclared_reference_rather_than_raising() -> None:
         "Ref[object]", design.derived("stray", int, dependencies={}, evaluate=lambda: 1)
     )
 
-    class Reaching(HardwareKernel):
+    class Reaching(Kernel):
         id = "reaching"
 
         @classmethod
-        def define_design(cls, kernel_design: HardwareDesign[HardwareInputs]) -> None:
+        def define_design(cls, kernel_design: KernelScope[HardwareInputs]) -> None:
             facts = kernel_design.inputs
             kernel_design.covers_region(
                 "compute",
@@ -1006,21 +1003,21 @@ def test_binding_reports_an_undeclared_reference_rather_than_raising() -> None:
             )
             kernel_design.parameter("STRAY", stray)
 
-    declaration = declare_hardware_kernel(Reaching, "example.reaching", inputs)[0]
+    declaration = declare_kernel(Reaching, "example.reaching", inputs)[0]
     placed = _place()
-    answer = bind_hardware_kernel(placed.engine, declaration, placed.point, _compute_role(placed))
+    answer = bind_kernel(placed.engine, declaration, placed.point, _compute_role(placed))
     assert isinstance(answer, Unresolved)
     assert any(item.code == "hardware-reference-not-declared" for item in answer.findings)
 
 
-def _reaching(source: Ref[object], inputs: HardwareInputs) -> HardwareKernelDeclaration:
+def _reaching(source: Ref[object], inputs: HardwareInputs) -> CompiledKernelDeclaration:
     """One Kernel whose only interesting feature is the reference it makes."""
 
-    class Reaching(HardwareKernel):
+    class Reaching(Kernel):
         id = "reaching"
 
         @classmethod
-        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+        def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
             facts = design.inputs
             design.covers_region(
                 "compute",
@@ -1030,7 +1027,7 @@ def _reaching(source: Ref[object], inputs: HardwareInputs) -> HardwareKernelDecl
             )
             design.parameter("VALUE", source)
 
-    return declare_hardware_kernel(Reaching, "example.reaching", inputs)[0]
+    return declare_kernel(Reaching, "example.reaching", inputs)[0]
 
 
 def test_a_reference_naming_the_wrong_dependency_kind_is_refused() -> None:
@@ -1104,9 +1101,9 @@ def test_a_parameter_ownership_is_read_off_its_handle() -> None:
     """Nothing restates where a value comes from, so nothing can misstate it."""
 
     _, inputs, _ = _semantics()
-    declaration = declare_hardware_kernel(
-        SingleComponentKernel, hardware_namespace(OWNER, "single"), inputs
-    )[0]
+    declaration = declare_kernel(SingleComponentKernel, kernel_namespace(OWNER, "single"), inputs)[
+        0
+    ]
     ownership = {item.name: item.ownership for item in declaration.parameters}
     assert ownership == {
         "LANES": "decision",
@@ -1118,11 +1115,11 @@ def test_a_parameter_ownership_is_read_off_its_handle() -> None:
 def test_a_constant_parameter_must_say_why_it_is_one() -> None:
     _, inputs, _ = _semantics()
 
-    class Nameless(HardwareKernel):
+    class Nameless(Kernel):
         id = "nameless"
 
         @classmethod
-        def define_design(cls, design: HardwareDesign[HardwareInputs]) -> None:
+        def define_design(cls, design: KernelScope[HardwareInputs]) -> None:
             facts = design.inputs
             design.covers_region(
                 "compute",
@@ -1133,7 +1130,7 @@ def test_a_constant_parameter_must_say_why_it_is_one() -> None:
             design.constant("MODE", 0, why="")
 
     with pytest.raises(AuthoringError):
-        declare_hardware_kernel(Nameless, "example.nameless", inputs)
+        declare_kernel(Nameless, "example.nameless", inputs)
 
 
 # -- what a bound Kernel may see ---------------------------------------------
@@ -1159,7 +1156,7 @@ def test_a_bound_kernel_sees_only_its_own_committed_choices() -> None:
     paths = {str(path) for path in bound.value.assignments}
 
     # Its own physical choice, and nothing of the semantics that configured it.
-    assert paths == {f"{hardware_namespace(OWNER, 'multi')}.pipelined"}
+    assert paths == {f"{kernel_namespace(OWNER, 'multi')}.pipelined"}
     assert not any(path.endswith(".lanes") for path in paths)
 
 
@@ -1175,9 +1172,9 @@ def test_an_imported_value_reaches_elaboration_only_as_a_declared_parameter() ->
 def test_a_physical_kernel_cannot_declare_a_region() -> None:
     """The scope simply has no way to; this pins that it stays that way."""
 
-    assert not hasattr(HardwareDesign, "region")
-    assert not hasattr(HardwareDesign, "demand")
-    assert not hasattr(HardwareDesign, "export")
+    assert not hasattr(KernelScope, "region")
+    assert not hasattr(KernelScope, "demand")
+    assert not hasattr(KernelScope, "export")
 
 
 # -- evidence ----------------------------------------------------------------

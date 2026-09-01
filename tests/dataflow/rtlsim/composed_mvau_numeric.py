@@ -57,14 +57,14 @@ from dataflow.rtlsim.composed_mvau_equiv import CLOCK_PERIOD_NS, finn_root, reco
 from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     write_decomposed_artifact,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 
@@ -72,9 +72,9 @@ from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 #: because fixture 5's table is keyed by its own ``Config`` and this one adds
 #: DSP48E1 -- the generation Phase 4 corrected a rule for and never measured.
 PART_FOR_TARGET = {
-    MVAUDspBlock.DSP48E1: "xc7z020clg400-1",
-    MVAUDspBlock.DSP48E2: "xczu3eg-sbva484-1-e",
-    MVAUDspBlock.DSP58: "xcvc1902-vsva2197-2MP-e-S",
+    DspBlock.DSP48E1: "xc7z020clg400-1",
+    DspBlock.DSP48E2: "xczu3eg-sbva484-1-e",
+    DspBlock.DSP58: "xcvc1902-vsva2197-2MP-e-S",
 }
 
 PASS, FAIL, SKIP = 0, 1, 2
@@ -94,7 +94,7 @@ class Case:
     """
 
     label: str
-    target: MVAUDspBlock
+    target: DspBlock
     repetitions: int
     matrix_width: int
     matrix_height: int
@@ -169,7 +169,7 @@ STIMULUS_KINDS = ("counting", "identity", "full", "negative", "narrow", "extreme
 CASES = (
     Case(
         "identity",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         1,
         4,
         4,
@@ -185,7 +185,7 @@ CASES = (
     ),
     Case(
         "signed_random",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         2,
         8,
         4,
@@ -200,7 +200,7 @@ CASES = (
     ),
     Case(
         "signed_random_softvec",
-        MVAUDspBlock.DSP48E2,
+        DspBlock.DSP48E2,
         2,
         8,
         6,
@@ -216,7 +216,7 @@ CASES = (
     # -- the discriminating matrix (Phase 6d) ---------------------------------
     Case(
         "unsigned_activations",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         2,
         8,
         4,
@@ -232,7 +232,7 @@ CASES = (
     ),
     Case(
         "unsigned_activations_softvec",
-        MVAUDspBlock.DSP48E2,
+        DspBlock.DSP48E2,
         2,
         8,
         4,
@@ -248,7 +248,7 @@ CASES = (
     ),
     Case(
         "all_negative",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         2,
         8,
         4,
@@ -264,7 +264,7 @@ CASES = (
     ),
     Case(
         "minimum_signed_weight",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         2,
         8,
         4,
@@ -280,7 +280,7 @@ CASES = (
     ),
     Case(
         "narrow_weights",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         2,
         8,
         4,
@@ -296,7 +296,7 @@ CASES = (
     ),
     Case(
         "narrow_weights_softvec",
-        MVAUDspBlock.DSP48E2,
+        DspBlock.DSP48E2,
         2,
         8,
         4,
@@ -322,7 +322,7 @@ CASES = (
     # because checking a rule against its own derivation proves nothing.
     Case(
         "dsp48e1",
-        MVAUDspBlock.DSP48E1,
+        DspBlock.DSP48E1,
         2,
         8,
         4,
@@ -338,7 +338,7 @@ CASES = (
     ),
     Case(
         "dsp48e1_minimum_weight",
-        MVAUDspBlock.DSP48E1,
+        DspBlock.DSP48E1,
         2,
         8,
         4,
@@ -354,7 +354,7 @@ CASES = (
     ),
     Case(
         "dsp48e1_narrow",
-        MVAUDspBlock.DSP48E1,
+        DspBlock.DSP48E1,
         2,
         8,
         4,
@@ -385,7 +385,7 @@ CASES = (
     # is unchanged, which is where the narrow-weight packing lives.
     Case(
         "dsp48e1_frames",
-        MVAUDspBlock.DSP48E1,
+        DspBlock.DSP48E1,
         3,
         4,
         4,
@@ -401,7 +401,7 @@ CASES = (
     ),
     Case(
         "dsp48e1_fixture5_point",
-        MVAUDspBlock.DSP48E1,
+        DspBlock.DSP48E1,
         2,
         8,
         4,
@@ -418,7 +418,7 @@ CASES = (
     ),
     Case(
         "dsp58_frames",
-        MVAUDspBlock.DSP58,
+        DspBlock.DSP58,
         3,
         4,
         4,

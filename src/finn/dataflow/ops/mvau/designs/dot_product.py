@@ -21,12 +21,10 @@ from finn.dataflow.authoring.design import (
 )
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import DesignSpaceSpec
-from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiHandles, DotpAxiKernel
-from finn.dataflow.ops.mvau.hardware.inputs import (
-    ActivationReplayHardwareInputs,
-    DotProductHardwareInputs,
-)
-from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.kernels.dotp_axi import DotpAxiHandles, DotpAxiKernel
+from finn.dataflow.kernels.dotp_axi import DotProductKernelInputs
+from finn.dataflow.kernels.replay_buffer import ReplayBufferInputs
+from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.input_supply import (
     MVAUInputSupply,
     declare_mvau_input_supply,
@@ -85,7 +83,7 @@ class DotProductDesign(DataflowDesign):
             "compute",
             covers=(compute,),
             candidates=(DotpAxiKernel,),
-            inputs=DotProductHardwareInputs(
+            inputs=DotProductKernelInputs(
                 region=semantics.dot_product_region,
                 computation=semantics.dot_product_computation,
                 pe=semantics.pe,
@@ -103,7 +101,7 @@ class DotProductDesign(DataflowDesign):
             "replay",
             covers=(replay,),
             candidates=(ReplayBufferKernel,),
-            inputs=ActivationReplayHardwareInputs(
+            inputs=ReplayBufferInputs(
                 region=semantics.replay_region,
                 computation=semantics.replay_computation,
                 matrix_width=inputs.problem.matrix_width,

@@ -30,9 +30,9 @@ from finn.dataflow.spec_algebra import (
 )
 
 if TYPE_CHECKING:
-    from finn.dataflow.hardware.kernel import (
+    from finn.dataflow.kernels.kernel import (
         CoveragePattern,
-        HardwareKernel,
+        Kernel,
         KernelParameter,
         SourceFile,
     )
@@ -41,7 +41,7 @@ Handles = TypeVar("Handles")
 
 
 @dataclass(frozen=True)
-class HardwareKernelDeclaration:
+class CompiledKernelDeclaration:
     """Everything one physical Kernel owns locally, as engine declarations."""
 
     id: str
@@ -52,7 +52,7 @@ class HardwareKernelDeclaration:
     parameters: tuple[KernelParameter, ...] = ()
     coverage_constraints: tuple[QualifiedPath, ...] = ()
     sources: tuple[SourceFile, ...] = ()
-    owner: type[HardwareKernel] | None = None
+    owner: type[Kernel] | None = None
     handles: object = field(default=None, repr=False, compare=False)
     decision_handles: tuple[Ref[object], ...] = field(default=(), repr=False, compare=False)
     constraint_handles: tuple[ConstraintRef, ...] = field(default=(), repr=False, compare=False)
@@ -179,7 +179,7 @@ class HardwareKernelDeclaration:
 
 def check_declared_references(
     specification: DesignSpaceSpec,
-    declarations: Sequence[HardwareKernelDeclaration],
+    declarations: Sequence[CompiledKernelDeclaration],
 ) -> None:
     """Refuse Kernel references the assembled design space does not honour."""
 
@@ -230,4 +230,4 @@ def check_declared_references(
         raise SpecAuthoringError(tuple(issues))
 
 
-__all__ = ["HardwareKernelDeclaration", "check_declared_references"]
+__all__ = ["CompiledKernelDeclaration", "check_declared_references"]

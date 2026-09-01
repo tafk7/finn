@@ -19,14 +19,14 @@ from __future__ import annotations
 from math import ceil, floor
 
 from finn.dataflow.authoring.scope import unresolved
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.region import NumericElementType
 
 #: The DSP generation each target family selects in the RTL.
 DSP_VERSION = {
-    MVAUDspBlock.DSP48E1: 1,
-    MVAUDspBlock.DSP48E2: 2,
-    MVAUDspBlock.DSP58: 3,
+    DspBlock.DSP48E1: 1,
+    DspBlock.DSP48E2: 2,
+    DspBlock.DSP58: 3,
 }
 
 #: Per-DSP delay terms behind the segment-length derivation, in nanoseconds.
@@ -35,7 +35,7 @@ SEGMENT_BASE_DELAY_NS = 0.741
 SEGMENT_STAGE_DELAY_NS = 0.605
 
 
-def dsp_version(target: MVAUDspBlock) -> object:
+def dsp_version(target: DspBlock) -> object:
     """``VERSION``: which DSP generation the core should instantiate."""
 
     return DSP_VERSION[target]

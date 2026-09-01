@@ -41,7 +41,7 @@ from finn.dataflow.artifacts import (
     kernel_artifact_identity,
 )
 from finn.dataflow.artifacts.identity import content_hash
-from finn.dataflow.hardware import HardwareKernel, PhysicalComponent
+from finn.dataflow.kernels import Kernel, PhysicalComponent
 from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
@@ -62,8 +62,8 @@ from finn.dataflow.ops.mvau.physical import (
     MVAUSemanticPortRef,
 )
 from finn.dataflow.ops.mvau.origin import mvau_elaboration_origin
-from finn.dataflow.ops.mvau.hardware.binding import bind_decomposed
-from finn.dataflow.ops.mvau.hardware.source import (
+from finn.dataflow.ops.mvau.binding import bind_decomposed
+from finn.dataflow.ops.mvau.artifacts.roots import (
     resolved_manifest,
     source_roots,
     verify_manifest,
@@ -303,7 +303,7 @@ class _Provenance:
 
 
 def _provenance(
-    kernel: HardwareKernel,
+    kernel: Kernel,
     semantic_kernel_id: str | None,
     selection: QualifiedPath | None,
     network: DataflowNetwork,
@@ -366,7 +366,7 @@ def _merge(items: tuple[_Provenance, ...]) -> _Provenance:
     )
 
 
-def _component(kernel: HardwareKernel, prefix: str, parent: str) -> PhysicalComponent:
+def _component(kernel: Kernel, prefix: str, parent: str) -> PhysicalComponent:
     """The Kernel's own component, placed under this source scope.
 
     A Kernel names itself ``dot_product`` and knows nothing about where that

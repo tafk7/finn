@@ -25,6 +25,7 @@ from finn.dataflow.authoring import (
     selected_design_metadata,
 )
 from finn.dataflow.authoring.admission import AdmissionVerdict, graph_stage_build_admission
+from finn.dataflow.computation import ComputationContract
 from finn.dataflow.authoring.design import (
     DataflowDesign,
     DataflowDesignDeclaration,
@@ -50,11 +51,10 @@ from finn.dataflow.design import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.hardware import (
+from finn.dataflow.kernels import (
     BoundRegion,
-    ComputationContract,
-    HardwareDesign,
-    HardwareKernel,
+    KernelScope,
+    Kernel,
     PhysicalComponent,
 )
 from finn.dataflow.network import (
@@ -212,11 +212,11 @@ class KernelInputs:
     graph_admitted: Ref[bool] | None = None
 
 
-class DirectKernel(HardwareKernel):
+class DirectKernel(Kernel):
     id = "direct"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[KernelInputs]) -> None:
+    def define_design(cls, design: KernelScope[KernelInputs]) -> None:
         facts = design.inputs
         for node in facts.nodes:
             design.covers_region(
@@ -236,15 +236,15 @@ class DirectKernel(HardwareKernel):
             )
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("direct", "synthetic.direct"),)
 
 
-class AlternativeKernel(HardwareKernel):
+class AlternativeKernel(Kernel):
     id = "alternative"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[KernelInputs]) -> None:
+    def define_design(cls, design: KernelScope[KernelInputs]) -> None:
         node = design.inputs.nodes[0]
         design.covers_region(
             node.role,
@@ -255,15 +255,15 @@ class AlternativeKernel(HardwareKernel):
         design.choice("pipeline", bool, domain=finite((False, True)))
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("alternative", "synthetic.alternative"),)
 
 
-class SupplierKernel(HardwareKernel):
+class SupplierKernel(Kernel):
     id = "supplier"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[KernelInputs]) -> None:
+    def define_design(cls, design: KernelScope[KernelInputs]) -> None:
         node = design.inputs.nodes[0]
         design.covers_region(
             node.role,
@@ -274,15 +274,15 @@ class SupplierKernel(HardwareKernel):
         design.coverage_constraint("available", dependencies={}, evaluate=lambda: True)
 
     @classmethod
-    def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("supplier", "synthetic.supplier"),)
 
 
-class GraphGuardKernel(HardwareKernel):
+class GraphGuardKernel(Kernel):
     id = "graph_guard"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[KernelInputs]) -> None:
+    def define_design(cls, design: KernelScope[KernelInputs]) -> None:
         node = design.inputs.nodes[0]
         admitted = design.inputs.graph_admitted
         if admitted is None:
@@ -733,7 +733,7 @@ def _two_placement_realization() -> tuple[DataflowDesignDeclaration, DesignReali
     return inventory.declarations[0], realized.value
 
 
-def _with_regions(kernel: HardwareKernel, regions: dict[str, BoundRegion]) -> HardwareKernel:
+def _with_regions(kernel: Kernel, regions: dict[str, BoundRegion]) -> Kernel:
     return type(kernel)(
         kernel.declaration,
         regions,
@@ -1252,7 +1252,7 @@ def test_public_design_authoring_surface_excludes_compiled_metadata() -> None:
     } <= set(design_authoring.__all__)
     assert {
         "DataflowDesignDeclaration",
-        "HardwareKernelDeclaration",
+        "CompiledKernelDeclaration",
         "KernelDesign",
         "KernelPlacement",
         "KernelProvider",

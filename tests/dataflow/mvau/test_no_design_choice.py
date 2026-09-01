@@ -37,14 +37,14 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataflow.mvau import test_datatype_continuity as continuity
-from finn.dataflow.ops.mvau.hardware import composition
+from finn.dataflow.ops.mvau.artifacts import _implementation as composition
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
-from finn.dataflow.hardware import TargetIdentity
+from finn.dataflow.artifacts import TargetIdentity
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
-from finn.dataflow.ops.mvau.hardware.binding import bind_decomposed
-from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.binding import bind_decomposed
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     elaborate_decomposed,

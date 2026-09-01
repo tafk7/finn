@@ -37,8 +37,8 @@ from finn.dataflow.design import (
     FindingKind,
     QualifiedPath,
 )
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS, local_mvau_assignment_path
-from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
 from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
     MVAUDataflowOpPaths,
@@ -51,7 +51,10 @@ from finn.dataflow.op_contracts import DataflowOpError, NodeAttributeType
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicTargetMemoryCapabilities,
 )
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import (
+    MVAUComputationProfile,
+    MVAUProblemPaths,
+)
 from finn.dataflow.datatypes import (
     DatatypeError,
     canonical_qonnx_datatype,
@@ -366,17 +369,17 @@ def _tensor_shape(
     return tuple(shape)
 
 
-def _dsp_block(fpga_part: str) -> MVAUDspBlock | None:
+def _dsp_block(fpga_part: str) -> DspBlock | None:
     if len(fpga_part) < 4 or not fpga_part.startswith(("xc", "xq")):
         return None
     if fpga_part.startswith(("xcvc", "xcve", "xcvp", "xcvm", "xqvc", "xqvm", "xqrvc", "xcv80")):
-        return MVAUDspBlock.DSP58
+        return DspBlock.DSP58
     if len(fpga_part) > 2 and fpga_part[2] == "7":
-        return MVAUDspBlock.DSP48E1
-    return MVAUDspBlock.DSP48E2
+        return DspBlock.DSP48E1
+    return DspBlock.DSP48E2
 
 
-def classify_mvau_dsp_block(fpga_part: str) -> MVAUDspBlock | None:
+def classify_mvau_dsp_block(fpga_part: str) -> DspBlock | None:
     """Classify one FPGA part into the MVAU binding's supported DSP families."""
 
     return _dsp_block(fpga_part)
@@ -387,7 +390,7 @@ def _supports_initialized_uram(context: MVAUProjectionContext) -> bool | None:
         return context.supports_initialized_uram
     if context.fpga_part is None:
         return None
-    return _dsp_block(context.fpga_part) is MVAUDspBlock.DSP58
+    return _dsp_block(context.fpga_part) is DspBlock.DSP58
 
 
 def project_mvau_build_problem(
@@ -869,12 +872,7 @@ def project_mvau_source(
             )
         )
     interleave = 1 if logical_node else cast(int, _attribute_value(node, "TH", 1))
-    if (
-        not logical_node
-        and interleave > 1
-        and target is not None
-        and target is not MVAUDspBlock.DSP58
-    ):
+    if not logical_node and interleave > 1 and target is not None and target is not DspBlock.DSP58:
         findings.append(
             _finding(
                 FindingKind.LIMITATION,

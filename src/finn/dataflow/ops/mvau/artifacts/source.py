@@ -3,7 +3,7 @@
 
 """MVAU generated-source requirements and staging boundary."""
 
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     decomposed_top_module_name,

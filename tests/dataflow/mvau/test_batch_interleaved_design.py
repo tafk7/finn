@@ -22,9 +22,9 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import (
 )
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.ops.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
-    MVAUDspBlock,
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
@@ -54,7 +54,7 @@ def _facts() -> dict[QualifiedPath, object]:
             "output",
             (6,),
         ),
-        MVAUProblemPaths.TARGET_DSP_BLOCK: MVAUDspBlock.DSP58,
+        MVAUProblemPaths.TARGET_DSP_BLOCK: DspBlock.DSP58,
         MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: 5.0,
         MVAUProblemPaths.TARGET_FPGA_PART: "xcvc1902-vsva2197-2MP-e-S",
     }

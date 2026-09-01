@@ -25,11 +25,11 @@ import tempfile
 import numpy as np  # type: ignore[import-not-found]
 
 from dataflow.rtlsim.composed_mvau_equiv import record_identity
-from dataflow.rtlsim.composed_mvau_numeric import MVAUDspBlock, _weights
+from dataflow.rtlsim.composed_mvau_numeric import DspBlock, _weights
 from dataflow.rtlsim.supplied_dot_product_numeric import CASE, requirements_for
-from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.artifacts import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
+from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     complete_decomposed_synthesis,
     complete_ip_package,
     package_decomposed_artifact,
@@ -42,7 +42,7 @@ PASS, FAIL = 0, 1
 
 # A readily licensed UltraScale+ part is enough to prove all D6a stages.  The
 # numerical gate separately exercises the DSP58 realization.
-HARDWARE_CASE = replace(CASE, label="dot_product_memstream_hardware", target=MVAUDspBlock.DSP48E2)
+HARDWARE_CASE = replace(CASE, label="dot_product_memstream_hardware", target=DspBlock.DSP48E2)
 
 _UTILIZATION = re.compile(r"^\|\s*(DSP\w*)\s*\|\s*(\d+)\s*\|", re.MULTILINE)
 _SUMMARY_ROW = "DSPs"

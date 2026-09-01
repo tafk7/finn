@@ -57,8 +57,8 @@ from dataflow.mvau.test_decomposed_op import (
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
-from finn.dataflow.ops.mvau.hardware.binding import bind_decomposed
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.binding import bind_decomposed
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     build_decomposed_artifact_requirements,
     elaborate_decomposed,
 )
@@ -389,7 +389,7 @@ def test_the_datatype_is_the_same_value_in_every_region_operand_it_types(role: _
 def test_the_kernel_covers_the_regions_carrying_those_operands() -> None:
     """Hop three: coverage is not a fourth place the type is written down.
 
-    ``bind_hardware_kernel`` checks that the bound Region is the one the
+    ``bind_kernel`` checks that the bound Region is the one the
     coverage handle derives, so the Kernel's view of the operand types is the
     Region's by construction rather than by copy.  What is worth asserting is
     that the roles line up -- an operand checked above under ``compute`` that

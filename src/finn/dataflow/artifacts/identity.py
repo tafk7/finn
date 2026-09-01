@@ -34,7 +34,7 @@ ONNX node names, the dataflow scope id, source tensor names, graph position,
 and physical instance names never reach a key.  Neither does a materialized
 absolute path: an artifact does not become a different artifact because it was
 staged under another directory.
-:class:`~finn.dataflow.hardware.KernelOrigin` carries the placement facts --
+:class:`~finn.dataflow.kernels.KernelOrigin` carries the placement facts --
 it is binding provenance, and this is the other value it points at.
 
 Each identity is a typed frozen value rather than a bare string.  ``key`` is a
@@ -53,7 +53,7 @@ from hashlib import sha256
 from string import Formatter
 from pathlib import Path
 
-from finn.dataflow.hardware.kernel import HardwareKernel, scalar_parameters
+from finn.dataflow.kernels.kernel import Kernel, scalar_parameters
 
 #: Bumped when what an identity *contains* changes.  Without it, adding a field
 #: makes every prior identity look like a different design rather than like one
@@ -172,7 +172,7 @@ def _check_command_shape(recipe: str) -> None:
             )
 
 
-def _local_assignments(kernel: HardwareKernel) -> tuple[tuple[str, Scalar], ...]:
+def _local_assignments(kernel: Kernel) -> tuple[tuple[str, Scalar], ...]:
     """A Kernel's own committed choices, under placement-independent names.
 
     A Kernel placed twice has two namespaces over one authored design, so the
@@ -578,9 +578,7 @@ class IpPackageArtifactIdentity:
         return content_hash(self.serialization.encode())
 
 
-def source_identities(
-    kernel: HardwareKernel, roots: Mapping[str, Path]
-) -> tuple[SourceIdentity, ...]:
+def source_identities(kernel: Kernel, roots: Mapping[str, Path]) -> tuple[SourceIdentity, ...]:
     """Hash every file the Kernel declares, in the order it declares them."""
 
     entries: list[SourceIdentity] = []
@@ -602,9 +600,7 @@ def source_identities(
     return tuple(entries)
 
 
-def kernel_artifact_identity(
-    kernel: HardwareKernel, roots: Mapping[str, Path]
-) -> KernelArtifactIdentity:
+def kernel_artifact_identity(kernel: Kernel, roots: Mapping[str, Path]) -> KernelArtifactIdentity:
     """The generated-source identity of one bound Kernel.
 
     Everything it reads is either declared by the Kernel or committed to it.

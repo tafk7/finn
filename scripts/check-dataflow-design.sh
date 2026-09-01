@@ -56,7 +56,7 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/region.py \
     src/finn/dataflow/region_profiles.py \
     src/finn/dataflow/region_validation.py \
-    src/finn/dataflow/hardware \
+    src/finn/dataflow/kernels \
     src/finn/dataflow/spec_algebra.py \
     src/finn/dataflow/network.py \
     src/finn/dataflow/network_validation.py \

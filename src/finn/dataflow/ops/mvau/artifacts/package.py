@@ -3,7 +3,7 @@
 
 """MVAU packaged-unit stage boundary."""
 
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     INSTANTIATION_COMMAND_SCHEMA,
     PackagedDecomposedArtifact,
     package_decomposed_artifact,

@@ -3,7 +3,7 @@
 
 """Computation contract for cyclic parameter delivery."""
 
-from finn.dataflow.hardware import ComputationContract
+from finn.dataflow.computation import ComputationContract
 
 CYCLIC_PARAMETER_DELIVERY = ComputationContract("parameter.cyclic_delivery")
 

@@ -22,24 +22,22 @@ from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, finite, reject
-from finn.dataflow.hardware import (
-    HardwareDesign,
-    HardwareKernel,
+from finn.dataflow.computation import ComputationContract, DOT_PRODUCT_COMPUTATION
+from finn.dataflow.kernels import (
+    KernelScope,
+    Kernel,
     PhysicalComponent,
     scalar_parameters,
 )
-from finn.dataflow.ops.mvau.computation import DOT_PRODUCT_COMPUTATION
-from finn.dataflow.ops.mvau.hardware.inputs import DotProductHardwareInputs
-from finn.dataflow.ops.mvau.lane_packing import pack_lanes
-from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes, RoleVerdict
-from finn.dataflow.ops.mvau.rtl_parameters import (
+from finn.dataflow.kernels.dsp import DspBlock, pack_lanes
+from finn.dataflow.kernels.numeric import DotProductNumericTypes, RoleVerdict
+from finn.dataflow.kernels.rtl_parameters import (
     DSP_VERSION,
     dsp_version,
     segment_length,
     signed_activations,
 )
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
-from finn.dataflow.region import NumericElementType, element_width
+from finn.dataflow.region import DataflowRegion, NumericElementType, element_width
 
 #: FinnLib's half of the composition, relative to the FinnLib root, in compile
 #: order -- ``dotp_axi`` instantiates ``dotp``, which instantiates the core.
@@ -57,9 +55,9 @@ DOTP_AXI_MODULE = "finnlib.rtl.dotp_axi"
 
 #: Multiplier operand and accumulator widths each DSP generation offers.
 _DSP_WIDTHS = {
-    MVAUDspBlock.DSP48E1: (25, 18, 48),
-    MVAUDspBlock.DSP48E2: (27, 18, 48),
-    MVAUDspBlock.DSP58: (27, 24, 58),
+    DspBlock.DSP48E1: (25, 18, 48),
+    DspBlock.DSP48E2: (27, 18, 48),
+    DspBlock.DSP58: (27, 24, 58),
 }
 
 
@@ -73,6 +71,23 @@ _DSP_WIDTHS = {
 #: is the ``TERNARY``-lowered-as-``INT2`` defect, and naming the families
 #: explicitly is what closes it.
 _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
+
+
+@dataclass(frozen=True)
+class DotProductKernelInputs:
+    """Operation-neutral contracts and facts consumed by ``DotpAxiKernel``."""
+
+    region: Ref[DataflowRegion]
+    computation: Ref[ComputationContract]
+    pe: Ref[int]
+    simd: Ref[int]
+    activation_element_type: Ref[NumericElementType]
+    weight_element_type: Ref[NumericElementType]
+    output_element_type: Ref[NumericElementType]
+    accumulator_element_type: Ref[NumericElementType]
+    narrow_weights: Ref[bool]
+    target_dsp_block: Ref[DspBlock]
+    target_clock_period_ns: Ref[float]
 
 
 @dataclass(frozen=True)
@@ -126,7 +141,7 @@ def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
 _SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
 
 
-def covers_numeric_types(types: MVAUNumericTypes) -> tuple[RoleVerdict, ...]:
+def covers_numeric_types(types: DotProductNumericTypes) -> tuple[RoleVerdict, ...]:
     """This core's one authoritative datatype predicate, over every role.
 
     The single implementation behind both the physical coverage constraint and
@@ -178,7 +193,7 @@ def covers_numeric_types(types: MVAUNumericTypes) -> tuple[RoleVerdict, ...]:
 
 
 def _with_output_paired_to_accumulator(
-    verdicts: tuple[RoleVerdict, ...], types: MVAUNumericTypes
+    verdicts: tuple[RoleVerdict, ...], types: DotProductNumericTypes
 ) -> tuple[RoleVerdict, ...]:
     """The last clause of the role contract: the output *is* the accumulator.
 
@@ -219,7 +234,7 @@ def _with_output_paired_to_accumulator(
     )
 
 
-def covers_operand_types(types: MVAUNumericTypes) -> bool:
+def covers_operand_types(types: DotProductNumericTypes) -> bool:
     """The boolean reduction, for callers that only need admission's answer."""
 
     return all(verdict.supported for verdict in covers_numeric_types(types))
@@ -236,7 +251,7 @@ def _operand_types_supported(
     refused = [
         verdict
         for verdict in covers_numeric_types(
-            MVAUNumericTypes(activation, weight, accumulator, output)
+            DotProductNumericTypes(activation, weight, accumulator, output)
         )
         if not verdict.supported
     ]
@@ -267,7 +282,7 @@ def _operand_widths_supported(activation: NumericElementType, weight: NumericEle
 
 
 def _width_supported(
-    target: MVAUDspBlock,
+    target: DspBlock,
     activation: NumericElementType,
     weight: NumericElementType,
     accumulator: NumericElementType,
@@ -285,7 +300,7 @@ def _width_supported(
 
 
 def _narrow_weights_supported(
-    target: MVAUDspBlock,
+    target: DspBlock,
     activation: NumericElementType,
     weight: NumericElementType,
     narrow: bool,
@@ -330,14 +345,14 @@ def _narrow_weights_supported(
     return True
 
 
-class DotpAxiKernel(HardwareKernel):
+class DotpAxiKernel(Kernel):
     """Folded multiply-accumulate over an already-expanded activation stream."""
 
     id = "dotp_axi"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[DotProductHardwareInputs]) -> DotpAxiHandles:
+    def define_design(cls, design: KernelScope[DotProductKernelInputs]) -> DotpAxiHandles:
         facts = design.inputs
         design.covers_region(
             "compute",
@@ -482,7 +497,7 @@ class DotpAxiKernel(HardwareKernel):
         return DotpAxiHandles(pumping)
 
     @classmethod
-    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
         """One ``dotp_axi`` instance.  Composition is the assembly's business."""
 
         return (
@@ -500,5 +515,6 @@ __all__ = [
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
     "DotpAxiKernel",
+    "DotProductKernelInputs",
     "covers_operand_types",
 ]

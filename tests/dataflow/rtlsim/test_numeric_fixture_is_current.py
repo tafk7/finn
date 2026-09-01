@@ -30,7 +30,7 @@ import pytest
 from dataflow.rtlsim import composed_mvau_numeric as fixture
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.lane_packing import a_datapath_width, pack_lanes
+from finn.dataflow.kernels.dsp import a_datapath_width, pack_lanes
 
 
 def _stimulus(case: fixture.Case) -> tuple[np.ndarray, np.ndarray]:

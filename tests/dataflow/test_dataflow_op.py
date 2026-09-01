@@ -21,7 +21,7 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.authoring import DataflowOpError, NodeAttrCodec
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.op import dataflow_problem_fingerprint
 from finn.dataflow.resolution import NetworkRef
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
@@ -95,7 +95,7 @@ def _change_synthetic_shape(model: ModelWrapper) -> None:
 
 def test_mvau_dsp_block_keeps_its_pre_move_problem_identity() -> None:
     assert (
-        dataflow_problem_fingerprint({QualifiedPath("target.dsp_block"): MVAUDspBlock.DSP58})
+        dataflow_problem_fingerprint({QualifiedPath("target.dsp_block"): DspBlock.DSP58})
         == "cf8ff27c13c04b2049026a5b360a9cf813bbdc3c511cab62639b0f80457e0f7f"
     )
 

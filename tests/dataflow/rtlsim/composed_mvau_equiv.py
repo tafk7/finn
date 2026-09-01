@@ -66,14 +66,14 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     write_decomposed_artifact,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 
@@ -108,7 +108,7 @@ class Config:
     """One design point to compare, named the way the design space names it."""
 
     label: str
-    target: MVAUDspBlock
+    target: DspBlock
     repetitions: int
     matrix_width: int
     matrix_height: int
@@ -139,22 +139,22 @@ class Config:
 #: A part per DSP family, so the design point's target is the real target and
 #: not an assertion the fixture makes on the side.
 _PART_FOR_TARGET = {
-    MVAUDspBlock.DSP48E1: "xc7z020clg400-1",
-    MVAUDspBlock.DSP48E2: "xczu3eg-sbva484-1-e",
-    MVAUDspBlock.DSP58: "xcvc1902-vsva2197-2MP-e-S",
+    DspBlock.DSP48E1: "xc7z020clg400-1",
+    DspBlock.DSP48E2: "xczu3eg-sbva484-1-e",
+    DspBlock.DSP58: "xcvc1902-vsva2197-2MP-e-S",
 }
 
 #: DSP48E2 exercises the soft-vector core, DSP58 the packed one.  The last
 #: three cover several repetitions (so the replay buffer has to reset between
 #: frames) and pumped compute.
 CONFIGS = [
-    Config("softvec", MVAUDspBlock.DSP48E2, 1, 4, 4, 2, 2),
-    Config("packed", MVAUDspBlock.DSP58, 1, 4, 4, 2, 2),
-    Config("one_neuron_fold", MVAUDspBlock.DSP58, 1, 4, 4, 4, 2),
-    Config("one_synapse_fold", MVAUDspBlock.DSP58, 1, 4, 4, 2, 4),
-    Config("three_repetitions", MVAUDspBlock.DSP58, 3, 4, 4, 2, 2),
-    Config("repetitions_softvec", MVAUDspBlock.DSP48E2, 2, 8, 6, 3, 2),
-    Config("pumped", MVAUDspBlock.DSP58, 2, 8, 4, 2, 4, pumping=True),
+    Config("softvec", DspBlock.DSP48E2, 1, 4, 4, 2, 2),
+    Config("packed", DspBlock.DSP58, 1, 4, 4, 2, 2),
+    Config("one_neuron_fold", DspBlock.DSP58, 1, 4, 4, 4, 2),
+    Config("one_synapse_fold", DspBlock.DSP58, 1, 4, 4, 2, 4),
+    Config("three_repetitions", DspBlock.DSP58, 3, 4, 4, 2, 2),
+    Config("repetitions_softvec", DspBlock.DSP48E2, 2, 8, 6, 3, 2),
+    Config("pumped", DspBlock.DSP58, 2, 8, 4, 2, 4, pumping=True),
     # DSP48E1 was in the part table from the start and in no configuration, so
     # the oldest generation this Kernel covers had never been simulated at all.
     # Phase 4 corrected the narrow-weight rule in both directions by reading
@@ -164,7 +164,7 @@ CONFIGS = [
     # Running it found a defect in this fixture rather than in either core: the
     # weight stimulus did not honour the NARROW_WEIGHTS the point declares.
     # See ``_random_weight_beat``.
-    Config("dsp48e1", MVAUDspBlock.DSP48E1, 2, 8, 4, 2, 2, activation_bits=4),
+    Config("dsp48e1", DspBlock.DSP48E1, 2, 8, 4, 2, 2, activation_bits=4),
 ]
 
 CONFIGS_BY_LABEL = {config.label: config for config in CONFIGS}

@@ -3,7 +3,7 @@
 
 """The physical Kernel: a hardware design family that covers selected semantics.
 
-A ``HardwareKernel`` is a reusable physical hardware design with declared
+A ``Kernel`` is a reusable physical hardware design with declared
 coverage over one or more Region families and the edges between them.  It is
 the unit an artifact is generated from and cached against.  It owns
 microarchitecture, target coverage, physical-only decisions, physical parameter
@@ -41,6 +41,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from finn.dataflow.authoring.scope import Ref
+from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design import (
     Answer,
     Decided,
@@ -53,8 +54,8 @@ from finn.dataflow.design import (
     RequestError,
     Unresolved,
 )
-from finn.dataflow.hardware._declaration import (
-    HardwareKernelDeclaration,
+from finn.dataflow.kernels._declaration import (
+    CompiledKernelDeclaration,
     check_declared_references,
 )
 from finn.dataflow.network import DataflowNetwork
@@ -62,7 +63,7 @@ from finn.dataflow.region import DataflowRegion
 from finn.dataflow.spec_algebra import SpecAuthoringError, SpecAuthoringIssue, duplicate_values
 
 if TYPE_CHECKING:  # the authoring scope imports this module, not the reverse
-    from finn.dataflow.hardware.authoring import HardwareDesign
+    from finn.dataflow.kernels.authoring import KernelScope
 
 #: Where a binding failure is reported when it belongs to no single Kernel.
 BINDING_PATH = QualifiedPath("hardware.binding")
@@ -93,27 +94,6 @@ def _resolve(engine: Engine, point: DesignPoint, path: QualifiedPath) -> Answer[
                 ),
             )
         )
-
-
-# -- what a Region is required to compute ------------------------------------
-
-
-@dataclass(frozen=True)
-class ComputationContract:
-    """What the traffic crossing a Region's boundary is required to mean.
-
-    Equal Region values do not imply equal computation: a dot product, a
-    maximum, and a population count over the same operands produce the same
-    schedule, the same beat grouping, and the same availability.  The contract
-    is what distinguishes them, so it is declared on both sides and compared.
-    """
-
-    id: str
-    version: str = "1"
-
-    def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError("a computation contract must be named")
 
 
 # -- coverage ----------------------------------------------------------------
@@ -496,12 +476,12 @@ class KernelOrigin:
     sources: tuple[tuple[str, str], ...]
 
 
-class HardwareKernel:
+class Kernel:
     """One physical Kernel family, and one bound instance of it.
 
     Subclass it to declare a hardware design.  A subclass carries a stable
     ``id`` and ``version`` and one ``define_design`` hook; passing it to
-    ``declare_hardware_kernel`` runs that hook under a namespace and returns the
+    ``declare_kernel`` runs that hook under a namespace and returns the
     ordinary engine declarations it produced.
 
     An *instance* is that Kernel as bound at one point: the Regions it was told
@@ -516,7 +496,7 @@ class HardwareKernel:
     version: str = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[Any]) -> object:
+    def define_design(cls, design: KernelScope[Any]) -> object:
         """Declare this Kernel's coverage, choices, parameters, and sources.
 
         The scope carries the typed inputs the covered semantics wired in, so a
@@ -527,7 +507,7 @@ class HardwareKernel:
         raise NotImplementedError(f"{cls.__name__} does not define a design")
 
     @classmethod
-    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
         """The physical components this Kernel becomes at one binding.
 
         Elaboration makes no design choice.  Every value it may use is in the
@@ -538,7 +518,7 @@ class HardwareKernel:
 
     def __init__(
         self,
-        declaration: HardwareKernelDeclaration,
+        declaration: CompiledKernelDeclaration,
         regions: Mapping[str, BoundRegion],
         edges: Mapping[str, str],
         assignments: Mapping[QualifiedPath, object],
@@ -630,7 +610,7 @@ class BoundRegion:
 
 
 def audit_elaboration(
-    kernel: HardwareKernel, components: tuple[PhysicalComponent, ...]
+    kernel: Kernel, components: tuple[PhysicalComponent, ...]
 ) -> tuple[PhysicalComponent, ...]:
     """Refuse a component carrying a parameter the Kernel did not declare.
 
@@ -686,7 +666,7 @@ def audit_elaboration(
 
 
 def _role_findings(
-    declaration: HardwareKernelDeclaration,
+    declaration: CompiledKernelDeclaration,
     regions: Mapping[str, BoundRegion],
     edges: Mapping[str, str],
 ) -> list[Finding]:
@@ -720,7 +700,7 @@ def _role_findings(
 def _semantic_findings(
     engine: Engine,
     point: DesignPoint,
-    declaration: HardwareKernelDeclaration,
+    declaration: CompiledKernelDeclaration,
     regions: Mapping[str, BoundRegion],
 ) -> list[Finding]:
     """Check every covered role against the declaration it names."""
@@ -758,7 +738,7 @@ def _semantic_findings(
 def _edge_findings(
     engine: Engine,
     point: DesignPoint,
-    declaration: HardwareKernelDeclaration,
+    declaration: CompiledKernelDeclaration,
     regions: Mapping[str, BoundRegion],
     edges: Mapping[str, str],
 ) -> list[Finding]:
@@ -797,7 +777,7 @@ def _edge_findings(
 
 
 def _coverage_findings(
-    engine: Engine, point: DesignPoint, declaration: HardwareKernelDeclaration
+    engine: Engine, point: DesignPoint, declaration: CompiledKernelDeclaration
 ) -> list[Finding]:
     """Evaluate the Kernel's own coverage conditions.
 
@@ -840,13 +820,13 @@ def _coverage_findings(
     return findings
 
 
-def bind_hardware_kernel(
+def bind_kernel(
     engine: Engine,
-    declaration: HardwareKernelDeclaration,
+    declaration: CompiledKernelDeclaration,
     point: DesignPoint,
     regions: Mapping[str, BoundRegion],
     edges: Mapping[str, str] | None = None,
-) -> Answer[HardwareKernel]:
+) -> Answer[Kernel]:
     """Bind one physical Kernel to the exact semantics it declared it covers.
 
     ``regions`` and ``edges`` map this Kernel's declared roles onto real node
@@ -886,7 +866,7 @@ def bind_hardware_kernel(
 
     owned = {item.path for item in declaration.spec.decisions}
     local = {path: value for path, value in point.assignments.items() if path in owned}
-    bound_type = declaration.owner or HardwareKernel
+    bound_type = declaration.owner or Kernel
     instance = bound_type(declaration, dict(regions), supplied_edges, local, values)
     return Decided(instance)
 
@@ -900,18 +880,17 @@ def bound_regions(pairs: Sequence[tuple[str, str, DataflowRegion]]) -> dict[str,
 __all__ = [
     "BINDING_PATH",
     "BoundRegion",
-    "ComputationContract",
     "CoveragePattern",
     "EdgeCoverage",
-    "HardwareKernel",
-    "HardwareKernelDeclaration",
+    "Kernel",
+    "CompiledKernelDeclaration",
     "KernelOrigin",
     "KernelParameter",
     "PhysicalComponent",
     "RegionCoverage",
     "SourceFile",
     "audit_elaboration",
-    "bind_hardware_kernel",
+    "bind_kernel",
     "bound_regions",
     "check_declared_references",
     "scalar_parameters",

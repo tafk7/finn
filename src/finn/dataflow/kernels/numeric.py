@@ -32,11 +32,11 @@ from dataclasses import dataclass
 
 from finn.dataflow.region import NumericElementType
 
-__all__ = ["MVAUNumericTypes", "RoleVerdict"]
+__all__ = ["DotProductNumericTypes", "RoleVerdict"]
 
 
 @dataclass(frozen=True)
-class MVAUNumericTypes:
+class DotProductNumericTypes:
     """Every numeric role in one MVAU computation.
 
     Complete QONNX datatypes, never cached widths or signedness flags: those

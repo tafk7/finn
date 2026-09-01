@@ -8,7 +8,7 @@ from __future__ import annotations
 from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.hardware.composition import compose
+from finn.dataflow.ops.mvau.artifacts._implementation import compose
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError, MVAUPhysicalElaboration
 from finn.dataflow.ops.mvau.projection import MVAUResolvedDesign
 

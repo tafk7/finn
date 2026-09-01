@@ -14,20 +14,20 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, DesignPoint, Engine, QualifiedPath, Unresolved
-from finn.dataflow.hardware import TargetIdentity, kernel_artifact_identity
+from finn.dataflow.artifacts import TargetIdentity, kernel_artifact_identity
 from finn.dataflow.ops.mvau.associations import (
     BindingLocalStateDestination,
     MVAUParameterTopology,
     MVAUSourceAssociation,
 )
 from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
-from finn.dataflow.ops.mvau.hardware.binding import source_roots
-from finn.dataflow.ops.mvau.hardware.memstream import (
+from finn.dataflow.ops.mvau.binding import source_roots
+from finn.dataflow.kernels.finn_rtl_memstream import (
     FINN_MEMSTREAM_MODULE,
     FINN_MEMSTREAM_SOURCES,
     FinnRtlMemstreamKernel,
 )
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     package_decomposed_artifact,
     prepare_decomposed_synthesis,
@@ -46,9 +46,9 @@ from finn.dataflow.ops.mvau.input_supply import (
 )
 from finn.dataflow.ops.mvau.elaboration import compose_dot_product_design
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
-    MVAUDspBlock,
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
@@ -84,7 +84,7 @@ def _facts(
             "output_tensor",
             (2,),
         ),
-        MVAUProblemPaths.TARGET_DSP_BLOCK: MVAUDspBlock.DSP58,
+        MVAUProblemPaths.TARGET_DSP_BLOCK: DspBlock.DSP58,
         MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: 5.0,
         MVAUProblemPaths.TARGET_FPGA_PART: "xcvc1902-vsva2197-2MP-e-S",
     }

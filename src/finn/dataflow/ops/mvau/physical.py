@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from finn.dataflow.design import Finding, QualifiedPath
-from finn.dataflow.hardware import PhysicalComponent
+from finn.dataflow.kernels import PhysicalComponent
 from finn.dataflow.ops.mvau.associations import MVAUNetworkRef
 
 

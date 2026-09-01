@@ -19,18 +19,18 @@ than smoothed over by a convention imposed on every core.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref
-from finn.dataflow.hardware import (
-    HardwareDesign,
-    HardwareKernel,
+from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION, ComputationContract
+from finn.dataflow.kernels import (
+    KernelScope,
+    Kernel,
     PhysicalComponent,
     scalar_parameters,
 )
-from finn.dataflow.ops.mvau.computation import ACTIVATION_REPLAY_COMPUTATION
-from finn.dataflow.ops.mvau.hardware.inputs import ActivationReplayHardwareInputs
-from finn.dataflow.region import element_width
+from finn.dataflow.region import DataflowRegion, NumericElementType, element_width
 
 #: FINN's half of the composition, relative to the FINN root, in compile order.
 FINN_ROOT = "finn"
@@ -43,14 +43,27 @@ FINN_SOURCES = (
 REPLAY_BUFFER_MODULE = "finn-rtllib.mvu.replay_buffer"
 
 
-class ReplayBufferKernel(HardwareKernel):
+@dataclass(frozen=True)
+class ReplayBufferInputs:
+    """Operation-neutral traffic and folding facts consumed by replay hardware."""
+
+    region: Ref[DataflowRegion]
+    computation: Ref[ComputationContract]
+    matrix_width: Ref[int]
+    matrix_height: Ref[int]
+    pe: Ref[int]
+    simd: Ref[int]
+    activation_element_type: Ref[NumericElementType]
+
+
+class ReplayBufferKernel(Kernel):
     """Present each activation row once per neuron fold."""
 
     id = "replay_buffer"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[ActivationReplayHardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[ReplayBufferInputs]) -> None:
         facts = design.inputs
         design.covers_region(
             "replay",
@@ -89,7 +102,7 @@ class ReplayBufferKernel(HardwareKernel):
         design.parameter("W", cast("Ref[object]", width))
 
     @classmethod
-    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
         """One ``replay_buffer`` instance."""
 
         return (
@@ -105,5 +118,6 @@ __all__ = [
     "FINN_ROOT",
     "FINN_SOURCES",
     "REPLAY_BUFFER_MODULE",
+    "ReplayBufferInputs",
     "ReplayBufferKernel",
 ]

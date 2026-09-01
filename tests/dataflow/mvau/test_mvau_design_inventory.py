@@ -20,12 +20,12 @@ from finn.dataflow.ops.mvau.designs.inventory import (
     MVAU_STRUCTURAL_READINESS,
     admissible_mvau_designs,
 )
-from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
-    MVAUDspBlock,
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
@@ -56,7 +56,7 @@ def _facts() -> dict[QualifiedPath, object]:
             "output",
             (6,),
         ),
-        MVAUProblemPaths.TARGET_DSP_BLOCK: MVAUDspBlock.DSP58,
+        MVAUProblemPaths.TARGET_DSP_BLOCK: DspBlock.DSP58,
         MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS: 5.0,
         MVAUProblemPaths.TARGET_FPGA_PART: "xcvc1902-vsva2197-2MP-e-S",
     }

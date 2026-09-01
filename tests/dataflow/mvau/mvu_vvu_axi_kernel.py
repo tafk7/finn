@@ -29,35 +29,37 @@ at the same semantic point.  See §16.3 of the migration plan.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, finite, reject
-from finn.dataflow.hardware import (
-    HardwareDesign,
-    HardwareKernel,
+from finn.dataflow.kernels import (
+    KernelScope,
+    Kernel,
     PhysicalComponent,
     scalar_parameters,
 )
-from finn.dataflow.ops.mvau.computation import (
+from finn.dataflow.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
+    ComputationContract,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.ops.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
-from finn.dataflow.ops.mvau.lane_packing import (
+from finn.dataflow.kernels.dsp import (
+    DspBlock,
     a_datapath_width,
     b_datapath_width,
     p_datapath_width,
     pack_lanes,
 )
-from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes, RoleVerdict
-from finn.dataflow.ops.mvau.rtl_parameters import (
+from finn.dataflow.kernels.numeric import DotProductNumericTypes, RoleVerdict
+from finn.dataflow.kernels.rtl_parameters import (
     DSP_VERSION,
     dsp_version,
     segment_length,
     signed_activations,
 )
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
-from finn.dataflow.region import NumericElementType, element_width
+from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.region import DataflowRegion, NumericElementType, element_width
 
 #: FINN's fused core and everything under it, relative to the FINN root, in
 #: compile order -- ``mvu_vvu_axi`` instantiates ``replay_buffer`` and one of
@@ -75,6 +77,27 @@ FINN_SOURCES = (
     "finn-rtllib/mvu/mvu_vvu_8sx9_dsp58.sv",
     "finn-rtllib/mvu/mvu_vvu_axi.sv",
 )
+
+
+@dataclass(frozen=True)
+class FusedMatrixVectorHardwareInputs:
+    replay_region: Ref[DataflowRegion]
+    replay_computation: Ref[ComputationContract]
+    compute_region: Ref[DataflowRegion]
+    compute_computation: Ref[ComputationContract]
+    network: Ref[DataflowNetwork]
+    matrix_width: Ref[int]
+    matrix_height: Ref[int]
+    pe: Ref[int]
+    simd: Ref[int]
+    activation_element_type: Ref[NumericElementType]
+    weight_element_type: Ref[NumericElementType]
+    output_element_type: Ref[NumericElementType]
+    accumulator_element_type: Ref[NumericElementType]
+    narrow_weights: Ref[bool]
+    target_dsp_block: Ref[DspBlock]
+    target_clock_period_ns: Ref[float]
+
 
 #: The physical module this Kernel instantiates.
 MVU_VVU_AXI_MODULE = "finn-rtllib.mvu.mvu_vvu_axi"
@@ -135,10 +158,10 @@ def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
     )
 
 
-def covers_numeric_types(types: MVAUNumericTypes) -> tuple[RoleVerdict, ...]:
+def covers_numeric_types(types: DotProductNumericTypes) -> tuple[RoleVerdict, ...]:
     """This core's own authoritative datatype predicate, over every role.
 
-    Complete by construction: it takes the whole :class:`MVAUNumericTypes`
+    Complete by construction: it takes the whole :class:`DotProductNumericTypes`
     bundle, so a role cannot go unasked.  A predicate that inspected only the
     two operands being multiplied is exactly the shape that admitted an integer
     dot product with a floating-point accumulator.
@@ -174,7 +197,7 @@ def covers_numeric_types(types: MVAUNumericTypes) -> tuple[RoleVerdict, ...]:
     return tuple(verdicts)
 
 
-def covers_operand_types(types: MVAUNumericTypes) -> bool:
+def covers_operand_types(types: DotProductNumericTypes) -> bool:
     """The boolean reduction, for callers that only need a yes or no."""
 
     return all(verdict.supported for verdict in covers_numeric_types(types))
@@ -191,7 +214,7 @@ def _operand_types_supported(
     refused = [
         verdict
         for verdict in covers_numeric_types(
-            MVAUNumericTypes(activation, weight, accumulator, output)
+            DotProductNumericTypes(activation, weight, accumulator, output)
         )
         if not verdict.supported
     ]
@@ -222,7 +245,7 @@ def _operand_widths_supported(activation: NumericElementType, weight: NumericEle
     return True
 
 
-def _datapath_widths(target: MVAUDspBlock) -> tuple[int, int, int]:
+def _datapath_widths(target: DspBlock) -> tuple[int, int, int]:
     """The A, B and P datapath widths, as ``mvu.sv`` itself computes them.
 
     Derived from ``VERSION`` rather than tabulated, so a change to those
@@ -239,7 +262,7 @@ def _datapath_widths(target: MVAUDspBlock) -> tuple[int, int, int]:
 
 
 def _width_supported(
-    target: MVAUDspBlock,
+    target: DspBlock,
     activation: NumericElementType,
     weight: NumericElementType,
     accumulator: NumericElementType,
@@ -261,7 +284,7 @@ def _width_supported(
 
 
 def _narrow_weights_supported(
-    target: MVAUDspBlock,
+    target: DspBlock,
     activation: NumericElementType,
     weight: NumericElementType,
     narrow: bool,
@@ -305,14 +328,14 @@ def _narrow_weights_supported(
     return True
 
 
-class MvuVvuAxiKernel(HardwareKernel):
+class MvuVvuAxiKernel(Kernel):
     """Replay and folded multiply-accumulate as one core."""
 
     id = "mvu_vvu_axi"
     version = "1"
 
     @classmethod
-    def define_design(cls, design: HardwareDesign[FusedMatrixVectorHardwareInputs]) -> None:
+    def define_design(cls, design: KernelScope[FusedMatrixVectorHardwareInputs]) -> None:
         facts = design.inputs
         # Two covered Regions and the edge between them.  Each names the
         # declaration it realizes and states what it computes, so the fused
@@ -480,7 +503,7 @@ class MvuVvuAxiKernel(HardwareKernel):
         )
 
     @classmethod
-    def elaborate(cls, kernel: HardwareKernel) -> tuple[PhysicalComponent, ...]:
+    def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
         """One ``mvu_vvu_axi`` instance -- replay and compute in one component.
 
         This is where the fusion is visible as a *count*.  The decomposed path
@@ -503,6 +526,7 @@ __all__ = [
     "COMPUTE_ROLE",
     "FINN_ROOT",
     "FINN_SOURCES",
+    "FusedMatrixVectorHardwareInputs",
     "MVU_VVU_AXI_MODULE",
     "REPLAY_ROLE",
     "MvuVvuAxiKernel",

@@ -29,6 +29,7 @@ from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterKernelPaths,
     CyclicTargetMemoryCapabilities,
 )
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.region import BeatSequence, NumericElementType, is_element_type
 
@@ -41,19 +42,6 @@ class MVAUComputationProfile(str, Enum):
     ACCUMULATOR_INTEGER = "accumulator_integer"
     BIPOLAR_XNOR_ACCUMULATOR = "bipolar_xnor_accumulator"
     FUSED_THRESHOLD = "fused_threshold"
-
-
-class MVAUDspBlock(str, Enum):
-    """Target DSP capability consumed only by Kernel feasibility constraints."""
-
-    # Persistence and artifact identities predate the Effort B module move.
-    # Keep their type token independent of the Python owner so relocating this
-    # Enum cannot silently invalidate v6/v11 selections or artifact keys.
-    __dataflow_identity_token__ = "finn.dataflow.mvau_problem.MVAUDspBlock"
-
-    DSP48E1 = "DSP48E1"
-    DSP48E2 = "DSP48E2"
-    DSP58 = "DSP58"
 
 
 @dataclass(frozen=True)
@@ -159,7 +147,7 @@ class MVAUProblem:
     runtime_writable: Ref[bool]
     external_weight_sequence: Ref[BeatSequence]
     accumulator_type_analysis_owner: Ref[str]
-    target_dsp_block: Ref[MVAUDspBlock]
+    target_dsp_block: Ref[DspBlock]
     target_fpga_part: Ref[str]
     target_clock_period_ns: Ref[float]
     target_memory_capabilities: Ref[CyclicTargetMemoryCapabilities]
@@ -255,7 +243,7 @@ def build_mvau_problem(design: OpDesign) -> MVAUProblem:
             validate=_non_empty_string,
             description="must identify the accumulator analysis owner",
         ),
-        target_dsp_block=design.target_fact("dsp_block", MVAUDspBlock, required=False),
+        target_dsp_block=design.target_fact("dsp_block", DspBlock, required=False),
         target_fpga_part=design.target_fact(
             "fpga_part",
             str,
@@ -389,7 +377,6 @@ __all__ = [
     "MVAU_PROBLEM_PROVENANCE",
     "MVAU_PROBLEM_SPEC",
     "MVAUComputationProfile",
-    "MVAUDspBlock",
     "MVAUProblem",
     "MVAUProblemPaths",
     "MVAUSourceDescription",

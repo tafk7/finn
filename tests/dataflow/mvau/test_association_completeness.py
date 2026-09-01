@@ -36,8 +36,8 @@ import pytest
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
-from finn.dataflow.ops.mvau.hardware import composition
-from finn.dataflow.ops.mvau.hardware.composition import elaborate_decomposed
+from finn.dataflow.ops.mvau.artifacts import _implementation as composition
+from finn.dataflow.ops.mvau.artifacts._implementation import elaborate_decomposed
 from finn.dataflow.ops.mvau import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]

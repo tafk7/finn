@@ -15,13 +15,13 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.artifacts import composed_artifact_identity, kernel_artifact_identity
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
-from finn.dataflow.ops.mvau.hardware.binding import source_roots
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.binding import source_roots
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     decomposed_top_module_name,
     render_decomposed_wrapper,
 )
-from finn.dataflow.ops.mvau.hardware.memstream import FINN_MEMSTREAM_SOURCES
+from finn.dataflow.kernels.finn_rtl_memstream import FINN_MEMSTREAM_SOURCES
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.region import NumericElementType, Port

@@ -32,6 +32,7 @@ from finn.dataflow.authoring.scope import (
     predicate,
     unresolved,
 )
+from finn.dataflow.computation import ComputationContract
 from finn.dataflow.authoring.realization import (
     DESIGN_REALIZATION_PATH,
     DesignRealization,
@@ -56,18 +57,17 @@ from finn.dataflow.design import (
     ValueSemantics,
     as_object_semantics,
 )
-from finn.dataflow.hardware.authoring import declare_hardware_kernel
-from finn.dataflow.hardware.kernel import (
+from finn.dataflow.kernels.authoring import declare_kernel
+from finn.dataflow.kernels.kernel import (
     BoundRegion,
-    ComputationContract,
-    HardwareKernel,
-    HardwareKernelDeclaration,
-    bind_hardware_kernel,
+    Kernel,
+    CompiledKernelDeclaration,
+    bind_kernel,
     check_declared_references,
 )
-from finn.dataflow.hardware.selection import (
-    HARDWARE_KERNEL_ID_SEMANTICS,
-    HardwareKernelSelection,
+from finn.dataflow.kernels.selection import (
+    KERNEL_ID_SEMANTICS,
+    KernelCandidateSelection,
 )
 from finn.dataflow.network import (
     BoundaryContract,
@@ -185,11 +185,11 @@ class KernelPlacement:
     name: str
     nodes: tuple[DesignNode, ...]
     edges: tuple[DesignEdge, ...]
-    candidates: tuple[HardwareKernelDeclaration, ...]
+    candidates: tuple[CompiledKernelDeclaration, ...]
     selected_kernel: Ref[PlacementSelection]
     kernel_choice: Ref[str] | None = field(default=None, repr=False, compare=False)
 
-    def candidate(self, kernel_id: str) -> HardwareKernelDeclaration:
+    def candidate(self, kernel_id: str) -> CompiledKernelDeclaration:
         for candidate in self.candidates:
             if candidate.id == kernel_id:
                 return candidate
@@ -222,7 +222,7 @@ class DataflowDesignScope(Scope, Generic[In]):
         self._placements: list[KernelPlacement] = []
         self._inputs: dict[str, DesignInput] = {}
         self._physical_specs: list[DesignSpaceSpec] = []
-        self._hardware: list[HardwareKernelDeclaration] = []
+        self._hardware: list[CompiledKernelDeclaration] = []
 
     def choice(
         self,
@@ -392,7 +392,7 @@ class DataflowDesignScope(Scope, Generic[In]):
         name: str,
         *,
         covers: Sequence[DesignNode],
-        candidates: Sequence[type[HardwareKernel]],
+        candidates: Sequence[type[Kernel]],
         inputs: object | None = None,
         absorbs: Sequence[DesignEdge] = (),
         applies_if: EvaluatorSpec[Answer[bool]] | None = None,
@@ -414,7 +414,7 @@ class DataflowDesignScope(Scope, Generic[In]):
 
         candidate_types = tuple(candidates)
         declarations = tuple(
-            declare_hardware_kernel(
+            declare_kernel(
                 kernel,
                 f"{self.namespace}.{name}.{kernel.id}",
                 self.inputs if inputs is None else inputs,
@@ -428,14 +428,14 @@ class DataflowDesignScope(Scope, Generic[In]):
         kernel_choice: Ref[str] | None = None
         physical_spec: DesignSpaceSpec | None = None
         if len(declarations) > 1:
-            selection = HardwareKernelSelection(
+            selection = KernelCandidateSelection(
                 f"{self.namespace}.{name}", declarations, applies_if=applies_if
             )
             physical_spec = selection.build_spec()
             kernel_choice = Ref(
                 selection.kernel_path,
                 DependencyKind.DECISION,
-                HARDWARE_KERNEL_ID_SEMANTICS,
+                KERNEL_ID_SEMANTICS,
             )
             selected_dependencies = {"kernel_id": kernel_choice}
             derive_selection: Callable[..., object] = _selected_placement
@@ -474,7 +474,7 @@ class DataflowDesignScope(Scope, Generic[In]):
         placement: str,
         nodes: tuple[DesignNode, ...],
         edges: tuple[DesignEdge, ...],
-        candidates: tuple[HardwareKernelDeclaration, ...],
+        candidates: tuple[CompiledKernelDeclaration, ...],
     ) -> None:
         expected_nodes = {item.role: item for item in nodes}
         expected_edges = {item.role: item for item in edges}
@@ -556,7 +556,7 @@ class DataflowDesignScope(Scope, Generic[In]):
         return self._inputs.get(source_operand)
 
     @property
-    def hardware_declarations(self) -> tuple[HardwareKernelDeclaration, ...]:
+    def hardware_declarations(self) -> tuple[CompiledKernelDeclaration, ...]:
         return tuple(self._hardware)
 
     def spec(self) -> DesignSpaceSpec:
@@ -862,7 +862,7 @@ class DataflowDesignDeclaration:
     nodes: tuple[DesignNode, ...]
     placements: tuple[KernelPlacement, ...]
     input_mappings: tuple[DesignInput, ...]
-    hardware: tuple[HardwareKernelDeclaration, ...]
+    hardware: tuple[CompiledKernelDeclaration, ...]
     owner: type[DataflowDesign]
     decision_handles: tuple[Ref[object], ...] = field(default=(), repr=False, compare=False)
     constraint_handles: tuple[ConstraintRef, ...] = field(default=(), repr=False, compare=False)
@@ -894,7 +894,7 @@ class DataflowDesignDeclaration:
                 )
             )
 
-        kernels: dict[str, HardwareKernel] = {}
+        kernels: dict[str, Kernel] = {}
         active: list[str] = []
         findings: list[Finding] = []
         for placement in self.placements:
@@ -937,7 +937,7 @@ class DataflowDesignDeclaration:
             edge_ids = {item.role: item.edge_id for item in placement.edges}
             if missing:
                 continue
-            bound = bind_hardware_kernel(engine, candidate, point, regions, edge_ids)
+            bound = bind_kernel(engine, candidate, point, regions, edge_ids)
             if isinstance(bound, Decided):
                 kernels[placement.name] = bound.value
             else:
@@ -949,7 +949,7 @@ class DataflowDesignDeclaration:
     def validate_realization(
         self,
         network: DataflowNetwork,
-        kernels: Mapping[str, HardwareKernel],
+        kernels: Mapping[str, Kernel],
         *,
         active_placements: Sequence[str] | None = None,
     ) -> Answer[DesignRealization]:
@@ -986,7 +986,7 @@ class DataflowDesignDeclaration:
                     placement=name,
                 )
             )
-        placed: dict[str, HardwareKernel] = {}
+        placed: dict[str, Kernel] = {}
         for name in active_names:
             placement = by_name.get(name)
             kernel = kernels.get(name)

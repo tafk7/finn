@@ -32,13 +32,11 @@ PRODUCTION_FILES = (
     *(ROOT / "ops" / "mvau" / "hardware").glob("*.py"),
 )
 FORBIDDEN_MODULES = {
-    "finn.dataflow.kernels",
     "finn.dataflow.mvau.compat",
     "finn.dataflow.mvau.compute_kernels",
     "finn.dataflow.mvau.decomposed",
 }
 FORBIDDEN_RUNTIME_MODULES = (
-    "finn.dataflow.kernels",
     "finn.dataflow.authoring.kernel_design",
     "finn.dataflow.mvau.compute_kernels",
     "finn.dataflow.mvau.decomposed",
@@ -56,7 +54,6 @@ FORBIDDEN_NAMES = {
 }
 DELETED_MVAU_MODULES = (
     "finn.dataflow.kernel",
-    "finn.dataflow.kernels",
     "finn.dataflow.authoring.kernel_design",
     "finn.dataflow.mvau.compat.operation",
     "finn.dataflow.mvau.compute_kernels",
@@ -251,6 +248,28 @@ def test_provider_era_mvau_modules_are_not_importable() -> None:
             "    if found is not None:",
             "        present.append(name)",
             "raise SystemExit('deleted modules remain: ' + ', '.join(present) if present else 0)",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_physical_kernel_vocabulary_has_one_canonical_package() -> None:
+    script = "\n".join(
+        (
+            "import importlib.util",
+            "import finn.dataflow.kernels as kernels",
+            "assert kernels.Kernel.__name__ == 'Kernel'",
+            "assert kernels.KernelScope.__name__ == 'KernelScope'",
+            "assert not hasattr(kernels, 'HardwareKernel')",
+            "assert not hasattr(kernels, 'HardwareDesign')",
+            "assert not hasattr(kernels, 'HardwareKernelSelection')",
+            "assert importlib.util.find_spec('finn.dataflow.hardware') is None",
         )
     )
     completed = subprocess.run(

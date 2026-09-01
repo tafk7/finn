@@ -21,7 +21,7 @@ from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
-from finn.dataflow.ops.mvau.hardware.source import (
+from finn.dataflow.ops.mvau.artifacts.roots import (
     FINNLIB_DEFAULT_SUBDIRECTORY,
     FINNLIB_ROOT_VARIABLE,
     finnlib_root,

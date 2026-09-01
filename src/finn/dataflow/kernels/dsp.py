@@ -37,8 +37,21 @@ A second implementation here would be a second place to get it wrong.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class DspBlock(str, Enum):
+    """Target DSP generation available to a multiply-accumulate Kernel."""
+
+    __dataflow_identity_token__ = "finn.dataflow.mvau_problem.MVAUDspBlock"
+
+    DSP48E1 = "DSP48E1"
+    DSP48E2 = "DSP48E2"
+    DSP58 = "DSP58"
+
 
 __all__ = [
+    "DspBlock",
     "LanePacking",
     "a_datapath_width",
     "b_datapath_width",

@@ -28,7 +28,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 import finn.dataflow.artifacts as artifacts
 from dataflow.mvau.test_decomposed_op import NODE_ID, _committed, _context, _model
 from dataflow.mvau.test_fused_hardware import _place, _source_description
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.artifacts import (
     DEFAULT_BUILDER,
@@ -43,11 +43,11 @@ from finn.dataflow.artifacts import (
     kernel_artifact_identity,
 )
 from finn.dataflow.artifacts.identity import content_hash
-from finn.dataflow.hardware import HardwareKernel
-from finn.dataflow.ops.mvau.hardware.binding import bind_decomposed, source_roots
-from finn.dataflow.ops.mvau.hardware.composition import build_decomposed_artifact_requirements
-from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.ops.mvau.hardware.replay_buffer import FINN_ROOT as FINN_ROOT_NAME
+from finn.dataflow.kernels import Kernel
+from finn.dataflow.ops.mvau.binding import bind_decomposed, source_roots
+from finn.dataflow.ops.mvau.artifacts._implementation import build_decomposed_artifact_requirements
+from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
+from finn.dataflow.kernels.replay_buffer import FINN_ROOT as FINN_ROOT_NAME
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
@@ -63,7 +63,7 @@ def test_artifact_facade_is_canonical_and_old_deep_module_is_gone() -> None:
             sys.executable,
             "-c",
             "import importlib.util; "
-            "raise SystemExit(0 if importlib.util.find_spec('finn.dataflow.hardware.identity') "
+            "raise SystemExit(0 if importlib.util.find_spec('finn.dataflow.kernels.identity') "
             "is None else 1)",
         ],
         check=False,
@@ -88,9 +88,7 @@ def _roots() -> dict[str, Path]:
     return source_roots(FINN_ROOT)
 
 
-def _kernel_with_assignments(
-    kernel: HardwareKernel, assignments: dict[QualifiedPath, object]
-) -> HardwareKernel:
+def _kernel_with_assignments(kernel: Kernel, assignments: dict[QualifiedPath, object]) -> Kernel:
     """The same bound Kernel with its committed choices replaced.
 
     Built through the real constructor rather than by patching an attribute, so
@@ -274,7 +272,7 @@ def test_an_explicit_enum_identity_token_survives_a_python_module_move() -> None
 
 
 def test_mvau_dsp_block_keeps_its_pre_move_artifact_token() -> None:
-    encoded = _identity(assignments=(("target", MVAUDspBlock.DSP58),))
+    encoded = _identity(assignments=(("target", DspBlock.DSP58),))
 
     assert "finn.dataflow.mvau_problem.MVAUDspBlock.DSP58" in encoded.serialization
 
@@ -351,7 +349,7 @@ def test_the_schema_version_is_part_of_the_key() -> None:
 _DETERMINISM_PROGRAM = """
 import sys
 sys.path[:0] = ["src", "tests"]
-from finn.dataflow.hardware import KernelArtifactIdentity, SourceIdentity
+from finn.dataflow.artifacts import KernelArtifactIdentity, SourceIdentity
 from finn.dataflow.artifacts.identity import content_hash
 
 identity = KernelArtifactIdentity(
@@ -411,8 +409,8 @@ def test_neither_target_nor_builder_reaches_the_generated_source_key() -> None:
     being shared: a wrong *miss*, and as wrong as the wrong hit.
     """
 
-    zynq = _place(target=MVAUDspBlock.DSP48E2)
-    versal = _place(target=MVAUDspBlock.DSP58)
+    zynq = _place(target=DspBlock.DSP48E2)
+    versal = _place(target=DspBlock.DSP58)
     keys = tuple(
         kernel_artifact_identity(place.decomposed()[1], _roots()).key for place in (zynq, versal)
     )

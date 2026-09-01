@@ -23,7 +23,7 @@ from finn.dataflow.ops.mvau.associations import (
     MVAUParameterTopology,
     MVAUSourceAssociation,
 )
-from finn.dataflow.ops.mvau.hardware.memstream import (
+from finn.dataflow.kernels.finn_rtl_memstream import (
     FinnRtlMemstreamInputs,
     FinnRtlMemstreamKernel,
 )

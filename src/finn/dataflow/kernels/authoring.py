@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Scoped engine authoring for one ``HardwareKernel`` subclass.
+"""Scoped engine authoring for one ``Kernel`` subclass.
 
-``HardwareDesign`` is the scope a hardware author is handed.  Like
+``KernelScope`` is the scope a hardware author is handed.  Like
 ``KernelDesign`` it owns no problem namespace -- a Kernel never reads a
 ``ModelWrapper``, an ONNX node, or a build configuration.  Everything it knows
 about the outside arrives as typed handles the covered semantics wired in,
@@ -36,13 +36,13 @@ from finn.dataflow.authoring.scope import (
     Scope,
     T,
 )
+from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design import Answer, DesignSpaceSpec, EvaluatorSpec, ValueSemantics
-from finn.dataflow.hardware._declaration import HardwareKernelDeclaration
-from finn.dataflow.hardware.kernel import (
-    ComputationContract,
+from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
+from finn.dataflow.kernels.kernel import (
     CoveragePattern,
     EdgeCoverage,
-    HardwareKernel,
+    Kernel,
     KernelParameter,
     RegionCoverage,
     SourceFile,
@@ -58,7 +58,7 @@ In = TypeVar("In")
 COVERAGE = "coverage"
 
 
-class HardwareDesign(Scope, Generic[In]):
+class KernelScope(Scope, Generic[In]):
     """One physical Kernel's authoring namespace over wired-in typed inputs."""
 
     def __init__(self, namespace: str, inputs: In) -> None:
@@ -235,14 +235,14 @@ class HardwareDesign(Scope, Generic[In]):
         )
 
 
-def declare_hardware_kernel(
-    kernel: type[HardwareKernel],
+def declare_kernel(
+    kernel: type[Kernel],
     namespace: str,
     inputs: object,
     *,
     applies_if: EvaluatorSpec[Answer[bool]] | None = None,
-) -> tuple[HardwareKernelDeclaration, HardwareDesign[object]]:
-    """Run one ``HardwareKernel`` subclass's ``define_design`` under a namespace.
+) -> tuple[CompiledKernelDeclaration, KernelScope[object]]:
+    """Run one ``Kernel`` subclass's ``define_design`` under a namespace.
 
     Returns the scope alongside the declarations, so an assembly that must wire
     one Kernel's choice into another can reach the handle rather than rebuild
@@ -256,11 +256,11 @@ def declare_hardware_kernel(
 
     if not kernel.id:
         raise AuthoringError(f"{kernel.__name__} must set a Kernel id")
-    design: HardwareDesign[object] = HardwareDesign(namespace, inputs)
+    design: KernelScope[object] = KernelScope(namespace, inputs)
     handles = kernel.define_design(design)
     declared = design.spec()
     spec = gate_spec(declared, applies_if) if applies_if is not None else declared
-    return HardwareKernelDeclaration(
+    return CompiledKernelDeclaration(
         kernel.id,
         kernel.version,
         namespace,
@@ -276,7 +276,7 @@ def declare_hardware_kernel(
     ), design
 
 
-def hardware_namespace(owner: str, kernel_id: str) -> str:
+def kernel_namespace(owner: str, kernel_id: str) -> str:
     """The namespace one physical Kernel owns inside one assembly."""
 
     if not owner or not kernel_id:
@@ -286,7 +286,7 @@ def hardware_namespace(owner: str, kernel_id: str) -> str:
 
 __all__ = [
     "COVERAGE",
-    "HardwareDesign",
-    "declare_hardware_kernel",
-    "hardware_namespace",
+    "KernelScope",
+    "declare_kernel",
+    "kernel_namespace",
 ]

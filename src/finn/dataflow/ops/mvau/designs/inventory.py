@@ -45,7 +45,7 @@ from finn.dataflow.ops.mvau.designs.dot_product import (
     DotProductDesign,
     DotProductDesignInputs,
 )
-from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiHandles
+from finn.dataflow.kernels.dotp_axi import DotpAxiHandles
 from finn.dataflow.ops.mvau.input_supply import (
     MVAUInputSupply,
     declare_mvau_input_supply,

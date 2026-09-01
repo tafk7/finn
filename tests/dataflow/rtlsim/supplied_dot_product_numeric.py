@@ -18,7 +18,7 @@ import numpy as np  # type: ignore[import-not-found]
 from dataflow.rtlsim.composed_mvau_equiv import record_identity
 from dataflow.rtlsim.composed_mvau_numeric import (
     Case,
-    MVAUDspBlock,
+    DspBlock,
     _activations,
     _model,
     _weights,
@@ -30,11 +30,11 @@ from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
-from finn.dataflow.ops.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.artifacts._implementation import (
     MVAUDecomposedArtifactRequirements,
     write_decomposed_artifact,
 )
-from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
+from finn.dataflow.ops.mvau.binding import finnlib_root
 from finn.dataflow.ops.mvau.artifacts.supplied import (
     build_supplied_artifact_requirements,
 )
@@ -51,7 +51,7 @@ from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 CASE = Case(
     "dot_product_memstream",
-    MVAUDspBlock.DSP58,
+    DspBlock.DSP58,
     2,
     4,
     6,
