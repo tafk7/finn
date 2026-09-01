@@ -47,21 +47,27 @@ command -v sbx >/dev/null || { recho "sbx not found on PATH"; exit 1; }
 REMOVE=0
 if [ "${1:-}" = "rm" ]; then REMOVE=1; shift; fi
 
+: "${FINN_SBX_AGENT:=shell}"
+: "${FINN_DEPS:=frozen}"
+# Accelerator stacks to bake in. Empty is the base image, which is what an agent
+# sandbox normally wants. See docker/runtimes/README.md.
+: "${FINN_RUNTIMES:=}"
+
 # dev by default. This lane exists for autonomous agents, and the narrow tier
 # is the one that needs no toolchain, no licence and no network grant. Asking
 # for tools should be explicit. (finn-apptainer defaults to `build` for the
 # opposite reason -- see its header.)
 TIER="${1:-dev}"
 case "$TIER" in
-    dev|build|build-xrt) shift || true ;;
+    dev|build) shift || true ;;
+    # Legacy. build-xrt was never a set of grants -- it was XRT, which is now a
+    # runtime target baked into the image and named in its tag.
+    build-xrt) shift || true; TIER="build"; FINN_RUNTIMES="${FINN_RUNTIMES:+$FINN_RUNTIMES,}xrt" ;;
     -*|"") TIER="dev" ;;
-    *) recho "Usage: $0 [rm] [dev|build|build-xrt] [-- command...]"; exit 2 ;;
+    *) recho "Usage: $0 [rm] [dev|build] [-- command...]"; exit 2 ;;
 esac
 [ "${1:-}" = "--" ] && shift
-
-: "${FINN_PROFILE:=py310}"
-: "${FINN_SBX_AGENT:=shell}"
-: "${FINN_DEPS:=frozen}"
+export FINN_RUNTIMES
 
 # One sandbox per (tier, checkout). Lowercased; sbx requires it.
 FINN_SBX_NAME="${FINN_SBX_NAME:-finn-$TIER-$(basename "$REPO")}"
@@ -87,15 +93,21 @@ fi
 # --------------------------------------------------------------------------
 
 GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo local)
-GIT_DESCRIBE_DIRTY=$(git describe --always --tags --dirty 2>/dev/null || echo local)
-export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
+export GIT_DESCRIBE
 
-BAKE_TARGET="sbx-${TIER}-${FINN_PROFILE}"
+# The tier does NOT appear here. There is one image; dev and build differ only
+# in what this script mounts and allows, which is decided further down. What
+# does appear is the runtime set, because that IS image content.
+BAKE_TARGET="finn-sbx"
+for r in $(echo "$FINN_RUNTIMES" | tr ',' ' ' | tr ' ' '\n' | sort); do
+    BAKE_TARGET="$BAKE_TARGET-$r"
+done
 gecho "Building $BAKE_TARGET"
 docker buildx bake -f docker-bake.hcl --load "$BAKE_TARGET" \
     || { recho "docker buildx bake $BAKE_TARGET failed"; exit 1; }
 
 FINN_SBX_TEMPLATE=$(docker buildx bake -f docker-bake.hcl --print "$BAKE_TARGET" 2>/dev/null \
+    | sed -n '/^{/,$p' \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$BAKE_TARGET']['tags'][0])")
 [ -n "$FINN_SBX_TEMPLATE" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
 

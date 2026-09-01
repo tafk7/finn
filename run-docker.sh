@@ -44,7 +44,7 @@
 #
 #   docker compose run --rm dev quicktest.sh
 #   docker compose --profile fpga run --rm build
-#   docker buildx bake build-py310
+#   docker buildx bake -f docker-bake.hcl finn-xrt
 #   docker/finn-sbx build
 #
 # 407 lines on `dev`, 306 now. The point is not the count -- it is that this
@@ -64,7 +64,10 @@ SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 cd "$SCRIPTPATH" || exit 1
 
-: "${FINN_PROFILE:=py310}"
+# Which accelerator stacks the image should carry. Empty is the base image.
+# See docker/runtimes/README.md. FINN_DOCKER_TARGET=build-xrt still works and
+# is translated to FINN_RUNTIMES=xrt below.
+: "${FINN_RUNTIMES:=}"
 # Was the tier chosen by the caller, or is it about to be defaulted? The
 # fallback below only applies to a DEFAULT, never to an explicit request.
 FINN_DOCKER_TARGET_EXPLICIT="${FINN_DOCKER_TARGET+yes}"
@@ -106,7 +109,37 @@ FINN_DOCKER_TARGET_EXPLICIT="${FINN_DOCKER_TARGET+yes}"
 # The build TARGET may be sbx-qualified; the TIER never is. Every capability
 # decision is a property of the tier, so `dev` means the same thing on both
 # backends.
-FINN_TIER="${FINN_DOCKER_TARGET#sbx-}"
+# Translate a legacy target name onto the current three axes.
+#
+# There used to be six images: {dev,build,build-xrt} x {generic,sbx}. There is
+# now ONE image, plus a set of runtime targets in its tag and an sbx variant.
+# `dev` and `build` name the same image and differ only in what the launcher
+# mounts and allows, so both map to the same bake target; `build-xrt` was never
+# a set of grants, it was XRT, so it maps to a runtime target.
+#
+#   dev, build      -> finn        tier dev / build
+#   build-xrt       -> finn-xrt    tier build, FINN_RUNTIMES=xrt
+#   sbx-*           -> finn-sbx[-xrt]
+#
+# Sets FINN_TIER, FINN_SBX_VARIANT and FINN_RUNTIMES.
+finn_resolve_axes () {
+    local target="$1"
+    FINN_TIER="${target#sbx-}"
+    case "$target" in sbx-*) FINN_SBX_VARIANT=1 ;; *) FINN_SBX_VARIANT=0 ;; esac
+    case "$FINN_TIER" in
+        build-xrt)
+            FINN_TIER="build"
+            case ",$FINN_RUNTIMES," in *,xrt,*) ;; *)
+                FINN_RUNTIMES="${FINN_RUNTIMES:+$FINN_RUNTIMES,}xrt" ;;
+            esac
+            ;;
+        dev|build) ;;
+        *) recho "Unknown target '$target'; expected dev, build, build-xrt or sbx-*"; exit 2 ;;
+    esac
+    export FINN_RUNTIMES
+}
+
+finn_resolve_axes "$FINN_DOCKER_TARGET"
 
 # Degrade to `dev` rather than failing when the default tier needs a toolchain
 # that is not configured.
@@ -131,9 +164,11 @@ fi
 # one, kept in sync with docker-bake.hcl by an assertion, and one authority is
 # better than two that agree.
 # ----------------------------------------------------------------------------
+# No GIT_DESCRIBE_DIRTY any more. FINN's source is mounted, not baked, so an
+# edited tree does not change the image; bake dropped the dirty variant with the
+# tier split. See the note on the variable in docker-bake.hcl.
 GIT_DESCRIBE="$(git describe --always --tags 2>/dev/null || echo local)"
-GIT_DESCRIBE_DIRTY="$(git describe --always --tags --dirty 2>/dev/null || echo local)"
-export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
+export GIT_DESCRIBE
 
 # -f docker-bake.hcl is REQUIRED, not tidiness.
 #
@@ -143,16 +178,31 @@ export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
 # to interpolate and refuses to run ANY target, including dev-py310 which has
 # nothing to do with the toolchain. Bake reads the bake file; compose reads the
 # compose file.
+
+# The bake target for the resolved axes. `finn`, `finn-xrt`, `finn-sbx`, ... --
+# the names in docker-bake.hcl. Only the combinations bake enumerates are
+# reachable from here; build anything else with bake directly.
+finn_bake_target () {
+    local t="finn"
+    [ "$FINN_SBX_VARIANT" = "1" ] && t="finn-sbx"
+    for r in $(echo "$FINN_RUNTIMES" | tr ',' ' ' | tr ' ' '\n' | sort); do
+        t="$t-$r"
+    done
+    echo "$t"
+}
+
 finn_bake_tag () {
-    local target="$1-${FINN_PROFILE}"
+    local target="$1"
     docker buildx bake -f docker-bake.hcl --print "$target" 2>/dev/null \
+        | sed -n '/^{/,$p' \
         | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$target']['tags'][0])" 2>/dev/null
 }
 
 if [ "${1:-}" = "print-tag" ]; then
     [ "$#" -le 2 ] || { recho "Usage: $0 print-tag [dev|build|build-xrt|sbx-*]"; exit 2; }
-    tag=$(finn_bake_tag "${2:-$FINN_DOCKER_TARGET}")
-    [ -n "$tag" ] || { recho "Usage: $0 print-tag [dev|build|build-xrt|sbx-*]"; exit 2; }
+    [ -n "${2:-}" ] && finn_resolve_axes "$2"
+    tag=$(finn_bake_tag "$(finn_bake_target)")
+    [ -n "$tag" ] || { recho "no bake target for '$FINN_DOCKER_TARGET' with FINN_RUNTIMES='$FINN_RUNTIMES'"; exit 2; }
     echo "$tag"
     exit 0
 fi
@@ -175,13 +225,13 @@ fi
 
 case "${1:-}" in
   build)
-    [ -n "${2:-}" ] && FINN_DOCKER_TARGET="$2"
-    target="${FINN_DOCKER_TARGET}-${FINN_PROFILE}"
+    [ -n "${2:-}" ] && finn_resolve_axes "$2"
+    target=$(finn_bake_target)
     gecho "Building bake target $target"
     # shellcheck disable=SC2086
     docker buildx bake -f docker-bake.hcl --load $FINN_DOCKER_BUILD_EXTRA "$target" \
         || { recho "docker buildx bake $target failed"; exit 1; }
-    gecho "Built $(finn_bake_tag "$FINN_DOCKER_TARGET")"
+    gecho "Built $(finn_bake_tag "$target")"
     exit 0
     ;;
   sbx)
@@ -221,7 +271,6 @@ RUN_ENV=".finn-run.env"
     echo "FINN_WORKSPACE_SOURCE=$SCRIPTPATH"
     echo "FINN_WORKSPACE_TARGET=$SCRIPTPATH"
     echo "FINN_ROOT=$SCRIPTPATH"
-    echo "FINN_PROFILE=$FINN_PROFILE"
     echo "FINN_DEPS=$FINN_DEPS"
     echo "JUPYTER_PORT=$JUPYTER_PORT"
     echo "NETRON_PORT=$NETRON_PORT"
@@ -293,11 +342,11 @@ esac
 
 # Prebuilt images come from the CI shared directory; developers build locally.
 if [ "$FINN_DOCKER_PREBUILT" = "1" ] || [ -n "${FINN_DOCKER_SHARED_IMAGE_DIR:-}" ]; then
-    ./ci/scripts/load-shared-image.sh "$(finn_bake_tag "$FINN_DOCKER_TARGET")" || exit 1
+    ./ci/scripts/load-shared-image.sh "$(finn_bake_tag "$(finn_bake_target)")" || exit 1
 else
     # shellcheck disable=SC2086
     docker buildx bake -f docker-bake.hcl --load $FINN_DOCKER_BUILD_EXTRA \
-        "${FINN_DOCKER_TARGET}-${FINN_PROFILE}" \
+        "$(finn_bake_target)" \
         || { recho "image build failed"; exit 1; }
 fi
 

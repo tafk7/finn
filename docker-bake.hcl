@@ -1,22 +1,41 @@
 # FINN's build matrix. The authoritative definition of what images exist, what
 # they are called, and what goes into them.
 #
-#   docker buildx bake dev-py310
-#   docker buildx bake supported          # everything CI must keep green
-#   docker buildx bake --print dev-py310  # resolved config, no build
+#   docker buildx bake -f docker-bake.hcl                 the base image
+#   docker buildx bake -f docker-bake.hcl finn-xrt        + XRT
+#   docker buildx bake -f docker-bake.hcl supported       everything CI gates on
+#   docker buildx bake -f docker-bake.hcl --print finn    resolved config, no build
 #
-# This replaces the tag computation and the sixteen --build-arg flags that lived
-# in run-docker.sh. Tags are derived HERE and nowhere else, so CI references a
-# target by name instead of re-deriving a tag string and hoping it matches.
+# Always pass -f docker-bake.hcl. Without it, bake also auto-loads compose.yaml
+# and fails on its interpolation before any target builds.
 #
-# WHY THE PROFILE MATRIX MOVED HERE FROM docker/profiles/*/profile.env
-# --------------------------------------------------------------------
-# bake's HCL has no file() function and does not read .env, so the only native
-# inputs are variables and override files. Keeping the profile values in a
-# shell file would have meant either a codegen step (which goes stale silently)
-# or a mandatory wrapper (so `docker buildx bake dev-py312` alone would
-# silently build with py310's XRT package -- a footgun worse than the problem).
-# A build matrix is what this file is for; the values live here.
+# THE SHAPE
+# ---------
+# One base image, plus two orthogonal layers:
+#
+#   axis            values                     appears in the tag as
+#   base            one                        <git>
+#   runtime target  a set: xrt, slash, v80pp   .xrt.slash   (sorted, dot-joined)
+#   sbx contract    boolean                    sbx- prefix
+#
+# There is no profile axis and no tier axis. The profile axis had one member and
+# threaded a variable through ten files to select from it. The tier axis encoded
+# "does this user have Vivado", which is a host fact that docker/finn-env
+# resolves at launch -- see the Dockerfile header.
+#
+# Use `.` and not `+` to join runtime names. A Docker tag accepts
+# [\w][\w.-]{0,127}; `+` gives "invalid reference format".
+#
+# ENUMERATE, DO NOT MULTIPLY
+# --------------------------
+# The targets below are the combinations FINN keeps green, written out. They are
+# not a generated powerset: three runtime targets and a boolean would be sixteen
+# images, almost all of which nobody wants. Build any other combination on
+# demand:
+#
+#   docker buildx bake -f docker-bake.hcl finn-xrt \
+#       --set finn-xrt.args.FINN_RUNTIMES=xrt,v80pp \
+#       --set finn-xrt.tags=xilinx/finn:$(git describe --always --tags).xrt.v80pp
 #
 # WHAT IS *NOT* HERE
 # ------------------
@@ -25,20 +44,35 @@
 # to it already invalidates the layer. The *_COMMIT args below exist only as
 # one-off overrides and default to empty; do not populate them from a second
 # copy of the pins.
+#
+# Runtime package versions. Those live in docker/runtimes/<name>.env, which the
+# build reads directly. HCL has no file() function, so duplicating them here is
+# the codegen-goes-stale trap that removed the profile matrix in the first
+# place. The tag carries the runtime NAME; the label carries the version.
 
 # ---------------------------------------------------------------------------
 # Variables
 # ---------------------------------------------------------------------------
 
-# Injected by run-docker.sh / CI from `git describe`. HCL cannot shell out, so a
+# Injected by the launchers / CI from `git describe`. HCL cannot shell out, so a
 # bare `docker buildx bake` produces the "local" fallback rather than a
 # provenance-bearing tag. CI must always pass this.
+#
+# No --dirty variant. The old `build` tags carried one and `dev` did not, which
+# was the right call for `dev` and is now the right call for everything: FINN's
+# source is MOUNTED, not baked, so an edited working tree does not change the
+# image. A dirty tag would rebuild on every edit under an agent workflow, which
+# is the normal state there. The trade is that editing the Dockerfile or
+# deps.env does not move the tag on its own; CI builds from a clean tree, so
+# this only ever bites locally.
 variable "GIT_DESCRIBE" { default = "local" }
-variable "GIT_DESCRIBE_DIRTY" { default = "local" }
 
 variable "REGISTRY" { default = "xilinx/finn" }
 
-# One-off overrides. Empty means "use deps.env from the build context".
+# The Ubuntu base. Date-pinned, never the rolling tag.
+variable "UBUNTU_TAG" { default = "jammy-20230126" }
+
+# One-off dependency overrides. Empty means "use deps.env from the context".
 variable "QONNX_COMMIT" { default = "" }
 variable "FINN_EXP_COMMIT" { default = "" }
 variable "BREVITAS_COMMIT" { default = "" }
@@ -49,73 +83,27 @@ variable "RFSOC4x2_BDF_COMMIT" { default = "" }
 variable "KV260_BDF_COMMIT" { default = "" }
 variable "AUPZU3_BDF_COMMIT" { default = "" }
 
-# Local XRT .deb in the build context instead of a download, and the escape
-# hatch for building an XRT tier with no XRT at all.
-variable "LOCAL_XRT" { default = "" }
-variable "SKIP_XRT" { default = "" }
-variable "V80PP_DEB_PACKAGE" { default = "" }
-
 # ---------------------------------------------------------------------------
-# Profiles
-#
-# A profile is one coherent (Ubuntu release, Python version, pin set, XRT
-# package) combination. The Ubuntu release is DERIVED from the XRT package name
-# rather than set independently, because a 24.04 package on a jammy base is
-# something apt will generally resolve rather than refuse -- yielding a subtly
-# wrong runtime instead of a clean failure. The Dockerfile re-checks this from
-# inside the image.
-#
-# ubuntu_tag is a date-pinned snapshot, never the rolling tag: Canonical
-# republishes `ubuntu:jammy` regularly, which would let image contents drift
-# under an unchanged FINN tag. Bump deliberately.
-#
-# `status` is retained for when a second profile returns. py312 lived here
-# until it was removed: it tracked an unfinished upstream PR, never built, and
-# cost ~350 lines across six files plus a FINN_PROFILE axis threaded through all
-# of them. Restoring it is this block plus a directory under docker/profiles.
-#   supported     must build and must pass its declared tests
-#   experimental  smoke-built; failures do not gate
+# Tags
 # ---------------------------------------------------------------------------
 
-profiles = {
-  py310 = {
-    status      = "supported"
-    description = "Ubuntu 22.04 / Python 3.10 (current, 1970 tests pass)"
-    ubuntu_tag  = "jammy-20230126"
-    xrt_deb     = "xrt_202220.2.14.354_22.04-amd64-xrt"
-    xrt_sha256  = "00f62fbf3e3b4972df96eb0a73191765f9a004c9cf86df9dff70450b32ccdbe0"
-  }
-}
-
-# ---------------------------------------------------------------------------
-# Tag rules
+# runtimes: a comma-separated list, or "". sbx: true or false.
 #
-# Preserved exactly from run-docker.sh's finn_compute_tag, so this migration
-# does not itself trigger a rebuild of every image.
+#   ""          -> xilinx/finn:<git>
+#   "xrt"       -> xilinx/finn:<git>.xrt
+#   "xrt,slash" -> xilinx/finn:<git>.xrt.slash
+#   sbx         -> xilinx/finn:sbx-<git>[...]
 #
-#   dev        no --dirty. Under an agent workflow the tree is dirty by
-#              definition, so a dirty-tagged dev image would rebuild on the
-#              first edit.
-#   build      --dirty, profile in the tag.
-#   build-xrt  --dirty plus the XRT package, and NO profile marker: the XRT
-#              package name already differs per profile (22.04 vs 24.04), and
-#              this shape is what the Jenkins publish path keys on.
-#   sbx-*      the same lineage plus NOPASSWD sudo. A distinct tag rather than
-#              a build argument, so the privilege model is visible in the tag
-#              instead of hidden inside identically-named images.
-# ---------------------------------------------------------------------------
-
+# The runtime part is a function of the SET, so sort before joining. Otherwise
+# `xrt,slash` and `slash,xrt` are the same image under two names.
 function "tag" {
-  params = [tier, profile]
-  result = (
-    tier == "dev"           ? "${REGISTRY}:dev-${profile}-${GIT_DESCRIBE}" :
-    tier == "build"         ? "${REGISTRY}:build-${profile}-${GIT_DESCRIBE_DIRTY}" :
-    tier == "build-xrt"     ? "${REGISTRY}:${GIT_DESCRIBE_DIRTY}.${profiles[profile].xrt_deb}" :
-    tier == "sbx-dev"       ? "${REGISTRY}:sbx-dev-${profile}-${GIT_DESCRIBE}" :
-    tier == "sbx-build"     ? "${REGISTRY}:sbx-build-${profile}-${GIT_DESCRIBE_DIRTY}" :
-    tier == "sbx-build-xrt" ? "${REGISTRY}:sbx-${GIT_DESCRIBE_DIRTY}.${profiles[profile].xrt_deb}" :
-    "${REGISTRY}:${tier}-${profile}-${GIT_DESCRIBE_DIRTY}"
-  )
+  params = [runtimes, sbx]
+  result = join("", [
+    "${REGISTRY}:",
+    sbx ? "sbx-" : "",
+    GIT_DESCRIBE,
+    runtimes == "" ? "" : ".${join(".", sort(split(",", runtimes)))}",
+  ])
 }
 
 # ---------------------------------------------------------------------------
@@ -129,18 +117,8 @@ target "_common" {
   # x86-64 only, and parts of the image (the LSB loader symlink, the ncurses 5
   # backport) carry explicit x86-64 assumptions.
   platforms = ["linux/amd64"]
-}
-
-function "common_args" {
-  params = [profile]
-  result = {
-    FINN_PROFILE        = profile
-    UBUNTU_TAG          = profiles[profile].ubuntu_tag
-    XRT_DEB_VERSION     = profiles[profile].xrt_deb
-    XRT_DEB_SHA256      = profiles[profile].xrt_sha256
-    SKIP_XRT            = SKIP_XRT
-    LOCAL_XRT           = LOCAL_XRT
-    V80PP_DEB_PACKAGE   = V80PP_DEB_PACKAGE
+  args = {
+    UBUNTU_TAG          = UBUNTU_TAG
     QONNX_COMMIT        = QONNX_COMMIT
     FINN_EXP_COMMIT     = FINN_EXP_COMMIT
     BREVITAS_COMMIT     = BREVITAS_COMMIT
@@ -155,66 +133,101 @@ function "common_args" {
 
 # OCI labels, so the image describes itself to anything that inspects it.
 #
-# These are descriptive, NOT a requirements protocol. There is no OCI
-# convention for declaring egress allowlists or mount requirements, and FINN
-# should not invent labels that imply a standard exists. What a tier needs is
-# resolved at launch by `finn-env inspect`; what these say is what the image IS.
-function "common_labels" {
-  params = [tier, profile]
+# These are descriptive, NOT a requirements protocol. There is no OCI convention
+# for declaring egress allowlists or mount requirements, and FINN should not
+# invent labels that imply a standard exists. What a LANE needs is resolved at
+# launch by `finn-env inspect`; what these say is what the image IS.
+#
+# dev.finn.runtimes carries the names the tag also carries. The exact package
+# versions are NOT here, because they live in docker/runtimes/*.env and HCL
+# cannot read a file -- restating them would be the stale-copy trap. Read the
+# manifest at the recorded revision, or `dpkg -l` inside the image.
+function "labels" {
+  params = [runtimes, sbx]
   result = {
-    "org.opencontainers.image.title"       = "FINN ${tier}"
-    "org.opencontainers.image.description" = profiles[profile].description
+    "org.opencontainers.image.title"       = "FINN"
+    "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 22.04 / Python 3.10"
     "org.opencontainers.image.source"      = "https://github.com/Xilinx/finn"
-    "org.opencontainers.image.revision"    = GIT_DESCRIBE_DIRTY
-    "dev.finn.tier"                        = tier
-    "dev.finn.profile"                     = profile
-    "dev.finn.profile-status"              = profiles[profile].status
+    "org.opencontainers.image.revision"    = GIT_DESCRIBE
+    "dev.finn.runtimes"                    = runtimes
     # Whether the image grants NOPASSWD root INSIDE the container. This is not
     # host privilege -- no devices, no capabilities, no privileged mode -- but
     # it is a real difference between two otherwise identical images, and the
-    # whole reason the sbx variants are separate targets.
-    "dev.finn.in-container-root" = can(regex("^sbx-", tier)) ? "true" : "false"
+    # whole reason the sbx variant is a separate target.
+    "dev.finn.in-container-root" = sbx ? "true" : "false"
   }
 }
 
 # ---------------------------------------------------------------------------
-# Targets: tier x profile, generated from one shape.
+# Targets
 # ---------------------------------------------------------------------------
 
-target "tiers" {
+target "finn" {
   inherits = ["_common"]
-  name     = replace("${tier}-${profile}", ".", "-")
-  matrix = {
-    tier    = ["dev", "build", "build-xrt", "sbx-dev", "sbx-build", "sbx-build-xrt"]
-    profile = ["py310"]
-  }
-  target = tier
-  args   = common_args(profile)
-  labels = common_labels(tier, profile)
-  tags   = [tag(tier, profile)]
+  target   = "runtime"
+  args     = { FINN_RUNTIMES = "" }
+  labels   = labels("", false)
+  tags     = [tag("", false)]
+}
+
+target "finn-xrt" {
+  inherits = ["_common"]
+  target   = "runtime"
+  args     = { FINN_RUNTIMES = "xrt" }
+  labels   = labels("xrt", false)
+  tags     = [tag("xrt", false)]
+}
+
+target "finn-sbx" {
+  inherits = ["_common"]
+  target   = "sbx"
+  args     = { FINN_RUNTIMES = "" }
+  labels   = labels("", true)
+  tags     = [tag("", true)]
+}
+
+target "finn-sbx-xrt" {
+  inherits = ["_common"]
+  target   = "sbx"
+  args     = { FINN_RUNTIMES = "xrt" }
+  labels   = labels("xrt", true)
+  tags     = [tag("xrt", true)]
+}
+
+# Deliberately outside every group. SLASH is SOURCE=supply: it needs
+# docker/packages/slash.deb, which FINN does not ship and CI cannot produce, so
+# a group containing this target would fail on any machine without the file.
+# Build it explicitly once you have the package.
+target "finn-xrt-slash" {
+  inherits = ["_common"]
+  target   = "runtime"
+  args     = { FINN_RUNTIMES = "xrt,slash" }
+  labels   = labels("xrt,slash", false)
+  tags     = [tag("xrt,slash", false)]
 }
 
 # ---------------------------------------------------------------------------
 # Groups
 # ---------------------------------------------------------------------------
 
-# `dev`, not `build-xrt`. The old default was Jenkins history: the largest tier
-# with the widest host exposure, for work that mostly does not need it.
+# The base image, not an accelerator variant. The old default was Jenkins
+# history: the largest tier with the widest host exposure, for work that mostly
+# does not need it.
 group "default" {
-  targets = ["dev-py310"]
+  targets = ["finn"]
 }
 
+# Everything that must build, on any machine, with no supplied packages.
 group "supported" {
-  targets = ["dev-py310", "build-py310", "build-xrt-py310",
-             "sbx-dev-py310", "sbx-build-py310", "sbx-build-xrt-py310"]
+  targets = ["finn", "finn-xrt", "finn-sbx", "finn-sbx-xrt"]
 }
 
 group "docker" {
-  targets = ["dev-py310", "build-py310", "build-xrt-py310"]
+  targets = ["finn", "finn-xrt"]
 }
 
 group "sbx" {
-  targets = ["sbx-dev-py310", "sbx-build-py310", "sbx-build-xrt-py310"]
+  targets = ["finn-sbx", "finn-sbx-xrt"]
 }
 
 group "all" {

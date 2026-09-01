@@ -29,33 +29,52 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # =============================================================================
-# Three publishable targets, each a superset of the last:
+# ONE base image, plus two orthogonal layers:
 #
-#   system -> python -> dev        no XRT, no Xilinx, no build data   [agent]
-#                        \-> build          + finn-hlslib, board files [RTL/HLS]
-#                             \-> build-xrt + XRT, v80++               [Alveo/V80]
+#   system -> python -> base -> runtime -> sbx
 #
-# `dev` is the sandboxed-agent image: it runs quicktest.sh, the non-Vivado
-# pytest subset, linting and every import-level task, with the network closed
-# and nothing mounted but the workspace. `build` adds the ~900 MB of HLS headers
-# and board definitions that Vivado and Vitis HLS need. `build-xrt` adds XRT,
-# which FINN reaches for only on Vitis/Alveo paths - notably NOT for rtlsim,
-# which needs Vivado's xsim and never XRT.
+#   base      everything FINN needs to compile a design. The publishable image.
+#   runtime   + the accelerator stacks named in FINN_RUNTIMES (xrt, slash, ...)
+#   sbx       + the privileged half of the sbx template contract
+#
+# WHY THERE IS NO dev/build SPLIT ANY MORE
+# ----------------------------------------
+# There used to be three tiers, and the difference between `dev` and `build` was
+# 530 MB of HLS headers and board definition files (measured: 2.91 GB against
+# 3.44 GB). That split encoded a HOST fact -- whether the user has Vivado -- as
+# an IMAGE fact, and docker/finn-env already resolves the same fact at launch.
+# Two encodings of one fact can disagree, and they did: Apptainer mounts $HOME,
+# so on a host that keeps its tools there, `vivado` ran out of the *dev* image.
+#
+# What made `dev` narrow was never which image you pulled. It was the absence of
+# a toolchain mount, a licence and egress -- all runtime grants, all still
+# enforced, now in exactly one place. `tier` still exists in finn-env and in the
+# launchers; it selects grants, not content.
+#
+# WHY THE RUNTIME LAYER IS A LAYER
+# --------------------------------
+# XRT and SLASH are not host facts. They are packages that code inside this
+# image links or execs against -- v++ links XRT, MakeCPPDriver builds
+# finn-vrt-driver against VRT. They cannot be mounted from the host the way
+# Vivado can, because they are distro-specific compiled binaries rather than a
+# self-contained tree. So they are built in, and the tag says which.
+#
+# Add one by writing docker/runtimes/<name>.env. See that directory's README
+# for the format and for the admission test.
 #
 # No image bakes an identity. Identity is a runtime concern: run-docker.sh
 # passes --user, and any orchestrator that runs this image is expected to
-# provision a passwd entry and drop privileges itself. A per-user image would
-# also make the tag a lie, since the tag encodes only the git describe and the
-# XRT version.
+# provision a passwd entry and drop privileges itself.
 # =============================================================================
 
-# Ubuntu base for every stage. For build-xrt this is not free to choose: it must
-# match the OS the XRT package targets, so run-docker.sh derives it from
-# XRT_DEB_VERSION and the build-xrt stage asserts the two agree.
+# Ubuntu base for every stage. Not free to choose once a runtime target is
+# selected: it must match the release that target's packages were built for.
+# Each manifest may declare EXPECT_OS, and docker/install-runtimes.sh fails the
+# build when it disagrees with this base.
 #
 # A date-pinned snapshot, not the rolling `ubuntu:jammy`. Canonical republishes
 # the rolling tag regularly, which would let image contents drift under an
-# unchanged FINN tag. run-docker.sh owns the codename -> snapshot mapping.
+# unchanged FINN tag. Bump deliberately.
 ARG UBUNTU_TAG=jammy-20230126
 
 
@@ -218,23 +237,13 @@ RUN pip install --no-cache-dir \
     torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
     --index-url https://download.pytorch.org/whl/cpu
 
-# Dependency profile: which (Ubuntu, Python, pin set) combination to build.
-#
-#   py310  Ubuntu 22.04 / Python 3.10 - the currently validated configuration
-#   py312  Ubuntu 24.04 / Python 3.12 - tracks upstream PR 1603
-#
-# The profile owns every Python pin plus the XRT package; run-docker.sh derives
-# the Ubuntu release from that XRT package, so selecting a profile selects the
-# whole stack coherently. See docker/profiles/README.md.
-ARG FINN_PROFILE=py310
-
 COPY requirements.txt /tmp/requirements.txt
-COPY docker/profiles /tmp/profiles
+COPY docker/pip-constraints.txt docker/pip-tools.txt \
+     docker/pip-tools-force-post.txt /tmp/pip/
 
-# Cap what later layers may resolve to - per profile, because the bounds differ.
-# See docker/profiles/README.md for why these are load-bearing rather than
-# defensive.
-RUN cp /tmp/profiles/$FINN_PROFILE/constraints.txt /etc/finn-pip-constraints.txt
+# Cap what later layers may resolve to. These bounds are load-bearing, not
+# defensive: numpy<2 is a FINN correctness requirement, not a convenience.
+RUN cp /tmp/pip/pip-constraints.txt /etc/finn-pip-constraints.txt
 ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
 
 # Base FINN requirements, then the interaction and test stack. Grouped rather
@@ -252,25 +261,24 @@ ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
 #         distro-provided copies, but installing them first would let the base
 #         requirements resolve against the wrong versions.
 #
-# Either file may be absent; a profile declares only the phases it needs.
+# Either force file may be absent. Add pip-tools-force-pre.txt when a base you
+# move to needs the pre phase; jammy does not.
 RUN set -eu; \
-    p=/tmp/profiles/$FINN_PROFILE; \
-    . $p/profile.env; \
-    echo "Building profile $FINN_PROFILE: $FINN_PROFILE_DESC"; \
-    if [ -s $p/tools-force-pre.txt ]; then \
-        pip install --no-cache-dir --ignore-installed -r $p/tools-force-pre.txt; \
+    p=/tmp/pip; \
+    if [ -s $p/pip-tools-force-pre.txt ]; then \
+        pip install --no-cache-dir --ignore-installed -r $p/pip-tools-force-pre.txt; \
     fi; \
-    pip install --no-cache-dir -r "$FINN_PROFILE_REQUIREMENTS"; \
-    pip install --no-cache-dir -r $p/tools.txt; \
-    if [ -s $p/tools-force-post.txt ]; then \
-        pip install --no-cache-dir --ignore-installed -r $p/tools-force-post.txt; \
+    pip install --no-cache-dir -r /tmp/requirements.txt; \
+    pip install --no-cache-dir -r $p/pip-tools.txt; \
+    if [ -s $p/pip-tools-force-post.txt ]; then \
+        pip install --no-cache-dir --ignore-installed -r $p/pip-tools-force-post.txt; \
     fi
 
 RUN pip install --no-cache-dir -e git+https://github.com/fbcotter/dataset_loading.git@0.0.4#egg=dataset_loading
 
 
-# --- dev: FINN's dependency closure. The agent image. ------------------------
-FROM python AS dev
+# --- base: FINN's dependency closure and build data. The publishable image. ---
+FROM python AS base
 
 # Pins come from deps.env, the same file fetch-repos.sh reads, so the commit
 # baked here and the commit checked out on the host cannot drift apart. Each is
@@ -278,6 +286,12 @@ FROM python AS dev
 ARG QONNX_COMMIT
 ARG FINN_EXP_COMMIT
 ARG BREVITAS_COMMIT
+ARG HLSLIB_COMMIT
+ARG AVNET_BDF_COMMIT
+ARG XIL_BDF_COMMIT
+ARG RFSOC4x2_BDF_COMMIT
+ARG KV260_BDF_COMMIT
+ARG AUPZU3_BDF_COMMIT
 
 COPY deps.env fetch-repos.sh /opt/finn-src/
 # Fetch and install the three importable deps as ordinary wheels, then drop the
@@ -294,6 +308,22 @@ RUN cd /opt/finn-src && \
         ./deps/finn-experimental \
         ./deps/brevitas && \
     rm -rf /opt/finn-src/deps
+
+# HLS C++ headers and Vivado board definitions. Never imported, reached through
+# FINN_HLSLIB_PATH / FINN_BOARD_FILES_PATH from generated Tcl and g++ include
+# flags. 530 MB after the .git strip.
+#
+# These used to live in a separate `build` stage, so that the `dev` image could
+# skip them. That saved 18% of the image and cost a second, disagreeing
+# encoding of "does this user have Vivado" -- see the header. A user with no
+# toolchain now carries headers nothing will read, which is inert: without a
+# Vivado mount there is nothing to include them.
+RUN cd /opt/finn-src && \
+    ./fetch-repos.sh data && \
+    rm -rf /opt/finn-src/deps/*/.git
+
+ENV FINN_HLSLIB_PATH=/opt/finn-src/deps/finn-hlslib \
+    FINN_BOARD_FILES_PATH=/opt/finn-src/deps/board_files
 
 # Resolve FINN and, in live mode, the deps from the mounted workspace. Installed
 # into site-packages so it applies to every interpreter start, including ones
@@ -402,10 +432,7 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
 # XILINX_LOCAL_USER_DATA=no: workaround for running multiple Vivado instances
 # simultaneously, see https://adaptivesupport.amd.com/s/article/63253
 #
-# LD_PRELOAD is a FlexLM workaround and is deliberately NOT set here. It only
-# matters once a licensed Xilinx tool is in play, and setting it image-wide
-# makes every unrelated process in the dev tier pay for it. The entrypoint sets
-# it when it actually finds Xilinx tools to source.
+# LD_PRELOAD is set further down, after the assertion that finds the library.
 
 # A non-root default identity, and PID 1 that reaps.
 #
@@ -472,6 +499,43 @@ RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/n
 ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
 CMD ["bash"]
 
+# The FLEXlm/libudev workaround, baked.
+#
+# Without it a licence checkout dies with "realloc(): invalid pointer" inside
+# udev_enumerate_scan_devices. FLEXlm fingerprints the host through libudev
+# during checkout and corrupts the heap doing it; preloading the system libudev
+# avoids it. Reproduced on plain docker, so this is NOT microVM-specific -- an
+# earlier comment in docker/finn.kit/spec.yaml claimed it was, and was wrong.
+#
+# WHY BAKED RATHER THAN RESOLVED AT RUNTIME. finn-env used to probe for this
+# per process. The probe was doing very little: the library is in the base image
+# at a fixed path, on the only architecture this image supports (bake declares
+# platforms = ["linux/amd64"], and XRT and Vivado are x86-64 only). Baking it
+# moves the value from run-time to CREATE-time, so a bare `docker exec` or
+# `sbx exec` inherits it with no hook at all -- neither runs the ENTRYPOINT, and
+# a Vivado launched that way is exactly how this went missing and took synthesis
+# down with it.
+#
+# This used to live in the `build` stage, so the narrow `dev` image did not
+# carry it. With one base image it applies everywhere, which is measured
+# harmless -- git, pip and apt are unaffected. The reason for keeping it out of
+# `dev` was that the narrow tier stays narrow on principle; that principle is
+# now enforced by the runtime grants (no toolchain mount, no licence, no
+# egress), which is where it was always doing the real work.
+#
+# The assertion is the point of baking it. If a future base changes distro and
+# the library moves, this fails the BUILD. Left to runtime, ld.so instead prints
+# "cannot be preloaded: ignored" on every single exec, which looks like a FINN
+# bug; and before that, a failed probe returned nothing at all and Vivado
+# aborted at licence checkout with a heap error pointing nowhere near the cause.
+RUN set -eu; \
+    libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1); \
+    [ -n "$libudev" ] || { echo "ERROR: libudev.so.1 not found; the FLEXlm workaround cannot be applied" >&2; exit 1; }; \
+    echo "libudev for LD_PRELOAD: $libudev"; \
+    test "$libudev" = /lib/x86_64-linux-gnu/libudev.so.1 || \
+        { echo "ERROR: libudev is at $libudev, not the baked path below. Update the ENV." >&2; exit 1; }
+ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
+
 # The image's default user. This was missing entirely: `agent` was created but
 # never selected, so every consumer that did not pass --user got ROOT. That
 # included plain `docker run`, `docker exec`, and any orchestrator reading the
@@ -485,167 +549,39 @@ CMD ["bash"]
 # the desired failure mode.
 USER agent
 
-
-# --- build: + the non-Python build data. Vivado / Vitis HLS flows. -----------
-FROM dev AS build
+# --- runtime: + the accelerator stacks named in FINN_RUNTIMES. ---------------
+#
+# Empty by default, so this stage is a no-op and the base image is what you get.
+#
+#   FINN_RUNTIMES=xrt          Vitis / Alveo
+#   FINN_RUNTIMES=xrt,slash    plus the V80
+#
+# The names are file names in docker/runtimes/. Add a target by writing one
+# manifest there; nothing in this Dockerfile changes. See that README for the
+# format, for the admission test, and for why kernel modules are not here.
+#
+# The manifests and any supplied packages arrive through a bind mount rather
+# than COPY, so an unselected runtime's deb never ends up in a layer and the
+# image does not carry packages it did not install.
+FROM base AS runtime
 USER root
 
-ARG HLSLIB_COMMIT
-ARG AVNET_BDF_COMMIT
-ARG XIL_BDF_COMMIT
-ARG RFSOC4x2_BDF_COMMIT
-ARG KV260_BDF_COMMIT
-ARG AUPZU3_BDF_COMMIT
+ARG FINN_RUNTIMES=""
+ENV FINN_RUNTIMES=${FINN_RUNTIMES}
 
-# HLS C++ headers and Vivado board definitions. Never imported, reached through
-# FINN_HLSLIB_PATH / FINN_BOARD_FILES_PATH from generated Tcl and g++ include
-# flags. Baking them here is what lets the dev tier - and every agent sandbox -
-# skip ~900 MB it has no way to use.
-# deps.env and fetch-repos.sh are already in place from the dev stage.
-RUN cd /opt/finn-src && \
-    ./fetch-repos.sh data && \
-    rm -rf /opt/finn-src/deps/*/.git
-
-ENV FINN_HLSLIB_PATH=/opt/finn-src/deps/finn-hlslib \
-    FINN_BOARD_FILES_PATH=/opt/finn-src/deps/board_files
-
-# The FLEXlm/libudev workaround, baked.
-#
-# Without it a licence checkout dies with "realloc(): invalid pointer" inside
-# udev_enumerate_scan_devices. FLEXlm fingerprints the host through libudev
-# during checkout and corrupts the heap doing it; preloading the system libudev
-# avoids it. Reproduced on plain docker, so this is NOT microVM-specific -- an
-# earlier comment in docker/finn.kit/spec.yaml claimed it was, and was wrong.
-#
-# WHY BAKED RATHER THAN RESOLVED AT RUNTIME. finn-env used to probe for this
-# per process. The probe was doing very little: the library is in the base image
-# at a fixed path, on the only architecture these tiers support (bake declares
-# platforms = ["linux/amd64"], and XRT and Vivado are x86-64 only). Baking it
-# moves the value from run-time to CREATE-time, so a bare `docker exec` or
-# `sbx exec` inherits it with no hook at all -- neither runs the ENTRYPOINT, and
-# a Vivado launched that way is exactly how this went missing and took synthesis
-# down with it.
-#
-# WHY HERE AND NOT IN system OR dev. `dev` has no Vivado and no reason to
-# preload libudev into every unrelated process. Measured harmless -- git, pip
-# and apt are unaffected -- but the narrow tier stays narrow on principle, the
-# same as it does for mounts, licences and egress.
-#
-# The assertion is the point of baking it. If a future profile changes distro
-# and the library moves, this fails the BUILD. Left to runtime, ld.so instead
-# prints "cannot be preloaded: ignored" on every single exec, which looks like a
-# FINN bug; and before that, a failed probe returned nothing at all and Vivado
-# aborted at licence checkout with a heap error pointing nowhere near the cause.
-RUN set -eu; \
-    libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1); \
-    [ -n "$libudev" ] || { echo "ERROR: libudev.so.1 not found; the FLEXlm workaround cannot be applied" >&2; exit 1; }; \
-    echo "libudev for LD_PRELOAD: $libudev"; \
-    test "$libudev" = /lib/x86_64-linux-gnu/libudev.so.1 || \
-        { echo "ERROR: libudev is at $libudev, not the baked path below. Update the ENV." >&2; exit 1; }
-ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
-
-USER agent
-
-
-# --- build-xrt: + XRT and v80++. Vitis / Alveo / V80 targets only. -----------
-FROM build AS build-xrt
-USER root
-
-# One authored value. The Ubuntu release and the target architecture are derived
-# from it rather than pinned separately, because a Noble package on a Jammy base
-# is something apt will generally resolve rather than refuse - yielding a subtly
-# wrong runtime instead of a clean failure.
-#
-#   xrt_202420.2.18.179_24.04-amd64-xrt
-#       └ version ──┘ └ OS ┘ └arch┘
-#
-ARG XRT_DEB_VERSION="xrt_202220.2.14.354_22.04-amd64-xrt"
-ARG XRT_DEB_SHA256=""
-ARG SKIP_XRT
-ARG LOCAL_XRT
-ARG V80PP_DEB_PACKAGE
-ARG TARGETARCH
-
-# Bracket glob so a missing local .deb is not an error: this is only present
-# when run-docker.sh staged one from FINN_XRT_PATH (the LOCAL_XRT path).
-COPY ${XRT_DEB_VERSION}.de[b] /tmp/
-
-# Make the §2.8 mismatch unrepresentable: fail the build rather than produce an
-# image whose XRT targets an OS or architecture it is not running on.
-RUN set -eu; \
-    if [ -n "${SKIP_XRT:-}" ]; then echo "SKIP_XRT set, skipping XRT consistency check"; exit 0; fi; \
-    deb_os=$(echo "$XRT_DEB_VERSION" | sed -n 's/.*_\([0-9][0-9]\.[0-9][0-9]\)-.*/\1/p'); \
-    deb_arch=$(echo "$XRT_DEB_VERSION" | sed -n 's/.*-\([a-z0-9]*\)-xrt$/\1/p'); \
-    run_os=$(. /etc/os-release; echo "$VERSION_ID"); \
-    if [ -z "$deb_os" ] || [ -z "$deb_arch" ]; then \
-        echo "ERROR: cannot parse XRT_DEB_VERSION='$XRT_DEB_VERSION'" >&2; \
-        echo "       expected xrt_<version>_<os>-<arch>-xrt" >&2; exit 1; \
-    fi; \
-    if [ "$deb_os" != "$run_os" ]; then \
-        echo "ERROR: XRT package targets Ubuntu $deb_os but this image is Ubuntu $run_os" >&2; \
-        echo "       XRT_DEB_VERSION=$XRT_DEB_VERSION" >&2; \
-        echo "       The base image is derived from XRT_DEB_VERSION; do not set" >&2; \
-        echo "       UBUNTU_CODENAME by hand." >&2; exit 1; \
-    fi; \
-    if [ -n "${TARGETARCH:-}" ] && [ "$deb_arch" != "$TARGETARCH" ]; then \
-        echo "ERROR: XRT package targets $deb_arch but the build platform is $TARGETARCH" >&2; \
-        exit 1; \
-    fi; \
-    echo "XRT $XRT_DEB_VERSION consistent with Ubuntu $run_os/${TARGETARCH:-unknown}"
-
-# Prefer download.amd.com, which serves current releases, but fall back to the
-# older openDownload redirect. Not belt-and-braces: the currently pinned
-# 2022.2-era package 404s on download.amd.com and is only available from the
-# legacy endpoint, so switching unconditionally would break this tier outright.
-#
-# The spoofed browser user-agent the previous revision sent is dropped - the
-# endpoint serves a plain wget fine, so it was cargo cult.
-#
-# Verify a checksum when one is supplied: this is an unauthenticated fetch of a
-# package installed as root, so an unpinned download is a supply-chain soft spot.
-# run-docker.sh passes FINN_XRT_SHA256 through when it is set.
-RUN set -eu; \
-    if [ -n "${LOCAL_XRT:-}" ] || [ -n "${SKIP_XRT:-}" ]; then exit 0; fi; \
-    out=/tmp/$XRT_DEB_VERSION.deb; \
-    if ! wget -q "https://download.amd.com/opendownload/xrt/$XRT_DEB_VERSION.deb" -O "$out"; then \
-        echo "download.amd.com has no $XRT_DEB_VERSION, falling back to openDownload" >&2; \
-        rm -f "$out"; \
-        wget -q "https://www.xilinx.com/bin/public/openDownload?filename=$XRT_DEB_VERSION.deb" -O "$out"; \
-    fi; \
-    if [ -n "$XRT_DEB_SHA256" ]; then \
-        echo "$XRT_DEB_SHA256  $out" | sha256sum -c - ; \
-    else \
-        echo "WARNING: XRT downloaded without checksum verification." >&2; \
-        echo "         Set FINN_XRT_SHA256 to pin it. sha256 of this download:" >&2; \
-        sha256sum "$out" >&2; \
-    fi
-
-RUN set -eu; \
-    if [ -n "${SKIP_XRT:-}" ]; then exit 0; fi; \
-    apt-get update && \
-    apt-get install -y --no-install-recommends /tmp/$XRT_DEB_VERSION.deb && \
-    rm -f /tmp/$XRT_DEB_VERSION.deb && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install v80++. If the package isn't provided, this is a no-op.
-# The wildcard pattern ensures COPY doesn't fail if the file doesn't exist.
-COPY v80pp.de[b] /tmp/
-RUN if [ -f /tmp/v80pp.deb ]; then \
-        apt-get update && \
-        apt-get install -y --no-install-recommends /tmp/v80pp.deb && \
-        rm /tmp/v80pp.deb && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
+RUN --mount=type=bind,source=docker/runtimes,target=/tmp/runtimes \
+    --mount=type=bind,source=docker/packages,target=/tmp/packages \
+    --mount=type=bind,source=docker/install-runtimes.sh,target=/tmp/install-runtimes.sh \
+    sh /tmp/install-runtimes.sh
 
 USER agent
 
 
 # =============================================================================
-# sbx targets: the generic image plus the privileged half of the sbx template
-# contract.
+# sbx: the generic image plus the privileged half of the sbx template contract.
 #
-# WHY SEPARATE TARGETS AND NOT A BUILD ARGUMENT
-# ---------------------------------------------
+# WHY A SEPARATE TARGET AND NOT A BUILD ARGUMENT
+# ----------------------------------------------
 # NOPASSWD sudo is a real capability. Gating it behind a build argument would
 # produce two images with materially different privilege that are
 # indistinguishable by tag -- a hidden variant. A named target puts the
@@ -655,10 +591,12 @@ USER agent
 # -----------------------------
 # Inheritance ENFORCES behavioural equivalence with the generic image; a second
 # Dockerfile only hopes for it. BuildKit shares every lower layer, so the
-# marginal cost of these targets is one thin layer each, not a second image.
-# Duplicated paths drifting is exactly the failure that produced the mount
-# defects this redesign started from -- adding a second axis of duplication
-# would be the wrong lesson to draw.
+# marginal cost is one thin layer, not a second image.
+#
+# This used to be three targets, one per tier, which is why the contract lives
+# in a script: a change could otherwise be applied to two of the three. With one
+# base image there is one sbx target, and the script keeps its own reason to
+# exist -- it is still the only place that knows the contract.
 #
 # WHAT SBX NEEDS THAT THE GENERIC IMAGE DELIBERATELY WITHHOLDS
 # ------------------------------------------------------------
@@ -669,13 +607,8 @@ USER agent
 #   /etc/sandbox-persistent.sh
 #                    sbx-managed; the image must never WRITE it, but the file
 #                    has to exist for BASH_ENV to source on the first shell.
-#   NPM_CONFIG_PREFIX
-#                    for harnesses that `npm install -g`. Paired with its bin
-#                    dir on PATH already, in the generic ENV -- setting the
-#                    prefix alone puts the binary somewhere unreachable and the
-#                    install appears to succeed, then `command -v` fails 127.
 #
-# In-container root here is NOT a violation of the dev tier's "no privileges"
+# In-container root here is NOT a violation of the narrow tier's "no privileges"
 # contract, which is about HOST exposure: no devices, no added capabilities, no
 # privileged mode, no sensitive writable mounts. The conformance suite asserts
 # both readings separately.
@@ -685,19 +618,7 @@ USER agent
 # wrapper.
 # =============================================================================
 
-FROM dev AS sbx-dev
-USER root
-COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
-RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh
-USER agent
-
-FROM build AS sbx-build
-USER root
-COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
-RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh
-USER agent
-
-FROM build-xrt AS sbx-build-xrt
+FROM runtime AS sbx
 USER root
 COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
 RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh

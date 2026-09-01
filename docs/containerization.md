@@ -52,6 +52,7 @@ wrong line.
 | sbx runtime | `docker/sbxenv/*.sbxenv.yaml` |
 | Host-system setup | `setup-local.sh` |
 | Dependency versions | `deps.env` |
+| Accelerator runtime packages | `docker/runtimes/*.env` |
 | Legacy command | `run-docker.sh` — owns nothing |
 
 ---
@@ -60,43 +61,131 @@ wrong line.
 
 ```
 ubuntu:${UBUNTU_TAG}
- └─ system     OS packages, locale, ncurses 5 ABI, LSB loader, tini
-    └─ python  interpreter and requirements    (one per profile)
-       └─ dev  FINN dependency wheels, finn-env, shims, USER agent
-          │     └─ sbx-dev
-          └─ build   + finn-hlslib, board files, ENV LD_PRELOAD
-             │        └─ sbx-build
-             └─ build-xrt   + XRT, v80++
-                └─ sbx-build-xrt
+ └─ system      OS packages, locale, ncurses 5 ABI, LSB loader, tini
+    └─ python   interpreter, torch, requirements, tool pins
+       └─ base  FINN wheels, finn-hlslib, board files, finn-env, shims,
+          │     ENV LD_PRELOAD, USER agent          <- the publishable image
+          └─ runtime   + the stacks in FINN_RUNTIMES (xrt, slash, v80pp)
+             └─ sbx    + the sbx template contract
 ```
 
-Two axes: **tier** and **profile**. The `sbx-*` variants add one layer.
+**One image, plus two orthogonal layers.**
 
-### Why the sbx variants are separate targets
+| axis | values | in the tag |
+|---|---|---|
+| base | one | `<git>` |
+| runtime targets | a set | `.xrt`, `.slash.xrt` (sorted, dot-joined) |
+| sbx contract | boolean | `sbx-` prefix |
+
+Four targets: `finn`, `finn-xrt`, `finn-sbx`, `finn-sbx-xrt`. Enumerated in
+`docker-bake.hcl`, not generated — three runtime targets and a boolean would be
+sixteen images, almost all unwanted. Build any other combination with `--set`.
+
+Use `.` and not `+` to join runtime names: a Docker tag accepts
+`[\w][\w.-]{0,127}`, and `+` gives `invalid reference format`.
+
+### Why there is no tier axis, and no profile axis
+
+There were three tiers and a profile. Both are gone, for the same reason: each
+encoded a fact something else already owned.
+
+**The profile axis had one member.** It threaded `FINN_PROFILE` through ten
+files and four lanes to select from a set of size one. A second Ubuntu/Python
+combination is a new value in one place, not an axis that must exist between
+migrations.
+
+**The tier axis encoded a host fact.** `dev` and `build` differed by 530 MB of
+HLS headers and board definition files (measured: 2.91 GB against 3.44 GB) —
+that is, by whether the user has Vivado. `finn-env` already resolves that at
+launch, so the fact had two encodings and they could disagree. They did:
+Apptainer mounts `$HOME`, so on a host that keeps its tools there, `vivado` ran
+out of the *dev* image.
+
+What made `dev` narrow was never which image you pulled. It was the absence of
+a toolchain mount, a licence and egress — runtime grants, still enforced, now in
+exactly one place. **`tier` still exists and still means something: it selects
+grants.** There are two, `dev` and `build`. `build-xrt` was not a third set of
+grants; it was XRT.
+
+The cost is that a toolchain-less user carries 530 MB of headers nothing will
+read. Without a Vivado mount there is nothing to include them, so they are
+inert.
+
+### The runtime seam
+
+A runtime target is a set of `.deb` files installed on top of the base. Add one
+by writing `docker/runtimes/<name>.env`; nothing else changes.
+
+Two sourcing modes. `fetch` downloads a pinned, checksummed URL — XRT only,
+because AMD publishes one, FINN's own code hard-depends on XRT
+(`alveo_build.py:64`), and CI publishes that image unattended. `supply`
+requires the user to put the file in `docker/packages/`, and a missing file
+**fails the build naming the path**. It is never silently inert.
+
+The admission test: a runtime target belongs only if code running inside the
+image links or execs against it. XRT passes (`v++` links it, `make_driver.py`
+execs `xclbinutil`). SLASH passes (`MakeCPPDriver` builds `finn-vrt-driver`
+against VRT, and `ShellFlowType.SLASH_ALVEO` is a supported flow). PyNQ fails —
+`from pynq import ...` appears only in a driver template copied to the board.
+
+Every runtime target has a **host half** — `xocl`/`xclmgmt` for XRT, a kernel
+module and `vrtd` for SLASH. The image carries userspace only.
+
+FINN does not build third-party runtime stacks from source. It fetches
+published artifacts and accepts supplied packages. A V80 user has already built
+and installed SLASH on the host, because the kernel module has to be there, so
+the `.deb` is a by-product they already hold — and FINN has no V80 to test a
+build against.
+
+### Why the sbx contract stays baked
+
+Folding `sbx-contract.sh` into `docker/finn.kit` would delete the sbx axis and
+leave literally one image. It was tried against sbx v0.39.0 and it does not
+work. From the base image, with no contract baked:
+
+| check | base image | sbx image |
+|---|---|---|
+| `id -nG` | `agent` | `agent sudo` |
+| `/etc/sandbox-persistent.sh` | missing | present |
+| `sudo -n true` | fails | succeeds |
+
+`sbx create` itself now succeeds on the base image, so this fails quietly: the
+sandbox comes up and is merely wrong. It also cannot be fixed from a kit for a
+reason no ordering change would help — a kit runs as `agent`, and the kit would
+have to `sudo` to grant itself the sudo it is granting.
+
+### Why the sbx variant is a separate target
 
 `NOPASSWD` sudo is a real capability. A build argument would produce two images
 with different privilege and the same name. A named target puts the privilege
-model in the tag.
+model in the tag. The same argument makes the runtime set part of the tag: the
+predecessor of that layer was a bare `COPY v80pp.de[b]`, which baked a package
+when the file happened to be present and produced an identical tag either way.
 
-They are not a separate Dockerfile. BuildKit shares every lower layer, so an
+It is not a separate Dockerfile. BuildKit shares every lower layer, so an
 inherited target costs one thin layer — measured, 26 layers against 28 — and
 inheritance *enforces* the equivalence that a second Dockerfile could only hope
 for. Given that four defects came from duplicated paths drifting, adding a
 second axis of duplication would have been the wrong lesson.
 
-The contract itself is `docker/sbx-contract.sh`, not three identical `RUN`
-blocks, for the same reason.
+The contract itself is `docker/sbx-contract.sh` rather than an inline `RUN`
+block. That was originally to stop a change reaching two of three tiers; with
+one base image it survives because it is still the only place that knows the
+contract, and because it now carries the evidence for why it cannot move.
 
 ### Build-time assertions
 
 The build fails rather than shipping something subtly wrong:
 
 1. `finn_paths.DEP_SRC_DIRS` must agree with `deps.env`.
-2. The XRT package's OS must match the base image. A 24.04 package on a jammy
-   base is something apt *resolves* rather than refuses, giving a subtly wrong
-   runtime instead of a clean failure.
-3. `libudev.so.1` must be where the baked `ENV LD_PRELOAD` says.
-4. The LSB loader symlink must resolve. Without it `lmutil` cannot exec, and the
+2. A runtime target's `EXPECT_OS` must match the base image. A 24.04 package on
+   a jammy base is something apt *resolves* rather than refuses, giving a subtly
+   wrong runtime instead of a clean failure. This was an XRT-specific check
+   before the runtime seam; every target gets it now.
+3. A `SOURCE=supply` target's `.deb` must be present, and the error names the
+   path.
+4. `libudev.so.1` must be where the baked `ENV LD_PRELOAD` says.
+5. The LSB loader symlink must resolve. Without it `lmutil` cannot exec, and the
    error names a file that plainly exists — the classic missing-ELF-interpreter
    confusion.
 
@@ -163,7 +252,7 @@ tool not found", which points nowhere near the cause.
 | Environment | Path |
 |---|---|
 | `dev`, ordinary CI | fixed `/workspace/finn` |
-| FPGA tiers | the host path |
+| `build` | the host path |
 | sbx, any tier | the host path — sbx cannot remap |
 
 Generated Vivado projects embed `$::env(FINN_ROOT)` as an absolute path via
@@ -174,7 +263,7 @@ Vivado GUI, which is routine debugging here.
 remote-daemon support, reproducible diagnostic paths and simple Dev Container
 configuration.
 
-**Accepted consequence:** `FINN_ROOT` differs between `dev` and the FPGA tiers on
+**Accepted consequence:** `FINN_ROOT` differs between `dev` and `build` on
 one host. `finn_paths.py` resolves either correctly, but the path moving when you
 change tier surprises people.
 
@@ -403,9 +492,9 @@ the path is untested. Conformance test 9 covers it and currently skips.
 
 ## Verification
 
-`ci/scripts/conformance.sh` — ten checks, each corresponding to a defect that
-happened or a contract that would erode silently. Tests 4 and 5 matter most, and
-only in their **bare** form:
+`ci/scripts/conformance.sh` — thirteen checks, each corresponding to a defect
+that happened or a contract that would erode silently. Tests 4 and 5 matter
+most, and only in their **bare** form:
 
 ```
 docker exec <c> vivado -version
@@ -418,3 +507,20 @@ is broken. Test 4 did not pass before the transparent shims.
 Test 7 asserts **both** readings of privilege, because "no privileges" is
 ambiguous and the natural reading is the wrong one: the generic and sbx images
 differ only in in-container root, and neither has host privilege.
+
+Tests 12 and 13 guard the runtime seam. 12 checks that the tag names the
+runtime set and that the two producers of that suffix — `tag()` in
+`docker-bake.hcl` and `runtime_tag()` in `finn-env` — agree; if they drift,
+compose names an image bake never built. 13 checks that a `SOURCE=supply`
+target with no `.deb` fails the build with the path in the message, because the
+build is the only place that is checked.
+
+Last measured: **27 pass, 0 fail, 4 skip.** Skips are the sbx sandbox, the
+node-locked licence (still unresolved, see above) and the Apptainer `.sif`.
+
+`quicktest.sh`: **2483 passed, 16 skipped, 5 xfailed, 1 xpassed, 32 errors.**
+The 32 are one file, `tests/util/test_config.py`, where onnxscript's `@script`
+decorator calls `inspect.getsource` on a function pytest's assertion rewriting
+compiled. It is unrelated to containerization and reproduces identically in the
+pre-restructure image — verified by running the same suite in both. An earlier
+revision of this document reported "2487 passed, 0 failed", which was wrong.

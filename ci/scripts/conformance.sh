@@ -51,12 +51,11 @@ head_() { echo; echo "=== $* ==="; }
 # loses every increment, which is how a red run can print a green total. Keep
 # every ok/bad call in the current shell.
 
-WANT="${*:-1 2 3 4 5 6 7 8 9 10 11}"
+WANT="${*:-1 2 3 4 5 6 7 8 9 10 11 12 13}"
 want () { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo local)
-GIT_DESCRIBE_DIRTY=$(git describe --always --tags --dirty 2>/dev/null || echo local)
-export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
+export GIT_DESCRIBE
 
 tag_for () { ./run-docker.sh print-tag "$1" 2>/dev/null; }
 
@@ -67,12 +66,19 @@ tag_for () { ./run-docker.sh print-tag "$1" 2>/dev/null; }
 # and the image for the current commit was never built. A test must fail
 # because the property is broken, not because of how it was invoked.
 need_image () {
-    local tier="$1" tag
+    local tier="$1" tag target
     tag=$(tag_for "$tier")
     [ -n "$tag" ] || return 1
     docker image inspect "$tag" >/dev/null 2>&1 && return 0
-    echo "  (building $tier for this commit)" >&2
-    docker buildx bake -f docker-bake.hcl --load "${tier}-${FINN_PROFILE:-py310}" >/dev/null 2>&1
+    # The bake target, not the tier. There is one image: dev and build resolve
+    # to the same `finn` target and differ only in grants.
+    case "$tier" in
+        sbx-*)     target="finn-sbx" ;;
+        build-xrt) target="finn-xrt" ;;
+        *)         target="finn" ;;
+    esac
+    echo "  (building $target for this commit)" >&2
+    docker buildx bake -f docker-bake.hcl --load "$target" >/dev/null 2>&1
 }
 
 CONTAINER=finn-conformance-$$
@@ -234,11 +240,11 @@ fi
 head_ "6. Toolchain and platform mounts are present AND read-only"
 # ---------------------------------------------------------------------------
 if want 6 && [ "$have_xilinx" = 1 ]; then
-    json=$(./docker/finn-env inspect --tier build-xrt 2>/dev/null)
+    json=$(./docker/finn-env inspect --tier build 2>/dev/null)
     rw=$(printf '%s' "$json" | python3 -c 'import json,sys;print(",".join(m["source"] for m in json.load(sys.stdin)["mounts"] if m["mode"]!="ro"))')
     n=$(printf '%s' "$json" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["mounts"]))')
-    [ "$n" -gt 0 ] && ok "build-xrt declares $n host mount(s)" \
-                   || bad "build-xrt declares no host mounts"
+    [ "$n" -gt 0 ] && ok "build declares $n host mount(s)" \
+                   || bad "build declares no host mounts"
     [ -z "$rw" ] && ok "every declared mount is read-only" \
                  || bad "writable mount(s) declared: $rw"
 
@@ -427,6 +433,57 @@ if want 11; then
                   | python3 -c 'import json,sys;print(json.load(sys.stdin)["workspace"]["policy"])' 2>/dev/null)
             [ "$pol" = "mirror" ] && ok "apptainer backend resolves the mirror workspace policy" \
                                   || bad "apptainer backend resolved policy '$pol', expected mirror"
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+head_ "12. The runtime set is visible in the tag, and one rule produces it"
+# ---------------------------------------------------------------------------
+# The image's contents must be readable from its name. The predecessor of this
+# layer was `COPY v80pp.de[b]`, which baked a package when the file happened to
+# be present and silently did not when it was absent -- two materially
+# different images under one tag.
+#
+# Two producers compute the suffix: tag() in docker-bake.hcl, for the build, and
+# runtime_tag() in finn-env, for the launchers and for compose. They must agree,
+# or compose names an image bake never built.
+if want 12; then
+    for spec in "finn:" "finn-xrt:.xrt" "finn-xrt-slash:.slash.xrt"; do
+        target="${spec%%:*}"; want_suffix="${spec#*:}"
+        tag=$(GIT_DESCRIBE=CONFORMANCE docker buildx bake -f docker-bake.hcl \
+                  --print "$target" 2>/dev/null | sed -n '/^{/,$p' \
+              | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$target']['tags'][0])" 2>/dev/null)
+        if [ "$tag" = "xilinx/finn:CONFORMANCE$want_suffix" ]; then
+            ok "bake target $target tags as ...CONFORMANCE$want_suffix"
+        else
+            bad "bake target $target tagged '$tag', expected 'xilinx/finn:CONFORMANCE$want_suffix'"
+        fi
+    done
+
+    # Unsorted input, sorted output: the tag is a function of the SET.
+    got=$(FINN_RUNTIMES="xrt,slash" ./docker/finn-env inspect --tier dev 2>/dev/null \
+          | python3 -c 'import json,sys;print(json.load(sys.stdin)["runtime_tag"])' 2>/dev/null)
+    [ "$got" = ".slash.xrt" ] \
+        && ok "finn-env runtime_tag agrees with bake and sorts the set" \
+        || bad "finn-env runtime_tag gave '$got', expected '.slash.xrt'"
+fi
+
+# ---------------------------------------------------------------------------
+head_ "13. A supplied runtime package that is absent fails the BUILD"
+# ---------------------------------------------------------------------------
+# SOURCE=supply targets must never be silently inert. The failure has to name
+# the path the user was supposed to fill, because there is nothing else to go
+# on: the build is the first and only place this is checked.
+if want 13 && [ "$have_docker" = 1 ]; then
+    if [ -f docker/packages/slash.deb ]; then
+        skip "13: docker/packages/slash.deb exists, so the absent case cannot be tested"
+    else
+        out=$(docker buildx bake -f docker-bake.hcl --load finn-xrt-slash 2>&1 || true)
+        if printf '%s' "$out" | grep -q "docker/packages/slash.deb"; then
+            ok "a missing supplied package fails the build and names the path"
+        else
+            bad "13: build did not fail with a message naming docker/packages/slash.deb"
         fi
     fi
 fi

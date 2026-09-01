@@ -14,6 +14,24 @@
 #
 # Everything below was established by bisecting real `sbx create` failures
 # against a stock template, not from documentation.
+#
+# WHY THIS IS NOT A KIT STARTUP COMMAND
+# -------------------------------------
+# Moving it into docker/finn.kit would delete the sbx image variant and leave
+# exactly one image. It was tried and it does not work. Measured against sbx
+# v0.39.0, creating a sandbox from the base image (no contract baked):
+#
+#   id -nG                       agent            -- not in the sudo group
+#   /etc/sandbox-persistent.sh   MISSING          -- BASH_ENV has nothing to source
+#   sudo -n true                 fails            -- no NOPASSWD
+#
+# The same check against the sbx image returns `agent sudo`, present, and yes.
+# Note that `sbx create` itself now SUCCEEDS on the base image, so this fails
+# quietly rather than loudly -- the sandbox comes up and is merely wrong.
+#
+# It cannot be fixed from a kit, and not only for ordering reasons: a kit runs
+# AS agent and every line below needs root. The kit would have to sudo to grant
+# itself the sudo it is trying to grant.
 
 set -eu
 

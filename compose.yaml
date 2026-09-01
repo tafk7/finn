@@ -3,8 +3,23 @@
 #   docker compose run --rm dev                   Python work, no toolchain
 #   docker compose run --rm dev quicktest.sh
 #   docker compose --profile fpga run --rm build  Vivado / Vitis HLS
-#   docker compose --profile fpga run --rm build-xrt
 #   docker compose up notebook
+#
+# There is ONE image. `dev` and `build` are the same image with different
+# grants: build mounts the Xilinx tree read-only, passes the licence and gets
+# toolchain egress; dev gets none of it. Selecting `dev` is not a smaller
+# download.
+#
+# For Alveo or V80 you need an image built with a runtime target. Build it once
+# and point compose at it through FINN_RUNTIME_TAG, which `finn-env inspect`
+# emits:
+#
+#   FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
+#   FINN_RUNTIMES=xrt ./docker/finn-env inspect --tier build --format sh > .env
+#   docker compose --profile fpga run --rm build
+#
+# The old `build-xrt` service is gone. XRT is an image layer, not a set of
+# grants, so it belongs in the tag and not in a fourth service.
 #
 # BEFORE YOU RUN THIS -- FOR EVERY SERVICE, INCLUDING dev
 # -------------------------------------------------------
@@ -74,13 +89,13 @@ services:
   # reason automation needs no discovery protocol to run it.
   dev:
     <<: *common
-    image: xilinx/finn:dev-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
+    image: xilinx/finn:${GIT_DESCRIBE:-local}${FINN_RUNTIME_TAG:-}
     build:
       context: .
       dockerfile: docker/Dockerfile.finn
-      target: dev
+      target: runtime
       args:
-        FINN_PROFILE: ${FINN_PROFILE:-py310}
+        FINN_RUNTIMES: ${FINN_RUNTIMES:-}
     volumes:
       # Defaults to the fixed path. run-docker.sh overrides both through its own
       # env file so the legacy contract keeps mirroring the host path -- see the
@@ -109,13 +124,13 @@ services:
   build:
     <<: *common
     profiles: [fpga]
-    image: xilinx/finn:build-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
+    image: xilinx/finn:${GIT_DESCRIBE:-local}${FINN_RUNTIME_TAG:-}
     build:
       context: .
       dockerfile: docker/Dockerfile.finn
-      target: build
+      target: runtime
       args:
-        FINN_PROFILE: ${FINN_PROFILE:-py310}
+        FINN_RUNTIMES: ${FINN_RUNTIMES:-}
     volumes:
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
       # NOT ${FINN_XILINX_PATH:?...}. Compose interpolates EVERY service in the
@@ -138,36 +153,13 @@ services:
         target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
         bind:
           create_host_path: false
-    environment:
-      <<: *toolchain
-      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-      FINN_DEPS: ${FINN_DEPS:-frozen}
-
-  build-xrt:
-    <<: *common
-    profiles: [fpga]
-    image: xilinx/finn:${GIT_DESCRIBE:-local}.${XRT_DEB_VERSION:-xrt}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.finn
-      target: build-xrt
-      args:
-        FINN_PROFILE: ${FINN_PROFILE:-py310}
-    volumes:
-      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      - type: bind
-        source: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        target: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        read_only: true
-        bind:
-          create_host_path: false
-      - ${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}:ro
-      - type: bind
-        source: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        bind:
-          create_host_path: false
+      # The Vitis platform repository, for Alveo. Optional, and compose has no
+      # conditional mount, so the default is /dev/null bound over itself: a real
+      # no-op that exists on every host and in every image. Do NOT default this
+      # to /opt/xilinx/platforms as the old build-xrt service did -- when that
+      # path is absent Docker CREATES it, as root, and the container then cannot
+      # write anything under it.
+      - ${PLATFORM_REPO_PATHS:-/dev/null}:${PLATFORM_REPO_PATHS:-/dev/null}:ro
     environment:
       <<: *toolchain
       FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
@@ -177,7 +169,7 @@ services:
   notebook:
     <<: *common
     profiles: [notebook]
-    image: xilinx/finn:dev-${FINN_PROFILE:-py310}-${GIT_DESCRIBE:-local}
+    image: xilinx/finn:${GIT_DESCRIBE:-local}${FINN_RUNTIME_TAG:-}
     volumes:
       - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
     working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}

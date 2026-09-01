@@ -48,13 +48,35 @@ import re
 import subprocess
 import sys
 
-TIERS = ("dev", "build", "build-xrt")
+# A tier is a GRANT profile, not an image. There is one image; what differs
+# between these two is what the launcher mounts and allows.
+#
+# `build-xrt` used to be a third tier. It differed from `build` by one mount,
+# and its real content -- XRT -- is now a runtime target baked into the image
+# and named in its tag. See docker/runtimes/README.md.
+TIERS = ("dev", "build")
 
 # Tiers that get a toolchain, a licence and toolchain egress. `dev` deliberately
 # gets none of it: that boundary is the reason the tier exists, and it is
 # enforced here rather than left to whether the caller's shell happens to have
 # FINN_XILINX_PATH set.
-FPGA_TIERS = ("build", "build-xrt")
+#
+# This is now the ONLY place the boundary is drawn. It used to be drawn twice --
+# here, and again by which image you pulled -- and the two could disagree.
+FPGA_TIERS = ("build",)
+
+
+def runtime_tag(runtimes=None):
+    """The tag suffix for a set of runtime targets: 'xrt,slash' -> '.slash.xrt'.
+
+    Sorted, so the tag is a function of the SET. Unsorted, `xrt,slash` and
+    `slash,xrt` would name the same image twice. Must agree with tag() in
+    docker-bake.hcl; there is a conformance test that they do.
+    """
+    if runtimes is None:
+        runtimes = os.environ.get("FINN_RUNTIMES", "")
+    names = sorted(n for n in runtimes.replace(",", " ").split() if n)
+    return "".join("." + n for n in names)
 
 # D4: the workspace path policy.
 #
@@ -222,7 +244,12 @@ def resolve_host(tier, backend):
     out = {
         "tier": tier,
         "backend": backend,
-        "profile": os.environ.get("FINN_PROFILE", "py310"),
+        # Which accelerator stacks the image is expected to carry. A launcher
+        # passes this to bake as FINN_RUNTIMES and uses runtime_tag to name the
+        # image, so one resolver decides both.
+        "runtimes": sorted(n for n in os.environ.get("FINN_RUNTIMES", "")
+                           .replace(",", " ").split() if n),
+        "runtime_tag": runtime_tag(),
         "platform": "linux/amd64",
         "workspace": {
             "policy": policy,
@@ -327,8 +354,10 @@ def resolve_host(tier, backend):
 # --------------------------------------------------------------------------
 
 # XRT installs to a fixed prefix from its .deb, so unlike Vivado/Vitis it is not
-# passed in from the host. Probed rather than required: only the build-xrt tier
-# has it, and its absence is normal for the other two.
+# passed in from the host: it is distro-specific compiled binaries, which a
+# bind mount from a host on another release would break. Probed rather than
+# required -- it is present only when the image was built with the `xrt` runtime
+# target, and its absence is normal.
 XRT_PREFIX = "/opt/xilinx/xrt"
 
 
@@ -538,8 +567,9 @@ def cmd_inspect(args):
         for key in path_keys:
             if os.environ.get(key):
                 sys.stdout.write("%s=%s\n" % (key, shquote(hostpath(os.environ[key]))))
-        if os.environ.get("FINN_PROFILE"):
-            sys.stdout.write("FINN_PROFILE=%s\n" % shquote(os.environ["FINN_PROFILE"]))
+        # The image name's runtime suffix, so compose names the same image the
+        # launchers and bake do. Empty for the base image, which is the default.
+        sys.stdout.write("FINN_RUNTIME_TAG=%s\n" % shquote(data["runtime_tag"]))
     return 0
 
 

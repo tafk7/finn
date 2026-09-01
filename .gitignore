@@ -110,3 +110,8 @@ MANIFEST
 
 # run-docker.sh writes this; same rules as .env.
 /.finn-run.env
+
+# Vendor runtime packages: supplied by the user, never redistributed by FINN.
+# See docker/runtimes/README.md.
+docker/packages/*.deb
+docker/packages/*.rpm

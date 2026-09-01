@@ -359,12 +359,29 @@ void rotateBuildTrees() {
 // The CI image tier. Python-only shards do not need Vivado, a licence or the
 // 267 GB Xilinx mount; before this was a knob, every shard paid for build-xrt
 // because that was run-docker.sh's default. Override per job.
+//
+// The tier no longer selects an IMAGE -- there is one -- it selects what the
+// shard mounts and is allowed to reach. It is still worth setting.
 String ciImageTier() {
-  return env.FINN_CI_IMAGE_TIER ?: 'build-xrt'
+  return env.FINN_CI_IMAGE_TIER ?: 'build'
+}
+
+// Which accelerator stacks the published image carries. Comma-separated names
+// from docker/runtimes/. Empty is the base image.
+//
+// MIGRATION: this publishes `xilinx/finn:<git>.xrt`, where the old path
+// published `xilinx/finn:<git>-dirty.<xrt-deb-name>`. Anything downstream that
+// pattern-matches the old tag shape must be re-pointed. The exact XRT version
+// is no longer in the tag; read the dev.finn.runtimes label and
+// docker/runtimes/xrt.env at the recorded commit.
+String ciRuntimes() {
+  return env.FINN_RUNTIMES ?: 'xrt'
 }
 
 String ciBakeTarget() {
-  return "${ciImageTier()}-${env.FINN_PROFILE ?: 'py310'}"
+  String t = 'finn'
+  for (String r : ciRuntimes().split(',').findAll { it }.sort()) { t += "-${r}" }
+  return t
 }
 
 void buildAndPublishDockerImage() {

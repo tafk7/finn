@@ -3,7 +3,7 @@
 #
 #   ci/scripts/build-images.sh <target> [output-dir]
 #
-# e.g.  ci/scripts/build-images.sh build-xrt-py310 "$IMAGE_DIR"
+# e.g.  ci/scripts/build-images.sh finn-xrt "$IMAGE_DIR"
 #
 # WHY A DIGEST IS NOT ENOUGH ON ITS OWN
 # -------------------------------------
@@ -18,7 +18,7 @@
 #
 #     finn_commit      what src/finn was
 #     image_digest     what the environment was
-#     profile, tier    which image
+#     target           which image (base, plus any runtime targets)
 #     deps             the resolved dependency commits, not branch names
 #     finn_deps_mode   frozen, or the run is not reproducible at all
 #
@@ -34,9 +34,9 @@ OUTDIR="${2:-}"
 cd "$(dirname "$0")/../.."
 
 GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo unknown)
-GIT_DESCRIBE_DIRTY=$(git describe --always --tags --dirty 2>/dev/null || echo unknown)
+
 FINN_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
-export GIT_DESCRIBE GIT_DESCRIBE_DIRTY
+export GIT_DESCRIBE
 
 if ! git diff --quiet HEAD 2>/dev/null; then
     echo "WARNING: building from a dirty tree; provenance records the commit," >&2
@@ -91,7 +91,7 @@ print(json.dumps({
     "tag": "$TAG",
     "image_digest": "$DIGEST",
     "finn_commit": "$FINN_COMMIT",
-    "git_describe": "$GIT_DESCRIBE_DIRTY",
+    "git_describe": "$GIT_DESCRIBE",
     "finn_deps_mode": "frozen",
     "deps": json.loads('''$DEPS_JSON'''),
 }, indent=2, sort_keys=True))

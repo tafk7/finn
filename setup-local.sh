@@ -184,15 +184,12 @@ echo ""
 # Step 4: Install Python dependencies
 gecho "Step 4: Installing Python dependencies..."
 
-# The SAME pin files the image uses. Lane 3 previously carried 27 hardcoded
-# `pip install` lines duplicating docker/profiles/$FINN_PROFILE/tools.txt -- a
-# fourth copy of the pin set, in the branch whose purpose is removing extra
-# copies. It also installed the CUDA build of torch while the image
-# deliberately installs CPU, so "all lanes use the same dependency versions"
-# was false.
-: "${FINN_PROFILE:=py310}"
-PROFILE_DIR="${FINN_ROOT}/docker/profiles/${FINN_PROFILE}"
-[ -d "$PROFILE_DIR" ] || { recho "Unknown FINN_PROFILE '$FINN_PROFILE'"; exit 1; }
+# The SAME pin files the image uses. This lane previously carried 27 hardcoded
+# `pip install` lines duplicating the image's tool pins -- another copy of the
+# pin set, in the branch whose purpose is removing extra copies. It also
+# installed the CUDA build of torch while the image deliberately installs CPU,
+# so "all lanes use the same dependency versions" was false.
+PIN_DIR="${FINN_ROOT}/docker"
 
 pip install -r "${FINN_ROOT}/requirements.txt"
 gecho "  Installed requirements.txt"
@@ -204,11 +201,11 @@ pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
     --index-url https://download.pytorch.org/whl/cpu
 gecho "  Installed PyTorch (CPU)"
 
-PIP_CONSTRAINT="$PROFILE_DIR/constraints.txt" pip install -r "$PROFILE_DIR/tools.txt"
-if [ -f "$PROFILE_DIR/tools-force-post.txt" ]; then
-    pip install -r "$PROFILE_DIR/tools-force-post.txt"
+PIP_CONSTRAINT="$PIN_DIR/pip-constraints.txt" pip install -r "$PIN_DIR/pip-tools.txt"
+if [ -f "$PIN_DIR/pip-tools-force-post.txt" ]; then
+    pip install -r "$PIN_DIR/pip-tools-force-post.txt"
 fi
-gecho "  Installed $FINN_PROFILE tool pins"
+gecho "  Installed the tool pins"
 
 # Same check the image build runs, for the same reason: a resolvable install is
 # not necessarily a consistent one.
