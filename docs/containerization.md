@@ -49,6 +49,7 @@ wrong line.
 | Which images exist, their names, their build inputs | `docker-bake.hcl` |
 | Host facts: toolchain, licence, mounts, network | `docker/finn-env` |
 | Applying the toolchain to a shell | `docker/finn-toolchain.sh` |
+| Build-matrix facts: target names, tags, `git describe` | `docker/lib.sh` |
 | Docker runtime | `compose.yaml` |
 | sbx runtime | `docker/sbxenv/*.sbxenv.yaml` |
 | Host-system setup | `setup-local.sh` |
@@ -111,6 +112,27 @@ grants; it was XRT.
 The cost is that a toolchain-less user carries 530 MB of headers nothing will
 read. Without a Vivado mount there is nothing to include them, so they are
 inert.
+
+### One resolver, applied to the build matrix too
+
+The "every fact in one place" rule was enforced for HOST facts and not at all
+for BUILD-MATRIX facts. `git describe`, "runtime set → bake target" and
+"extract `tags[0]` from `bake --print`" were each derived in four to six places,
+and had drifted three ways, all silent:
+
+| drift | consequence |
+|---|---|
+| `build-images.sh` fell back to `unknown`, everything else to `local` | a provenance record could name a tag bake never emits |
+| `build-images.sh` and `Jenkinsfile` omitted `sed -n '/^{/,$p'` | one bake progress line ahead of the JSON breaks the parse |
+| `Jenkinsfile` omitted `-f docker-bake.hcl` | bake also loads `compose.yaml` and dies on `${FINN_XILINX_PATH:?}` — a latent break on any agent with no Xilinx |
+
+`docker/lib.sh` is now the one implementation, sourced by the three launchers
+and `build-images.sh`. Jenkins no longer computes a tag at all: it reads the one
+`build-images.sh` already wrote into `finn-image-provenance.json` a stage
+earlier. Reading the artifact cannot drift from the artifact.
+
+Conformance test 12 existed *because* this rule had two implementations. It
+checked two of seven sites.
 
 ### The runtime seam
 
@@ -418,7 +440,7 @@ Compose's model.
 Generated files go stale silently when someone edits the output. `finn-env` is a
 *runtime* resolver instead, so it cannot disagree with itself.
 
-**A separate `Dockerfile.sbx`.** See "Why the sbx variants are separate targets".
+**A separate `Dockerfile.sbx`.** See "Why the sbx variant is a separate target".
 
 **`FINN_SINGULARITY`** is removed, not deprecated. It worked by string-replacing
 the docker argument list, which belongs to Compose now.
@@ -618,14 +640,28 @@ compose names an image bake never built. 13 checks that a `SOURCE=supply`
 target with no `.deb` fails the build with the path in the message, because the
 build is the only place that is checked.
 
-Unit tests: **45** in `tests/util/test_finn_env.py`, including the path-dedup
+Unit tests: **49** in `tests/util/test_finn_env.py`, including the path-dedup
 and idempotence checks, which now drive `finn-toolchain.sh` through bash rather
 than calling a Python function.
 
-Last measured: **27 pass, 0 fail, 4 skip.** Skips are the sbx sandbox, the
-node-locked licence (still unresolved, see above) and the Apptainer `.sif`.
+Four checks moved from the suite into pytest — the two static greps, the
+Apptainer workspace-policy assertion and `finn-env`'s half of the tag agreement.
+Each read files and needed no hardware, so in the suite they ran on one machine
+behind a `have_docker` or cached-`.sif` guard; in pytest they run on every PR.
 
-`quicktest.sh`: **2494 passed, 16 skipped, 5 xfailed, 1 xpassed, 32 errors.**
+Check 5 now **creates** the sandbox it needs. It previously required one the
+suite never made, and the `EXIT` trap then deleted it — so the first run
+consumed the operator's sandbox and every run after it skipped. A green
+scoreboard was structurally guaranteed to be missing the one check that proves
+FINN works against stock sbx. It passes now, for the first time.
+
+A skipped check listed in `LOAD_BEARING_SKIPS` warns in the summary, because a
+green total that skipped a bare-exec check has not proved that property.
+
+Last measured: **26 pass, 0 fail, 3 skip.** Skips are the node-locked licence
+(still unresolved, see above) and the Apptainer `.sif`, which warns.
+
+`quicktest.sh`: **2498 passed, 16 skipped, 5 xfailed, 1 xpassed, 32 errors.**
 The 32 are one file, `tests/util/test_config.py`, where onnxscript's `@script`
 decorator calls `inspect.getsource` on a function pytest's assertion rewriting
 compiled. It is unrelated to containerization and reproduces identically in the

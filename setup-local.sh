@@ -202,9 +202,11 @@ pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
 gecho "  Installed PyTorch (CPU)"
 
 PIP_CONSTRAINT="$PIN_DIR/pip-constraints.txt" pip install -r "$PIN_DIR/pip-tools.txt"
-if [ -f "$PIN_DIR/pip-tools-force-post.txt" ]; then
-    pip install -r "$PIN_DIR/pip-tools-force-post.txt"
-fi
+# The post phase, matching docker/Dockerfile.finn. These fight distro-provided
+# copies, so they are installed with --ignore-installed AFTER the tool set --
+# but they must not precede the base requirements, which would resolve against
+# the wrong versions.
+pip install --ignore-installed jupyter==1.0.0 matplotlib==3.7.0
 gecho "  Installed the tool pins"
 
 # Same check the image build runs, for the same reason: a resolvable install is
@@ -272,17 +274,13 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
 
     if [ "$XILINX_AVAILABLE" -eq 1 ]; then
         # Source the toolchain into THIS shell, the same way the container does.
+        # That includes the FLEXlm/libudev workaround, which used to be a
+        # separate copy here and a byte-identical one in scripts/activate.sh.
         . "${FINN_ROOT}/docker/finn-toolchain.sh"
-        # The FLEXlm/libudev workaround. Baked as ENV in the container image;
-        # on a bare host it has to be applied here. Without it a licence
-        # checkout dies with "realloc(): invalid pointer" inside
-        # udev_enumerate_scan_devices.
-        libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
-        if [ -n "$libudev" ]; then
-            export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$libudev"
-        else
-            yecho "libudev.so.1 not found; licence checkout may abort"
-        fi
+        case ":${LD_PRELOAD:-}:" in
+            *libudev.so.1*) ;;
+            *) yecho "libudev.so.1 not found; licence checkout may abort" ;;
+        esac
     fi
 else
     yecho "FINN_XILINX_PATH and/or FINN_XILINX_VERSION not set"
@@ -328,7 +326,7 @@ gecho "FINN local setup complete!"
 echo "=============================================="
 echo ""
 echo "To use FINN, activate the environment:"
-echo "  source scripts/finn-env.sh"
+echo "  source scripts/activate.sh"
 echo ""
 echo "To validate the installation:"
 echo "  ./scripts/quicktest-local.sh"

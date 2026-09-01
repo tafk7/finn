@@ -378,10 +378,11 @@ String ciRuntimes() {
   return env.FINN_RUNTIMES ?: 'xrt'
 }
 
+// Delegated to docker/lib.sh rather than reimplemented in Groovy. This was a
+// fourth copy of "runtime set -> target name", and the copies had drifted.
 String ciBakeTarget() {
-  String t = 'finn'
-  for (String r : ciRuntimes().split(',').findAll { it }.sort()) { t += "-${r}" }
-  return t
+  return sh(returnStdout: true, script:
+    ". ./docker/lib.sh && finn_bake_target ${shellQuote(ciRuntimes())}").trim()
 }
 
 void buildAndPublishDockerImage() {
@@ -409,20 +410,24 @@ String buildDockerImageDir() {
   return "${parent}/${env.BUILD_NUMBER}"
 }
 
-// Other agents docker-load this image instead of rebuilding. Tag comes from
-// `./run-docker.sh print-tag`. The build-scoped imageDir keeps cross-build
-// readers away from in-progress writes. publish_docker_image.sh handles the
-// same-build-retry serialisation.
+// Other agents docker-load this image instead of rebuilding. The build-scoped
+// imageDir keeps cross-build readers away from in-progress writes.
+// publish_docker_image.sh handles the same-build-retry serialisation.
 void publishSharedDockerImage(String imageDir) {
-  // The tag comes from bake, which owns the tag rule. run-docker.sh print-tag
-  // still exists and still agrees -- it asserts as much after every build --
-  // but CI should read the authority rather than a second implementation of it.
-  def tag = sh(returnStdout: true, script: """
-    docker buildx bake --print ${shellQuote(ciBakeTarget())} \
-      | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['${ciBakeTarget()}']['tags'][0])"
-  """).trim()
+  // READ the tag build-images.sh already recorded, one stage earlier, rather
+  // than asking bake again.
+  //
+  // The previous version recomputed it here, and carried two defects the
+  // launchers had already fixed: no `-f docker-bake.hcl`, so bake also
+  // auto-loaded compose.yaml and died on ${FINN_XILINX_PATH:?} interpolation on
+  // any agent with no Xilinx configured; and no `sed -n '/^{/,$p'`, so a single
+  // bake progress line ahead of the JSON would break the parse. Reading the
+  // artifact cannot drift from the artifact.
+  def provenance = "${imageDir}/finn-image-provenance.json"
+  def tag = sh(returnStdout: true, script:
+    "python3 -c \"import json;print(json.load(open('${provenance}'))['tag'])\"").trim()
   if (!tag || tag.contains('\n')) {
-    error "bake must emit exactly one Docker tag for ${ciBakeTarget()}. Got: ${tag}"
+    error "no single tag in ${provenance}. Got: ${tag}"
   }
   sh "mkdir -p ${shellQuote(imageDir)}"
   sh "ci/scripts/publish_docker_image.sh " +
@@ -569,7 +574,7 @@ ${CI_TOOL} prune-pip-cache \\
             sh './setup-local.sh'
             sh '''#!/bin/bash
 set -eo pipefail
-source scripts/finn-env.sh
+source scripts/activate.sh
 ./scripts/quicktest-local.sh vivado
 '''
           }

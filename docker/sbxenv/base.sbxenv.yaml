@@ -18,9 +18,10 @@ agent: "${FINN_SBX_AGENT}"
 # repo. sbx mounts at the host path and cannot remap, so this is always mirror.
 workspace: "${FINN_WORKSPACE_SOURCE}"
 
-kits:
-  - "${FINN_SBX_KIT}"
-
+# MEASURED: these reach a bare `sbx exec <s> sh -c 'echo $FINN_ROOT'` with no
+# shell and no hook. That is what retired docker/finn.kit -- the kit existed to
+# set these two as real process env, on the belief that only a kit could, and it
+# was a second declaration of values this file already owns.
 env:
   FINN_ROOT: "${FINN_WORKSPACE_SOURCE}"
   # Inside the VM, deliberately -- not a host mount, so not the host default.

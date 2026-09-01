@@ -61,10 +61,9 @@ REPO=$(dirname "$DOCKER_DIR")
 CALLER_PWD="$PWD"
 cd "$REPO"
 
-RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
-gecho () { echo "${GREEN}$1${NC}"; }
-recho () { echo "${RED}$1${NC}" >&2; }
-yecho () { echo "${YELLOW}$1${NC}" >&2; }
+# gecho/recho/yecho, finn_git_describe, finn_bake_target, finn_bake_tag.
+# shellcheck source=lib.sh
+. "$DOCKER_DIR/lib.sh"
 
 # apptainer first: it is the current name. Ubuntu ships the Sylabs fork as
 # `singularity` (singularity-ce), and the CLI is compatible for what we use.
@@ -125,18 +124,14 @@ export FINN_RUNTIMES
 # The .sif
 # --------------------------------------------------------------------------
 
-GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo local)
+GIT_DESCRIBE=$(finn_git_describe)
 export GIT_DESCRIBE
 
-# The tier does NOT appear here. There is one image; the tier decides binds and
-# environment, further down. The runtime set does appear: it is image content.
-BAKE_TARGET="finn"
-for r in $(echo "$FINN_RUNTIMES" | tr ',' ' ' | tr ' ' '\n' | sort); do
-    BAKE_TARGET="$BAKE_TARGET-$r"
-done
-TAG=$(docker buildx bake -f docker-bake.hcl --print "$BAKE_TARGET" 2>/dev/null \
-      | sed -n '/^{/,$p' \
-      | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$BAKE_TARGET']['tags'][0])" 2>/dev/null || true)
+# The tier does NOT appear in the target. There is one image; the tier decides
+# binds and environment, further down. The runtime set DOES appear: it is image
+# content.
+BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES")
+TAG=$(finn_bake_tag "$BAKE_TARGET")
 [ -n "$TAG" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
 
 # Keyed on the tag, so a rebuild produces a new .sif rather than reusing a stale
@@ -172,9 +167,7 @@ else
         recho "then copy the .sif here and set FINN_SINGULARITY to its path."
         exit 1
     }
-    gecho "Building $BAKE_TARGET"
-    docker buildx bake -f docker-bake.hcl --load "$BAKE_TARGET" \
-        || { recho "docker buildx bake $BAKE_TARGET failed"; exit 1; }
+    finn_bake_build "$BAKE_TARGET" || exit 1
 
     mkdir -p "$SIF_DIR"
     TAR=$(mktemp -t finn-sif-XXXXXX.tar)

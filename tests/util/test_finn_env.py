@@ -580,3 +580,82 @@ def test_sh_output_is_not_an_injection_path():
     """XILINXD_LICENSE_FILE passes through verbatim and is then eval'd."""
     assert finn_env.shquote("x`id`") == "'x`id`'"
     assert finn_env.shquote("a'b") == "'a'\\''b'"
+
+
+# --------------------------------------------------------------------------
+# Static properties, moved here from ci/scripts/conformance.sh.
+#
+# Each of these reads files and needs no docker, no sbx and no toolchain. In
+# the conformance suite they ran on one machine, behind a `have_docker` or a
+# cached-.sif guard; here they run on every PR. The suite keeps only what
+# genuinely needs hardware -- the bare `docker exec` / `sbx exec` / apptainer
+# checks, and the real `bake --print`.
+# --------------------------------------------------------------------------
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def test_nothing_requests_host_privilege():
+    """In-container root is the sbx contract; HOST privilege is never granted.
+
+    "No privileges" is ambiguous and the wrong reading is the natural one. This
+    asserts the reading that matters: no launcher asks for --privileged, an
+    added capability, or the docker socket.
+    """
+    launchers = ["run-docker.sh", "compose.yaml", "docker/finn-sbx",
+                 "docker/finn-apptainer", "docker/sbxenv/base.sbxenv.yaml",
+                 "docker/sbxenv/fpga.sbxenv.yaml"]
+    offenders = []
+    for rel in launchers:
+        path = os.path.join(REPO, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, errors="replace") as handle:
+            for n, line in enumerate(handle, 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                for needle in ("--privileged", "--cap-add",
+                               "/var/run/docker.sock"):
+                    if needle in line:
+                        offenders.append("%s:%d %s" % (rel, n, needle))
+    assert not offenders, offenders
+
+
+def test_setup_local_has_not_regrown_the_hardcoded_layout():
+    """The pre-2024.2 layout, hardcoded, was defect 4 of the original four.
+
+        VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
+
+    AMD reorganised the tree after 2024.2, so that reported "Vivado not found"
+    at a path the user could see was right there. finn-env probes both.
+    """
+    for rel in ("setup-local.sh", "scripts/activate.sh"):
+        with open(os.path.join(REPO, rel), errors="replace") as handle:
+            body = handle.read()
+        for n, line in enumerate(body.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            assert "$FINN_XILINX_PATH/Vivado/" not in line, "%s:%d" % (rel, n)
+
+
+def test_apptainer_backend_forces_the_mirror_workspace_policy(tmp_path):
+    """Apptainer cannot remap a mount, so a fixed FINN_ROOT would name a
+    directory that was never mounted and `import finn` would fail with
+    ModuleNotFoundError pointing nowhere near the cause."""
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    for tier in ("dev", "build"):
+        data = json.loads(_inspect(
+            {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"},
+            tier, backend="apptainer").stdout)
+        assert data["workspace"]["policy"] == "mirror", tier
+
+
+def test_runtime_tag_matches_the_bake_tag_rule():
+    """finn-env's half of an agreement conformance test 12 checks the other
+    half of. Bake's half needs a real `bake --print` and stays there."""
+    assert finn_env.runtime_tag("") == ""
+    assert finn_env.runtime_tag("xrt") == ".xrt"
+    # Unsorted in, sorted out: the suffix is a function of the SET, or
+    # `xrt,slash` and `slash,xrt` name one image twice.
+    assert finn_env.runtime_tag("xrt,slash") == ".slash.xrt"
+    assert finn_env.runtime_tag("slash,xrt") == ".slash.xrt"

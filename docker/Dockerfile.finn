@@ -238,8 +238,7 @@ RUN pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt /tmp/requirements.txt
-COPY docker/pip-constraints.txt docker/pip-tools.txt \
-     docker/pip-tools-force-post.txt /tmp/pip/
+COPY docker/pip-constraints.txt docker/pip-tools.txt /tmp/pip/
 
 # Cap what later layers may resolve to. These bounds are load-bearing, not
 # defensive: numpy<2 is a FINN correctness requirement, not a convenience.
@@ -261,18 +260,19 @@ ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
 #         distro-provided copies, but installing them first would let the base
 #         requirements resolve against the wrong versions.
 #
-# Either force file may be absent. Add pip-tools-force-pre.txt when a base you
-# move to needs the pre phase; jammy does not.
+# The post phase is inline rather than a file. It was a 4-line file holding two
+# packages, with a `[ -s ]` branch here for a pre-phase sibling that has never
+# existed -- a phantom file plus five lines of conditional to handle it. A phase
+# is expressible where it executes.
+#
+# If a future base needs the PRE phase, add it here, before the requirements:
+#   noble ships typing_extensions as a Debian package with no RECORD file, so
+#   pip cannot uninstall it and any requirement wanting a newer one aborts the
+#   whole resolve. jammy does not need it.
 RUN set -eu; \
-    p=/tmp/pip; \
-    if [ -s $p/pip-tools-force-pre.txt ]; then \
-        pip install --no-cache-dir --ignore-installed -r $p/pip-tools-force-pre.txt; \
-    fi; \
     pip install --no-cache-dir -r /tmp/requirements.txt; \
-    pip install --no-cache-dir -r $p/pip-tools.txt; \
-    if [ -s $p/pip-tools-force-post.txt ]; then \
-        pip install --no-cache-dir --ignore-installed -r $p/pip-tools-force-post.txt; \
-    fi
+    pip install --no-cache-dir -r /tmp/pip/pip-tools.txt; \
+    pip install --no-cache-dir --ignore-installed jupyter==1.0.0 matplotlib==3.7.0
 
 RUN pip install --no-cache-dir -e git+https://github.com/fbcotter/dataset_loading.git@0.0.4#egg=dataset_loading
 

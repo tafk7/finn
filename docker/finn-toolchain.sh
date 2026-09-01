@@ -113,7 +113,32 @@ elif [ "${FINN_ENV_APPLIED:-}" != "1" ]; then
     [ -n "${LD_LIBRARY_PATH:-}" ] && export LD_LIBRARY_PATH
 
     # ---------------------------------------------------------------------
-    # 3. De-duplicate the path variables.
+    # 3. The FLEXlm/libudev workaround, for hosts that have no baked ENV.
+    #
+    # Without it a licence checkout dies with "realloc(): invalid pointer"
+    # inside udev_enumerate_scan_devices: FLEXlm fingerprints the machine
+    # through libudev during checkout and corrupts the heap doing it.
+    #
+    # The IMAGE bakes this as ENV (docker/Dockerfile.finn), asserted at build
+    # time, so the branch below is a no-op there. The bare-host lane has no
+    # image to bake into, and had its own copy of this in TWO files --
+    # scripts/activate.sh and setup-local.sh, byte-identical. Both now get it
+    # from here, which is the file whose stated job is applying the toolchain
+    # wherever it runs.
+    # ---------------------------------------------------------------------
+    case ":${LD_PRELOAD:-}:" in
+        *libudev.so.1*) ;;
+        *)
+            _finn_libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
+            if [ -n "$_finn_libudev" ]; then
+                LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$_finn_libudev"
+                export LD_PRELOAD
+            fi
+            ;;
+    esac
+
+    # ---------------------------------------------------------------------
+    # 4. De-duplicate the path variables.
     #
     # settings64.sh PREPENDS unconditionally, so applying the toolchain more
     # than once in a process tree grows PATH without bound. Observed at four
@@ -141,7 +166,7 @@ elif [ "${FINN_ENV_APPLIED:-}" != "1" ]; then
     export FINN_ENV_APPLIED
 
     unset _finn_base _finn_name _finn_script _finn_sourced _finn_dir \
-          _finn_var _finn_val _finn_out _finn_ifs _finn_part
+          _finn_var _finn_val _finn_out _finn_ifs _finn_part _finn_libudev
 fi
 
 # Never let this file's last command decide the caller's exit status.

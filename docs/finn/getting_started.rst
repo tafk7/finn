@@ -347,7 +347,7 @@ Quick Start
 
 4. Activate the FINN environment::
 
-    source scripts/finn-env.sh
+    source scripts/activate.sh
 
 5. Verify the installation::
 

@@ -55,14 +55,13 @@
 
 set -uo pipefail
 
-RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
-gecho () { echo "${GREEN}$1${NC}"; }
-recho () { echo "${RED}$1${NC}" >&2; }
-yecho () { echo "${YELLOW}$1${NC}" >&2; }
-
 SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 cd "$SCRIPTPATH" || exit 1
+
+# gecho/recho/yecho, finn_git_describe, finn_bake_target, finn_bake_tag.
+# shellcheck source=docker/lib.sh
+. "$SCRIPTPATH/docker/lib.sh"
 
 # Which accelerator stacks the image should carry. Empty is the base image.
 # See docker/runtimes/README.md. FINN_DOCKER_TARGET=build-xrt still works and
@@ -166,41 +165,22 @@ fi
 # No GIT_DESCRIBE_DIRTY any more. FINN's source is mounted, not baked, so an
 # edited tree does not change the image; bake dropped the dirty variant with the
 # tier split. See the note on the variable in docker-bake.hcl.
-GIT_DESCRIBE="$(git describe --always --tags 2>/dev/null || echo local)"
+GIT_DESCRIBE="$(finn_git_describe)"
 export GIT_DESCRIBE
 
-# -f docker-bake.hcl is REQUIRED, not tidiness.
-#
-# With no -f, bake auto-loads every definition it finds in the directory --
-# including compose.yaml. compose's fpga services guard the toolchain mount with
-# ${FINN_XILINX_PATH:?...}, so on a machine with no Xilinx configured bake fails
-# to interpolate and refuses to run ANY target, including dev-py310 which has
-# nothing to do with the toolchain. Bake reads the bake file; compose reads the
-# compose file.
-
-# The bake target for the resolved axes. `finn`, `finn-xrt`, `finn-sbx`, ... --
-# the names in docker-bake.hcl. Only the combinations bake enumerates are
-# reachable from here; build anything else with bake directly.
-finn_bake_target () {
-    local t="finn"
-    [ "$FINN_SBX_VARIANT" = "1" ] && t="finn-sbx"
-    for r in $(echo "$FINN_RUNTIMES" | tr ',' ' ' | tr ' ' '\n' | sort); do
-        t="$t-$r"
-    done
-    echo "$t"
-}
-
-finn_bake_tag () {
-    local target="$1"
-    docker buildx bake -f docker-bake.hcl --print "$target" 2>/dev/null \
-        | sed -n '/^{/,$p' \
-        | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$target']['tags'][0])" 2>/dev/null
+# The target for the axes resolved above. finn_bake_target and finn_bake_tag
+# live in docker/lib.sh -- they were duplicated across this script, finn-sbx,
+# finn-apptainer and two CI scripts, and had drifted in three ways.
+finn_target () {
+    local variant=""
+    [ "$FINN_SBX_VARIANT" = "1" ] && variant="sbx"
+    finn_bake_target "$FINN_RUNTIMES" "$variant"
 }
 
 if [ "${1:-}" = "print-tag" ]; then
     [ "$#" -le 2 ] || { recho "Usage: $0 print-tag [dev|build|build-xrt|sbx-*]"; exit 2; }
     [ -n "${2:-}" ] && finn_resolve_axes "$2"
-    tag=$(finn_bake_tag "$(finn_bake_target)")
+    tag=$(finn_bake_tag "$(finn_target)")
     [ -n "$tag" ] || { recho "no bake target for '$FINN_DOCKER_TARGET' with FINN_RUNTIMES='$FINN_RUNTIMES'"; exit 2; }
     echo "$tag"
     exit 0
@@ -225,7 +205,7 @@ fi
 case "${1:-}" in
   build)
     [ -n "${2:-}" ] && finn_resolve_axes "$2"
-    target=$(finn_bake_target)
+    target=$(finn_target)
     gecho "Building bake target $target"
     # shellcheck disable=SC2086
     docker buildx bake -f docker-bake.hcl --load $FINN_DOCKER_BUILD_EXTRA "$target" \
@@ -341,11 +321,11 @@ esac
 
 # Prebuilt images come from the CI shared directory; developers build locally.
 if [ "$FINN_DOCKER_PREBUILT" = "1" ] || [ -n "${FINN_DOCKER_SHARED_IMAGE_DIR:-}" ]; then
-    ./ci/scripts/load-shared-image.sh "$(finn_bake_tag "$(finn_bake_target)")" || exit 1
+    ./ci/scripts/load-shared-image.sh "$(finn_bake_tag "$(finn_target)")" || exit 1
 else
     # shellcheck disable=SC2086
     docker buildx bake -f docker-bake.hcl --load $FINN_DOCKER_BUILD_EXTRA \
-        "$(finn_bake_target)" \
+        "$(finn_target)" \
         || { recho "image build failed"; exit 1; }
 fi
 

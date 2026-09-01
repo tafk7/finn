@@ -2,10 +2,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-# finn-env.sh - Environment activation script for FINN local installation
+# activate.sh - Environment activation for a bare-host FINN installation.
 #
 # Source this script to set up the FINN environment:
-#   source scripts/finn-env.sh
+#   source scripts/activate.sh
+#
+# RENAMED from scripts/finn-env.sh, which was a near-homograph of
+# docker/finn-env doing an unrelated job -- and did not even wrap it. The two
+# programs it DOES use are named below.
 #
 # This script:
 #   - Activates the Python virtual environment
@@ -82,15 +86,6 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
     # apply the toolchain through identical code.
     eval "$("$FINN_ROOT/docker/finn-env" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
     . "$FINN_ROOT/docker/finn-toolchain.sh"
-
-    # The FLEXlm/libudev workaround. Baked as ENV in the image; on a bare host
-    # it has to be applied here. Without it a licence checkout dies with
-    # "realloc(): invalid pointer" inside udev_enumerate_scan_devices.
-    _finn_libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
-    if [ -n "$_finn_libudev" ]; then
-        export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$_finn_libudev"
-    fi
-    unset _finn_libudev
 
     if [ -n "${XILINX_VIVADO:-}" ]; then
         _finn_gecho "Xilinx toolchain configured (finn-env): $XILINX_VIVADO"

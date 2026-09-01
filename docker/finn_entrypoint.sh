@@ -84,7 +84,7 @@ export FINN_ROOT="${FINN_ROOT:-${WORKSPACE_DIR:-$PWD}}"
 
 # Match the defaults finn.util.basic applies, so generated Tcl and g++ include
 # flags resolve even in a shell that never imports FINN. Already set as ENV in
-# the build/build-xrt tiers, where the data lives outside the workspace.
+# the image, where the data lives outside the workspace.
 export FINN_HLSLIB_PATH="${FINN_HLSLIB_PATH:-$FINN_ROOT/deps/finn-hlslib}"
 export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_files}"
 
@@ -204,11 +204,12 @@ fi
 # code: sbx replaces the file after the entrypoint runs, so a sandbox always
 # showed it 0 bytes despite this running as root with the file writable.
 #
-# Env for sessions that never run this script is delivered by the FINN kit
-# instead (docker/finn.kit): `environment.variables` for FINN_ROOT and
-# FINN_BUILD_DIR, which become real process env and so reach even a bare
-# `sbx exec <cmd>` with no shell, and `commands.startup` for anything that has
-# to be computed at start. Python additionally self-heals via finn_paths, so
-# the image still works under plain `docker run` with no kit at all.
+# Env for sessions that never run this script comes from the sandbox definition
+# itself: `env:` in docker/sbxenv/base.sbxenv.yaml sets FINN_ROOT and
+# FINN_BUILD_DIR as real process env, which reaches even a bare `sbx exec <cmd>`
+# with no shell. That was MEASURED when docker/finn.kit was retired -- the kit
+# existed on the belief that only a kit could do it, and was a second
+# declaration of values base.sbxenv.yaml already owned. Python additionally
+# self-heals via finn_paths, so the image works under plain `docker run` too.
 
 exec "$@"

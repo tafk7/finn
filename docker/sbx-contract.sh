@@ -17,9 +17,9 @@
 #
 # WHY THIS IS NOT A KIT STARTUP COMMAND
 # -------------------------------------
-# Moving it into docker/finn.kit would delete the sbx image variant and leave
-# exactly one image. It was tried and it does not work. Measured against sbx
-# v0.39.0, creating a sandbox from the base image (no contract baked):
+# Moving it into an sbx kit would delete the sbx image variant and leave exactly
+# one image. It was tried and it does not work. Measured against sbx v0.39.0,
+# creating a sandbox from the base image with no contract baked:
 #
 #   id -nG                       agent            -- not in the sudo group
 #   /etc/sandbox-persistent.sh   MISSING          -- BASH_ENV has nothing to source
@@ -32,6 +32,10 @@
 # It cannot be fixed from a kit, and not only for ordering reasons: a kit runs
 # AS agent and every line below needs root. The kit would have to sudo to grant
 # itself the sudo it is trying to grant.
+#
+# FINN no longer ships a kit at all -- docker/finn.kit was deleted once its env
+# block turned out to duplicate docker/sbxenv/base.sbxenv.yaml -- so this would
+# now mean reintroducing one.
 
 set -eu
 

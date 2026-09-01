@@ -45,8 +45,8 @@ with a single producer, not a second source of truth.
 
 STDOUT IS DATA
 --------------
-`inspect` and `print` emit machine-readable output on stdout and nothing else.
-Every diagnostic goes to stderr. Callers may pipe stdout directly.
+`inspect` emits machine-readable output on stdout and nothing else. Every
+diagnostic goes to stderr. Callers may pipe stdout directly.
 """
 
 import argparse
@@ -425,7 +425,9 @@ def resolve_host(tier, backend):
                 continue
             # The directory rather than the file: a single-file bind cannot
             # accommodate sibling state files. See the UNRESOLVED note in
-            # docker/finn.kit/spec.yaml about :ro versus those writes.
+            # docs/containerization.md about :ro versus those writes --
+            # conformance test 9 covers it and has never had a licence to run
+            # against.
             if not any(m["source"] == directory for m in out["mounts"]):
                 out["mounts"].append({"source": directory, "target": directory,
                                       "mode": "ro", "reason": "license-file"})

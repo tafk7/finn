@@ -3,13 +3,17 @@
 #
 #   ci/scripts/conformance.sh [test-number ...]
 #
-# Nine checks over the properties the containerization redesign established.
-# These are NOT unit tests -- they need a real docker daemon, and tests 5 and 9
-# additionally need sbx and a licence. Each is skipped with a reason rather than
-# silently passing when its prerequisites are absent.
+# Thirteen checks over the properties the containerization redesign
+# established. These are NOT unit tests -- they need a real docker daemon, and
+# 5, 9 and 11 additionally need sbx, a licence and apptainer. Each is skipped
+# with a reason rather than silently passing when its prerequisites are absent,
+# and a skipped LOAD-BEARING check warns in the summary.
 #
-# WHY THESE NINE
-# --------------
+# Anything that can be asserted without hardware belongs in
+# tests/util/test_finn_env.py instead, where it runs on every PR.
+#
+# WHY THESE THIRTEEN
+# ------------------
 # Every one corresponds to a defect that actually happened, or to a contract
 # that would erode silently without an assertion:
 #
@@ -27,10 +31,13 @@
 #   8  awkward workspace path         both policies survive spaces (NOT the
 #                                     launcher -- see the note at test 8)
 #   9  node-locked licence with :ro   UNRESOLVED contradiction in the kit
-#  11  apptainer runs the image      a fourth runtime, with different rules
-#  10  lane 3 resolves a toolchain    the bare-host lane has the fewest users
+#  10  lane 4 resolves a toolchain    the bare-host lane has the fewest users
 #                                     and the least coverage, so it is the one
 #                                     that rots silently
+#  11  apptainer runs the image       a fourth runtime, with different rules
+#  12  the runtime set is in the tag  two producers of the suffix must agree,
+#                                     or compose names an image bake never built
+#  13  a missing supplied deb fails   SOURCE=supply must never be silently inert
 #
 # Tests 4 and 5 in their BARE form are the load-bearing ones. Running them
 # through a wrapper would pass while the property they exist to check is
@@ -41,10 +48,16 @@ cd "$(dirname "$0")/../.."
 
 PASS=0; FAIL=0; SKIP=0
 FAILED_TESTS=()
+SKIPPED_TESTS=()
+
+# Checks whose absence means the scoreboard is not saying what it looks like it
+# says. A green run that skipped one of these has not proved the property.
+LOAD_BEARING_SKIPS="4 5 11"
 
 ok   () { echo "PASS: $*"; PASS=$((PASS+1)); }
 bad  () { echo "FAIL: $*"; FAIL=$((FAIL+1)); FAILED_TESTS+=("$*"); }
-skip () { echo "SKIP: $*"; SKIP=$((SKIP+1)); }
+skip () { echo "SKIP: $*"; SKIP=$((SKIP+1)); SKIPPED_TESTS+=("$*"); }
+yecho_conf () { echo "WARN: $*" >&2; }
 head_() { echo; echo "=== $* ==="; }
 
 # Counters must not be incremented inside a subshell -- a `( cd x && check )`
@@ -65,20 +78,16 @@ tag_for () { ./run-docker.sh print-tag "$1" 2>/dev/null; }
 # spurious failures the moment HEAD moves, because the tag embeds git describe
 # and the image for the current commit was never built. A test must fail
 # because the property is broken, not because of how it was invoked.
+# Every call site passes `dev` or `build`, which are the same image -- the tier
+# is a grant profile now, not image content. The sbx-* and build-xrt arms this
+# used to carry were dead.
 need_image () {
-    local tier="$1" tag target
-    tag=$(tag_for "$tier")
+    local tag
+    tag=$(tag_for "$1")
     [ -n "$tag" ] || return 1
     docker image inspect "$tag" >/dev/null 2>&1 && return 0
-    # The bake target, not the tier. There is one image: dev and build resolve
-    # to the same `finn` target and differ only in grants.
-    case "$tier" in
-        sbx-*)     target="finn-sbx" ;;
-        build-xrt) target="finn-xrt" ;;
-        *)         target="finn" ;;
-    esac
-    echo "  (building $target for this commit)" >&2
-    docker buildx bake -f docker-bake.hcl --load "$target" >/dev/null 2>&1
+    echo "  (building finn for this commit)" >&2
+    docker buildx bake -f docker-bake.hcl --load finn >/dev/null 2>&1
 }
 
 CONTAINER=finn-conformance-$$
@@ -215,7 +224,18 @@ fi
 # ---------------------------------------------------------------------------
 head_ "5. BARE sbx exec, no launcher involved"
 # ---------------------------------------------------------------------------
+# SELF-PROVISIONING. This used to require a sandbox the suite never created --
+# and the EXIT trap then DELETED it. So the first run consumed the operator's
+# sandbox and every run after it skipped, which made a green scoreboard
+# structurally guaranteed to be missing the one check that proves FINN works
+# against stock sbx. Create it when it is absent.
 if want 5 && [ "$have_sbx" = 1 ]; then
+    if ! sbx ls 2>/dev/null | awk '{print $1}' | grep -qx "$SANDBOX"; then
+        tier=dev; [ "$have_xilinx" = 1 ] && tier=build
+        echo "  (creating sandbox $SANDBOX, tier $tier -- this is slow the first time)" >&2
+        FINN_SBX_NAME="$SANDBOX" timeout 2400 docker/finn-sbx "$tier" -- true >/dev/null 2>&1 \
+            || yecho_conf "5: could not create $SANDBOX"
+    fi
     if sbx ls 2>/dev/null | awk '{print $1}' | grep -qx "$SANDBOX"; then
         if timeout 180 sbx exec "$SANDBOX" python -c 'import finn' >/dev/null 2>&1; then
             ok "bare sbx exec: python -c 'import finn'"
@@ -230,7 +250,7 @@ if want 5 && [ "$have_sbx" = 1 ]; then
             fi
         fi
     else
-        skip "5: no sandbox named $SANDBOX (create one with FINN_SBX_NAME=$SANDBOX docker/finn-sbx build)"
+        skip "5: could not create a sandbox named $SANDBOX"
     fi
 elif want 5; then
     skip "5: sbx not on PATH"
@@ -285,16 +305,9 @@ if want 7 && [ "$have_docker" = 1 ] && need_image dev; then
     else
         skip "7: sbx-dev image not built"
     fi
-    # Host privilege: neither image should need any of it, and nothing in the
-    # repo should be adding it.
-    if grep -rn -- '--privileged\|--cap-add\|/var/run/docker.sock' \
-         run-docker.sh compose.yaml docker-bake.hcl 2>/dev/null | grep -v '^\s*#' | grep -q .; then
-        bad "something requests host privilege (--privileged / --cap-add / docker.sock)"
-    else
-        ok "nothing requests host privilege"
-    fi
-elif want 7; then
-    skip "7: no docker daemon"
+    # The static "nothing requests host privilege" grep moved to
+    # tests/util/test_finn_env.py -- it reads files and needs no daemon, so it
+    # belongs where it runs on every PR rather than on one machine with docker.
 fi
 
 # ---------------------------------------------------------------------------
@@ -335,7 +348,8 @@ fi
 # ---------------------------------------------------------------------------
 head_ "9. Node-locked licence with the licence directory :ro"
 # ---------------------------------------------------------------------------
-# Resolves the UNRESOLVED contradiction recorded in docker/finn.kit/spec.yaml:
+# Resolves the UNRESOLVED licence contradiction recorded in
+# docs/containerization.md, "Licensing, and what the kit cannot express":
 # the kit says some FLEXlm setups write beside the licence file, but both the
 # docker and sbx paths mount that directory read-only. Our licence testing used
 # the floating PORT@HOST form, which mounts nothing, so this path has never
@@ -348,7 +362,7 @@ if want 9; then
     done
     if [ -z "$node_locked" ]; then
         skip "9: no node-locked licence file configured -- the :ro-vs-sibling-writes"
-        skip "   contradiction in docker/finn.kit/spec.yaml REMAINS UNRESOLVED"
+        skip "   :ro-vs-sibling-writes contradiction REMAINS UNRESOLVED"
     elif [ "$have_docker" = 1 ] && [ "$have_xilinx" = 1 ]; then
         licdir=$(dirname "$node_locked")
         if docker run --rm -v "$FINN_XILINX_PATH:$FINN_XILINX_PATH:ro" \
@@ -399,12 +413,8 @@ if want 10; then
     else
         skip "10: FINN_XILINX_PATH not set"
     fi
-    # setup-local.sh must not have grown its own layout logic back.
-    if grep -qE '^\s*VIVADO_PATH="\$FINN_XILINX_PATH/Vivado/' setup-local.sh 2>/dev/null; then
-        bad "setup-local.sh has hardcoded the pre-2024.2 Xilinx layout again"
-    else
-        ok "setup-local.sh delegates layout resolution to finn-env"
-    fi
+    # The "setup-local.sh has not regrown the hardcoded layout" grep moved to
+    # tests/util/test_finn_env.py for the same reason as 7's.
 fi
 
 # ---------------------------------------------------------------------------
@@ -431,13 +441,9 @@ if want 11; then
             else
                 bad "apptainer cannot run the image"
             fi
-            # The workspace policy MUST be mirror here. Apptainer cannot remap a
-            # mount, so a fixed FINN_ROOT names a directory that was never
-            # mounted and `import finn` fails with ModuleNotFoundError.
-            pol=$(./docker/finn-env inspect --tier dev --backend apptainer 2>/dev/null \
-                  | python3 -c 'import json,sys;print(json.load(sys.stdin)["workspace"]["policy"])' 2>/dev/null)
-            [ "$pol" = "mirror" ] && ok "apptainer backend resolves the mirror workspace policy" \
-                                  || bad "apptainer backend resolved policy '$pol', expected mirror"
+            # The mirror-workspace-policy assertion moved to
+            # tests/util/test_finn_env.py: it is one inspect call and needs no
+            # apptainer, so gating it on a cached .sif hid it behind a skip.
         fi
     fi
 fi
@@ -466,12 +472,10 @@ if want 12; then
         fi
     done
 
-    # Unsorted input, sorted output: the tag is a function of the SET.
-    got=$(FINN_RUNTIMES="xrt,slash" ./docker/finn-env inspect --tier dev 2>/dev/null \
-          | python3 -c 'import json,sys;print(json.load(sys.stdin)["runtime_tag"])' 2>/dev/null)
-    [ "$got" = ".slash.xrt" ] \
-        && ok "finn-env runtime_tag agrees with bake and sorts the set" \
-        || bad "finn-env runtime_tag gave '$got', expected '.slash.xrt'"
+    # finn-env's half of the agreement is asserted in
+    # tests/util/test_finn_env.py against the imported function. What must stay
+    # HERE is bake's half, above: only a real `bake --print` can tell you what
+    # the build will actually tag.
 fi
 
 # ---------------------------------------------------------------------------
@@ -498,6 +502,18 @@ echo
 echo "======================================"
 echo "  PASS $PASS   FAIL $FAIL   SKIP $SKIP"
 echo "======================================"
+# A skipped load-bearing check makes a green total mean less than it looks like
+# it means. Say so, rather than letting the scoreboard imply coverage it lacks.
+for n in $LOAD_BEARING_SKIPS; do
+    for s_ in "${SKIPPED_TESTS[@]:-}"; do
+        case "$s_" in
+            "$n:"*|"$n "*)
+                echo
+                echo "WARNING: check $n is load-bearing and did not run."
+                echo "         A green total here does not prove that property." ;;
+        esac
+    done
+done
 if [ "$FAIL" -gt 0 ]; then
     echo
     echo "Failures:"

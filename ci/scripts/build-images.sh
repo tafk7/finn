@@ -33,10 +33,29 @@ OUTDIR="${2:-}"
 
 cd "$(dirname "$0")/../.."
 
-GIT_DESCRIBE=$(git describe --always --tags 2>/dev/null || echo unknown)
+# shellcheck source=docker/lib.sh
+. ./docker/lib.sh
 
+# finn_git_describe, not a local copy. This script used to fall back to
+# `unknown` where every other site -- and docker-bake.hcl's own default -- uses
+# `local`, so a provenance record built outside a git checkout named a tag bake
+# could never emit.
+GIT_DESCRIBE=$(finn_git_describe)
 FINN_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
 export GIT_DESCRIBE
+
+# FINN_DEPS is load-bearing for this record, not a preference: in `auto` or
+# `live` the mounted checkouts shadow the baked wheels and the digest stops
+# describing what ran. This used to be hardcoded to "frozen" in the output --
+# a claim rather than a measurement, which is the same shape as the
+# `egress: false` defect the design record already fixed once. Record what is
+# actually set, and refuse to record a value that invalidates the artifact.
+FINN_DEPS_MODE="${FINN_DEPS:-frozen}"
+if [ "$FINN_DEPS_MODE" != "frozen" ]; then
+    recho "FINN_DEPS=$FINN_DEPS_MODE, so the image digest does not describe what will run."
+    recho "Provenance would be misleading. Build with FINN_DEPS=frozen."
+    exit 1
+fi
 
 if ! git diff --quiet HEAD 2>/dev/null; then
     echo "WARNING: building from a dirty tree; provenance records the commit," >&2
@@ -48,8 +67,12 @@ docker buildx bake -f docker-bake.hcl --load "$TARGET"
 
 # Ask bake for the tag rather than recomputing it. This is the whole point of
 # moving the rule into docker-bake.hcl: there is exactly one implementation.
-TAG=$(docker buildx bake -f docker-bake.hcl --print "$TARGET" 2>/dev/null \
-      | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$TARGET']['tags'][0])")
+#
+# Through finn_bake_tag, which carries the `sed -n '/^{/,$p'` that strips bake's
+# progress lines before the JSON. This script's own copy omitted it and would
+# have died on any bake that printed one.
+TAG=$(finn_bake_tag "$TARGET")
+[ -n "$TAG" ] || { recho "could not resolve a tag for $TARGET"; exit 1; }
 
 # Image ID, not RepoDigests. RepoDigests is populated only after a push, and is
 # empty for a locally built image -- which is the case CI is in when it uses the
@@ -66,7 +89,8 @@ DEPS_JSON=$(
   # shellcheck disable=SC1091
   . ./deps.env
   set +a
-  python3 - "$@" <<'PY'
+  # No "$@": the program below reads only the environment `set -a` exported.
+  python3 <<'PY'
 import os, subprocess, sys, json
 out = {}
 for key, value in sorted(os.environ.items()):
@@ -92,7 +116,7 @@ print(json.dumps({
     "image_digest": "$DIGEST",
     "finn_commit": "$FINN_COMMIT",
     "git_describe": "$GIT_DESCRIBE",
-    "finn_deps_mode": "frozen",
+    "finn_deps_mode": "$FINN_DEPS_MODE",
     "deps": json.loads('''$DEPS_JSON'''),
 }, indent=2, sort_keys=True))
 PY
