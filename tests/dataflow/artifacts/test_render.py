@@ -1,0 +1,225 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""A6: the renderer, against the free oracle that already exists.
+
+``render_decomposed_wrapper`` is a Python f-string in the tree today, and its
+output is checked by an rtlsim fixture.  That makes it an oracle nobody has to
+build: if a file template reproduces it **byte for byte**, the renderer is
+correct by the same evidence that already covers the f-string.
+
+The oracle is called directly with plain arguments rather than through the
+design machinery.  What is being tested is the renderer, not the MVAU, and a
+test that had to construct a realization to check a template would be checking
+two things and reporting one.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from finn.dataflow.artifacts.render import (
+    RenderError,
+    parameter_list,
+    render_template,
+    substitute_markers,
+)
+from finn.dataflow.mvau.hardware.composition import render_decomposed_wrapper
+
+TEMPLATES = Path(__file__).parent / "templates"
+WRAPPER = "decomposed_wrapper.sv.j2"
+
+#: The configuration the rtlsim fixtures use, so the oracle is one the tree
+#: already exercises rather than one invented here.
+REPLAY = {"LEN": 2, "REP": 3, "W": 16}
+COMPUTE: dict[str, bool | int] = {
+    "ACCU_WIDTH": 16,
+    "ACTIVATION_BROADCASTING": True,
+    "ACTIVATION_WIDTH": 8,
+    "FORCE_BEHAVIORAL": False,
+    "NARROW_WEIGHTS": False,
+    "PE": 2,
+    "PUMPED_COMPUTE": True,
+    "SEGMENTLEN": 1,
+    "SIGNED_ACTIVATIONS": True,
+    "SIMD": 2,
+    "VERSION": 3,
+    "WEIGHT_WIDTH": 8,
+}
+MODULE = "mvau_decomposed_fef0cf4f76a0"
+ACTIVATION_BITS, WEIGHT_BITS, OUTPUT_BITS = 16, 32, 32
+
+
+def _byte_aligned(bits: int) -> int:
+    return ((bits + 7) // 8) * 8
+
+
+def _context() -> dict[str, object]:
+    """Everything structural computed in Python, so the template stays thin."""
+
+    return {
+        "module_name": MODULE,
+        "wstream": _byte_aligned(WEIGHT_BITS),
+        "istream": _byte_aligned(ACTIVATION_BITS),
+        "ostream": _byte_aligned(OUTPUT_BITS),
+        "replay_w": REPLAY["W"],
+        "replay_parameters": parameter_list(REPLAY),
+        "compute_parameters": parameter_list(COMPUTE),
+    }
+
+
+def _oracle() -> str:
+    return render_decomposed_wrapper(
+        MODULE,
+        REPLAY,
+        COMPUTE,
+        activation_bits=ACTIVATION_BITS,
+        weight_bits=WEIGHT_BITS,
+        output_bits=OUTPUT_BITS,
+    )
+
+
+# -- the exit gate -------------------------------------------------------------
+
+
+def test_the_template_reproduces_the_current_wrapper_byte_for_byte() -> None:
+    """The whole phase, in one assertion.
+
+    If this ever fails because the wrapper moved, the template follows it --
+    the f-string is the authority until the migration retires it, and a
+    template that has drifted from the authority is worse than no template.
+    """
+
+    assert render_template([TEMPLATES], WRAPPER, _context()) == _oracle()
+
+
+def test_a_changed_parameter_moves_both_the_oracle_and_the_template_together() -> None:
+    """Equality on one configuration could be a coincidence.  Two is not."""
+
+    wider = dict(COMPUTE, PE=4)
+    context = dict(_context(), compute_parameters=parameter_list(wider))
+    expected = render_decomposed_wrapper(
+        MODULE,
+        REPLAY,
+        wider,
+        activation_bits=ACTIVATION_BITS,
+        weight_bits=WEIGHT_BITS,
+        output_bits=OUTPUT_BITS,
+    )
+    assert render_template([TEMPLATES], WRAPPER, context) == expected
+    assert expected != _oracle()
+
+
+# -- StrictUndefined ------------------------------------------------------------
+
+
+def test_an_undefined_context_variable_raises_rather_than_rendering_empty() -> None:
+    """The prior compiler left this off, so a missing value rendered into HDL."""
+
+    incomplete = _context()
+    del incomplete["module_name"]
+    with pytest.raises(RenderError, match="does not define"):
+        render_template([TEMPLATES], WRAPPER, incomplete)
+
+
+def test_a_structural_context_value_is_refused_at_the_boundary() -> None:
+    """Templates stay thin: a loop in one is another place bytes are decided."""
+
+    with pytest.raises(RenderError, match="flat scalars only"):
+        render_template([TEMPLATES], WRAPPER, dict(_context(), replay_w=[1, 2]))
+
+
+def test_a_missing_template_is_a_render_error_and_not_an_import_error() -> None:
+    with pytest.raises(RenderError, match="could not be loaded"):
+        render_template([TEMPLATES], "nonexistent.j2", {})
+
+
+# -- determinism ----------------------------------------------------------------
+
+_DETERMINISM_PROGRAM = """
+import hashlib, sys
+sys.path[:0] = ["src", "tests"]
+from pathlib import Path
+from finn.dataflow.artifacts.render import parameter_list, render_template
+
+templates = Path("tests/dataflow/artifacts/templates")
+compute = {
+    "ACCU_WIDTH": 16, "ACTIVATION_BROADCASTING": True, "ACTIVATION_WIDTH": 8,
+    "FORCE_BEHAVIORAL": False, "NARROW_WEIGHTS": False, "PE": 2,
+    "PUMPED_COMPUTE": True, "SEGMENTLEN": 1, "SIGNED_ACTIVATIONS": True,
+    "SIMD": 2, "VERSION": 3, "WEIGHT_WIDTH": 8,
+}
+text = render_template(
+    [templates],
+    "decomposed_wrapper.sv.j2",
+    {
+        "module_name": "mvau_decomposed_fef0cf4f76a0",
+        "wstream": 32, "istream": 16, "ostream": 32, "replay_w": 16,
+        "replay_parameters": parameter_list({"LEN": 2, "REP": 3, "W": 16}),
+        "compute_parameters": parameter_list(compute),
+    },
+)
+print(hashlib.sha256(text.encode()).hexdigest())
+"""
+
+
+@pytest.mark.parametrize("seed", ["0", "1", "12345"])
+def test_the_rendered_bytes_are_the_same_in_a_fresh_process(seed: str, finn_root: Path) -> None:
+    """A renderer is held to determinism where a vendor tool is not."""
+
+    environment = dict(os.environ, PYTHONHASHSEED=seed)
+    environment.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "-c", _DETERMINISM_PROGRAM],
+        cwd=finn_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    expected = hashlib.sha256(render_template([TEMPLATES], WRAPPER, _context()).encode())
+    assert completed.stdout.strip() == expected.hexdigest()
+
+
+# -- the parameter list is computed, not templated ------------------------------
+
+
+def test_a_boolean_parameter_is_emitted_as_a_bit_and_not_as_the_word_true() -> None:
+    """SystemVerilog has no ``True``, and ``str()`` would happily write one."""
+
+    assert parameter_list({"PUMPED": True, "NARROW": False}) == ".NARROW(0),\n        .PUMPED(1)"
+
+
+def test_the_parameter_list_is_sorted_because_a_table_has_no_order() -> None:
+    assert parameter_list({"B": 1, "A": 0}) == parameter_list({"A": 0, "B": 1})
+
+
+# -- $KEY$ substitution, for text with no loop in it ----------------------------
+
+
+def test_flat_marker_substitution_replaces_every_marker() -> None:
+    assert substitute_markers("module $TOP$;", {"TOP": "mvau"}) == "module mvau;"
+
+
+def test_an_unsubstituted_marker_is_refused_rather_than_shipped() -> None:
+    """A literal ``$KEY$`` reaching HDL is a silent wrong answer."""
+
+    with pytest.raises(RenderError, match="do not define"):
+        substitute_markers("module $TOP$ ($WIDTH$);", {"TOP": "mvau"})
+
+
+def test_a_supplied_value_nothing_reads_is_refused() -> None:
+    """A value with no authority over anything is a fact stated for nobody."""
+
+    with pytest.raises(RenderError, match="no authority"):
+        substitute_markers("module $TOP$;", {"TOP": "mvau", "UNUSED": 1})
+
+
+def test_a_boolean_marker_value_is_also_emitted_as_a_bit() -> None:
+    assert substitute_markers("$PUMPED$", {"PUMPED": True}) == "1"
