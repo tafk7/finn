@@ -35,6 +35,13 @@ from finn.dataflow.spec_algebra import (
 )
 
 if TYPE_CHECKING:
+    from finn.dataflow.authoring.design import (
+        DataflowDesign,
+        DataflowDesignScope,
+        InputSupplyAlternative,
+        InputSupplyDeclaration,
+        declare_dataflow_design_inventory,
+    )
     from finn.dataflow.authoring.kernel_design import (
         FEASIBILITY,
         SOURCE_ADMISSION,
@@ -77,6 +84,18 @@ _LAZY_EXPORTS = {
         "kernel_namespace",
     )
 }
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.authoring.design", name)
+        for name in (
+            "DataflowDesign",
+            "DataflowDesignScope",
+            "InputSupplyAlternative",
+            "InputSupplyDeclaration",
+            "declare_dataflow_design_inventory",
+        )
+    }
+)
 _LAZY_EXPORTS.update(
     {
         name: ("finn.dataflow.kernels", name)
@@ -135,6 +154,8 @@ __all__ = [
     "ConstraintRef",
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
+    "DataflowDesign",
+    "DataflowDesignScope",
     "DataflowOp",
     "DataflowOpError",
     "DataflowOpResult",
@@ -148,6 +169,8 @@ __all__ = [
     "KernelProvider",
     "KernelSelection",
     "KernelSelectionPaths",
+    "InputSupplyAlternative",
+    "InputSupplyDeclaration",
     "NO_KERNEL",
     "NetworkRef",
     "NodeAttrCodec",
@@ -172,6 +195,7 @@ __all__ = [
     "dataflow_problem_fingerprint",
     "declare_kernel",
     "declare_kernel_design",
+    "declare_dataflow_design_inventory",
     "divisors_of",
     "domain",
     "enumerate_feasible_points",

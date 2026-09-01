@@ -62,6 +62,12 @@ class _Resource(Enum):
     DSP = "dsp"
 
 
+class _RelocatableResource(Enum):
+    __dataflow_identity_token__ = "stable.example.Resource"
+
+    DSP = "dsp"
+
+
 def _roots() -> dict[str, Path]:
     return source_roots(FINN_ROOT)
 
@@ -242,6 +248,19 @@ def test_a_value_with_no_stable_serialization_is_refused() -> None:
     encoded = _identity(assignments=(("resource", _Resource.LUT),))
     assert f"{__name__}._Resource.LUT" in encoded.serialization
     assert encoded.key != _identity(assignments=(("resource", _Resource.DSP),)).key
+
+
+def test_an_explicit_enum_identity_token_survives_a_python_module_move() -> None:
+    encoded = _identity(assignments=(("resource", _RelocatableResource.DSP),))
+
+    assert "stable.example.Resource.DSP" in encoded.serialization
+    assert f"{__name__}._RelocatableResource" not in encoded.serialization
+
+
+def test_mvau_dsp_block_keeps_its_pre_move_artifact_token() -> None:
+    encoded = _identity(assignments=(("target", MVAUDspBlock.DSP58),))
+
+    assert "finn.dataflow.mvau_problem.MVAUDspBlock.DSP58" in encoded.serialization
 
 
 def test_two_enums_that_look_alike_are_not_one_choice() -> None:

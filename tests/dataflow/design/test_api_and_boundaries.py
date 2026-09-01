@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+from importlib import import_module
 import subprocess
 import sys
 from pathlib import Path
@@ -56,6 +57,7 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "ItemOutcome",
         "NetworkValidationIssue",
         "NetworkValidationReport",
+        "NetworkRef",
         "ProblemField",
         "ProblemSchema",
         "ProposalAdoptionMode",
@@ -66,6 +68,7 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "RegionValidationIssue",
         "RegionValidationReport",
         "RequestError",
+        "ResolvedDataflowOp",
         "Unresolved",
         "ValidationError",
         "ValueSemantics",
@@ -94,6 +97,27 @@ def test_design_import_loads_engine_and_region_by_design() -> None:
         "import sys; import finn.dataflow.design; "
         "assert 'finn.dataflow._engine' in sys.modules; "
         "assert 'finn.dataflow.region' in sys.modules"
+    )
+
+
+def test_resolved_operation_values_have_an_evaluation_time_canonical_import() -> None:
+    resolution = import_module("finn.dataflow.resolution")
+
+    assert design.NetworkRef is resolution.NetworkRef
+    assert design.ResolvedDataflowOp is resolution.ResolvedDataflowOp
+
+
+def test_authoring_facade_exposes_design_declaration_entry_points() -> None:
+    authoring = import_module("finn.dataflow.authoring")
+    implementation = import_module("finn.dataflow.authoring.design")
+
+    assert authoring.DataflowDesign is implementation.DataflowDesign
+    assert authoring.DataflowDesignScope is implementation.DataflowDesignScope
+    assert authoring.InputSupplyAlternative is implementation.InputSupplyAlternative
+    assert authoring.InputSupplyDeclaration is implementation.InputSupplyDeclaration
+    assert (
+        authoring.declare_dataflow_design_inventory
+        is implementation.declare_dataflow_design_inventory
     )
 
 

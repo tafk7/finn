@@ -44,6 +44,11 @@ class MVAUComputationProfile(str, Enum):
 class MVAUDspBlock(str, Enum):
     """Target DSP capability consumed only by Kernel feasibility constraints."""
 
+    # Persistence and artifact identities predate the Effort B module move.
+    # Keep their type token independent of the Python owner so relocating this
+    # Enum cannot silently invalidate v6/v11 selections or artifact keys.
+    __dataflow_identity_token__ = "finn.dataflow.mvau_problem.MVAUDspBlock"
+
     DSP48E1 = "DSP48E1"
     DSP48E2 = "DSP48E2"
     DSP58 = "DSP58"

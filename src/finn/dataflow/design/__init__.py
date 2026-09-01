@@ -1,7 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Supported authoring API for FINN dataflow design spaces."""
+"""Supported evaluation API for FINN dataflow design spaces."""
+
+from importlib import import_module
+from typing import TYPE_CHECKING
 
 from finn.dataflow._engine import (
     ABSENT,
@@ -63,6 +66,26 @@ from finn.dataflow.region_validation import (
     validate_region,
 )
 
+if TYPE_CHECKING:
+    from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
+
+_LAZY_EXPORTS = {
+    name: ("finn.dataflow.resolution", name) for name in ("NetworkRef", "ResolvedDataflowOp")
+}
+
+
+def __getattr__(name: str) -> object:
+    """Load resolved-operation values without creating an import cycle."""
+
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
     "ABSENT",
     "DATAFLOW_REGION_SEMANTICS",
@@ -99,6 +122,7 @@ __all__ = [
     "ItemOutcome",
     "NetworkValidationIssue",
     "NetworkValidationReport",
+    "NetworkRef",
     "ProblemField",
     "ProblemSchema",
     "ProposalAdoptionMode",
@@ -109,6 +133,7 @@ __all__ = [
     "RegionValidationIssue",
     "RegionValidationReport",
     "RequestError",
+    "ResolvedDataflowOp",
     "Unresolved",
     "ValidationError",
     "ValueSemantics",

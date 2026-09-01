@@ -19,8 +19,10 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
-from finn.dataflow.design import QualifiedPath
 from finn.dataflow.authoring import DataflowOpError, NodeAttrCodec
+from finn.dataflow.design import QualifiedPath
+from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.op import dataflow_problem_fingerprint
 from finn.dataflow.resolution import RegionRef
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
 
@@ -89,6 +91,13 @@ def _wrapped(model: ModelWrapper) -> SyntheticDataflowOp:
 def _change_synthetic_shape(model: ModelWrapper) -> None:
     model.set_tensor_shape("x", [8])
     model.set_tensor_shape("y", [8])
+
+
+def test_mvau_dsp_block_keeps_its_pre_move_problem_identity() -> None:
+    assert (
+        dataflow_problem_fingerprint({QualifiedPath("target.dsp_block"): MVAUDspBlock.DSP58})
+        == "cf8ff27c13c04b2049026a5b360a9cf813bbdc3c511cab62639b0f80457e0f7f"
+    )
 
 
 def test_modelwrapper_attaches_exact_model_and_bare_wrapper_rejects_evaluation() -> None:

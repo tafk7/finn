@@ -91,8 +91,16 @@ def _canonical_value(value: object) -> object:
     if is_qonnx_datatype(value):
         return encode_datatype(value)
     if isinstance(value, Enum):
+        kind = type(value)
+        type_token = getattr(
+            kind,
+            "__dataflow_identity_token__",
+            f"{kind.__module__}.{kind.__qualname__}",
+        )
+        if not isinstance(type_token, str) or not type_token:
+            raise TypeError(f"invalid stable identity token for {kind.__name__}")
         return {
-            "enum_type": f"{type(value).__module__}.{type(value).__qualname__}",
+            "enum_type": type_token,
             "value": _canonical_value(value.value),
         }
     if is_dataclass(value) and not isinstance(value, type):

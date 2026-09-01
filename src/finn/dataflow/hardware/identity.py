@@ -116,7 +116,16 @@ def _encode(name: str, value: object) -> Scalar:
 
     if isinstance(value, Enum):
         kind = type(value)
-        return f"{kind.__module__}.{kind.__qualname__}.{value.name}"
+        type_token = getattr(
+            kind,
+            "__dataflow_identity_token__",
+            f"{kind.__module__}.{kind.__qualname__}",
+        )
+        if not isinstance(type_token, str) or not type_token:
+            raise ArtifactIdentityError(
+                f"{name} uses {kind.__name__} with an invalid stable identity token"
+            )
+        return f"{type_token}.{value.name}"
     if type(value) in (bool, int, float, str):
         return value  # type: ignore[return-value]
     raise ArtifactIdentityError(
