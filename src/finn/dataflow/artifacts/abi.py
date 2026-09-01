@@ -229,18 +229,42 @@ class Signal:
             raise AbiError(f"{self.name} has width {self.width}; a pin is at least one bit")
 
 
+@dataclass(frozen=True, order=True)
+class Member:
+    """One logical bus member, the pin that carries it, and how wide it is.
+
+    The width is here rather than only on ``Signal`` because a declared
+    ``tdata`` width that disagrees with the RTL is the most likely real
+    mismatch, and the one a packager must get right.  A bus whose members
+    carried no width would be the one part of an ABI nothing could check.
+
+    One bit by default, which is right for every handshake member; only the
+    payload members are ever wider.
+    """
+
+    logical: str
+    physical: str
+    width: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.logical or not self.physical:
+            raise AbiError("a bus member needs a logical name and a physical pin")
+        if self.width < 1:
+            raise AbiError(f"{self.physical} has width {self.width}; a pin is at least one bit")
+
+
 @dataclass(frozen=True, init=False)
 class Bus:
     """A group of pins that a consumer connects as one interface.
 
-    ``signals`` maps a logical member to the physical pin that carries it, so
-    the ABI can describe RTL whose naming it does not control.  It is stored
+    ``signals`` maps each logical member to the physical pin that carries it,
+    so the ABI can describe RTL whose naming it does not control.  It is stored
     sorted: the map is a lookup and its order is not a fact.
     """
 
     name: str
     protocol: Protocol
-    signals: tuple[tuple[str, str], ...]
+    signals: tuple[Member, ...]
     endpoint: Endpoint = Endpoint.TARGET
     role: Role = Data()
     associated_clock: str | None = None
@@ -250,7 +274,7 @@ class Bus:
         self,
         name: str,
         protocol: Protocol,
-        signals: Iterable[tuple[str, str]],
+        signals: Iterable[Member],
         endpoint: Endpoint = Endpoint.TARGET,
         role: Role = Data(),
         associated_clock: str | None = None,
@@ -259,10 +283,20 @@ class Bus:
         members = tuple(sorted(signals))
         if not members:
             raise AbiError(f"bus {name!r} groups no signals")
-        logical = [member for member, _ in members]
+        logical = [member.logical for member in members]
         if len(logical) != len(set(logical)):
             raise AbiError(f"bus {name!r} maps one logical member twice")
-        if isinstance(protocol, StandardProtocol) and protocol in SIGNATURES:
+        if isinstance(protocol, StandardProtocol):
+            if protocol not in SIGNATURES:
+                # Refused here rather than at member_directions().  A bus that
+                # constructs and then cannot say which way its pins point is a
+                # value that is only half a value, and the failure surfaces at
+                # whichever consumer happens to ask first.
+                raise AbiError(
+                    f"bus {name!r} speaks {protocol.value}, which this package has no "
+                    "declared signature for; declare one, or say CustomProtocol and be "
+                    "refused by the formats that publish interfaces"
+                )
             known = SIGNATURES[protocol]
             unknown = [member for member in logical if member not in known]
             if unknown:
@@ -291,13 +325,18 @@ class Bus:
         signature = SIGNATURES[self.protocol]
         return tuple(
             (
-                physical,
-                signature[member]
+                member.physical,
+                signature[member.logical]
                 if self.endpoint is Endpoint.INITIATOR
-                else flip(signature[member]),
+                else flip(signature[member.logical]),
             )
-            for member, physical in self.signals
+            for member in self.signals
         )
+
+    def widths(self) -> tuple[tuple[str, int], ...]:
+        """Each physical pin and the width the ABI declares for it."""
+
+        return tuple((member.physical, member.width) for member in self.signals)
 
 
 Port = Union[Signal, Bus]
@@ -338,7 +377,7 @@ class ComponentABI:
             if isinstance(port, Signal):
                 names.append(port.name)
             else:
-                names.extend(physical for _, physical in port.signals)
+                names.extend(member.physical for member in port.signals)
         return tuple(names)
 
     def clocks(self) -> tuple[Signal, ...]:
@@ -383,29 +422,66 @@ class ObservedPort:
     width: int
 
 
+def _conventional_prefix(physical: str) -> str | None:
+    """The prefix suffix inference would file this pin under, if it would.
+
+    ``None`` means the name does not end in an AXI-Stream member suffix at all,
+    so inference never sees it.  That is not a disagreement -- it is the
+    ``Bus.signals`` map doing its job on RTL whose naming the ABI does not
+    control.
+    """
+
+    prefix, _, suffix = physical.rpartition("_")
+    if prefix and suffix in SIGNATURES[StandardProtocol.AXIS]:
+        return prefix
+    return None
+
+
 def check_declared_grouping(abi: ComponentABI) -> tuple[str, ...]:
     """Where the declared bus grouping and the inferred one disagree.
 
     A packager infers interfaces from suffixes.  If the declaration groups
     differently, the component publishes interfaces the unit does not have.
+
+    A bus whose pins do not follow the suffix convention **at all** is not
+    reported.  Mapping a logical member onto an unconventional pin is the
+    feature ``Bus.signals`` exists for, and complaining about it would make the
+    feature unusable without an accompanying complaint.  What is reported is a
+    bus that is *partly* conventional: those pins do reach inference, and where
+    it puts them is then a fact that can disagree.
     """
 
-    inferred = {members for _, members in infer_buses(abi.physical_names())}
-    declared = {
-        tuple(sorted(port.signals))
-        for port in abi.ports
-        if isinstance(port, Bus) and port.protocol is StandardProtocol.AXIS
+    inferred = {
+        frozenset(physical for _, physical in members)
+        for _, members in infer_buses(abi.physical_names())
     }
+    declared: set[frozenset[str]] = set()
     issues: list[str] = []
-    for group in sorted(declared - inferred):
+    for port in abi.ports:
+        if not isinstance(port, Bus) or port.protocol is not StandardProtocol.AXIS:
+            continue
+        pins = frozenset(member.physical for member in port.signals)
+        declared.add(pins)
+        prefixes = {physical: _conventional_prefix(physical) for physical in pins}
+        conventional = {name for name, prefix in prefixes.items() if prefix is not None}
+        if not conventional:
+            continue
+        if conventional != pins:
+            issues.append(
+                f"declared AXI-Stream {port.name!r} mixes {sorted(conventional)}, which suffix "
+                f"inference groups, with {sorted(pins - conventional)}, which it does not; a "
+                "packager would publish part of this interface and leave the rest loose"
+            )
+            continue
+        if pins not in inferred:
+            issues.append(
+                f"declared AXI-Stream {sorted(pins)} is not what suffix inference would "
+                "group; a packager would publish a different interface"
+            )
+    for group in sorted(inferred - declared, key=sorted):
         issues.append(
-            f"declared AXI-Stream {[physical for _, physical in group]} is not what suffix "
-            "inference would group; a packager would publish a different interface"
-        )
-    for group in sorted(inferred - declared):
-        issues.append(
-            f"{[physical for _, physical in group]} infers as an AXI-Stream but is not "
-            "declared as one; a stitcher would see loose pins"
+            f"{sorted(group)} infers as an AXI-Stream but is not declared as one; a "
+            "stitcher would see loose pins"
         )
     return tuple(issues)
 
@@ -463,12 +539,20 @@ def check_against_rtl(abi: ComponentABI, observed: Sequence[ObservedPort]) -> tu
                     f"declares it {found.direction.value}"
                 )
 
+    # Bus members are checked here too, and that is the point of them carrying
+    # a width: a declared ``tdata`` that disagrees with the RTL is the most
+    # likely real mismatch, and it used to pass because only loose signals were
+    # compared.
     for port in abi.ports:
         if isinstance(port, Signal):
-            found = actual.get(port.name)
-            if found is not None and found.width != port.width:
+            widths: tuple[tuple[str, int], ...] = ((port.name, port.width),)
+        else:
+            widths = port.widths()
+        for name, width in widths:
+            found = actual.get(name)
+            if found is not None and found.width != width:
                 issues.append(
-                    f"the ABI declares {port.name!r} as {port.width} bits and the source "
+                    f"the ABI declares {name!r} as {width} bits and the source "
                     f"resolves it to {found.width}"
                 )
 
@@ -490,6 +574,7 @@ __all__ = [
     "Endpoint",
     "Free",
     "Interrupt",
+    "Member",
     "ObservedPort",
     "Port",
     "Protocol",

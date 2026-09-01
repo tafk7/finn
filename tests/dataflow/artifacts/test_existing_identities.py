@@ -234,6 +234,31 @@ def _texts(derivation: Derivation) -> set[str]:
     return {text for _, _, text in project(derivation)}
 
 
+def _table(derivation: Derivation, channel: str) -> dict[str, str]:
+    """Rebuild a name-to-value table out of the preimage, pairing intact.
+
+    ``_texts`` alone cannot see an association.  ``(("PE", 2), ("SIMD", 4))``
+    and ``(("PE", 4), ("SIMD", 2))`` have the same set of texts, so a totality
+    check built on the set is satisfied by two values that swapped -- which is
+    the one way a translation can lose a fact while appearing to carry every
+    one of them.  Reading the positions back out of the paths restores the
+    pairing the projection actually encodes.
+    """
+
+    columns: dict[str, dict[str, str]] = {}
+    for path, _, text in project(derivation):
+        prefix, _, rest = path.partition("[")
+        if prefix != channel:
+            continue
+        index, _, column = rest.partition("][")
+        # ``options`` pairs a name with a scalar, so the value is ``[1]``.
+        # ``inputs`` pairs a name with a reference, whose own fields hang off
+        # ``[1]`` -- ``[1].digest``, ``[1].key``.  Either way the name is
+        # ``[0]`` and everything else is what it points at.
+        columns.setdefault(index, {})["0" if column.startswith("0]") else "1"] = text
+    return {pair["0"]: pair["1"] for pair in columns.values() if len(pair) == 2}
+
+
 # -- totality: nothing the existing key carries is dropped ---------------------
 
 
@@ -243,6 +268,41 @@ def test_the_kernel_identity_is_expressible_without_losing_a_fact() -> None:
     assert {"dotp_axi", "1", identity.schema_version} <= texts
     assert {DIGEST, OTHER_DIGEST} <= texts
     assert {"2", "true", "false"} <= texts
+    # Paired, not merely present.  Two same-valued parameters could otherwise
+    # swap and every set-based assertion above would still hold.
+    assert _table(kernel_derivation(identity), "options") == {
+        "kernel_id": "dotp_axi",
+        "kernel_version": "1",
+        "choice.compute_pumping": "false",
+        "parameter.PE": "2",
+        "parameter.SIGNED_ACTIVATIONS": "true",
+        "parameter.SIMD": "2",
+    }
+    assert _table(kernel_derivation(identity), "inputs") == {
+        "finnlib/rtl/linalg/dotp.sv": DIGEST,
+        "finnlib/rtl/linalg/dotp_axi.sv": OTHER_DIGEST,
+    }
+
+
+def test_two_parameters_whose_values_swap_are_two_kernel_derivations() -> None:
+    """The negative the set-based totality check could not have caught."""
+
+    swapped = KernelArtifactIdentity(
+        "dotp_axi",
+        "1",
+        _kernel().sources,
+        (("PE", 4), ("SIMD", 2), ("SIGNED_ACTIVATIONS", True)),
+        (("compute_pumping", False),),
+    )
+    other_way = KernelArtifactIdentity(
+        "dotp_axi",
+        "1",
+        _kernel().sources,
+        (("PE", 2), ("SIMD", 4), ("SIGNED_ACTIVATIONS", True)),
+        (("compute_pumping", False),),
+    )
+    assert _texts(kernel_derivation(swapped)) == _texts(kernel_derivation(other_way))
+    assert build_key(kernel_derivation(swapped)) != build_key(kernel_derivation(other_way))
 
 
 def test_the_kernel_manifest_keeps_its_declared_compile_order() -> None:

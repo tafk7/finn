@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from dataflow.mvau.test_decomposed_packaging import _requirements
+from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from finn.dataflow.artifacts.derivation import (
     ArtifactRef,
     Derivation,
@@ -46,9 +46,26 @@ from finn.dataflow.hardware.identity import PackagedArtifactIdentity
 from finn.dataflow.hardware.store import ArtifactKey, StoredArtifact, checked_lookup
 from finn.dataflow.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
+    build_decomposed_artifact_requirements,
     package_decomposed_artifact,
     packaged_artifact_identity,
 )
+from finn.dataflow.mvau.providers import elaborate_mvau
+
+FINN_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _requirements() -> MVAUDecomposedArtifactRequirements:
+    """The same fixture ``test_decomposed_packaging`` builds, built here.
+
+    Spelled out rather than imported.  The private helper next door belongs to
+    the ``DataflowDesign`` migration, and reaching into it makes this the one
+    place a branch that touches nothing outside two trees can be broken from
+    outside them.  Four lines is a cheaper price than that coupling.
+    """
+
+    resolved = _committed(_model(), pe=2).resolve_dataflow(_context())
+    return build_decomposed_artifact_requirements(resolved, elaborate_mvau(resolved), FINN_ROOT)
 
 
 def _derivation(identity: PackagedArtifactIdentity) -> Derivation:

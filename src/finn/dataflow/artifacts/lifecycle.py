@@ -20,6 +20,13 @@ Three states, and the distinction that matters is between the last two:
 ``Completed``
     a validated, hashed tree exists.  **Only this one may enter the store.**
 
+Each of the three has a type, and only ``Required`` and ``Completed`` are
+declared here.  ``Prepared`` is ``request.PreparedToolRun``: it lives beside
+the receipt it will be checked against, and it carries the mounts, the
+substitutions and the toolchain that make "a request has been formed" mean
+something.  A second, emptier ``Prepared`` here would be a state with two
+authorities, so the enum member points at that one instead.
+
 A materialization is checked against the *declared* layout, never against what
 happens to be on disk.  Discovering outputs makes a partial run
 indistinguishable from a complete one: there is no file whose absence says
@@ -33,7 +40,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from finn.dataflow.artifacts.derivation import Derivation, OutputLayout
+from finn.dataflow.artifacts.derivation import Derivation, OutputLayout, build_key
 from finn.dataflow.artifacts.projection import content_digest
 
 
@@ -66,6 +73,26 @@ class Materialization:
     @property
     def files(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.entries)
+
+
+@dataclass(frozen=True)
+class Required:
+    """A derivation exists and its key is known.  Nothing has run.
+
+    Thin because the state is: what is true here is exactly that the inputs
+    are declared, and anything else this carried would be a fact from a later
+    state smuggled into an earlier one.
+    """
+
+    derivation: Derivation
+
+    @property
+    def state(self) -> State:
+        return State.REQUIRED
+
+    @property
+    def key(self) -> str:
+        return build_key(self.derivation)
 
 
 @dataclass(frozen=True)
@@ -171,6 +198,7 @@ __all__ = [
     "Completed",
     "LifecycleError",
     "Materialization",
+    "Required",
     "State",
     "check_layout",
     "materialize",

@@ -146,15 +146,62 @@ class PortableComponent:
 
 @dataclass(frozen=True)
 class PackagePlan:
-    """What a packager decided, before anything is written."""
+    """What a packager decided, before anything is written.
+
+    ``contents`` **is** the declared layout, name for name and in order.  The
+    two used to be independent, and the first format written got it wrong in
+    the least visible way available: it declared the sources and emitted only
+    the descriptor, so the package that shipped had no RTL in it.  A round trip
+    that reads the descriptor back does not notice, because the descriptor is
+    the one file that *was* there.
+
+    So the plan checks itself.  A layout is a promise about a tree, and a plan
+    that cannot fill its own promise is not a plan.
+    """
 
     derivation: Derivation
-    #: Relative name to bytes, in the order the format wants them.
+    #: Relative name to bytes, in declared-layout order.
     contents: tuple[tuple[str, bytes], ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        layout = self.derivation.outputs
+        if layout is None:
+            raise PackagingError(
+                f"{self.derivation.kind} declares no output layout, so nothing says what "
+                "this package is supposed to contain"
+            )
+        emitted = tuple(name for name, _ in self.contents)
+        if emitted != layout.entries:
+            missing = [name for name in layout.entries if name not in set(emitted)]
+            extra = [name for name in emitted if name not in set(layout.entries)]
+            detail = (
+                f"declares {list(layout.entries)} and emits {list(emitted)}"
+                if not missing and not extra
+                else f"declares {list(layout.entries)}"
+                + (f", does not emit {missing}" if missing else "")
+                + (f", emits undeclared {extra}" if extra else "")
+            )
+            raise PackagingError(f"{self.derivation.kind} {detail}")
+
+
+class ContentSource(Protocol):
+    """Somewhere a ``ContentRef`` can be turned back into bytes.
+
+    ``ArtifactStore`` satisfies this structurally, which is what gives
+    ``get_blob`` a caller other than a test: a packager holds references, and
+    the only way to put a source file into a package is to resolve one.
+    """
+
+    def get_blob(self, reference: ContentRef) -> bytes: ...
 
 
 class Packager(Protocol):
-    """A distribution format.  It reads a component, a target, and options."""
+    """A distribution format.  It reads a component, a target, and options.
+
+    ``contents`` is a resolver and not a fourth input: it turns the references
+    the component already carries into the bytes they name, and a packager can
+    reach nothing through it that the component did not declare.
+    """
 
     format_id: str
     contract_version: str
@@ -164,10 +211,27 @@ class Packager(Protocol):
     def supports(self, abi: ComponentABI) -> Support: ...
 
     def plan(
-        self, component: PortableComponent, target: Target, options: PackageOptions
+        self,
+        component: PortableComponent,
+        target: Target,
+        options: PackageOptions,
+        contents: ContentSource,
     ) -> PackagePlan: ...
 
     def parse(self, contents: Mapping[str, bytes]) -> ComponentABI: ...
+
+
+def staged_sources(
+    component: PortableComponent, contents: ContentSource
+) -> tuple[tuple[str, bytes], ...]:
+    """The component's files as bytes, in declared compile order.
+
+    Shared by both in-tree formats, because "resolve what the component
+    declared, in the order it declared it" is not a per-format decision and
+    writing it twice is how the two would eventually disagree.
+    """
+
+    return tuple((name, contents.get_blob(reference)) for name, reference in component.files)
 
 
 def check_realization(packager: Packager, component: PortableComponent) -> Refused | None:
@@ -186,6 +250,7 @@ def plan_package(
     component: PortableComponent,
     target: Target,
     options: PackageOptions,
+    contents: ContentSource,
 ) -> PackagePlan:
     """Refuse before planning, so a degraded package is never produced."""
 
@@ -195,7 +260,7 @@ def plan_package(
     support = packager.supports(component.abi)
     if isinstance(support, Refused):
         raise PackagingError(f"{packager.format_id} cannot express this component: {support}")
-    return packager.plan(component, target, options)
+    return packager.plan(component, target, options, contents)
 
 
 def round_trip(packager: Packager, plan: PackagePlan) -> ComponentABI:
@@ -223,6 +288,7 @@ def registry(packagers: Sequence[Packager]) -> Mapping[str, Packager]:
 
 
 __all__ = [
+    "ContentSource",
     "PackageOptions",
     "PackagePlan",
     "Packager",
@@ -238,4 +304,5 @@ __all__ = [
     "plan_package",
     "registry",
     "round_trip",
+    "staged_sources",
 ]

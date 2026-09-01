@@ -7,7 +7,8 @@
 
     artifact-store/
     |-- objects/<kind>/<key-prefix>/<build-key>/
-    |       `-- artifact.json          references blobs; relative paths only
+    |       |-- artifact.json          names each file by content digest
+    |       `-- <declared files>       hard links to the blobs below
     |-- blobs/sha256/<digest-prefix>/<content-digest>
     |-- attempts/<request-key>/<attempt-id>/
     `-- incoming/                      private workspaces, inside the root
@@ -17,6 +18,21 @@ Two properties do most of the work.
 **Blobs deduplicate at file level across every artifact, stage and
 derivation**, including bytes reached by different routes.  Compilation-unit
 identity is separate and coarser (§5.3), and lives in ``sources``.
+
+The dedup is by **hard link**, and it has to be something.  An object tree that
+was a plain copy of its workspace stored every byte twice -- once under
+``objects/`` and once under ``blobs/`` -- and nothing ever read the blob, so
+the claimed saving was a 2x cost with a directory of unreferenced files beside
+it.  Linking makes the two names one inode: a consumer still opens a real file
+at a real path, and identical bytes reached by two routes occupy one extent.
+
+That an object file and its blob are the same inode is also why **a published
+tree is immutable in a stronger sense than convention**: writing through the
+object path would rewrite the blob, and therefore every other artifact that
+shares it.  Nothing in this package writes to a published tree, ``lookup``
+re-hashes what it returns, and a store whose files are being edited underneath
+it is already broken -- but the linking makes the blast radius wider, so it is
+written down rather than left to be discovered.
 
 **A failed or abandoned run is an attempt, not an artifact.**  Failures never
 reach ``objects/``, so the store cannot hold a partial tree, and the material
@@ -45,6 +61,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,14 +173,14 @@ class ArtifactStore:
         See the module docstring: a workspace on another filesystem makes the
         publish step silently non-atomic, and the container bind-mount makes
         that the normal case rather than an exotic one.
+
+        Private also means *per call*.  A name derived from the key alone was
+        shared by every builder of that key, and the second one to arrive
+        deleted the first one's half-built tree.
         """
 
         key = build_key(derivation)
-        path = self._incoming / f"{derivation.kind}-{key[:16]}"
-        if path.exists():
-            shutil.rmtree(path)
-        path.mkdir(parents=True)
-        return path
+        return Path(tempfile.mkdtemp(dir=self._incoming, prefix=f"{derivation.kind}-{key[:16]}-"))
 
     def publish(
         self,
@@ -244,11 +261,56 @@ class ArtifactStore:
             # Already published.  Two builders racing on one key is a real
             # problem and a different one; what matters here is that the
             # second does not half-replace the first.
+            #
+            # It is answered through ``lookup`` rather than by returning the
+            # manifest we just built.  Returning ours would report a clean
+            # artifact for whatever is actually on disk -- the one path into
+            # this store that skipped every validation the same store performs
+            # on the way out, and so the one place a corrupt tree could be
+            # handed back looking healthy.
             shutil.rmtree(workspace)
-            return self._stored(manifest, target)
+            existing = self.lookup(derivation)
+            if existing is None:
+                raise StoreError(
+                    f"{target} exists and holds no readable manifest, so it is neither an "
+                    "artifact nor absent; the store is inconsistent"
+                )
+            published = decode((target / MANIFEST_NAME).read_bytes())
+            if published.tree_digest != tree:
+                raise StoreError(
+                    f"{derivation.kind} {manifest.build_key[:12]} is already published with "
+                    f"tree digest {published.tree_digest[:12]} and this build produced "
+                    f"{tree[:12]}; one key names two trees, so the key does not cover "
+                    "everything the producer read"
+                )
+            return existing
         os.replace(workspace, target)
         _fsync_directory(target.parent)
+        self._link_to_blobs(target, found.entries)
         return self._stored(manifest, target)
+
+    def _link_to_blobs(self, target: Path, entries: Sequence[tuple[str, str]]) -> None:
+        """Make each published file and its blob one inode.
+
+        Best effort, and deliberately so: a filesystem that refuses the link
+        leaves a byte-identical copy in place, which costs space and breaks
+        nothing.  Failing the publish over a storage optimization would trade a
+        correct artifact for a tidy one.
+        """
+
+        for name, content in entries:
+            blob = self.blob_path(ContentRef(content))
+            located = target / name
+            try:
+                if not blob.is_file() or located.stat().st_ino == blob.stat().st_ino:
+                    continue
+                handle, scratch = _scratch_name(located)
+                os.close(handle)
+                scratch.unlink()
+                os.link(blob, scratch)
+                os.replace(scratch, located)
+            except OSError:
+                continue
 
     def record_attempt(self, receipt: ExecutionReceipt, workspace: Path) -> Path:
         """Keep a failed run where it can be diagnosed, and out of ``objects/``.
@@ -259,7 +321,11 @@ class ArtifactStore:
 
         attempt = self._attempts / receipt.build_key[:_PREFIX] / receipt.build_key
         attempt.mkdir(parents=True, exist_ok=True)
-        destination = attempt / f"attempt-{len(list(attempt.iterdir())):04d}"
+        # Named by reserving a directory rather than by counting the ones that
+        # are there: two failures landing at once both saw the same count, and
+        # the second overwrote the first's evidence.  ``os.replace`` onto an
+        # empty directory is what makes the reservation and the move one step.
+        destination = Path(tempfile.mkdtemp(dir=attempt, prefix="attempt-"))
         os.replace(workspace, destination)
         _fsync_directory(attempt)
         return destination
@@ -349,15 +415,34 @@ def _canonical_text(derivation: Derivation) -> str:
     return "\n".join(f"{path}\t{tag}\t{text}" for path, tag, text in project(derivation))
 
 
+def _scratch_name(target: Path) -> tuple[int, Path]:
+    """An open, private, uniquely named file beside ``target``.
+
+    Beside it, so the rename that follows stays within one filesystem.
+    Uniquely named, because a fixed ``.incoming`` suffix was shared by every
+    writer of one blob: two of them interleaved into a single file and the
+    rename published whichever prefix happened to be there.
+    """
+
+    handle, name = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".incoming")
+    return handle, Path(name)
+
+
 def _atomic_write(target: Path, data: bytes) -> None:
     """Write beside the target and rename, so a reader never sees half a file."""
 
-    scratch = target.with_name(target.name + ".incoming")
-    with open(scratch, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(scratch, target)
+    handle, scratch = _scratch_name(target)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # mkstemp opens at 0600 and a store's contents are meant to be read.
+        os.chmod(scratch, 0o644)
+        os.replace(scratch, target)
+    except BaseException:
+        scratch.unlink(missing_ok=True)
+        raise
     _fsync_directory(target.parent)
 
 

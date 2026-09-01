@@ -36,6 +36,7 @@ from finn.dataflow.artifacts.abi import (
 from finn.dataflow.artifacts.derivation import Derivation, OutputLayout, ProducerIdentity
 from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.packaging import (
+    ContentSource,
     PackageOptions,
     PackagePlan,
     PortableComponent,
@@ -44,6 +45,7 @@ from finn.dataflow.artifacts.packaging import (
     Support,
     Supported,
     Target,
+    staged_sources,
 )
 from finn.dataflow.artifacts.projection import content_digest
 
@@ -80,7 +82,10 @@ class RtlModuleDirectory:
                 "declared signature to publish",
                 custom,
             )
-        clocks = {port.name for port in abi.ports if isinstance(port, Signal)}
+        # The *clocks*, not every loose signal.  Testing the whole signal set
+        # made a derived clock naming a data pin pass, which is the relation
+        # this refusal exists to catch stated slightly less obviously.
+        clocks = {signal.name for signal in abi.clocks()}
         dangling = tuple(
             port.name
             for port in abi.ports
@@ -97,10 +102,15 @@ class RtlModuleDirectory:
         return Supported()
 
     def plan(
-        self, component: PortableComponent, target: Target, options: PackageOptions
+        self,
+        component: PortableComponent,
+        target: Target,
+        options: PackageOptions,
+        contents: ContentSource,
     ) -> PackagePlan:
         descriptor = _descriptor.encode(component.abi)
-        layout = tuple(name for name, _ in component.files) + (_descriptor.DESCRIPTOR_NAME,)
+        staged = staged_sources(component, contents)
+        layout = tuple(name for name, _ in staged) + (_descriptor.DESCRIPTOR_NAME,)
         derivation = Derivation(
             kind="rtl-module-package",
             schema_version=f"{self.format_id}-v{self.contract_version}",
@@ -114,7 +124,7 @@ class RtlModuleDirectory:
             + options.as_options(),
             outputs=OutputLayout(layout),
         )
-        return PackagePlan(derivation, ((_descriptor.DESCRIPTOR_NAME, descriptor),))
+        return PackagePlan(derivation, staged + ((_descriptor.DESCRIPTOR_NAME, descriptor),))
 
     def parse(self, contents: Mapping[str, bytes]) -> ComponentABI:
         return _descriptor.decode(contents[_descriptor.DESCRIPTOR_NAME])

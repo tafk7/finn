@@ -17,7 +17,15 @@ from pathlib import Path
 
 import pytest
 
-from finn.dataflow.artifacts.derivation import ArtifactRef, ContentRef, RequestSchema
+from finn.dataflow.artifacts.derivation import (
+    ArtifactRef,
+    ContentRef,
+    Derivation,
+    ProducerIdentity,
+    RequestSchema,
+    build_key,
+)
+from finn.dataflow.artifacts.lifecycle import Required, State
 from finn.dataflow.artifacts.projection import digest
 from finn.dataflow.artifacts.request import (
     ExecutionReceipt,
@@ -240,3 +248,24 @@ def test_a_content_input_and_an_artifact_input_both_reduce_to_a_digest() -> None
     assert isinstance(predicate, dict)
     dependencies = predicate["buildDefinition"]["resolvedDependencies"]
     assert [item["digest"]["sha256"] for item in dependencies] == [DIGEST, KEY]
+
+
+def test_a_prepared_run_is_the_lifecycle_s_prepared_state() -> None:
+    """``State.PREPARED`` names a type, and this is it.
+
+    The enum member used to have no value behind it, which made "a tool request
+    has been formed" the one state nothing could hold.  A second, emptier type
+    next to ``Completed`` would have been the same state with two authorities,
+    so the one that carries the mounts and the toolchain answers instead.
+    """
+
+    assert _run().state is State.PREPARED
+    required = Required(
+        Derivation(
+            kind="ooc-synthesis",
+            schema_version="ooc-synthesis-v1",
+            producer=ProducerIdentity("finn.ooc-synthesis", "1"),
+        )
+    )
+    assert required.state is State.REQUIRED
+    assert required.key == build_key(required.derivation)

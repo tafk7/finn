@@ -30,6 +30,7 @@ from finn.dataflow.artifacts.abi import (
     Direction,
     Endpoint,
     Free,
+    Member,
     ObservedPort,
     Reset,
     Signal,
@@ -74,7 +75,7 @@ def _generated_wrapper_ports() -> tuple[ObservedPort, ...]:
     ``WSTREAM=32``, ``ISTREAM=16``, ``OSTREAM=32``.
     """
 
-    widths = {"in1_V_tdata": 32, "in0_V_tdata": 16, "out0_V_tdata": 32}
+    widths = {f"{prefix}_tdata": width for prefix, width in DATA_WIDTHS.items()}
     directions = {
         "ap_clk": Direction.IN,
         "ap_clk2x": Direction.IN,
@@ -94,14 +95,19 @@ def _generated_wrapper_ports() -> tuple[ObservedPort, ...]:
     )
 
 
-def _stream(prefix: str, *, initiator: bool = False) -> Bus:
+#: The widths the wrapper resolves each payload to under its own parameters.
+DATA_WIDTHS = {"in1_V": 32, "in0_V": 16, "out0_V": 32}
+
+
+def _stream(prefix: str, *, initiator: bool = False, data_width: int = 0) -> Bus:
+    width = data_width or DATA_WIDTHS[prefix]
     return Bus(
         prefix,
         StandardProtocol.AXIS,
         (
-            ("tdata", f"{prefix}_tdata"),
-            ("tvalid", f"{prefix}_tvalid"),
-            ("tready", f"{prefix}_tready"),
+            Member("tdata", f"{prefix}_tdata", width),
+            Member("tvalid", f"{prefix}_tvalid"),
+            Member("tready", f"{prefix}_tready"),
         ),
         endpoint=Endpoint.INITIATOR if initiator else Endpoint.TARGET,
         associated_clock="ap_clk",
@@ -154,7 +160,7 @@ def test_the_known_case_mismatch_reproduces_as_a_failing_check() -> None:
                 "in0_V",
                 StandardProtocol.AXIS,
                 tuple(
-                    (member, name)
+                    Member(member, name, 16 if member == "tdata" else 1)
                     for member, name in zip(("tdata", "tvalid", "tready"), LEGACY_DECLARED_NAMES)
                 ),
                 associated_clock="ap_clk",
@@ -213,9 +219,22 @@ def test_a_flipped_direction_disagreement_is_caught() -> None:
 
 
 def test_a_protocol_with_no_declared_signature_refuses_rather_than_guesses() -> None:
-    custom = Bus("weird", CustomProtocol("acme.thing"), (("a", "weird_a"),))
+    custom = Bus("weird", CustomProtocol("acme.thing"), (Member("a", "weird_a"),))
     with pytest.raises(AbiError, match="refuse it rather than guess"):
         custom.member_directions()
+
+
+def test_a_standard_protocol_with_no_signature_is_refused_at_construction() -> None:
+    """Not deferred to whichever consumer asks for directions first.
+
+    ``AXI`` is in the enum because it exists, and there is no signature table
+    for it.  A bus that constructs and then cannot say which way its pins point
+    is half a value, and the failure lands on whoever asks rather than on
+    whoever wrote it.
+    """
+
+    with pytest.raises(AbiError, match="no declared signature"):
+        Bus("m", StandardProtocol.AXI, (Member("awaddr", "m_awaddr", 32),))
 
 
 # -- suffix inference, shared with the packager --------------------------------
@@ -247,14 +266,60 @@ def test_a_declared_grouping_the_packager_would_not_agree_with_is_reported() -> 
                 "muddled",
                 StandardProtocol.AXIS,
                 (
-                    ("tdata", "in0_V_tdata"),
-                    ("tvalid", "in0_V_tvalid"),
-                    ("tready", "in1_V_tready"),
+                    Member("tdata", "in0_V_tdata", 16),
+                    Member("tvalid", "in0_V_tvalid"),
+                    Member("tready", "in1_V_tready"),
                 ),
             ),
         ),
     )
     assert check_declared_grouping(crossed)
+
+
+def test_a_bus_named_outside_the_convention_is_not_reported_as_a_disagreement() -> None:
+    """``Bus.signals`` exists to describe RTL whose naming it does not control.
+
+    None of these pins reaches suffix inference at all, so there is nothing for
+    inference to disagree with.  Reporting it anyway made the feature unusable
+    without an accompanying complaint -- which is a check training its reader to
+    ignore it.
+    """
+
+    unconventional = ComponentABI(
+        entry_point="m",
+        ports=(
+            Bus(
+                "weights",
+                StandardProtocol.AXIS,
+                (
+                    Member("tdata", "weight_bus", 32),
+                    Member("tvalid", "weight_go"),
+                    Member("tready", "weight_ok"),
+                ),
+            ),
+        ),
+    )
+    assert check_declared_grouping(unconventional) == ()
+
+
+def test_a_bus_that_is_only_half_conventional_is_still_reported() -> None:
+    """Those pins do reach inference, so where it puts them is a fact."""
+
+    half = ComponentABI(
+        entry_point="m",
+        ports=(
+            Bus(
+                "muddled",
+                StandardProtocol.AXIS,
+                (
+                    Member("tdata", "in0_V_tdata", 16),
+                    Member("tvalid", "in0_V_tvalid"),
+                    Member("tready", "weight_ok"),
+                ),
+            ),
+        ),
+    )
+    assert any("leave the rest loose" in issue for issue in check_declared_grouping(half))
 
 
 def test_a_stream_left_undeclared_is_reported_as_loose_pins() -> None:
@@ -308,7 +373,7 @@ def test_an_abi_refuses_to_carry_one_pin_in_two_places() -> None:
 
 def test_a_bus_refuses_a_member_its_protocol_has_no_slot_for() -> None:
     with pytest.raises(AbiError, match="no member for"):
-        Bus("s", StandardProtocol.AXIS, (("tdata", "a"), ("nonsense", "b")))
+        Bus("s", StandardProtocol.AXIS, (Member("tdata", "a"), Member("nonsense", "b")))
 
 
 def test_a_bus_groups_at_least_one_signal() -> None:
@@ -336,6 +401,33 @@ def test_a_width_disagreement_with_the_source_is_caught() -> None:
     abi = ComponentABI("m", (Signal("a", Direction.IN, 8),))
     issues = check_against_rtl(abi, (ObservedPort("a", Direction.IN, 16),))
     assert any("8 bits" in issue and "16" in issue for issue in issues)
+
+
+def test_a_bus_member_width_that_disagrees_with_the_source_is_caught() -> None:
+    """The likeliest real mismatch, and the one only loose signals used to see.
+
+    A declared ``tdata`` width is what a consumer sizes its connection on, so a
+    bus whose members carried no width left the single most consequential field
+    in the ABI unchecked.
+    """
+
+    abi = ComponentABI("m", (_stream("in0_V", data_width=8),))
+    issues = check_against_rtl(abi, _generated_wrapper_ports())
+    assert any("in0_V_tdata" in issue and "8 bits" in issue and "16" in issue for issue in issues)
+
+
+def test_a_bus_member_width_that_agrees_is_not_reported() -> None:
+    """Otherwise the check above would pass for the wrong reason."""
+
+    abi = ComponentABI("m", (_stream("in0_V"),))
+    assert all(
+        "in0_V_tdata" not in issue for issue in check_against_rtl(abi, _generated_wrapper_ports())
+    )
+
+
+def test_a_bus_member_is_at_least_one_bit() -> None:
+    with pytest.raises(AbiError, match="at least one bit"):
+        Member("tdata", "a", 0)
 
 
 def test_a_pin_the_source_has_and_the_abi_omits_is_caught() -> None:

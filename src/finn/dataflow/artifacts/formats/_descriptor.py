@@ -32,6 +32,7 @@ from finn.dataflow.artifacts.abi import (
     Endpoint,
     Free,
     Interrupt,
+    Member,
     Port,
     Protocol,
     Reset,
@@ -62,7 +63,10 @@ class _Port(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     protocol: str = ""
     protocol_spec: str = ""
     endpoint: str = ""
-    signals: tuple[tuple[str, str], ...] = ()
+    #: ``(logical, physical, width)``.  The width is carried because a
+    #: descriptor that dropped it would make a round trip lossy in exactly the
+    #: field a consumer connects on.
+    signals: tuple[tuple[str, str, int], ...] = ()
     associated_clock: str | None = None
     associated_reset: str | None = None
 
@@ -140,7 +144,9 @@ def encode(abi: ComponentABI) -> bytes:
                 protocol=protocol,
                 protocol_spec=spec,
                 endpoint=port.endpoint.value,
-                signals=port.signals,
+                signals=tuple(
+                    (member.logical, member.physical, member.width) for member in port.signals
+                ),
                 associated_clock=port.associated_clock,
                 associated_reset=port.associated_reset,
             )
@@ -174,7 +180,9 @@ def decode(data: bytes) -> ComponentABI:
             Bus(
                 port.name,
                 _protocol_in(port.protocol, port.protocol_spec),
-                port.signals,
+                tuple(
+                    Member(logical, physical, width) for logical, physical, width in port.signals
+                ),
                 endpoint=Endpoint(port.endpoint),
                 role=_role_in(port.role),
                 associated_clock=port.associated_clock,

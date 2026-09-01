@@ -147,6 +147,48 @@ def test_a_blob_that_was_never_written_is_refused_rather_than_returned_empty(
         store.get_blob(ContentRef("d" * 64))
 
 
+def test_a_published_file_and_its_blob_are_one_inode(store: ArtifactStore) -> None:
+    """Otherwise every byte is stored twice and the blob is never read.
+
+    Publishing used to copy the workspace into ``objects/`` *and* write a blob
+    for each file, so a store cost 2x what it held while advertising dedup.
+    """
+
+    derivation = _derivation()
+    _publish(store, derivation)
+    directory = store.object_directory(derivation.kind, build_key(derivation))
+    published = directory / "dotp_axi.sv"
+    blob = store.blob_path(ContentRef(content_digest(published.read_bytes())))
+    assert blob.is_file()
+    assert published.stat().st_ino == blob.stat().st_ino
+
+
+def test_one_file_shared_by_two_artifacts_occupies_one_inode(store: ArtifactStore) -> None:
+    """The dedup claim, measured rather than asserted."""
+
+    first = _derivation()
+    second = _derivation(options=(("PE", 4), ("SIMD", 2)))
+    _publish(store, first)
+    _publish(store, second)
+    shared = [
+        store.object_directory(built.kind, build_key(built)) / "replay_buffer.sv"
+        for built in (first, second)
+    ]
+    assert shared[0] != shared[1]
+    assert shared[0].stat().st_ino == shared[1].stat().st_ino
+
+
+def test_the_blob_of_every_published_file_is_reachable(store: ArtifactStore) -> None:
+    """``get_blob`` has a caller, so ``blobs/`` is not write-only."""
+
+    derivation = _derivation()
+    _publish(store, derivation)
+    directory = store.object_directory(derivation.kind, build_key(derivation))
+    for name in ("dotp_axi.sv", "replay_buffer.sv"):
+        data = (directory / name).read_bytes()
+        assert store.get_blob(ContentRef(content_digest(data))) == data
+
+
 # -- one test per entry on the validation list, each with its own diagnostic ---
 
 
@@ -260,6 +302,19 @@ def test_the_workspace_lives_inside_the_store_root(store: ArtifactStore) -> None
     assert workspace.is_relative_to(store.root)
 
 
+def test_two_builders_of_one_key_get_two_workspaces(store: ArtifactStore) -> None:
+    """A name derived from the key alone was shared, and the second arrival
+    deleted the first one's half-built tree."""
+
+    derivation = _derivation()
+    first = store.workspace(derivation)
+    (first / "dotp_axi.sv").write_text("module a; endmodule\n")
+    second = store.workspace(derivation)
+    assert first != second
+    assert (first / "dotp_axi.sv").is_file()
+    assert not any(second.iterdir())
+
+
 def test_a_cross_filesystem_rename_is_not_atomic_which_is_why_the_rule_exists(
     finn_root: Path,
 ) -> None:
@@ -328,6 +383,45 @@ def test_publishing_twice_leaves_the_first_artifact_intact(store: ArtifactStore)
     second = _publish(store)
     assert first.directory == second.directory  # type: ignore[attr-defined]
     assert store.lookup(_derivation()) is not None
+
+
+def test_publishing_onto_a_corrupt_object_is_refused_rather_than_answered(
+    store: ArtifactStore,
+) -> None:
+    """The one path into the store that used to skip every check on the way out.
+
+    Publishing over an existing key returned a ``StoredArtifact`` built from
+    the manifest just computed, without reading what is actually on disk -- so
+    a tampered tree came back looking clean, while ``lookup`` on the same store
+    refused it correctly.  Two answers about one artifact, and the wrong one
+    was the one a builder got.
+    """
+
+    derivation = _derivation()
+    _publish(store, derivation)
+    directory = store.object_directory(derivation.kind, build_key(derivation))
+    (directory / "dotp_axi.sv").unlink()
+
+    workspace = store.workspace(derivation)
+    _populate(workspace)
+    with pytest.raises(StoreError, match="recorded and missing"):
+        store.publish(derivation, workspace)
+
+
+def test_one_key_naming_two_trees_is_refused_at_publication(store: ArtifactStore) -> None:
+    """A nondeterministic producer, caught where it can still be diagnosed.
+
+    Same declared inputs, different bytes: either the producer read something
+    the key does not cover or it is not a function.  Silently keeping the first
+    tree makes which one you get depend on who built first.
+    """
+
+    derivation = _derivation()
+    _publish(store, derivation)
+    workspace = store.workspace(derivation)
+    _populate(workspace, contents="module a; /* and a timestamp */ endmodule\n")
+    with pytest.raises(StoreError, match="one key names two trees"):
+        store.publish(derivation, workspace)
 
 
 def test_the_manifest_stores_the_derivation_text_so_a_miss_can_be_explained(

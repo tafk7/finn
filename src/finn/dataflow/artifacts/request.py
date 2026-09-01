@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from finn.dataflow.artifacts.derivation import ArtifactRef, ContentRef, RequestSchema
+from finn.dataflow.artifacts.lifecycle import State
 
 
 class RequestError(Exception):
@@ -197,6 +198,19 @@ class PreparedToolRun:
         object.__setattr__(self, "environment_allowlist", tuple(sorted(set(environment_allowlist))))
         object.__setattr__(self, "expected_outputs", outputs)
         object.__setattr__(self, "resources", resources or ResourceRequirements())
+
+    @property
+    def state(self) -> State:
+        """This type **is** the lifecycle's ``Prepared``.
+
+        Declared here rather than as a second, emptier type next to
+        ``Completed``: a prepared run is a request that has been formed, and
+        the mounts, substitutions and declared toolchain are what "formed"
+        means.  A parallel type carrying less would be the same state with two
+        authorities.
+        """
+
+        return State.PREPARED
 
 
 @dataclass(frozen=True)

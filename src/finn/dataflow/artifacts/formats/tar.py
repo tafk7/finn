@@ -35,6 +35,7 @@ from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.derivation import Derivation, OutputLayout, ProducerIdentity
 from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.packaging import (
+    ContentSource,
     PackageOptions,
     PackagePlan,
     PackagingError,
@@ -43,6 +44,7 @@ from finn.dataflow.artifacts.packaging import (
     Support,
     Supported,
     Target,
+    staged_sources,
 )
 from finn.dataflow.artifacts.projection import content_digest
 
@@ -82,12 +84,17 @@ class DeterministicTar:
         return Supported()
 
     def plan(
-        self, component: PortableComponent, target: Target, options: PackageOptions
+        self,
+        component: PortableComponent,
+        target: Target,
+        options: PackageOptions,
+        contents: ContentSource,
     ) -> PackagePlan:
         if not isinstance(options, TarOptions):
             raise PackagingError(f"{self.format_id} takes TarOptions")
         descriptor = _descriptor.encode(component.abi)
-        members = {_descriptor.DESCRIPTOR_NAME: descriptor}
+        members = dict(staged_sources(component, contents))
+        members[_descriptor.DESCRIPTOR_NAME] = descriptor
         archive = write_archive(members, prefix=options.prefix)
         derivation = Derivation(
             kind="tar-package",
