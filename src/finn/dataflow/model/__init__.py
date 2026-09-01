@@ -3,6 +3,7 @@
 
 """Declarative frontend for constructing ordinary dataflow design-space specs."""
 
+from finn.dataflow.model.compiler import compile_space
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Constraint,
@@ -37,6 +38,7 @@ __all__ = [
     "Space",
     "Use",
     "constraint",
+    "compile_space",
     "derived",
     "divisors_of",
     "domain",
