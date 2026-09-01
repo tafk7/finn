@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Prepare FINN's Docker image, sbx template, or Apptainer SIF.
+
+set -euo pipefail
+DIR=$(dirname "$(readlink -f "$0")")
+case "${1:-}" in
+    -h|--help)
+        cat <<'EOF'
+Usage: docker/build [OPTIONS]
+
+Prepare a Docker image (default), sbx template, or Apptainer SIF.
+
+Options:
+  --backend NAME     docker (default), sbx, or apptainer
+  --runtime NAME     add an image runtime such as xrt; repeatable
+  --rebuild          rebuild without cache and replace derived artifacts
+  --print            print the resolved preparation request
+  -h, --help         show this help
+EOF
+        exit 0
+        ;;
+esac
+exec "$DIR/run" --prepare-only "$@"

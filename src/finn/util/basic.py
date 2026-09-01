@@ -46,9 +46,8 @@ from finn.util.data_packing import finnpy_to_packed_bytearray
 # from generated Tcl and from g++ include flags rather than from Python.
 #
 # They default to the historical deps/ layout, so a checkout populated by
-# fetch-repos.sh behaves exactly as before. Making them overridable is what lets
-# the `build` and `build-xrt` images ship them outside the mounted workspace,
-# which in turn is what lets the `dev` image skip ~900 MB it can never use.
+# fetch-repos.sh behaves exactly as before. In the image they point at the baked
+# dependency data outside the mounted workspace.
 #
 # setdefault (not assignment) at import time: any subprocess FINN launches -
 # Vivado, Vitis HLS, g++ - inherits the resolved values, so the generated Tcl
@@ -56,8 +55,8 @@ from finn.util.data_packing import finnpy_to_packed_bytearray
 #
 # LIMITATION(finn-root-absolute): the defaults are relative to FINN_ROOT because
 # the workspace has no fixed path. With a fixed path these become constants and
-# the env vars are only needed for the build images, which relocate the data out
-# of the workspace entirely. See docker/finn_paths.py.
+# the env vars are only needed for images that relocate the data out of the
+# workspace. See docker/finn_paths.py.
 def _default_dep_path(env_var: str, *relative_parts: str) -> str:
     finn_root = os.environ.get("FINN_ROOT")
     if finn_root:

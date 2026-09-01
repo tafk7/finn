@@ -11,8 +11,8 @@ ordinary wheels; this module decides whether the workspace shadows them.
 
 LIMITATION(finn-root-absolute)
 ------------------------------
-This module exists because FINN has no fixed workspace path. ``run-docker.sh``
-mirrors the host path (``-v $SCRIPTPATH:$SCRIPTPATH``) and sbx cannot remap a
+This module exists because FINN has no fixed workspace path. The Docker backend
+mirrors the host path and sbx cannot remap a
 mount at all - it attaches every mount at its host path by design - so the
 workspace lives at a different absolute path for every developer and is only
 knowable at run time.
@@ -29,7 +29,7 @@ It is confined to five sites, all tagged ``LIMITATION(finn-root-absolute)``:
 
     docker/finn_paths.py        this module (workspace_root)
     docker/finn_entrypoint.sh   derives FINN_ROOT from $PWD
-    run-docker.sh               the host-path-mirroring mount
+    docker/run-docker           the host-path-mirroring mount
     src/finn/util/basic.py      FINN_HLSLIB_PATH / FINN_BOARD_FILES_PATH
     src/finn/xsi/paths.py       finn_xsi source location
 
@@ -84,7 +84,7 @@ def workspace_root():
     Resolution order, first hit wins:
 
     ``FINN_ROOT``
-        Explicit, and what run-docker.sh and finn_entrypoint.sh set.
+        Explicit, and what the Docker backend and finn_entrypoint.sh set.
     ``WORKSPACE_DIR``
         What sbx sets. This matters because ``sbx exec`` starts a process
         directly in the container and does NOT run the image ENTRYPOINT, so
@@ -145,7 +145,8 @@ def deps_mode():
     if mode not in DEPS_MODES:
         sys.stderr.write(
             "finn: FINN_DEPS=%r is not one of %s; using %r\n"
-            % (mode, ", ".join(DEPS_MODES), DEFAULT_DEPS_MODE))
+            % (mode, ", ".join(DEPS_MODES), DEFAULT_DEPS_MODE)
+        )
         return DEFAULT_DEPS_MODE
     return mode
 
@@ -181,7 +182,8 @@ def source_dirs():
                 "FINN_DEPS=live but these dependency sources are missing:\n  "
                 + "\n  ".join(missing)
                 + "\nRun ./fetch-repos.sh, or use FINN_DEPS=auto to fall back "
-                  "to the baked wheels, or FINN_DEPS=frozen to require them.")
+                "to the baked wheels, or FINN_DEPS=frozen to require them."
+            )
 
     return dirs
 
@@ -196,7 +198,7 @@ def ensure_build_dir():
     build directory.
 
     Scoped per-uid under /tmp, matching the entrypoint's default. An explicit
-    value always wins, so run-docker.sh's mounted FINN_HOST_BUILD_DIR is
+    value always wins, so the Docker backend's mounted FINN_HOST_BUILD_DIR is
     untouched.
     """
     if os.environ.get("FINN_BUILD_DIR"):

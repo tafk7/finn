@@ -1,4 +1,4 @@
-"""Tests for docker/finn-env, the single host/container environment resolver.
+"""Tests for docker/config, the host/container environment resolver.
 
 These run outside a container against synthetic Xilinx trees, so they cover the
 layouts and licence forms that a single development host cannot exercise. That
@@ -10,30 +10,16 @@ was developed on, and that is exactly where the sbx mount silently resolved to
 nothing.
 """
 
-import pytest
-
-import importlib.util
 import json
 import os
 import subprocess
 import sys
 
-FINN_ENV = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "docker", "finn-env")
-
-
-def _load():
-    """Import finn-env as a module despite the hyphen and missing suffix."""
-    spec = importlib.util.spec_from_loader(
-        "finn_env",
-        importlib.machinery.SourceFileLoader("finn_env", FINN_ENV))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-finn_env = _load()
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DOCKER_DIR = os.path.join(REPO, "docker")
+FINN_ENV = os.path.join(DOCKER_DIR, "config")
+sys.path.insert(0, DOCKER_DIR)
+import config as finn_env  # noqa: E402
 
 
 def _make_tree(base, layout, version):
@@ -41,8 +27,7 @@ def _make_tree(base, layout, version):
     if layout == "new":
         dirs = ["%s/Vivado" % version, "%s/Vitis" % version]
     else:
-        dirs = ["Vivado/%s" % version, "Vitis/%s" % version,
-                "Vitis_HLS/%s" % version]
+        dirs = ["Vivado/%s" % version, "Vitis/%s" % version, "Vitis_HLS/%s" % version]
     for d in dirs:
         os.makedirs(os.path.join(base, d))
     return base
@@ -51,6 +36,7 @@ def _make_tree(base, layout, version):
 # --------------------------------------------------------------------------
 # Layout resolution -- defect 2.
 # --------------------------------------------------------------------------
+
 
 def test_new_layout_resolves(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
@@ -106,6 +92,7 @@ def test_malformed_version_still_probes(tmp_path, capsys):
 # Licence classification.
 # --------------------------------------------------------------------------
 
+
 def test_floating_license():
     servers, files = finn_env.classify_license("2100@licsrv.example")
     assert servers == [{"host": "licsrv.example", "advertised_port": "2100"}]
@@ -119,8 +106,7 @@ def test_node_locked_license():
 
 
 def test_mixed_license_list():
-    servers, files = finn_env.classify_license(
-        "2100@a.example:/opt/lic/x.lic::27000@b.example")
+    servers, files = finn_env.classify_license("2100@a.example:/opt/lic/x.lic::27000@b.example")
     assert [s["host"] for s in servers] == ["a.example", "b.example"]
     assert files == ["/opt/lic/x.lic"]
 
@@ -134,14 +120,27 @@ def test_empty_license():
 # Host resolution and the dev contract.
 # --------------------------------------------------------------------------
 
+
 def _inspect(env, tier, backend="docker"):
     """Run the real CLI in a clean environment, so nothing leaks in."""
     base = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp")}
     base.update(env)
     proc = subprocess.run(
-        [sys.executable, FINN_ENV, "inspect", "--tier", tier,
-         "--backend", backend, "--format", "json"],
-        capture_output=True, env=base, text=True)
+        [
+            sys.executable,
+            FINN_ENV,
+            "inspect",
+            "--tier",
+            tier,
+            "--backend",
+            backend,
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        env=base,
+        text=True,
+    )
     return proc
 
 
@@ -153,26 +152,28 @@ def test_dev_requires_nothing(tmp_path):
     exported in the caller's shell.
     """
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "XILINXD_LICENSE_FILE": "2100@licsrv.example",
-                     "PLATFORM_REPO_PATHS": "/opt/xilinx/platforms"}, "dev")
+    proc = _inspect(
+        {
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "XILINXD_LICENSE_FILE": "2100@licsrv.example",
+            "PLATFORM_REPO_PATHS": "/opt/xilinx/platforms",
+        },
+        "dev",
+    )
     assert proc.returncode == 0, proc.stderr
     data = json.loads(proc.stdout)
     assert data["mounts"] == []
     assert data["egress"] == []
-    assert data["dev_contract"] == {
-        "toolchain": False, "license": False, "egress": False}
-    for leaked in ("XILINX_VIVADO", "XILINXD_LICENSE_FILE",
-                   "PLATFORM_REPO_PATHS"):
+    assert data["dev_contract"] == {"toolchain": False, "license": False, "egress": False}
+    for leaked in ("XILINX_VIVADO", "XILINXD_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
         assert leaked not in data["env"]
 
 
 def test_build_mounts_root_read_only(tmp_path):
     """Defect 1: the root is mounted, and it is mounted :ro."""
     root = _make_tree(str(tmp_path / "Xilinx"), "old", "2022.2")
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2022.2"}, "build")
+    proc = _inspect({"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2022.2"}, "build")
     assert proc.returncode == 0, proc.stderr
     data = json.loads(proc.stdout)
     toolchain = [m for m in data["mounts"] if m["reason"] == "xilinx-toolchain"]
@@ -187,12 +188,16 @@ def test_platform_repo_is_mounted(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     platforms = str(tmp_path / "platforms")
     os.makedirs(platforms)
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "PLATFORM_REPO_PATHS": platforms}, "build")
+    proc = _inspect(
+        {
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "PLATFORM_REPO_PATHS": platforms,
+        },
+        "build",
+    )
     data = json.loads(proc.stdout)
-    assert any(m["source"] == platforms and m["mode"] == "ro"
-               for m in data["mounts"])
+    assert any(m["source"] == platforms and m["mode"] == "ro" for m in data["mounts"])
     assert data["env"]["PLATFORM_REPO_PATHS"] == platforms
 
 
@@ -200,9 +205,14 @@ def test_platform_repo_inside_root_is_not_double_mounted(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     platforms = os.path.join(root, "platforms")
     os.makedirs(platforms)
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "PLATFORM_REPO_PATHS": platforms}, "build")
+    proc = _inspect(
+        {
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "PLATFORM_REPO_PATHS": platforms,
+        },
+        "build",
+    )
     data = json.loads(proc.stdout)
     assert [m["source"] for m in data["mounts"]] == [root]
 
@@ -213,13 +223,17 @@ def test_node_locked_license_dir_is_mounted(tmp_path):
     licdir = tmp_path / "lic"
     licdir.mkdir()
     (licdir / "Xilinx.lic").write_text("x")
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "XILINXD_LICENSE_FILE": str(licdir / "Xilinx.lic")},
-                    "build", backend="sbx")
+    proc = _inspect(
+        {
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "XILINXD_LICENSE_FILE": str(licdir / "Xilinx.lic"),
+        },
+        "build",
+        backend="sbx",
+    )
     data = json.loads(proc.stdout)
-    assert any(m["source"] == str(licdir) and m["reason"] == "license-file"
-               for m in data["mounts"])
+    assert any(m["source"] == str(licdir) and m["reason"] == "license-file" for m in data["mounts"])
     assert data["egress"] == []
 
 
@@ -227,13 +241,19 @@ def test_floating_license_grants_the_whole_host_when_unpinned(tmp_path):
     """An unpinned vendor daemon means a port-scoped grant would let lmstat
     pass -- it only talks to lmgrd -- while every real checkout failed."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "XILINXD_LICENSE_FILE": "2100@licsrv.example"},
-                    "build", backend="sbx")
+    proc = _inspect(
+        {
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "XILINXD_LICENSE_FILE": "2100@licsrv.example",
+        },
+        "build",
+        backend="sbx",
+    )
     data = json.loads(proc.stdout)
-    assert data["egress"] == [{"host": "licsrv.example", "reason": "flexlm",
-                               "advertised_port": "2100", "ports": []}]
+    assert data["egress"] == [
+        {"host": "licsrv.example", "reason": "flexlm", "advertised_port": "2100", "ports": []}
+    ]
     assert not any(m["reason"] == "license-file" for m in data["mounts"])
 
 
@@ -241,11 +261,16 @@ def test_floating_license_narrows_to_two_ports_when_pinned(tmp_path):
     """Both ports, never just the advertised one: lmgrd hands the checkout to
     the vendor daemon."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "XILINXD_LICENSE_FILE": "2100@licsrv.example",
-                     "FINN_LICENSE_VENDOR_PORT": "2101"},
-                    "build", backend="sbx")
+    proc = _inspect(
+        {
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "XILINXD_LICENSE_FILE": "2100@licsrv.example",
+            "FINN_LICENSE_VENDOR_PORT": "2101",
+        },
+        "build",
+        backend="sbx",
+    )
     data = json.loads(proc.stdout)
     assert data["egress"][0]["ports"] == ["2100", "2101"]
     assert data["egress"][0]["vendor_port"] == "2101"
@@ -257,9 +282,11 @@ def test_egress_enforcement_is_reported_per_backend(tmp_path):
     claiming it."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     env = {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"}
-    for backend, expected in (("sbx", "enforced"),
-                              ("docker", "declared"),
-                              ("apptainer", "declared")):
+    for backend, expected in (
+        ("sbx", "enforced"),
+        ("docker", "declared"),
+        ("apptainer", "declared"),
+    ):
         data = json.loads(_inspect(env, "build", backend=backend).stdout)
         assert data["egress_enforcement"] == expected, backend
 
@@ -272,14 +299,15 @@ def test_missing_xilinx_path_is_an_error(tmp_path):
 
 def test_unknown_tier_is_rejected():
     proc = subprocess.run(
-        [sys.executable, FINN_ENV, "inspect", "--tier", "nonsense"],
-        capture_output=True, text=True)
+        [sys.executable, FINN_ENV, "inspect", "--tier", "nonsense"], capture_output=True, text=True
+    )
     assert proc.returncode != 0
 
 
 # --------------------------------------------------------------------------
 # Workspace policy -- D4.
 # --------------------------------------------------------------------------
+
 
 def test_sbx_always_mirrors(tmp_path):
     """sbx has no mount remapping, so the policy is not a free choice there."""
@@ -292,9 +320,10 @@ def test_sbx_always_mirrors(tmp_path):
 def test_fpga_tiers_always_mirror(tmp_path):
     """LIMITATION(finn-root-absolute): generated .xpr files embed FINN_ROOT."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
-    proc = _inspect({"FINN_XILINX_PATH": root,
-                     "FINN_XILINX_VERSION": "2025.1",
-                     "FINN_ROOT": "/somewhere/finn"}, "build")
+    proc = _inspect(
+        {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1", "FINN_ROOT": "/somewhere/finn"},
+        "build",
+    )
     data = json.loads(proc.stdout)
     assert data["workspace"]["policy"] == "mirror"
 
@@ -310,35 +339,36 @@ def test_env_root_matches_workspace_target(tmp_path):
 # Output discipline.
 # --------------------------------------------------------------------------
 
+
 def test_stdout_is_pure_json_even_with_warnings(tmp_path):
     """Diagnostics go to stderr so callers can pipe stdout directly."""
     empty = str(tmp_path / "Xilinx")
     os.makedirs(empty)
-    proc = _inspect({"FINN_XILINX_PATH": empty,
-                     "FINN_XILINX_VERSION": "2022.2"}, "build")
+    proc = _inspect({"FINN_XILINX_PATH": empty, "FINN_XILINX_VERSION": "2022.2"}, "build")
     assert proc.returncode == 0
-    json.loads(proc.stdout)          # must not raise
+    json.loads(proc.stdout)  # must not raise
     assert "no Vivado/Vitis/HLS found" in proc.stderr
 
 
 def test_sh_format_is_shell_assignments(tmp_path):
-    """The .env compose consumes.
+    """The shell assignment format used by launchers and bare-host setup.
 
     Under the dev policy the SOURCE is the host checkout and the TARGET is the
     fixed path -- they are deliberately different, and conflating them is what
     would mount the workspace in the wrong place.
     """
     proc = subprocess.run(
-        [sys.executable, FINN_ENV, "inspect", "--tier", "dev",
-         "--format", "sh"],
-        capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "FINN_ROOT": "/w/finn"})
+        [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "FINN_ROOT": "/w/finn"},
+    )
     # Values are single-quoted: three callers eval this output.
     assert "FINN_WORKSPACE_SOURCE='/w/finn'" in proc.stdout
     assert "FINN_WORKSPACE_TARGET='%s'" % finn_env.FIXED_WORKSPACE in proc.stdout
     # FINN_ROOT is the CONTAINER path, so it tracks the target, not the source.
     assert "FINN_ROOT='%s'" % finn_env.FIXED_WORKSPACE in proc.stdout
-    # Compose cannot get these from the shell; see the comment in finn-env.
+    # Launchers use these for Compose identity and bind ownership.
     assert "FINN_UID=" in proc.stdout
     assert "FINN_GID=" in proc.stdout
 
@@ -360,9 +390,18 @@ def _clean_env(env):
     """
     child = dict(os.environ)
     child.pop("FINN_ENV_APPLIED", None)
-    for key in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS", "XILINX_XRT",
-                "VIVADO_PATH", "VITIS_PATH", "HLS_PATH", "LD_LIBRARY_PATH",
-                "LD_PRELOAD", "PYTHONPATH"):
+    for key in (
+        "XILINX_VIVADO",
+        "XILINX_VITIS",
+        "XILINX_HLS",
+        "XILINX_XRT",
+        "VIVADO_PATH",
+        "VITIS_PATH",
+        "HLS_PATH",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONPATH",
+    ):
         child.pop(key, None)
     child.update(env)
     return child
@@ -376,9 +415,11 @@ def _apply_toolchain(env, probe='printf "%s" "$PATH"'):
     extract its effect (124 ms). The tests follow the code.
     """
     proc = subprocess.run(
-        ["/bin/bash", "--noprofile", "--norc", "-c",
-         ". %s; %s" % (TOOLCHAIN_SH, probe)],
-        capture_output=True, text=True, env=_clean_env(env))
+        ["/bin/bash", "--noprofile", "--norc", "-c", ". %s; %s" % (TOOLCHAIN_SH, probe)],
+        capture_output=True,
+        text=True,
+        env=_clean_env(env),
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
 
@@ -394,8 +435,7 @@ def test_toolchain_dedupes_repeated_path_entries():
 
 
 def test_toolchain_dedupes_ld_preload():
-    out = _apply_toolchain({"PATH": "/a", "LD_PRELOAD": "/x:/x"},
-                           probe='printf "%s" "$LD_PRELOAD"')
+    out = _apply_toolchain({"PATH": "/a", "LD_PRELOAD": "/x:/x"}, probe='printf "%s" "$LD_PRELOAD"')
     assert out == "/x"
 
 
@@ -406,9 +446,17 @@ def test_toolchain_drops_empty_path_segments():
 def test_toolchain_is_idempotent():
     """FINN_ENV_APPLIED short-circuits, so a nested shell must not re-apply."""
     proc = subprocess.run(
-        ["/bin/bash", "--noprofile", "--norc", "-c",
-         ". {0}; . {0}; printf \"%s|%s\" \"$PATH\" \"$FINN_ENV_APPLIED\"".format(TOOLCHAIN_SH)],
-        capture_output=True, text=True, env=_clean_env({"PATH": "/a:/b"}))
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            '. {0}; . {0}; printf "%s|%s" "$PATH" "$FINN_ENV_APPLIED"'.format(TOOLCHAIN_SH),
+        ],
+        capture_output=True,
+        text=True,
+        env=_clean_env({"PATH": "/a:/b"}),
+    )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == "/a:/b|1"
 
@@ -422,6 +470,7 @@ def test_toolchain_never_writes_to_stdout():
 # --------------------------------------------------------------------------
 # Tier resolution and the licence vendor port.
 # --------------------------------------------------------------------------
+
 
 def test_auto_tier_becomes_build_when_a_toolchain_exists(tmp_path, monkeypatch):
     monkeypatch.setenv("FINN_XILINX_PATH", str(tmp_path))
@@ -443,8 +492,7 @@ def test_explicit_tiers_are_not_degraded(monkeypatch):
 def test_vendor_port_read_from_a_licence_file(tmp_path, monkeypatch):
     monkeypatch.delenv("FINN_LICENSE_VENDOR_PORT", raising=False)
     lic = tmp_path / "Xilinx.lic"
-    lic.write_text("SERVER licsrv 0011aabb 2100\n"
-                   "DAEMON xilinxd /opt/xilinx/xilinxd port=2101\n")
+    lic.write_text("SERVER licsrv 0011aabb 2100\nDAEMON xilinxd /opt/xilinx/xilinxd port=2101\n")
     assert finn_env.vendor_daemon_port([str(lic)]) == "2101"
 
 
@@ -486,6 +534,7 @@ def test_dev_uses_the_fixed_workspace_path(tmp_path):
 # Host path hygiene.
 # --------------------------------------------------------------------------
 
+
 def test_hostpath_expands_tilde(monkeypatch):
     """A tilde in a variable is never expanded by a shell or by Compose.
 
@@ -493,8 +542,7 @@ def test_hostpath_expands_tilde(monkeypatch):
     from a run where something passed `~/builds` through a variable. `.gitignore`
     has `*~` for editor backups, which hides it from `git status`.
 
-    Every path finn-env emits becomes a mount argument, so every one is expanded
-    here.
+    Every path docker/config emits can become a mount argument, so all are expanded.
     """
     monkeypatch.setenv("HOME", "/home/someone")
     assert finn_env.hostpath("~/builds") == "/home/someone/builds"
@@ -510,39 +558,56 @@ def test_hostpath_passes_through_empty():
 
 
 def test_emitted_paths_have_no_tilde(tmp_path):
-    """End to end: a tilde in the environment must not reach the .env file."""
+    """End to end: a tilde must not reach launcher assignments."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     proc = subprocess.run(
         [sys.executable, FINN_ENV, "inspect", "--tier", "build", "--format", "sh"],
-        capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
-             "FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1",
-             "FINN_HOST_BUILD_DIR": "~/builds", "FINN_ROOT": "~/finn"})
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": "/home/someone",
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "FINN_HOST_BUILD_DIR": "~/builds",
+            "FINN_ROOT": "~/finn",
+        },
+    )
     assert proc.returncode == 0, proc.stderr
     for line in proc.stdout.splitlines():
-        assert "~" not in line, "tilde survived into the .env: %s" % line
+        assert "~" not in line, "tilde survived into output: %s" % line
     assert "FINN_HOST_BUILD_DIR='/home/someone/builds'" in proc.stdout
 
 
 # --------------------------------------------------------------------------
-# The `sh` output -- the format Compose and three eval sites consume.
+# The `sh` output -- the format launchers and bare-host activation consume.
 # --------------------------------------------------------------------------
 #
 # Every defect below was live and none was caught, because the existing tests
 # checked the JSON output while Compose reads the sh output.
 
-def test_sh_output_defaults_deps_to_frozen(tmp_path):
-    """The resolver emitted `auto` while every other site said `frozen`.
 
-    Because the documented recipe is `finn-env inspect --format sh > .env`, and
-    that value overrides ${FINN_DEPS:-frozen} in every compose service, the
-    single source of truth was turning off the determinism it exists to give.
-    """
+def test_sh_output_defaults_deps_to_frozen(tmp_path):
+    """The resolver default must match the image and all launchers."""
     proc = subprocess.run(
         [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
-        capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone"})
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone"},
+    )
     assert "FINN_DEPS='frozen'" in proc.stdout
+
+
+def test_sh_output_carries_the_canonical_runtime_set():
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone", "FINN_RUNTIMES": "xrt,slash,xrt"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "FINN_RUNTIMES='slash,xrt'" in proc.stdout
+    assert "FINN_IMAGE=" not in proc.stdout
 
 
 def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
@@ -550,16 +615,28 @@ def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     proc = subprocess.run(
         [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
-        capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
-             "FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"})
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": "/home/someone",
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+        },
+    )
     assert "FINN_XILINX_PATH" not in proc.stdout
     # ...and is present for a tier that may have a toolchain.
     proc = subprocess.run(
         [sys.executable, FINN_ENV, "inspect", "--tier", "build", "--format", "sh"],
-        capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
-             "FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"})
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": "/home/someone",
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+        },
+    )
     assert "FINN_XILINX_PATH=" in proc.stdout
 
 
@@ -567,12 +644,16 @@ def test_sh_output_survives_eval_with_spaces():
     """Three callers eval this output. A space used to truncate the value."""
     assert finn_env.shquote("/a b/c") == "'/a b/c'"
     proc = subprocess.run(
-        ["bash", "-c",
-         'eval "$(%s %s inspect --tier dev --format sh | sed \'s/^/export /\')"; '
-         'printf "%%s" "$FINN_WORKSPACE_SOURCE"' % (sys.executable, FINN_ENV)],
-        capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone",
-             "FINN_ROOT": "/tmp/a b/finn"})
+        [
+            "bash",
+            "-c",
+            "eval \"$(%s %s inspect --tier dev --format sh | sed 's/^/export /')\"; "
+            'printf "%%s" "$FINN_WORKSPACE_SOURCE"' % (sys.executable, FINN_ENV),
+        ],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "HOME": "/home/someone", "FINN_ROOT": "/tmp/a b/finn"},
+    )
     assert proc.stdout == "/tmp/a b/finn", proc.stderr
 
 
@@ -592,8 +673,6 @@ def test_sh_output_is_not_an_injection_path():
 # checks, and the real `bake --print`.
 # --------------------------------------------------------------------------
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 
 def test_nothing_requests_host_privilege():
     """In-container root is the sbx contract; HOST privilege is never granted.
@@ -602,9 +681,16 @@ def test_nothing_requests_host_privilege():
     asserts the reading that matters: no launcher asks for --privileged, an
     added capability, or the docker socket.
     """
-    launchers = ["run-docker.sh", "compose.yaml", "docker/finn-sbx",
-                 "docker/finn-apptainer", "docker/sbxenv/base.sbxenv.yaml",
-                 "docker/sbxenv/fpga.sbxenv.yaml"]
+    launchers = [
+        "run-docker.sh",
+        "compose.yaml",
+        "docker/run",
+        "docker/run-docker",
+        "docker/run-sbx",
+        "docker/run-apptainer",
+        "docker/finn-sbx",
+        "docker/finn-apptainer",
+    ]
     offenders = []
     for rel in launchers:
         path = os.path.join(REPO, rel)
@@ -614,8 +700,7 @@ def test_nothing_requests_host_privilege():
             for n, line in enumerate(handle, 1):
                 if line.lstrip().startswith("#"):
                     continue
-                for needle in ("--privileged", "--cap-add",
-                               "/var/run/docker.sock"):
+                for needle in ("--privileged", "--cap-add", "/var/run/docker.sock"):
                     if needle in line:
                         offenders.append("%s:%d %s" % (rel, n, needle))
     assert not offenders, offenders
@@ -627,7 +712,7 @@ def test_setup_local_has_not_regrown_the_hardcoded_layout():
         VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
 
     AMD reorganised the tree after 2024.2, so that reported "Vivado not found"
-    at a path the user could see was right there. finn-env probes both.
+    at a path the user could see was right there. docker/config probes both.
     """
     for rel in ("setup-local.sh", "scripts/activate.sh"):
         with open(os.path.join(REPO, rel), errors="replace") as handle:
@@ -644,18 +729,181 @@ def test_apptainer_backend_forces_the_mirror_workspace_policy(tmp_path):
     ModuleNotFoundError pointing nowhere near the cause."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     for tier in ("dev", "build"):
-        data = json.loads(_inspect(
-            {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"},
-            tier, backend="apptainer").stdout)
+        data = json.loads(
+            _inspect(
+                {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"},
+                tier,
+                backend="apptainer",
+            ).stdout
+        )
         assert data["workspace"]["policy"] == "mirror", tier
 
 
-def test_runtime_tag_matches_the_bake_tag_rule():
-    """finn-env's half of an agreement conformance test 12 checks the other
-    half of. Bake's half needs a real `bake --print` and stays there."""
-    assert finn_env.runtime_tag("") == ""
-    assert finn_env.runtime_tag("xrt") == ".xrt"
-    # Unsorted in, sorted out: the suffix is a function of the SET, or
-    # `xrt,slash` and `slash,xrt` name one image twice.
-    assert finn_env.runtime_tag("xrt,slash") == ".slash.xrt"
-    assert finn_env.runtime_tag("slash,xrt") == ".slash.xrt"
+def test_custom_runtime_sets_use_the_parameterized_bake_target():
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. ./docker/lib.sh; printf "%s|%s|%s" '
+            '"$(finn_bake_target xrt)" '
+            '"$(finn_bake_target xrt,slash)" '
+            '"$(finn_bake_target xrt,slash sbx)"',
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "finn-xrt|finn-runtime|finn-sbx-runtime"
+    with open(os.path.join(REPO, "docker-bake.hcl"), errors="replace") as handle:
+        bake = handle.read()
+    assert 'target "finn-runtime"' in bake
+    assert 'target "finn-sbx-runtime"' in bake
+
+
+def test_compose_override_consumes_resolved_mounts(tmp_path):
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    licdir = tmp_path / "lic"
+    licdir.mkdir()
+    licence = licdir / "Xilinx.lic"
+    licence.write_text("FEATURE x\n")
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "compose", "--tier", "build", "--service", "build"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "XILINXD_LICENSE_FILE": str(licence),
+            "FINN_HOST_BUILD_DIR": str(tmp_path / "build"),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    service = json.loads(proc.stdout)["services"]["build"]
+    mounts = {m["target"]: m for m in service["volumes"]}
+    assert mounts[root]["read_only"] is True
+    assert mounts[str(licdir)]["read_only"] is True
+    assert service["environment"]["XILINXD_LICENSE_FILE"] == str(licence)
+
+
+def test_compose_override_uses_the_bake_resolved_image(tmp_path):
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "compose", "--tier", "dev", "--service", "dev"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FINN_HOST_BUILD_DIR": str(tmp_path / "build"),
+            "FINN_IMAGE": "xilinx/finn:test.xrt",
+            "FINN_RUNTIMES": "xrt",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    service = json.loads(proc.stdout)["services"]["dev"]
+    assert service["image"] == "xilinx/finn:test.xrt"
+    assert service["build"]["args"]["FINN_RUNTIMES"] == "xrt"
+
+
+def test_compose_rejects_runtime_content_without_a_resolved_image(tmp_path):
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "compose", "--tier", "dev", "--service", "dev"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FINN_HOST_BUILD_DIR": str(tmp_path / "build"),
+            "FINN_RUNTIMES": "xrt",
+        },
+    )
+    assert proc.returncode == 2
+    assert "FINN_IMAGE must be set" in proc.stderr
+
+
+def test_sbx_overlay_consumes_resolved_mounts(tmp_path):
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    platforms = tmp_path / "platforms"
+    platforms.mkdir()
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "sbx", "--tier", "build"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FINN_XILINX_PATH": root,
+            "FINN_XILINX_VERSION": "2025.1",
+            "PLATFORM_REPO_PATHS": str(platforms),
+            "FINN_SBX_NAME": "test-sandbox",
+            "FINN_SBX_TEMPLATE": "xilinx/finn:test-sbx",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    overlay = json.loads(proc.stdout)
+    mounts = {entry["path"]: entry for entry in overlay["additionalWorkspaces"]}
+    assert mounts[root]["readOnly"] is True
+    assert mounts[str(platforms)]["readOnly"] is True
+    assert overlay["env"]["PLATFORM_REPO_PATHS"] == str(platforms)
+    assert overlay["sandboxOptions"]["template"] == "xilinx/finn:test-sbx"
+
+
+def test_sbx_dev_file_has_no_capability_mounts(tmp_path):
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "sbx", "--tier", "dev"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FINN_SBX_NAME": "test-sandbox",
+            "FINN_SBX_TEMPLATE": "xilinx/finn:test-sbx",
+            "FINN_XILINX_PATH": "/must/not/leak",
+            "XILINXD_LICENSE_FILE": "2100@example.invalid",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    config = json.loads(proc.stdout)
+    assert config["additionalWorkspaces"] == []
+    assert "XILINXD_LICENSE_FILE" not in config["env"]
+
+
+def test_container_docs_do_not_reference_retired_interfaces():
+    paths = [
+        "README.md",
+        "docs/finn/getting_started.rst",
+        "docs/finn/developers.rst",
+        ".github/workflows/quicktest-local.yml",
+    ]
+    chunks = []
+    for rel in paths:
+        with open(os.path.join(REPO, rel), errors="replace") as handle:
+            chunks.append(handle.read())
+    body = "\n".join(chunks)
+    for retired in (
+        "<<Claude",
+        "scripts/finn-env.sh",
+        "XRT_DEB_VERSION",
+        "V80PP_DEB_PACKAGE",
+        "FINN_XRT_SHA256",
+    ):
+        assert retired not in body
+
+
+def test_python_dependency_pins_are_not_duplicated_in_installers():
+    with open(os.path.join(REPO, "docker/Dockerfile.finn")) as handle:
+        dockerfile = handle.read()
+    with open(os.path.join(REPO, "setup-local.sh")) as handle:
+        local_setup = handle.read()
+    for pin in ("torch==2.8.0", "jupyter==1.0.0", "matplotlib==3.7.0"):
+        assert pin not in dockerfile
+        assert pin not in local_setup
+
+
+def test_compose_uses_complete_image_references():
+    with open(os.path.join(REPO, "compose.yaml")) as handle:
+        compose = handle.read()
+    assert "${FINN_IMAGE:-xilinx/finn:local}" in compose
+    assert "FINN_RUNTIME_TAG" not in compose

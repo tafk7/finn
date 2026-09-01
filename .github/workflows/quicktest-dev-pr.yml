@@ -15,12 +15,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: DockerRunQuicktest
-        run: |
-          export FINN_ROOT=$(pwd)
-          export FINN_BUILD_DIR=/tmp/finn_gha
-          export FINN_INST_NAME=finn_gha
-          export FINN_SKIP_XRT_DOWNLOAD=1
-          ./run-docker.sh quicktest
+        run: ./docker/run -- quicktest.sh

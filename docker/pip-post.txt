@@ -1,0 +1,4 @@
+# Installed after the main requirements and tooling because these packages can
+# conflict with distro-provided copies on supported Ubuntu releases.
+jupyter==1.0.0
+matplotlib==3.7.0

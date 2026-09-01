@@ -14,7 +14,3 @@
 !docker/
 !deps.env
 !fetch-repos.sh
-
-# XRT and v80++ packages, staged into the repo root by run-docker.sh when a
-# local copy is supplied instead of a download.
-!*.deb

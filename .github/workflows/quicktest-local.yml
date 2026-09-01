@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
@@ -31,5 +31,5 @@ jobs:
       - name: Run quicktest
         run: |
           export FINN_HOST_BUILD_DIR=/tmp/finn_gha
-          source scripts/finn-env.sh
+          source scripts/activate.sh
           ./scripts/quicktest-local.sh

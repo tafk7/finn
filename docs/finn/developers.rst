@@ -56,60 +56,48 @@ further detailed below:
   your PRs have dependencies on each other please state in which order
   they should be reviewed and merged.
 
-Docker images
-===============
+Container architecture
+======================
 
-If you want to add new dependencies (packages, repos) to FINN it is
-important to understand how we handle this in Docker.
+The detailed rationale lives in ``docs/containerization.md``. The operational
+model is deliberately small:
 
-Image tiers
------------
+* ``docker/Dockerfile.finn`` defines one dependency image, optional accelerator
+  runtime packages, and an sbx contract layer.
+* ``docker-bake.hcl`` owns image targets, labels and complete image tags.
+* ``docker/config.py`` owns host discovery. Its CLI wrapper is
+  ``docker/config``.
+* ``compose.yaml`` contains only static service behavior. ``docker/config compose``
+  renders the host-specific mounts, uid/gid and environment at launch.
+* ``docker/run`` is the containerized-environment interface. Docker is its
+  default backend; sbx and Apptainer consume the same Docker-built image.
+* ``docker/build`` prepares Docker images, sbx templates, or Apptainer SIFs.
+* The historical ``docker/finn-*`` commands are compatibility interfaces. New
+  host facts must never be derived there.
+* The root ``run-docker.sh`` exists only as a temporary Jenkins compatibility
+  bridge. It is not a user interface; its remaining callers are tracked in
+  ``docs/ci-container-debt.md``.
 
-``docker/Dockerfile.finn`` defines six targets. Three are tiers. Each tier is a
-superset of the tier before it. Each tier also has an ``sbx-`` variant.
+``dev`` and ``build`` are grant tiers, not image tiers. ``build`` adds the
+read-only toolchain, platform and licence mounts. Accelerator userspace is
+selected independently with ``FINN_RUNTIMES`` and appears in the image tag.
 
-Select a tier with ``FINN_DOCKER_TARGET``. The default is ``build`` for
-``run-docker.sh``, and ``dev`` for Docker Compose and Bake. The two defaults are
-different on purpose. A person who uses ``run-docker.sh`` expects Vivado. A new
-contributor or an agent must get a usable environment with no configuration.
+The image carries a default ``agent`` user for runtimes such as sbx. Docker
+launches override it with the invoking uid/gid so bind-mounted files have the
+correct ownership.
 
-.. list-table::
-  :header-rows: 1
-
-  * - Target
-    - Adds
-    - Use for
-  * - ``dev``
-    - FINN's Python dependency closure
-    - Editing FINN's Python. No XRT, no Xilinx mount, no licence, so it can run
-      on a closed network. Runs ``quicktest.sh`` and the non-Vivado pytest subset.
-  * - ``build``
-    - finn-hlslib headers, Vivado board files
-    - RTL simulation and HLS synthesis. Vivado/Vitis is still mounted from the host.
-  * - ``build-xrt``
-    - XRT, v80++
-    - Vitis, Alveo and V80 targets. XRT is needed only on these paths - notably
-      *not* for rtlsim, which uses Vivado's xsim.
-
-The ``sbx-`` variants add the privileged part of the sbx template contract:
-``NOPASSWD`` sudo, proxy variables that stay set through sudo, and
-``/etc/sandbox-persistent.sh``. Only the sbx sandbox lane uses these variants.
-They are separate targets, not a build argument, because the tag must show which
-privilege model you have.
-
-To build an image but not run it:
+To build without launching:
 
 .. code-block:: bash
 
-  ./run-docker.sh build dev
-  docker buildx bake -f docker-bake.hcl dev-py310
+  ./docker/build
+  ./docker/build --runtime xrt
+  ./docker/build --backend apptainer
+  FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
 
-``docker-bake.hcl`` holds the build matrix, the build arguments, the labels and
-the tag rule. It is the only place that computes a tag.
-
-No image contains a user identity. Docker applies the identity at run time with
-``--user``. One image is therefore correct for every developer, and the tag
-agrees with the contents.
+Arbitrary runtime combinations use the parameterized ``finn-runtime`` and
+``finn-sbx-runtime`` Bake targets. Bake computes their args, labels and tag; a
+launcher must not reconstruct those independently.
 
 Dependency handling
 -------------------
@@ -121,8 +109,8 @@ any git ref - a SHA, a tag or a branch:
 
 .. code-block:: bash
 
-  QONNX_COMMIT=my-feature-branch ./run-docker.sh
-  BREVITAS_COMMIT=v0.11.0 ./run-docker.sh quicktest
+  QONNX_COMMIT=my-feature-branch ./docker/run
+  BREVITAS_COMMIT=v0.11.0 ./docker/run -- quicktest.sh
 
 ``fetch-repos.sh`` will not move a dependency whose working tree is dirty, so
 in-progress edits to qonnx or brevitas survive a container launch.
@@ -154,40 +142,31 @@ identifies the environment but not the code.
 FINN's own ``src`` always comes from the workspace. FINN is never baked into
 the image.
 
-The two non-Python dependencies are reached through ``FINN_HLSLIB_PATH`` and
-``FINN_BOARD_FILES_PATH``. These default to the historical ``deps/`` locations;
-the ``build`` tiers override them to point at their baked copies.
+The non-Python build data is reached through ``FINN_HLSLIB_PATH`` and
+``FINN_BOARD_FILES_PATH`` and is present in the common image. The runtime grant
+tier decides whether a Xilinx toolchain is available to consume it.
 
 Launch sequence
 ---------------
 
-1. run-docker.sh launches fetch-repos.sh to checkout dependency git repos at correct commit hashes (unless ``FINN_SKIP_DEP_REPOS=1``). For ``FINN_DOCKER_TARGET=dev`` only the Python group is fetched.
+1. ``docker/run`` normalizes the requested backend, FPGA grants, runtime set,
+   dependency mode and command.
+2. ``docker/build`` or the selected backend prepares the required artifact.
+   Bake builds the underlying image. ``deps.env`` supplies repository pins;
+   the shared ``docker/pip-*.txt`` files supply Python pins.
+3. ``docker/config`` resolves the workspace, build directory, toolchain, platform,
+   licence, environment and mounts once.
+4. ``docker/config compose`` renders an ephemeral Compose override. The static
+   Compose file does not rediscover host state.
+5. The selected backend runs the image directly with Compose, imports it into
+   sbx, or converts it into an Apptainer SIF. The entrypoint handles only runtime state. Python source resolution is
+   installed in site-packages, toolchain application is shared by the
+   entrypoint/BASH_ENV/tool shims, and ``finn_xsi`` builds on demand.
 
-2. run-docker.sh launches the build of the Docker image with `docker build` (unless ``FINN_DOCKER_PREBUILT=1``). Docker image is built from docker/Dockerfile.finn using the following steps:
-
-  * Base: Ubuntu, whose release is derived from ``XRT_DEB_VERSION`` rather than pinned separately, so an XRT package cannot target an OS the image is not running. The build fails if the two disagree.
-  * Set up apt dependencies: apt-get install a few packages for verilator and
-  * Set up pip dependencies: torch first, then the Python packages FINN depends on from requirements.txt, then the interaction and test tooling.
-  * Fetch and wheel-install qonnx, finn-experimental and brevitas at the ``deps.env`` pins.
-  * Install XRT, for the ``build-xrt`` target only.
-
-3. Docker image is ready, run-docker.sh can now launch a container from this image with `docker run`. It sets up certain environment variables and volume mounts:
-
-  * Vivado/Vitis is mounted from the host into the container (on the same path). Not for the ``dev`` target, which never mounts it.
-  * The finn root folder is mounted into the container (on the same path). This allows modifying the source code on the host and testing inside the container.
-  * The build folder is mounted under /tmp/finn_dev_username (can be overridden by defining FINN_HOST_BUILD_DIR). This will be used for generated files. Mounting on the host allows easy examination of the generated files, and keeping the generated files after the container exits.
-  * Only genuine host bindings are passed with ``-e``. Static settings are ``ENV`` in the image.
-
-4. Entrypoint script (docker/finn_entrypoint.sh) upon launching container performs the following:
-
-  * Respect an inherited ``HOME`` and derive ``FINN_ROOT`` from the working directory when unset.
-  * Source Vivado settings64.sh from specified path to make vivado and vitis_hls available.
-  * Source Vitis settings64.sh if Vitis is mounted.
-
-  It performs no installation. finn_xsi is compiled on demand by
-  ``python -m finn.xsi.setup`` into ``$FINN_BUILD_DIR``, never into the source tree.
-
-5. Depending on the arguments to run-docker.sh a different application is launched. run-docker.sh notebook launches a Jupyter server for the tutorials, whereas run-docker.sh build_custom and run-docker.sh build_dataflow trigger a dataflow build (see documentation). Running without arguments yields an interactive shell. See run-docker.sh for other options.
+Container images are periodically rebuilt rather than bit-for-bit reproducible
+from their human-readable tag. Treat the image digest as the identity of the
+environment and use an SBOM to inspect its package contents. See
+``docs/image-identity.md``.
 
 (Re-)launching builds outside of Docker
 ========================================
@@ -255,14 +234,14 @@ by:
 
 ::
 
-  bash ./run-docker.sh test
+  ./docker/run -- pytest
 
 There is a quicker variant of the test suite that skips the tests marked as
 requiring Vivado or as slow-running tests:
 
 ::
 
-  bash ./run-docker.sh quicktest
+  ./docker/run -- quicktest.sh
 
 When developing a new feature it is useful to be able to run just a single test,
 or a group of tests that e.g. share the same prefix.

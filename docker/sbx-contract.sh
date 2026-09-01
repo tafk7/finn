@@ -2,10 +2,8 @@
 # The privileged half of the sbx (Docker Sandboxes) template contract.
 #
 # Run as root by each sbx-* target in docker/Dockerfile.finn. It exists as a
-# script rather than three copies of the same RUN block so that a change to the
-# contract cannot be applied to two of the three tiers -- which is the same
-# drift-between-duplicated-paths failure that produced the mount defects this
-# redesign started from.
+# script rather than an inline RUN block so the privileged contract has one
+# auditable implementation.
 #
 # The generic image deliberately does NOT have any of this. See the header
 # comment above the sbx-* targets for why it is a target rather than a build
@@ -15,27 +13,8 @@
 # Everything below was established by bisecting real `sbx create` failures
 # against a stock template, not from documentation.
 #
-# WHY THIS IS NOT A KIT STARTUP COMMAND
-# -------------------------------------
-# Moving it into an sbx kit would delete the sbx image variant and leave exactly
-# one image. It was tried and it does not work. Measured against sbx v0.39.0,
-# creating a sandbox from the base image with no contract baked:
-#
-#   id -nG                       agent            -- not in the sudo group
-#   /etc/sandbox-persistent.sh   MISSING          -- BASH_ENV has nothing to source
-#   sudo -n true                 fails            -- no NOPASSWD
-#
-# The same check against the sbx image returns `agent sudo`, present, and yes.
-# Note that `sbx create` itself now SUCCEEDS on the base image, so this fails
-# quietly rather than loudly -- the sandbox comes up and is merely wrong.
-#
-# It cannot be fixed from a kit, and not only for ordering reasons: a kit runs
-# AS agent and every line below needs root. The kit would have to sudo to grant
-# itself the sudo it is trying to grant.
-#
-# FINN no longer ships a kit at all -- docker/finn.kit was deleted once its env
-# block turned out to duplicate docker/sbxenv/base.sbxenv.yaml -- so this would
-# now mean reintroducing one.
+# This must be baked as root. Sandbox setup runs as `agent`, so it cannot grant
+# itself sudo membership or create the root-owned persistent-shell hook.
 
 set -eu
 

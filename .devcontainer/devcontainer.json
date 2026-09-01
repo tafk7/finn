@@ -4,16 +4,14 @@
   //
   // It points at compose's `dev` service deliberately. That service is held to
   // a hard contract: only the workspace is mounted from the host, and there is
-  // no toolchain, no licence, no secret, no device and no FINN-specific
-  // network egress. An automation can therefore launch it knowing nothing
-  // about FINN -- there is no requirement to discover because there is no
-  // requirement.
+  // no toolchain, licence, secret or device. Docker networking remains open;
+  // the portable contract is about host mounts and capabilities, not egress.
   //
   // Vivado, Vitis and HLS work is NOT available here, and that is the point.
   // Those need host paths and a licence, which is explicit capability
   // escalation a human opts into:
   //
-  //   docker compose --profile fpga run --rm build
+  //   ./docker/run --fpga
   //
   // There is deliberately no second devcontainer.json for the FPGA tiers. Dev
   // Containers is the right format for the portable default; a profile whose
@@ -22,13 +20,16 @@
   // machine but one.
   "name": "FINN (dev)",
 
-  "dockerComposeFile": "../compose.yaml",
+  "initializeCommand": "mkdir -p .finn-build",
+  "dockerComposeFile": [
+    "../compose.yaml",
+    "compose.yaml"
+  ],
   "service": "dev",
   "workspaceFolder": "/workspace/finn",
 
-  // The image's own default. run-docker.sh overrides it with the host uid, and
-  // compose does the same via FINN_UID, but a Dev Containers host does its own
-  // uid mapping and this is the identity it maps onto.
+  // docker/run renders the host uid into its Compose override. Dev Containers
+  // performs its own uid mapping against the image's `agent` identity.
   "remoteUser": "agent",
   "updateRemoteUserUID": true,
 
@@ -50,9 +51,8 @@
     "FINN_DEPS": "frozen"
   },
 
-  // Nothing here installs software or reaches the network. The image already
-  // carries the full dependency closure as wheels, which is what makes the
-  // dev tier usable with egress closed.
+  // Nothing here installs software or requires network access. Docker itself
+  // does not enforce closed egress; use the sbx lane when that is required.
   "postCreateCommand": "python -c 'import finn; print(\"FINN import OK\")'",
 
   "customizations": {

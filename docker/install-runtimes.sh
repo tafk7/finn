@@ -46,7 +46,7 @@ for name in $(echo "$FINN_RUNTIMES" | tr ',' ' '); do
     if [ ! -f "$manifest" ]; then
         echo "ERROR: no runtime target named '$name'." >&2
         echo "       Expected $manifest (from docker/runtimes/$name.env)." >&2
-        echo "       Available: $(ls "$RUNTIME_DIR" 2>/dev/null | sed -n 's/\.env$//p' | tr '\n' ' ')" >&2
+        echo "       Available: $(find "$RUNTIME_DIR" -maxdepth 1 -type f -name '*.env' -printf '%f\n' 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" >&2
         exit 1
     fi
 

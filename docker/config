@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility entry point. Repository tooling uses ``docker/config``."""
+"""Command-line entry point for the Docker environment configuration resolver."""
 
 from config import main
 

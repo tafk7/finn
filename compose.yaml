@@ -1,186 +1,51 @@
-# FINN's runtime services. The human-facing half of the container story.
+# Static FINN service definitions.
 #
-#   docker compose run --rm dev                   Python work, no toolchain
-#   docker compose run --rm dev quicktest.sh
-#   docker compose --profile fpga run --rm build  Vivado / Vitis HLS
-#   docker compose up notebook
+# Host-specific identity, workspace, build directory, toolchain and licence
+# mounts are rendered at launch by:
 #
-# There is ONE image. `dev` and `build` are the same image with different
-# grants: build mounts the Xilinx tree read-only, passes the licence and gets
-# toolchain egress; dev gets none of it. Selecting `dev` is not a smaller
-# download.
+#   ./docker/config compose --tier dev --service dev
 #
-# For Alveo or V80 you need an image built with a runtime target. Build it once
-# and point compose at it through FINN_RUNTIME_TAG, which `finn-env inspect`
-# emits:
-#
-#   FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
-#   FINN_RUNTIMES=xrt ./docker/finn-env inspect --tier build --format sh > .env
-#   docker compose --profile fpga run --rm build
-#
-# The old `build-xrt` service is gone. XRT is an image layer, not a set of
-# grants, so it belongs in the tag and not in a fourth service.
-#
-# BEFORE YOU RUN THIS -- FOR EVERY SERVICE, INCLUDING dev
-# -------------------------------------------------------
-#
-#   ./docker/finn-env inspect --tier dev --format sh > .env
-#
-# .env is a CACHE with a single producer. Delete and regenerate it if it looks
-# stale; never hand-edit it.
-#
-# This step is NOT optional for dev, and an earlier version of this comment
-# wrongly said it was. Compose cannot run `id -u`, so with no .env the `user:`
-# key below falls back to 1000:1000. On any host whose uid is not 1000, the
-# container then cannot write the bind-mounted workspace, and the failure is a
-# bare `PermissionError` from whatever tries first -- not a message about uids.
-#
-# run-docker.sh does this for you. Plain Compose cannot.
-#
-# What dev DOES avoid is host state: no toolchain, no licence, no secrets, no
-# egress. Only the workspace is mounted. If you find yourself adding a bind
-# mount to `dev`, that is the signal to make an fpga-profile service instead.
-#
-# WORKSPACE PATH
-# --------------
-# `dev` mounts the checkout at /workspace/finn. The FPGA services mount it at
-# its HOST path, because generated Vivado projects embed $::env(FINN_ROOT) as
-# an absolute path via add_files -- so a project built under a fixed path
-# cannot be opened in the host's Vivado GUI, which is routine debugging here.
-# See LIMITATION(finn-root-absolute) in docker/finn_paths.py.
-#
-# Consequence worth knowing: FINN_ROOT differs between dev and the FPGA tiers
-# on the same host. finn_paths.py resolves it correctly either way, but the
-# path moving when you switch tiers is surprising the first time.
+# `docker/run` does this automatically. The Dev Container has a fixed-path
+# dev-only overlay and relies on the Dev Containers uid mapper. This separation
+# keeps the base file portable and leaves host capability discovery in
+# docker/config.py.
+
+x-image: &image
+  image: ${FINN_IMAGE:-xilinx/finn:local}
+  platform: linux/amd64
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.finn
+    target: runtime
+    args:
+      FINN_RUNTIMES: ${FINN_RUNTIMES:-}
 
 x-common: &common
-  init: false            # the image has tini as PID 1; a second init is redundant
-  working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-  # FINN_UID/FINN_GID, not UID/GID: bash marks UID readonly and does not export
-  # it, so ${UID} here would silently resolve to the default and every file the
-  # container wrote to the bind mount would be owned by uid 1000. `finn-env
-  # inspect --format sh` emits both.
-  user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
-  # NO `environment:` here. A YAML merge key does not deep-merge, so a service
-  # defining its own `environment:` replaces this wholesale -- and all four do.
-  # It looked like it was setting NUM_DEFAULT_WORKERS for every service and set
-  # it for none. `docker compose config dev` shows the resolved truth.
-
-# Everything an FPGA tier needs from the host, resolved by `finn-env inspect`.
-# Read-only throughout: the tools do not write into their own installation, and
-# an agent with write access to the Xilinx tree is the largest blast radius this
-# container has.
-x-toolchain: &toolchain
-  XILINX_VIVADO: ${XILINX_VIVADO:-}
-  XILINX_VITIS: ${XILINX_VITIS:-}
-  XILINX_HLS: ${XILINX_HLS:-}
-  VIVADO_PATH: ${VIVADO_PATH:-}
-  VITIS_PATH: ${VITIS_PATH:-}
-  HLS_PATH: ${HLS_PATH:-}
-  PLATFORM_REPO_PATHS: ${PLATFORM_REPO_PATHS:-}
-  XILINXD_LICENSE_FILE: ${XILINXD_LICENSE_FILE:-}
-  LM_LICENSE_FILE: ${LM_LICENSE_FILE:-}
+  <<: *image
+  init: false                 # tini is already PID 1 in the image
 
 services:
-
-  # The universal default. No toolchain, no licence, no secrets, no host
-  # privilege, no FINN-specific egress -- only the workspace is mounted from
-  # the host. This is the contract the conformance suite asserts, and the
-  # reason automation needs no discovery protocol to run it.
   dev:
     <<: *common
-    image: xilinx/finn:${GIT_DESCRIBE:-local}${FINN_RUNTIME_TAG:-}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.finn
-      target: runtime
-      args:
-        FINN_RUNTIMES: ${FINN_RUNTIMES:-}
-    volumes:
-      # Defaults to the fixed path. run-docker.sh overrides both through its own
-      # env file so the legacy contract keeps mirroring the host path -- see the
-      # note at the top of this file about FINN_ROOT differing between tiers.
-      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      # The build directory. Comes from .env; finn-env resolves it AND creates
-      # it, because Docker would otherwise create a missing bind source as
-      # ROOT and the container could not write it.
-      #
-      # create_host_path:false so a missing .env fails with a message that
-      # names itself, rather than silently landing artifacts in a container
-      # path that `--rm` then deletes -- which is what dev did before.
-      #
-      # Scratch space, not host state in the sense the dev contract means.
-      - type: bind
-        source: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        bind:
-          create_host_path: false
-    working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-    environment:
-      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-      FINN_DEPS: ${FINN_DEPS:-frozen}
 
   build:
     <<: *common
     profiles: [fpga]
-    image: xilinx/finn:${GIT_DESCRIBE:-local}${FINN_RUNTIME_TAG:-}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.finn
-      target: runtime
-      args:
-        FINN_RUNTIMES: ${FINN_RUNTIMES:-}
-    volumes:
-      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      # NOT ${FINN_XILINX_PATH:?...}. Compose interpolates EVERY service in the
-      # file, not only the one you selected, so a `:?` here aborts
-      # `docker compose run --rm dev` on any machine with no Xilinx configured
-      # -- which is exactly the user the dev tier exists for. Same defect that
-      # made bake refuse every target until it was given -f docker-bake.hcl.
-      #
-      # create_host_path: false so an unset value fails when you START this
-      # service, with an error that names itself, instead of silently binding a
-      # directory Docker helpfully created.
-      - type: bind
-        source: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        target: ${FINN_XILINX_PATH:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        target: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-        bind:
-          create_host_path: false
-      # The Vitis platform repository, for Alveo. Optional, and compose has no
-      # conditional mount, so the default is /dev/null bound over itself: a real
-      # no-op that exists on every host and in every image. Do NOT default this
-      # to /opt/xilinx/platforms as the old build-xrt service did -- when that
-      # path is absent Docker CREATES it, as root, and the container then cannot
-      # write anything under it.
-      - ${PLATFORM_REPO_PATHS:-/dev/null}:${PLATFORM_REPO_PATHS:-/dev/null}:ro
-    environment:
-      <<: *toolchain
-      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_BUILD_DIR: ${FINN_HOST_BUILD_DIR:-/FINN-run-docker-finn-env-inspect-format-sh-to-make-.env-first}
-      FINN_DEPS: ${FINN_DEPS:-frozen}
 
   notebook:
     <<: *common
     profiles: [notebook]
-    image: xilinx/finn:${GIT_DESCRIBE:-local}${FINN_RUNTIME_TAG:-}
-    volumes:
-      - ${FINN_WORKSPACE_SOURCE:-.}:${FINN_WORKSPACE_TARGET:-/workspace/finn}
-    working_dir: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
     environment:
-      FINN_ROOT: ${FINN_WORKSPACE_TARGET:-/workspace/finn}
-      FINN_DEPS: ${FINN_DEPS:-frozen}
       JUPYTER_PORT: ${JUPYTER_PORT:-8888}
       NETRON_PORT: ${NETRON_PORT:-8081}
     ports:
       - "${JUPYTER_PORT:-8888}:${JUPYTER_PORT:-8888}"
       - "${NETRON_PORT:-8081}:${NETRON_PORT:-8081}"
-    command: >
-      jupyter notebook --no-browser --ip=0.0.0.0
-      --port ${JUPYTER_PORT:-8888} notebooks
+    command:
+      - jupyter
+      - notebook
+      - --no-browser
+      - --ip=0.0.0.0
+      - --port
+      - "${JUPYTER_PORT:-8888}"
+      - notebooks

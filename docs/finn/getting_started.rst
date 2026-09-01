@@ -8,71 +8,51 @@ Getting Started
 Quickstart
 ==========
 
-1. Install Docker. <<Claude, hyperlink or put the best command that will automatically get buildx and compose>>
-2. Configure Docker to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
-
-3. Set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``. These give the
-   directory and the version of your Xilinx tools, for example
-   ``FINN_XILINX_PATH=/opt/Xilinx`` and ``FINN_XILINX_VERSION=2022.2``.
-4. Clone the FINN compiler: ``git clone https://github.com/Xilinx/finn/``. Go
+1. Use an Ubuntu 22.04 x86-64 system with Python 3.10.
+2. Clone the FINN compiler: ``git clone https://github.com/Xilinx/finn/``. Go
    into the new directory.
-5. Run ``./run-docker.sh quicktest verify`` to verify the installation.
+3. Install fundamental host packages with
+   ``sudo ./scripts/install-system-deps.sh`` if needed.
+4. Optionally verify the support contract with ``./setup-local.sh --check``,
+   then run ``./setup-local.sh``.
+5. Activate the environment with ``source scripts/activate.sh``.
+6. Run ``./scripts/quicktest-local.sh`` to verify the Python environment.
+   No Xilinx installation is needed for this command.
    Warnings during the tests are normal. FINN uses warnings to tell you about
    some conditions. The installation is correct if all tests pass.
-6. Optional: for board setup, obey the instructions in :ref:`PYNQ board first-time setup`, :ref:`Vitis-based Alveo first-time setup` or :ref:`Slash-based Alveo first-time setup`.
-7. Optional: set up a `Vivado/Vitis license`_.
-8. See :ref:`Running FINN in Docker` for the other ways to run the compiler.
+7. For Vivado or Vitis work, set ``FINN_XILINX_PATH`` and
+   ``FINN_XILINX_VERSION`` before setup or activation.
+8. If the host does not match the supported native environment, use the
+   Docker-built environment described below.
 
 
 
 
-Environment Configuration
-=========================
+Choose an installation
+======================
 
-FINN provides docker containers for easy environment configuration, with image presets 
-for different types of development work.
-
-<<Claude put small table here showing dev/build/build-xrt splits>>
-
-For standard development, use of hte 
-
-
-It's also possible to setup the required dependenciess locally on your system using
-``./setup-local.sh``, provided that your system meets the requirements.
-
-
-
-For Agentic development, we recommend using using the images with docker sbx for proper 
-sandboxing and isolation.
-
-
-
-
-FINN runs in three ways. Each way has a different purpose. Select the way that
-agrees with your task.
+FINN has two setup paths:
 
 .. list-table::
   :header-rows: 1
 
-  * - Way
+  * - Setup
     - Command
-    - Use it for
-    - Isolation
-  * - Docker container
-    - ``docker compose run --rm dev``
-    - Development by a person
-    - Processes and files are separate. The kernel is shared and the network is open.
-  * - sbx sandbox
-    - ``docker/finn-sbx dev``
-    - Development by an autonomous agent
-    - A separate kernel. The network is closed unless you permit a host.
-  * - Host system
+    - Use it when
+  * - Native installation
     - ``./setup-local.sh``
-    - Development with no container
-    - None
+    - The host is Ubuntu 22.04 with Python 3.10 and you want one local installation
+  * - Docker-built environment
+    - ``./docker/run``
+    - You need a portable dependency environment, agent isolation, or an HPC image
 
-The three ways use the same dependency versions, the same image tiers and the
-same toolchain resolver. A result in one way is therefore correct in the others.
+The Docker-built image executes through Docker Compose by default. The
+``--backend sbx`` option imports it into an agent sandbox. The
+``--backend apptainer`` option converts it to a SIF for HPC execution.
+
+For the native path, continue with ``./setup-local.sh`` and
+``source scripts/activate.sh``. Detailed native prerequisites and validation
+commands are in `Native installation details`_.
 
 
 FINN does not supply Vivado, Vitis or Vitis HLS. Install these tools yourself.
@@ -111,54 +91,63 @@ Once you have a working flow, you can implement a command line entry for this
 by using the "advanced mode" described in the :ref:`command_line` section.
 
 
-Running FINN in Docker
-======================
+Using the Docker-built environment
+==================================
 
-There are two commands for the Docker container. Both do the same work.
-
-Docker Compose is the standard command:
-
-.. code-block:: bash
-
-  docker compose run --rm dev                    # a shell
-  docker compose run --rm dev quicktest.sh       # the fast tests
-  docker compose --profile fpga run --rm build   # Vivado and Vitis HLS
-  docker compose --profile notebook up           # Jupyter
-
-Make the host settings one time, for **every** tier including ``dev``:
+Use this option when the native support contract does not match the host, or
+when an isolated dependency environment is preferable. Docker Compose is the
+default execution backend:
 
 .. code-block:: bash
 
-  ./docker/finn-env inspect --tier dev --format sh > .env
+  ./docker/run                                  # a shell
+  ./docker/run --name finn-test -- pytest       # named one-off container
+  ./docker/run -- quicktest.sh                  # fast Python tests
+  ./docker/run --fpga -- vivado -version        # host Xilinx tools
+  ./docker/run --fpga --runtime xrt -- bash     # XRT image content
+  ./docker/run --notebook                       # Jupyter and Netron ports
 
-The ``.env`` file is a cache. One program writes it. Do not edit it. If it is
-not correct, delete it and make it again.
+Use ``-n NAME`` or ``--name NAME`` to assign the Docker container name. This
+is useful for finding parallel interactive sessions with ``docker ps`` and
+targeting one with standard commands such as ``docker exec``. The same option
+selects the persistent sandbox identity with ``--backend sbx``. Apptainer has
+no equivalent named-instance object, so that backend rejects the option.
 
-This step is necessary. Docker Compose cannot run ``id -u``, so with no
-``.env`` the container runs as user 1000. If your user ID is not 1000, the
-container cannot write to the workspace, and you get a permission error from
-the first program that tries. ``run-docker.sh`` makes this file for you.
+The run command prepares a missing artifact automatically. Preparation is also
+available separately:
 
-The ``dev`` tier still needs no *host state*: no toolchain, no licence, no
-secrets and no network access. Only the workspace is mounted.
+.. code-block:: bash
 
-`run-docker.sh <https://github.com/Xilinx/finn/blob/main/run-docker.sh>`_ is the
-older command. It continues to work, and it accepts all the variables that it
-always accepted. It now translates its arguments into the commands above. Use
-Docker Compose for new work.
+  ./docker/build
+  ./docker/build --runtime xrt
+  ./docker/build --backend sbx
+  ./docker/build --backend apptainer
+
+The static ``compose.yaml`` can also be used directly. Supply the generated
+host override in the same invocation so Compose receives the correct uid,
+workspace, build directory and capability mounts:
+
+.. code-block:: bash
+
+  docker compose \
+    -f compose.yaml \
+    -f <(./docker/config compose --tier dev --service dev) \
+    run --rm dev
+
+The override is generated at launch and should not be committed. The ``dev``
+tier adds no toolchain, licence or secret mounts. Docker networking remains
+open; use ``./docker/run --backend sbx`` when egress must be denied.
 
 If Docker is new to you, there are good `online resources <https://docker-curriculum.com/>`_.
 Read :ref:`General FINN Docker tips` and :ref:`Environment variables` also.
 
-``run-docker.sh`` has these modes:
-
 Launch interactive shell
 ************************
-Simply running bash run-docker.sh without any additional arguments will create a Docker container with all dependencies and give you a terminal with you can use for development for experimentation:
+Running ``docker/run`` without a command opens an interactive shell:
 
 ::
 
-  bash ./run-docker.sh
+  ./docker/run
 
 
 Launch a Build with ``build_dataflow``
@@ -169,8 +158,8 @@ or a user-defined flow from the command line as follows:
 
 ::
 
-  bash ./run-docker.sh build_dataflow <path/to/dataflow_build_dir/>
-  bash ./run-docker.sh build_custom <path/to/custom_build_dir/>
+  ./docker/run -- build_dataflow <path/to/dataflow_build_dir/>
+  ./docker/run -- python <path/to/custom_build_dir/build.py>
 
 
 Launch Jupyter notebooks
@@ -179,69 +168,74 @@ FINN comes with numerous Jupyter notebook tutorials, which you can launch with:
 
 ::
 
-  bash ./run-docker.sh notebook
+  ./docker/run --notebook
 
 This will launch the `Jupyter notebook <https://jupyter.org/>`_ server inside a Docker container, and print a link on the terminal that you can open in your browser to run the FINN notebooks or create new ones.
 
 .. note::
   The link will look something like this (the token you get will be different):
   http://127.0.0.1:8888/?token=f5c6bd32ae93ec103a88152214baedff4ce1850d81065bfc.
-  The ``run-docker.sh`` script forwards ports 8888 for Jupyter and 8081 for Netron, and launches the notebook server with appropriate arguments.
+  The Docker backend forwards ports 8888 for Jupyter and 8081 for Netron.
 
 
-Image tiers
-===========
+Grant tiers and runtime layers
+==============================
 
-The three tiers are the same in all three ways. Select one with
-``FINN_DOCKER_TARGET``.
+``FINN_DOCKER_TARGET`` selects host grants, not image contents:
 
 .. list-table::
   :header-rows: 1
 
   * - Tier
-    - Adds
-    - Host requirements
+    - Host grants
+    - Use for
   * - ``dev``
-    - Python, FINN and its dependencies
-    - **Nothing** but the repository
+    - Workspace and build scratch only
+    - Python development and tests
   * - ``build``
-    - HLS headers, board files
-    - Xilinx installation, licence
-  * - ``build-xrt``
-    - XRT, V80 support
-    - Xilinx installation, licence
+    - Read-only Xilinx/platform/licence mounts and resolved tool environment
+    - RTL simulation, HLS and implementation
+
+Accelerator userspace packages are a separate image-content axis selected with
+``FINN_RUNTIMES``. Runtime names are sorted into the image tag, for example
+``.xrt`` or ``.slash.xrt``. See ``docker/runtimes/README.md``.
 
 
 Environment variables
 **********************
 
-Prior to running the ``run-docker.sh`` script, there are several environment variables you can set to configure certain aspects of FINN.
-For a complete list, please have a look in the `run-docker.sh <https://github.com/Xilinx/finn/blob/main/run-docker.sh#L72>`_ file.
-The most relevant are summarized below:
+The common choices are command-line options:
 
-* (required) ``FINN_XILINX_PATH`` points to your Xilinx tools installation on the host (e.g. ``/opt/Xilinx``)
-* (required) ``FINN_XILINX_VERSION`` sets the Xilinx tools version to be used (e.g. ``2022.2``)
+* ``--fpga`` adds the host Xilinx toolchain and licence configuration.
+* ``--runtime NAME`` selects image content such as XRT; repeat the option for
+  multiple runtimes.
+* ``--deps frozen|live|auto`` selects dependency source behavior.
+* ``--backend docker|sbx|apptainer`` selects how the Docker-built image runs.
+* ``--rebuild`` rebuilds without the BuildKit cache.
+* ``--no-build`` requires an already prepared artifact.
+
+The underlying environment variables remain available for automation and
+legacy callers. The most relevant are:
+
+* (required for ``build``) ``FINN_XILINX_PATH`` points to your Xilinx tools installation on the host (e.g. ``/opt/Xilinx``)
+* (required for ``build``) ``FINN_XILINX_VERSION`` sets the Xilinx tools version to be used (e.g. ``2022.2``)
 * (required for Vitis) ``PLATFORM_REPO_PATHS`` points to the Vitis platform files (DSA).
-* (required for Vitis) ``XRT_DEB_VERSION`` specifies the .deb to be installed for XRT inside the container (see default value in ``run-docker.sh``).
-* (required for Slash) ``V80PP_DEB_PACKAGE`` specifies the .deb to be installed for Slash's v80++ linker.
+* ``FINN_RUNTIMES`` selects image runtime packages such as ``xrt`` or ``xrt,slash``.
 * (optional) ``NUM_DEFAULT_WORKERS`` (default 4) specifies the degree of parallelization for the transformations that can be run in parallel, potentially reducing build time
-* (optional) ``FINN_HOST_BUILD_DIR`` specifies which directory on the host will be used as the build directory. Defaults to ``/tmp/finn_dev_<username>``
+* (optional) ``FINN_HOST_BUILD_DIR`` specifies which directory on the host will be used as the build directory. Defaults to ``/tmp/finn_build_<uid>``
 * (optional) ``JUPYTER_PORT`` (default 8888) changes the port for Jupyter inside Docker
 * (optional) ``JUPYTER_PASSWD_HASH`` (default "") Set the Jupyter notebook password hash. If set to empty string, token authentication will be used (token printed in terminal on launch).
 * (optional) ``LOCALHOST_URL`` (default localhost) sets the base URL for accessing e.g. Netron from inside the container. Useful when running FINN remotely.
 * (optional) ``NETRON_PORT`` (default 8081) changes the port for Netron inside Docker
 * (optional) ``IMAGENET_VAL_PATH`` specifies the path to the ImageNet validation directory for tests.
-* (optional) ``FINN_DOCKER_TAG`` (autogenerated) specifies the Docker image tag to use.
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
-* (optional) ``FINN_DOCKER_EXTRA`` (default "") pass extra arguments to the ``docker run`` command when executing ``./run-docker.sh``
+* (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
 * (optional) ``FINN_SKIP_DEP_REPOS`` (default "0") skips the download of FINN dependency repos (uses the ones already downloaded under deps/.
-* (optional) ``FINN_DOCKER_TARGET`` (default "build") selects the image tier. ``dev`` has no XRT, no Xilinx mount and no licence, so it runs on a closed network. ``build`` adds finn-hlslib and the board files for RTL and HLS work. ``build-xrt`` adds XRT for Vitis, Alveo and V80 targets. Note that RTL simulation uses the ``xsim`` tool of Vivado, not XRT. If ``FINN_XILINX_PATH`` is not set, ``run-docker.sh`` gives a warning and uses ``dev``. Docker Compose and Bake use ``dev`` as the default.
+* (legacy) ``FINN_DOCKER_TARGET`` selects the ``dev`` or ``build`` grant tier. ``build-xrt`` is a compatibility spelling for ``build`` plus ``FINN_RUNTIMES=xrt``.
 * (optional) ``FINN_DEPS`` (default "frozen") selects the source of qonnx, brevitas and finn-experimental. ``frozen`` uses the wheels in the image, at the versions in ``deps.env``. ``live`` uses the checkouts in ``deps/``, so your edits take effect immediately; if a checkout is missing, FINN stops and tells you which one. ``auto`` uses a checkout if it is present, and the wheel if it is not.
 * (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
 * (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
-* (optional) ``FINN_XRT_SHA256`` (default "") pins the sha256 of the downloaded XRT .deb. The build prints the observed checksum when this is unset.
-* (optional) ``DOCKER_BUILDKIT`` (default "1") enables `Docker BuildKit <https://docs.docker.com/develop/develop-images/build_enhancements/>`_ for faster Docker image rebuilding (recommended).
-* ``FINN_SINGULARITY`` is **removed**. It changed the Docker argument list into Singularity arguments, and Docker Compose now builds that list. If you use Singularity, get the mounts and the environment from ``./docker/finn-env inspect --tier <tier> --format json`` and build the command yourself.
+* ``FINN_SINGULARITY`` may point to a prebuilt ``.sif`` consumed by the Apptainer backend.
 
 General FINN Docker tips
 ************************
@@ -286,13 +280,16 @@ microVM with its own kernel. Network access is denied until you permit a host.
 
 .. code-block:: bash
 
-  docker/finn-sbx dev                      # only the repository
-  docker/finn-sbx build                    # also the toolchain (ro) and licence access
-  docker/finn-sbx build -- pytest -m util  # one command
-  docker/finn-sbx rm build                 # remove the sandbox
+  ./docker/run --backend sbx                         # repository only
+  ./docker/run --backend sbx --fpga                  # toolchain and licence
+  ./docker/run --backend sbx --name agent-1          # a distinct parallel sandbox
+  ./docker/run --backend sbx -- pytest -m util       # one command
+  ./docker/run --backend sbx --fpga --remove         # remove the sandbox
 
 You must have `sbx <https://docs.docker.com/ai/sandboxes/>`_ 0.39.0 or later,
-and you must be signed in.
+and you must be signed in. The ``sbx env`` command and file format are
+experimental in sbx 0.39.0. Environment-variable changes apply when reusing a
+sandbox; image, workspace and mount changes require removing and recreating it.
 
 The ``dev`` tier in a sandbox has no toolchain, no licence and no network
 permission. This is not because the variables are empty. It is because the tier
@@ -300,24 +297,25 @@ does not read the file that adds them.
 
 The command builds the image, puts it into the image store of sbx, and then
 uses ``sbx env`` to make or connect to the sandbox.
-``docker/sbxenv/base.sbxenv.yaml`` declares what a FINN sandbox is, and
-``fpga.sbxenv.yaml`` adds the toolchain for the larger tiers.
+``docker/config sbx`` renders the complete sandbox environment file outside the
+workspace, including the build tier's toolchain, platform and licence mounts.
 
 .. note::
    Node-locked licences are not verified in a sandbox. FLEXlm connects a
    node-locked licence to an Ethernet host ID, and a sandbox does not show the
    host ID of the machine. Floating licences (``port@host``) do operate.
 
-Running FINN without Docker (Local Installation)
-=================================================
+Native installation details
+===========================
 
-For environments where Docker is not available, FINN can be installed and run locally.
-Note that Docker remains the primary supported method.
+Native installation is the primary path on the supported Ubuntu and Python
+versions. Use the Docker-built environment when the host does not match that
+contract or when a disposable dependency environment is preferable.
 
 Prerequisites
 *************
 
-* Ubuntu 22.04 (other distributions may work but are not officially tested)
+* Ubuntu 22.04
 * Python 3.10
 * System dependencies (see below)
 * Vivado/Vitis 2022.2 or later (for synthesis and simulation)
@@ -359,7 +357,7 @@ Setup Script Options
 The ``setup-local.sh`` script supports several options:
 
 * ``--help``: Show usage information
-* ``--ci``: CI mode (non-interactive, fail fast on errors)
+* ``--check``: Validate the supported host, Python and required commands without installing
 * ``--skip-xsi``: Skip building finn_xsi (Vivado Python interface)
 * ``--skip-deps``: Skip fetching git dependencies (if already run)
 
@@ -387,6 +385,28 @@ The local installation has some limitations compared to Docker:
 If you encounter issues, please try the Docker-based installation first to verify the
 issue is not environment-specific.
 
+Using the Docker image with Apptainer
+=====================================
+
+Apptainer is an HPC execution backend for the same Docker-built environment. A
+Docker-capable machine must first build the image and convert it to a SIF:
+
+.. code-block:: bash
+
+  ./docker/build --backend apptainer
+
+The command prints the cached SIF path. Copy that file to the HPC system, then
+select it explicitly:
+
+.. code-block:: bash
+
+  export FINN_SINGULARITY=/path/to/finn.sif
+  ./docker/run --backend apptainer -- python -c 'import finn'
+
+The HPC system needs Singularity or Apptainer but does not need Docker. This
+backend uses the host kernel, network and identity; it is not an isolation
+boundary like sbx.
+
 Supported FPGA Hardware
 =======================
 **Vivado IPI support for any Xilinx FPGA:** FINN generates a Vivado IP Integrator (IPI) design from the neural network with AXI stream (FIFO) in-out interfaces, which can be integrated onto any Xilinx-AMD FPGA as part of a larger system. It’s up to you to take the FINN-generated accelerator (what we call “stitched IP” in the tutorials), wire it up to your FPGA design and send/receive neural network data to/from the accelerator.
@@ -408,8 +428,8 @@ Continue on the host side (replace the ``<PYNQ_IP>`` and ``<PYNQ_USERNAME>`` wit
    ``export FINN_SSH_KEY_DIR=/path/to/finn/ssh_keys``. FINN mounts this
    directory only when you set the variable. Earlier versions mounted
    ``finn/ssh_keys`` always.
-2. Start the Docker container from the directory where you cloned FINN:
-   ``./run-docker.sh``
+2. Start the Docker environment from the directory where you cloned FINN:
+   ``./docker/run --fpga``
 3. Go into the ``ssh_keys`` directory, for example ``cd /path/to/finn/ssh_keys``
 4. Run ``ssh-keygen`` to make a key pair, for example the private key ``id_rsa`` and the public key ``id_rsa.pub``
 5. Run ``ssh-copy-id -i id_rsa.pub <PYNQ_USERNAME>@<PYNQ_IP>`` to install the keys on the remote system
@@ -430,13 +450,13 @@ On the target side:
 
 
 
-On the host side:
+On the build host:
 
-1. Install Vitis 2022.2 and set up the ``VITIS_PATH`` environment variable to point to your installation.
-2. Install Xilinx XRT. Ensure that the ``XRT_DEB_VERSION`` environment variable reflects which version of XRT you have installed.
-3. Install the Vitis platform files for Alveo and set up the ``PLATFORM_REPO_PATHS`` environment variable to point to your installation. *This must be the same path as the target's platform files (target step 2)*
-4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_. Copy your private key to the ``finn/ssh_keys`` folder on the host to get password-less deployment and remote execution.
-5. Done!
+1. Install Vitis and set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``.
+2. Set ``FINN_RUNTIMES=xrt`` so the image includes XRT userspace.
+3. Install the Vitis platform files and set ``PLATFORM_REPO_PATHS``. This must be the same path as the target's platform files.
+4. Configure ``FINN_SSH_KEY_DIR`` if FINN will deploy to a remote target.
+5. Launch with ``./docker/run --fpga --runtime xrt``.
 
 Slash-based Alveo first-time setup
 ***********************************
@@ -458,35 +478,36 @@ On the target side:
 
 On the host side:
 
-1. Build the ``v80++`` Debian package from the `Slash GitHub repository
-   <https://github.com/Xilinx/slash>`_ and copy it to a location accessible on the host.
-2. Set the ``V80PP_DEB_PACKAGE`` environment variable to the path of the ``v80++``
-   Debian package (e.g. ``export V80PP_DEB_PACKAGE=/path/to/v80++.deb``). The package
-   will be installed into the Docker image when ``run-docker.sh`` builds it.
-3. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_.
-   Copy your private key to the ``finn/ssh_keys`` folder on the host to get
-   password-less deployment and remote execution.
-4. Done!
+1. Build the required Debian packages from the `Slash GitHub repository
+   <https://github.com/Xilinx/slash>`_.
+2. Copy them to the names required by ``docker/runtimes/slash.env`` and
+   ``docker/runtimes/v80pp.env`` under ``docker/packages/``.
+3. Set ``FINN_RUNTIMES=xrt,slash,v80pp`` when building or launching the image.
+4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_
+   and point ``FINN_SSH_KEY_DIR`` at the key directory.
+5. Done!
 
 Vivado/Vitis license
 *********************
-If you are targeting Xilinx FPGA parts that needs specific licenses (non-WebPack) you can make these available to the
-FINN Docker container by passing extra arguments. To do this, you can use the ``FINN_DOCKER_EXTRA`` environment variable as follows:
+Set the normal FLEXlm variable before launching FINN:
 
 ::
 
-  export FINN_DOCKER_EXTRA=" -v /path/to/licenses:/path/to/licenses -e XILINXD_LICENSE_FILE=/path/to/licenses "
+  export XILINXD_LICENSE_FILE=2100@licsrv.example
+  # or
+  export XILINXD_LICENSE_FILE=/path/to/licenses/Xilinx.lic
 
-The above example mounts ``/path/to/licenses`` from the host into the same path on the Docker container, and sets the
-value of the ``XILINXD_LICENSE_FILE`` environment variable.
+For a licence file, ``docker/config`` mounts its containing directory read-only. For
+a floating server, sbx grants the server network access; ordinary Docker uses
+its normal open outbound network.
 
 System Requirements
 ====================
 
-* Ubuntu 18.04 with ``bash`` installed
-* Docker `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_
-* A working Vitis/Vivado 2022.2 installation
-* ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` environment variables correctly set, see `Quickstart`_
+* A Linux x86-64 host with ``bash``
+* Docker Engine with Compose and Buildx, configured `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_
+* For FPGA build flows, a supported Vitis/Vivado installation
+* For FPGA build flows, ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` set correctly
 * *(optional)* `Vivado/Vitis license`_ if targeting non-WebPack FPGA parts.
 * *(optional)* A PYNQ board with a network connection, see `PYNQ board first-time setup`_
 
@@ -507,7 +528,7 @@ strong hardware:
 * **Storage.** While going through the build steps, FINN will generate many files as part of
   the process. For larger networks, you may need 10s of GB of space for the temporary
   files generated during the build.
-  By default, these generated files will be placed under ``/tmp/finn_dev_<username>``.
+  By default, these generated files will be placed under ``/tmp/finn_build_<uid>``.
   You can override this location by using the ``FINN_HOST_BUILD_DIR`` environment
   variable.
   Mapping the generated file dir to a fast SSD will result in quicker builds.

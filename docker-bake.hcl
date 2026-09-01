@@ -20,22 +20,19 @@
 #
 # There is no profile axis and no tier axis. The profile axis had one member and
 # threaded a variable through ten files to select from it. The tier axis encoded
-# "does this user have Vivado", which is a host fact that docker/finn-env
+# "does this user have Vivado", which is a host fact that docker/config
 # resolves at launch -- see the Dockerfile header.
 #
 # Use `.` and not `+` to join runtime names. A Docker tag accepts
 # [\w][\w.-]{0,127}; `+` gives "invalid reference format".
 #
-# ENUMERATE, DO NOT MULTIPLY
-# --------------------------
-# The targets below are the combinations FINN keeps green, written out. They are
-# not a generated powerset: three runtime targets and a boolean would be sixteen
-# images, almost all of which nobody wants. Build any other combination on
-# demand:
+# ENUMERATE SUPPORT; PARAMETERIZE EVERYTHING ELSE
+# ------------------------------------------------
+# Named targets below declare the combinations FINN keeps green. The generic
+# finn-runtime / finn-sbx-runtime targets accept any manifest set without
+# generating a powerset of named targets:
 #
-#   docker buildx bake -f docker-bake.hcl finn-xrt \
-#       --set finn-xrt.args.FINN_RUNTIMES=xrt,v80pp \
-#       --set finn-xrt.tags=xilinx/finn:$(git describe --always --tags).xrt.v80pp
+#   FINN_RUNTIMES=xrt,v80pp docker buildx bake -f docker-bake.hcl finn-runtime
 #
 # WHAT IS *NOT* HERE
 # ------------------
@@ -69,6 +66,10 @@ variable "GIT_DESCRIBE" { default = "local" }
 
 variable "REGISTRY" { default = "xilinx/finn" }
 
+# Runtime set for the two generic launcher targets. Named, supported targets
+# below remain fixed so CI can build the supported matrix in one invocation.
+variable "FINN_RUNTIMES" { default = "" }
+
 # The Ubuntu base. Date-pinned, never the rolling tag.
 variable "UBUNTU_TAG" { default = "jammy-20230126" }
 
@@ -96,13 +97,18 @@ variable "AUPZU3_BDF_COMMIT" { default = "" }
 #
 # The runtime part is a function of the SET, so sort before joining. Otherwise
 # `xrt,slash` and `slash,xrt` are the same image under two names.
+function "runtime_set" {
+  params = [runtimes]
+  result = runtimes == "" ? "" : join(",", distinct(sort(compact(split(",", runtimes)))))
+}
+
 function "tag" {
   params = [runtimes, sbx]
   result = join("", [
     "${REGISTRY}:",
     sbx ? "sbx-" : "",
     GIT_DESCRIBE,
-    runtimes == "" ? "" : ".${join(".", sort(split(",", runtimes)))}",
+    runtime_set(runtimes) == "" ? "" : ".${join(".", split(",", runtime_set(runtimes)))}",
   ])
 }
 
@@ -149,7 +155,7 @@ function "labels" {
     "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 22.04 / Python 3.10"
     "org.opencontainers.image.source"      = "https://github.com/Xilinx/finn"
     "org.opencontainers.image.revision"    = GIT_DESCRIBE
-    "dev.finn.runtimes"                    = runtimes
+    "dev.finn.runtimes"                    = runtime_set(runtimes)
     # Whether the image grants NOPASSWD root INSIDE the container. This is not
     # host privilege -- no devices, no capabilities, no privileged mode -- but
     # it is a real difference between two otherwise identical images, and the
@@ -170,6 +176,17 @@ target "finn" {
   tags     = [tag("", false)]
 }
 
+# Generic targets used by launchers for arbitrary manifest combinations. Bake
+# remains authoritative for args, labels and the complete image tag; launchers
+# no longer manufacture a target name from a runtime string.
+target "finn-runtime" {
+  inherits = ["_common"]
+  target   = "runtime"
+  args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
+  labels   = labels(runtime_set(FINN_RUNTIMES), false)
+  tags     = [tag(FINN_RUNTIMES, false)]
+}
+
 target "finn-xrt" {
   inherits = ["_common"]
   target   = "runtime"
@@ -186,6 +203,14 @@ target "finn-sbx" {
   tags     = [tag("", true)]
 }
 
+target "finn-sbx-runtime" {
+  inherits = ["_common"]
+  target   = "sbx"
+  args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
+  labels   = labels(runtime_set(FINN_RUNTIMES), true)
+  tags     = [tag(FINN_RUNTIMES, true)]
+}
+
 target "finn-sbx-xrt" {
   inherits = ["_common"]
   target   = "sbx"
@@ -198,12 +223,25 @@ target "finn-sbx-xrt" {
 # docker/packages/slash.deb, which FINN does not ship and CI cannot produce, so
 # a group containing this target would fail on any machine without the file.
 # Build it explicitly once you have the package.
-target "finn-xrt-slash" {
+target "finn-slash-xrt" {
   inherits = ["_common"]
   target   = "runtime"
-  args     = { FINN_RUNTIMES = "xrt,slash" }
-  labels   = labels("xrt,slash", false)
+  args     = { FINN_RUNTIMES = "slash,xrt" }
+  labels   = labels("slash,xrt", false)
   tags     = [tag("xrt,slash", false)]
+}
+
+# Compatibility alias for the pre-canonical target spelling.
+target "finn-xrt-slash" {
+  inherits = ["finn-slash-xrt"]
+}
+
+target "finn-v80pp-xrt" {
+  inherits = ["_common"]
+  target   = "runtime"
+  args     = { FINN_RUNTIMES = "v80pp,xrt" }
+  labels   = labels("v80pp,xrt", false)
+  tags     = [tag("xrt,v80pp", false)]
 }
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,2 @@
+# Small third-party package not published through FINN's normal requirements.
+-e git+https://github.com/fbcotter/dataset_loading.git@0.0.4#egg=dataset_loading

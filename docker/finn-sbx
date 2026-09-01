@@ -1,207 +1,23 @@
 #!/usr/bin/env bash
-# Launch a FINN sandbox with sbx.
-#
-#   docker/finn-sbx [dev|build|build-xrt] [command...]
-#   docker/finn-sbx build                    create-or-attach, interactive
-#   docker/finn-sbx build -- pytest -m util  run one command
-#   docker/finn-sbx rm build                 remove the sandbox
-#
-# SCOPE: this script does the THREE things `.sbxenv.yaml` cannot express, and
-# nothing else. Everything declarative -- mounts, environment, kit, template
-# selection, create-or-attach -- lives in docker/sbxenv/*.sbxenv.yaml and is
-# owned by `sbx env`.
-#
-#   1. Build the image and load it into sbx's image store. sbx keeps its own
-#      store and cannot see the host docker daemon's, so a locally built
-#      template has to be exported and imported. There is no field for this.
-#   2. Materialise the environment files outside every mounted workspace.
-#   3. Grant licence-server egress. `.sbxenv.yaml` has no network field, and
-#      there is no allow-at-create flag (only --deny-network, sbx >= 0.38).
-#
-# If a future sbx gains fields for (1) or (3), delete the corresponding block
-# rather than keeping both.
-#
-# This replaces ~130 lines of hand-rolled create-or-attach in run-docker.sh:
-# name derivation, an existence check, a timeout wrapper around a wedged-daemon
-# `sbx ls`, positional mount assembly, and the attach fallback. `sbx env run`
-# is create-or-attach, so all of it was reimplementation.
+# Compatibility entry point. Prefer: ./docker/run --backend sbx
 
 set -euo pipefail
-
-SCRIPT=$(readlink -f "$0")
-DOCKER_DIR=$(dirname "$SCRIPT")
-REPO=$(dirname "$DOCKER_DIR")
-cd "$REPO"
-
-# gecho/recho/yecho, finn_git_describe, finn_bake_target, finn_bake_tag.
-# shellcheck source=lib.sh
-. "$DOCKER_DIR/lib.sh"
-
-command -v sbx >/dev/null || { recho "sbx not found on PATH"; exit 1; }
-
-# --------------------------------------------------------------------------
-# Arguments
-# --------------------------------------------------------------------------
-
-REMOVE=0
-if [ "${1:-}" = "rm" ]; then REMOVE=1; shift; fi
-
-: "${FINN_SBX_AGENT:=shell}"
-: "${FINN_DEPS:=frozen}"
-# Accelerator stacks to bake in. Empty is the base image, which is what an agent
-# sandbox normally wants. See docker/runtimes/README.md.
-: "${FINN_RUNTIMES:=}"
-
-# dev by default. This lane exists for autonomous agents, and the narrow tier
-# is the one that needs no toolchain, no licence and no network grant. Asking
-# for tools should be explicit. (finn-apptainer defaults to `build` for the
-# opposite reason -- see its header.)
-TIER="${1:-dev}"
-case "$TIER" in
-    dev|build) shift || true ;;
-    # Legacy. build-xrt was never a set of grants -- it was XRT, which is now a
-    # runtime target baked into the image and named in its tag.
-    build-xrt) shift || true; TIER="build"; FINN_RUNTIMES="${FINN_RUNTIMES:+$FINN_RUNTIMES,}xrt" ;;
-    -*|"") TIER="dev" ;;
-    *) recho "Usage: $0 [rm] [dev|build] [-- command...]"; exit 2 ;;
+DIR=$(dirname "$(readlink -f "$0")")
+args=(--backend sbx)
+case "${1:-}" in
+    -h|--help) exec "$DIR/run" --help ;;
+    rm)
+        shift
+        args+=(--remove)
+        case "${1:-dev}" in
+            build) args+=(--fpga); shift || true ;;
+            build-xrt) args+=(--fpga --runtime xrt); shift || true ;;
+            dev) shift || true ;;
+        esac
+        ;;
+    build) args+=(--fpga); shift ;;
+    build-xrt) args+=(--fpga --runtime xrt); shift ;;
+    dev) shift ;;
 esac
 [ "${1:-}" = "--" ] && shift
-export FINN_RUNTIMES
-
-# One sandbox per (tier, checkout). Lowercased; sbx requires it.
-FINN_SBX_NAME="${FINN_SBX_NAME:-finn-$TIER-$(basename "$REPO")}"
-FINN_SBX_NAME=$(printf '%s' "$FINN_SBX_NAME" | tr '[:upper:]' '[:lower:]')
-
-# Outside every mounted workspace. See the WHY block in base.sbxenv.yaml: an
-# environment file the agent can edit is a file the agent can use to widen its
-# own next sandbox.
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/finn/sbxenv/$FINN_SBX_NAME"
-
-if [ "$REMOVE" = 1 ]; then
-    if [ -f "$STATE_DIR/base.sbxenv.yaml" ]; then
-        ( cd "$STATE_DIR" && sbx env rm --force ) || true
-    fi
-    sbx rm --force "$FINN_SBX_NAME" >/dev/null 2>&1 || true
-    rm -rf "$STATE_DIR"
-    gecho "Removed $FINN_SBX_NAME"
-    exit 0
-fi
-
-# --------------------------------------------------------------------------
-# 1. Build and load the template
-# --------------------------------------------------------------------------
-
-GIT_DESCRIBE=$(finn_git_describe)
-export GIT_DESCRIBE
-
-# The tier does NOT appear in the target. There is one image; dev and build
-# differ only in what this script mounts and allows, decided further down. The
-# runtime set DOES appear, because that is image content.
-BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES" sbx)
-finn_bake_build "$BAKE_TARGET" || exit 1
-
-FINN_SBX_TEMPLATE=$(finn_bake_tag "$BAKE_TARGET")
-[ -n "$FINN_SBX_TEMPLATE" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
-
-# sbx does not resolve the Docker Hub domain implicitly, so its store lists the
-# template as docker.io/<tag>. Skipping the load when it is already there is
-# what makes repeat runs fast; only a new tag pays the export.
-if sbx template ls 2>/dev/null | awk '{print $1":"$2}' \
-     | grep -qx "docker.io/$FINN_SBX_TEMPLATE"; then
-    gecho "Template already loaded: $FINN_SBX_TEMPLATE"
-else
-    gecho "Loading $FINN_SBX_TEMPLATE into the sbx image store (first time is slow)"
-    TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
-    trap 'rm -f "$TAR"' EXIT
-    docker save -o "$TAR" "$FINN_SBX_TEMPLATE" \
-        || { recho "docker save failed"; exit 1; }
-    sbx template load "$TAR" || { recho "sbx template load failed"; exit 1; }
-    rm -f "$TAR"; trap - EXIT
-fi
-
-# --------------------------------------------------------------------------
-# 2. Materialise the environment files
-# --------------------------------------------------------------------------
-
-# Every value the committed files reference comes from finn-env, so the host
-# facts are derived in exactly one place. `sbx env` interpolates ${VAR} from
-# this process's environment, which is why these are exported rather than
-# substituted into the files -- the committed artifacts stay static and
-# machine-independent.
-eval "$(./docker/finn-env inspect --tier "$TIER" --backend sbx --format sh \
-        | sed 's/^/export /')"
-
-export FINN_SBX_NAME FINN_SBX_TEMPLATE FINN_SBX_AGENT FINN_DEPS
-
-mkdir -p "$STATE_DIR"
-ENV_FILES=(base.sbxenv.yaml)
-cp "$DOCKER_DIR/sbxenv/base.sbxenv.yaml" "$STATE_DIR/"
-if [ "$TIER" != "dev" ]; then
-    cp "$DOCKER_DIR/sbxenv/fpga.sbxenv.yaml" "$STATE_DIR/"
-    ENV_FILES+=(fpga.sbxenv.yaml)
-else
-    # Stale overlay from a previous build-tier run in the same state dir would
-    # silently re-add the toolchain mount to what is supposed to be the narrow
-    # profile.
-    rm -f "$STATE_DIR/fpga.sbxenv.yaml"
-    gecho "dev tier: no Xilinx mount, no licence, no toolchain egress"
-fi
-
-cd "$STATE_DIR"
-
-# --------------------------------------------------------------------------
-# 3. Create or attach, then grant egress
-# --------------------------------------------------------------------------
-
-# `sbx env run` is create-or-attach, but the egress grants below have to land
-# BEFORE anything attaches -- `run` would block on the session. So: create when
-# absent, grant, then attach or exec.
-#
-# The existence check is explicit rather than "create and ignore the error",
-# because `sbx env create` on an existing sandbox prints a red ERROR line. That
-# would train the reader to ignore red output from this script, which is a
-# worse outcome than one extra `sbx ls`.
-if sbx ls 2>/dev/null | awk '{print $1}' | grep -qx "$FINN_SBX_NAME"; then
-    gecho "Sandbox $FINN_SBX_NAME exists; reusing it"
-    gecho "(docker/finn-sbx rm $TIER to rebuild it against the current image)"
-else
-    sbx env create "${ENV_FILES[@]}" || { recho "sbx env create failed"; exit 1; }
-fi
-
-# Licence-server egress.
-#
-# Host-wide by default, because FLEXlm needs two connections and the second one
-# -- the vendor daemon, where the checkout actually happens -- is on an
-# ephemeral port that lmgrd hands back after the handshake.
-#
-# finn-env narrows it to two ports when the site PINNED that port
-# (`DAEMON xilinxd ... port=2101` in the licence file, or
-# FINN_LICENSE_VENDOR_PORT). Then, and only then, a port-scoped rule is safe.
-#
-# Both cases announce themselves. A wrong pinned port fails at checkout with
-# "A valid license was not found", which reads as a licensing fault rather than
-# a firewall one -- and `lmutil lmstat` will still SUCCEED, because it only
-# talks to lmgrd. lmstat is not a test of this.
-if [ "$TIER" != "dev" ]; then
-    while IFS=$'\t' read -r host resources; do
-        [ -n "$host" ] || continue
-        if [ "$resources" = "$host" ]; then
-            gecho "Allowing licence egress: $host (all ports; vendor daemon port is not pinned)"
-        else
-            gecho "Allowing licence egress: $resources (vendor daemon port is pinned)"
-        fi
-        sbx policy allow network --sandbox "$FINN_SBX_NAME" "$resources" >/dev/null 2>&1 \
-            || yecho "could not grant egress to $resources; licence checkout will fail"
-    done < <("$REPO/docker/finn-env" inspect --tier "$TIER" --backend sbx 2>/dev/null \
-             | python3 -c '
-import json, sys
-for g in json.load(sys.stdin)["egress"]:
-    host, ports = g["host"], g.get("ports") or []
-    res = ",".join("%s:%s" % (host, p) for p in ports) if ports else host
-    print("%s\t%s" % (host, res))')
-fi
-
-if [ "$#" -gt 0 ]; then
-    exec sbx env exec "${ENV_FILES[@]}" -- "$@"
-fi
-exec sbx env run "${ENV_FILES[@]}"
+exec "$DIR/run" "${args[@]}" -- "$@"

@@ -3,6 +3,15 @@
 Reference for contributors. To *run* FINN, read
 [Getting Started](finn/getting_started.rst).
 
+Image rebuild and digest semantics are defined in
+[Image identity](image-identity.md). Deferred Jenkins and shared-image work is
+tracked in [CI and Jenkins container debt](ci-container-debt.md).
+
+The user-facing model has two setup paths: native installation on the supported
+Ubuntu/Python platform, or the Docker-built environment. Docker Compose is the
+default execution backend for that image; sbx imports it for agent isolation,
+and Apptainer converts it to a SIF for HPC execution.
+
 This replaces three earlier documents — an analysis of the previous design, a
 decision record and an implementation plan. They described work that is now
 done, in the present tense, which misleads a later reader.
@@ -13,7 +22,7 @@ have to rediscover.
 
 ## The one idea
 
-**Every fact about the host is found in exactly one place: `docker/finn-env`.**
+**Every fact about the host is found in exactly one place: `docker/config`.**
 
 This is a correctness requirement, not tidiness. Nine defects were found while
 building this. Four were the same defect — two or more programs found the same
@@ -30,13 +39,9 @@ None of these reproduced on the development machine, because it has one Xilinx
 version in one layout. A program that finds nothing cannot disagree with
 anything.
 
-`run-docker.sh` went from **407 lines to 306** against `dev` — a 25% cut, bought
-with roughly +5,600 lines across the rest of the stack. An earlier version of
-this document said "900 lines to 262". That was wrong twice over: 900 was the
-launcher's peak *on this branch*, reached partway through when the sbx logic
-was still inline, so the figure measured a detour this work created and then
-removed. The value of the change is that the launcher now derives no host
-facts, not that it is shorter.
+The value of the change is that launchers derive no host facts, not a particular
+line count. Host-specific Docker configuration is rendered as an ephemeral
+Compose override from the same resolver used by the other backends.
 
 The other five were documentation contradicting itself or the code. Those are
 listed under "Corrections" below, because a wrong comment costs as much as a
@@ -46,16 +51,18 @@ wrong line.
 
 | Subject | File |
 |---|---|
-| Which images exist, their names, their build inputs | `docker-bake.hcl` |
-| Host facts: toolchain, licence, mounts, network | `docker/finn-env` |
+| Image stages, supported flavors, build inputs and tags | `docker-bake.hcl` |
+| Host facts and backend renderers | `docker/config.py` (`docker/config` CLI) |
 | Applying the toolchain to a shell | `docker/finn-toolchain.sh` |
-| Build-matrix facts: target names, tags, `git describe` | `docker/lib.sh` |
-| Docker runtime | `compose.yaml` |
-| sbx runtime | `docker/sbxenv/*.sbxenv.yaml` |
+| Launcher Bake helpers and compatibility mappings | `docker/lib.sh` |
+| Static Docker services | `compose.yaml` |
+| sbx runtime rendering and lifecycle | `docker/config.py`, `docker/run-sbx` |
 | Host-system setup | `setup-local.sh` |
 | Dependency versions | `deps.env` |
 | Accelerator runtime packages | `docker/runtimes/*.env` |
-| Legacy command | `run-docker.sh` — owns nothing |
+| Container UX and artifact preparation | `docker/run`, `docker/build` |
+| Legacy user commands | `docker/finn-*` — own nothing |
+| Jenkins compatibility bridge | `run-docker.sh` — delete after CI migration |
 
 ---
 
@@ -65,7 +72,7 @@ wrong line.
 ubuntu:${UBUNTU_TAG}
  └─ system      OS packages, locale, ncurses 5 ABI, LSB loader, tini
     └─ python   interpreter, torch, requirements, tool pins
-       └─ base  FINN wheels, finn-hlslib, board files, finn-env, shims,
+       └─ base  FINN wheels, finn-hlslib, board files, config resolver, shims,
           │     ENV LD_PRELOAD, USER agent          <- the publishable image
           └─ runtime   + the stacks in FINN_RUNTIMES (xrt, slash, v80pp)
              └─ sbx    + the sbx template contract
@@ -79,9 +86,10 @@ ubuntu:${UBUNTU_TAG}
 | runtime targets | a set | `.xrt`, `.slash.xrt` (sorted, dot-joined) |
 | sbx contract | boolean | `sbx-` prefix |
 
-Four targets: `finn`, `finn-xrt`, `finn-sbx`, `finn-sbx-xrt`. Enumerated in
-`docker-bake.hcl`, not generated — three runtime targets and a boolean would be
-sixteen images, almost all unwanted. Build any other combination with `--set`.
+Four supported flavors — `finn`, `finn-xrt`, `finn-sbx`, `finn-sbx-xrt` — are
+enumerated for CI. The parameterized `finn-runtime` and `finn-sbx-runtime`
+targets cover other manifest combinations without creating a powerset of named
+targets. Bake computes their args, labels and complete tag.
 
 Use `.` and not `+` to join runtime names: a Docker tag accepts
 `[\w][\w.-]{0,127}`, and `+` gives `invalid reference format`.
@@ -98,7 +106,7 @@ migrations.
 
 **The tier axis encoded a host fact.** `dev` and `build` differed by 530 MB of
 HLS headers and board definition files (measured: 2.91 GB against 3.44 GB) —
-that is, by whether the user has Vivado. `finn-env` already resolves that at
+that is, by whether the user has Vivado. `docker/config` already resolves that at
 launch, so the fact had two encodings and they could disagree. They did:
 Apptainer mounts `$HOME`, so on a host that keeps its tools there, `vivado` ran
 out of the *dev* image.
@@ -183,11 +191,11 @@ have to `sudo` to grant itself the sudo it is granting.
 the container is the only boundary there is.** That is the argument that holds,
 and it is why the capability belongs to the variant whose runtime can take it.
 Merged into the base, every `docker run` would grant passwordless root to uid
-1000: an agent could install anything, disable the shims, rewrite `finn-env`, and
+1000: an agent could install anything, disable the shims, rewrite the resolver, and
 — with no userns remap — create root-owned files in the workspace bind mount.
 Under sbx that mutability is *intended*; kits install software.
 
-Two mitigations worth knowing: `run-docker.sh` always passes `--user $UID:$GID`,
+Two mitigations worth knowing: the Docker backend always passes `--user $UID:$GID`,
 so the sudoers entry (which is for `agent`, uid 1000) is inert for anyone going
 through the launcher; and in-container root cannot write through a `:ro` mount.
 
@@ -231,14 +239,12 @@ The build fails rather than shipping something subtly wrong:
 
 ### `dev` requires no host state, and that is the point
 
-No toolchain mount, no licence, no secrets, no FINN network access. Only the
-workspace.
+No toolchain mount, no licence and no secret mount. Docker networking remains
+open; sbx is the backend that enforces denied-by-default egress.
 
-This is about **host state**, not about setup steps. Plain Compose still needs
-`.env` generated once, because Compose cannot run `id -u` and would otherwise
-run as uid 1000 and fail to write a workspace owned by anyone else. An earlier
-version of this document said `dev` needed no configuration at all. That was
-wrong, and it was wrong in the primary documented command.
+This is about **host state**, not about setup steps. The Docker backend generates a
+per-invocation Compose override containing uid/gid, workspace and build scratch.
+The Dev Container uses its standard uid mapping plus a fixed-path static overlay.
 
 If the default environment requires nothing, the question "how does automation
 discover what this image needs" largely *disappears* rather than needing a
@@ -259,11 +265,11 @@ actually withhold the third:
 | lane | tier | egress |
 |---|---|---|
 | sbx | `dev` / `build`, explicit | **enforced** — `sbx policy allow network` |
-| docker | `auto` by default, `dev` opt-in | declared only |
+| docker | `dev` by default, `--fpga` for `build` | declared only |
 | apptainer | none | the host's network namespace |
-| bare host | n/a | n/a |
+| native install | n/a | n/a |
 
-`finn-env` reports which through `egress_enforcement`. That field exists because
+`docker/config` reports which through `egress_enforcement`. That field exists because
 the dev tier used to report `egress: false` everywhere, and it was measurably
 untrue:
 
@@ -285,7 +291,7 @@ claim the runtime cannot keep. The positional argument is still accepted and
 warns.
 
 **`--tier auto`** resolves to `build` when the host has a toolchain and `dev`
-when it does not. That degrade used to live in `run-docker.sh`, which made a
+when it does not. That degrade used to live in the legacy launcher, which made a
 launcher the place a host fact was interpreted — the shape of the four defects
 this design exists to prevent. `dev` and `build` stay explicit requests: an
 explicit `--tier build` with no toolchain is still a hard error, because
@@ -301,7 +307,7 @@ is host-wide unless the site pinned it:
 DAEMON xilinxd /opt/xilinx/xilinxd port=2101
 ```
 
-`finn-env` reads that from a readable licence file, or takes
+`docker/config` reads that from a readable licence file, or takes
 `FINN_LICENSE_VENDOR_PORT`. When known, the grant becomes `host:2100,host:2101`;
 when not, the whole host. Both cases announce themselves in the launcher output.
 
@@ -369,7 +375,7 @@ and passed as container environment, which a bare exec inherits. Only `PATH`,
 
 **The layout probe stays host-side, and only there.** `finn-toolchain.sh` is
 handed `XILINX_VIVADO` and friends and probes nothing, so there is still exactly
-one resolver for where the tools are. `finn-env` is now a host-side program with
+one resolver for where the tools are. `docker/config` is a host-side program with
 one subcommand.
 
 ### Workspace path policy is per-tier
@@ -405,16 +411,18 @@ naming what is missing), `auto` (whichever is there).
 *environment*; FINN's source is mounted, not baked. With shadowing on, two shards
 on one digest can execute different code — exactly the property the digest is
 adopted to guarantee. The CI record is therefore the full tuple: source commit,
-image digest, profile, tier, resolved dependency commits, deps mode.
+image digest, runtime set, grant tier, resolved dependency commits and deps mode.
 
 ### `sbx env` owns the sandbox
 
 sbx 0.39.0 added declarative environment files, and `sbx env run` *is*
 create-or-attach. Most of the previous sandbox launcher was reimplementing it.
-`docker/finn-sbx` now does only the three things the format cannot express:
+The interface is experimental in 0.39.0. Reusing an environment applies `env`
+changes, while template and workspace changes require remove/recreate.
+`docker/run-sbx` does only the three things the format cannot express:
 
 1. Load a locally built image into sbx's own image store.
-2. Write the environment files outside every mounted workspace.
+2. Render the environment file outside every mounted workspace.
 3. Permit network access to the licence server.
 
 Item 2 is a safety requirement. With a direct mount the agent can write every
@@ -430,20 +438,21 @@ both.
 
 **Image labels as a requirements protocol.** There is no OCI convention for
 network allowlists or mount requirements, and FINN should not invent labels that
-imply one exists. Labels describe what the image *is*; `finn-env` resolves what it
+imply one exists. Labels describe what the image *is*; `docker/config` resolves what it
 *needs*.
 
 **Compose as the sbx driver.** sbx's create-or-attach lifecycle does not fit
 Compose's model.
 
-**Generated files as a single source of truth** across bake, compose and the kit.
-Generated files go stale silently when someone edits the output. `finn-env` is a
-*runtime* resolver instead, so it cannot disagree with itself.
+**Checked-in generated configuration as a source of truth.** Generated files go
+stale when someone edits the output. The Compose override is different: it is an
+ephemeral launch artifact rendered directly from `docker/config` and never committed.
 
 **A separate `Dockerfile.sbx`.** See "Why the sbx variant is a separate target".
 
-**`FINN_SINGULARITY`** is removed, not deprecated. It worked by string-replacing
-the docker argument list, which belongs to Compose now.
+**Treating Apptainer as a security tier.** `FINN_SINGULARITY` remains a
+compatibility path to a prebuilt SIF, but Apptainer inherits the host kernel and
+network and cannot enforce the Docker/sbx grant model.
 
 ---
 
@@ -473,7 +482,7 @@ set:
 |---|---|
 | `docker/finn_paths.py` | `workspace_root()` — the seam |
 | `docker/finn_entrypoint.sh` | derives `FINN_ROOT` from `$PWD` |
-| `run-docker.sh` | the host-path-mirroring mount |
+| `docker/run-docker` | the host-path-mirroring mount |
 | `src/finn/util/basic.py` | `FINN_HLSLIB_PATH` / `FINN_BOARD_FILES_PATH` defaults |
 | `src/finn/xsi/paths.py` | `finn_xsi` source location |
 
@@ -504,7 +513,7 @@ template. A stock create against an unprepared image fails with nothing but
 
 | Requirement | Symptom when absent |
 |---|---|
-| `agent` uid 1000, NOPASSWD sudo | Kits run as `agent` and cannot write |
+| `agent` uid 1000, NOPASSWD sudo | Sandbox setup runs as `agent` and cannot install tools |
 | `/home/agent` **755**, with `.claude/ .local/bin .npm .cache workspace/` agent-owned | `cannot create .../settings.json: Permission denied` |
 | `tini` as PID 1 | No zombie reaping |
 | A `CMD` that does not exit | The container dies before setup |
@@ -517,22 +526,15 @@ diffing a stock template after the permission failure.
 **`/etc/sandbox-persistent.sh` is sbx-managed.** The image must not write its
 content — sbx replaces the file after the entrypoint runs, so anything written
 there is dead code. It must however *exist*, so the first shell's `BASH_ENV` hook
-can source it. A kit's startup command may add a line to it.
+can source it.
 
 **sbx substitutes its own CMD.** PID 1 in a sandbox is
 `tini -- finn_entrypoint.sh sh -c 'trap ...; sleep infinity & wait'`. The image's
 `CMD` is irrelevant there. What kills a sandbox is the ENTRYPOINT *exiting*.
 
-**Kit schema versions**, verified against v0.39.0: `schemaVersion: "1"` uses
-`commands:`, `"2"` uses `setup:`. v2 is available from sbx 0.36. The grammars must
-not be mixed.
-
 **`.sbxenv.yaml` facts not in the documentation**, all established by testing:
 
-- Host `${VAR}` interpolation works in `name`, `workspace`, `kits[]` and
-  `sandboxOptions.template`, not only in `env`.
-- `WORKSPACE_DIR` is a real environment variable. `WORKDIR` is **not** — it is a
-  kit-render placeholder for `files.content` only.
+- `WORKSPACE_DIR` is a real environment variable. `WORKDIR` is not.
 - `pullPolicy: never` genuinely refuses. The default `always` tries to pull
   `xilinx/finn:...` from Docker Hub and reports what looks like an
   authentication failure.
@@ -552,7 +554,7 @@ wrapper, and run a bare `sbx exec`.
 
 ---
 
-### Licensing, and what the kit cannot express
+### Licensing, and what sbxenv cannot express
 
 `XILINXD_LICENSE_FILE` takes two forms, and only one implies a mount:
 
@@ -569,29 +571,28 @@ license was not found" — a thoroughly misleading error for a firewall problem.
 Verified by a real `synth_design`.
 
 The directory rather than the file, because a single-file bind cannot carry
-sibling state. **Unresolved:** the kit claims some FLEXlm setups write beside
-the licence, and both backends mount that directory `:ro`. Both cannot be true.
-Our licence testing used the floating form, which mounts nothing, so this is
-untested — conformance test 9.
+sibling state. **Unresolved:** earlier template guidance claimed some FLEXlm
+setups write beside the licence, while FINN mounts that directory `:ro`. Both
+cannot be true. Our licence testing used the floating form, which mounts
+nothing, so this is untested — conformance test 9.
 
 `.sbxenv.yaml` has **no network field**, and there is no allow-at-create flag
 (only `--deny-network`, sbx 0.38+). So the grant is a post-create step in
 `finn-sbx`, and it is the reason that script exists at all alongside the
 declarative files.
 
-### Why a kit and not the entrypoint
+### Why sbxenv, not the entrypoint
 
 `sbx exec` does not run the ENTRYPOINT, so nothing `finn_entrypoint.sh` exports
-reaches an exec session. The kit's `environment.variables` becomes **real
-process env**, which does:
+reaches an exec session. The `env` mapping in the materialized sbxenv becomes
+real process environment, which does:
 
 | Mechanism | `bash -c` | `sh -c` | bare exec |
 |---|---|---|---|
-| kit `environment.variables` | yes | yes | yes |
+| sbxenv `env` | yes | yes | yes |
 | `/etc/sandbox-persistent.sh` | yes | no | no |
 
-The image still works with no kit at all: `finn_paths.py` resolves the same
-values from `WORKSPACE_DIR` at interpreter startup.
+`finn_paths.py` additionally resolves the workspace at Python startup.
 
 ## Corrections
 
@@ -601,25 +602,26 @@ pattern worth recognising.
 | Claim | Reality |
 |---|---|
 | The libudev `LD_PRELOAD` workaround is microVM-specific | It is not. `realloc(): invalid pointer` reproduces on plain `docker run`. |
-| sbx v0.39.0 rejects `setup:` and requires `commands:` | It does not. That was a v1 spec read by a v2 parser, and the diagnosis stopped at the first error message. |
 | The entrypoint writes `/etc/sandbox-persistent.sh` | It does not, and must not. Stated four paragraphs after the opposite. |
 | A floating licence requires an open network posture | A bare hostname grant is sufficient. Verified by a real checkout. |
 | The Docker container gives no isolation | It gives separate namespaces, a reduced capability set and a seccomp filter. What it lacks is a separate kernel and any network allowlist. |
 
 Every one came from reasoning where a measurement was available and cheap.
 
-**Still unresolved.** `docker/finn.kit/spec.yaml` says some FLEXlm setups write
-beside the licence file, and both backends mount that directory read-only. Both
-cannot be true. Licence testing used the floating form, which mounts nothing, so
-the path is untested. Conformance test 9 covers it and currently skips.
+**Still unresolved.** Earlier template guidance says some FLEXlm setups write
+beside the licence file, while FINN mounts that directory read-only. Licence
+testing used the floating form, which mounts nothing, so the path is untested.
+Conformance test 9 covers it and skips when no node-locked licence is available.
 
 ---
 
 ## Verification
 
-`ci/scripts/conformance.sh` — thirteen checks, each corresponding to a defect
-that happened or a contract that would erode silently. Tests 4 and 5 matter
-most, and only in their **bare** form:
+`tests/container/test_container_conformance.py` contains thirteen runtime checks,
+each corresponding to a defect that happened or a contract that would erode
+silently. `ci/scripts/conformance.sh` remains as a compatibility selector for
+their historical numbers. Tests 4 and 5 matter most, and only in their **bare**
+form:
 
 ```
 docker exec <c> vivado -version
@@ -633,37 +635,11 @@ Test 7 asserts **both** readings of privilege, because "no privileges" is
 ambiguous and the natural reading is the wrong one: the generic and sbx images
 differ only in in-container root, and neither has host privilege.
 
-Tests 12 and 13 guard the runtime seam. 12 checks that the tag names the
-runtime set and that the two producers of that suffix — `tag()` in
-`docker-bake.hcl` and `runtime_tag()` in `finn-env` — agree; if they drift,
-compose names an image bake never built. 13 checks that a `SOURCE=supply`
-target with no `.deb` fails the build with the path in the message, because the
-build is the only place that is checked.
+Tests 12 and 13 guard the runtime seam. Bake alone computes complete image tags;
+parameterized targets cover arbitrary manifest combinations without deriving a
+target name in a launcher. A missing `SOURCE=supply` package must fail the build
+and name the expected path.
 
-Unit tests: **49** in `tests/util/test_finn_env.py`, including the path-dedup
-and idempotence checks, which now drive `finn-toolchain.sh` through bash rather
-than calling a Python function.
-
-Four checks moved from the suite into pytest — the two static greps, the
-Apptainer workspace-policy assertion and `finn-env`'s half of the tag agreement.
-Each read files and needed no hardware, so in the suite they ran on one machine
-behind a `have_docker` or cached-`.sif` guard; in pytest they run on every PR.
-
-Check 5 now **creates** the sandbox it needs. It previously required one the
-suite never made, and the `EXIT` trap then deleted it — so the first run
-consumed the operator's sandbox and every run after it skipped. A green
-scoreboard was structurally guaranteed to be missing the one check that proves
-FINN works against stock sbx. It passes now, for the first time.
-
-A skipped check listed in `LOAD_BEARING_SKIPS` warns in the summary, because a
-green total that skipped a bare-exec check has not proved that property.
-
-Last measured: **26 pass, 0 fail, 3 skip.** Skips are the node-locked licence
-(still unresolved, see above) and the Apptainer `.sif`, which warns.
-
-`quicktest.sh`: **2498 passed, 16 skipped, 5 xfailed, 1 xpassed, 32 errors.**
-The 32 are one file, `tests/util/test_config.py`, where onnxscript's `@script`
-decorator calls `inspect.getsource` on a function pytest's assertion rewriting
-compiled. It is unrelated to containerization and reproduces identically in the
-pre-restructure image — verified by running the same suite in both. An earlier
-revision of this document reported "2487 passed, 0 failed", which was wrong.
+Static resolver, quoting, Compose-rendering and toolchain-idempotence checks live
+in `tests/util/test_container_config.py` and run in the ordinary PR suite. Runtime tests
+are marked `container` and are excluded from quicktest unless requested.

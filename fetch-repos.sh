@@ -43,7 +43,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 . "$SCRIPTPATH/deps.env"
 
 # Which half of deps/ to fetch. `python` is the three importable packages,
-# `data` the HLS headers and board files that only the build image tiers use.
+# `data` is the HLS headers and board files used by FPGA build flows.
 FETCH_GROUP="${1:-all}"
 case "$FETCH_GROUP" in
     all)    FETCH_NAMES="$FINN_DEP_GROUP_PYTHON $FINN_DEP_GROUP_DATA" ;;

@@ -13,7 +13,10 @@ FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
 
 ## Add a runtime target
 
-Write one file, `docker/runtimes/<name>.env`. Nothing else changes.
+Write one file, `docker/runtimes/<name>.env`. The parameterized
+`finn-runtime`/`finn-sbx-runtime` Bake targets and launchers can use it without a
+new named target. Add an explicit named target only when the combination should
+join the supported CI matrix.
 
 | key | required | meaning |
 |---|---|---|
@@ -59,5 +62,5 @@ already built and installed SLASH on the host, because the kernel module has to
 be there, so the `.deb` is a by-product they already hold. FINN has no V80 to
 test a build against.
 
-**The Xilinx toolchain.** Vivado and Vitis are host facts. `docker/finn-env`
+**The Xilinx toolchain.** Vivado and Vitis are host facts. `docker/config`
 resolves them at launch and the lane mounts them read-only.

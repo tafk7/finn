@@ -58,9 +58,8 @@ mkdir -p "$HOME" 2>/dev/null || true
 
 # Give the running uid a resolvable name.
 #
-# Dropping the baked useradd (identity is a runtime concern) also removed the
-# passwd entry it happened to provide, and `docker run --user 1234:1234` maps to
-# no entry at all. Anything calling getpass.getuser() then raises
+# `docker run --user 1234:1234` may select an uid with no passwd entry. Anything
+# calling getpass.getuser() then raises
 # "getpwuid(): uid not found" - which includes pytest's tmp_path fixture, so
 # every test using it fails.
 #
@@ -68,17 +67,18 @@ mkdir -p "$HOME" 2>/dev/null || true
 # exporting a name is enough and needs no root. Prefer the real name when there
 # is an entry; fall back to a fixed one when there is not.
 if [ -z "$USER" ]; then
-  export USER="$(id -un 2>/dev/null || echo finn)"
+  USER="$(id -un 2>/dev/null || echo finn)"
+  export USER
 fi
 export LOGNAME="${LOGNAME:-$USER}"
 
 # LIMITATION(finn-root-absolute): FINN has no fixed workspace path, so the image
 # cannot know where the source will be until it is running. Derive rather than
-# require, so the same image works under host-path mirroring (run-docker.sh,
+# require, so the same image works under host-path mirroring (the Docker backend,
 # sbx) and at a fixed path. See docker/finn_paths.py for the full statement of
 # the limitation and the migration if the path ever becomes fixed.
 # WORKSPACE_DIR before $PWD: sbx sets it and starts PID 1 with cwd=/, so $PWD
-# alone resolves to the wrong place there. run-docker.sh sets neither and relies
+# alone resolves to the wrong place there. The Docker backend sets neither and relies
 # on -w, which $PWD picks up.
 export FINN_ROOT="${FINN_ROOT:-${WORKSPACE_DIR:-$PWD}}"
 
@@ -93,10 +93,10 @@ export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_fil
 # nothing but a KeyError, because finn.util.basic reads os.environ["FINN_BUILD_DIR"]
 # with no default and pytest turns that into 7 collection errors.
 #
-# Deliberately the SAME formula as finn-env's default, not a second opinion.
+# Deliberately the SAME formula as docker/config's default, not a second opinion.
 # This is the last resort: a bare `docker run <image>` with no orchestration.
 # Every supported lane resolves and mounts a host directory before we get here,
-# so artifacts survive. If you change the formula, change it in finn-env too.
+# so artifacts survive. If you change the formula, change it in docker/config too.
 export FINN_BUILD_DIR="${FINN_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
 mkdir -p "$FINN_BUILD_DIR" 2>/dev/null || true
 
@@ -163,6 +163,7 @@ elif [ -r /etc/finn-toolchain.sh ]; then
   # Non-fatal on failure, for the same reason the checks below are: killing
   # PID 1 here surfaces under sbx as an opaque "failed to run sandbox
   # container" with no cause. The shims and BASH_ENV still apply it later.
+  # shellcheck source=/dev/null
   . /etc/finn-toolchain.sh 2>/dev/null || \
     yecho "could not apply /etc/finn-toolchain.sh; vendor tools will configure on first use"
   if [ -n "${XILINX_VIVADO:-}${VIVADO_PATH:-}" ]; then
@@ -205,11 +206,9 @@ fi
 # showed it 0 bytes despite this running as root with the file writable.
 #
 # Env for sessions that never run this script comes from the sandbox definition
-# itself: `env:` in docker/sbxenv/base.sbxenv.yaml sets FINN_ROOT and
+# itself: `env:` in the materialized finn.sbxenv.yaml sets FINN_ROOT and
 # FINN_BUILD_DIR as real process env, which reaches even a bare `sbx exec <cmd>`
-# with no shell. That was MEASURED when docker/finn.kit was retired -- the kit
-# existed on the belief that only a kit could do it, and was a second
-# declaration of values base.sbxenv.yaml already owned. Python additionally
-# self-heals via finn_paths, so the image works under plain `docker run` too.
+# with no shell. Python additionally self-heals via finn_paths, so the image
+# works under plain `docker run` too.
 
 exec "$@"

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Apply the mounted Xilinx toolchain to the current shell. SOURCE this file.
 #
 #     . /etc/finn-toolchain.sh
@@ -19,7 +20,7 @@
 # vivado -version` against a container where everything else worked.
 #
 # INPUT: XILINX_VIVADO / XILINX_VITIS / XILINX_HLS (or the *_PATH aliases),
-# already resolved. Those come from `finn-env inspect`, which probes the two
+# already resolved. Those come from `docker/config inspect`, which probes the two
 # Xilinx directory layouts on the HOST and passes the answer in as process
 # environment. Nothing here probes; there is one layout resolver and it is
 # host-side.
@@ -129,7 +130,7 @@ elif [ "${FINN_ENV_APPLIED:-}" != "1" ]; then
     case ":${LD_PRELOAD:-}:" in
         *libudev.so.1*) ;;
         *)
-            _finn_libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1)
+            _finn_libudev=$(find /lib -path '*-linux-gnu/libudev.so.1' -print -quit 2>/dev/null)
             if [ -n "$_finn_libudev" ]; then
                 LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$_finn_libudev"
                 export LD_PRELOAD

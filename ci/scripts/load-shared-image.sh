@@ -3,8 +3,8 @@
 #
 #   ci/scripts/load-shared-image.sh <tag>
 #
-# CI transport, not a developer concern. It lived in run-docker.sh, where every
-# local `./run-docker.sh quicktest` carried ~50 lines of NFS handling it would
+# CI transport, not a developer concern. It lived in the old public launcher,
+# where every local quick test carried ~50 lines of NFS handling it would
 # never execute.
 #
 # This is the OCI-archive path: where a registry is unavailable and NFS is the
@@ -53,6 +53,8 @@ if [ -n "$FINN_DOCKER_SHARED_IMAGE_DIR" ] && \
       exit 1
     fi
     # local /tmp lock to serialise concurrent loads on the same host
+    # $1 is intentionally expanded by the inner bash.
+    # shellcheck disable=SC2016
     if flock /tmp/finn-docker-load.lock \
          bash -c 'set -o pipefail; gunzip -c "$1" | docker load' _ "$SHARED_IMG"; then
       SHARED_LOADED="1"

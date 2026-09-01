@@ -28,53 +28,22 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# =============================================================================
-# ONE base image, plus two orthogonal layers:
+# Image stages: system -> python -> base -> runtime -> sbx.
 #
-#   system -> python -> base -> runtime -> sbx
-#
-#   base      everything FINN needs to compile a design. The publishable image.
-#   runtime   + the accelerator stacks named in FINN_RUNTIMES (xrt, slash, ...)
-#   sbx       + the privileged half of the sbx template contract
-#
-# WHY THERE IS NO dev/build SPLIT ANY MORE
-# ----------------------------------------
-# There used to be three tiers, and the difference between `dev` and `build` was
-# 530 MB of HLS headers and board definition files (measured: 2.91 GB against
-# 3.44 GB). That split encoded a HOST fact -- whether the user has Vivado -- as
-# an IMAGE fact, and docker/finn-env already resolves the same fact at launch.
-# Two encodings of one fact can disagree, and they did: Apptainer mounts $HOME,
-# so on a host that keeps its tools there, `vivado` ran out of the *dev* image.
-#
-# What made `dev` narrow was never which image you pulled. It was the absence of
-# a toolchain mount, a licence and egress -- all runtime grants, all still
-# enforced, now in exactly one place. `tier` still exists in finn-env and in the
-# launchers; it selects grants, not content.
-#
-# WHY THE RUNTIME LAYER IS A LAYER
-# --------------------------------
-# XRT and SLASH are not host facts. They are packages that code inside this
-# image links or execs against -- v++ links XRT, MakeCPPDriver builds
-# finn-vrt-driver against VRT. They cannot be mounted from the host the way
-# Vivado can, because they are distro-specific compiled binaries rather than a
-# self-contained tree. So they are built in, and the tag says which.
-#
-# Add one by writing docker/runtimes/<name>.env. See that directory's README
-# for the format and for the admission test.
-#
-# No image bakes an identity. Identity is a runtime concern: run-docker.sh
-# passes --user, and any orchestrator that runs this image is expected to
-# provision a passwd entry and drop privileges itself.
-# =============================================================================
+# `dev` and `build` are runtime grant tiers, not image stages. XRT/SLASH are
+# distro-specific userspace packages and remain image content selected through
+# FINN_RUNTIMES. The sbx stage adds its explicit in-container privilege contract.
+# See docs/containerization.md for the design rationale.
 
 # Ubuntu base for every stage. Not free to choose once a runtime target is
 # selected: it must match the release that target's packages were built for.
 # Each manifest may declare EXPECT_OS, and docker/install-runtimes.sh fails the
 # build when it disagrees with this base.
 #
-# A date-pinned snapshot, not the rolling `ubuntu:jammy`. Canonical republishes
-# the rolling tag regularly, which would let image contents drift under an
-# unchanged FINN tag. Bump deliberately.
+# A date-pinned base gives rebuilds a stable starting point. apt and pip inputs
+# are intentionally refreshed when layers rebuild, so the image digest -- not
+# the human-readable FINN tag -- is the immutable identity of a particular
+# build. See docs/image-identity.md.
 ARG UBUNTU_TAG=jammy-20230126
 
 
@@ -221,29 +190,26 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 # --- python: the interpreter environment. Changes with requirements. ---------
 FROM system AS python
 
-# torch first and alone: it is the largest and most stable pin in the tree, so it
-# belongs in a layer that edits to requirements.txt cannot invalidate.
+# Torch first and alone: it is the largest and most stable pin in the tree, so it
+# belongs in a layer that edits to requirements.txt cannot invalidate. The pin
+# file is shared with setup-local.sh.
 #
 # CPU build, not cu126. The CUDA wheels pull ~5 GB of nvidia/* and triton that
 # nothing here can reach: FINN's src and tests contain no .cuda(), no
-# torch.cuda, not even an is_available() guard, and run-docker.sh never passes
+# torch.cuda, not even an is_available() guard, and the Docker backend never passes
 # --gpus (NVIDIA_VISIBLE_DEVICES is set and then unused), so no container can
 # see a device in the first place. This removes dead weight, not capability.
 #
 # Restoring GPU support means adding the --gpus plumbing AND a separate
 # cuda-variant image tag - not flipping this index back, which would only make
 # every image 5 GB larger while remaining unable to reach a device.
-RUN pip install --no-cache-dir \
-    torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
-    --index-url https://download.pytorch.org/whl/cpu
-
-COPY requirements.txt /tmp/requirements.txt
-COPY docker/pip-constraints.txt docker/pip-tools.txt /tmp/pip/
-
-# Cap what later layers may resolve to. These bounds are load-bearing, not
-# defensive: numpy<2 is a FINN correctness requirement, not a convenience.
+COPY docker/pip-constraints.txt docker/pip-torch.txt /tmp/pip/
 RUN cp /tmp/pip/pip-constraints.txt /etc/finn-pip-constraints.txt
 ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
+RUN python -m pip install --no-cache-dir -r /tmp/pip/pip-torch.txt
+
+COPY requirements.txt /tmp/requirements.txt
+COPY docker/pip-tools.txt docker/pip-post.txt docker/pip-extra.txt /tmp/pip/
 
 # Base FINN requirements, then the interaction and test stack. Grouped rather
 # than one RUN per package: ~30 sequential layers cost cache granularity that
@@ -260,21 +226,19 @@ ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
 #         distro-provided copies, but installing them first would let the base
 #         requirements resolve against the wrong versions.
 #
-# The post phase is inline rather than a file. It was a 4-line file holding two
-# packages, with a `[ -s ]` branch here for a pre-phase sibling that has never
-# existed -- a phantom file plus five lines of conditional to handle it. A phase
-# is expressible where it executes.
+# The post phase is a shared pin file because setup-local.sh must install the
+# same versions in the same order.
 #
 # If a future base needs the PRE phase, add it here, before the requirements:
 #   noble ships typing_extensions as a Debian package with no RECORD file, so
 #   pip cannot uninstall it and any requirement wanting a newer one aborts the
 #   whole resolve. jammy does not need it.
 RUN set -eu; \
-    pip install --no-cache-dir -r /tmp/requirements.txt; \
-    pip install --no-cache-dir -r /tmp/pip/pip-tools.txt; \
-    pip install --no-cache-dir --ignore-installed jupyter==1.0.0 matplotlib==3.7.0
+    python -m pip install --no-cache-dir -r /tmp/requirements.txt; \
+    python -m pip install --no-cache-dir -r /tmp/pip/pip-tools.txt; \
+    python -m pip install --no-cache-dir --ignore-installed -r /tmp/pip/pip-post.txt
 
-RUN pip install --no-cache-dir -e git+https://github.com/fbcotter/dataset_loading.git@0.0.4#egg=dataset_loading
+RUN python -m pip install --no-cache-dir -r /tmp/pip/pip-extra.txt
 
 
 # --- base: FINN's dependency closure and build data. The publishable image. ---
@@ -378,7 +342,7 @@ print('env consistent: numpy', numpy.__version__, '| torch', torch.__version__, 
 # check passes while every pytest invocation dies at plugin load.
 
 COPY docker/finn_entrypoint.sh docker/quicktest.sh docker/build_dataflow \
-     docker/finn-env /usr/local/bin/
+     docker/config.py docker/finn-env /usr/local/bin/
 RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
               /usr/local/bin/quicktest.sh \
               /usr/local/bin/build_dataflow \
@@ -395,7 +359,7 @@ RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
 # has no reason to know FINN's calling convention. The shim directory goes
 # EARLY on PATH so the bare command works with no caller cooperation.
 #
-# The tool list comes from finn-env's SHIMMED_TOOLS, and the build asserts they
+# The tool list comes from config.py's SHIMMED_TOOLS, and the build asserts they
 # agree -- so adding a tool in one place cannot silently skip the other.
 COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
@@ -409,7 +373,7 @@ RUN set -eu; \
     chmod 644 /etc/finn-bashenv.sh /etc/finn-toolchain.sh; \
     mkdir -p /usr/local/lib/finn/toolchain-bin; \
     for t in $(python -c 'import runpy,sys; \
-        m=runpy.run_path("/usr/local/bin/finn-env"); \
+        m=runpy.run_path("/usr/local/bin/config.py"); \
         print(" ".join(m["SHIMMED_TOOLS"]))'); do \
         ln -sf /usr/local/lib/finn/toolchain-shim \
                /usr/local/lib/finn/toolchain-bin/"$t"; \
@@ -432,7 +396,7 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
 # with the static tier. They point into /finn_cache, which exists only when
 # FINN_DOCKER_CACHE_DIR is mounted; baking them would make torch.hub try to
 # create /finn_cache as a non-root user and fail whenever the cache is absent.
-# run-docker.sh sets them alongside the mount, and without it torch falls back
+# The Docker backend sets them alongside the mount, and without it torch falls back
 # to ~/.cache, which always works.
 # XILINX_LOCAL_USER_DATA=no: workaround for running multiple Vivado instances
 # simultaneously, see https://adaptivesupport.amd.com/s/article/63253
@@ -446,15 +410,15 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
 # privilege -- NOPASSWD sudo above all -- live in the sbx-* targets at the
 # bottom of this file, so that a tag says which privilege model you got.
 #
-#   agent uid 1000     a stable, non-root identity. run-docker.sh still
+#   agent uid 1000     a stable, non-root identity. The Docker backend
 #                      overrides it with --user $UID:$GID.
 #   /home/agent 0755   with .claude/.local/.npm/.cache/workspace present. A bare
-#                      0750 home fails sbx kit install with "cannot create
+#                      0750 home fails sbx setup with "cannot create
 #                      .../settings.json: Permission denied". That requirement
 #                      is in no documentation; it came from diffing a stock
 #                      template. Harmless here, and keeping the home layout in
 #                      one place avoids a second chown -R in the sbx layer.
-#   tini as PID 1      reaps zombies. Also what run-docker.sh's --init provided
+#   tini as PID 1      reaps zombies. Also what the former launcher's --init provided
 #                      for Vivado, so that flag is now redundant.
 RUN set -eu; \
     useradd --create-home --uid 1000 --shell /bin/bash agent 2>/dev/null || true; \
@@ -546,7 +510,7 @@ ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
 # included plain `docker run`, `docker exec`, and any orchestrator reading the
 # image's own metadata to decide who to run as.
 #
-# run-docker.sh still passes --user $UID:$GID and so is unaffected; this fixes
+# The Docker backend passes --user $UID:$GID and so is unaffected; this fixes
 # the default for everyone who does not.
 #
 # Stages below re-assert USER root for their install steps and restore this at

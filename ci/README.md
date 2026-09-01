@@ -1,11 +1,17 @@
 # FINN Jenkins CI guide
 
+Deferred container-related Jenkins and shared-image concerns are tracked in
+[`docs/ci-container-debt.md`](../docs/ci-container-debt.md). They require team
+agreement before changing shared agent or transport behavior.
+
 ## How the pipeline works
 
 The [Jenkinsfile](./Jenkinsfile) is a declarative pipeline of four stages, delegating most logic to the `finn_ci` Python package.
 
 1. **Validate**: computes the sharding plan once, prepares a timing snapshot from historical records, checks executor budget, and prunes the shared trees.
-2. **Build Docker Image**: builds the FINN image with `run-docker.sh` and publishes it to NFS (if `FINN_CI_NFS_ROOT` is set) so the test shards load it instead of rebuilding.
+2. **Build Docker Image**: builds the FINN image with Buildx Bake through
+   `ci/scripts/build-images.sh` and publishes it to NFS (if
+   `FINN_CI_NFS_ROOT` is set) so test shards load it instead of rebuilding.
 3. **Run Tests**: fans out one parallel branch per shard. Each branch runs `python -m pytest -m <marker> --num-shards N --shard-id i` inside the container and stashes results/artifacts.
 4. **Check Stage Results** unstashes every shard's reports, aggregates one board zip per `(hwTestType, board)`, and refreshes the persistent timing master file.
 
@@ -29,7 +35,7 @@ For external contributors who would like to write or edit tests in FINN:
 You do not need Jenkins to run the same tests locally. From a checkout:
 
 ```bash
-./run-docker.sh python -m pytest -m sanity_bnn
+./docker/run -- python -m pytest -m sanity_bnn
 ```
 
 substituting any marker from the `STAGES` table in [finn_ci/config.py](./finn_ci/config.py). The sharding flags are optional and change nothing when omitted. If running tests in parallel locally with `-n <N>` (i.e. multiple workers), add `--dist loadgroup` too, so the checkpoint-linked tests stay on one worker.
@@ -249,14 +255,14 @@ nodeid=<nodeid> stage=<stage> shard=<i>/<n> stash=<stash> group=<group> weight_s
 
 ### DSL environment variables
 
-These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by `run-docker.sh` and the FINN flow rather than by the pipeline itself, so the defaults and meanings match a normal local `run-docker.sh` run.
+These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by the temporary Jenkins compatibility launcher and the FINN flow rather than by the pipeline itself. Their migration is tracked in `docs/ci-container-debt.md`.
 
 | Env var               | What it sets                                                                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FINN_XILINX_PATH`    | Path to the Xilinx tools install. `run-docker.sh` warns when unset, and Vivado/Vitis/HLS steps need it.                                                       |
+| `FINN_XILINX_PATH`    | Path to the Xilinx tools install. The Jenkins compatibility launcher warns when unset, and Vivado/Vitis/HLS steps need it.                                  |
 | `FINN_XILINX_VERSION` | Xilinx tool version (for example `2022.2`).                                                                                                                   |
 | `PLATFORM_REPO_PATHS` | Vitis platform (DSA) files, required for Vitis-based Alveo cards.                                                                                             |
-| `FINN_DOCKER_EXTRA`   | Extra `docker run` arguments (bind mounts, licence, network, and any `-e` vars the tool-dispatch layer needs). The pipeline appends a per-agent `--hostname` and the NFS cache mounts to whatever the DSL sets. |
+| `FINN_DOCKER_EXTRA`   | Legacy extra `docker compose run` arguments. The pipeline appends a per-agent `--hostname` and cache mounts to whatever the DSL sets. Prefer adding generally useful host facts to `docker/config` instead. |
 | `NUM_DEFAULT_WORKERS` | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                             |
 
 A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA`, and the only variable FINN itself reads is the shim-directory override below:

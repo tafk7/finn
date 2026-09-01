@@ -19,22 +19,36 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Getting Started
 
-FINN runs three ways, for three purposes. See the
+FINN supports two setup paths. See the
 [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
-page for the full guide.
+page for the complete guide.
 
-| Lane | Command | For |
+| Setup | Command | Use it when |
 |---|---|---|
-| **Docker** | `docker compose run --rm dev` | setup-and-go human development |
-| **sbx sandbox** | `docker/finn-sbx dev` | autonomous agent development |
-| **Bare host** | `./setup-local.sh` | unstructured development |
+| **Native** | `./setup-local.sh` | You have the supported Ubuntu/Python environment and want one local installation |
+| **Docker-built environment** | `./docker/run` | You need a portable dependency environment, agent isolation, or an HPC image |
 
-The `dev` tier needs no host state — no toolchain, no licence, no network
-access. (It does need one setup command; see the guide.) Vivado and Vitis work is the `build` tier, which mounts **your
-own** Xilinx installation read-only; FINN does not ship the tools.
+Native quickstart:
 
-`./run-docker.sh` still works and still accepts every variable it always did.
-It is now a wrapper over the Docker lane.
+```bash
+./setup-local.sh
+source scripts/activate.sh
+```
+
+Container examples:
+
+```bash
+./docker/run -- quicktest.sh
+./docker/run --backend sbx -- pytest -m util
+./docker/build --backend apptainer
+```
+
+See [docker/README.md](docker/README.md) for backend and artifact details.
+
+The Docker-built environment runs through Docker Compose by default. Select
+`--backend sbx` for agent isolation or `--backend apptainer` to prepare and run
+a SIF on an HPC system. Use `--fpga` when the environment needs your Xilinx
+installation, which is mounted read-only.
 
 Due to the complex dependencies of this project, we recommend one of the
 container-based methods.

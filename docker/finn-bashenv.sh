@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced by every bash in the image, via BASH_ENV.
 #
 # Covers the shell-based invocation styles -- an interactive session, and
@@ -18,6 +19,7 @@
 # breaks -- sbx writes the sandbox's own environment there after the entrypoint
 # has run.
 if [ -r /etc/sandbox-persistent.sh ]; then
+    # shellcheck source=/dev/null
     . /etc/sandbox-persistent.sh 2>/dev/null || true
 fi
 
@@ -31,6 +33,7 @@ fi
 # created between them are all gone -- nothing in this path spawns Python any
 # more, so there is nothing to recurse into.
 if [ -r /etc/finn-toolchain.sh ]; then
+    # shellcheck source=/dev/null
     . /etc/finn-toolchain.sh 2>/dev/null || true
 fi
 

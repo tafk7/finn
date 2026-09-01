@@ -29,7 +29,7 @@
 
 # This file is intended to serve as an example showing how to set up custom builds
 # using FINN. The custom build can be launched like this:
-# ./run-docker.sh build_custom /path/to/folder
+# ./docker/run --fpga -- bash -lc 'cd tutorials/fpga_flow && python build.py'
 
 
 import numpy as np

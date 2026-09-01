@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared shell helpers for FINN's launchers and CI scripts. SOURCE this file.
 #
 #     . "$(dirname "$0")/lib.sh"          # from docker/
@@ -18,7 +19,7 @@
 #     present in the four launchers and MISSING from build-images.sh and
 #     ci/Jenkinsfile, so the two CI paths carried the fragile variant;
 #   - `-f docker-bake.hcl` was missing from ci/Jenkinsfile:421. Both
-#     run-docker.sh and docker-bake.hcl document at length that this is required
+#     docker/run-docker and docker-bake.hcl document that this is required
 #     rather than tidy: without it bake auto-loads compose.yaml and dies on
 #     ${FINN_XILINX_PATH:?} interpolation, on any machine with no Xilinx
 #     configured.
@@ -27,7 +28,7 @@
 # checked two of seven sites. This file is the fix that test was pointing at.
 #
 # NOT A HOST-FACT RESOLVER. Nothing here reads the machine. Host facts stay in
-# docker/finn-env; the toolchain is applied by docker/finn-toolchain.sh. This
+# docker/config; the toolchain is applied by docker/finn-toolchain.sh. This
 # file knows only about the build matrix, which is docker-bake.hcl's subject.
 
 # --------------------------------------------------------------------------
@@ -50,6 +51,10 @@ yecho () { echo "${FINN_YELLOW}$*${FINN_NC}" >&2; }
 # The build matrix
 # --------------------------------------------------------------------------
 
+finn_normalize_runtimes () {
+    printf '%s' "${1:-}" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -
+}
+
 # The provenance string that goes in every tag.
 #
 # `local`, never `unknown`. docker-bake.hcl's GIT_DESCRIBE default is `local`,
@@ -62,22 +67,22 @@ finn_git_describe () {
 #
 #   finn_bake_target ""          -> finn
 #   finn_bake_target "xrt"       -> finn-xrt
-#   finn_bake_target "xrt,slash" -> finn-slash-xrt      (sorted)
+#   finn_bake_target "xrt,slash" -> finn-runtime        (parameterized)
 #   finn_bake_target "xrt" sbx   -> finn-sbx-xrt
 #
-# Sorted, because the target -- like the tag suffix it produces -- is a function
-# of the SET. Must agree with tag() in docker-bake.hcl and runtime_tag() in
-# docker/finn-env; conformance test 12 asserts that it does.
-#
-# Only the combinations enumerated in docker-bake.hcl are reachable. Build any
-# other with bake directly and --set.
+# The two supported runtime sets keep their descriptive fixed targets. Any other
+# set uses a parameterized target; Bake computes its args, labels and tag.
 finn_bake_target () {
-    local runtimes="${1:-}" variant="${2:-}" t="finn" r
-    [ "$variant" = "sbx" ] && t="finn-sbx"
-    for r in $(printf '%s' "$runtimes" | tr ',' '\n' | sort); do
-        [ -n "$r" ] && t="$t-$r"
-    done
-    printf '%s' "$t"
+    local runtimes variant="${2:-}"
+    runtimes=$(finn_normalize_runtimes "${1:-}")
+    case "$variant:$runtimes" in
+        :)       printf '%s' finn ;;
+        :xrt)    printf '%s' finn-xrt ;;
+        sbx:)    printf '%s' finn-sbx ;;
+        sbx:xrt) printf '%s' finn-sbx-xrt ;;
+        sbx:*)   printf '%s' finn-sbx-runtime ;;
+        *)       printf '%s' finn-runtime ;;
+    esac
 }
 
 # Ask bake for a target's tag. The ONE place that parses bake's output.
