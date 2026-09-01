@@ -97,7 +97,7 @@ class ToyKernel(Kernel):
 
     LANES = Parameter(lanes)
     WIDTH = Parameter(width)
-    FLAG = Parameter.constant_value(1, why="the test RTL fixes this mode")
+    FLAG = Parameter.constant(1, why="the test RTL fixes this mode")
     exports = (lanes, region)
 
     @classmethod
