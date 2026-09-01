@@ -25,7 +25,7 @@ import pytest
 
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
 from dataflow.rtlsim import composed_mvau_equiv as fixture
-from finn.dataflow.hardware import (
+from finn.dataflow.artifacts import (
     DEFAULT_BUILDER,
     ArtifactIdentityError,
     ArtifactKey,
@@ -37,7 +37,7 @@ from finn.dataflow.hardware import (
     TargetIdentity,
 )
 from finn.dataflow.mvau.physical import MVAUPhysicalDirection
-from finn.dataflow.hardware.identity import content_hash
+from finn.dataflow.artifacts.identity import content_hash
 from finn.dataflow.mvau.hardware.composition import (
     INSTANTIATION_COMMAND_SCHEMA,
     SYNTHESIS_LAYOUT,

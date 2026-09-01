@@ -26,31 +26,14 @@ needs, so they are added when the MVAU migration supplies one, not guessed at
 from a synthetic case.
 """
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from finn.dataflow.hardware.authoring import (
     COVERAGE,
     HardwareDesign,
     declare_hardware_kernel,
     hardware_namespace,
-)
-from finn.dataflow.hardware.identity import (
-    COMPOSED_ARTIFACT_SCHEMA_VERSION,
-    DEFAULT_BUILDER,
-    DEFAULT_VLNV,
-    KERNEL_ARTIFACT_SCHEMA_VERSION,
-    PACKAGED_ARTIFACT_SCHEMA_VERSION,
-    SYNTHESIS_ARTIFACT_SCHEMA_VERSION,
-    ArtifactIdentityError,
-    BuilderIdentity,
-    ComposedArtifactIdentity,
-    KernelArtifactIdentity,
-    PackagedArtifactIdentity,
-    SourceIdentity,
-    IpPackageArtifactIdentity,
-    SynthesisArtifactIdentity,
-    TargetIdentity,
-    VlnvIdentity,
-    composed_artifact_identity,
-    kernel_artifact_identity,
 )
 from finn.dataflow.hardware.kernel import (
     BINDING_PATH,
@@ -74,15 +57,74 @@ from finn.dataflow.hardware.selection import (
     HARDWARE_KERNEL_ID_SEMANTICS,
     HardwareKernelSelection,
 )
-from finn.dataflow.hardware.store import (
-    NO_ARTIFACT_STORE,
-    ArtifactKey,
-    ArtifactStore,
-    ArtifactStoreError,
-    EmptyArtifactStore,
-    StoredArtifact,
-    checked_lookup,
-)
+
+if TYPE_CHECKING:
+    from finn.dataflow.artifacts import (
+        COMPOSED_ARTIFACT_SCHEMA_VERSION,
+        DEFAULT_BUILDER,
+        DEFAULT_VLNV,
+        KERNEL_ARTIFACT_SCHEMA_VERSION,
+        NO_ARTIFACT_STORE,
+        PACKAGED_ARTIFACT_SCHEMA_VERSION,
+        SYNTHESIS_ARTIFACT_SCHEMA_VERSION,
+        ArtifactIdentityError,
+        ArtifactKey,
+        ArtifactStore,
+        ArtifactStoreError,
+        BuilderIdentity,
+        ComposedArtifactIdentity,
+        EmptyArtifactStore,
+        IpPackageArtifactIdentity,
+        KernelArtifactIdentity,
+        PackagedArtifactIdentity,
+        SourceIdentity,
+        StoredArtifact,
+        SynthesisArtifactIdentity,
+        TargetIdentity,
+        VlnvIdentity,
+        checked_lookup,
+        composed_artifact_identity,
+        kernel_artifact_identity,
+    )
+
+_ARTIFACT_EXPORTS = {
+    "COMPOSED_ARTIFACT_SCHEMA_VERSION",
+    "DEFAULT_BUILDER",
+    "DEFAULT_VLNV",
+    "KERNEL_ARTIFACT_SCHEMA_VERSION",
+    "NO_ARTIFACT_STORE",
+    "PACKAGED_ARTIFACT_SCHEMA_VERSION",
+    "SYNTHESIS_ARTIFACT_SCHEMA_VERSION",
+    "ArtifactIdentityError",
+    "ArtifactKey",
+    "ArtifactStore",
+    "ArtifactStoreError",
+    "BuilderIdentity",
+    "ComposedArtifactIdentity",
+    "EmptyArtifactStore",
+    "IpPackageArtifactIdentity",
+    "KernelArtifactIdentity",
+    "PackagedArtifactIdentity",
+    "SourceIdentity",
+    "StoredArtifact",
+    "SynthesisArtifactIdentity",
+    "TargetIdentity",
+    "VlnvIdentity",
+    "checked_lookup",
+    "composed_artifact_identity",
+    "kernel_artifact_identity",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Keep the temporary hardware re-export without an import cycle."""
+
+    if name not in _ARTIFACT_EXPORTS:
+        raise AttributeError(name)
+    value = getattr(import_module("finn.dataflow.artifacts"), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "BINDING_PATH",

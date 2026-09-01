@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
-from finn.dataflow.hardware import (
+from finn.dataflow.artifacts import (
     DEFAULT_BUILDER,
     DEFAULT_VLNV,
     ArtifactIdentityError,

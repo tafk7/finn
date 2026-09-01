@@ -15,7 +15,7 @@ Explicitly out of scope, and each for its own reason:
   different one; solving it here would fix it for a store that does not exist.
 - **Persistence and cross-machine sharing.** Both require the builder version
   in the identity to be trustworthy, and it is a caller-supplied label
-  (:data:`~finn.dataflow.hardware.identity.DEFAULT_BUILDER`).  A caller that
+  (:data:`~finn.dataflow.artifacts.identity.DEFAULT_BUILDER`).  A caller that
   lies gets a wrong hit -- harmless while nothing is stored, and the first
   obligation on whoever stores anything.
 """

@@ -25,16 +25,16 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
+import finn.dataflow.artifacts as artifacts
 from dataflow.mvau.test_decomposed_op import NODE_ID, _committed, _context, _model
 from dataflow.mvau.test_fused_hardware import _place, _source_description
 from finn.dataflow.mvau_problem import MVAUDspBlock
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.hardware import (
+from finn.dataflow.artifacts import (
     DEFAULT_BUILDER,
     KERNEL_ARTIFACT_SCHEMA_VERSION,
     ArtifactIdentityError,
     BuilderIdentity,
-    HardwareKernel,
     KernelArtifactIdentity,
     SourceIdentity,
     SynthesisArtifactIdentity,
@@ -42,7 +42,8 @@ from finn.dataflow.hardware import (
     composed_artifact_identity,
     kernel_artifact_identity,
 )
-from finn.dataflow.hardware.identity import content_hash
+from finn.dataflow.artifacts.identity import content_hash
+from finn.dataflow.hardware import HardwareKernel
 from finn.dataflow.mvau.hardware.binding import bind_decomposed, source_roots
 from finn.dataflow.mvau.hardware.composition import build_decomposed_artifact_requirements
 from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_ROOT
@@ -53,6 +54,21 @@ FINN_ROOT = Path(__file__).resolve().parents[3]
 
 BUILDER = BuilderIdentity("vivado", "2024.2")
 TARGET = TargetIdentity("xcvc1902-vsva2197-2MP-e-S", 4.0)
+
+
+def test_artifact_facade_is_canonical_and_old_deep_module_is_gone() -> None:
+    assert artifacts.KernelArtifactIdentity is KernelArtifactIdentity
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import importlib.util; "
+            "raise SystemExit(0 if importlib.util.find_spec('finn.dataflow.hardware.identity') "
+            "is None else 1)",
+        ],
+        check=False,
+    )
+    assert completed.returncode == 0
 
 
 class _Resource(Enum):
@@ -336,7 +352,7 @@ _DETERMINISM_PROGRAM = """
 import sys
 sys.path[:0] = ["src", "tests"]
 from finn.dataflow.hardware import KernelArtifactIdentity, SourceIdentity
-from finn.dataflow.hardware.identity import content_hash
+from finn.dataflow.artifacts.identity import content_hash
 
 identity = KernelArtifactIdentity(
     "dotp_axi",

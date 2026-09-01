@@ -23,7 +23,7 @@ from typing import cast
 
 from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
-from finn.dataflow.hardware import (
+from finn.dataflow.artifacts import (
     DEFAULT_BUILDER,
     DEFAULT_VLNV,
     NO_ARTIFACT_STORE,
@@ -31,7 +31,6 @@ from finn.dataflow.hardware import (
     BuilderIdentity,
     ComposedArtifactIdentity,
     IpPackageArtifactIdentity,
-    HardwareKernel,
     KernelArtifactIdentity,
     PackagedArtifactIdentity,
     SynthesisArtifactIdentity,
@@ -41,7 +40,8 @@ from finn.dataflow.hardware import (
     composed_artifact_identity,
     kernel_artifact_identity,
 )
-from finn.dataflow.hardware.identity import content_hash
+from finn.dataflow.artifacts.identity import content_hash
+from finn.dataflow.hardware import HardwareKernel
 from finn.dataflow.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,

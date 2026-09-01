@@ -482,7 +482,7 @@ class KernelOrigin:
     **It is still not an artifact identity and must not become one.**  It is
     sensitive to declaration paths and to field ordering, neither of which a
     reusable artifact may depend on, and it says nothing about source content.
-    :mod:`finn.dataflow.hardware.identity` carries the staged artifact keys.
+    :mod:`finn.dataflow.artifacts.identity` carries the staged artifact keys.
     """
 
     kernel_id: str

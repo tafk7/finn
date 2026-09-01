@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from finn.dataflow.hardware import (
+from finn.dataflow.artifacts import (
     NO_ARTIFACT_STORE,
     ArtifactKey,
     ArtifactStore,

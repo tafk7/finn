@@ -13,7 +13,7 @@ from typing import cast
 import numpy as np  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow.authoring.design import DesignRealization
-from finn.dataflow.hardware import composed_artifact_identity, kernel_artifact_identity
+from finn.dataflow.artifacts import composed_artifact_identity, kernel_artifact_identity
 from finn.dataflow.mvau.physical import MVAUPhysicalElaboration
 from finn.dataflow.mvau.hardware.binding import source_roots
 from finn.dataflow.mvau.hardware.composition import (
