@@ -61,13 +61,13 @@ from finn.dataflow.mvau.decomposed import (
     HARDWARE_NUMERIC_TYPE_COVERAGE,
     REPLAY_NODE,
 )
-from finn.dataflow.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.hardware.dotp_axi import (
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.hardware.dotp_axi import (
     DotpAxiKernel,
     covers_numeric_types as dotp_axi_covers_numeric_types,
 )
-from finn.dataflow.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
+from finn.dataflow.ops.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
 from dataflow.mvau.mvu_vvu_axi_kernel import (
     ACTIVATION_EDGE_ROLE,
     COMPUTE_ROLE,
@@ -77,10 +77,10 @@ from dataflow.mvau.mvu_vvu_axi_kernel import (
     covers_operand_types as fused_covers_operand_types,
 )
 from dataflow.rtlsim.composed_mvau_equiv import CONFIGS, Config, declared_parameters
-from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.mvau.numeric import MVAUNumericTypes, RoleVerdict
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
+from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes, RoleVerdict
+from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
     MVAUComputationProfile,
@@ -93,7 +93,7 @@ from finn.dataflow.ops.mvau import (
     MVAU_DATAFLOW_OP_SPEC,
     NetworkRef,
 )
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - the real operation fixture
     MATRIX_HEIGHT,
     MATRIX_WIDTH,
@@ -101,7 +101,7 @@ from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - the real operatio
     _context,
     _model,
 )
-from finn.dataflow.ops.mvau_op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.region import DataflowRegion, NumericElementType
 
 #: The one repetition count these tests use; the claim is structural.

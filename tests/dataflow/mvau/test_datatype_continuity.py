@@ -56,15 +56,15 @@ from dataflow.mvau.test_decomposed_op import (
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.mvau.physical import MVAUElaborationError
-from finn.dataflow.mvau.hardware.binding import bind_decomposed
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.physical import MVAUElaborationError
+from finn.dataflow.ops.mvau.hardware.binding import bind_decomposed
+from finn.dataflow.ops.mvau.hardware.composition import (
     build_decomposed_artifact_requirements,
     elaborate_decomposed,
 )
-from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.mvau_problem import MVAUProblemPaths
-from finn.dataflow.ops.mvau_op import MvauDataflowOp
+from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.region import NumericElementType
 
 FINN_ROOT = Path(__file__).resolve().parents[3]

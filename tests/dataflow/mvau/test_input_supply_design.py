@@ -15,19 +15,19 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, DesignPoint, Engine, QualifiedPath, Unresolved
 from finn.dataflow.hardware import TargetIdentity, kernel_artifact_identity
-from finn.dataflow.mvau.associations import (
+from finn.dataflow.ops.mvau.associations import (
     BindingLocalStateDestination,
     MVAUParameterTopology,
     MVAUSourceAssociation,
 )
-from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
-from finn.dataflow.mvau.hardware.binding import source_roots
-from finn.dataflow.mvau.hardware.memstream import (
+from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
+from finn.dataflow.ops.mvau.hardware.binding import source_roots
+from finn.dataflow.ops.mvau.hardware.memstream import (
     FINN_MEMSTREAM_MODULE,
     FINN_MEMSTREAM_SOURCES,
     FinnRtlMemstreamKernel,
 )
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
     package_decomposed_artifact,
     prepare_decomposed_synthesis,
@@ -35,18 +35,18 @@ from finn.dataflow.mvau.hardware.composition import (
     staged_layout,
     write_decomposed_artifact,
 )
-from finn.dataflow.mvau.hardware.supplied_artifacts import (
+from finn.dataflow.ops.mvau.hardware.supplied_artifacts import (
     build_supplied_artifact_requirements,
 )
-from finn.dataflow.mvau.input_supply import (
+from finn.dataflow.ops.mvau.input_supply import (
     DELIVERY_EDGE,
     DELIVERY_NODE,
     EXTERNAL_SUPPLY,
     FINN_RTL_MEMSTREAM_SUPPLY,
 )
-from finn.dataflow.mvau.providers import compose_dot_product_design
-from finn.dataflow.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.elaboration import compose_dot_product_design
+from finn.dataflow.ops.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
+from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
     MVAUDspBlock,
     MVAUProblemPaths,

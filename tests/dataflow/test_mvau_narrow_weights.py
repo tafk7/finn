@@ -17,7 +17,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataflow.mvau_op_facts import compute_pool_context
 from finn.dataflow.design import Decided, Engine, QualifiedPath
 from finn.dataflow.authoring.op_design import Provenance
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM_PROVENANCE,
     MVAUComputationProfile,
     MVAUProblemPaths,

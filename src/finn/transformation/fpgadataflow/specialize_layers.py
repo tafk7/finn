@@ -131,9 +131,7 @@ def _determine_impl_style(node, fpgapart, model):
                 warn_str = """RTL implementation of DWC requires
                             stream widths that are integer width ratios
                             from each other. Node %s will automatically be
-                            set to HLS variant.""" % (
-                    node.name,
-                )
+                            set to HLS variant.""" % (node.name,)
                 warnings.warn(warn_str)
                 return "hls"
             else:
@@ -145,9 +143,7 @@ def _determine_impl_style(node, fpgapart, model):
             else:
                 warn_str = """There is no RTL variant for %s. The node will automatically be
                         set to HLS variant. Please check the bit-widths to be <= 8 and ensure the
-                        thresholds are implemented as standalone layer""" % (
-                    node.name,
-                )
+                        thresholds are implemented as standalone layer""" % (node.name,)
                 warnings.warn(warn_str)
                 return "hls"
         elif optype == "VVAU":
@@ -157,9 +153,7 @@ def _determine_impl_style(node, fpgapart, model):
                 warn_str = """There is no RTL variant for %s. The node will automatically be
                         set to HLS variant. Please check the bit-widths to be <= 8 and ensure the
                         thresholds are implemented as standalone layer. Note that the RTL-variant
-                        of this layer is only supported on Versal boards""" % (
-                    node.name,
-                )
+                        of this layer is only supported on Versal boards""" % (node.name,)
                 warnings.warn(warn_str)
                 return "hls"
 
@@ -180,9 +174,7 @@ def _determine_impl_style(node, fpgapart, model):
             else:
                 warn_str = """There is no RTL variant for %s. The node will automatically be
                         set to HLS variant. The RTL SoftMax layer uses DSPFP32, so only
-                        versal devices are supported.""" % (
-                    node.name,
-                )
+                        versal devices are supported.""" % (node.name,)
                 warnings.warn(warn_str)
                 return "hls"
         elif optype in ["ElementwiseAdd", "ElementwiseSub", "ElementwiseMul"]:
@@ -192,9 +184,7 @@ def _determine_impl_style(node, fpgapart, model):
                 warn_str = """There is no RTL variant for %s. The node will automatically be
                         set to HLS variant. The RTL Elementwise layers use DSP58 and require
                         Versal devices. For int/int, both operand widths and signedness must
-                        match, and MUL width is limited by DSP58 capacity.""" % (
-                    node.name,
-                )
+                        match, and MUL width is limited by DSP58 capacity.""" % (node.name,)
                 warnings.warn(warn_str)
                 return "hls"
         elif optype == "Requant":
@@ -228,9 +218,7 @@ def _determine_impl_style(node, fpgapart, model):
     else:
         raise Exception(
             """Invalid value for attribute preferred_impl_style! Is currently set to: {}
-            has to be set to one of the following value ("hls", "rtl")""".format(
-                impl_style
-            )
+            has to be set to one of the following value ("hls", "rtl")""".format(impl_style)
         )
 
 

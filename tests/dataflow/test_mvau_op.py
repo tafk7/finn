@@ -22,7 +22,7 @@ from finn.dataflow.design import (
     Unresolved,
 )
 from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_PATHS,
     LEGACY_HLS_PATHS,
@@ -33,7 +33,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.mvau.regions import construct_batch_interleaved_streamed_mvau_region
+from finn.dataflow.ops.mvau.regions import construct_batch_interleaved_streamed_mvau_region
 from finn.dataflow.mvau.weight_adapter_kernel import FULL_TILE_TO_CHUNKED
 from finn.dataflow.network_validation import NetworkValidationReport
 from finn.dataflow.mvau.compat.operation import (
@@ -60,7 +60,7 @@ from finn.dataflow.parameters.supply_kernels import (
 )
 from finn.dataflow.region import Port
 from finn.dataflow.selection import enumerate_feasible_points
-from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]

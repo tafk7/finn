@@ -12,7 +12,7 @@ about what a Kernel actually depends on.
 from __future__ import annotations
 
 from finn.dataflow.design import DesignSpaceSpec, ProblemSchema
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM_SPEC,
     MVAUProblemPaths,
 )

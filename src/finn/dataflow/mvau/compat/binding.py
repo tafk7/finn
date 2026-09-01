@@ -13,7 +13,7 @@ from finn.dataflow.mvau.compat.operation import MVAU_COMPUTE_SELECTION
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
 from finn.dataflow.mvau.compute_pool import MVAUComputeKernelId
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
-from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
+from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.mvau.compat.elaboration import MVAUElaborationError
 from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign as MVAUResolvedDesign
 from finn.dataflow.network import DataflowNetwork

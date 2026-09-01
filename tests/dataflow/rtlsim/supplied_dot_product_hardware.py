@@ -28,8 +28,8 @@ from dataflow.rtlsim.composed_mvau_equiv import record_identity
 from dataflow.rtlsim.composed_mvau_numeric import MVAUDspBlock, _weights
 from dataflow.rtlsim.supplied_dot_product_numeric import CASE, requirements_for
 from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
-from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
+from finn.dataflow.ops.mvau.hardware.composition import (
     complete_decomposed_synthesis,
     complete_ip_package,
     package_decomposed_artifact,

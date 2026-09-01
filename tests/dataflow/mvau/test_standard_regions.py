@@ -4,7 +4,7 @@
 import pytest
 from typing import NamedTuple
 
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     MVAUWeightInterface,
     construct_mvau_compute_region,
     construct_standard_embedded_mvau_region,

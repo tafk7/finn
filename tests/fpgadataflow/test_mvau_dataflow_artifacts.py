@@ -22,7 +22,7 @@ from finn.dataflow.mvau.compat.elaboration import elaborate_mvau_rtl_softvec
 from finn.dataflow.mvau.compat.evidence import collect_mvau_rtl_softvec_evidence
 from finn.dataflow.kernels import NO_KERNEL
 from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PATHS, MVAUComputeKernelId
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.source import (
     MVAUProjectionContext,
 )
 from finn.dataflow.mvau.compat.source import (
@@ -34,7 +34,7 @@ from finn.dataflow.mvau.compat.operation import (
     MVAU_WEIGHT_ADAPTER_SELECTION,
     MVAU_WEIGHT_SUPPLY_SELECTION,
 )
-from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,

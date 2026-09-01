@@ -21,7 +21,7 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.authoring import DataflowOpError, NodeAttrCodec
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock
 from finn.dataflow.op import dataflow_problem_fingerprint
 from finn.dataflow.resolution import RegionRef
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
@@ -409,7 +409,7 @@ def _imported_modules(path: Path) -> set[str]:
 def test_dataflow_operation_modules_do_not_import_physical_or_legacy_stacks() -> None:
     root = Path(__file__).parents[2]
     base_imports = _imported_modules(root / "src/finn/dataflow/op.py")
-    logical_mvau_imports = _imported_modules(root / "src/finn/dataflow/ops/mvau_op.py")
+    logical_mvau_imports = _imported_modules(root / "src/finn/dataflow/ops/mvau/op.py")
     assert not any(module.startswith("finn.dataflow.mvau") for module in base_imports)
     assert not any(module.startswith("finn.builder") for module in base_imports)
     for imports in (base_imports, logical_mvau_imports):

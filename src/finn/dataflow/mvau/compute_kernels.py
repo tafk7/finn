@@ -52,8 +52,8 @@ from finn.dataflow.kernels import (
     KernelProvider,
     KernelSelection,
 )
-from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.regions import (
     MVAURegionDeclaration,
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_embedded_mvau_region,
@@ -68,12 +68,12 @@ from finn.dataflow.mvau.compute_pool import (
     WEIGHT_INTERFACE,
 )
 from finn.dataflow.mvau.decomposed import build_decomposed_mvau_kernels
-from finn.dataflow.mvau.rtl_parameters import (
+from finn.dataflow.ops.mvau.rtl_parameters import (
     dsp_version,
     segment_length,
     signed_activations,
 )
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
     MVAUDspBlock,

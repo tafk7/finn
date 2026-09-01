@@ -3,7 +3,7 @@
 
 """Logical FINN dataflow custom-operation domain."""
 
-from finn.dataflow.ops.mvau_op import (
+from finn.dataflow.ops.mvau.op import (
     MVAU_DATAFLOW_OP_FAMILY_VERSION,
     MVAUDataflowBuildContext,
     MvauDataflowOp,

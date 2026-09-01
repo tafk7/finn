@@ -58,8 +58,8 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataflow.normalized_structure import normalized
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from finn.dataflow.mvau.decomposed import DOT_PRODUCT_NODE, REPLAY_NODE
-from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.composition import MVAUDecomposedArtifactRequirements
+from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
+from finn.dataflow.ops.mvau.hardware.composition import MVAUDecomposedArtifactRequirements
 from finn.dataflow.ops.mvau import NetworkRef
 from finn.dataflow.region import LogicalSchedule, ScheduleLevel
 

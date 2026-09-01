@@ -22,7 +22,7 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as equiv
 from dataflow.rtlsim import composed_mvau_ip_stitch as fixture
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.composition import (
     package_decomposed_artifact,
     prepare_ip_package,
 )

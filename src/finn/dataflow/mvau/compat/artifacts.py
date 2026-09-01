@@ -30,7 +30,7 @@ from finn.dataflow.mvau.compat.elaboration import (
     MVAUPhysicalNumericInterface,
     mvau_elaboration_origin,
 )
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.source import (
     MVAUModelAccessor,
     tensor_value_fingerprint,
 )
@@ -45,7 +45,7 @@ from finn.dataflow.mvau.compat.operation import (
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
 )
-from finn.dataflow.mvau_problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.region import (
     BeatSequence,
     NumericElementType,

@@ -16,16 +16,16 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Decided, Engine, QualifiedPath
-from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.ops.mvau import (
     MVAUDataflowOpPaths,
     MVAUParameterTopology,
     NetworkRef,
 )
-from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.transformation.fpgadataflow.select_dataflow_design import (
     DataflowSelectionContext,

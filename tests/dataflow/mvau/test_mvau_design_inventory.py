@@ -10,20 +10,20 @@ from typing import cast
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Absent, Decided, DesignPoint, Engine, QualifiedPath
-from finn.dataflow.mvau.associations import MVAUSourceAssociation
-from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.mvau.designs.inventory import (
+from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
+from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import (
     MVAU_ARTIFACT_READINESS,
     MVAU_DESIGN_INVENTORY,
     MVAU_FEASIBILITY_CONSTRAINT_SET,
     MVAU_STRUCTURAL_READINESS,
     admissible_mvau_designs,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
+from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
     MVAUDspBlock,
     MVAUProblemPaths,
@@ -31,7 +31,7 @@ from finn.dataflow.mvau_problem import (
 )
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.resolution import NetworkRef
-from finn.dataflow.ops.mvau_op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]

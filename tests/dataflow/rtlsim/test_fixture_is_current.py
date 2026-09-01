@@ -25,8 +25,8 @@ import pytest
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from dataflow.rtlsim.rtl_transport import random_word
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
-from finn.dataflow.mvau.hardware.binding import verify_manifest
-from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
+from finn.dataflow.ops.mvau.hardware.binding import verify_manifest
+from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_SOURCES
 
 
 @pytest.mark.parametrize("config", fixture.CONFIGS, ids=lambda item: item.label)

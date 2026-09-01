@@ -18,16 +18,16 @@ from finn.dataflow.design import (
     Unresolved,
 )
 from finn.dataflow.kernels import KernelDeclaration, KernelSelection
-from finn.dataflow.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     MVAU_COMPUTE_SELECTION,
     SOFT_VECTOR_MVAU_KERNEL,
     SOFT_VECTOR_PATHS,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.source import MVAUSourceAdapterError, make_mvau_selection_envelope
+from finn.dataflow.ops.mvau.source import MVAUSourceAdapterError, make_mvau_selection_envelope
 from finn.dataflow.spec_algebra import SpecAuthoringError, assemble_specs
-from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
 from dataflow.mvau_op_facts import compute_pool_context
 
 INT8 = DataType["INT8"]

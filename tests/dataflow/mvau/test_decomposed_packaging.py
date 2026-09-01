@@ -36,9 +36,9 @@ from finn.dataflow.artifacts import (
     SynthesisArtifactIdentity,
     TargetIdentity,
 )
-from finn.dataflow.mvau.physical import MVAUPhysicalDirection
+from finn.dataflow.ops.mvau.physical import MVAUPhysicalDirection
 from finn.dataflow.artifacts.identity import content_hash
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.composition import (
     INSTANTIATION_COMMAND_SCHEMA,
     SYNTHESIS_LAYOUT,
     SYNTHESIS_RECIPE_SCHEMA,
@@ -54,7 +54,7 @@ from finn.dataflow.mvau.hardware.composition import (
     staged_layout,
     synthesis_directory_name,
 )
-from finn.dataflow.mvau.providers import elaborate_mvau
+from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 

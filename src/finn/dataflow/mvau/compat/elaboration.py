@@ -26,9 +26,9 @@ from finn.dataflow.mvau.compat.operation import (
     NetworkRef,
     RegionRef,
 )
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.ops.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign as MVAUResolvedDesign
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     mvau_problem_fingerprint,
 )
@@ -39,7 +39,7 @@ from finn.dataflow.parameters.supply_kernels import (
     MVAUWeightSupplyKernelId,
 )
 
-from finn.dataflow.mvau_problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.region import NumericElementType, Port, element_width
 
 _ELABORATION_PATH = QualifiedPath("elaboration.mvau")
@@ -390,7 +390,7 @@ def _selected_kernel_id(
 def mvau_elaboration_origin(resolved: MVAUResolvedDesign) -> MVAUElaborationOrigin:
     """Construct the exact immutable identity of an elaboration input point."""
 
-    from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY  # noqa: PLC0415
+    from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY  # noqa: PLC0415
 
     design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
     if design_path is not None and design_path in resolved.point.design_space.decisions:

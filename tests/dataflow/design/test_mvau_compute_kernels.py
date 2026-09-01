@@ -23,7 +23,7 @@ from finn.dataflow.design import (
     Unresolved,
 )
 from finn.dataflow.kernels import SelectedKernel
-from finn.dataflow.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_PATHS,
     FULL_TILE_WEIGHT_EXPORT,
@@ -38,7 +38,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     MVAURegionDeclaration,
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_embedded_mvau_region,
@@ -47,7 +47,7 @@ from finn.dataflow.mvau.regions import (
 from finn.dataflow.region import DataflowRegion, NumericElementType
 from finn.dataflow.region_validation import RegionValidationReport
 from finn.dataflow.spec_algebra import assemble_specs
-from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
 from dataflow.mvau_op_facts import compute_pool_context
 
 INT2 = DataType["INT2"]

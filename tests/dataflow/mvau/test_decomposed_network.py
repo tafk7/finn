@@ -41,8 +41,8 @@ from finn.dataflow.mvau.decomposed import (
     DotProductKernel,
     construct_decomposed_mvau_network,
 )
-from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
-from finn.dataflow.mvau_problem import MVAUComputationProfile, MVAUProblemPaths
+from finn.dataflow.ops.mvau.regions import construct_standard_streamed_mvau_region
+from finn.dataflow.ops.mvau.problem import MVAUComputationProfile, MVAUProblemPaths
 from finn.dataflow.network_validation import validate_network
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region

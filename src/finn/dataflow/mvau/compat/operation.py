@@ -49,7 +49,7 @@ from finn.dataflow.kernels import (
     SelectedKernel,
 )
 from finn.dataflow.hardware import check_declared_references
-from finn.dataflow.mvau.associations import (
+from finn.dataflow.ops.mvau.associations import (
     BindingLocalStateDestination,
     CoordinateMappingKind,
     MVAUNetworkRef as NetworkRef,
@@ -59,7 +59,7 @@ from finn.dataflow.mvau.associations import (
     SourceOperandAssociation,
     SourceOperandDestination,
 )
-from finn.dataflow.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
 from finn.dataflow.mvau.compute_kernels import (
     FULL_TILE_WEIGHT_EXPORT,
     MVAU_COMPUTE_SELECTION,
@@ -68,9 +68,9 @@ from finn.dataflow.mvau.compute_kernels import (
 )
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS, MVAU_REPLAY_SELECTION
 from finn.dataflow.mvau.decomposed import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.ops.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.mvau.weight_adapter_kernel import build_mvau_weight_adapter_selection
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM,
     MVAU_PROBLEM_SPEC,
     MVAUDspBlock,
@@ -115,7 +115,7 @@ DataflowOpResult = RegionRef | NetworkRef
 class MVAUDataflowOpPaths:
     """Stable paths owned by the MVAU source-operation assembly."""
 
-    # Problem paths are declared in ``finn.dataflow.mvau_problem`` and named
+    # Problem paths are declared in ``finn.dataflow.ops.mvau.problem`` and named
     # here for the assembly's convenience; they are not a second definition.
     SOURCE_DESCRIPTION = MVAUProblemPaths.SOURCE_DESCRIPTION
     ACCUMULATOR_TYPE_ANALYSIS_OWNER = MVAUProblemPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER

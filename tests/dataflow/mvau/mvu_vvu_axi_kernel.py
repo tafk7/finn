@@ -38,25 +38,25 @@ from finn.dataflow.hardware import (
     PhysicalComponent,
     scalar_parameters,
 )
-from finn.dataflow.mvau.computation import (
+from finn.dataflow.ops.mvau.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
-from finn.dataflow.mvau.lane_packing import (
+from finn.dataflow.ops.mvau.hardware.inputs import FusedMatrixVectorHardwareInputs
+from finn.dataflow.ops.mvau.lane_packing import (
     a_datapath_width,
     b_datapath_width,
     p_datapath_width,
     pack_lanes,
 )
-from finn.dataflow.mvau.numeric import MVAUNumericTypes, RoleVerdict
-from finn.dataflow.mvau.rtl_parameters import (
+from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes, RoleVerdict
+from finn.dataflow.ops.mvau.rtl_parameters import (
     DSP_VERSION,
     dsp_version,
     segment_length,
     signed_activations,
 )
-from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock
 from finn.dataflow.region import NumericElementType, element_width
 
 #: FINN's fused core and everything under it, relative to the FINN root, in

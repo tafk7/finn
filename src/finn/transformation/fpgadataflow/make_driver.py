@@ -452,9 +452,9 @@ class MakePYNQDriver(Transformation):
         ext_weight_shapes_dict = {}
 
         for node in model.graph.node:
-            assert (
-                node.op_type == "StreamingDataflowPartition"
-            ), "CreateDataflowPartition needs to be applied before driver generation"
+            assert node.op_type == "StreamingDataflowPartition", (
+                "CreateDataflowPartition needs to be applied before driver generation"
+            )
 
             if len(node.input) > 0:
                 producer = model.find_producer(node.input[0])

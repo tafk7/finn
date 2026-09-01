@@ -10,26 +10,26 @@ from pathlib import Path
 import subprocess
 import sys
 
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.providers import __all__ as production_provider_exports
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.elaboration import __all__ as production_provider_exports
 
 ROOT = Path(__file__).parents[3] / "src" / "finn" / "dataflow"
 PRODUCTION_FILES = (
-    ROOT / "ops" / "mvau.py",
-    ROOT / "ops" / "mvau_op.py",
-    ROOT / "mvau" / "source.py",
-    ROOT / "mvau" / "projection.py",
-    ROOT / "mvau" / "persistence.py",
-    ROOT / "mvau" / "origin.py",
-    ROOT / "mvau" / "assignments.py",
-    ROOT / "mvau" / "associations.py",
-    ROOT / "mvau" / "input_supply.py",
-    ROOT / "mvau" / "regions.py",
-    ROOT / "mvau" / "physical.py",
-    ROOT / "mvau" / "semantics.py",
-    ROOT / "mvau" / "providers.py",
-    *(ROOT / "mvau" / "designs").glob("*.py"),
-    *(ROOT / "mvau" / "hardware").glob("*.py"),
+    ROOT / "ops" / "mvau" / "__init__.py",
+    ROOT / "ops" / "mvau" / "op.py",
+    ROOT / "ops" / "mvau" / "source.py",
+    ROOT / "ops" / "mvau" / "projection.py",
+    ROOT / "ops" / "mvau" / "persistence.py",
+    ROOT / "ops" / "mvau" / "origin.py",
+    ROOT / "ops" / "mvau" / "assignments.py",
+    ROOT / "ops" / "mvau" / "associations.py",
+    ROOT / "ops" / "mvau" / "input_supply.py",
+    ROOT / "ops" / "mvau" / "regions.py",
+    ROOT / "ops" / "mvau" / "physical.py",
+    ROOT / "ops" / "mvau" / "semantics.py",
+    ROOT / "ops" / "mvau" / "elaboration.py",
+    *(ROOT / "ops" / "mvau" / "designs").glob("*.py"),
+    *(ROOT / "ops" / "mvau" / "hardware").glob("*.py"),
 )
 FORBIDDEN_MODULES = {
     "finn.dataflow.kernels",
@@ -122,11 +122,11 @@ def test_production_mvau_import_graph_is_acyclic() -> None:
 
 def test_operation_specific_authoring_does_not_reconstruct_compiled_declarations() -> None:
     operation_files = (
-        ROOT / "ops" / "mvau.py",
-        ROOT / "ops" / "mvau_op.py",
-        ROOT / "mvau" / "designs" / "dot_product.py",
-        ROOT / "mvau" / "designs" / "batch_interleaved.py",
-        ROOT / "mvau" / "designs" / "inventory.py",
+        ROOT / "ops" / "mvau" / "__init__.py",
+        ROOT / "ops" / "mvau" / "op.py",
+        ROOT / "ops" / "mvau" / "designs" / "dot_product.py",
+        ROOT / "ops" / "mvau" / "designs" / "batch_interleaved.py",
+        ROOT / "ops" / "mvau" / "designs" / "inventory.py",
     )
     forbidden_calls = {"Ref", "assemble_specs"}
     for path in operation_files:
@@ -174,11 +174,53 @@ def _assert_fresh_import_avoids_provider_era_modules(module: str) -> None:
 
 
 def test_production_elaboration_import_does_not_load_provider_era_modules() -> None:
-    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.mvau.providers")
+    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.ops.mvau.elaboration")
 
 
 def test_production_mvau_op_import_does_not_load_provider_era_modules() -> None:
-    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.ops.mvau_op")
+    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.ops.mvau.op")
+
+
+def test_operation_namespace_does_not_eagerly_load_mvau() -> None:
+    _run = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import finn.dataflow.ops; "
+            "assert 'finn.dataflow.ops.mvau' not in sys.modules",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert _run.returncode == 0, _run.stderr
+
+
+def test_relocated_production_module_paths_are_absent() -> None:
+    script = "\n".join(
+        (
+            "import importlib.util",
+            "old = ('finn.dataflow.ops.mvau_op', 'finn.dataflow.mvau.source', "
+            "'finn.dataflow.mvau.designs.inventory', 'finn.dataflow.mvau.hardware.composition')",
+            "present = []",
+            "for name in old:",
+            "    try:",
+            "        found = importlib.util.find_spec(name)",
+            "    except ModuleNotFoundError:",
+            "        found = None",
+            "    if found is not None:",
+            "        present.append(name)",
+            "message = 'old production modules remain: ' + ', '.join(present)",
+            "raise SystemExit(message if present else 0)",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_fused_kernel_is_absent_from_every_production_design_candidate() -> None:

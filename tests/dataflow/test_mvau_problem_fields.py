@@ -13,7 +13,11 @@ from __future__ import annotations
 
 import pytest
 
-from finn.dataflow.mvau_problem import MVAU_PROBLEM_SPEC, MVAUProblemPaths, MVAUSourceDescription
+from finn.dataflow.ops.mvau.problem import (
+    MVAU_PROBLEM_SPEC,
+    MVAUProblemPaths,
+    MVAUSourceDescription,
+)
 
 
 def _validate(description: object) -> bool:

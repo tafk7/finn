@@ -32,7 +32,7 @@ from finn.dataflow.design import (
     as_object_semantics,
 )
 from finn.dataflow.kernel import RegionDeclaration, build_kernel_semantic_declarations
-from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
+from finn.dataflow.ops.mvau.regions import construct_standard_streamed_mvau_region
 from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.region import NumericElementType, is_element_type
 

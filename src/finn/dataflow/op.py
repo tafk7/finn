@@ -105,8 +105,16 @@ def _canonical_value(value: object) -> object:
             "value": _canonical_value(value.value),
         }
     if is_dataclass(value) and not isinstance(value, type):
+        dataclass_kind = type(value)
+        type_token = getattr(
+            dataclass_kind,
+            "__dataflow_identity_token__",
+            f"{dataclass_kind.__module__}.{dataclass_kind.__qualname__}",
+        )
+        if not isinstance(type_token, str) or not type_token:
+            raise TypeError(f"invalid stable identity token for {dataclass_kind.__name__}")
         return {
-            "dataclass_type": f"{type(value).__module__}.{type(value).__qualname__}",
+            "dataclass_type": type_token,
             "fields": [
                 [field.name, _canonical_value(getattr(value, field.name))]
                 for field in fields(value)

@@ -34,14 +34,14 @@ from finn.dataflow.mvau.decomposed import (
     REPLAY_NODE,
     DotProductKernel,
 )
-from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.physical import (
+from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.physical import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
     MVAUSemanticPortRef,
 )
-from finn.dataflow.mvau.hardware.binding import (
+from finn.dataflow.ops.mvau.hardware.binding import (
     bind_decomposed,
     finnlib_root,
     resolved_manifest,
@@ -53,18 +53,18 @@ from finn.dataflow.hardware import (
     composed_artifact_identity,
     kernel_artifact_identity,
 )
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.composition import (
     build_decomposed_artifact_requirements,
     decomposed_top_module_name,
     elaborate_decomposed,
     write_decomposed_artifact,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_SOURCES
-from finn.dataflow.mvau.hardware.replay_buffer import FINN_SOURCES
+from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_SOURCES
+from finn.dataflow.ops.mvau.hardware.replay_buffer import FINN_SOURCES
 from finn.dataflow.mvau.compat.providers import MVAU_PROVIDER_ELABORATORS
-from finn.dataflow.mvau.providers import elaborate_mvau
-from finn.dataflow.mvau.source import MVAUResolvedDesign
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
+from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
+from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]

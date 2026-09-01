@@ -15,7 +15,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 import pytest
 
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region,
     construct_dot_product_region,
     construct_standard_streamed_mvau_region,

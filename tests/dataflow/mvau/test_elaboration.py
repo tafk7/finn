@@ -27,7 +27,7 @@ from finn.dataflow.mvau.compat.elaboration import (
     MVAUPhysicalControlKind,
     elaborate_mvau_rtl_softvec,
 )
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     MVAUProjectionContext,
     mvau_problem_fingerprint,

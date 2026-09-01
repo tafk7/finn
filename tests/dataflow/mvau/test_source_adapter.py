@@ -25,10 +25,10 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.ops.mvau.source import (
     MVAU_DECLARATION_FAMILY_VERSION,
     MVAU_SOURCE_MAPPING,
     MVAUProjectionContext,
@@ -60,7 +60,7 @@ from finn.dataflow.parameters.supply_kernels import (
     WeightOrganization,
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
-from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
 
 NODE_ID = "mvau0"
 ULTRASCALE_PART = "xczu3eg-sbva484-1-e"
@@ -362,7 +362,7 @@ def test_saved_choices_reconstitute_identically_in_a_fresh_process(tmp_path: Pat
 import json
 import sys
 from qonnx.core.modelwrapper import ModelWrapper
-from finn.dataflow.mvau.source import MVAUProjectionContext, reconstitute_mvau_selection
+from finn.dataflow.ops.mvau.source import MVAUProjectionContext, reconstitute_mvau_selection
 model = ModelWrapper(sys.argv[1])
 context = MVAUProjectionContext('finn.MinimizeAccumulatorWidth', fpga_part=sys.argv[2])
 resolved = reconstitute_mvau_selection(model, 'mvau0', context)

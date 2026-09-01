@@ -23,7 +23,7 @@ from finn.dataflow.mvau.compute_kernels import SOFT_VECTOR_PATHS
 from finn.dataflow.mvau.compat.elaboration import MVAUPhysicalElaboration, MVAUSemanticPortRef
 from finn.dataflow.mvau.compat.operation import NetworkRef, RegionRef
 from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign as MVAUResolvedDesign
-from finn.dataflow.mvau_problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.region import BeatSequence, Coordinate, DataflowRegion, InputInterface
 
 

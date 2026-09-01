@@ -8,7 +8,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataclasses import replace
 from typing import cast
 
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_streamed_mvau_region,
 )

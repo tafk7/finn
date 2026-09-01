@@ -23,7 +23,7 @@ from finn.dataflow.mvau.compat.operation import (
     MVAU_WEIGHT_SUPPLY_SELECTION,
     MVAUDataflowOpPaths,
 )
-from finn.dataflow.mvau.associations import MVAUSourceAssociation
+from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_PATHS,
     LEGACY_HLS_PATHS,
@@ -34,7 +34,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUHlsResource,
     MVAUWeightSource,
 )
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.source import (
     MVAUModelAccessor,
     MVAUProjectionContext,
     MVAUSourceAdapterError,
@@ -46,7 +46,7 @@ from finn.dataflow.mvau.source import (
     _initializer_excludes_minimum,
     project_mvau_source,
 )
-from finn.dataflow.mvau_problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
 from finn.dataflow.parameters.supply_kernels import (
     FINN_RTL_MEMSTREAM_PATHS,
     CyclicRamStyle,

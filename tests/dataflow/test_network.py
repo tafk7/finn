@@ -3,7 +3,7 @@
 
 from dataclasses import fields
 
-from finn.dataflow.mvau.regions import construct_standard_streamed_mvau_region
+from finn.dataflow.ops.mvau.regions import construct_standard_streamed_mvau_region
 from finn.dataflow.network import ChannelSpec, OrderedChannel
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 

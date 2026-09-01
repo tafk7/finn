@@ -64,18 +64,18 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
-from finn.dataflow.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
+from finn.dataflow.ops.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     write_decomposed_artifact,
 )
-from finn.dataflow.mvau.providers import elaborate_mvau
-from finn.dataflow.mvau_problem import MVAUDspBlock
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
-from finn.dataflow.ops.mvau_op import MVAUDataflowBuildContext, MvauDataflowOp
+from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
+from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 
 from dataflow.rtlsim.rtl_transport import drive, random_word
 

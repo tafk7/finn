@@ -11,7 +11,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
-from finn.dataflow.mvau.associations import (
+from finn.dataflow.ops.mvau.associations import (
     BindingLocalStateDestination,
     MVAUParameterTopology,
     MVAUSourceAssociation,
@@ -21,13 +21,13 @@ from finn.dataflow.mvau.compute_kernels import (
     BATCH_INTERLEAVED_DSP_MVAU_KERNEL,
     BATCH_INTERLEAVED_PATHS,
 )
-from finn.dataflow.mvau.designs.batch_interleaved import (
+from finn.dataflow.ops.mvau.designs.batch_interleaved import (
     BATCH_INTERLEAVED_NODE,
     MVAU_BATCH_INTERLEAVED_DESIGN,
 )
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.ops.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM_SPEC,
     MVAUComputationProfile,
     MVAUDspBlock,

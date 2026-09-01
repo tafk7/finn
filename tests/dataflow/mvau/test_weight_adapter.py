@@ -22,7 +22,7 @@ from finn.dataflow.design import (
     as_object_semantics,
 )
 from finn.dataflow.kernels import NO_KERNEL, KernelSelection, SelectedKernel
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port,
     construct_standard_mvau_weight_port,
 )

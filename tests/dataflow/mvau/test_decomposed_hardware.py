@@ -42,9 +42,9 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
-from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
+from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM_PROVENANCE,
     MVAUComputationProfile,
     MVAUDspBlock,

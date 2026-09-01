@@ -19,7 +19,7 @@ configuration requires, and never the reverse.
 
 The hardware that realizes them -- ``DotpAxiKernel`` and ``ReplayBufferKernel``
 -- is declared here too, because this module is what knows the wiring, but it
-lives in :mod:`finn.dataflow.mvau.hardware` and imports these declarations
+lives in :mod:`finn.dataflow.ops.mvau.hardware` and imports these declarations
 rather than being part of them.
 """
 
@@ -53,7 +53,7 @@ from finn.dataflow.kernels import (
     KernelDeclaration,
     KernelSelection,
 )
-from finn.dataflow.mvau.computation import (
+from finn.dataflow.ops.mvau.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
@@ -62,19 +62,19 @@ from finn.dataflow.mvau.compute_pool import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.mvau.hardware.inputs import (
+from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
+from finn.dataflow.ops.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
     DotProductHardwareInputs,
 )
-from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.regions import (
     MVAURegionDeclaration,
     construct_activation_replay_region,
     construct_dot_product_region,
     construct_standard_mvau_weight_port,
 )
-from finn.dataflow.mvau.semantics import (
+from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     HARDWARE_NUMERIC_TYPE_COVERAGE,
@@ -84,7 +84,7 @@ from finn.dataflow.mvau.semantics import (
     dot_product_computation_supported,
     some_dot_product_hardware_covers_numeric_types,
 )
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
     MVAUComputationProfile,

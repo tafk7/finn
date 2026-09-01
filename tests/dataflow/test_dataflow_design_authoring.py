@@ -1133,7 +1133,7 @@ def test_production_mvau_import_loads_the_new_design_layer() -> None:
         (
             sys.executable,
             "-c",
-            "import sys; import finn.dataflow.ops.mvau_op; "
+            "import sys; import finn.dataflow.ops.mvau.op; "
             "assert 'finn.dataflow.authoring.design' in sys.modules",
         ),
         check=True,

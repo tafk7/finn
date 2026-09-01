@@ -18,29 +18,29 @@ from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
 from finn.dataflow.hardware import composed_artifact_identity, kernel_artifact_identity
 from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.associations import MVAUSourceAssociation
+from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
-from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
-from finn.dataflow.mvau.hardware.binding import source_roots
+from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
+from finn.dataflow.ops.mvau.hardware.binding import source_roots
 from finn.dataflow.mvau.compat.binding import bind_legacy_decomposed
 from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.composition import (
     compose,
     decomposed_top_module_name,
     render_decomposed_wrapper,
     render_stitch_shim,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
-from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
-from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
-from finn.dataflow.mvau.providers import compose_dot_product_design
-from finn.dataflow.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
+from finn.dataflow.ops.mvau.hardware.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
+from finn.dataflow.ops.mvau.elaboration import compose_dot_product_design
+from finn.dataflow.ops.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
+from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
     MVAUDspBlock,
     MVAUProblemPaths,
@@ -335,14 +335,16 @@ def test_dot_product_wrapper_and_composed_artifact_identity_match_legacy() -> No
 
 
 def test_production_mvau_has_switched_to_the_reviewed_design_inventory() -> None:
-    source = Path(__file__).parents[3] / "src" / "finn" / "dataflow" / "ops" / "mvau.py"
+    source = (
+        Path(__file__).parents[3] / "src" / "finn" / "dataflow" / "ops" / "mvau" / "__init__.py"
+    )
     tree = ast.parse(source.read_text(), filename=str(source))
     imported = {
         node.module
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
-    assert "finn.dataflow.mvau.designs.inventory" in imported
+    assert "finn.dataflow.ops.mvau.designs.inventory" in imported
     production_decisions = {item.path for item in MVAU_DATAFLOW_OP_SPEC.decisions}
     assert MVAU_DOT_PRODUCT_DESIGN.semantics.pe.path in production_decisions
     assert MVAU_DOT_PRODUCT_DESIGN.compute_pumping.path in production_decisions

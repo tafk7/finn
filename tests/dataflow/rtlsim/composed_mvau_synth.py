@@ -40,8 +40,8 @@ from dataflow.rtlsim.composed_mvau_equiv import (
     record_identity,
 )
 from finn.dataflow.hardware import DEFAULT_BUILDER, BuilderIdentity, TargetIdentity
-from finn.dataflow.mvau.hardware.binding import finnlib_root
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
+from finn.dataflow.ops.mvau.hardware.composition import (
     complete_decomposed_synthesis,
     find_decomposed_synthesis,
     package_decomposed_artifact,

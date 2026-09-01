@@ -37,7 +37,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAUWeightSource,
 )
 from finn.dataflow.mvau.compat.operation import MVAU_COMPUTE_SELECTION
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.source import (
     MVAUProjectionContext,
     project_mvau_source,
 )
@@ -46,7 +46,7 @@ from finn.dataflow.mvau.compat.source import (
     project_legacy_mvau_source,
     start_legacy_mvau_projection,
 )
-from finn.dataflow.mvau.associations import MVAUNetworkRef as NetworkRef
+from finn.dataflow.ops.mvau.associations import MVAUNetworkRef as NetworkRef
 from finn.dataflow.mvau.compat.operation import RegionRef
 
 NODE_ID = "mvau_artifact"

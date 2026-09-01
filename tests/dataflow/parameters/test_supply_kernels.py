@@ -26,7 +26,7 @@ from finn.dataflow.design import (
     as_object_semantics,
 )
 from finn.dataflow.kernels import NO_KERNEL, SelectedKernel
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port,
     construct_standard_streamed_mvau_region,
 )
@@ -46,7 +46,7 @@ from finn.dataflow.parameters.supply_kernels import (
 from finn.dataflow.region import DataflowRegion, Port
 from finn.dataflow.region_validation import RegionValidationReport
 from finn.dataflow.spec_algebra import assemble_specs
-from finn.dataflow.mvau_problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]

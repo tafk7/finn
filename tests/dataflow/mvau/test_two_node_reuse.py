@@ -34,13 +34,13 @@ from dataflow.mvau.test_decomposed_op import (
     _context,
 )
 from finn.dataflow.hardware import ArtifactKey, StoredArtifact
-from finn.dataflow.mvau.hardware.composition import (
+from finn.dataflow.ops.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
     build_decomposed_artifact_requirements,
     package_decomposed_artifact,
 )
-from finn.dataflow.mvau.providers import elaborate_mvau
-from finn.dataflow.ops.mvau_op import MvauDataflowOp
+from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 

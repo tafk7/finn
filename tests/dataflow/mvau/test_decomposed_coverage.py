@@ -43,16 +43,16 @@ from finn.dataflow.mvau.decomposed import (
     DecomposedMVAUKernels,
     DotProductKernel,
 )
-from finn.dataflow.mvau.hardware.dotp_axi import (
+from finn.dataflow.ops.mvau.hardware.dotp_axi import (
     covers_numeric_types,
     covers_operand_types,
     covers_operand_types as dotp_axi_covers_operand_types,
 )
-from finn.dataflow.mvau.numeric import MVAUNumericTypes
+from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.mvau.compat.operation import (
     MVAU_LEGACY_DATAFLOW_OP_SPEC as MVAU_DATAFLOW_OP_SPEC,
 )
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
     MVAUDspBlock,
     MVAUProblemPaths,

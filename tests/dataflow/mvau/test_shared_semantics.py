@@ -16,20 +16,20 @@ from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, DependencyKind, DesignPoint, Engine, QualifiedPath
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.associations import MVAUSourceAssociation
+from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.mvau.compute_kernels import (
     DECOMPOSED_MVAU_KERNELS,
     MVAU_COMPUTE_SELECTION,
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
-from finn.dataflow.mvau.regions import MVAURegionDeclaration
-from finn.dataflow.mvau.semantics import (
+from finn.dataflow.ops.mvau.regions import MVAURegionDeclaration
+from finn.dataflow.ops.mvau.semantics import (
     DOT_PRODUCT_DESIGN_NAMESPACE,
     MVAUDotProductSemantics,
     declare_dot_product_semantics,
 )
-from finn.dataflow.mvau_problem import (
+from finn.dataflow.ops.mvau.problem import (
     MVAU_PROBLEM,
     MVAU_PROBLEM_SPEC,
     MVAUComputationProfile,

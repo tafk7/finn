@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from finn.dataflow.mvau.regions import (
+from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_streamed_mvau_region,
 )

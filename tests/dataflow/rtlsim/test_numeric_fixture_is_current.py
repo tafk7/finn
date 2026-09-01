@@ -29,7 +29,7 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_numeric as fixture
 from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
-from finn.dataflow.mvau.lane_packing import a_datapath_width, pack_lanes
+from finn.dataflow.ops.mvau.lane_packing import a_datapath_width, pack_lanes
 
 
 def _stimulus(case: fixture.Case) -> tuple[np.ndarray, np.ndarray]:

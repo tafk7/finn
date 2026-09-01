@@ -2048,9 +2048,7 @@ class InferShuffle(Transformation):
                         to_remove.append(consumer)
 
                 # Handle None shapes (shape inference might have failed)
-                assert (
-                    in_reshaped is not None
-                ), f"""Could not infer shape for tensor {n.input[0]}.
+                assert in_reshaped is not None, f"""Could not infer shape for tensor {n.input[0]}.
                     Please run InferShapes first"""
                 assert (
                     out_reshaped is not None
@@ -2530,9 +2528,9 @@ class InferCrop(Transformation):
 
                 # ensure that the axis is among the two innermost dimensions
                 input_shape = model.get_tensor_shape(n.input[0])
-                assert (
-                    len(input_shape) > 1
-                ), "Input shape needs to be at least 2D to be converted to Crop."
+                assert len(input_shape) > 1, (
+                    "Input shape needs to be at least 2D to be converted to Crop."
+                )
 
                 max_index = len(input_shape) - 1
                 axis = get_by_name(n.attribute, "axis").i
@@ -2542,9 +2540,9 @@ class InferCrop(Transformation):
                         max_index - 2,
                     ], "Crop Operates on height and width of the input, assuming (N)HWC layout."
                 else:
-                    assert (
-                        axis == max_index - 1
-                    ), "Crop Operates on width of the input, for 2D input assuming WC layout."
+                    assert axis == max_index - 1, (
+                        "Crop Operates on width of the input, for 2D input assuming WC layout."
+                    )
                 is_vertical = axis == max_index  # otherwise horizontal
                 assert is_vertical is False, "This operator does not current support vertical crops"
 

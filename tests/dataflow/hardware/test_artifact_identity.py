@@ -28,7 +28,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 import finn.dataflow.artifacts as artifacts
 from dataflow.mvau.test_decomposed_op import NODE_ID, _committed, _context, _model
 from dataflow.mvau.test_fused_hardware import _place, _source_description
-from finn.dataflow.mvau_problem import MVAUDspBlock
+from finn.dataflow.ops.mvau.problem import MVAUDspBlock
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.artifacts import (
     DEFAULT_BUILDER,
@@ -44,11 +44,11 @@ from finn.dataflow.artifacts import (
 )
 from finn.dataflow.artifacts.identity import content_hash
 from finn.dataflow.hardware import HardwareKernel
-from finn.dataflow.mvau.hardware.binding import bind_decomposed, source_roots
-from finn.dataflow.mvau.hardware.composition import build_decomposed_artifact_requirements
-from finn.dataflow.mvau.hardware.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.mvau.hardware.replay_buffer import FINN_ROOT as FINN_ROOT_NAME
-from finn.dataflow.mvau.providers import elaborate_mvau
+from finn.dataflow.ops.mvau.hardware.binding import bind_decomposed, source_roots
+from finn.dataflow.ops.mvau.hardware.composition import build_decomposed_artifact_requirements
+from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_ROOT
+from finn.dataflow.ops.mvau.hardware.replay_buffer import FINN_ROOT as FINN_ROOT_NAME
+from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 

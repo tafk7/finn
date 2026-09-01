@@ -21,17 +21,17 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow.design import Decided, Engine, QualifiedPath
-from finn.dataflow.mvau.computation import MVAUComputationProfile
-from finn.dataflow.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.mvau.hardware.composition import build_decomposed_artifact_requirements
-from finn.dataflow.mvau.input_supply import (
+from finn.dataflow.ops.mvau.computation import MVAUComputationProfile
+from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.hardware.composition import build_decomposed_artifact_requirements
+from finn.dataflow.ops.mvau.input_supply import (
     EXTERNAL_SUPPLY,
     FINN_RTL_MEMSTREAM_SUPPLY,
 )
-from finn.dataflow.mvau.providers import elaborate_mvau
-from finn.dataflow.mvau.source import (
+from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
+from finn.dataflow.ops.mvau.source import (
     MVAUProjectionContext,
     MVAUResolvedDesign,
     project_mvau_source,
@@ -44,7 +44,7 @@ from finn.dataflow.ops.mvau import (
     NetworkRef,
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
-from finn.dataflow.ops.mvau_op import (
+from finn.dataflow.ops.mvau.op import (
     MVAU_DATAFLOW_OP_FAMILY_VERSION,
     MVAUDataflowBuildContext,
     MvauDataflowOp,
@@ -52,7 +52,7 @@ from finn.dataflow.ops.mvau_op import (
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.region import BeatSequence
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
-from finn.dataflow.mvau_problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 
 NODE_ID = "logical_mvau0"
 PART = "xczu3eg-sbva484-1-e"
@@ -536,7 +536,7 @@ import json
 import sys
 from dataclasses import dataclass
 from qonnx.core.modelwrapper import ModelWrapper
-from finn.dataflow.ops.mvau_op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 @dataclass
 class Config:
     synth_clk_period_ns: float = 5.0
