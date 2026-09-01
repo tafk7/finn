@@ -473,6 +473,7 @@ class KernelOrigin:
     covered_edges: tuple[str, ...]
     computations: tuple[tuple[str, str], ...]
     assignments: tuple[tuple[str, object], ...]
+    imported_decisions: tuple[str, ...]
     parameters: tuple[tuple[str, object], ...]
     sources: tuple[tuple[str, str], ...]
 
@@ -524,6 +525,7 @@ class Kernel:
         edges: Mapping[str, str],
         assignments: Mapping[QualifiedPath, object],
         parameters: Mapping[str, object],
+        imported_decisions: Sequence[QualifiedPath] = (),
     ) -> None:
         self.declaration = declaration
         self.regions = MappingProxyType(dict(regions))
@@ -532,6 +534,7 @@ class Kernel:
         #: reading another's, and no way to.
         self.assignments = MappingProxyType(dict(assignments))
         self.parameters = MappingProxyType(dict(parameters))
+        self.imported_decisions = tuple(imported_decisions)
         # Instance attributes shadow the class-level family identity, so a
         # generically bound Kernel still answers correctly.
         self.id = declaration.id
@@ -578,6 +581,7 @@ class Kernel:
                 )
             ),
             tuple(sorted((str(path), value) for path, value in self.assignments.items())),
+            tuple(str(path) for path in self.imported_decisions),
             tuple(sorted(self.parameters.items())),
             # Compile order, not sorted: ``dotp_axi`` instantiates ``dotp``,
             # which instantiates the DSP core.  The manifest is a sequence, and
@@ -861,7 +865,14 @@ def bind_kernel(
     owned = {item.path for item in declaration.spec.decisions}
     local = {path: value for path, value in point.assignments.items() if path in owned}
     bound_type = declaration.owner or Kernel
-    instance = bound_type(declaration, dict(regions), supplied_edges, local, values)
+    instance = bound_type(
+        declaration,
+        dict(regions),
+        supplied_edges,
+        local,
+        values,
+        declaration.transitive_imported_decisions(point.design_space),
+    )
     return Decided(instance)
 
 

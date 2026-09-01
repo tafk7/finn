@@ -120,6 +120,8 @@ class DataflowDesignDeclaration:
         for placement in self.placements:
             answer = engine.query_property(point, placement.selected_kernel.path)
             if isinstance(answer, Absent):
+                if answer.is_rejection:
+                    findings.extend(answer.findings)
                 continue
             active.append(placement.name)
             if not isinstance(answer, Decided):

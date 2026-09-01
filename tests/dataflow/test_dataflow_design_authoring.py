@@ -1429,6 +1429,11 @@ def test_absent_placement_selection_distinguishes_inactive_from_rejected() -> No
     )
     assert inactive.trials[0].placements == ()
     assert resolved_physical_feasibility(engine, inactive_point, inventory).verdict is True
+    inactive_realization = inventory.realize(engine, inactive_point)
+    assert isinstance(inactive_realization, Unresolved)
+    assert {finding.code for finding in inactive_realization.findings} == {
+        "design-node-coverage-not-exact"
+    }
 
     rejected_point = engine.start(
         space,
@@ -1444,6 +1449,11 @@ def test_absent_placement_selection_distinguishes_inactive_from_rejected() -> No
     feasibility = resolved_physical_feasibility(engine, rejected_point, inventory)
     assert feasibility.verdict is False
     assert {finding.code for finding in feasibility.findings} == {"matrix-placement-rejected"}
+    rejected_realization = inventory.realize(engine, rejected_point)
+    assert isinstance(rejected_realization, Unresolved)
+    assert {finding.code for finding in rejected_realization.findings} == {
+        "matrix-placement-rejected"
+    }
 
 
 def test_candidate_membership_alone_controls_build_admission() -> None:

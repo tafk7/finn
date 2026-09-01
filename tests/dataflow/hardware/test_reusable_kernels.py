@@ -466,6 +466,7 @@ def _problem_values(
     narrow: bool = False,
     target: DspBlock = DspBlock.DSP58,
     clock: float = 5.0,
+    sets: int = 1,
 ) -> dict[QualifiedPath, object]:
     return {
         inputs.extent.path: 4,
@@ -482,7 +483,7 @@ def _problem_values(
         inputs.initializer_available.path: True,
         inputs.runtime_writable.path: False,
         inputs.memory_capabilities.path: CyclicTargetMemoryCapabilities(True),
-        inputs.sets.path: 3,
+        inputs.sets.path: sets,
     }
 
 
@@ -581,9 +582,16 @@ def test_memstream_kernel_binds_in_a_non_mvau_design() -> None:
     )
     assert kernel.id == FinnRtlMemstreamKernel.id
     assert tuple(kernel.regions) == ("parameter_source",)
-    assert dict(kernel.parameters)["SETS"] == 3
+    assert dict(kernel.parameters)["SETS"] == 1
     assert dict(kernel.parameters)["DEPTH"] == 4
     assert kernel.components()[0].id == "memstream"
+    unsupported_sets = _resolve(
+        NeutralMemstreamDesign,
+        {".ram_style": CyclicRamStyle.BRAM, ".pumped": False},
+        sets=3,
+    )
+    assert isinstance(unsupported_sets, Unresolved)
+    assert "hardware-coverage-refused" in {finding.code for finding in unsupported_sets.findings}
 
 
 def test_promoted_kernel_parameter_and_source_ownership_is_complete() -> None:
@@ -643,6 +651,12 @@ def test_promoted_kernel_parameter_and_source_ownership_is_complete() -> None:
         "finn-rtllib/memstream/hdl/memstream_axi.sv",
         "finn-rtllib/axi/hdl/axilite.sv",
     ]
+    replay_imports = {path.value for path in replay.imported_decisions}
+    assert any(path.endswith(".pe") for path in replay_imports)
+    assert any(path.endswith(".simd") for path in replay_imports)
+    assert replay.origin().imported_decisions == tuple(
+        path.value for path in replay.imported_decisions
+    )
 
 
 @pytest.mark.parametrize(

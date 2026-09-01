@@ -93,6 +93,12 @@ def _pumping_supported(output_port: Port, pumped_memory: bool) -> bool:
     return not pumped_memory or output_port.beat_sequence.elements_per_beat > 1
 
 
+def _sets_supported(sets: int) -> bool:
+    """The shared Kernel currently proves one initializer-backed set."""
+
+    return sets == 1
+
+
 def _uram_initialization_supported(
     initializer_available: bool,
     ram_style: CyclicRamStyle,
@@ -161,6 +167,11 @@ class FinnRtlMemstreamKernel(Kernel):
                 "pumped_memory": inputs.pumped_memory,
             },
             evaluate=_pumping_supported,
+        )
+        design.coverage_constraint(
+            "sets_supported",
+            dependencies={"sets": inputs.sets},
+            evaluate=_sets_supported,
         )
         design.coverage_constraint(
             "uram_initialization_supported",

@@ -18,7 +18,7 @@ from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.authoring.admission import AdmissionVerdict, resolved_physical_feasibility
-from finn.dataflow.design import Decided, Engine
+from finn.dataflow.design import Decided, Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.inventory import (
@@ -387,10 +387,35 @@ def test_unsupported_datatypes_are_rejected_without_a_target() -> None:
         if finding.code == "mvau-inference-candidate-graph-rejected"
     )
     values = dict(detailed.values)
-    assert values["placement"] == "compute"
-    assert values["candidate"] == "dotp_axi"
+    assert values["admission_placement"] == "compute"
+    assert values["admission_candidate"] == "dotp_axi"
     graph_constraints = cast("tuple[object, ...]", values["graph_constraints"])
     assert any(str(path).endswith("operand_types_supported") for path in graph_constraints)
+
+
+def test_admission_context_does_not_collide_with_kernel_finding_values() -> None:
+    original = Finding(
+        FindingKind.REJECTION,
+        "synthetic-kernel-rejection",
+        QualifiedPath("synthetic.kernel.coverage"),
+        "synthetic Kernel rejection",
+        (("placement", "kernel-owned"), ("candidate", "kernel-owned")),
+    )
+
+    contextual = infer_mvau_dataflow._contextual_finding(
+        original,
+        source_nodes=("matmul0",),
+        design_id="dot_product",
+        supply_modes=(("weight", "external"),),
+        placement="compute",
+        candidate_id="dotp_axi",
+    )
+
+    values = dict(contextual.values)
+    assert values["placement"] == "kernel-owned"
+    assert values["candidate"] == "kernel-owned"
+    assert values["admission_placement"] == "compute"
+    assert values["admission_candidate"] == "dotp_axi"
 
 
 def test_target_constraints_are_deferred_then_required_for_resolved_feasibility() -> None:

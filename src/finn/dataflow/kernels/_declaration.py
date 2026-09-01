@@ -19,6 +19,7 @@ from finn.dataflow.authoring.scope import ConstraintRef, Ref
 from finn.dataflow.design import (
     DependencyKind,
     DependencyRef,
+    DesignSpace,
     DesignSpaceSpec,
     QualifiedPath,
     ValueSemantics,
@@ -141,6 +142,39 @@ class CompiledKernelDeclaration:
             for path, kind in self._read_declarations()
             if kind is DependencyKind.DECISION and path not in owned
         ]
+        return tuple(dict.fromkeys(found))
+
+    def transitive_imported_decisions(self, design_space: DesignSpace) -> tuple[QualifiedPath, ...]:
+        """Resolve imported decision provenance against the assembled space."""
+
+        owned = {item.path for item in self.spec.decisions}
+        pending = list(self._read_declarations())
+        found: list[QualifiedPath] = []
+        visited: set[tuple[QualifiedPath, DependencyKind]] = set()
+        while pending:
+            path, kind = pending.pop()
+            key = (path, kind)
+            if key in visited:
+                continue
+            visited.add(key)
+            if kind is DependencyKind.DECISION:
+                if path not in owned:
+                    found.append(path)
+                continue
+            if kind is not DependencyKind.PROPERTY:
+                continue
+            declaration = design_space.properties.get(path)
+            if declaration is None:
+                continue
+            pending.extend(
+                (dependency.path, dependency.kind)
+                for dependency in declaration.evaluator.dependencies
+            )
+            if declaration.applies_if is not None:
+                pending.extend(
+                    (dependency.path, dependency.kind)
+                    for dependency in declaration.applies_if.dependencies
+                )
         return tuple(dict.fromkeys(found))
 
     def _read_declarations(self) -> list[tuple[QualifiedPath, DependencyKind]]:
