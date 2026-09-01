@@ -41,7 +41,7 @@ from finn.dataflow.artifacts import (
     kernel_artifact_identity,
 )
 from finn.dataflow.artifacts.identity import content_hash
-from finn.dataflow.hardware import HardwareKernel
+from finn.dataflow.hardware import HardwareKernel, PhysicalComponent
 from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
@@ -52,7 +52,6 @@ from finn.dataflow.ops.mvau.physical import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
     MVAUPhysicalBoundary,
-    MVAUPhysicalComponent,
     MVAUPhysicalConnection,
     MVAUPhysicalControlInterface,
     MVAUPhysicalControlKind,
@@ -367,7 +366,7 @@ def _merge(items: tuple[_Provenance, ...]) -> _Provenance:
     )
 
 
-def _component(kernel: HardwareKernel, prefix: str, parent: str) -> MVAUPhysicalComponent:
+def _component(kernel: HardwareKernel, prefix: str, parent: str) -> PhysicalComponent:
     """The Kernel's own component, placed under this source scope.
 
     A Kernel names itself ``dot_product`` and knows nothing about where that
@@ -379,8 +378,11 @@ def _component(kernel: HardwareKernel, prefix: str, parent: str) -> MVAUPhysical
     # back against what the Kernel declared, and calling the raw classmethod
     # would take the one assembly that matters straight past the check.
     (declared,) = kernel.components()
-    return MVAUPhysicalComponent(
-        f"{prefix}.{declared.id}", declared.module, parent, declared.parameters
+    return PhysicalComponent(
+        f"{prefix}.{declared.id}",
+        declared.module,
+        parameters=declared.parameters,
+        parent=parent,
     )
 
 
@@ -429,8 +431,8 @@ def compose(
         **dict(replay.parameters),
         **dict(compute.parameters),
     }
-    components: tuple[MVAUPhysicalComponent, ...] = (
-        MVAUPhysicalComponent(
+    components: tuple[PhysicalComponent, ...] = (
+        PhysicalComponent(
             wrapper_id,
             WRAPPER_MODULE,
             parameters=tuple(
@@ -585,7 +587,7 @@ def compose(
         delivery_port = delivery_region.output_interface("weight").port
         delivery_id = f"{source_id}.delivery.wrapper"
         (declared_delivery,) = delivery.components()
-        delivery_component = MVAUPhysicalComponent(
+        delivery_component = PhysicalComponent(
             delivery_id,
             declared_delivery.module,
             parameters=declared_delivery.parameters,

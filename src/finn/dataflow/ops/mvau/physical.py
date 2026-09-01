@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from finn.dataflow.design import Finding, QualifiedPath
+from finn.dataflow.hardware import PhysicalComponent
 from finn.dataflow.ops.mvau.associations import MVAUNetworkRef
 
 
@@ -45,17 +46,6 @@ class MVAUElaborationOrigin:
 class MVAUSemanticPortRef:
     region_id: str
     port_id: str
-
-
-@dataclass(frozen=True)
-class MVAUPhysicalComponent:
-    id: str
-    implementation_id: str
-    parent_id: str | None = None
-    parameters: tuple[tuple[str, PhysicalParameterValue], ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "parameters", tuple(sorted(self.parameters)))
 
 
 @dataclass(frozen=True)
@@ -115,7 +105,7 @@ class MVAUPhysicalElaboration:
     semantic_result: MVAUNetworkRef
     target_fpga_part: str
     target_clock_period_ns: float
-    components: tuple[MVAUPhysicalComponent, ...]
+    components: tuple[PhysicalComponent, ...]
     numeric_interfaces: tuple[MVAUPhysicalNumericInterface, ...]
     control_interfaces: tuple[MVAUPhysicalControlInterface, ...]
     connections: tuple[MVAUPhysicalConnection, ...]
@@ -146,18 +136,18 @@ class MVAUPhysicalElaboration:
         ):
             raise ValueError("every physical interface must name a component")
         if any(
-            component.parent_id is not None and component.parent_id not in component_ids
+            component.parent is not None and component.parent not in component_ids
             for component in components
         ):
             raise ValueError("every physical component parent must name another component")
         for component in components:
             ancestors = set()
-            parent = component.parent_id
+            parent = component.parent
             while parent is not None:
                 if parent == component.id or parent in ancestors:
                     raise ValueError("physical component parent relationships must be acyclic")
                 ancestors.add(parent)
-                parent = next(item.parent_id for item in components if item.id == parent)
+                parent = next(item.parent for item in components if item.id == parent)
         if any(
             not isinstance(interface.direction, MVAUPhysicalDirection)
             or interface.protocol is not MVAUPhysicalNumericProtocol.AXI_STREAM
@@ -226,7 +216,7 @@ class MVAUPhysicalElaboration:
         object.__setattr__(self, "boundaries", boundaries)
         object.__setattr__(self, "associations", associations)
 
-    def component(self, component_id: str) -> MVAUPhysicalComponent:
+    def component(self, component_id: str) -> PhysicalComponent:
         matches = tuple(item for item in self.components if item.id == component_id)
         if len(matches) != 1:
             raise KeyError(f"expected one physical component {component_id!r}")
@@ -246,7 +236,6 @@ __all__ = [
     "MVAUElaborationOrigin",
     "MVAUPhysicalAssociation",
     "MVAUPhysicalBoundary",
-    "MVAUPhysicalComponent",
     "MVAUPhysicalConnection",
     "MVAUPhysicalControlInterface",
     "MVAUPhysicalControlKind",

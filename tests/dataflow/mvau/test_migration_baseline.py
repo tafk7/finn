@@ -254,6 +254,12 @@ def _physical(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
 #: structure still carries the placement, in the component ids, because an
 #: *instance* name legitimately depends on where the instance is.
 #:
+#: **Effort B B6 moves only the component representation.**  The MVAU-local
+#: ``implementation_id``/``parent_id`` record is replaced by the generic
+#: ``module``/``parent`` record.  The component tuples below therefore acquire
+#: new repr fingerprints while their ids, modules, parent relationships, and
+#: parameter tables remain exactly equal under the explicit field mapping.
+#:
 #: ``softvec`` and ``packed`` share all three semantic fingerprints, and
 #: ``packed`` and ``three_repetitions`` share their parameters.  Both are the
 #: decomposition showing: the target does not reach the Region, and the
@@ -274,7 +280,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "8162f7a7817c53be",
-            "components": "7899fcc0bf491f02",
+            "components": "d25714e0f4f4ecb5",
             "numeric_interfaces": "600b06f72177b206",
             "control_interfaces": "b954f296f62e47fb",
             "connections": "315f5a4fead89a41",
@@ -297,7 +303,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "d6d573ebc9159065",
-            "components": "f717e392f4c971f0",
+            "components": "148363a9d83b7730",
             "numeric_interfaces": "ccf1d5978d6060d0",
             "control_interfaces": "10974902328b4ddf",
             "connections": "f54a3d78f385b0ad",
@@ -320,7 +326,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "201ffec0dc084a80",
-            "components": "957680b992e6a76a",
+            "components": "da58aeb87dffef23",
             "numeric_interfaces": "13eca52b4516e4d1",
             "control_interfaces": "41dcdc2c96649be5",
             "connections": "c046ba0b8dd365c5",
@@ -343,7 +349,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "20ebdde09b7e74ee",
-            "components": "9cd4ad7494cc3be7",
+            "components": "e4f54b5183a9baec",
             "numeric_interfaces": "7cb37c52567c60e9",
             "control_interfaces": "a247a182419bdd77",
             "connections": "23f3e9df21ba7d83",
@@ -366,7 +372,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "d6d573ebc9159065",
-            "components": "173f4373497aea1b",
+            "components": "89a4006df3a1066a",
             "numeric_interfaces": "dc0fb768ed1434f4",
             "control_interfaces": "b5eb163f0011feb8",
             "connections": "bec46178ba047b3b",
@@ -389,7 +395,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "4d0ad578ed08cf0e",
-            "components": "20a863e19a37ea4f",
+            "components": "d88860b2ef5352a2",
             "numeric_interfaces": "e7c09d1f896617e3",
             "control_interfaces": "d4db82222fd89522",
             "connections": "b7a0a11b90ebe3d1",
@@ -412,7 +418,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "e7e05f66b02b4927",
-            "components": "592ebb9e0f08c069",
+            "components": "585278000331a706",
             "numeric_interfaces": "ba2650c0be5b970c",
             "control_interfaces": "95779a8114bf1f7f",
             "connections": "5323d92561033ffe",
@@ -441,7 +447,7 @@ BASELINE: dict[str, dict[str, dict[str, str]]] = {
         },
         "physical": {
             "parameters": "dd930e0bc4e28c2d",
-            "components": "041e87d8f9a372aa",
+            "components": "c6b06d3e2e230689",
             "numeric_interfaces": "f0c7e9f908845e35",
             "control_interfaces": "6333b28c1701b1d6",
             "connections": "29e9aa687d4f9558",

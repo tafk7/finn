@@ -104,7 +104,7 @@ def _requirements(tmp_path: Path | None = None):  # type: ignore[no-untyped-def]
 
 def test_elaboration_follows_the_selected_design() -> None:
 
-    decomposed = {item.implementation_id for item in elaborate_mvau(_resolved()).components}
+    decomposed = {item.module for item in elaborate_mvau(_resolved()).components}
     assert decomposed == {
         "finnlib.rtl.dotp_axi",
         "finn-rtllib.mvu.replay_buffer",
@@ -144,7 +144,7 @@ def test_the_structure_is_the_network_the_kernels_assembled() -> None:
     elaboration = elaborate_mvau(resolved)
     wrapper = f"{resolved.result.source_association.source_node_id}.compute.wrapper"
 
-    children = {item.id for item in elaboration.components if item.parent_id == wrapper}
+    children = {item.id for item in elaboration.components if item.parent == wrapper}
     assert len(children) == 2
 
     internal = elaboration.connections

@@ -26,7 +26,7 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 from finn.dataflow.design import Decided
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.hardware.supplied_artifacts import (
+from finn.dataflow.ops.mvau.artifacts.supplied import (
     build_supplied_artifact_requirements,
 )
 from finn.dataflow.ops.mvau.input_supply import FINN_RTL_MEMSTREAM_SUPPLY

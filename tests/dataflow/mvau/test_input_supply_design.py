@@ -35,7 +35,7 @@ from finn.dataflow.ops.mvau.hardware.composition import (
     staged_layout,
     write_decomposed_artifact,
 )
-from finn.dataflow.ops.mvau.hardware.supplied_artifacts import (
+from finn.dataflow.ops.mvau.artifacts.supplied import (
     build_supplied_artifact_requirements,
 )
 from finn.dataflow.ops.mvau.input_supply import (
@@ -279,7 +279,7 @@ def test_memstream_integrates_with_dot_product_physical_elaboration() -> None:
     resolved = _resolved(engine, point, realization.network)
     elaboration = compose_dot_product_design(resolved, realization)
 
-    assert {item.implementation_id for item in elaboration.components} == {
+    assert {item.module for item in elaboration.components} == {
         "finn.dataflow.mvau.decomposed_wrapper",
         "finn-rtllib.mvu.replay_buffer",
         "finnlib.rtl.dotp_axi",

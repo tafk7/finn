@@ -35,7 +35,7 @@ from finn.dataflow.ops.mvau.hardware.composition import (
     write_decomposed_artifact,
 )
 from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
-from finn.dataflow.ops.mvau.hardware.supplied_artifacts import (
+from finn.dataflow.ops.mvau.artifacts.supplied import (
     build_supplied_artifact_requirements,
 )
 from finn.dataflow.ops.mvau.input_supply import FINN_RTL_MEMSTREAM_SUPPLY
