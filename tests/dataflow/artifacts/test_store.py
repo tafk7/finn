@@ -16,6 +16,7 @@ to building hides a broken store behind a slow build, and it stays broken.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 from pathlib import Path
@@ -66,6 +67,23 @@ def _populate(workspace: Path, *, contents: str = "module a; endmodule\n") -> No
 @pytest.fixture(name="store")
 def _store(tmp_path: Path) -> ArtifactStore:
     return ArtifactStore(tmp_path / "artifact-store")
+
+
+def _other_filesystem(reference: Path) -> Path | None:
+    """A writable directory on a different device from ``reference``, if any.
+
+    ``/dev/shm`` is a separate tmpfs almost everywhere and ``/tmp`` is a
+    separate tmpfs only sometimes, so both are tried and the first that is
+    genuinely on another device wins.
+    """
+
+    device = os.stat(reference).st_dev
+    for candidate in (Path("/dev/shm"), Path("/tmp"), Path(f"/run/user/{os.getuid()}")):
+        if not candidate.is_dir() or not os.access(candidate, os.W_OK):
+            continue
+        if os.stat(candidate).st_dev != device:
+            return candidate
+    return None
 
 
 def _publish(store: ArtifactStore, derivation: Derivation | None = None) -> object:
@@ -247,22 +265,24 @@ def test_a_cross_filesystem_rename_is_not_atomic_which_is_why_the_rule_exists(
 ) -> None:
     """The failure mode, demonstrated rather than asserted from memory.
 
-    ``/tmp`` against the repository checkout is the exact pairing the rule is
-    about: in the container one is the overlay and the other is the bind
-    mount.  Skipped where this machine happens to put both on one device,
-    since then there is nothing to demonstrate -- and the skip is itself the
-    honest answer about what was checked here.
+    In the container this pairing is the overlay against the bind-mounted
+    repository.  Here it is whichever mount is not the checkout's -- the
+    candidates are tried rather than assumed, because ``/tmp`` is a tmpfs on
+    some machines and part of ``/`` on others, and hard-coding it turns a real
+    check into a skip that reads like a pass.
     """
 
-    scratch = Path("/tmp") / f"a4-cross-fs-{os.getpid()}"
-    scratch.mkdir(exist_ok=True)
+    elsewhere = _other_filesystem(finn_root)
+    if elsewhere is None:
+        pytest.skip("this machine exposes no second filesystem to rename across")
+
+    scratch = elsewhere / f"a4-cross-fs-{os.getpid()}"
     inside_repo = finn_root / f".a4-cross-fs-{os.getpid()}"
+    scratch.mkdir(exist_ok=True)
     try:
-        if os.stat(scratch).st_dev == os.stat(finn_root).st_dev:
-            pytest.skip("/tmp and the checkout share a filesystem on this machine")
         with pytest.raises(OSError) as raised:
             os.replace(scratch, inside_repo)
-        assert raised.value.errno == 18  # EXDEV
+        assert raised.value.errno == errno.EXDEV
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(inside_repo, ignore_errors=True)
