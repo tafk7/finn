@@ -257,7 +257,6 @@ print(json.dumps({
         text=True,
         env=environment,
     )
-
     subprocess_result = json.loads(completed.stdout)
     assert subprocess_result == {
         "paths": sorted(str(path) for path in original.point.assignments),
@@ -266,6 +265,29 @@ print(json.dumps({
     local_reload = reconstitute_mvau_selection(ModelWrapper(str(model_path)), NODE_ID, context)
     assert local_reload.result == original.result
     assert local_reload.point.assignments == original.point.assignments
+
+
+def test_v11_metadata_envelope_bytes_are_frozen_for_retirement() -> None:
+    """Pin the obsolete transport so later code can reject, never reinterpret, it."""
+
+    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
+    resolved = _v11_resolved(model, _context(), supplied=True)
+    envelope = save_mvau_selection(model, NODE_ID, resolved.point)
+
+    assert envelope.to_json() == (
+        '{"adapter_key":"finn.dataflow.mvau","assignments":['
+        '{"path":"mvau.design","value":"dot_product"},'
+        '{"path":"mvau.design.dot_product.compute.dotp_axi.compute_pumping","value":false},'
+        '{"path":"mvau.design.dot_product.pe","value":2},'
+        '{"path":"mvau.design.dot_product.simd","value":2},'
+        '{"path":"mvau.input.weight.finn_rtl_memstream.pumped_memory","value":false},'
+        '{"path":"mvau.input.weight.finn_rtl_memstream.ram_style","value":"block"},'
+        '{"path":"mvau.input.weight.supply","value":"finn_rtl_memstream"}],'
+        '"declaration_family_version":"mvau-source-composition-v11",'
+        '"format_version":1,'
+        '"problem_fingerprint":"4e54b91103159763b07e8ce4953b252bd129d91614c57d6f9e9796e6b2fc9ef1",'
+        '"source_scope_id":"mvau0"}'
+    )
 
 
 def test_supplied_composition_round_trips_without_an_adapter(tmp_path: Path) -> None:

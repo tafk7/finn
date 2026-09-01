@@ -521,6 +521,48 @@ def test_a_freshly_saved_v6_selection_reloads_with_its_datatypes_intact() -> Non
         assert value == DataType[value.name], path
 
 
+def test_v6_node_backed_persistence_bytes_are_frozen_for_adapter_migration() -> None:
+    """Pin the old payload so v7 can reject it instead of reinterpreting it."""
+
+    model = _model()
+    operation = _wrapped(model)
+    operation.commit_dataflow_assignments(_context(), _dot_product())
+
+    actual = {
+        attribute.name: attribute.SerializeToString(deterministic=True).hex()
+        for attribute in operation.onnx_node.attribute
+        if attribute.name.startswith("dataflow_")
+    }
+    assert actual == {
+        "dataflow_design": ("0a0f64617461666c6f775f64657369676e220b646f745f70726f64756374a00103"),
+        "dataflow_dot_product_pe": ("0a1764617461666c6f775f646f745f70726f647563745f70651802a00102"),
+        "dataflow_dot_product_simd": (
+            "0a1964617461666c6f775f646f745f70726f647563745f73696d641802a00102"
+        ),
+        "dataflow_dotp_axi_pumping": (
+            "0a1964617461666c6f775f646f74705f6178695f70756d70696e671800a00102"
+        ),
+        "dataflow_family_id": (
+            "0a1264617461666c6f775f66616d696c795f6964221266696e6e2e64617461666c6f772e6d766175a00103"
+        ),
+        "dataflow_family_version": (
+            "0a1764617461666c6f775f66616d696c795f76657273696f6e22136d7661752d"
+            "64617461666c6f772d6f702d7636a00103"
+        ),
+        "dataflow_problem_fingerprint": (
+            "0a1c64617461666c6f775f70726f626c656d5f66696e6765727072696e742240"
+            "333464333465393063303838306464393831396464653066616332643666383932"
+            "61306362333338323332353064306233653665363266613539386362393135a00103"
+        ),
+        "dataflow_scope_id": (
+            "0a1164617461666c6f775f73636f70655f696422136c6f676963616c5f6d766175305f73636f7065a00103"
+        ),
+        "dataflow_weight_supply": (
+            "0a1664617461666c6f775f7765696768745f737570706c79220865787465726e616ca00103"
+        ),
+    }
+
+
 def test_logical_mvau_assignments_survive_fresh_process_reload(tmp_path: Path) -> None:
     model = _model()
     operation = _wrapped(model)
