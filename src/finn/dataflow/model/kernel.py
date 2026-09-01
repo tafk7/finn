@@ -38,6 +38,7 @@ from finn.dataflow.artifacts.contributions import (
     DataSlot,
     RenderedSource,
 )
+from finn.dataflow.artifacts.derivation import Scalar
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.compiler import _CompiledSpace, _Ref, _compile_space
@@ -137,6 +138,13 @@ class Kernel(Space):
     @classmethod
     def component_abi(cls, configured: Self) -> ComponentABI:
         raise NotImplementedError(f"{cls.__name__} does not declare a component ABI")
+
+    @classmethod
+    def render_context(cls, configured: Self) -> Mapping[str, Scalar]:
+        """Flat scalar context for this Kernel's rendered source contributions."""
+
+        del configured
+        return MappingProxyType({})
 
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:

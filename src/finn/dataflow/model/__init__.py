@@ -35,6 +35,16 @@ _LAZY_EXPORTS = {
     name: ("finn.dataflow.model.kernel", name)
     for name in ("Kernel", "Parameter", "configure_kernel")
 }
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.model.kernel_artifacts", name)
+        for name in (
+            "kernel_source_derivation",
+            "portable_kernel_component",
+            "resolve_kernel_contributions",
+        )
+    }
+)
 
 
 def __getattr__(name: str) -> object:
@@ -45,6 +55,7 @@ def __getattr__(name: str) -> object:
     value = getattr(import_module(module_name), attribute_name)
     globals()[name] = value
     return value
+
 
 __all__ = [
     "AuthoringError",
@@ -67,6 +78,9 @@ __all__ = [
     "divisors_of",
     "domain",
     "finite",
+    "kernel_source_derivation",
+    "portable_kernel_component",
     "reject",
+    "resolve_kernel_contributions",
     "unresolved",
 ]
