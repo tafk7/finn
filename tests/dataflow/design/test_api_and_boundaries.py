@@ -104,8 +104,10 @@ def test_design_import_loads_engine_and_region_by_design() -> None:
 def test_resolved_operation_values_have_an_evaluation_time_canonical_import() -> None:
     resolution = import_module("finn.dataflow.resolution")
 
+    assert design.DataflowOpResult is resolution.NetworkRef
     assert design.NetworkRef is resolution.NetworkRef
     assert design.ResolvedDataflowOp is resolution.ResolvedDataflowOp
+    assert not hasattr(resolution, "RegionRef")
 
 
 def test_authoring_facade_exposes_design_declaration_entry_points() -> None:

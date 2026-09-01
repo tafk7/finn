@@ -67,10 +67,11 @@ from finn.dataflow.region_validation import (
 )
 
 if TYPE_CHECKING:
-    from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
+    from finn.dataflow.resolution import DataflowOpResult, NetworkRef, ResolvedDataflowOp
 
 _LAZY_EXPORTS = {
-    name: ("finn.dataflow.resolution", name) for name in ("NetworkRef", "ResolvedDataflowOp")
+    name: ("finn.dataflow.resolution", name)
+    for name in ("DataflowOpResult", "NetworkRef", "ResolvedDataflowOp")
 }
 
 
@@ -103,6 +104,7 @@ __all__ = [
     "ConstraintSet",
     "DataflowRegion",
     "DataflowNetwork",
+    "DataflowOpResult",
     "Decided",
     "Decision",
     "DecisionDomain",

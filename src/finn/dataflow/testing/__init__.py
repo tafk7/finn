@@ -18,7 +18,7 @@ from finn.dataflow.op import (
     DataflowOp,
     DataflowOpError,
 )
-from finn.dataflow.resolution import NetworkRef, RegionRef, ResolvedDataflowOp
+from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,7 @@ def assert_dataflow_op_conforms(
     if split < len(assignment_items):
         reloaded.commit_dataflow_assignments(case.config, dict(assignment_items[split:]))
     original = reloaded.resolve_dataflow(case.config)
-    assert isinstance(original.result, (RegionRef, NetworkRef))
+    assert isinstance(original.result, NetworkRef)
     reloaded_model.save(case.reload_path)
     final_model = ModelWrapper(str(case.reload_path))
     final_node = next(node for node in final_model.graph.node if node.name == case.node_name)

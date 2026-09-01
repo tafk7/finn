@@ -33,6 +33,7 @@ from finn.dataflow.design import (
     as_object_semantics,
 )
 from finn.dataflow.authoring import DataflowBuildConfigView, DataflowOp, NodeAttrCodec
+from finn.dataflow.authoring.design import singleton_network
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -45,7 +46,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, RegionRef
+from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, NetworkRef
 
 __all__ = ["SyntheticDataflowOp", "ZeroDecisionDataflowOp"]
 
@@ -130,9 +131,9 @@ def _derive_fixed_region(dependencies: DependencyView) -> Answer[object]:
 
 def _derive_result(dependencies: DependencyView) -> Answer[object]:
     return Decided(
-        RegionRef(
+        NetworkRef(
             "synthetic",
-            cast(DataflowRegion, dependencies["region"]),
+            singleton_network("compute", cast(DataflowRegion, dependencies["region"])),
             cast(str, dependencies["association"]),
         )
     )

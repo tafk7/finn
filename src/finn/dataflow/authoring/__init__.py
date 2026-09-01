@@ -24,8 +24,6 @@ from finn.dataflow.authoring.scope import (
     reject,
     unresolved,
 )
-from finn.dataflow.kernel import RegionDeclaration, build_kernel_semantic_declarations
-from finn.dataflow.resolution import DataflowOpResult, NetworkRef, RegionRef, ResolvedDataflowOp
 from finn.dataflow.selection import FiniteSelectionResult, enumerate_feasible_points
 from finn.dataflow.spec_algebra import (
     SpecAuthoringError,
@@ -52,28 +50,6 @@ if TYPE_CHECKING:
         declare_dataflow_op_authoring,
         selected_design_metadata,
     )
-    from finn.dataflow.authoring.kernel_design import (
-        FEASIBILITY,
-        SOURCE_ADMISSION,
-        KernelDesign,
-        declare_kernel,
-        declare_kernel_design,
-        kernel_namespace,
-    )
-    from finn.dataflow.kernels import (
-        NO_KERNEL,
-        SELECTED_KERNEL_SEMANTICS,
-        Kernel,
-        KernelDemand,
-        KernelExport,
-        KernelProvider,
-        KernelSelection,
-        KernelSelectionPaths,
-        SelectedKernel,
-        admissible_kernels,
-        bind_kernel,
-        selected_kernel,
-    )
     from finn.dataflow.op import (
         AssignmentMapping,
         DataflowAssignmentCommit,
@@ -83,17 +59,7 @@ if TYPE_CHECKING:
     )
     from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
 
-_LAZY_EXPORTS = {
-    name: ("finn.dataflow.authoring.kernel_design", name)
-    for name in (
-        "FEASIBILITY",
-        "SOURCE_ADMISSION",
-        "KernelDesign",
-        "declare_kernel",
-        "declare_kernel_design",
-        "kernel_namespace",
-    )
-}
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {}
 _LAZY_EXPORTS.update(
     {
         name: ("finn.dataflow.authoring.design", name)
@@ -120,25 +86,6 @@ _LAZY_EXPORTS.update(
             "declare_dataflow_design_inventory",
             "declare_dataflow_op_authoring",
             "selected_design_metadata",
-        )
-    }
-)
-_LAZY_EXPORTS.update(
-    {
-        name: ("finn.dataflow.kernels", name)
-        for name in (
-            "NO_KERNEL",
-            "SELECTED_KERNEL_SEMANTICS",
-            "Kernel",
-            "KernelDemand",
-            "KernelExport",
-            "KernelProvider",
-            "KernelSelection",
-            "KernelSelectionPaths",
-            "SelectedKernel",
-            "admissible_kernels",
-            "bind_kernel",
-            "selected_kernel",
         )
     }
 )
@@ -188,44 +135,22 @@ __all__ = [
     "DataflowOp",
     "DataflowOpAuthoring",
     "DataflowOpError",
-    "DataflowOpResult",
-    "FEASIBILITY",
     "FiniteSelectionResult",
     "GRAPH_OWNED",
-    "Kernel",
-    "KernelDemand",
-    "KernelDesign",
-    "KernelExport",
-    "KernelProvider",
-    "KernelSelection",
-    "KernelSelectionPaths",
     "InputSupplyAlternative",
     "InputSupplyDeclaration",
     "DesignSelectionMetadata",
-    "NO_KERNEL",
-    "NetworkRef",
     "NodeAttrCodec",
     "NodeAttributeType",
     "OpDesign",
     "ProblemProvenance",
     "Provenance",
     "Ref",
-    "RegionDeclaration",
-    "RegionRef",
-    "ResolvedDataflowOp",
-    "SELECTED_KERNEL_SEMANTICS",
-    "SOURCE_ADMISSION",
     "Scope",
-    "SelectedKernel",
     "SpecAuthoringError",
     "SpecAuthoringIssue",
-    "admissible_kernels",
     "assemble_specs",
-    "bind_kernel",
-    "build_kernel_semantic_declarations",
     "dataflow_problem_fingerprint",
-    "declare_kernel",
-    "declare_kernel_design",
     "declare_dataflow_design_inventory",
     "declare_dataflow_op_authoring",
     "divisors_of",
@@ -233,9 +158,7 @@ __all__ = [
     "enumerate_feasible_points",
     "finite",
     "gate_spec",
-    "kernel_namespace",
     "reject",
-    "selected_kernel",
     "selected_design_metadata",
     "unresolved",
 ]

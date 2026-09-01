@@ -33,11 +33,10 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.datatypes import encode_datatype, is_qonnx_datatype
 from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
-from finn.dataflow.resolution import NetworkRef, RegionRef, ResolvedDataflowOp
+from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
 
 if TYPE_CHECKING:
     from finn.dataflow.authoring.inventory import DataflowOpAuthoring
-    from finn.dataflow.kernels import KernelSelection
     from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 
@@ -190,7 +189,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
 
     @classmethod
     def result_path(cls) -> QualifiedPath:
-        """Return the selected ``RegionRef | NetworkRef`` property path."""
+        """Return the selected ``NetworkRef`` property path."""
 
         return cls._required_authoring().result.path
 
@@ -212,12 +211,6 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     # Kernel pools and the constraint sets and readiness profiles a caller
     # should ask about, so the generic selection transform needs no
     # per-operation configuration.
-
-    @classmethod
-    def kernel_selections(cls) -> tuple[KernelSelection, ...]:
-        """Return the static Kernel pools this operation family declares."""
-
-        return ()
 
     @classmethod
     def selection_constraint_set(cls) -> str | None:
@@ -247,7 +240,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
         authored = cls.dataflow_authoring()
         if authored is not None:
             return authored.feasibility_constraint_sets
-        return tuple(selection.feasibility_constraint_set for selection in cls.kernel_selections())
+        return ()
 
     @classmethod
     def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:
@@ -622,13 +615,13 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                 )
             )
         selected = result.value
-        if not isinstance(selected, (RegionRef, NetworkRef)):
+        if not isinstance(selected, NetworkRef):
             raise DataflowOpError(
                 (
                     _finding(
                         FindingKind.AUTHORING,
                         "dataflow-result-type-invalid",
-                        "the result property did not produce RegionRef or NetworkRef",
+                        "the result property did not produce NetworkRef",
                     ),
                 )
             )

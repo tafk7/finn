@@ -8,16 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from finn.dataflow.design import DesignPoint, Engine, ValueSemantics
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.region import DataflowRegion
-
-
-@dataclass(frozen=True)
-class RegionRef:
-    """Selected region associated with one source-operation scope."""
-
-    region_id: str
-    region: DataflowRegion
-    source_association: object
 
 
 @dataclass(frozen=True)
@@ -29,12 +19,12 @@ class NetworkRef:
     source_association: object
 
 
-DataflowOpResult = RegionRef | NetworkRef
+DataflowOpResult = NetworkRef
 
 DATAFLOW_OP_RESULT_SEMANTICS: ValueSemantics[object] = ValueSemantics(
     DataflowOpResult,
     "DataflowOpResult",
-    lambda value: isinstance(value, (RegionRef, NetworkRef)),
+    lambda value: isinstance(value, NetworkRef),
     lambda left, right: left == right,
     lambda value: value,
 )
@@ -55,6 +45,5 @@ __all__ = [
     "DATAFLOW_OP_RESULT_SEMANTICS",
     "DataflowOpResult",
     "NetworkRef",
-    "RegionRef",
     "ResolvedDataflowOp",
 ]

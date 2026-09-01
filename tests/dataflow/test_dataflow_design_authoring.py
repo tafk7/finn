@@ -1253,8 +1253,12 @@ def test_public_design_authoring_surface_excludes_compiled_metadata() -> None:
     assert {
         "DataflowDesignDeclaration",
         "HardwareKernelDeclaration",
+        "KernelDesign",
         "KernelPlacement",
+        "KernelProvider",
+        "KernelSelection",
         "PlacementSelection",
+        "RegionRef",
     }.isdisjoint(design_authoring.__all__)
 
 

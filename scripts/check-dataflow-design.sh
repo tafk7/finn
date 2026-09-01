@@ -56,8 +56,6 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/region.py \
     src/finn/dataflow/region_profiles.py \
     src/finn/dataflow/region_validation.py \
-    src/finn/dataflow/kernel.py \
-    src/finn/dataflow/kernels.py \
     src/finn/dataflow/hardware \
     src/finn/dataflow/spec_algebra.py \
     src/finn/dataflow/network.py \
@@ -76,17 +74,13 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/mvau_op_facts.py \
     tests/dataflow/normalized_structure.py \
     tests/dataflow/test_datatypes.py \
-    tests/dataflow/test_kernel_admission.py \
     tests/dataflow/test_authoring_op_design.py \
     tests/dataflow/test_authoring_scope.py \
     tests/dataflow/test_dataflow_design_authoring.py \
     tests/dataflow/test_mvau_narrow_weights.py \
     tests/dataflow/test_mvau_problem_fields.py \
     tests/dataflow/test_dataflow_op.py \
-    tests/dataflow/test_kernel_class_authoring.py \
-    tests/dataflow/test_kernel_pool.py \
     tests/dataflow/test_network.py \
     tests/dataflow/test_network_validation.py \
     tests/dataflow/test_mvau_inference.py \
-    tests/dataflow/test_dataflow_selection.py \
-    tests/dataflow/test_op_kernel_waterfall_acceptance.py
+    tests/dataflow/test_dataflow_selection.py

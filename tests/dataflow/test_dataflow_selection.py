@@ -283,7 +283,7 @@ def test_the_transform_needs_no_operation_specific_configuration() -> None:
     assert MvauDataflowOp.selection_constraint_set() == "mvau_op_feasibility"
     assert MvauDataflowOp.structural_readiness_profile() == "mvau_op_structural"
     assert MvauDataflowOp.artifact_readiness_profile() == "artifact_inputs"
-    assert MvauDataflowOp.kernel_selections() == ()
+    assert not hasattr(MvauDataflowOp, "kernel_selections")
 
 
 def test_a_policy_sees_every_scope_in_one_call() -> None:

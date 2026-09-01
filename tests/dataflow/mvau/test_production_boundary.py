@@ -55,6 +55,9 @@ FORBIDDEN_NAMES = {
     "MEMSTREAM_PROVIDER_ID",
 }
 DELETED_MVAU_MODULES = (
+    "finn.dataflow.kernel",
+    "finn.dataflow.kernels",
+    "finn.dataflow.authoring.kernel_design",
     "finn.dataflow.mvau.compat.operation",
     "finn.dataflow.mvau.compute_kernels",
     "finn.dataflow.mvau.compute_pool",
