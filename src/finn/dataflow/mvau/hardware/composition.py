@@ -61,10 +61,10 @@ from finn.dataflow.mvau.physical import (
     MVAUPhysicalNumericInterface,
     MVAUPhysicalNumericProtocol,
     MVAUSemanticPortRef,
-    mvau_elaboration_origin,
 )
-from finn.dataflow.mvau.hardware.binding import (
-    bind_decomposed,
+from finn.dataflow.mvau.origin import mvau_elaboration_origin
+from finn.dataflow.mvau.hardware.binding import bind_decomposed
+from finn.dataflow.mvau.hardware.source import (
     resolved_manifest,
     source_roots,
     verify_manifest,
@@ -73,7 +73,7 @@ from finn.dataflow.mvau.input_supply import (
     DELIVERY_EDGE,
     DELIVERY_NODE,
 )
-from finn.dataflow.mvau.source import MVAUResolvedDesign
+from finn.dataflow.mvau.projection import MVAUResolvedDesign
 from finn.dataflow.mvau_problem import MVAUProblemPaths
 from finn.dataflow.region import Port
 

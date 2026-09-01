@@ -18,8 +18,14 @@ PRODUCTION_FILES = (
     ROOT / "ops" / "mvau.py",
     ROOT / "ops" / "mvau_op.py",
     ROOT / "mvau" / "source.py",
-    ROOT / "mvau" / "physical.py",
+    ROOT / "mvau" / "projection.py",
+    ROOT / "mvau" / "persistence.py",
+    ROOT / "mvau" / "origin.py",
+    ROOT / "mvau" / "assignments.py",
+    ROOT / "mvau" / "associations.py",
     ROOT / "mvau" / "input_supply.py",
+    ROOT / "mvau" / "regions.py",
+    ROOT / "mvau" / "physical.py",
     ROOT / "mvau" / "semantics.py",
     ROOT / "mvau" / "providers.py",
     *(ROOT / "mvau" / "designs").glob("*.py"),
@@ -77,6 +83,41 @@ def test_removed_binding_wrappers_do_not_reappear_in_production() -> None:
             node.id for node in ast.walk(ast.parse(path.read_text())) if isinstance(node, ast.Name)
         }
         assert not names & {"KernelBinding", "DecomposedBindings"}, path
+
+
+def test_production_mvau_import_graph_is_acyclic() -> None:
+    modules = {
+        "finn.dataflow." + ".".join(path.relative_to(ROOT).with_suffix("").parts): path
+        for path in PRODUCTION_FILES
+    }
+    edges: dict[str, set[str]] = {name: set() for name in modules}
+    for source, path in modules.items():
+        for imported, _name in _imports(path):
+            edges[source].update(
+                target
+                for target in modules
+                if imported == target or imported.startswith(f"{target}.")
+            )
+
+    def reaches(source: str, target: str) -> bool:
+        pending = list(edges[source])
+        visited: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            if current not in visited:
+                visited.add(current)
+                pending.extend(edges[current] - visited)
+        return False
+
+    cycles = {
+        tuple(sorted((left, right)))
+        for left in modules
+        for right in modules
+        if left < right and reaches(left, right) and reaches(right, left)
+    }
+    assert cycles == set()
 
 
 def test_production_elaboration_dispatch_exports_no_provider_registry() -> None:

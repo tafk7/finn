@@ -27,7 +27,7 @@ from finn.dataflow.authoring import (
 )
 from finn.dataflow.design import DesignSpaceSpec, Engine, Finding, FindingKind, QualifiedPath
 from finn.dataflow.mvau.assignments import MVAU_DECISION_NODEATTRS
-from finn.dataflow.mvau.source import (
+from finn.dataflow.mvau.projection import (
     MVAU_LOGICAL_SOURCE_NODEATTRS,
     MVAUProjectionContext,
     MVAUResolvedDesign,

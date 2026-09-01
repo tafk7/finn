@@ -8,14 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.dataflow.authoring.design import DesignRealization
 from finn.dataflow.design import Finding, QualifiedPath
 from finn.dataflow.mvau.associations import MVAUNetworkRef
-from finn.dataflow.mvau.source import (
-    MVAU_DECLARATION_FAMILY_VERSION,
-    MVAUResolvedDesign,
-    mvau_problem_fingerprint,
-)
 
 
 class MVAUPhysicalDirection(str, Enum):
@@ -36,12 +30,6 @@ class MVAUPhysicalControlKind(str, Enum):
 PhysicalParameterValue = bool | int | float | str
 
 
-@dataclass(frozen=True, order=True)
-class MVAUSemanticPortRef:
-    region_id: str
-    port_id: str
-
-
 @dataclass(frozen=True)
 class MVAUElaborationOrigin:
     """Exact selected-point identity from which physical elaboration was derived."""
@@ -51,6 +39,12 @@ class MVAUElaborationOrigin:
     assignments: tuple[tuple[QualifiedPath, object], ...]
     kernel_ids: tuple[str, ...]
     provider_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, order=True)
+class MVAUSemanticPortRef:
+    region_id: str
+    port_id: str
 
 
 @dataclass(frozen=True)
@@ -247,20 +241,6 @@ class MVAUElaborationError(ValueError):
         super().__init__(f"MVAU elaboration failed with {len(self.findings)} finding(s)")
 
 
-def mvau_elaboration_origin(
-    resolved: MVAUResolvedDesign,
-    realization: DesignRealization,
-) -> MVAUElaborationOrigin:
-    """Construct the immutable identity of one production design realization."""
-
-    return MVAUElaborationOrigin(
-        MVAU_DECLARATION_FAMILY_VERSION,
-        mvau_problem_fingerprint(resolved.point.problem),
-        tuple(sorted(resolved.point.assignments.items(), key=lambda item: item[0])),
-        tuple(realization.kernel(name).kernel_id for name in realization.kernels),
-    )
-
-
 __all__ = [
     "MVAUElaborationError",
     "MVAUElaborationOrigin",
@@ -276,5 +256,4 @@ __all__ = [
     "MVAUPhysicalNumericProtocol",
     "MVAUSemanticPortRef",
     "PhysicalParameterValue",
-    "mvau_elaboration_origin",
 ]
