@@ -20,10 +20,7 @@ from finn.dataflow.mvau.associations import (
     MVAUParameterTopology,
     MVAUSourceAssociation,
 )
-from finn.dataflow.mvau.designs.dot_product import (
-    MVAU_DOT_PRODUCT_DESIGN,
-    compose_dot_product_design,
-)
+from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.mvau.hardware.binding import source_roots
 from finn.dataflow.mvau.hardware.memstream import (
     FINN_MEMSTREAM_MODULE,
@@ -47,6 +44,7 @@ from finn.dataflow.mvau.input_supply import (
     EXTERNAL_SUPPLY,
     FINN_RTL_MEMSTREAM_SUPPLY,
 )
+from finn.dataflow.mvau.providers import compose_dot_product_design
 from finn.dataflow.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,

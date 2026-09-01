@@ -25,10 +25,7 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import ActivationReplayKernel, DotProductKernel
-from finn.dataflow.mvau.designs.dot_product import (
-    MVAU_DOT_PRODUCT_DESIGN,
-    compose_dot_product_design,
-)
+from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.mvau.hardware.binding import source_roots
 from finn.dataflow.mvau.compat.binding import bind_legacy_decomposed
 from finn.dataflow.mvau.compat.source import MVAULegacyResolvedDesign
@@ -41,6 +38,7 @@ from finn.dataflow.mvau.hardware.composition import (
 from finn.dataflow.mvau.hardware.dotp_axi import DotpAxiKernel
 from finn.dataflow.mvau.hardware.replay_buffer import ReplayBufferKernel
 from finn.dataflow.mvau.input_supply import EXTERNAL_SUPPLY
+from finn.dataflow.mvau.providers import compose_dot_product_design
 from finn.dataflow.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,

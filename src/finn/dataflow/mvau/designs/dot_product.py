@@ -10,7 +10,6 @@ does not switch ``MVAUDataflowOp`` selection or persistence; that remains D7.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from finn.dataflow.authoring.design import (
     DataflowDesign,
@@ -18,7 +17,6 @@ from finn.dataflow.authoring.design import (
     DataflowDesignEntry,
     DataflowDesignInventory,
     DataflowDesignScope,
-    DesignRealization,
     declare_dataflow_design_inventory,
 )
 from finn.dataflow.authoring.scope import Ref
@@ -47,10 +45,6 @@ from finn.dataflow.mvau_problem import (
     MVAUProblem,
 )
 from finn.dataflow.mvau.associations import MVAUSourceAssociation
-
-if TYPE_CHECKING:
-    from finn.dataflow.mvau.physical import MVAUPhysicalElaboration
-    from finn.dataflow.mvau.source import MVAUResolvedDesign
 
 
 @dataclass(frozen=True)
@@ -180,24 +174,6 @@ def declare_dot_product_design(
     )
 
 
-def compose_dot_product_design(
-    resolved_source: MVAUResolvedDesign,
-    realization: DesignRealization,
-) -> MVAUPhysicalElaboration:
-    """Use the proven decomposed composer with the new design's bindings.
-
-    During the side-by-side phases the source envelope still comes from the
-    legacy Operation path.  D7 replaces that envelope after persistence cuts
-    over; the physical composition itself is already shared here.
-    """
-
-    if getattr(resolved_source.result, "network", None) != realization.network:
-        raise ValueError("the source envelope and DotProduct realization name different Networks")
-    from finn.dataflow.mvau.hardware.composition import compose  # noqa: PLC0415
-
-    return compose(resolved_source, realization)
-
-
 MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()
 
 
@@ -206,6 +182,5 @@ __all__ = [
     "DotProductDesignAssembly",
     "DotProductDesignInputs",
     "MVAU_DOT_PRODUCT_DESIGN",
-    "compose_dot_product_design",
     "declare_dot_product_design",
 ]

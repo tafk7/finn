@@ -29,10 +29,7 @@ from dataflow.rtlsim.composed_mvau_numeric import (
 from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.mvau.associations import MVAUSourceAssociation
-from finn.dataflow.mvau.designs.dot_product import (
-    MVAU_DOT_PRODUCT_DESIGN,
-    compose_dot_product_design,
-)
+from finn.dataflow.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.mvau.hardware.composition import (
     MVAUDecomposedArtifactRequirements,
     write_decomposed_artifact,
@@ -42,6 +39,7 @@ from finn.dataflow.mvau.hardware.supplied_artifacts import (
     build_supplied_artifact_requirements,
 )
 from finn.dataflow.mvau.input_supply import FINN_RTL_MEMSTREAM_SUPPLY
+from finn.dataflow.mvau.providers import compose_dot_product_design
 from finn.dataflow.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
 from finn.dataflow.mvau_problem import (
     MVAUComputationProfile,
