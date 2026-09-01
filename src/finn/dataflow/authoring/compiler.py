@@ -19,6 +19,7 @@ from finn.dataflow.authoring.declarations import (
 )
 from finn.dataflow.authoring.design import DataflowDesign
 from finn.dataflow.authoring.inventory import (
+    DataflowOpAuthoring,
     DataflowDesignEntry,
     DataflowDesignInventory,
     declare_dataflow_design_inventory,
@@ -102,6 +103,14 @@ class ClosedDesigns:
             raise ValueError("ClosedDesigns cannot contain the same use twice")
         object.__setattr__(self, "uses", tuple(uses))
         object.__setattr__(self, "choice", DesignChoice(self))
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptedDesignCompilation:
+    """Temporary private bridge for scope-authored Designs during migration."""
+
+    authoring: DataflowOpAuthoring
+    persistence_refs: Mapping[int, Ref[object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,10 +342,25 @@ def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation
     ):
         raise AuthoringError(f"{owner.__name__}.persistence must be a tuple of Persist values")
 
+    adapter = getattr(owner, "design_adapter", None)
+    adapted = adapter.compile(declarations) if adapter is not None else None
     inventory, generated_result, generated_association, external = _compile_designs(
         owner, declarations
     )
-    if inventory is None:
+    if adapted is not None:
+        if not isinstance(adapted, AdaptedDesignCompilation):
+            raise AuthoringError("a Design migration adapter returned an invalid compiler product")
+        authored = adapted.authoring
+        inventory = authored.inventory
+        result = cast("Ref[object]", authored.result)
+        association = authored.source_association
+        specification = authored.specification
+        selection_constraints = authored.selection_constraint_set
+        structural_readiness = authored.structural_readiness_profile
+        artifact_readiness = authored.artifact_readiness_profile
+        feasibility_constraints = authored.feasibility_constraint_sets
+        external = adapted.persistence_refs
+    elif inventory is None:
         result_member = getattr(owner, "result_member", "result")
         association_member = getattr(owner, "source_association_member", "source_association")
         if not isinstance(result_member, str) or not isinstance(association_member, str):
@@ -399,6 +423,7 @@ def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation
 
 
 __all__ = [
+    "AdaptedDesignCompilation",
     "BoundTensor",
     "ClosedDesigns",
     "CompiledDataflowOperation",

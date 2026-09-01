@@ -28,6 +28,7 @@ from finn.dataflow.authoring.scope import (
     semantics_for,
 )
 from finn.dataflow.design import (
+    AbsenceMode,
     Answer,
     Decided,
     DecisionDomain,
@@ -75,6 +76,15 @@ class DeclarationTemplate(Generic[T]):
             raise ValueError("a declaration stable name must not be empty")
         if not self.layers:
             raise ValueError("a declaration must be available to at least one layer")
+
+    def allow_absent(self) -> DependencyTemplate[T]:
+        return DependencyTemplate(self, AbsenceMode.ALLOWS_ABSENT)
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyTemplate(Generic[T]):
+    declaration: DeclarationTemplate[T]
+    absence: AbsenceMode
 
 
 class DeclarationGroup:
@@ -230,14 +240,14 @@ class Choice(DeclarationTemplate[T]):
 class Derived(DeclarationTemplate[T]):
     """One derived property backed by a decorated pure method."""
 
-    dependencies: tuple[DeclarationTemplate[Any], ...] = ()
+    dependencies: tuple[DeclarationTemplate[Any] | DependencyTemplate[Any], ...] = ()
     evaluate: Callable[..., object] = lambda: None
     when: DeclarationTemplate[bool] | Condition | None = None
 
     def __init__(
         self,
         value_type: type[T] | ValueSemantics[T],
-        dependencies: Sequence[DeclarationTemplate[Any]],
+        dependencies: Sequence[DeclarationTemplate[Any] | DependencyTemplate[Any]],
         evaluate: Callable[..., object],
         *,
         stable_name: str | None = None,
@@ -255,7 +265,7 @@ class Derived(DeclarationTemplate[T]):
 
 
 def derived(
-    *dependencies: DeclarationTemplate[Any],
+    *dependencies: DeclarationTemplate[Any] | DependencyTemplate[Any],
     value_type: type[Any] | ValueSemantics[Any] = object,
     stable_name: str | None = None,
     when: DeclarationTemplate[bool] | Condition | None = None,
@@ -280,14 +290,14 @@ def derived(
 class Rule(DeclarationTemplate[bool]):
     """One constraint backed by a decorated pure method."""
 
-    dependencies: tuple[DeclarationTemplate[Any], ...] = ()
+    dependencies: tuple[DeclarationTemplate[Any] | DependencyTemplate[Any], ...] = ()
     evaluate: Callable[..., object] = lambda: True
     when: DeclarationTemplate[bool] | Condition | None = None
     sets: tuple[str, ...] = ()
 
     def __init__(
         self,
-        dependencies: Sequence[DeclarationTemplate[Any]],
+        dependencies: Sequence[DeclarationTemplate[Any] | DependencyTemplate[Any]],
         evaluate: Callable[..., object],
         *,
         stable_name: str | None = None,
@@ -307,7 +317,7 @@ class Rule(DeclarationTemplate[bool]):
 
 
 def constraint(
-    *dependencies: DeclarationTemplate[Any],
+    *dependencies: DeclarationTemplate[Any] | DependencyTemplate[Any],
     stable_name: str | None = None,
     when: DeclarationTemplate[bool] | Condition | None = None,
     sets: Sequence[str] = (),
@@ -550,18 +560,24 @@ def _condition_spec(
 
 
 def _resolve_ref(
-    template: DeclarationTemplate[Any],
+    template: DeclarationTemplate[Any] | DependencyTemplate[Any],
     *,
     aliases: Mapping[int, str],
     bound: Mapping[str, Ref[object] | ConstraintRef],
 ) -> Ref[object]:
-    member_name = aliases.get(id(template))
+    declaration = template.declaration if isinstance(template, DependencyTemplate) else template
+    member_name = aliases.get(id(declaration))
     if member_name is None:
         raise AuthoringError("a declaration dependency is not a member of the compiled class")
     value = bound.get(member_name)
     if not isinstance(value, Ref):
         raise AuthoringError(f"dependency {member_name!r} is not a value declaration")
-    return value
+    return (
+        value.allow_absent()
+        if isinstance(template, DependencyTemplate)
+        and template.absence is AbsenceMode.ALLOWS_ABSENT
+        else value.required()
+    )
 
 
 def _domain(
@@ -774,6 +790,7 @@ __all__ = [
     "DeclarationLayer",
     "DeclarationGroup",
     "DeclarationTemplate",
+    "DependencyTemplate",
     "DependentDomain",
     "Derived",
     "DivisorsDomain",

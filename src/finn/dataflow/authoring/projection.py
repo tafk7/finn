@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
+import json
 from types import MappingProxyType
 from typing import Any, Protocol, cast
 
@@ -24,8 +25,12 @@ from finn.dataflow.authoring.declarations import (
     collect_class_declarations,
 )
 from finn.dataflow.authoring.op_design import Provenance
-from finn.dataflow.authoring.scope import Ref
-from finn.dataflow.datatypes import canonical_qonnx_datatype
+from finn.dataflow.authoring.scope import Ref, semantics_for
+from finn.dataflow.datatypes import (
+    QONNXDataType,
+    canonical_qonnx_datatype,
+    resolve_qonnx_datatype_name,
+)
 from finn.dataflow.design import (
     Finding,
     FindingKind,
@@ -178,6 +183,43 @@ class Attribute(Problem[Any]):
 
 
 @dataclass(frozen=True, slots=True, eq=False)
+class DatatypeAttribute(Problem[QONNXDataType]):
+    """Legacy/source datatype spelling normalized to one QONNX datatype value."""
+
+    attribute_name: str = ""
+    default: str = ""
+    required_on_node: bool = False
+
+    def __init__(
+        self,
+        attribute_name: str,
+        *,
+        default: str,
+        required: bool = False,
+        stable_name: str | None = None,
+    ) -> None:
+        Problem.__init__(
+            self,
+            QONNX_DATATYPE_VALUE_SEMANTICS,
+            provenance=Provenance.GRAPH,
+            stable_name=stable_name,
+        )
+        object.__setattr__(self, "attribute_name", attribute_name)
+        object.__setattr__(self, "default", default)
+        object.__setattr__(self, "required_on_node", required)
+
+    @property
+    def nodeattr_definition(self) -> NodeAttributeType:
+        return ("s", self.required_on_node, self.default, None)
+
+    @staticmethod
+    def decode(value: object) -> QONNXDataType:
+        if not isinstance(value, str):
+            raise ValueError("datatype attributes must be strings")
+        return resolve_qonnx_datatype_name(value)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class BuildFact(Problem[Any]):
     """One target/build field projected from a restricted configuration view."""
 
@@ -188,13 +230,14 @@ class BuildFact(Problem[Any]):
     def __init__(
         self,
         key: str,
-        value_type: type[Any],
+        value_type: type[Any] | Any,
         *,
         provenance: Provenance = Provenance.BUILD,
         default: object = None,
         required: bool = True,
         accessor: Callable[[object], object] | None = None,
         stable_name: str | None = None,
+        path: QualifiedPath | str | None = None,
     ) -> None:
         Problem.__init__(
             self,
@@ -202,6 +245,7 @@ class BuildFact(Problem[Any]):
             provenance=provenance,
             stable_name=stable_name,
             required=required,
+            path=path,
         )
         if not key:
             raise ValueError("a build fact key must not be empty")
@@ -213,6 +257,33 @@ class BuildFact(Problem[Any]):
         if self.accessor is not None:
             return self.accessor(config)
         return getattr(config, self.key, self.default)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class InitializerAnalysis(Problem[Any]):
+    """One pure graph analysis over a declared tensor initializer."""
+
+    tensor: TensorOperand | None = None
+    evaluate: Callable[[object, object], object] = lambda _initializer, _datatype: None
+
+    def __init__(
+        self,
+        tensor: TensorOperand,
+        value_type: type[Any],
+        *,
+        evaluate: Callable[[object, object], object],
+        required: bool = False,
+        stable_name: str | None = None,
+    ) -> None:
+        Problem.__init__(
+            self,
+            value_type,
+            provenance=Provenance.GRAPH_ANALYSIS,
+            stable_name=stable_name,
+            required=required,
+        )
+        object.__setattr__(self, "tensor", tensor)
+        object.__setattr__(self, "evaluate", evaluate)
 
 
 def TargetFpgaPart(*, required: bool = False) -> BuildFact:
@@ -403,15 +474,17 @@ class ProjectionResult:
 
 @dataclass(frozen=True, slots=True)
 class ProjectionPlan:
-    attributes: tuple[tuple[str, Attribute, Ref[object]], ...]
+    attributes: tuple[tuple[str, Attribute | DatatypeAttribute, Ref[object]], ...]
     tensors: tuple[tuple[str, TensorOperand, Mapping[str, Ref[object]]], ...]
     graph_facts: tuple[tuple[str, Problem[Any], Ref[object]], ...]
+    initializer_analyses: tuple[tuple[str, InitializerAnalysis, Ref[object]], ...]
     build_facts: tuple[tuple[str, BuildFact, Ref[object]], ...]
 
     @classmethod
     def compile(cls, declarations: CompiledClassDeclarations) -> ProjectionPlan:
-        attributes: list[tuple[str, Attribute, Ref[object]]] = []
+        attributes: list[tuple[str, Attribute | DatatypeAttribute, Ref[object]]] = []
         graph_facts: list[tuple[str, Problem[Any], Ref[object]]] = []
+        initializer_analyses: list[tuple[str, InitializerAnalysis, Ref[object]]] = []
         build_facts: list[tuple[str, BuildFact, Ref[object]]] = []
         for item in declarations.members:
             value = declarations.members[item]
@@ -422,10 +495,12 @@ class ProjectionPlan:
                 for entry in declarations_for(declarations.owner)
                 if entry.member_name == item
             )
-            if isinstance(template, Attribute):
+            if isinstance(template, (Attribute, DatatypeAttribute)):
                 attributes.append((item, template, value))
             elif isinstance(template, BuildFact):
                 build_facts.append((item, template, value))
+            elif isinstance(template, InitializerAnalysis):
+                initializer_analyses.append((item, template, value))
             elif isinstance(template, Problem) and template.provenance in {
                 Provenance.GRAPH,
                 Provenance.GRAPH_ANALYSIS,
@@ -449,7 +524,13 @@ class ProjectionPlan:
             tensors.append((name, group, MappingProxyType(refs)))
         tensor_paths = {ref.path for _name, _group, refs in tensors for ref in refs.values()}
         graph_facts = [item for item in graph_facts if item[2].path not in tensor_paths]
-        return cls(tuple(attributes), tuple(tensors), tuple(graph_facts), tuple(build_facts))
+        return cls(
+            tuple(attributes),
+            tuple(tensors),
+            tuple(graph_facts),
+            tuple(initializer_analyses),
+            tuple(build_facts),
+        )
 
     @property
     def source_nodeattrs(self) -> Mapping[str, NodeAttributeType]:
@@ -478,14 +559,11 @@ def _condition_value(
 
 def _fingerprint_initializer(value: object) -> str:
     array = np.asarray(value)
-    payload = b"\0".join(
-        (
-            array.dtype.str.encode("utf-8"),
-            repr(tuple(int(item) for item in array.shape)).encode("utf-8"),
-            array.tobytes(order="C"),
-        )
-    )
-    return sha256(payload).hexdigest()
+    digest = sha256()
+    digest.update(array.dtype.str.encode("ascii"))
+    digest.update(json.dumps(tuple(int(item) for item in array.shape)).encode("ascii"))
+    digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
 
 
 def _finding(path: QualifiedPath, code: str, message: str, **values: object) -> Finding:
@@ -619,6 +697,47 @@ def project_graph(
                 projected[refs["initializer_fingerprint"].path] = fingerprint
                 template_values[id(tensor.initializer_fingerprint)] = fingerprint
 
+    for _name, analysis, ref in plan.initializer_analyses:
+        analysis_tensor = analysis.tensor
+        if analysis_tensor is None:
+            raise AssertionError("initializer analysis has no tensor declaration")
+        tensor_name = template_values.get(id(analysis_tensor.tensor_id))
+        analysis_datatype = template_values.get(id(analysis_tensor.datatype))
+        if not isinstance(tensor_name, str) or analysis_datatype is None:
+            if analysis.required:
+                findings.append(
+                    _finding(
+                        ref.path,
+                        "dataflow-source-analysis-input-unavailable",
+                        "initializer analysis inputs are unavailable",
+                    )
+                )
+            continue
+        initializer = model.get_initializer(tensor_name)
+        if initializer is None:
+            if analysis.required:
+                findings.append(
+                    _finding(
+                        ref.path,
+                        "dataflow-source-analysis-initializer-unavailable",
+                        "initializer analysis requires a concrete initializer",
+                        tensor=tensor_name,
+                    )
+                )
+            continue
+        try:
+            analyzed = analysis.evaluate(initializer, analysis_datatype)
+            if analyzed is None:
+                if analysis.required:
+                    raise ValueError("initializer analysis did not produce a value")
+                continue
+            if not semantics_for(analysis.value_type).accepts(analyzed):
+                raise TypeError("initializer analysis produced an incompatible value")
+            projected[ref.path] = analyzed
+            template_values[id(analysis)] = analyzed
+        except (TypeError, ValueError) as exc:
+            findings.append(_finding(ref.path, "dataflow-source-analysis-failed", str(exc)))
+
     return ProjectionResult(MappingProxyType(projected), tuple(findings))
 
 
@@ -632,11 +751,10 @@ def project_build(plan: ProjectionPlan, config: object) -> ProjectionResult:
                 if template.required:
                     raise ValueError(f"required build fact {template.key!r} is unavailable")
                 continue
-            expected = cast("type[object]", template.value_type)
-            if type(value) is not expected:
+            expected = semantics_for(template.value_type)
+            if not expected.accepts(value):
                 raise TypeError(
-                    f"build fact {template.key!r} is {type(value).__name__}, "
-                    f"not {expected.__name__}"
+                    f"build fact {template.key!r} is {type(value).__name__}, not {expected.name}"
                 )
             projected[ref.path] = value
         except (AttributeError, TypeError, ValueError) as exc:
@@ -651,8 +769,10 @@ __all__ = [
     "BuildFact",
     "BuildFlag",
     "BuildString",
+    "DatatypeAttribute",
     "GraphModelView",
     "InitializerPolicy",
+    "InitializerAnalysis",
     "InputTensor",
     "NoInitializer",
     "OptionalInitializer",

@@ -20,11 +20,18 @@ from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.analysis.verify_custom_nodes import verify_nodes
+from finn.dataflow.authoring.declarations import (
+    DeclarationLayer,
+    compile_class_declarations,
+)
+from finn.dataflow.authoring.compiler import compile_dataflow_operation
+from finn.dataflow.authoring.projection import ProjectionPlan, project_build, project_graph
 from finn.dataflow.design import Decided, Engine, QualifiedPath
 from finn.dataflow.ops.mvau.problem import MVAUComputationProfile
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS
 from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
 from finn.dataflow.ops.mvau.input_supply import (
     EXTERNAL_SUPPLY,
@@ -37,7 +44,11 @@ from finn.dataflow.ops.mvau.source import (
     project_mvau_source,
     start_mvau_projection,
 )
-from finn.dataflow.op import DataflowBuildConfigView, DataflowOpError
+from finn.dataflow.op import (
+    DataflowBuildConfigView,
+    DataflowOpError,
+    dataflow_problem_fingerprint,
+)
 from finn.dataflow.design import NetworkRef
 from finn.dataflow.ops.mvau.inventory import MVAU_DATAFLOW_OP_SPEC, MVAUDataflowOpPaths
 from finn.dataflow.datatypes import is_qonnx_datatype
@@ -238,6 +249,111 @@ def _assert_resolution_parity(
     assert current.engine.check_readiness(
         current.point, "artifact_inputs"
     ) == expected.engine.check_readiness(expected.point, "artifact_inputs")
+
+
+@pytest.mark.parametrize("fused", (False, True))
+def test_class_authored_mvau_projection_matches_v6_semantic_facts(fused: bool) -> None:
+    """AC3 shadow path: new operand declarations derive the values v6 copied."""
+
+    model = _model(fused=fused)
+    operation = _wrapped(model)
+    context = _context()
+    legacy = operation.problem_instance(context)
+
+    declarations = compile_class_declarations(
+        MvauDataflowOp,
+        layer=DeclarationLayer.OP,
+        namespace="mvau",
+    )
+    plan = ProjectionPlan.compile(declarations)
+    graph = project_graph(
+        plan,
+        operation,
+        model,
+        operation.onnx_node,
+        operation.dataflow_scope_id(),
+    )
+    build = project_build(plan, context)
+    assert graph.findings == ()
+    assert build.findings == ()
+    engine = Engine()
+    point = engine.start(
+        engine.validate(declarations.scope.spec()),
+        {**graph.values, **build.values},
+    )
+
+    def derived_value(member: str) -> object:
+        answer = engine.query_property(point, declarations.ref(member).path)
+        assert isinstance(answer, Decided)
+        return answer.value
+
+    assert derived_value("repetitions") == legacy[MVAUProblemPaths.REPETITIONS]
+    assert derived_value("matrix_width") == legacy[MVAUProblemPaths.MATRIX_WIDTH]
+    assert derived_value("matrix_height") == legacy[MVAUProblemPaths.MATRIX_HEIGHT]
+    assert derived_value("computation_profile") == legacy[MVAUProblemPaths.COMPUTATION_PROFILE]
+    assert derived_value("source_description") == legacy[MVAUProblemPaths.SOURCE_DESCRIPTION]
+    assert derived_value("effective_narrow_weights") is False
+
+    direct_pairs = {
+        "activation.datatype": MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
+        "weight.datatype": MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
+        "accumulator_element_type": MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
+        "output.datatype": MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
+        "weight.initializer_present": MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
+        "weight.initializer_fingerprint": MVAUProblemPaths.WEIGHT_INITIALIZER_FINGERPRINT,
+        "runtime_writable": MVAUProblemPaths.RUNTIME_WRITABLE,
+        "accumulator_type_analysis_owner": MVAUProblemPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER,
+        "target_dsp_block": MVAUProblemPaths.TARGET_DSP_BLOCK,
+        "target_fpga_part": MVAUProblemPaths.TARGET_FPGA_PART,
+        "target_clock_period_ns": MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS,
+        "target_memory_capabilities": MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES,
+    }
+    projected = {**graph.values, **build.values}
+    for member, legacy_path in direct_pairs.items():
+        assert projected[declarations.ref(member).path] == legacy[legacy_path]
+    if fused:
+        assert (
+            projected[declarations.ref("threshold.datatype").path]
+            == legacy[MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE]
+        )
+        assert (
+            projected[declarations.ref("threshold.initializer_present").path]
+            == legacy[MVAUProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE]
+        )
+
+
+def test_class_authored_mvau_shadow_lifecycle_matches_v6_resolution() -> None:
+    model = _model()
+    operation = _wrapped(model)
+    context = _context()
+    expected = operation.commit_dataflow_assignments(context, _dot_product()).point
+    expected_result = Engine().query_property(expected, MVAU_DESIGN_INVENTORY.result.path)
+    assert isinstance(expected_result, Decided)
+
+    compiled = compile_dataflow_operation(MvauDataflowOp)
+    graph = project_graph(
+        compiled.projection,
+        operation,
+        model,
+        operation.onnx_node,
+        operation.dataflow_scope_id(),
+    )
+    build = project_build(compiled.projection, context)
+    assert graph.findings == () and build.findings == ()
+    engine = Engine()
+    point = engine.start(
+        engine.validate(compiled.specification),
+        {**graph.values, **build.values},
+    )
+    point = engine.commit_assignments(point, _dot_product()).point
+    actual_result = engine.query_property(point, compiled.result.path)
+    assert actual_result == expected_result
+    assert dataflow_problem_fingerprint(point.problem) == (
+        "8e96ddc2535ee0e97d8df67f5186b7247b03acb528d8b6d99a4f1dc786159b34"
+    )
+    assert {path: codec.attribute_name for path, codec in compiled.persistence.items()} == {
+        path: codec.attribute_name for path, codec in MVAU_DECISION_NODEATTRS.items()
+    }
 
 
 def test_logical_mvau_registration_static_spec_and_problem_projection_parity() -> None:

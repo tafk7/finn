@@ -99,3 +99,23 @@ BindingLocalStateDestination
 
 The exact v6 and v11 bytes recorded by the tests are migration evidence only.
 They are not accepted payloads for v7.
+
+## AC3 proposed v7 problem identity
+
+The shadow class-authored MVAU frontend projects 39 problem fields. Tensor
+identity, shape, datatype, initializer presence, and requested initializer
+fingerprints are owned by the four operand declarations; `r`, `mw`, `mh`, the
+computation profile, source description, and effective narrow-weight flag are
+derived properties rather than separately projected copies.
+
+For the canonical unfused logical-MVAU fixture, the proposed problem
+fingerprint is:
+
+```text
+8e96ddc2535ee0e97d8df67f5186b7247b03acb528d8b6d99a4f1dc786159b34
+```
+
+The shadow lifecycle uses the same ten reviewed decision paths and storage
+attribute names as v6. Tests compare its selected Region, Network, association,
+candidate admission, and configured-Kernel inputs against the production v6
+path before the atomic v7 cutover.

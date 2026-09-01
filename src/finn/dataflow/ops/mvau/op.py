@@ -20,13 +20,31 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 )
 
 from finn.dataflow.authoring import (
+    Attribute,
+    BuildFact,
     DataflowBuildConfigView,
     DataflowOp,
+    DatatypeAttribute,
+    InitializerAnalysis,
+    InputTensor,
+    NoInitializer,
     NodeAttrCodec,
     NodeAttributeType,
+    OptionalInitializer,
+    OutputTensor,
+    Persist,
+    RequiredInitializer,
+    SourceScope,
+    TensorShape,
+    constraint,
+    derived,
+    not_,
 )
+from finn.dataflow.authoring.op_design import Provenance
 from finn.dataflow.authoring.inventory import DataflowOpAuthoring
-from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
+from finn.dataflow.design import ABSENT, Engine, Finding, FindingKind, QualifiedPath
+from finn.dataflow.kernels.dsp import DspBlock
+from finn.dataflow.ops.mvau._adapter import MVAU_DESIGN_ADAPTER
 from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS
 from finn.dataflow.ops.mvau.projection import (
     MVAU_LOGICAL_SOURCE_NODEATTRS,
@@ -44,9 +62,14 @@ from finn.dataflow.ops.mvau.inventory import (
     MVAUDataflowOpPaths,
 )
 from finn.dataflow.ops.mvau.problem import (
+    MVAUComputationProfile,
     MVAU_PROBLEM_PROVENANCE,
     MVAUProblemPaths,
     MVAUSourceDescription,
+)
+from finn.dataflow.parameters.cyclic.definition import (
+    CyclicParameterKernelPaths,
+    CyclicTargetMemoryCapabilities,
 )
 from finn.dataflow.region import BeatSequence
 
@@ -72,8 +95,313 @@ class MVAUDataflowBuildContext:
         return self.build_config.synth_clk_period_ns
 
 
+def _initializer_excludes_minimum(initializer: object, datatype: object) -> bool | None:
+    try:
+        return float(np.asarray(initializer).min()) != float(getattr(datatype, "min")())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _mvau_context(config: object) -> MVAUDataflowBuildContext | None:
+    return config if isinstance(config, MVAUDataflowBuildContext) else None
+
+
+def _mvau_base_config(config: object) -> object:
+    context = _mvau_context(config)
+    return context.build_config if context is not None else config
+
+
+def _mvau_target_part(config: object) -> str | None:
+    base = _mvau_base_config(config)
+    resolver = getattr(base, "_resolve_fpga_part", None)
+    if callable(resolver):
+        try:
+            value = resolver()
+        except (KeyError, TypeError, ValueError):
+            return None
+        return value if isinstance(value, str) and value else None
+    value = getattr(base, "fpga_part", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _mvau_target_dsp(config: object) -> DspBlock | None:
+    part = _mvau_target_part(config)
+    return None if part is None else classify_mvau_dsp_block(part)
+
+
+def _mvau_memory_capabilities(config: object) -> CyclicTargetMemoryCapabilities | None:
+    context = _mvau_context(config)
+    explicit = None if context is None else context.supports_initialized_uram
+    if explicit is not None:
+        return CyclicTargetMemoryCapabilities(explicit)
+    target = _mvau_target_dsp(config)
+    return None if target is None else CyclicTargetMemoryCapabilities(target is DspBlock.DSP58)
+
+
+def _mvau_runtime_writable(config: object) -> bool:
+    context = _mvau_context(config)
+    return False if context is None else context.runtime_writable_weights
+
+
+def _mvau_runtime_range(config: object) -> bool | None:
+    return getattr(config, "runtime_weight_range_contract", None)
+
+
+def _mvau_external_sequence(config: object) -> BeatSequence | None:
+    context = _mvau_context(config)
+    return None if context is None else context.external_weight_sequence
+
+
+def _mvau_analysis_owner(config: object) -> str:
+    context = _mvau_context(config)
+    return (
+        "finn.MinimizeAccumulatorWidth"
+        if context is None
+        else context.accumulator_type_analysis_owner
+    )
+
+
+def _mvau_clock_period(config: object) -> float | None:
+    value = getattr(_mvau_base_config(config), "synth_clk_period_ns", None)
+    return None if value is None else float(value)
+
+
+def _mvau_source_description(
+    source_scope_id: str,
+    activation_id: str,
+    activation_shape: tuple[int, ...],
+    weight_id: str,
+    threshold_present: bool,
+    threshold_id: object,
+    threshold_shape: object,
+    output_id: str,
+    source_nodes: str,
+) -> MVAUSourceDescription:
+    selected_threshold_id = None
+    selected_threshold_shape = None
+    if threshold_present:
+        if threshold_id is ABSENT or threshold_shape is ABSENT:
+            raise ValueError("active threshold facts are unavailable")
+        selected_threshold_id = cast(str, threshold_id)
+        selected_threshold_shape = cast("tuple[int, ...]", threshold_shape)
+    return MVAUSourceDescription(
+        source_scope_id,
+        activation_id,
+        weight_id,
+        output_id,
+        activation_shape[:-1],
+        selected_threshold_id,
+        tuple(item for item in source_nodes.split(",") if item),
+        selected_threshold_shape,
+    )
+
+
 class MvauDataflowOp(DataflowOp):
     """Logical MVAU source operation backed by the reviewed design inventory."""
+
+    declaration_namespace = "mvau"
+    design_adapter = MVAU_DESIGN_ADAPTER
+
+    # Proposed v7 source/build schema. AC3 compiles this in shadow while the
+    # v6 hooks below remain authoritative; AC4 switches ``uses_class_authoring``.
+    source_scope_id = SourceScope()
+    no_activation = Attribute("noActivation", bool, default=True)
+    binary_xnor = Attribute("binaryXnorMode", bool, default=False)
+    accumulator_element_type = DatatypeAttribute("accDataType", default="INT32")
+    activation_bias = Attribute("ActVal", int, default=0)
+    source_nodes = Attribute("dataflow_source_nodes", str, default="")
+
+    activation = InputTensor(
+        "activation",
+        index=0,
+        shape=TensorShape(min_rank=2),
+        initializer=NoInitializer(),
+    )
+    weight = InputTensor(
+        "weight",
+        index=1,
+        shape=TensorShape(rank=2),
+        initializer=OptionalInitializer(fingerprint=True),
+    )
+    threshold = InputTensor(
+        "threshold",
+        index=2,
+        when=not_(no_activation),
+        shape=TensorShape(rank=2),
+        initializer=RequiredInitializer(fingerprint=True),
+    )
+    output = OutputTensor("output", index=0, shape=TensorShape(min_rank=2))
+
+    @derived(weight.shape, value_type=int)
+    def matrix_width(weight_shape: tuple[int, ...]) -> int:
+        return weight_shape[0]
+
+    @derived(weight.shape, value_type=int)
+    def matrix_height(weight_shape: tuple[int, ...]) -> int:
+        return weight_shape[1]
+
+    @derived(activation.shape, value_type=int)
+    def repetitions(activation_shape: tuple[int, ...]) -> int:
+        return int(np.prod(activation_shape[:-1]))
+
+    @derived(no_activation, binary_xnor, value_type=MVAUComputationProfile)
+    def computation_profile(no_activation: bool, binary_xnor: bool) -> MVAUComputationProfile:
+        if not no_activation:
+            return MVAUComputationProfile.FUSED_THRESHOLD
+        if binary_xnor:
+            return MVAUComputationProfile.BIPOLAR_XNOR_ACCUMULATOR
+        return MVAUComputationProfile.ACCUMULATOR_INTEGER
+
+    @derived(
+        source_scope_id,
+        activation.tensor_id,
+        activation.shape,
+        weight.tensor_id,
+        threshold.present,
+        threshold.tensor_id.allow_absent(),
+        threshold.shape.allow_absent(),
+        output.tensor_id,
+        source_nodes,
+        value_type=MVAUSourceDescription,
+    )
+    def source_description(
+        source_scope_id: str,
+        activation_id: str,
+        activation_shape: tuple[int, ...],
+        weight_id: str,
+        threshold_present: bool,
+        threshold_id: object,
+        threshold_shape: object,
+        output_id: str,
+        source_nodes: str,
+    ) -> MVAUSourceDescription:
+        return _mvau_source_description(
+            source_scope_id,
+            activation_id,
+            activation_shape,
+            weight_id,
+            threshold_present,
+            threshold_id,
+            threshold_shape,
+            output_id,
+            source_nodes,
+        )
+
+    initializer_excludes_minimum = InitializerAnalysis(
+        weight,
+        bool,
+        evaluate=_initializer_excludes_minimum,
+    )
+    runtime_weight_range_contract = BuildFact(
+        "runtime_weight_range_contract",
+        bool,
+        required=False,
+        accessor=_mvau_runtime_range,
+    )
+    runtime_writable = BuildFact(
+        "runtime_writable_weights",
+        bool,
+        accessor=_mvau_runtime_writable,
+        path=CyclicParameterKernelPaths.RUNTIME_WRITABLE,
+    )
+    external_weight_sequence = BuildFact(
+        "external_weight_sequence",
+        BeatSequence,
+        required=False,
+        accessor=_mvau_external_sequence,
+    )
+    accumulator_type_analysis_owner = BuildFact(
+        "accumulator_type_analysis_owner",
+        str,
+        required=False,
+        accessor=_mvau_analysis_owner,
+    )
+    target_dsp_block = BuildFact(
+        "dsp_block",
+        DspBlock,
+        provenance=Provenance.TARGET,
+        required=False,
+        accessor=_mvau_target_dsp,
+        path=MVAUProblemPaths.TARGET_DSP_BLOCK,
+    )
+    target_fpga_part = BuildFact(
+        "fpga_part",
+        str,
+        provenance=Provenance.TARGET,
+        required=False,
+        accessor=_mvau_target_part,
+        path=MVAUProblemPaths.TARGET_FPGA_PART,
+    )
+    target_clock_period_ns = BuildFact(
+        "clock_period_ns",
+        float,
+        provenance=Provenance.TARGET,
+        required=False,
+        accessor=_mvau_clock_period,
+        path=MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS,
+    )
+    target_memory_capabilities = BuildFact(
+        "memory_capabilities",
+        CyclicTargetMemoryCapabilities,
+        provenance=Provenance.TARGET,
+        required=False,
+        accessor=_mvau_memory_capabilities,
+        path=CyclicParameterKernelPaths.TARGET_MEMORY_CAPABILITIES,
+    )
+
+    @derived(
+        initializer_excludes_minimum.allow_absent(),
+        runtime_weight_range_contract.allow_absent(),
+        runtime_writable,
+        value_type=bool,
+    )
+    def effective_narrow_weights(
+        initializer_excludes_minimum: object,
+        runtime_weight_range_contract: object,
+        runtime_writable: bool,
+    ) -> bool:
+        selected = (
+            runtime_weight_range_contract if runtime_writable else initializer_excludes_minimum
+        )
+        return selected is not ABSENT and bool(selected)
+
+    @constraint(activation.shape, matrix_width)
+    def activation_width_supported(shape: tuple[int, ...], matrix_width: int) -> bool:
+        return shape[-1] == matrix_width
+
+    @constraint(output.shape, activation.shape, matrix_height)
+    def output_shape_supported(
+        output_shape: tuple[int, ...],
+        activation_shape: tuple[int, ...],
+        matrix_height: int,
+    ) -> bool:
+        return output_shape == (*activation_shape[:-1], matrix_height)
+
+    @constraint(threshold.shape, matrix_height, when=threshold.present)
+    def threshold_shape_supported(shape: tuple[int, ...], matrix_height: int) -> bool:
+        return shape[0] == matrix_height
+
+    persistence = (
+        Persist(design_adapter.refs.design, "dataflow_design"),
+        Persist(design_adapter.refs.dot_product_pe, "dataflow_dot_product_pe"),
+        Persist(design_adapter.refs.dot_product_simd, "dataflow_dot_product_simd"),
+        Persist(design_adapter.refs.batch_interleaved_pe, "dataflow_interleaved_pe"),
+        Persist(design_adapter.refs.batch_interleaved_simd, "dataflow_interleaved_simd"),
+        Persist(
+            design_adapter.refs.batch_interleaved_interleave,
+            "dataflow_interleaved_batch",
+        ),
+        Persist(design_adapter.refs.weight_supply, "dataflow_weight_supply"),
+        Persist(design_adapter.refs.compute_pumping, "dataflow_dotp_axi_pumping"),
+        Persist(
+            design_adapter.refs.ram_style,
+            "dataflow_finn_rtl_memstream_ram_style",
+        ),
+        Persist(
+            design_adapter.refs.pumped_memory,
+            "dataflow_finn_rtl_memstream_pumping",
+        ),
+    )
 
     @classmethod
     def dataflow_family_id(cls) -> str:

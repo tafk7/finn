@@ -144,6 +144,7 @@ def declare_mvau_design_inventory(
     problem: MVAUProblem = MVAU_PROBLEM,
     *,
     narrow_weights: Ref[bool] = MVAU_EFFECTIVE_NARROW_WEIGHTS,
+    problem_spec: DesignSpaceSpec = MVAU_PROBLEM_SPEC,
 ) -> MVAUDesignInventoryAssembly:
     """Declare the fresh v6 inventory without importing any legacy Kernel pool."""
 
@@ -183,7 +184,7 @@ def declare_mvau_design_inventory(
             ),
         ),
         input_supplies=(supply.declaration,),
-        shared_specs=(MVAU_PROBLEM_SPEC,),
+        shared_specs=(problem_spec,),
     )
     if inventory.design_selection is None:
         raise AssertionError("the MVAU inventory must expose its two-design choice")
