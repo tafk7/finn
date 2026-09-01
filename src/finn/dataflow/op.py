@@ -32,11 +32,11 @@ from finn.dataflow.design import (
     RequestError,
 )
 from finn.dataflow.datatypes import encode_datatype, is_qonnx_datatype
-from finn.dataflow.kernels import KernelSelection
 from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
 from finn.dataflow.resolution import NetworkRef, RegionRef, ResolvedDataflowOp
 
 if TYPE_CHECKING:
+    from finn.dataflow.kernels import KernelSelection
     from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 

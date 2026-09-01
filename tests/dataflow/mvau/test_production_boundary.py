@@ -31,6 +31,14 @@ FORBIDDEN_MODULES = {
     "finn.dataflow.mvau.compute_kernels",
     "finn.dataflow.mvau.decomposed",
 }
+FORBIDDEN_RUNTIME_MODULES = (
+    "finn.dataflow.kernels",
+    "finn.dataflow.authoring.kernel_design",
+    "finn.dataflow.mvau.compute_kernels",
+    "finn.dataflow.mvau.decomposed",
+    "finn.dataflow.mvau.compat.operation",
+    "finn.dataflow.parameters.supply_kernels",
+)
 FORBIDDEN_NAMES = {
     "DecomposedBindings",
     "KernelBinding",
@@ -75,19 +83,13 @@ def test_production_elaboration_dispatch_exports_no_provider_registry() -> None:
     assert production_provider_exports == ["elaborate_mvau"]
 
 
-def test_production_elaboration_import_does_not_load_provider_era_modules() -> None:
-    forbidden = (
-        "finn.dataflow.kernels",
-        "finn.dataflow.mvau.compute_kernels",
-        "finn.dataflow.mvau.decomposed",
-        "finn.dataflow.mvau.compat.operation",
-        "finn.dataflow.parameters.supply_kernels",
-    )
+def _assert_fresh_import_avoids_provider_era_modules(module: str) -> None:
     script = "\n".join(
         (
+            "from importlib import import_module",
             "import sys",
-            "import finn.dataflow.mvau.providers",
-            f"forbidden = {forbidden!r}",
+            f"import_module({module!r})",
+            f"forbidden = {FORBIDDEN_RUNTIME_MODULES!r}",
             "loaded = [name for name in forbidden if name in sys.modules]",
             "raise SystemExit('loaded legacy modules: ' + ', '.join(loaded) if loaded else 0)",
         )
@@ -99,6 +101,14 @@ def test_production_elaboration_import_does_not_load_provider_era_modules() -> N
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_production_elaboration_import_does_not_load_provider_era_modules() -> None:
+    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.mvau.providers")
+
+
+def test_production_mvau_op_import_does_not_load_provider_era_modules() -> None:
+    _assert_fresh_import_avoids_provider_era_modules("finn.dataflow.ops.mvau_op")
 
 
 def test_fused_kernel_is_absent_from_every_production_design_candidate() -> None:
