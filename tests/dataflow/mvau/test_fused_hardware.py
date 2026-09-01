@@ -58,7 +58,6 @@ from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
 from finn.dataflow.mvau.decomposed import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
-    HARDWARE_NUMERIC_TYPE_COVERAGE,
     REPLAY_NODE,
 )
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
@@ -74,7 +73,6 @@ from dataflow.mvau.mvu_vvu_axi_kernel import (
     REPLAY_ROLE,
     MvuVvuAxiKernel,
     covers_numeric_types as fused_covers_numeric_types,
-    covers_operand_types as fused_covers_operand_types,
 )
 from dataflow.rtlsim.composed_mvau_equiv import CONFIGS, Config, declared_parameters
 from finn.dataflow.ops.mvau.hardware.binding import finnlib_root
@@ -1211,20 +1209,13 @@ def test_equal_width_does_not_imply_equal_identity() -> None:
         ("floating accumulator and output", {"accumulator": FLOAT16, "output": FLOAT16}),
     ],
 )
-def test_the_operation_refuses_these_numerics_before_any_hardware_sees_them(
+def test_the_legacy_compatibility_path_refuses_unsupported_numerics(
     label: str, overrides: dict[str, NumericElementType]
 ) -> None:
-    """Where the refusal actually happens in production.
-
-    Source admission asks whether *some* declared Kernel can multiply the
-    graph's datatypes, and removes the graph when none can. So the fused
-    Kernel's own predicate is never reached for these points on the production
-    path -- which is worth pinning, because a test that only exercised the
-    Kernel's refusal would be describing a path production does not take.
-    """
+    """The legacy path keeps its local predicate until B7 removes it."""
 
     placed = _place(**overrides)  # type: ignore[arg-type]
-    assert "some_hardware_covers_the_numeric_types" in placed.semantic_refusals(), label
+    assert "operand_types_supported" in placed.semantic_refusals(), label
 
 
 def test_a_refusal_reaches_the_binding_and_names_the_offending_role() -> None:
@@ -1314,17 +1305,6 @@ def test_the_two_cores_agree_today_and_the_agreement_is_demonstrated() -> None:
 
 
 # -- test-only, and held there -----------------------------------------------
-
-
-def test_the_fused_kernel_is_absent_from_production_admission() -> None:
-    """The inventory inference quantifies over must not gain a forcing case.
-
-    Adding it here would widen what FINN admits on the strength of hardware
-    nobody can select, which is worse than not having the Kernel at all.
-    """
-
-    assert len(HARDWARE_NUMERIC_TYPE_COVERAGE) == 1
-    assert fused_covers_operand_types not in HARDWARE_NUMERIC_TYPE_COVERAGE
 
 
 def test_the_fused_kernel_is_absent_from_the_production_assembly() -> None:

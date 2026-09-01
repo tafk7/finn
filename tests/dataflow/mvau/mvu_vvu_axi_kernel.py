@@ -21,7 +21,7 @@ two nodes.
 **Test-only, deliberately.**  This Kernel is a required forcing case and is
 *not* production-selectable: it is absent from the operation's compute pool,
 absent from production inference admission, and absent from
-``HARDWARE_NUMERIC_TYPE_COVERAGE``.  Making it selectable is a later decision
+the production candidate inventory.  Making it selectable is a later decision
 that needs measurements or a compatibility need behind it, and it is only
 meaningful where both the fused and the decomposed Kernel are valid candidates
 at the same semantic point.  See §16.3 of the migration plan.

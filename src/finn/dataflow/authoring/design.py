@@ -187,6 +187,7 @@ class KernelPlacement:
     edges: tuple[DesignEdge, ...]
     candidates: tuple[HardwareKernelDeclaration, ...]
     selected_kernel: Ref[PlacementSelection]
+    kernel_choice: Ref[str] | None = field(default=None, repr=False, compare=False)
 
     def candidate(self, kernel_id: str) -> HardwareKernelDeclaration:
         for candidate in self.candidates:
@@ -424,19 +425,19 @@ class DataflowDesignScope(Scope, Generic[In]):
         self._check_candidate_coverage(name, nodes, edges, declarations)
 
         selected_dependencies: Dependencies = {}
+        kernel_choice: Ref[str] | None = None
         physical_spec: DesignSpaceSpec | None = None
         if len(declarations) > 1:
             selection = HardwareKernelSelection(
                 f"{self.namespace}.{name}", declarations, applies_if=applies_if
             )
             physical_spec = selection.build_spec()
-            selected_dependencies = {
-                "kernel_id": Ref(
-                    selection.kernel_path,
-                    DependencyKind.DECISION,
-                    HARDWARE_KERNEL_ID_SEMANTICS,
-                )
-            }
+            kernel_choice = Ref(
+                selection.kernel_path,
+                DependencyKind.DECISION,
+                HARDWARE_KERNEL_ID_SEMANTICS,
+            )
+            selected_dependencies = {"kernel_id": kernel_choice}
             derive_selection: Callable[..., object] = _selected_placement
         elif declarations:
             physical_spec = declarations[0].spec
@@ -454,7 +455,14 @@ class DataflowDesignScope(Scope, Generic[In]):
                 applies_if=applies_if,
             ),
         )
-        placement = KernelPlacement(name, nodes, edges, declarations, selected)
+        placement = KernelPlacement(
+            name,
+            nodes,
+            edges,
+            declarations,
+            selected,
+            kernel_choice,
+        )
         self._placements.append(placement)
         self._hardware.extend(declarations)
         if physical_spec is not None:

@@ -308,7 +308,7 @@ def test_shared_and_legacy_folding_domains_are_identical() -> None:
         {"activation_type": FLOAT32},
     ),
 )
-def test_shared_source_admission_matches_legacy(
+def test_shared_source_admission_excludes_the_legacy_physical_bridge(
     problem_overrides: dict[str, object],
 ) -> None:
     compared = _compared(GEOMETRIES[0], **problem_overrides)
@@ -321,18 +321,14 @@ def test_shared_source_admission_matches_legacy(
         tuple(item.path for item in compared.semantics.source_constraints),
     ).answers
 
-    assert tuple(
+    old_values = tuple(
         answer.value for answer in old_answers.values() if isinstance(answer, Decided)
-    ) == tuple(answer.value for answer in new_answers.values() if isinstance(answer, Decided))
-    assert (
-        compared.old_engine.evaluate_constraints(
-            compared.old_point,
-            DECOMPOSED_MVAU_KERNELS.dot_product.feasibility_constraints,
-        ).verdict
-        == compared.new_engine.evaluate_constraint_set(
-            compared.new_point, compared.semantics.feasibility_constraint_set
-        ).verdict
     )
+    new_values = tuple(
+        answer.value for answer in new_answers.values() if isinstance(answer, Decided)
+    )
+    assert old_values[:2] == new_values
+    assert len(old_values) == len(new_values) + 1
 
 
 def test_shared_semantic_readiness_matches_the_legacy_partial_state() -> None:

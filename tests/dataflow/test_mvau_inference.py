@@ -16,10 +16,15 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.core.onnx_exec import execute_onnx  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
+from finn.dataflow.authoring.admission import AdmissionVerdict, resolved_physical_feasibility
 from finn.dataflow.design import Decided, Engine
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.designs.inventory import (
+    MVAU_DESIGN_INVENTORY,
+    admissible_mvau_designs,
+    mvau_build_admission,
+)
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from finn.dataflow.ops.mvau import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
@@ -46,8 +51,8 @@ class _BuildConfig:
         return self.fpga_part
 
 
-def _context() -> MVAUDataflowBuildContext:
-    return MVAUDataflowBuildContext(_BuildConfig())
+def _context(fpga_part: str | None = PART) -> MVAUDataflowBuildContext:
+    return MVAUDataflowBuildContext(_BuildConfig(fpga_part=fpga_part))
 
 
 def _model(
@@ -150,7 +155,14 @@ def _xnor_model() -> ModelWrapper:
 
 
 def _lower(model: ModelWrapper) -> tuple[ModelWrapper, InferMVAUDataflowOp]:
-    transform = InferMVAUDataflowOp(_context())
+    return _lower_with_context(model, _context())
+
+
+def _lower_with_context(
+    model: ModelWrapper,
+    context: MVAUDataflowBuildContext,
+) -> tuple[ModelWrapper, InferMVAUDataflowOp]:
+    transform = InferMVAUDataflowOp(context)
     # cleanup=False keeps the comparison about this transform only.
     lowered = model.transform(transform, cleanup=False)
     return lowered, transform
@@ -194,17 +206,15 @@ def test_a_dynamic_weight_matmul_is_still_a_source_form() -> None:
     assert candidates[0].source_node_names == ("matmul0",)
 
 
-def test_a_float_matmul_is_recognized_by_the_semantic_only_design() -> None:
-    """Logical admission does not falsely claim a physical implementation."""
+def test_a_float_matmul_is_recognized_but_not_claimed_buildable() -> None:
+    """Semantic recognition does not make a semantic-only design buildable."""
 
     model = _model(float_weights=True)
     assert len(recognize_mvau_candidates(model)) == 1
     lowered, transform = _lower(model)
-    assert transform.report.lowered
-    assert transform.report.refused == ()
-    assert mvau_source_admission(lowered, lowered.graph.node[0].name, _context()) == (
-        BatchInterleavedDesign.id,
-    )
+    assert transform.report.lowered == ()
+    assert transform.report.refused == (("matmul0",),)
+    assert [node.op_type for node in lowered.graph.node] == ["MatMul"]
 
 
 # -- lowering ----------------------------------------------------------------
@@ -281,10 +291,10 @@ def test_provenance_records_every_consumed_source_node() -> None:
 # -- admission comes from the design inventory -------------------------------
 
 
-def test_admission_is_the_existential_union_over_the_design_inventory() -> None:
+def test_build_admission_is_the_candidate_backed_subset_of_semantic_designs() -> None:
     lowered, _ = _lower(_model())
     admitted = mvau_source_admission(lowered, lowered.graph.node[0].name, _context())
-    assert admitted == (DotProductDesign.id, BatchInterleavedDesign.id)
+    assert admitted == (DotProductDesign.id,)
 
 
 def test_fused_threshold_is_deferred_from_the_new_design_inventory() -> None:
@@ -296,11 +306,17 @@ def test_fused_threshold_is_deferred_from_the_new_design_inventory() -> None:
 
 
 def test_semantic_only_admission_does_not_make_a_build_point_feasible() -> None:
-    lowered, _ = _lower(_model(float_weights=True))
+    lowered, _ = _lower(_model())
+    lowered.set_tensor_datatype("weights", DataType["FLOAT32"])
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     engine = Engine()
     point = engine.start(operation.validated_design_space(), operation.problem_instance(_context()))
+    assert admissible_mvau_designs(engine, point) == (
+        DotProductDesign.id,
+        BatchInterleavedDesign.id,
+    )
+    assert mvau_build_admission(engine, point).admitted_designs == ()
     assert MVAU_DESIGN_INVENTORY.inventory.design_path is not None
     point = engine.commit_assignments(
         point,
@@ -328,6 +344,107 @@ def test_admission_does_not_depend_on_the_fpga_target() -> None:
         for part in (PART, "xcvc1902-vsva2197-2MP-e-S")
     }
     assert len(set(admitted.values())) == 1
+
+
+def test_supported_datatypes_are_build_admitted_without_a_target() -> None:
+    lowered, transform = _lower_with_context(_model(), _context(None))
+
+    assert transform.report.lowered
+    assert mvau_source_admission(lowered, lowered.graph.node[0].name, _context(None)) == (
+        DotProductDesign.id,
+    )
+
+
+def test_unsupported_datatypes_are_rejected_without_a_target() -> None:
+    lowered, transform = _lower_with_context(
+        _model(weight_type="TERNARY"),
+        _context(None),
+    )
+
+    assert transform.report.lowered == ()
+    assert transform.report.refused == (("matmul0",),)
+    assert [node.op_type for node in lowered.graph.node] == ["MatMul"]
+
+
+def test_target_constraints_are_deferred_then_required_for_resolved_feasibility() -> None:
+    lowered, _transform = _lower(_model(activation_type="INT19"))
+    operation = lowered.get_customop_wrapper(lowered.graph.node[0])
+    assert isinstance(operation, MvauDataflowOp)
+    engine = Engine()
+    point = engine.start(operation.validated_design_space(), operation.problem_instance(_context()))
+    admission = mvau_build_admission(engine, point)
+    dot_trials = [trial for trial in admission.trials if trial.design_id == DotProductDesign.id]
+    dot_candidates = [
+        candidate
+        for trial in dot_trials
+        for placement in trial.placements
+        for candidate in placement.candidates
+        if candidate.candidate_id == "dotp_axi"
+    ]
+    assert admission.admitted_designs == (DotProductDesign.id,)
+    assert any(candidate.deferred_constraints for candidate in dot_candidates)
+
+    assembly = MVAU_DESIGN_INVENTORY
+    assert assembly.inventory.design_selection is not None
+    point = engine.commit_assignments(
+        point,
+        {
+            assembly.inventory.design_selection.path: DotProductDesign.id,
+            assembly.dot_product.pe.path: 2,
+            assembly.dot_product.simd.path: 2,
+            assembly.compute_pumping.path: False,
+            assembly.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
+        },
+    ).point
+    feasibility = resolved_physical_feasibility(engine, point, assembly.inventory)
+    assert feasibility.verdict is False
+
+
+def test_graph_admission_reports_target_constraints_as_deferred() -> None:
+    lowered, _transform = _lower(_model())
+    operation = lowered.get_customop_wrapper(lowered.graph.node[0])
+    assert isinstance(operation, MvauDataflowOp)
+    engine = Engine()
+    complete = operation.problem_instance(_context(None))
+    point = engine.start(operation.validated_design_space(), complete)
+    admitted = mvau_build_admission(engine, point)
+    candidates = [
+        candidate
+        for trial in admitted.trials
+        for placement in trial.placements
+        for candidate in placement.candidates
+        if candidate.candidate_id == "dotp_axi"
+    ]
+    assert any(candidate.verdict is AdmissionVerdict.ADMITTED for candidate in candidates)
+    dotp = next(candidate for candidate in candidates if candidate.deferred_constraints)
+    assert any(str(path).endswith("operand_types_supported") for path in dotp.graph_constraints)
+    assert any(str(path).endswith("width_supported") for path in dotp.deferred_constraints)
+
+
+def test_supply_trials_activate_only_their_own_placements() -> None:
+    lowered, _transform = _lower(_model(with_weight_initializer=False))
+    operation = lowered.get_customop_wrapper(lowered.graph.node[0])
+    assert isinstance(operation, MvauDataflowOp)
+    engine = Engine()
+    point = engine.start(operation.validated_design_space(), operation.problem_instance(_context()))
+    report = mvau_build_admission(engine, point)
+    dot_trials = {
+        dict(trial.supply_modes)["weight"]: trial
+        for trial in report.trials
+        if trial.design_id == DotProductDesign.id
+    }
+
+    assert tuple(item.placement for item in dot_trials["external"].placements) == (
+        "compute",
+        "replay",
+    )
+    assert dot_trials["external"].verdict is AdmissionVerdict.ADMITTED
+    assert tuple(item.placement for item in dot_trials["finn_rtl_memstream"].placements) == (
+        "compute",
+        "replay",
+        "delivery",
+    )
+    assert dot_trials["finn_rtl_memstream"].verdict is AdmissionVerdict.REJECTED
 
 
 def test_an_interleave_that_can_never_be_chosen_is_not_admitted() -> None:

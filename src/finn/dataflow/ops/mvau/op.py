@@ -127,7 +127,7 @@ class MvauDataflowOp(DataflowOp):
         if callable(resolver):
             try:
                 value = resolver()
-            except (KeyError, TypeError):
+            except (KeyError, TypeError, ValueError):
                 value = None
             return value if isinstance(value, str) and value else None
         value = getattr(config, "fpga_part", None)

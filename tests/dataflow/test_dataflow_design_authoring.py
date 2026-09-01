@@ -24,6 +24,7 @@ from finn.dataflow.authoring import (
     finite,
     selected_design_metadata,
 )
+from finn.dataflow.authoring.admission import AdmissionVerdict, graph_stage_build_admission
 from finn.dataflow.authoring.design import (
     DataflowDesign,
     DataflowDesignDeclaration,
@@ -199,6 +200,7 @@ def _fanout(
 @dataclass(frozen=True)
 class DesignInputs:
     extent: Ref[int]
+    graph_admitted: Ref[bool]
 
 
 @dataclass(frozen=True)
@@ -207,6 +209,7 @@ class KernelInputs:
     lanes: Ref[int] | None = None
     network: Ref[DataflowNetwork] | None = None
     edge_role: str = "link"
+    graph_admitted: Ref[bool] | None = None
 
 
 class DirectKernel(HardwareKernel):
@@ -273,6 +276,28 @@ class SupplierKernel(HardwareKernel):
     @classmethod
     def elaborate(cls, binding: HardwareKernel) -> tuple[PhysicalComponent, ...]:
         return (PhysicalComponent("supplier", "synthetic.supplier"),)
+
+
+class GraphGuardKernel(HardwareKernel):
+    id = "graph_guard"
+
+    @classmethod
+    def define_design(cls, design: HardwareDesign[KernelInputs]) -> None:
+        node = design.inputs.nodes[0]
+        admitted = design.inputs.graph_admitted
+        if admitted is None:
+            raise AssertionError("GraphGuardKernel requires the graph admission fact")
+        design.covers_region(
+            node.role,
+            region=node.region,
+            computation=node.computation,
+            implements=COPY,
+        )
+        design.coverage_constraint(
+            "graph_admitted",
+            dependencies={"admitted": admitted},
+            evaluate=lambda admitted: admitted,
+        )
 
 
 class SingletonDesign(DataflowDesign):
@@ -369,6 +394,30 @@ class SemanticOnlyDesign(DataflowDesign):
         )
         design.singleton_network(compute)
         design.kernels("compute", covers=(compute,), candidates=())
+
+
+class GraphGuardDesign(DataflowDesign):
+    id = "graph_guard"
+
+    @classmethod
+    def define(cls, design: DataflowDesignScope[DesignInputs]) -> None:
+        compute = design.region(
+            "compute",
+            node_id="compute",
+            dependencies={"extent": design.inputs.extent},
+            evaluate=lambda extent: _region(extent, "guarded"),
+            computation=COPY,
+        )
+        design.singleton_network(compute)
+        design.kernels(
+            "compute",
+            covers=(compute,),
+            candidates=(GraphGuardKernel,),
+            inputs=KernelInputs(
+                (compute,),
+                graph_admitted=design.inputs.graph_admitted,
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -580,7 +629,10 @@ def _declare_supplier(context: InputSupplyContext) -> SupplierAttachment:
 
 def _problem() -> tuple[OpDesign, DesignInputs]:
     operation = OpDesign("synthetic.op", problem_namespace="synthetic")
-    return operation, DesignInputs(operation.graph_fact("extent", int))
+    return operation, DesignInputs(
+        operation.graph_fact("extent", int),
+        operation.graph_fact("graph_admitted", bool, required=False),
+    )
 
 
 def _inventory(
@@ -1087,6 +1139,84 @@ def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> 
     assert profiles["synthetic_artifacts"].decisions == tuple(
         item.path for item in inventory.artifact_decisions
     )
+
+
+def test_graph_admission_distinguishes_missing_graph_facts_from_rejection() -> None:
+    operation, inputs = _problem()
+    inventory = declare_dataflow_design_inventory(
+        "synthetic",
+        (DataflowDesignEntry(GraphGuardDesign, inputs),),
+        shared_specs=(operation.spec(),),
+    )
+    engine = Engine()
+    space = engine.validate(inventory.specification)
+
+    missing = graph_stage_build_admission(
+        engine,
+        engine.start(space, {inputs.extent.path: 4}),
+        inventory,
+        operation.provenance(),
+    )
+    rejected = graph_stage_build_admission(
+        engine,
+        engine.start(
+            space,
+            {inputs.extent.path: 4, inputs.graph_admitted.path: False},
+        ),
+        inventory,
+        operation.provenance(),
+    )
+    admitted = graph_stage_build_admission(
+        engine,
+        engine.start(
+            space,
+            {inputs.extent.path: 4, inputs.graph_admitted.path: True},
+        ),
+        inventory,
+        operation.provenance(),
+    )
+
+    assert missing.admitted_designs == ()
+    assert missing.unresolved_designs == (GraphGuardDesign.id,)
+    assert missing.trials[0].placements[0].verdict is AdmissionVerdict.UNRESOLVED
+    assert rejected.admitted_designs == ()
+    assert rejected.unresolved_designs == ()
+    assert rejected.trials[0].placements[0].verdict is AdmissionVerdict.REJECTED
+    assert admitted.admitted_designs == (GraphGuardDesign.id,)
+    assert admitted.trials[0].placements[0].verdict is AdmissionVerdict.ADMITTED
+
+
+def test_candidate_membership_alone_controls_build_admission() -> None:
+    operation, inputs = _problem()
+    with_candidate = declare_dataflow_design_inventory(
+        "synthetic",
+        (DataflowDesignEntry(GraphGuardDesign, inputs),),
+        shared_specs=(operation.spec(),),
+    )
+    without_candidate = declare_dataflow_design_inventory(
+        "synthetic",
+        (DataflowDesignEntry(SemanticOnlyDesign, inputs),),
+        shared_specs=(operation.spec(),),
+    )
+
+    for inventory, expected in (
+        (with_candidate, (GraphGuardDesign.id,)),
+        (without_candidate, ()),
+    ):
+        engine = Engine()
+        point = engine.start(
+            engine.validate(inventory.specification),
+            {inputs.extent.path: 4, inputs.graph_admitted.path: True},
+        )
+        assert (
+            graph_stage_build_admission(
+                engine,
+                point,
+                inventory,
+                operation.provenance(),
+            ).admitted_designs
+            == expected
+        )
 
 
 def test_a_new_design_inherits_the_closed_supply_policy_without_copying_alternatives() -> None:

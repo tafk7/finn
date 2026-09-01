@@ -23,7 +23,7 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.transformation.base import Transformation  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
-from finn.dataflow.ops.mvau.designs.inventory import admissible_mvau_designs
+from finn.dataflow.ops.mvau.designs.inventory import mvau_build_admission
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 
 #: Node attribute carrying every original source node a lowering consumed.
@@ -270,7 +270,7 @@ def mvau_source_admission(
         raise TypeError("admission requires a logical MvauDataflowOp node")
     engine = Engine()
     point = engine.start(operation.validated_design_space(), operation.problem_instance(context))
-    return admissible_mvau_designs(engine, point)
+    return mvau_build_admission(engine, point).admitted_designs
 
 
 class InferMVAUDataflowOp(Transformation):  # type: ignore[misc]

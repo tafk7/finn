@@ -8,6 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
+from finn.dataflow.authoring.admission import (
+    GraphBuildAdmission,
+    graph_stage_build_admission,
+)
 from finn.dataflow.authoring.inventory import (
     DataflowOpAuthoring,
     DataflowDesignEntry,
@@ -51,6 +55,7 @@ from finn.dataflow.ops.mvau.semantics import MVAUDotProductSemantics, declare_do
 from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
+    MVAU_PROBLEM_PROVENANCE,
     MVAU_PROBLEM_SPEC,
     MVAUProblem,
 )
@@ -310,6 +315,18 @@ def admissible_mvau_designs(engine: Engine, point: DesignPoint) -> tuple[str, ..
     return tuple(candidates)
 
 
+def mvau_build_admission(engine: Engine, point: DesignPoint) -> GraphBuildAdmission:
+    """Return graph-stage build admission for semantically valid MVAU designs."""
+
+    return graph_stage_build_admission(
+        engine,
+        point,
+        MVAU_DESIGN_INVENTORY.inventory,
+        MVAU_PROBLEM_PROVENANCE,
+        design_ids=admissible_mvau_designs(engine, point),
+    )
+
+
 __all__ = [
     "MVAU_ARTIFACT_READINESS",
     "MVAU_DESIGN_INVENTORY",
@@ -323,4 +340,5 @@ __all__ = [
     "MVAUDesignInventoryAssembly",
     "admissible_mvau_designs",
     "declare_mvau_design_inventory",
+    "mvau_build_admission",
 ]

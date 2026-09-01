@@ -62,7 +62,7 @@ from finn.dataflow.mvau.compute_pool import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
-from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel
+from finn.dataflow.ops.mvau.hardware.dotp_axi import DotpAxiKernel, covers_operand_types
 from finn.dataflow.ops.mvau.hardware.inputs import (
     ActivationReplayHardwareInputs,
     DotProductHardwareInputs,
@@ -77,13 +77,12 @@ from finn.dataflow.ops.mvau.regions import (
 from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
-    HARDWARE_NUMERIC_TYPE_COVERAGE,
     REPLAY_NODE,
     accumulator_output_type_supported,
     construct_decomposed_mvau_network,
     dot_product_computation_supported,
-    some_dot_product_hardware_covers_numeric_types,
 )
+from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
@@ -97,6 +96,18 @@ from finn.dataflow.region import DataflowRegion, NumericElementType
 #: The dot product has no pool of its own -- it is a member of the operation's
 #: one compute pool, beside the fused Kernels it replaces.
 REPLAY_POOL = "mvau.replay"
+
+
+def _legacy_dot_product_hardware_covers_numeric_types(
+    activation: NumericElementType,
+    weight: NumericElementType,
+    accumulator: NumericElementType,
+    output: NumericElementType,
+) -> bool:
+    """Compatibility-only admission for the old semantic-Kernel flow."""
+
+    return covers_operand_types(MVAUNumericTypes(activation, weight, accumulator, output))
+
 
 #: Where the two physical Kernels are placed.
 HARDWARE_OWNER = "mvau.hardware"
@@ -177,9 +188,8 @@ class DotProductKernel(Kernel):
         # ``admissible_kernels`` sees semantic declarations only -- so the
         # existential is spelled out here over a declared inventory.
         #
-        # Adding a float Kernel therefore widens admission by extending
-        # ``HARDWARE_NUMERIC_TYPE_COVERAGE``, not by editing this Region or the
-        # source matcher.  Delete this once admission can ask coverage directly.
+        # This compatibility path keeps its historical admission check locally;
+        # production inference asks the selected design's candidates directly.
         design.source_constraint(
             "some_hardware_covers_the_numeric_types",
             dependencies={
@@ -188,7 +198,7 @@ class DotProductKernel(Kernel):
                 "accumulator": facts.accumulator_element_type,
                 "output": facts.output_element_type,
             },
-            evaluate=some_dot_product_hardware_covers_numeric_types,
+            evaluate=_legacy_dot_product_hardware_covers_numeric_types,
         )
 
         design.region(
@@ -467,7 +477,6 @@ def build_decomposed_mvau_kernels(
 
 __all__ = [
     "ACTIVATION_EDGE",
-    "HARDWARE_NUMERIC_TYPE_COVERAGE",
     "ActivationReplayInputs",
     "ActivationReplayKernel",
     "DOT_PRODUCT_NODE",

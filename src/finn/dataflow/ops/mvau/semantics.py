@@ -43,8 +43,6 @@ from finn.dataflow.mvau.compute_pool import (
     WEIGHT_INTERFACE,
     MVAUComputeKernelId,
 )
-from finn.dataflow.ops.mvau.hardware.dotp_axi import covers_operand_types
-from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.ops.mvau.regions import (
     MVAURegionDeclaration,
     construct_activation_replay_region,
@@ -75,8 +73,6 @@ REPLAY_NODE = "replay"
 DOT_PRODUCT_NODE = "compute"
 ACTIVATION_EDGE = "activation_replay"
 
-HARDWARE_NUMERIC_TYPE_COVERAGE = (covers_operand_types,)
-
 
 def dot_product_computation_supported(profile: MVAUComputationProfile) -> bool:
     """Whether the ordinary dot-product Region expresses this source computation."""
@@ -90,18 +86,6 @@ def accumulator_output_type_supported(
     """The unfused dot product emits its accumulator value directly."""
 
     return accumulator == output
-
-
-def some_dot_product_hardware_covers_numeric_types(
-    activation: NumericElementType,
-    weight: NumericElementType,
-    accumulator: NumericElementType,
-    output: NumericElementType,
-) -> bool:
-    """Graph-answerable projection of the attached physical coverage inventory."""
-
-    numeric = MVAUNumericTypes(activation, weight, accumulator, output)
-    return any(covers(numeric) for covers in HARDWARE_NUMERIC_TYPE_COVERAGE)
 
 
 def construct_decomposed_mvau_network(
@@ -259,18 +243,6 @@ def declare_dot_product_semantics(
         evaluate=accumulator_output_type_supported,
         sets=(source_constraint_set, feasibility_constraint_set),
     )
-    scope.constraint(
-        "some_hardware_covers_the_numeric_types",
-        dependencies={
-            "activation": problem.activation_element_type,
-            "weight": problem.weight_element_type,
-            "accumulator": problem.accumulator_element_type,
-            "output": problem.output_element_type,
-        },
-        evaluate=some_dot_product_hardware_covers_numeric_types,
-        sets=(source_constraint_set, feasibility_constraint_set),
-    )
-
     dot_product_region = cast(
         "Ref[DataflowRegion]",
         scope.derived(
@@ -421,7 +393,6 @@ __all__ = [
     "DOT_PRODUCT_DESIGN_NAMESPACE",
     "DOT_PRODUCT_NODE",
     "DOT_PRODUCT_SEMANTIC_READINESS",
-    "HARDWARE_NUMERIC_TYPE_COVERAGE",
     "MVAUDotProductSemantics",
     "MVAUSemanticDemand",
     "MVAUSemanticExport",
@@ -431,5 +402,4 @@ __all__ = [
     "construct_external_dot_product_source_association",
     "declare_dot_product_semantics",
     "dot_product_computation_supported",
-    "some_dot_product_hardware_covers_numeric_types",
 ]

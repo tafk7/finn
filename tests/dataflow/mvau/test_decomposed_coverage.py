@@ -38,7 +38,6 @@ from finn.dataflow.mvau.compute_kernels import (
     MVAU_REPLAY_SELECTION,
 )
 from finn.dataflow.mvau.decomposed import (
-    HARDWARE_NUMERIC_TYPE_COVERAGE,
     ActivationReplayKernel,
     DecomposedMVAUKernels,
     DotProductKernel,
@@ -46,7 +45,6 @@ from finn.dataflow.mvau.decomposed import (
 from finn.dataflow.ops.mvau.hardware.dotp_axi import (
     covers_numeric_types,
     covers_operand_types,
-    covers_operand_types as dotp_axi_covers_operand_types,
 )
 from finn.dataflow.ops.mvau.numeric import MVAUNumericTypes
 from finn.dataflow.mvau.compat.operation import (
@@ -240,21 +238,6 @@ def test_the_hardware_does_not_claim_types_it_cannot_multiply() -> None:
     assert "operand_types_supported" in _rejected(engine, point, pools)
     assert covers_operand_types(MVAUNumericTypes(INT8, INT8, INT16, INT16)) is True
     assert covers_operand_types(MVAUNumericTypes(FLOAT16, FLOAT16, INT16, INT16)) is False
-
-
-def test_admission_quantifies_over_the_declared_hardware_inventory() -> None:
-    """Adding a Kernel widens admission; it does not edit the Region.
-
-    Pinning the mechanism, not just the outcome: the bridge asks each entry in
-    the inventory, and each entry is the same predicate that Kernel's own
-    coverage constraint uses, so the two cannot drift.
-    """
-
-    supported = MVAUNumericTypes(INT8, INT8, INT16, INT16)
-    unsupported = MVAUNumericTypes(FLOAT16, FLOAT16, FLOAT16, FLOAT16)
-    assert dotp_axi_covers_operand_types in HARDWARE_NUMERIC_TYPE_COVERAGE
-    assert any(covers(supported) for covers in HARDWARE_NUMERIC_TYPE_COVERAGE)
-    assert not any(covers(unsupported) for covers in HARDWARE_NUMERIC_TYPE_COVERAGE)
 
 
 def test_an_integer_product_with_a_floating_accumulator_is_refused() -> None:
