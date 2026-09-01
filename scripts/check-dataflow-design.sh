@@ -14,6 +14,19 @@ MYPY_BIN=${MYPY_BIN:-mypy}
 
 cd "$FINN_ROOT"
 
+FINN_REVISION=$(git rev-parse HEAD)
+printf 'finn     %s  %s\n' "$FINN_REVISION" "$FINN_ROOT"
+if git -C "$FINN_ROOT/deps/finnlib" rev-parse HEAD >/dev/null 2>&1; then
+    FINNLIB_REVISION=$(git -C "$FINN_ROOT/deps/finnlib" rev-parse HEAD)
+    printf 'finnlib  %s  %s\n' "$FINNLIB_REVISION" "$FINN_ROOT/deps/finnlib"
+else
+    printf 'finnlib  unavailable\n'
+fi
+"$PYTHON_BIN" --version
+"$PYTHON_BIN" -m pytest --version
+"$RUFF_BIN" --version
+"$MYPY_BIN" --version
+
 # The tests need qonnx importable.  Prefer the pinned checkout fetch-repos.sh
 # places under deps/, so the gate does not depend on the caller having installed
 # it, and fall back to whatever the environment provides.
