@@ -27,7 +27,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
-from finn.dataflow.mvau.decomposed import (
+from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     REPLAY_NODE,
@@ -45,13 +45,7 @@ from finn.dataflow.design import (
 from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
-from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.op import DataflowOpError
 from finn.dataflow.ops.mvau import MVAUDataflowOpPaths, NetworkRef, SemanticOperandDestination
-from finn.dataflow.mvau.compute_kernels import (
-    MVAU_COMPUTE_SELECTION,
-    MVAU_REPLAY_SELECTION,
-)
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region
@@ -276,8 +270,8 @@ def test_the_selection_survives_a_save_and_reload(tmp_path: Path) -> None:
     assert assignments[MVAUDataflowOpPaths.DESIGN] == DotProductDesign.id
     assert assignments[MVAU_DESIGN_INVENTORY.dot_product.pe.path] == 2
     assert assignments[MVAU_DESIGN_INVENTORY.dot_product.simd.path] == 4
-    assert MVAU_COMPUTE_SELECTION.paths.kernel not in assignments
-    assert MVAU_REPLAY_SELECTION.paths.kernel not in assignments
+    assert QualifiedPath("mvau.compute.kernel") not in assignments
+    assert QualifiedPath("mvau.replay.kernel") not in assignments
 
     result = _result(reloaded)
     assert {node.id for node in result.network.nodes} == {REPLAY_NODE, DOT_PRODUCT_NODE}
@@ -341,7 +335,7 @@ def test_dot_product_is_a_design_not_a_legacy_kernel_pool_member() -> None:
         "dot_product",
         "batch_interleaved",
     )
-    assert MvauDataflowOp.kernel_selections() == ()
+    assert not hasattr(MvauDataflowOp, "kernel_selections")
 
 
 def test_batch_interleaved_resolves_to_a_singleton_network() -> None:
@@ -409,28 +403,6 @@ def test_the_association_and_the_network_are_both_checked() -> None:
     assert isinstance(
         Engine().query_property(point, MVAUDataflowOpPaths.SOURCE_ASSOCIATION), Decided
     )
-
-
-# -- replay is not optional --------------------------------------------------
-
-
-def test_the_replay_kernel_cannot_be_declined() -> None:
-    """Without it the dot product's expanded activation reaches the boundary.
-
-    ``R x NF x SF`` beats where the source operation presents ``R x SF``.  That
-    is a different contract, so ``none`` is not in this pool's domain when the
-    compute is decomposed -- the choice is withheld, not defaulted.
-    """
-
-    decisions = set(MvauDataflowOp.validated_design_space().decisions)
-    assert MVAU_REPLAY_SELECTION.paths.kernel not in decisions
-
-    operation = _wrapped(_model())
-    operation.initialize_dataflow_scope_id()
-    choices = dict(_choices())
-    choices[MVAU_REPLAY_SELECTION.paths.kernel] = NO_KERNEL
-    with pytest.raises(DataflowOpError):
-        operation.commit_dataflow_assignments(_context(), choices)
 
 
 def test_the_replay_choice_does_not_apply_to_a_fused_member() -> None:

@@ -23,18 +23,13 @@ from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - fixtures come wit
     _model,
     _wrapped,
 )
-from finn.dataflow.mvau.compute_kernels import (
-    DECOMPOSED_MVAU_KERNELS,
-    MVAU_COMPUTE_SELECTION,
-    SOFT_VECTOR_PROVIDER_ID,
-)
-from finn.dataflow.mvau.decomposed import (
+from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     REPLAY_NODE,
-    DotProductKernel,
 )
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.physical import (
     MVAUElaborationError,
@@ -61,7 +56,6 @@ from finn.dataflow.ops.mvau.hardware.composition import (
 )
 from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_SOURCES
 from finn.dataflow.ops.mvau.hardware.replay_buffer import FINN_SOURCES
-from finn.dataflow.mvau.compat.providers import MVAU_PROVIDER_ELABORATORS
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
@@ -114,19 +108,6 @@ def test_elaboration_follows_the_selected_design() -> None:
     with pytest.raises(MVAUElaborationError) as deferred:
         elaborate_mvau(_batch_resolved())
     assert {item.code for item in deferred.value.findings} == {"mvau-dispatch-design-semantic-only"}
-
-
-def test_provider_dispatch_is_confined_to_the_compatibility_boundary() -> None:
-
-    published = {
-        provider.id for kernel in MVAU_COMPUTE_SELECTION.kernels for provider in kernel.providers
-    }
-    assert set(MVAU_PROVIDER_ELABORATORS) <= published
-    assert SOFT_VECTOR_PROVIDER_ID in MVAU_PROVIDER_ELABORATORS
-
-    # The migrated member declares no provider at all, so it cannot be reached
-    # through the compatibility dispatcher even by accident.
-    assert MVAU_COMPUTE_SELECTION.kernel(DotProductKernel.id).providers == ()
 
 
 def test_the_decomposed_hardware_refuses_the_semantic_only_design() -> None:
@@ -299,8 +280,13 @@ def test_every_parameter_reaching_the_rtl_came_from_the_point() -> None:
     """
 
     resolved = _resolved()
+    design = MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
     declared = {
-        item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
+        item.name
+        for placement in design.placements
+        if placement.name in {"compute", "replay"}
+        for kernel in placement.candidates
+        for item in kernel.parameters
     }
     bindings = bind_decomposed(resolved)
     resolved_names = {name for binding in bindings.kernels.values() for name in binding.parameters}
@@ -316,7 +302,12 @@ def test_the_cores_are_given_their_own_parameters_only() -> None:
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
     prefix = f"{resolved.result.source_association.source_node_id}.compute"
-    replay_names = set(DECOMPOSED_MVAU_KERNELS.replay_hardware.parameter_names)
+    replay_names = set(
+        MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
+        .placement("replay")
+        .candidates[0]
+        .parameter_names
+    )
 
     replay = elaboration.component(f"{prefix}.replay")
     assert {name for name, _ in replay.parameters} == replay_names
@@ -453,8 +444,14 @@ def test_the_requirements_carry_the_identity_of_what_they_build() -> None:
     assert requirements.target_fpga_part not in requirements.identity.serialization
     # Compile order, and the replay feeds the dot product.
     assert tuple(item.kernel_id for item in requirements.identity.kernels) == (
-        DECOMPOSED_MVAU_KERNELS.replay_hardware.id,
-        DECOMPOSED_MVAU_KERNELS.dot_product_hardware.id,
+        MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
+        .placement("replay")
+        .candidates[0]
+        .id,
+        MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
+        .placement("compute")
+        .candidates[0]
+        .id,
     )
 
 

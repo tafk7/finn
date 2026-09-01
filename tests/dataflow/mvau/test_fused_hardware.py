@@ -55,7 +55,7 @@ from finn.dataflow.hardware import (
     hardware_namespace,
 )
 from finn.dataflow.hardware.kernel import HardwareKernelDeclaration
-from finn.dataflow.mvau.decomposed import (
+from finn.dataflow.ops.mvau.semantics import (
     ACTIVATION_EDGE,
     DOT_PRODUCT_NODE,
     REPLAY_NODE,
@@ -716,7 +716,7 @@ def test_the_guard_is_not_an_assert_and_survives_optimised_python() -> None:
     source = (
         "from dataflow.mvau.test_fused_hardware import ("
         "  _place, FUSED, ACTIVATION_EDGE_ROLE, InfeasiblePoint, OMITTED)\n"
-        "from finn.dataflow.mvau.decomposed import ACTIVATION_EDGE\n"
+        "from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE\n"
         "placed = _place(target=OMITTED)\n"
         "try:\n"
         "    placed.bind(FUSED, placed.both_roles(), {ACTIVATION_EDGE_ROLE: ACTIVATION_EDGE})\n"

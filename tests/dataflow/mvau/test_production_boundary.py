@@ -54,6 +54,17 @@ FORBIDDEN_NAMES = {
     "SOFT_VECTOR_PROVIDER_ID",
     "MEMSTREAM_PROVIDER_ID",
 }
+DELETED_MVAU_MODULES = (
+    "finn.dataflow.mvau.compat.operation",
+    "finn.dataflow.mvau.compute_kernels",
+    "finn.dataflow.mvau.compute_pool",
+    "finn.dataflow.mvau.decomposed",
+    "finn.dataflow.mvau.legacy_design",
+    "finn.dataflow.mvau.weight_adapter",
+    "finn.dataflow.mvau.weight_adapter_kernel",
+    "finn.dataflow.mvau_design",
+    "finn.dataflow.parameters.supply_kernels",
+)
 
 
 def _imports(path: Path) -> tuple[tuple[str, str], ...]:
@@ -221,6 +232,36 @@ def test_relocated_production_module_paths_are_absent() -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_provider_era_mvau_modules_are_not_importable() -> None:
+    script = "\n".join(
+        (
+            "import importlib.util",
+            f"deleted = {DELETED_MVAU_MODULES!r}",
+            "present = []",
+            "for name in deleted:",
+            "    try:",
+            "        found = importlib.util.find_spec(name)",
+            "    except ModuleNotFoundError:",
+            "        found = None",
+            "    if found is not None:",
+            "        present.append(name)",
+            "raise SystemExit('deleted modules remain: ' + ', '.join(present) if present else 0)",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_weight_adapter_forcing_code_is_test_only() -> None:
+    assert not (ROOT / "mvau" / "weight_adapter.py").exists()
+    assert Path(__file__).with_name("weight_adapter_region.py").is_file()
 
 
 def test_fused_kernel_is_absent_from_every_production_design_candidate() -> None:

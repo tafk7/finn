@@ -28,7 +28,8 @@ import numpy as np  # type: ignore[import-not-found]
 import pytest
 
 from dataflow.rtlsim import composed_mvau_numeric as fixture
-from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.lane_packing import a_datapath_width, pack_lanes
 
 
@@ -44,8 +45,13 @@ def test_every_case_builds_what_it_will_simulate(case: fixture.Case) -> None:
     weights, _activations = _stimulus(case)
     built = fixture.requirements_for(case, fixture._model(case, weights))
 
+    design = MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
     declared = {
-        item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
+        item.name
+        for placement in design.placements
+        if placement.name in {"compute", "replay"}
+        for kernel in placement.candidates
+        for item in kernel.parameters
     }
     assert {name for name, _ in built.parameters} == declared
     assert built.target_fpga_part == case.fpga_part

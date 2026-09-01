@@ -141,48 +141,6 @@ def element_width(element_type: NumericElementType) -> int:
     return element_type.bitwidth()
 
 
-def element_family(element_type: NumericElementType) -> str:
-    """The element's reduced family label: ``int``, ``uint``, ``float``, ...
-
-    **Transitional, and deliberately conspicuous.**  A reduced family is
-    precisely the lossy notion adopting QONNX removes: this maps ``TERNARY`` and
-    ``INT2`` to the same label, exactly as the old representation did, which is
-    the live defect recorded in ``open/qonnx-datatype-adoption.md`` §1.1.
-
-    It is reproduced faithfully here on purpose.  Switching the representation
-    and fixing the classification in one step would leave nothing able to say
-    which of the two caused a change.  Every caller is a question that must be
-    re-asked by canonical datatype identity, and emptying this function is what
-    Phase D of the adoption is for.
-
-    Datatypes with no legacy label -- fixed point, scaled integer -- return
-    their canonical name, so they match no family test and are refused by
-    coverage rather than silently joining one.
-
-    **What is left.**  The decomposed slice no longer calls this: ``dotp_axi``
-    asks canonical identity, and ``SIGNED_ACTIVATIONS`` asks ``signed()``.  The
-    remaining callers are the legacy HLS and RTL pool members in
-    ``compute_kernels.py``, whose bipolar/binary tests are the same reduced
-    question they always were.  Rewriting *their* datatype semantics would be a
-    behaviour change on legacy paths, which is not this migration's to make, and
-    those Kernels are retired by Phase 7 of the Region/Kernel binding plan
-    anyway.  Left deliberately, recorded rather than hidden.
-
-    New code must not call this.  Ask what it actually needs to know: the width,
-    the signedness, or whether this specific datatype is one the Kernel can
-    multiply.
-    """
-
-    name = element_type.name
-    if name in {"BIPOLAR", "BINARY"}:
-        return name.lower()
-    if element_type.is_integer():
-        return "int" if element_type.signed() else "uint"
-    if name.startswith("FLOAT"):
-        return "float"
-    return name
-
-
 def _canonical_element_type(value: object) -> NumericElementType:
     """Re-resolve an element type on the way into a Region value.
 

@@ -54,7 +54,7 @@ from finn.dataflow.ops.mvau.problem import (
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau import NetworkRef
-from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle, WeightOrganization
+from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]
@@ -159,7 +159,6 @@ def test_mvau_supply_inventory_is_closed_finn_rtl_only_and_as_demanded() -> None
     assert tuple(item.id for item in supply.declaration.alternatives) == (
         FINN_RTL_MEMSTREAM_SUPPLY,
     )
-    assert supply.organization is WeightOrganization.AS_DEMANDED
 
 
 def test_supply_and_memstream_decision_paths_are_the_frozen_v6_paths() -> None:

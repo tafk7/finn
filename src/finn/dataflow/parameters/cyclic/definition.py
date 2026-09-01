@@ -3,11 +3,8 @@
 
 """Facts shared by every cyclic parameter-supply Kernel.
 
-The selectable cyclic identities now live in
-:mod:`finn.dataflow.parameters.supply_kernels` as ordinary Kernels.  What
-remains here is the vocabulary those Kernels and the operation both read: the
-RAM implementations one of them exposes, the target memory capability, and the
-problem paths that carry build requirements.
+This module owns the stable RAM-style vocabulary and target capability facts
+used by cyclic parameter delivery.
 """
 
 from __future__ import annotations
@@ -25,13 +22,6 @@ class CyclicRamStyle(str, Enum):
     BRAM = "block"
     LUTRAM = "distributed"
     URAM = "ultra"
-
-
-class WeightOrganization(str, Enum):
-    """How stored parameters are ordered relative to the consumer demand."""
-
-    AS_DEMANDED = "as_demanded"
-    STANDARD_FULL_TILE = "standard_full_tile"
 
 
 @dataclass(frozen=True)
@@ -54,5 +44,4 @@ __all__ = [
     "CyclicParameterKernelPaths",
     "CyclicRamStyle",
     "CyclicTargetMemoryCapabilities",
-    "WeightOrganization",
 ]

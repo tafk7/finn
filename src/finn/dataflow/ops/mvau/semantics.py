@@ -38,11 +38,6 @@ from finn.dataflow.ops.mvau.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.mvau.compute_pool import (
-    REGION_FORM_EXPORT,
-    WEIGHT_INTERFACE,
-    MVAUComputeKernelId,
-)
 from finn.dataflow.ops.mvau.regions import (
     MVAURegionDeclaration,
     construct_activation_replay_region,
@@ -72,6 +67,8 @@ DOT_PRODUCT_SEMANTIC_READINESS = "mvau.design.dot_product.semantic"
 REPLAY_NODE = "replay"
 DOT_PRODUCT_NODE = "compute"
 ACTIVATION_EDGE = "activation_replay"
+WEIGHT_INTERFACE = "weight"
+REGION_FORM_EXPORT = "region_form"
 
 
 def dot_product_computation_supported(profile: MVAUComputationProfile) -> bool:
@@ -170,7 +167,7 @@ def construct_external_dot_product_source_association(
                 (repetitions, matrix_height),
             ),
         ),
-        MVAUComputeKernelId.DOT_PRODUCT.value,
+        "dot_product",
     )
 
 

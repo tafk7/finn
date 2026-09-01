@@ -62,10 +62,8 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     src/finn/dataflow/spec_algebra.py \
     src/finn/dataflow/network.py \
     src/finn/dataflow/network_validation.py \
-    src/finn/dataflow/mvau \
     src/finn/dataflow/parameters \
     src/finn/dataflow/ops \
-    src/finn/dataflow/mvau_design.py \
     src/finn/custom_op/dataflow \
     src/finn/transformation/fpgadataflow/infer_mvau_dataflow.py \
     src/finn/transformation/fpgadataflow/select_dataflow_design.py \
@@ -85,12 +83,10 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/test_mvau_narrow_weights.py \
     tests/dataflow/test_mvau_problem_fields.py \
     tests/dataflow/test_dataflow_op.py \
-    tests/dataflow/test_kernel_authoring.py \
     tests/dataflow/test_kernel_class_authoring.py \
+    tests/dataflow/test_kernel_pool.py \
     tests/dataflow/test_network.py \
     tests/dataflow/test_network_validation.py \
-    tests/dataflow/test_mvau_op.py \
-    tests/dataflow/test_kernel_pool.py \
     tests/dataflow/test_mvau_inference.py \
     tests/dataflow/test_dataflow_selection.py \
     tests/dataflow/test_op_kernel_waterfall_acceptance.py

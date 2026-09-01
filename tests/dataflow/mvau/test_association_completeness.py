@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 from dataflow.mvau.test_decomposed_op import _committed, _context, _model
-from finn.dataflow.mvau.decomposed import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
+from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
 from finn.dataflow.ops.mvau.hardware import composition
 from finn.dataflow.ops.mvau.hardware.composition import elaborate_decomposed

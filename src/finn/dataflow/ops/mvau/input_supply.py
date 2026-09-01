@@ -29,7 +29,7 @@ from finn.dataflow.ops.mvau.hardware.memstream import (
 )
 from finn.dataflow.ops.mvau.problem import MVAUProblem
 from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
-from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle, WeightOrganization
+from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from finn.dataflow.region import InputInterface, Port
 
@@ -55,7 +55,6 @@ class MVAUInputSupply:
 
     declaration: InputSupplyDeclaration
     settings: MVAUWeightSupplySettings
-    organization: WeightOrganization = WeightOrganization.AS_DEMANDED
 
 
 def _memstream_selected(choice: Ref[str]) -> EvaluatorSpec[Answer[bool]]:

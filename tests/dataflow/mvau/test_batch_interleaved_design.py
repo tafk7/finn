@@ -9,17 +9,12 @@ from typing import cast
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.authoring import assemble_specs
 from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
 from finn.dataflow.ops.mvau.associations import (
     BindingLocalStateDestination,
     MVAUParameterTopology,
     MVAUSourceAssociation,
     SemanticOperandDestination,
-)
-from finn.dataflow.mvau.compute_kernels import (
-    BATCH_INTERLEAVED_DSP_MVAU_KERNEL,
-    BATCH_INTERLEAVED_PATHS,
 )
 from finn.dataflow.ops.mvau.designs.batch_interleaved import (
     BATCH_INTERLEAVED_NODE,
@@ -28,7 +23,6 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import (
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.ops.mvau.regions import MVAURegionDeclaration
 from finn.dataflow.ops.mvau.problem import (
-    MVAU_PROBLEM_SPEC,
     MVAUComputationProfile,
     MVAUDspBlock,
     MVAUProblemPaths,
@@ -36,7 +30,6 @@ from finn.dataflow.ops.mvau.problem import (
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
-from finn.dataflow.region import DataflowRegion
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]
@@ -102,28 +95,6 @@ def test_batch_interleaved_uses_the_frozen_design_decision_paths() -> None:
     assert semantics.pe.path == QualifiedPath("mvau.design.batch_interleaved.pe")
     assert semantics.simd.path == QualifiedPath("mvau.design.batch_interleaved.simd")
     assert semantics.interleave.path == QualifiedPath("mvau.design.batch_interleaved.interleave")
-
-
-def test_batch_interleaved_region_is_equal_to_the_legacy_direct_region() -> None:
-    engine, point = _point()
-    new_region = _network(engine, point).node(BATCH_INTERLEAVED_NODE).region
-
-    old_engine = Engine()
-    old_spec = old_engine.validate(
-        assemble_specs((MVAU_PROBLEM_SPEC, BATCH_INTERLEAVED_DSP_MVAU_KERNEL.spec))
-    )
-    old_point = old_engine.start(old_spec, _facts())
-    old_point = old_engine.commit_assignments(
-        old_point,
-        {
-            BATCH_INTERLEAVED_PATHS.pe: 3,
-            BATCH_INTERLEAVED_PATHS.simd: 2,
-            BATCH_INTERLEAVED_PATHS.interleave: 3,
-        },
-    ).point
-    old_answer = old_engine.query_property(old_point, BATCH_INTERLEAVED_PATHS.region)
-    assert isinstance(old_answer, Decided)
-    assert new_region == cast(DataflowRegion, old_answer.value)
 
 
 def test_batch_interleaved_is_a_canonical_singleton_network() -> None:

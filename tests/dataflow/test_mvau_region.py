@@ -3,9 +3,9 @@
 
 import pytest
 
-from finn.dataflow.mvau_design import MVAUWeightInterface, construct_mvau_compute_region
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
+from finn.dataflow.ops.mvau.regions import MVAUWeightInterface, construct_mvau_compute_region
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,

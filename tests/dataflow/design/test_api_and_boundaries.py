@@ -38,6 +38,7 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "ConstraintSet",
         "DataflowRegion",
         "DataflowNetwork",
+        "DataflowOpResult",
         "Decided",
         "Decision",
         "DecisionDomain",
@@ -140,7 +141,9 @@ def test_private_engine_has_no_finn_or_region_imports() -> None:
 
 
 def test_mvau_specification_does_not_import_the_private_engine() -> None:
-    source_path = Path(__file__).parents[3] / "src" / "finn" / "dataflow" / "mvau_design.py"
+    source_path = (
+        Path(__file__).parents[3] / "src" / "finn" / "dataflow" / "ops" / "mvau" / "__init__.py"
+    )
     tree = ast.parse(source_path.read_text(), filename=str(source_path))
     imported_modules = {
         node.module

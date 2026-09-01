@@ -24,7 +24,8 @@ import pytest
 
 from dataflow.rtlsim import composed_mvau_equiv as fixture
 from dataflow.rtlsim.rtl_transport import random_word
-from finn.dataflow.mvau.compute_kernels import DECOMPOSED_MVAU_KERNELS
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.hardware.binding import verify_manifest
 from finn.dataflow.ops.mvau.hardware.dotp_axi import FINNLIB_SOURCES
 
@@ -35,8 +36,13 @@ def test_every_configuration_builds_what_it_will_simulate(config: fixture.Config
 
     built = fixture.decomposed_requirements(config)
 
+    design = MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
     declared = {
-        item.name for kernel in DECOMPOSED_MVAU_KERNELS.hardware for item in kernel.parameters
+        item.name
+        for placement in design.placements
+        if placement.name in {"compute", "replay"}
+        for kernel in placement.candidates
+        for item in kernel.parameters
     }
     assert {name for name, _ in built.parameters} == declared
 

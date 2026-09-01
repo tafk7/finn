@@ -17,14 +17,6 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from finn.dataflow.design import QualifiedPath
-from finn.dataflow.kernels import NO_KERNEL
-from finn.dataflow.mvau.compute_kernels import (
-    BATCH_INTERLEAVED_PATHS,
-    LEGACY_HLS_PATHS,
-    MVAUComputeKernelId,
-    MVAUHlsResource,
-    MVAUWeightSource,
-)
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
@@ -34,33 +26,15 @@ from finn.dataflow.ops.mvau.source import (
     MVAUProjectionContext,
     MVAUResolvedDesign,
     MVAUSourceAdapterError,
-    MVAUSourceProjection,
     project_mvau_source,
     reconstitute_mvau_selection,
     save_mvau_selection,
     start_mvau_projection,
 )
-from finn.dataflow.mvau.compat.source import (
-    project_legacy_mvau_source,
-    start_legacy_mvau_projection,
-)
-from finn.dataflow.mvau.compat.operation import (
-    MVAU_COMPUTE_SELECTION,
-    MVAU_WEIGHT_ADAPTER_SELECTION,
-    MVAU_WEIGHT_SUPPLY_SELECTION,
-    MVAUDataflowOpPaths,
-    NetworkRef,
-    RegionRef,
-)
-from finn.dataflow.parameters.supply_kernels import (
-    FINN_RTL_MEMSTREAM_PATHS,
-    CyclicRamStyle,
-    CyclicTargetMemoryCapabilities,
-    MVAUWeightSupplyKernelId,
-    WeightOrganization,
-)
+from finn.dataflow.ops.mvau import NetworkRef
+from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.datatypes import is_qonnx_datatype
-from finn.dataflow.ops.mvau.problem import MVAUDspBlock, MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 
 NODE_ID = "mvau0"
 ULTRASCALE_PART = "xczu3eg-sbva484-1-e"
@@ -137,14 +111,6 @@ def _context(part: str = ULTRASCALE_PART) -> MVAUProjectionContext:
     return MVAUProjectionContext("finn.MinimizeAccumulatorWidth", fpga_part=part)
 
 
-def _project_preserving(model: ModelWrapper, part: str = ULTRASCALE_PART) -> MVAUSourceProjection:
-    return project_legacy_mvau_source(
-        model,
-        NODE_ID,
-        _context(part),
-    )
-
-
 def _v11_assignments(*, supplied: bool = False) -> dict[QualifiedPath | str, object]:
     assembly = MVAU_DESIGN_INVENTORY
     assert assembly.inventory.design_path is not None
@@ -187,92 +153,10 @@ def test_mapping_table_keeps_observations_choices_and_derivations_separate() -> 
     assert derived.destination == "semantic.*"
 
 
-def test_real_standard_embedded_node_projects_facts_and_explicit_choices() -> None:
-    model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded", resource_type="lut")
-
-    projection = _project_preserving(model)
-
-    assert projection.blocking_findings == ()
-    assert projection.problem_data[MVAUProblemPaths.REPETITIONS] == 4
-    assert projection.problem_data[MVAUProblemPaths.MATRIX_WIDTH] == 4
-    assert projection.problem_data[MVAUProblemPaths.MATRIX_HEIGHT] == 6
-    assert (
-        projection.problem_data[MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER]
-        == "finn.MinimizeAccumulatorWidth"
-    )
-    assert projection.problem_data[MVAUProblemPaths.TARGET_DSP_BLOCK] is MVAUDspBlock.DSP48E2
-    assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
-        MVAUComputeKernelId.LEGACY_HLS.value
-    )
-    assert projection.imported_assignments[LEGACY_HLS_PATHS.weight_source] is (
-        MVAUWeightSource.EMBEDDED
-    )
-    assert projection.imported_assignments[LEGACY_HLS_PATHS.resource] is MVAUHlsResource.LUT
-    # An embedded weight source leaves the supply pool inapplicable entirely.
-    assert MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel not in projection.imported_assignments
-    # The topology is derived from those selections, never imported beside them.
-    assert MVAUDataflowOpPaths.PARAMETER_TOPOLOGY not in projection.imported_assignments
-    resolved = start_legacy_mvau_projection(projection)
-    assert isinstance(resolved.result, RegionRef)
-    assert tuple(interface.port.id for interface in resolved.result.region.inputs) == (
-        "activation",
-    )
-
-
-def test_real_standard_direct_node_projects_soft_vector_binding() -> None:
-    model = _make_mvau_model(op_type="MVAU_rtl", mem_mode="external")
-
-    projection = _project_preserving(model)
-
-    assert projection.blocking_findings == ()
-    assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
-        MVAUComputeKernelId.SOFT_VECTOR.value
-    )
-    assert projection.imported_assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] == NO_KERNEL
-    # External delivery means the initializer does not govern the delivered
-    # values, so the graph analysis declines rather than answering False.
-    assert MVAUProblemPaths.INITIALIZER_EXCLUDES_MINIMUM not in projection.problem_data
-
-
-def test_real_batch_interleaved_cyclic_node_projects_both_kernel_selections() -> None:
-    model = _make_mvau_model(
-        op_type="MVAU_rtl",
-        mem_mode="internal_decoupled",
-        interleave=2,
-    )
-
-    projection = _project_preserving(model, VERSAL_PART)
-
-    assert projection.blocking_findings == ()
-    assert projection.imported_assignments[MVAU_COMPUTE_SELECTION.paths.kernel] == (
-        MVAUComputeKernelId.BATCH_INTERLEAVED_DSP.value
-    )
-    assert projection.imported_assignments[BATCH_INTERLEAVED_PATHS.interleave] == 2
-    assert projection.imported_assignments[MVAU_WEIGHT_SUPPLY_SELECTION.paths.kernel] == (
-        MVAUWeightSupplyKernelId.FINN_RTL_MEMSTREAM.value
-    )
-    # The supplier serves the compute demand exactly, so no delivery tile and
-    # no adapter is imported.
-    assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.organization] is (
-        WeightOrganization.AS_DEMANDED
-    )
-    assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.ram_style] is (
-        CyclicRamStyle.BRAM
-    )
-    assert projection.imported_assignments[FINN_RTL_MEMSTREAM_PATHS.pumped_memory] is True
-    assert projection.imported_assignments[MVAU_WEIGHT_ADAPTER_SELECTION.paths.kernel] == NO_KERNEL
-    assert projection.problem_data[MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES] == (
-        CyclicTargetMemoryCapabilities(True)
-    )
-    resolved = start_legacy_mvau_projection(projection)
-    assert isinstance(resolved.result, NetworkRef)
-    assert tuple(node.id for node in resolved.result.network.nodes) == ("compute", "delivery")
-
-
 def test_fused_threshold_projection_preserves_real_tensor_contract() -> None:
     model = _make_mvau_model(op_type="MVAU_hls", mem_mode="internal_embedded", fused=True)
 
-    projection = _project_preserving(model)
+    projection = project_mvau_source(model, NODE_ID, _context())
 
     assert projection.blocking_findings == ()
     description = projection.source_description
@@ -304,7 +188,9 @@ def test_missing_initializers_unknown_datatypes_and_dimensions_are_findings() ->
         weight_initializer=False,
         threshold_initializer=False,
     )
-    missing_codes = {finding.code for finding in _project_preserving(missing).findings}
+    missing_codes = {
+        finding.code for finding in project_mvau_source(missing, NODE_ID, _context()).findings
+    }
     assert "mvau-source-weight-initializer-missing" in missing_codes
     assert "mvau-source-threshold-initializer-missing" in missing_codes
 
@@ -313,28 +199,17 @@ def test_missing_initializers_unknown_datatypes_and_dimensions_are_findings() ->
         item for item in unknown.graph.quantization_annotation if item.tensor_name == "weights"
     )
     annotation.quant_parameter_tensor_names[0].value = "NOT_A_FINN_DATATYPE"
-    unknown_codes = {finding.code for finding in _project_preserving(unknown).findings}
+    unknown_codes = {
+        finding.code for finding in project_mvau_source(unknown, NODE_ID, _context()).findings
+    }
     assert "mvau-source-datatype-unknown" in unknown_codes
 
     inconsistent = _make_mvau_model()
     inconsistent.set_tensor_shape("output", [4, 5])
-    inconsistent_codes = {finding.code for finding in _project_preserving(inconsistent).findings}
+    inconsistent_codes = {
+        finding.code for finding in project_mvau_source(inconsistent, NODE_ID, _context()).findings
+    }
     assert "mvau-source-output-dimensions-inconsistent" in inconsistent_codes
-
-
-def test_unsupported_and_ambiguous_legacy_attributes_are_explicit() -> None:
-    unsupported = _make_mvau_model(mem_mode="dynamic")
-    codes = {finding.code for finding in _project_preserving(unsupported).findings}
-    assert "mvau-source-delivery-mode-unsupported" in codes
-
-    ambiguous = _make_mvau_model(
-        op_type="MVAU_hls",
-        mem_mode="internal_embedded",
-        resource_type="auto",
-    )
-    projection = _project_preserving(ambiguous)
-    assert {finding.code for finding in projection.findings} == {"mvau-legacy-resource-ambiguous"}
-    assert LEGACY_HLS_PATHS.resource not in projection.imported_assignments
 
 
 def test_saved_choices_reconstitute_identically_in_a_fresh_process(tmp_path: Path) -> None:
