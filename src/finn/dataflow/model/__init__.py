@@ -45,6 +45,9 @@ _LAZY_EXPORTS.update(
         )
     }
 )
+_LAZY_EXPORTS.update(
+    {name: ("finn.dataflow.model.dotp_axi", name) for name in ("DspBlock", "DotpAxiKernel")}
+)
 
 
 def __getattr__(name: str) -> object:
@@ -62,8 +65,10 @@ __all__ = [
     "Constraint",
     "ConstraintGroup",
     "Decision",
+    "DspBlock",
     "Derived",
     "Domain",
+    "DotpAxiKernel",
     "Input",
     "Kernel",
     "Parameter",
