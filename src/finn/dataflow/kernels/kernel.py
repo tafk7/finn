@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, cast
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design import (
+    Absent,
     Answer,
     Decided,
     DependencyKind,
@@ -781,11 +782,10 @@ def _coverage_findings(
 ) -> list[Finding]:
     """Evaluate the Kernel's own coverage conditions.
 
-    Two ways to be refused, and both mean the same thing.  ``False`` is the
-    flat answer; ``Absent`` is what ``reject(...)`` produces, which is how an
-    author says no *with a reason*.  A rejection's own findings are carried
-    through -- replacing "the fused core stops at 8" with "does not cover this
-    point" would throw away the only part anyone can act on.
+    Two ways to be refused, and both mean the same thing. ``False`` is the flat
+    answer; a rejecting ``Absent`` is what ``reject(...)`` produces, which is
+    how an author says no *with a reason*. Ordinary non-rejecting absence is
+    non-applicability. A rejection's own findings are carried through.
     """
 
     try:
@@ -799,15 +799,9 @@ def _coverage_findings(
             )
         ]
     findings: list[Finding] = []
-    refused: list[QualifiedPath] = []
+    refused = list(assessment.refused)
     for path, answer in assessment.answers.items():
-        if isinstance(answer, Decided):
-            if answer.value is False:
-                refused.append(path)
-        elif isinstance(answer, Unresolved):
-            findings.extend(answer.findings)
-        else:
-            refused.append(path)
+        if isinstance(answer, Unresolved) or (isinstance(answer, Absent) and answer.is_rejection):
             findings.extend(answer.findings)
     if refused:
         findings.append(

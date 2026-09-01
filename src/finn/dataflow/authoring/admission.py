@@ -25,7 +25,6 @@ from finn.dataflow.design import (
     Finding,
     QualifiedPath,
     RequestError,
-    Unresolved,
 )
 
 
@@ -49,6 +48,7 @@ class PlacementAdmission:
     placement: str
     verdict: AdmissionVerdict
     candidates: tuple[CandidateAdmission, ...]
+    findings: tuple[Finding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,36 +187,34 @@ def _candidate_admission(
             deferred,
         )
     assessment = engine.evaluate_constraints(trial, graph_constraints)
-    findings: list[Finding] = []
-    unresolved = False
-    for answer in assessment.answers.values():
-        if isinstance(answer, Decided):
-            if answer.value is True:
-                continue
-            return CandidateAdmission(
-                candidate_id,
-                AdmissionVerdict.REJECTED,
-                graph_constraints,
-                deferred,
-                tuple(findings),
-            )
-        findings.extend(answer.findings)
-        if isinstance(answer, Unresolved):
-            unresolved = True
-            continue
+    findings = tuple(
+        finding
+        for answer in assessment.answers.values()
+        if not isinstance(answer, Decided)
+        for finding in answer.findings
+    )
+    if assessment.refused:
         return CandidateAdmission(
             candidate_id,
             AdmissionVerdict.REJECTED,
             graph_constraints,
             deferred,
-            tuple(findings),
+            findings,
+        )
+    if assessment.verdict is None:
+        return CandidateAdmission(
+            candidate_id,
+            AdmissionVerdict.UNRESOLVED,
+            graph_constraints,
+            deferred,
+            findings,
         )
     return CandidateAdmission(
         candidate_id,
-        AdmissionVerdict.UNRESOLVED if unresolved else AdmissionVerdict.ADMITTED,
+        AdmissionVerdict.ADMITTED,
         graph_constraints,
         deferred,
-        tuple(findings),
+        findings,
     )
 
 
@@ -230,6 +228,13 @@ def _placement_admission(
 ) -> PlacementAdmission | None:
     selected = engine.query_property(point, placement.selected_kernel.path)
     if isinstance(selected, Absent):
+        if selected.is_rejection:
+            return PlacementAdmission(
+                placement.name,
+                AdmissionVerdict.REJECTED,
+                (),
+                selected.findings,
+            )
         return None
     candidates = tuple(
         _candidate_admission(
@@ -350,6 +355,8 @@ def resolved_physical_feasibility(
     for placement in selected_design.value.placements:
         selected = engine.query_property(point, placement.selected_kernel.path)
         if isinstance(selected, Absent):
+            if selected.is_rejection:
+                return ResolvedPhysicalFeasibility(False, selected.findings)
             continue
         if not isinstance(selected, Decided):
             findings.extend(selected.findings)
@@ -360,16 +367,16 @@ def resolved_physical_feasibility(
             return ResolvedPhysicalFeasibility(False, tuple(findings))
         candidate = placement.candidate(selection.kernel_id)
         assessment = engine.evaluate_constraints(point, candidate.coverage_constraints)
-        for answer in assessment.answers.values():
-            if isinstance(answer, Decided):
-                if answer.value is True:
-                    continue
-                return ResolvedPhysicalFeasibility(False, tuple(findings))
-            findings.extend(answer.findings)
-            if isinstance(answer, Unresolved):
-                unresolved = True
-                continue
+        findings.extend(
+            finding
+            for answer in assessment.answers.values()
+            if not isinstance(answer, Decided)
+            for finding in answer.findings
+        )
+        if assessment.refused:
             return ResolvedPhysicalFeasibility(False, tuple(findings))
+        if assessment.verdict is None:
+            unresolved = True
     return ResolvedPhysicalFeasibility(None if unresolved else True, tuple(findings))
 
 

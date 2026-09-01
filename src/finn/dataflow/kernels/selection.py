@@ -242,12 +242,7 @@ class KernelCandidateSelection:
                     continue
                 trial = result.point
             assessment = engine.evaluate_constraints(trial, kernel.coverage_constraints)
-            refused = any(
-                not isinstance(answer, Unresolved)
-                and not (isinstance(answer, Decided) and answer.value is True)
-                for answer in assessment.answers.values()
-            )
-            if not refused:
+            if not assessment.refused:
                 supported.append(kernel.id)
         return tuple(supported)
 

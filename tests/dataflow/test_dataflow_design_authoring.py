@@ -22,8 +22,15 @@ from finn.dataflow.authoring import (
     declare_dataflow_op_authoring,
     divisors_of,
     finite,
+    reject,
+    unresolved,
 )
-from finn.dataflow.authoring.admission import AdmissionVerdict, graph_stage_build_admission
+from finn.dataflow.authoring.admission import (
+    AdmissionVerdict,
+    graph_stage_build_admission,
+    resolved_physical_feasibility,
+)
+from finn.dataflow.authoring.scope import predicate
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.authoring.design import (
     DataflowDesign,
@@ -52,15 +59,21 @@ from finn.dataflow.design import (
     DesignPoint,
     DesignSpaceSpec,
     Engine,
+    Finding,
+    FindingKind,
     QualifiedPath,
     Unresolved,
 )
+from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, NetworkRef
 from finn.dataflow.kernels import (
     BoundRegion,
     KernelScope,
     Kernel,
     PhysicalComponent,
+    bind_kernel,
+    bound_regions,
 )
+from finn.dataflow.kernels.selection import KernelCandidateSelection
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -420,6 +433,130 @@ class GraphGuardDesign(DataflowDesign):
             inputs=KernelInputs(
                 (compute,),
                 graph_admitted=design.inputs.graph_admitted,
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class CoverageAnswerInputs:
+    extent: Ref[int]
+    answer: Ref[str]
+
+
+@dataclass(frozen=True)
+class CoverageKernelInputs:
+    node: DesignNode
+    answer: Ref[str]
+
+
+def _coverage_answer(answer: str) -> object:
+    if answer == "true":
+        return True
+    if answer == "false":
+        return False
+    if answer == "rejecting_absent":
+        return reject("matrix-coverage-rejected", "the forcing Kernel refuses this point")
+    if answer == "limitation_absent":
+        return Absent(
+            (
+                Finding(
+                    FindingKind.LIMITATION,
+                    "matrix-coverage-inapplicable-limitation",
+                    QualifiedPath("test.coverage.matrix"),
+                    "a required upstream declaration is inactive",
+                ),
+            )
+        )
+    if answer == "unresolved":
+        return unresolved("matrix-coverage-unresolved", "coverage information is missing")
+    raise AssertionError(f"unexpected coverage forcing answer {answer!r}")
+
+
+def _coverage_applies(answer: str) -> bool:
+    return answer != "absent"
+
+
+class CoverageAnswerKernel(Kernel):
+    id = "coverage_answer"
+
+    @classmethod
+    def define_design(cls, design: KernelScope[CoverageKernelInputs]) -> None:
+        inputs = design.inputs
+        design.covers_region(
+            inputs.node.role,
+            region=inputs.node.region,
+            computation=inputs.node.computation,
+            implements=COPY,
+        )
+        design.coverage_constraint(
+            "answer",
+            dependencies={"answer": inputs.answer},
+            evaluate=_coverage_answer,
+            applies_if=predicate(
+                inputs.answer.path,
+                {"answer": inputs.answer},
+                _coverage_applies,
+            ),
+        )
+
+    @classmethod
+    def elaborate(cls, binding: Kernel) -> tuple[PhysicalComponent, ...]:
+        return (PhysicalComponent("coverage_answer", "synthetic.coverage_answer"),)
+
+
+class CoverageAnswerAlternativeKernel(CoverageAnswerKernel):
+    id = "coverage_answer_alternative"
+
+
+class CoverageAnswerDesign(DataflowDesign):
+    id = "coverage_answer"
+
+    @classmethod
+    def define(cls, design: DataflowDesignScope[CoverageAnswerInputs]) -> None:
+        node = design.region(
+            "unit",
+            node_id="unit",
+            dependencies={"extent": design.inputs.extent},
+            evaluate=lambda extent: _region(extent, "coverage"),
+            computation=COPY,
+        )
+        design.singleton_network(node)
+        design.kernels(
+            "unit",
+            covers=(node,),
+            candidates=(CoverageAnswerKernel, CoverageAnswerAlternativeKernel),
+            inputs=CoverageKernelInputs(node, design.inputs.answer),
+        )
+
+
+def _placement_applies(answer: str) -> object:
+    if answer == "reject":
+        return reject("matrix-placement-rejected", "the placement is refused")
+    return answer == "active"
+
+
+class PlacementAnswerDesign(DataflowDesign):
+    id = "placement_answer"
+
+    @classmethod
+    def define(cls, design: DataflowDesignScope[CoverageAnswerInputs]) -> None:
+        node = design.region(
+            "unit",
+            node_id="unit",
+            dependencies={"extent": design.inputs.extent},
+            evaluate=lambda extent: _region(extent, "placement"),
+            computation=COPY,
+        )
+        design.singleton_network(node)
+        design.kernels(
+            "unit",
+            covers=(node,),
+            candidates=(DirectKernel,),
+            inputs=KernelInputs((node,)),
+            applies_if=predicate(
+                design.inputs.answer.path,
+                {"answer": design.inputs.answer},
+                _placement_applies,
             ),
         )
 
@@ -1106,6 +1243,14 @@ def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> 
         dependencies={},
         evaluate=lambda: "synthetic",
     )
+    selected_result = operation.derived(
+        "result",
+        DATAFLOW_OP_RESULT_SEMANTICS,
+        dependencies={"network": selected_network, "association": source_association},
+        evaluate=lambda network, association: NetworkRef(
+            "synthetic", cast(DataflowNetwork, network), association
+        ),
+    )
     structurally_valid = operation.constraint(
         "structurally_valid",
         dependencies={"network": selected_network},
@@ -1115,9 +1260,9 @@ def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> 
     authored = declare_dataflow_op_authoring(
         inventory,
         operation,
-        result=cast("Ref[object]", selected_network),
+        result=cast("Ref[NetworkRef]", selected_result),
         source_association=cast("Ref[object]", source_association),
-        structural_properties=(selected_network, source_association),
+        structural_properties=(selected_network, source_association, selected_result),
         structural_constraints=(structurally_valid,),
         structural_constraint_set="synthetic_structural",
         feasibility_constraint_set="synthetic_feasibility",
@@ -1125,7 +1270,7 @@ def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> 
         artifact_readiness_profile="synthetic_artifacts",
     )
 
-    assert authored.result is selected_network
+    assert authored.result is selected_result
     assert authored.source_association is source_association
     constraint_set = next(
         item
@@ -1188,6 +1333,117 @@ def test_graph_admission_distinguishes_missing_graph_facts_from_rejection() -> N
     assert rejected.trials[0].placements[0].verdict is AdmissionVerdict.REJECTED
     assert admitted.admitted_designs == (GraphGuardDesign.id,)
     assert admitted.trials[0].placements[0].verdict is AdmissionVerdict.ADMITTED
+
+
+def test_coverage_answer_reduction_is_consistent_across_every_kernel_path() -> None:
+    expected = {
+        "true": (AdmissionVerdict.ADMITTED, True, True),
+        "false": (AdmissionVerdict.REJECTED, False, False),
+        "rejecting_absent": (AdmissionVerdict.REJECTED, False, False),
+        "absent": (AdmissionVerdict.ADMITTED, True, True),
+        "limitation_absent": (AdmissionVerdict.ADMITTED, True, True),
+        "unresolved": (AdmissionVerdict.UNRESOLVED, True, None),
+    }
+    for answer_kind, (graph_verdict, candidate_retained, feasibility_verdict) in expected.items():
+        operation = OpDesign("coverage_matrix", problem_namespace="coverage_matrix")
+        inputs = CoverageAnswerInputs(
+            operation.graph_fact("extent", int),
+            operation.graph_fact("answer", str),
+        )
+        inventory = declare_dataflow_design_inventory(
+            "coverage_matrix",
+            (DataflowDesignEntry(CoverageAnswerDesign, inputs),),
+            shared_specs=(operation.spec(),),
+        )
+        engine = Engine()
+        point = engine.start(
+            engine.validate(inventory.specification),
+            {inputs.extent.path: 4, inputs.answer.path: answer_kind},
+        )
+        graph = graph_stage_build_admission(
+            engine,
+            point,
+            inventory,
+            operation.provenance(),
+        )
+        trial = graph.trials[0]
+        assert trial.verdict is graph_verdict, answer_kind
+
+        declaration = inventory.declaration(CoverageAnswerDesign.id)
+        placement = declaration.placement("unit")
+        assert placement.kernel_choice is not None
+        selection = KernelCandidateSelection(
+            placement.kernel_choice.path.value.removesuffix(".hardware_kernel"),
+            placement.candidates,
+        )
+        retained = selection.supported_kernels(engine, point)
+        assert (CoverageAnswerKernel.id in retained) is candidate_retained, answer_kind
+
+        committed = engine.commit_assignments(
+            point,
+            {placement.kernel_choice.path: CoverageAnswerKernel.id},
+        ).point
+        feasibility = resolved_physical_feasibility(engine, committed, inventory)
+        assert feasibility.verdict is feasibility_verdict, answer_kind
+
+        network_answer = engine.query_property(committed, declaration.network.path)
+        assert isinstance(network_answer, Decided)
+        network = cast(DataflowNetwork, network_answer.value)
+        binding = bind_kernel(
+            engine,
+            placement.candidate(CoverageAnswerKernel.id),
+            committed,
+            bound_regions((("unit", "unit", network.node("unit").region),)),
+        )
+        assert isinstance(binding, Decided) is (feasibility_verdict is True), answer_kind
+
+        candidate = trial.placements[0].candidates[0]
+        if answer_kind == "limitation_absent":
+            assert {finding.code for finding in candidate.findings} == {
+                "matrix-coverage-inapplicable-limitation"
+            }
+        if answer_kind == "rejecting_absent":
+            assert {finding.code for finding in candidate.findings} == {"matrix-coverage-rejected"}
+
+
+def test_absent_placement_selection_distinguishes_inactive_from_rejected() -> None:
+    operation = OpDesign("placement_matrix", problem_namespace="placement_matrix")
+    inputs = CoverageAnswerInputs(
+        operation.graph_fact("extent", int),
+        operation.graph_fact("answer", str),
+    )
+    inventory = declare_dataflow_design_inventory(
+        "placement_matrix",
+        (DataflowDesignEntry(PlacementAnswerDesign, inputs),),
+        shared_specs=(operation.spec(),),
+    )
+    engine = Engine()
+    space = engine.validate(inventory.specification)
+
+    inactive_point = engine.start(
+        space,
+        {inputs.extent.path: 4, inputs.answer.path: "inactive"},
+    )
+    inactive = graph_stage_build_admission(
+        engine, inactive_point, inventory, operation.provenance()
+    )
+    assert inactive.trials[0].placements == ()
+    assert resolved_physical_feasibility(engine, inactive_point, inventory).verdict is True
+
+    rejected_point = engine.start(
+        space,
+        {inputs.extent.path: 4, inputs.answer.path: "reject"},
+    )
+    rejected = graph_stage_build_admission(
+        engine, rejected_point, inventory, operation.provenance()
+    )
+    assert rejected.trials[0].placements[0].verdict is AdmissionVerdict.REJECTED
+    assert {finding.code for finding in rejected.trials[0].placements[0].findings} == {
+        "matrix-placement-rejected"
+    }
+    feasibility = resolved_physical_feasibility(engine, rejected_point, inventory)
+    assert feasibility.verdict is False
+    assert {finding.code for finding in feasibility.findings} == {"matrix-placement-rejected"}
 
 
 def test_candidate_membership_alone_controls_build_admission() -> None:

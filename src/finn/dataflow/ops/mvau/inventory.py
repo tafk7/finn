@@ -290,7 +290,7 @@ def declare_mvau_design_inventory(
     authoring = declare_dataflow_op_authoring(
         inventory,
         operation,
-        result=cast("Ref[object]", result),
+        result=result,
         source_association=cast("Ref[object]", source_association),
         structural_properties=(network, network_validation, source_association, result),
         structural_constraints=(network_valid,),

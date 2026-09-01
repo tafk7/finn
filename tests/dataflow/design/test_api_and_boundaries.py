@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import ast
 from importlib import import_module
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import finn.dataflow.design as design
+import pytest
 from finn.dataflow.testing import (
     assert_fresh_import_avoids,
     assert_no_raw_declaration_construction,
@@ -181,6 +184,34 @@ def test_authoring_implementation_responsibilities_are_physically_split() -> Non
     assert authoring.DataflowDesign.__module__ == "finn.dataflow.authoring.design"
     assert authoring.InputSupplyDeclaration.__module__ == "finn.dataflow.authoring.input_supply"
     assert authoring.DataflowDesignInventory.__module__ == "finn.dataflow.authoring.inventory"
+
+
+def test_region_result_is_rejected_by_static_operation_authoring_type() -> None:
+    mypy = shutil.which("mypy")
+    if mypy is None:
+        pytest.skip("mypy is not installed in this test environment")
+    root = Path(__file__).parents[3]
+    fixture = root / "tests" / "dataflow" / "typing" / "invalid_region_result.py"
+    environment = dict(os.environ)
+    environment["MYPYPATH"] = str(root / "src")
+    completed = subprocess.run(
+        [
+            mypy,
+            "--no-incremental",
+            "--strict",
+            "--explicit-package-bases",
+            str(fixture),
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert 'Argument "result"' in completed.stdout
+    assert "Ref[DataflowRegion]" in completed.stdout
+    assert "Ref[NetworkRef]" in completed.stdout
 
 
 def test_private_engine_has_no_finn_or_region_imports() -> None:

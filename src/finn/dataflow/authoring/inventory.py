@@ -49,6 +49,7 @@ from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
 from finn.dataflow.kernels.kernel import BoundRegion, Kernel, bind_kernel, check_declared_references
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
+from finn.dataflow.resolution import NetworkRef
 from finn.dataflow.spec_algebra import assemble_specs, duplicate_values, gate_spec
 
 
@@ -543,7 +544,7 @@ class DataflowOpAuthoring:
     """Compiled operation declarations plus their typed runtime handles."""
 
     specification: DesignSpaceSpec
-    result: Ref[object]
+    result: Ref[NetworkRef]
     source_association: Ref[object]
     selection_constraint_set: str | None
     structural_readiness_profile: str | None
@@ -556,7 +557,7 @@ def declare_dataflow_op_authoring(
     inventory: DataflowDesignInventory,
     operation: Scope,
     *,
-    result: Ref[object],
+    result: Ref[NetworkRef],
     source_association: Ref[object],
     structural_properties: Sequence[Ref[object]],
     structural_constraints: Sequence[ConstraintRef],
