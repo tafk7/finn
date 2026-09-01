@@ -47,7 +47,7 @@
 #   docker buildx bake -f docker-bake.hcl finn-xrt
 #   docker/finn-sbx build
 #
-# 407 lines on `dev`, 306 now. The point is not the count -- it is that this
+# 407 lines on `dev`, ~350 now. The point is not the count -- it is that this
 # script derives no host facts. The mount defects that started this work were
 # all one failure, two code paths deriving the same fact and drifting, and a
 # script that derives nothing cannot reproduce it. See docs/containerization.md.
@@ -72,18 +72,9 @@ cd "$SCRIPTPATH" || exit 1
 # fallback below only applies to a DEFAULT, never to an explicit request.
 FINN_DOCKER_TARGET_EXPLICIT="${FINN_DOCKER_TARGET+yes}"
 
-# `build`, for the LEGACY entry point specifically.
-#
-# The three lanes have different right answers here and it is worth being
-# explicit about why they differ rather than making them agree:
-#
-#   compose / bake   default `dev`. A new contributor or an agent should get a
-#                    working environment with no toolchain, no licence and no
-#                    configuration.
-#   run-docker.sh    default `build`. Anyone typing this has been running FINN
-#                    for years and expects Vivado and Vitis HLS to be present.
-#                    Silently handing them the Python-only tier would look like
-#                    a broken install.
+# `build` as the nominal default, but see the `auto` block below: an
+# unspecified tier is resolved against the host, so this only decides what an
+# EXPLICIT request without a value would mean.
 #
 # NOT build-xrt, which was the historic default. That was Jenkins history: the
 # widest-exposure tier -- XRT, the platform repository, the largest image -- for
@@ -106,9 +97,6 @@ FINN_DOCKER_TARGET_EXPLICIT="${FINN_DOCKER_TARGET+yes}"
 # and creates it; this script had a fifth, different default
 # (/tmp/finn_dev_$USER) for the same question.
 
-# The build TARGET may be sbx-qualified; the TIER never is. Every capability
-# decision is a property of the tier, so `dev` means the same thing on both
-# backends.
 # Translate a legacy target name onto the current three axes.
 #
 # There used to be six images: {dev,build,build-xrt} x {generic,sbx}. There is
@@ -141,22 +129,33 @@ finn_resolve_axes () {
 
 finn_resolve_axes "$FINN_DOCKER_TARGET"
 
-# Degrade to `dev` rather than failing when the default tier needs a toolchain
-# that is not configured.
+# An UNSPECIFIED tier becomes `auto`, and finn-env decides.
 #
-# finn-env is strict: `inspect --tier build` with no FINN_XILINX_PATH is a hard
-# error, which is right for a resolver. But this script defaults to `build`, and
-# historically it warned and carried on when the Xilinx variables were unset --
-# so making the DEFAULT fail would break anyone doing Python-only work who never
-# had Vivado configured. An explicit FINN_DOCKER_TARGET=build still errors, as
-# it should: that is a request, not a default.
-if [ "$FINN_TIER" != "dev" ] && [ -z "${FINN_DOCKER_TARGET_EXPLICIT:-}" ] \
-   && [ -z "${FINN_XILINX_PATH:-}" ]; then
-    yecho "FINN_XILINX_PATH is not set; falling back to the dev tier."
-    yecho "Vivado, Vitis, HLS and rtlsim are unavailable. Everything else works."
-    yecho "Set FINN_XILINX_PATH and FINN_XILINX_VERSION for the build tier."
-    FINN_DOCKER_TARGET="dev"
-    FINN_TIER="dev"
+# This script used to carry the degrade itself: if the default tier is `build`
+# and FINN_XILINX_PATH is unset, fall back to `dev`. That made a launcher the
+# place where a host fact was interpreted, which is the shape of the four
+# defects this redesign exists to prevent. `--tier auto` moves the same rule
+# into the resolver, where every lane gets it.
+#
+# An EXPLICIT FINN_DOCKER_TARGET=build still hard-errors without a toolchain, as
+# it should: that is a request, not a default, and silently narrowing it is how
+# a CI shard passes without testing anything.
+if [ -z "${FINN_DOCKER_TARGET_EXPLICIT:-}" ]; then
+    FINN_TIER="auto"
+fi
+
+# Resolve `auto` to a concrete tier ONCE, and pass the concrete value to every
+# later call. Not for speed -- so that finn-env's "no FINN_XILINX_PATH" warning
+# is printed once per invocation rather than once per call.
+if [ "$FINN_TIER" = "auto" ]; then
+    # stderr is NOT suppressed: finn-env's "no FINN_XILINX_PATH, resolving to
+    # dev" warning is the whole user-visible signal that a degrade happened.
+    FINN_TIER=$(./docker/finn-env inspect --tier auto --format json \
+                | python3 -c 'import json,sys;print(json.load(sys.stdin)["tier"])' 2>/dev/null) \
+        || FINN_TIER=""
+    if [ -z "$FINN_TIER" ]; then
+        recho "finn-env could not resolve a tier"; exit 3
+    fi
 fi
 
 # ----------------------------------------------------------------------------
@@ -247,7 +246,7 @@ esac
 # docker/finn-apptainer can, so the variable is an override rather than the only
 # way in.
 if [ -n "$FINN_SINGULARITY" ]; then
-    exec "$SCRIPTPATH/docker/finn-apptainer" "$FINN_TIER" -- "$@"
+    exec "$SCRIPTPATH/docker/finn-apptainer" -- "$@"
 fi
 
 # ----------------------------------------------------------------------------

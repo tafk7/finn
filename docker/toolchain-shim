@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Transparent shim for a mounted Xilinx vendor tool.
 #
 # Installed into /usr/local/lib/finn/toolchain-bin and symlinked once per tool
@@ -31,39 +31,42 @@
 # Two hazards, both of which have bitten:
 #
 #   1. Re-sourcing on every nested call is slow and can duplicate PATH entries.
-#      FINN_ENV_APPLIED short-circuits that.
+#      FINN_ENV_APPLIED short-circuits that; finn-toolchain.sh sets it.
 #   2. If the shim directory is still on PATH when we dispatch, `command -v`
 #      finds the shim again and we recurse until the process dies. So the
 #      real executable is resolved with the shim directory REMOVED from PATH,
 #      and never by re-running a bare name.
+#
+# This used to dispatch through `finn-env exec`, which spawned Python (85 ms)
+# to spawn a bash to source the scripts and diff the environment. It now sources
+# the same shell file every other path sources.
+#
+# BASH, not sh. AMD's settings64.sh calls the `source` builtin, which dash does
+# not have. Under /bin/sh it fails with "source: not found" and, because each
+# source is `|| true`, it fails SILENTLY -- PATH is untouched and this script
+# then reports 127 for a tool that is plainly installed.
 
 set -e
 
 SHIM_DIR=/usr/local/lib/finn/toolchain-bin
 tool=$(basename "$0")
 
-# Resolve the real tool with the shim directory taken out of PATH, so we cannot
-# find ourselves. Done before any sourcing, because sourcing settings64.sh is
-# what puts the real tool on PATH in the first place.
-strip_shim_dir () {
-    printf '%s' "$1" | tr ':' '\n' | grep -vxF "$SHIM_DIR" | paste -sd: -
-}
-
-if [ "${FINN_ENV_APPLIED:-}" = "1" ]; then
-    # Environment already applied by an outer finn-env or BASH_ENV: just
-    # dispatch. This is the nested-call path and must stay cheap.
-    PATH=$(strip_shim_dir "$PATH")
-    export PATH
-    real=$(command -v "$tool" 2>/dev/null) || real=""
-    if [ -z "$real" ]; then
-        echo "finn: $tool not found after the toolchain was configured." >&2
-        echo "finn: the Xilinx install may not be mounted in this container." >&2
-        exit 127
-    fi
-    exec "$real" "$@"
+# Apply the toolchain unless an outer shell already did. Sourcing is 7 ms and
+# the file is idempotent, so this is the cheap path either way.
+if [ "${FINN_ENV_APPLIED:-}" != "1" ] && [ -r /etc/finn-toolchain.sh ]; then
+    . /etc/finn-toolchain.sh 2>/dev/null || true
 fi
 
-# Cold path: source the toolchain, then dispatch. finn-env exec sets
-# FINN_ENV_APPLIED, so the re-entry above handles the actual lookup and there is
-# exactly one place that resolves the binary.
-exec finn-env exec "$tool" "$@"
+# Resolve the real tool with the shim directory taken out of PATH, so we cannot
+# find ourselves.
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$SHIM_DIR" | paste -sd: -)
+export PATH
+
+real=$(command -v "$tool" 2>/dev/null) || real=""
+if [ -z "$real" ]; then
+    echo "finn: $tool not found after the toolchain was configured." >&2
+    echo "finn: the Xilinx install may not be mounted in this container," >&2
+    echo "finn: or XILINX_VIVADO/XILINX_VITIS/XILINX_HLS may be unset." >&2
+    exit 127
+fi
+exec "$real" "$@"

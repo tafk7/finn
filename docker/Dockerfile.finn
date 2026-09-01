@@ -399,9 +399,14 @@ RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
 # agree -- so adding a tool in one place cannot silently skip the other.
 COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
+# The toolchain application itself: pure shell, sourced by all three delivery
+# mechanisms and by the entrypoint. It used to be `finn-env print --format sh`,
+# which spawned Python to spawn a bash to source the same scripts and diff the
+# result -- 124 ms against 7 ms for sourcing directly, measured in this image.
+COPY docker/finn-toolchain.sh /etc/finn-toolchain.sh
 RUN set -eu; \
     chmod 755 /usr/local/lib/finn/toolchain-shim; \
-    chmod 644 /etc/finn-bashenv.sh; \
+    chmod 644 /etc/finn-bashenv.sh /etc/finn-toolchain.sh; \
     mkdir -p /usr/local/lib/finn/toolchain-bin; \
     for t in $(python -c 'import runpy,sys; \
         m=runpy.run_path("/usr/local/bin/finn-env"); \

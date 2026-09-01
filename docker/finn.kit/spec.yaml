@@ -34,9 +34,15 @@ setup:
     - command: ["sh", "-c", "mkdir -p /tmp/finn_build && chmod 1777 /tmp/finn_build"]
       user: "0"
 
-    # Resolve the toolchain once at startup, so the first shell does not pay
-    # for it. This is an OPTIMISATION -- BASH_ENV and the shims are what make
-    # correctness work. It delegates to finn-env rather than re-deriving.
+    # Make every sbx session source the toolchain, including ones that get no
+    # BASH_ENV. /etc/finn-toolchain.sh is BAKED into the image, so there is
+    # nothing to generate here -- this only appends the source line to the
+    # sbx-managed file.
+    #
+    # It used to run `finn-env print --format sh` and write the RESULT to
+    # /etc/finn-toolchain.sh. That generated file is now a static one, because
+    # sourcing the settings scripts (7 ms) turned out to be far cheaper than
+    # extracting their effect (124 ms), so there is no reason to precompute.
     #
     # Three dispatcher constraints, each learned by breaking it:
     #   - a non-zero exit STOPS the chain, silently disabling every command
@@ -48,18 +54,9 @@ setup:
         - bash
         - -c
         - |
-          command -v finn-env >/dev/null 2>&1 || exit 0
-          finn-env print --format sh > /etc/finn-toolchain.sh.$$ 2>/dev/null || {
-            rm -f /etc/finn-toolchain.sh.$$; exit 0
-          }
-          if [ -s /etc/finn-toolchain.sh.$$ ]; then
-            mv -f /etc/finn-toolchain.sh.$$ /etc/finn-toolchain.sh
-            chmod 0644 /etc/finn-toolchain.sh
-            grep -q finn-toolchain /etc/sandbox-persistent.sh 2>/dev/null \
-              || echo ". /etc/finn-toolchain.sh" >> /etc/sandbox-persistent.sh
-          else
-            rm -f /etc/finn-toolchain.sh.$$
-          fi
+          [ -r /etc/finn-toolchain.sh ] || exit 0
+          grep -q finn-toolchain /etc/sandbox-persistent.sh 2>/dev/null \
+            || echo ". /etc/finn-toolchain.sh" >> /etc/sandbox-persistent.sh
           # Explicit success: the dispatcher stops the whole chain otherwise.
           exit 0
       user: "0"

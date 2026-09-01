@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""FINN's single environment resolver, for both sides of the container boundary.
+"""FINN's single host-fact resolver.
 
-Three subcommands, one body of resolution logic:
+    finn-env inspect --format json|sh   Emits the mounts, egress grants,
+                                        environment and policy a launcher needs.
 
-    finn-env inspect --format json      HOST side, before launch. Emits the
-                                        mounts, egress grants, environment and
-                                        policy a launcher needs.
-    finn-env print --format sh|json|env0
-                                        CONTAINER side. Emits the resolved
-                                        Xilinx toolchain environment.
-    finn-env exec <cmd> [args...]       CONTAINER side. Applies that environment
-                                        and execs.
+HOST SIDE ONLY
+--------------
+This program runs before launch and answers "what does this machine have".
+Applying the toolchain INSIDE a container is docker/finn-toolchain.sh, a
+sourceable shell file with no Python in it.
 
-WHY ONE PROGRAM AND NOT TWO
----------------------------
+That split is new. This file used to carry both, through `finn-env print` and
+`finn-env exec`, which spawned Python (85 ms) to spawn a bash to source the
+settings scripts and diff the result against an allowlist -- 124 ms to avoid
+7 ms of sourcing, with a cache to avoid the 124 ms. Measured, not assumed. The
+container side is now 7 ms of shell.
+
+The layout probe stays HERE, and only here: finn-toolchain.sh is handed
+XILINX_VIVADO and friends as process environment and probes nothing. One
+resolver, still.
+
+WHY ONE RESOLVER
+----------------
 The host view and the container view must agree about the same facts - where the
 toolchain is, which licence form is in use, what the workspace path is. When
 those were derived twice, they drifted, and the drift was silent:
@@ -45,7 +53,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 
 # A tier is a GRANT profile, not an image. There is one image; what differs
@@ -104,15 +111,6 @@ DEFAULT_DEV_WORKSPACE_POLICY = "fixed"
 # the shim needs the same toolchain resolution this file already performs.
 SHIMMED_TOOLS = ("vivado", "vitis", "vitis_hls", "vitis-run", "v++",
                  "xelab", "xsim", "xvlog", "xsc", "lmutil", "xsct")
-
-# Variables a sourced settings64.sh is allowed to contribute. An allowlist, not
-# a diff of everything: settings64.sh also exports shell bookkeeping and a
-# handful of variables that are actively harmful to carry into an unrelated
-# process.
-TOOLCHAIN_VARS = ("PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "XILINX_VIVADO",
-                  "XILINX_VITIS", "XILINX_HLS", "XILINX_XRT", "XILINX_SDX",
-                  "XILINX_VIVADO_HLS", "RDI_DATADIR", "PYTHONPATH")
-
 
 def warn(msg):
     print("finn-env: %s" % msg, file=sys.stderr)
@@ -191,6 +189,45 @@ def xilinx_layout(root, version):
     return found
 
 
+def vendor_daemon_port(files):
+    """The pinned FLEXlm vendor-daemon port, if the site pinned one.
+
+    FLEXlm needs TWO connections. lmgrd on the advertised port is a directory
+    service; it hands back a second port where the vendor daemon (xilinxd) does
+    the actual checkout. That second port is EPHEMERAL by default, which is why
+    the egress grant defaults to the whole host.
+
+    It does not have to be ephemeral. A licence admin can pin it:
+
+        DAEMON xilinxd /opt/xilinx/xilinxd port=2101
+
+    When we can see a licence file, read it. When we cannot -- a bare PORT@HOST
+    tells us nothing about the DAEMON line -- FINN_LICENSE_VENDOR_PORT lets the
+    user state it.
+
+    Returns None when unknown, and None means "grant the host", not "guess".
+    """
+    explicit = os.environ.get("FINN_LICENSE_VENDOR_PORT", "").strip()
+    if explicit:
+        if not explicit.isdigit():
+            warn("FINN_LICENSE_VENDOR_PORT=%r is not a port number; ignoring"
+                 % explicit)
+        else:
+            return explicit
+
+    for path in files or ():
+        try:
+            with open(hostpath(path), "r", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        m = re.search(r"^\s*DAEMON\s+\S+.*?\bport\s*=\s*(\d+)", text,
+                      re.IGNORECASE | re.MULTILINE)
+        if m:
+            return m.group(1)
+    return None
+
+
 def classify_license(value):
     """Split a FLEXlm licence variable into server and file entries.
 
@@ -200,12 +237,15 @@ def classify_license(value):
         PORT@HOST     floating server. Nothing to mount; needs TCP egress.
         /path/to.lic  node-locked file. Must be readable inside the container.
 
-    Egress is granted to the HOST, never host:port. FLEXlm uses two
-    connections: lmgrd on the advertised port is a directory service that hands
-    back a second, usually ephemeral, port for the vendor daemon where the
-    checkout actually happens. A port-scoped rule lets `lmutil lmstat` succeed
-    while every real checkout fails with "A valid license was not found" - a
-    thoroughly misleading error for a firewall problem. Do not narrow this.
+    Egress defaults to the whole HOST, because the vendor-daemon port is
+    ephemeral unless the site pinned it -- see vendor_daemon_port(). A
+    port-scoped rule against an unpinned daemon lets `lmutil lmstat` succeed,
+    because lmstat only talks to lmgrd, while every real checkout fails with
+    "A valid license was not found" -- a thoroughly misleading error for a
+    firewall problem.
+
+    So: narrow ONLY when the vendor port is known, and say so out loud when you
+    do. lmstat is not a test of the narrowed rule.
     """
     servers, files = [], []
     for entry in (value or "").split(":"):
@@ -220,8 +260,32 @@ def classify_license(value):
     return servers, files
 
 
+def resolve_tier(tier):
+    """Resolve `auto` to a real tier, here rather than in every launcher.
+
+    `auto` means "build if this machine has a toolchain, dev if it does not".
+    That degrade used to live in run-docker.sh, which made it a fact derived in
+    a launcher -- the exact shape of the four defects this program exists to
+    prevent. It belongs here, once.
+
+    `dev` and `build` stay EXPLICIT requests. An explicit `--tier build` with no
+    toolchain is still a hard error: that is a request, not a default, and
+    silently handing back a narrower environment than the caller asked for is
+    how a CI shard ends up passing without testing anything.
+    """
+    if tier != "auto":
+        return tier
+    root = hostpath(os.environ.get("FINN_XILINX_PATH"))
+    if root and os.path.isdir(root):
+        return "build"
+    warn("no FINN_XILINX_PATH; resolving --tier auto to 'dev'. "
+         "Vivado, Vitis, HLS and rtlsim will be unavailable.")
+    return "dev"
+
+
 def resolve_host(tier, backend):
     """Everything a launcher needs, derived from the host, exactly once."""
+    tier = resolve_tier(tier)
     if tier not in TIERS:
         die("unknown tier %r; expected one of %s" % (tier, ", ".join(TIERS)), 2)
 
@@ -258,6 +322,20 @@ def resolve_host(tier, backend):
         },
         "mounts": [],
         "egress": [],
+        # Is the egress list ENFORCED, or merely declared?
+        #
+        # Only sbx enforces it: it has a policy engine, and `sbx policy allow
+        # network` is what opens each grant. Docker containers have full
+        # outbound network by default and compose adds no restriction, and
+        # Apptainer uses the host's network namespace outright.
+        #
+        # This field exists because the dev tier used to report
+        # `egress: false` on every backend, which was measurably untrue -- a
+        # `docker run` of the dev image reaches pypi.org. Reporting a property
+        # you do not enforce is worse than not claiming it, because a reader
+        # cannot tell the difference and the conformance suite was asserting
+        # the claim rather than the behaviour.
+        "egress_enforcement": "enforced" if backend == "sbx" else "declared",
         "env": {"FINN_ROOT": workspace_target},
     }
 
@@ -327,9 +405,19 @@ def resolve_host(tier, backend):
             continue
         out["env"][var] = value
         servers, files = classify_license(value)
+        # Narrow to two ports when the vendor daemon's port is known, and to
+        # the whole host when it is not. See vendor_daemon_port(). `ports: []`
+        # means host-wide; a launcher must treat it as "no port restriction",
+        # not as "no ports".
+        vendor = vendor_daemon_port(files)
         for server in servers:
-            out["egress"].append({"host": server["host"], "reason": "flexlm",
-                                  "advertised_port": server["advertised_port"]})
+            grant = {"host": server["host"], "reason": "flexlm",
+                     "advertised_port": server["advertised_port"],
+                     "ports": []}
+            if vendor:
+                grant["ports"] = sorted({server["advertised_port"], vendor})
+                grant["vendor_port"] = vendor
+            out["egress"].append(grant)
         for path in files:
             directory = os.path.dirname(hostpath(path))
             if not os.path.isdir(directory):
@@ -348,153 +436,6 @@ def resolve_host(tier, backend):
 
     return out
 
-
-# --------------------------------------------------------------------------
-# Container side.
-# --------------------------------------------------------------------------
-
-# XRT installs to a fixed prefix from its .deb, so unlike Vivado/Vitis it is not
-# passed in from the host: it is distro-specific compiled binaries, which a
-# bind mount from a host on another release would break. Probed rather than
-# required -- it is present only when the image was built with the `xrt` runtime
-# target, and its absence is normal.
-XRT_PREFIX = "/opt/xilinx/xrt"
-
-
-def settings_scripts():
-    """The settings64.sh files present in this container, in source order."""
-    found = []
-    bases = [os.environ.get(v) for v in
-             ("XILINX_VITIS", "VITIS_PATH", "XILINX_VIVADO", "VIVADO_PATH",
-              "XILINX_HLS", "HLS_PATH", "XILINX_XRT")]
-    bases.append(XRT_PREFIX)
-    for base in bases:
-        if not base:
-            continue
-        for name in ("settings64.sh", "setup.sh"):
-            script = os.path.join(base, name)
-            if os.path.isfile(script) and script not in found:
-                found.append(script)
-    return found
-
-
-def finn_library_paths():
-    """LD_LIBRARY_PATH entries FINN needs beyond what settings64.sh provides.
-
-    These lived in the entrypoint, which meant `docker exec` and `sbx exec`
-    sessions ran without them. fpo_v7_1 holds the floating-point operator
-    libraries that HLS-generated code links against; lib/lnx64.o is what
-    finn_xsi needs to load the Vivado simulation kernel.
-    """
-    paths = []
-    vivado = os.environ.get("XILINX_VIVADO") or os.environ.get("VIVADO_PATH")
-    if vivado:
-        paths.append(os.path.join(vivado, "lib", "lnx64.o"))
-    for var in ("XILINX_VITIS", "VITIS_PATH", "XILINX_HLS", "HLS_PATH"):
-        base = os.environ.get(var)
-        if base:
-            paths.append(os.path.join(base, "lnx64", "tools", "fpo_v7_1"))
-    return [p for p in dict.fromkeys(paths) if os.path.isdir(p)]
-
-
-# Path-like variables that must be de-duplicated. See dedupe_paths().
-PATH_VARS = ("PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH")
-
-
-def dedupe_paths(env):
-    """Collapse repeated entries in colon-separated path variables.
-
-    settings64.sh PREPENDS to PATH unconditionally. Applying the toolchain more
-    than once in a process tree -- the entrypoint does it, then the sbx kit's
-    startup command does it again, then a shell might -- therefore grows PATH
-    without bound. It was observed at four copies of the full Xilinx PATH, about
-    3 kB, which is slow to search and makes any diagnostic printing the
-    environment unreadable.
-
-    Order-preserving, first occurrence wins, so the toolchain still shadows the
-    system tools exactly as settings64.sh intended.
-    """
-    for var in PATH_VARS:
-        if var not in env:
-            continue
-        seen, ordered = set(), []
-        for part in env[var].split(":"):
-            if part and part not in seen:
-                seen.add(part)
-                ordered.append(part)
-        env[var] = ":".join(ordered)
-    return env
-
-
-def toolchain_env():
-    """The environment delta from sourcing the mounted toolchain.
-
-    Sources each settings script in one bash and reports the allowlisted
-    variables. Deliberately NOT `set -u`: settings64.sh reads unset variables
-    on several Xilinx releases, and a strict shell aborts partway through,
-    leaving a half-configured PATH that fails much later and elsewhere.
-    """
-    scripts = settings_scripts()
-    env = {}
-
-    if scripts:
-        script = "\n".join(['. %s >/dev/null 2>&1 || true' % s for s in scripts])
-        script += "\nfor v in %s; do eval \"printf '%%s=%%s\\\\0' \\\"\\$v\\\" \\\"\\${$v-}\\\"\"; done" \
-                  % " ".join(TOOLCHAIN_VARS)
-        # BASH_ENV must be cleared for this bash, and FINN_ENV_APPLIED set.
-        #
-        # The image points BASH_ENV at finn-bashenv.sh, which calls
-        # `finn-env print` to configure the shell. So this bash would source
-        # that file, which would run this program, which would spawn a bash,
-        # which would source that file -- forking without bound until the
-        # 120 s timeout fired and every vendor tool reported "not found".
-        # finn-bashenv.sh carries a matching guard; either alone is enough,
-        # and both are cheap.
-        child = dict(os.environ)
-        child.pop("BASH_ENV", None)
-        child["FINN_ENV_APPLIED"] = "1"
-        try:
-            raw = subprocess.run(["bash", "--noprofile", "--norc", "-c", script],
-                                 capture_output=True, timeout=120,
-                                 env=child).stdout
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            warn("could not source the toolchain (%s); "
-                 "vendor tools will not be on PATH" % exc)
-            return {}
-        for record in raw.split(b"\0"):
-            if not record:
-                continue
-            key, _, value = record.decode("utf-8", "replace").partition("=")
-            if value and value != os.environ.get(key, ""):
-                env[key] = value
-
-    # FINN's own library additions, appended after whatever settings64.sh set.
-    extra = finn_library_paths()
-    if extra:
-        current = env.get("LD_LIBRARY_PATH",
-                          os.environ.get("LD_LIBRARY_PATH", ""))
-        parts = [p for p in current.split(":") if p]
-        for path in extra:
-            if path not in parts:
-                parts.append(path)
-        env["LD_LIBRARY_PATH"] = ":".join(parts)
-
-    # NOTE: the FLEXlm/libudev LD_PRELOAD workaround is NOT applied here.
-    #
-    # It is baked as ENV in the `build` stage of docker/Dockerfile.finn, which
-    # moves it from run-time to create-time -- so a bare `docker exec` or
-    # `sbx exec` inherits it without needing any hook. This function used to
-    # probe for it per process, which was doing very little work for a library
-    # that sits at a fixed path in the base image on the only architecture the
-    # FPGA tiers support. LD_PRELOAD is still in TOOLCHAIN_VARS so that whatever
-    # settings64.sh contributes is picked up and de-duplicated against it.
-
-    return dedupe_paths(env)
-
-
-# --------------------------------------------------------------------------
-# Subcommands.
-# --------------------------------------------------------------------------
 
 def shquote(value):
     """Single-quote a value so it survives `eval`.
@@ -573,56 +514,20 @@ def cmd_inspect(args):
     return 0
 
 
-def cmd_print(args):
-    env = toolchain_env()
-    if args.format == "json":
-        json.dump(env, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-    elif args.format == "env0":
-        for key, value in sorted(env.items()):
-            sys.stdout.write("%s=%s\0" % (key, value))
-    else:  # sh
-        for key, value in sorted(env.items()):
-            # Single-quote and escape embedded quotes: a Xilinx path with a
-            # space in it must survive being eval'd by the caller.
-            sys.stdout.write("export %s='%s'\n" % (key, value.replace("'", "'\\''")))
-    return 0
-
-
-def cmd_exec(args):
-    if not args.command:
-        die("exec needs a command", 2)
-    env = dict(os.environ)
-    env.update(toolchain_env())
-    # Idempotence marker, so a shim invoked from an already-configured session
-    # -- or a tool that re-execs itself -- does not re-source.
-    env["FINN_ENV_APPLIED"] = "1"
-    try:
-        os.execvpe(args.command[0], args.command, env)
-    except OSError as exc:
-        die("cannot exec %s: %s" % (args.command[0], exc), 127)
-
-
 def main():
     parser = argparse.ArgumentParser(
         prog="finn-env", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("inspect", help="host-side resolution (JSON)")
-    p.add_argument("--tier", default=os.environ.get("FINN_DOCKER_TARGET", "dev"),
-                   choices=TIERS)
+    # `auto` degrades to dev when the host has no toolchain; dev and build are
+    # explicit requests and an impossible one is an error. See resolve_tier().
+    p.add_argument("--tier", default=os.environ.get("FINN_DOCKER_TARGET", "auto"),
+                   choices=TIERS + ("auto",))
     p.add_argument("--backend", default="docker",
                    choices=("docker", "sbx", "apptainer"))
     p.add_argument("--format", default="json", choices=("json", "sh"))
     p.set_defaults(func=cmd_inspect)
-
-    p = sub.add_parser("print", help="container-side toolchain environment")
-    p.add_argument("--format", default="sh", choices=("sh", "json", "env0"))
-    p.set_defaults(func=cmd_print)
-
-    p = sub.add_parser("exec", help="apply the environment and exec")
-    p.add_argument("command", nargs=argparse.REMAINDER)
-    p.set_defaults(func=cmd_exec)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

@@ -177,18 +177,37 @@ else
     sbx env create "${ENV_FILES[@]}" || { recho "sbx env create failed"; exit 1; }
 fi
 
-# Licence-server egress. Granted to the HOST, never host:port: FLEXlm hands back
-# a second, usually ephemeral, vendor-daemon port after the lmgrd handshake, so
-# a port-scoped rule lets `lmutil lmstat` succeed while every real checkout
-# fails with "A valid license was not found". Do not narrow this.
+# Licence-server egress.
+#
+# Host-wide by default, because FLEXlm needs two connections and the second one
+# -- the vendor daemon, where the checkout actually happens -- is on an
+# ephemeral port that lmgrd hands back after the handshake.
+#
+# finn-env narrows it to two ports when the site PINNED that port
+# (`DAEMON xilinxd ... port=2101` in the licence file, or
+# FINN_LICENSE_VENDOR_PORT). Then, and only then, a port-scoped rule is safe.
+#
+# Both cases announce themselves. A wrong pinned port fails at checkout with
+# "A valid license was not found", which reads as a licensing fault rather than
+# a firewall one -- and `lmutil lmstat` will still SUCCEED, because it only
+# talks to lmgrd. lmstat is not a test of this.
 if [ "$TIER" != "dev" ]; then
-    hosts=$("$REPO/docker/finn-env" inspect --tier "$TIER" --backend sbx 2>/dev/null \
-            | python3 -c 'import json,sys;print(" ".join(g["host"] for g in json.load(sys.stdin)["egress"]))')
-    for host in $hosts; do
-        gecho "Allowing licence egress: $host (plus its vendor daemon)"
-        sbx policy allow network --sandbox "$FINN_SBX_NAME" "$host" >/dev/null 2>&1 \
-            || yecho "could not grant egress to $host; licence checkout will fail"
-    done
+    while IFS=$'\t' read -r host resources; do
+        [ -n "$host" ] || continue
+        if [ "$resources" = "$host" ]; then
+            gecho "Allowing licence egress: $host (all ports; vendor daemon port is not pinned)"
+        else
+            gecho "Allowing licence egress: $resources (vendor daemon port is pinned)"
+        fi
+        sbx policy allow network --sandbox "$FINN_SBX_NAME" "$resources" >/dev/null 2>&1 \
+            || yecho "could not grant egress to $resources; licence checkout will fail"
+    done < <("$REPO/docker/finn-env" inspect --tier "$TIER" --backend sbx 2>/dev/null \
+             | python3 -c '
+import json, sys
+for g in json.load(sys.stdin)["egress"]:
+    host, ports = g["host"], g.get("ports") or []
+    res = ",".join("%s:%s" % (host, p) for p in ports) if ports else host
+    print("%s\t%s" % (host, res))')
 fi
 
 if [ "$#" -gt 0 ]; then

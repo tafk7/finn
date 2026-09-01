@@ -379,17 +379,22 @@ head_ "10. Lane 3: the resolver works on a bare host"
 # that drifted.
 if want 10; then
     if [ "$have_xilinx" = 1 ]; then
-        out=$(./docker/finn-env print --format sh 2>/dev/null)
-        if printf '%s' "$out" | grep -q '^export PATH='; then
-            ok "finn-env resolves a toolchain on the bare host"
+        # The two halves, checked separately: finn-env says WHERE the tools are,
+        # finn-toolchain.sh applies it. The image sources the same second file,
+        # so this covers the bare host and the container with one assertion.
+        out=$(./docker/finn-env inspect --tier build --format sh 2>/dev/null)
+        if printf '%s' "$out" | grep -q '^XILINX_VIVADO='; then
+            ok "finn-env locates the toolchain on the bare host"
         else
-            bad "finn-env produced no PATH on the bare host"
+            bad "finn-env found no XILINX_VIVADO on the bare host"
         fi
-        # The real check: does the resolved environment actually run the tool?
-        if bash -c 'eval "$(./docker/finn-env print --format sh)"; command -v vivado' >/dev/null 2>&1; then
-            ok "vivado is on PATH after sourcing finn-env on the host"
+        # The real check: does applying it actually run the tool?
+        if bash -c 'eval "$(./docker/finn-env inspect --tier build --format sh | sed "s/^/export /")"
+                    . ./docker/finn-toolchain.sh
+                    command -v vivado' >/dev/null 2>&1; then
+            ok "vivado is on PATH after finn-toolchain.sh on the host"
         else
-            bad "vivado is NOT on PATH after sourcing finn-env on the host"
+            bad "vivado is NOT on PATH after finn-toolchain.sh on the host"
         fi
     else
         skip "10: FINN_XILINX_PATH not set"

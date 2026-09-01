@@ -223,8 +223,9 @@ def test_node_locked_license_dir_is_mounted(tmp_path):
     assert data["egress"] == []
 
 
-def test_floating_license_grants_host_not_port(tmp_path):
-    """A port-scoped grant lets lmstat pass and every real checkout fail."""
+def test_floating_license_grants_the_whole_host_when_unpinned(tmp_path):
+    """An unpinned vendor daemon means a port-scoped grant would let lmstat
+    pass -- it only talks to lmgrd -- while every real checkout failed."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     proc = _inspect({"FINN_XILINX_PATH": root,
                      "FINN_XILINX_VERSION": "2025.1",
@@ -232,8 +233,35 @@ def test_floating_license_grants_host_not_port(tmp_path):
                     "build", backend="sbx")
     data = json.loads(proc.stdout)
     assert data["egress"] == [{"host": "licsrv.example", "reason": "flexlm",
-                               "advertised_port": "2100"}]
+                               "advertised_port": "2100", "ports": []}]
     assert not any(m["reason"] == "license-file" for m in data["mounts"])
+
+
+def test_floating_license_narrows_to_two_ports_when_pinned(tmp_path):
+    """Both ports, never just the advertised one: lmgrd hands the checkout to
+    the vendor daemon."""
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    proc = _inspect({"FINN_XILINX_PATH": root,
+                     "FINN_XILINX_VERSION": "2025.1",
+                     "XILINXD_LICENSE_FILE": "2100@licsrv.example",
+                     "FINN_LICENSE_VENDOR_PORT": "2101"},
+                    "build", backend="sbx")
+    data = json.loads(proc.stdout)
+    assert data["egress"][0]["ports"] == ["2100", "2101"]
+    assert data["egress"][0]["vendor_port"] == "2101"
+
+
+def test_egress_enforcement_is_reported_per_backend(tmp_path):
+    """The dev tier used to report egress:false on docker, where a container
+    reaches pypi.org. Claiming a property you do not enforce is worse than not
+    claiming it."""
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    env = {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"}
+    for backend, expected in (("sbx", "enforced"),
+                              ("docker", "declared"),
+                              ("apptainer", "declared")):
+        data = json.loads(_inspect(env, "build", backend=backend).stdout)
+        assert data["egress_enforcement"] == expected, backend
 
 
 def test_missing_xilinx_path_is_an_error(tmp_path):
@@ -319,27 +347,124 @@ def test_sh_format_is_shell_assignments(tmp_path):
 # Idempotence.
 # --------------------------------------------------------------------------
 
-def test_dedupe_paths_collapses_repeats():
+TOOLCHAIN_SH = os.path.join(os.path.dirname(FINN_ENV), "finn-toolchain.sh")
+
+
+def _clean_env(env):
+    """os.environ minus everything finn-toolchain.sh reads, plus `env`.
+
+    Stripping matters: these tests also run INSIDE the container, where
+    XILINX_VIVADO is set and a real settings64.sh would put Vivado's bin on
+    PATH. Without this the dedup assertions compare against the host's
+    toolchain instead of the fixture.
+    """
+    child = dict(os.environ)
+    child.pop("FINN_ENV_APPLIED", None)
+    for key in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS", "XILINX_XRT",
+                "VIVADO_PATH", "VITIS_PATH", "HLS_PATH", "LD_LIBRARY_PATH",
+                "LD_PRELOAD", "PYTHONPATH"):
+        child.pop(key, None)
+    child.update(env)
+    return child
+
+
+def _apply_toolchain(env, probe='printf "%s" "$PATH"'):
+    """Source finn-toolchain.sh with a controlled environment and read a value.
+
+    The dedup used to be finn_env.dedupe_paths(). It is shell now, because
+    sourcing settings64.sh (7 ms) is far cheaper than the Python that existed to
+    extract its effect (124 ms). The tests follow the code.
+    """
+    proc = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-c",
+         ". %s; %s" % (TOOLCHAIN_SH, probe)],
+        capture_output=True, text=True, env=_clean_env(env))
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
+
+
+def test_toolchain_dedupes_repeated_path_entries():
     """settings64.sh prepends unconditionally, so applying it twice grows PATH.
 
     Observed in a live sandbox at four copies of the full Xilinx PATH -- about
     3 kB -- because the entrypoint applied it, then the sbx kit's startup
     command applied it again on top of the result.
     """
-    env = {"PATH": "/a:/b:/a:/c:/b", "LD_PRELOAD": "/x:/x"}
-    out = finn_env.dedupe_paths(dict(env))
-    assert out["PATH"] == "/a:/b:/c"      # order preserved, first wins
-    assert out["LD_PRELOAD"] == "/x"
+    assert _apply_toolchain({"PATH": "/a:/b:/a:/c:/b"}) == "/a:/b:/c"
 
 
-def test_dedupe_paths_drops_empty_segments():
-    out = finn_env.dedupe_paths({"PATH": "/a::/b:"})
-    assert out["PATH"] == "/a:/b"
+def test_toolchain_dedupes_ld_preload():
+    out = _apply_toolchain({"PATH": "/a", "LD_PRELOAD": "/x:/x"},
+                           probe='printf "%s" "$LD_PRELOAD"')
+    assert out == "/x"
 
 
-def test_dedupe_paths_ignores_absent_vars():
-    out = finn_env.dedupe_paths({"PATH": "/a"})
-    assert out == {"PATH": "/a"}
+def test_toolchain_drops_empty_path_segments():
+    assert _apply_toolchain({"PATH": "/a::/b:"}) == "/a:/b"
+
+
+def test_toolchain_is_idempotent():
+    """FINN_ENV_APPLIED short-circuits, so a nested shell must not re-apply."""
+    proc = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-c",
+         ". {0}; . {0}; printf \"%s|%s\" \"$PATH\" \"$FINN_ENV_APPLIED\"".format(TOOLCHAIN_SH)],
+        capture_output=True, text=True, env=_clean_env({"PATH": "/a:/b"}))
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "/a:/b|1"
+
+
+def test_toolchain_never_writes_to_stdout():
+    """BASH_ENV sources this before every `bash -c`, so a stray echo corrupts
+    the output of every command in the image."""
+    assert _apply_toolchain({"PATH": "/a"}, probe="true") == ""
+
+
+# --------------------------------------------------------------------------
+# Tier resolution and the licence vendor port.
+# --------------------------------------------------------------------------
+
+def test_auto_tier_becomes_build_when_a_toolchain_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("FINN_XILINX_PATH", str(tmp_path))
+    assert finn_env.resolve_tier("auto") == "build"
+
+
+def test_auto_tier_degrades_to_dev_without_a_toolchain(monkeypatch):
+    monkeypatch.delenv("FINN_XILINX_PATH", raising=False)
+    assert finn_env.resolve_tier("auto") == "dev"
+
+
+def test_explicit_tiers_are_not_degraded(monkeypatch):
+    """`dev` and `build` are requests. Only `auto` is a question."""
+    monkeypatch.delenv("FINN_XILINX_PATH", raising=False)
+    assert finn_env.resolve_tier("build") == "build"
+    assert finn_env.resolve_tier("dev") == "dev"
+
+
+def test_vendor_port_read_from_a_licence_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("FINN_LICENSE_VENDOR_PORT", raising=False)
+    lic = tmp_path / "Xilinx.lic"
+    lic.write_text("SERVER licsrv 0011aabb 2100\n"
+                   "DAEMON xilinxd /opt/xilinx/xilinxd port=2101\n")
+    assert finn_env.vendor_daemon_port([str(lic)]) == "2101"
+
+
+def test_vendor_port_is_none_when_unpinned(tmp_path, monkeypatch):
+    """None means grant the whole host. It must never mean 'guess a port'."""
+    monkeypatch.delenv("FINN_LICENSE_VENDOR_PORT", raising=False)
+    lic = tmp_path / "Xilinx.lic"
+    lic.write_text("SERVER licsrv 0011aabb 2100\nDAEMON xilinxd /opt/xilinx/xilinxd\n")
+    assert finn_env.vendor_daemon_port([str(lic)]) is None
+    assert finn_env.vendor_daemon_port([]) is None
+
+
+def test_vendor_port_env_override_wins(tmp_path, monkeypatch):
+    monkeypatch.setenv("FINN_LICENSE_VENDOR_PORT", "2222")
+    assert finn_env.vendor_daemon_port([]) == "2222"
+
+
+def test_vendor_port_rejects_a_non_numeric_override(monkeypatch):
+    monkeypatch.setenv("FINN_LICENSE_VENDOR_PORT", "not-a-port")
+    assert finn_env.vendor_daemon_port([]) is None
 
 
 def test_dev_uses_the_fixed_workspace_path(tmp_path):

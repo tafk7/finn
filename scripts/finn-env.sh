@@ -76,9 +76,12 @@ export FINN_BOARD_FILES_PATH="$FINN_ROOT/deps/board_files"
 # It also duplicated the LD_LIBRARY_PATH additions (lib/lnx64.o, fpo_v7_1) and
 # the XRT sourcing, both of which finn-env now owns.
 if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
+    # Two steps, and the split is the point. finn-env probes the host and says
+    # WHERE the tools are; finn-toolchain.sh takes that and applies it. The
+    # image sources the same second file, so the bare host and the container
+    # apply the toolchain through identical code.
     eval "$("$FINN_ROOT/docker/finn-env" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
-    eval "$("$FINN_ROOT/docker/finn-env" print --format sh 2>/dev/null)"
-    export FINN_ENV_APPLIED=1
+    . "$FINN_ROOT/docker/finn-toolchain.sh"
 
     # The FLEXlm/libudev workaround. Baked as ENV in the image; on a bare host
     # it has to be applied here. Without it a licence checkout dies with

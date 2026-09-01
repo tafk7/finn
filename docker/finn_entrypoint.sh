@@ -148,30 +148,26 @@ fi
 # recommends `docker exec` for a second terminal, so that was a real gap and
 # not a theoretical one.
 #
-# The resolution now lives in finn-env, which every invocation style reaches:
-# this entrypoint, the BASH_ENV hook, and the transparent vendor-tool shims. The
-# entrypoint is no longer load-bearing for correctness -- it is an optimisation
-# that front-loads the work once for the session.
+# The resolution now lives in /etc/finn-toolchain.sh, which every invocation
+# style sources: this entrypoint, the BASH_ENV hook, and the transparent
+# vendor-tool shims. The entrypoint is no longer load-bearing for correctness --
+# it is an optimisation that front-loads the work once for the session.
 # ---------------------------------------------------------------------------
 
-if [ -z "$VITIS_PATH" ] && [ -z "$VIVADO_PATH" ] && [ -z "$HLS_PATH" ]; then
+if [ -z "$VITIS_PATH" ] && [ -z "$VIVADO_PATH" ] && [ -z "$HLS_PATH" ] \
+   && [ -z "$XILINX_VIVADO" ] && [ -z "$XILINX_VITIS" ] && [ -z "$XILINX_HLS" ]; then
   gecho "No Xilinx tools configured. Vivado, Vitis, HLS and rtlsim are unavailable;"
   gecho "everything else - transformations, ONNX execution, brevitas export, tests"
-  gecho "not marked vivado/vitis/board - works. Use the build tier if you need them."
-else
-  # finn-env writes shell assignments to stdout and diagnostics to stderr, so
-  # this eval cannot be corrupted by a warning. Failure is non-fatal for the
-  # same reason the checks below are: killing PID 1 here surfaces under sbx as
-  # an opaque "failed to run sandbox container" with no cause.
-  if _finn_env_sh=$(finn-env print --format sh 2>/dev/null); then
-    eval "$_finn_env_sh"
-    export FINN_ENV_APPLIED=1
-    gecho "Xilinx toolchain configured (finn-env)"
-  else
-    yecho "finn-env could not resolve the Xilinx toolchain."
-    yecho "Vendor tools will attempt to configure themselves on first use."
+  gecho "not marked vivado/vitis/board - works. Mount a toolchain if you need them."
+elif [ -r /etc/finn-toolchain.sh ]; then
+  # Non-fatal on failure, for the same reason the checks below are: killing
+  # PID 1 here surfaces under sbx as an opaque "failed to run sandbox
+  # container" with no cause. The shims and BASH_ENV still apply it later.
+  . /etc/finn-toolchain.sh 2>/dev/null || \
+    yecho "could not apply /etc/finn-toolchain.sh; vendor tools will configure on first use"
+  if [ -n "${XILINX_VIVADO:-}${VIVADO_PATH:-}" ]; then
+    gecho "Xilinx toolchain configured"
   fi
-  unset _finn_env_sh
 fi
 
 export PATH="$PATH:$HOME/.local/bin"

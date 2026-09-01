@@ -48,6 +48,7 @@ wrong line.
 |---|---|
 | Which images exist, their names, their build inputs | `docker-bake.hcl` |
 | Host facts: toolchain, licence, mounts, network | `docker/finn-env` |
+| Applying the toolchain to a shell | `docker/finn-toolchain.sh` |
 | Docker runtime | `compose.yaml` |
 | sbx runtime | `docker/sbxenv/*.sbxenv.yaml` |
 | Host-system setup | `setup-local.sh` |
@@ -156,11 +157,24 @@ have to `sudo` to grant itself the sudo it is granting.
 
 ### Why the sbx variant is a separate target
 
-`NOPASSWD` sudo is a real capability. A build argument would produce two images
-with different privilege and the same name. A named target puts the privilege
-model in the tag. The same argument makes the runtime set part of the tag: the
-predecessor of that layer was a bare `COPY v80pp.de[b]`, which baked a package
-when the file happened to be present and produced an identical tag either way.
+**In-container root is absorbed by a microVM under sbx, and under plain docker
+the container is the only boundary there is.** That is the argument that holds,
+and it is why the capability belongs to the variant whose runtime can take it.
+Merged into the base, every `docker run` would grant passwordless root to uid
+1000: an agent could install anything, disable the shims, rewrite `finn-env`, and
+— with no userns remap — create root-owned files in the workspace bind mount.
+Under sbx that mutability is *intended*; kits install software.
+
+Two mitigations worth knowing: `run-docker.sh` always passes `--user $UID:$GID`,
+so the sudoers entry (which is for `agent`, uid 1000) is inert for anyone going
+through the launcher; and in-container root cannot write through a `:ro` mount.
+
+A secondary argument: a build argument would produce two images with different
+privilege and the same name. The same reasoning makes the runtime set part of
+the tag — the predecessor of that layer was a bare `COPY v80pp.de[b]`, which
+baked a package when the file happened to be present and produced an identical
+tag either way. This one is weaker, though: it only applies *if* you keep two
+images, so it cannot be the reason for keeping them.
 
 It is not a separate Dockerfile. BuildKit shares every lower layer, so an
 inherited target costs one thin layer — measured, 26 layers against 28 — and
@@ -215,6 +229,65 @@ does not read the file that adds the toolchain. It is not that the variables
 happen to be empty. The original defect class was a narrow profile widening
 because something was set in the caller's shell.
 
+### Tier is a grant profile, and only sbx enforces it
+
+`dev` withholds the toolchain mount, the licence and egress. Only sbx can
+actually withhold the third:
+
+| lane | tier | egress |
+|---|---|---|
+| sbx | `dev` / `build`, explicit | **enforced** — `sbx policy allow network` |
+| docker | `auto` by default, `dev` opt-in | declared only |
+| apptainer | none | the host's network namespace |
+| bare host | n/a | n/a |
+
+`finn-env` reports which through `egress_enforcement`. That field exists because
+the dev tier used to report `egress: false` everywhere, and it was measurably
+untrue:
+
+```
+$ docker run --rm xilinx/finn:<git> wget https://pypi.org/simple/
+EGRESS: OPEN
+```
+
+Compose adds no network restriction, so a docker `dev` container has the open
+internet. Conformance test 2 asserted the declaration and passed. Claiming a
+property you do not enforce is worse than not claiming it, because a reader
+cannot tell the difference.
+
+**Apptainer has no tier at all**, and that is the honest version of what was
+previously a documented defect: `$HOME` and `$PWD` are mounted automatically and
+the host environment is inherited wholesale, so `vivado` ran out of the narrow
+image on a host that keeps its tools under `$HOME`. A `dev` tier there was a
+claim the runtime cannot keep. The positional argument is still accepted and
+warns.
+
+**`--tier auto`** resolves to `build` when the host has a toolchain and `dev`
+when it does not. That degrade used to live in `run-docker.sh`, which made a
+launcher the place a host fact was interpreted — the shape of the four defects
+this design exists to prevent. `dev` and `build` stay explicit requests: an
+explicit `--tier build` with no toolchain is still a hard error, because
+silently narrowing a request is how a CI shard passes without testing anything.
+
+### Licence egress narrows only when the vendor port is pinned
+
+FLEXlm needs two connections: lmgrd on the advertised port hands the checkout to
+a vendor daemon on a second port that is **ephemeral by default**. So the grant
+is host-wide unless the site pinned it:
+
+```
+DAEMON xilinxd /opt/xilinx/xilinxd port=2101
+```
+
+`finn-env` reads that from a readable licence file, or takes
+`FINN_LICENSE_VENDOR_PORT`. When known, the grant becomes `host:2100,host:2101`;
+when not, the whole host. Both cases announce themselves in the launcher output.
+
+`lmutil lmstat` is **not** a test of the narrowed rule — it only talks to lmgrd,
+so it succeeds against a port-scoped grant while every real checkout fails with
+"A valid license was not found", which reads as a licensing fault rather than a
+firewall one.
+
 ### Three mechanisms deliver the toolchain, because one cannot
 
 | Invocation | Mechanism |
@@ -241,11 +314,49 @@ by AMD's `settings64.sh`. Those could in principle be computed host-side too, bu
 XRT forces the mechanism regardless — XRT is installed *in the image*, so the
 host may have none.
 
-Two guards that must both stay: `finn-env` clears `BASH_ENV` and sets
-`FINN_ENV_APPLIED=1` for the bash it spawns, and `finn-bashenv.sh` honours that
-flag. Without either, `finn-env` spawns a bash that sources `finn-bashenv.sh`
-which calls `finn-env`, forking until a 120 s timeout. It presents as "vendor
-tool not found", which points nowhere near the cause.
+**All three apply the same file: `docker/finn-toolchain.sh`.** It finds the
+settings scripts from the environment, sources them, adds the two library paths
+`settings64.sh` omits (`lib/lnx64.o` for `finn_xsi`'s simulation kernel,
+`lnx64/tools/fpo_v7_1` for the floating-point operator libraries HLS-generated
+code links), and de-duplicates the path variables.
+
+It is **shell, with no Python in it**, and that is a correction. It used to be
+`finn-env print --format sh`: spawn Python, spawn a bash inside it, source the
+scripts, diff the environment against an eleven-name allowlist, print
+assignments — and cache the result, because a comment claimed "sourcing
+settings64.sh is the expensive part, about a second". Measured in the container
+against a read-only mount:
+
+| | |
+|---|---|
+| source Vivado + Vitis `settings64.sh` | **7 ms** |
+| `finn-env print --format sh` | **124 ms** (85 ms of it Python startup) |
+
+The extraction cost 18× the thing it existed to avoid, and the cache was storing
+the extraction. All of it is gone — about 150 lines from `finn-env` and 35 from
+`finn-bashenv.sh` — along with the fork bomb the two created between them: with
+no Python in the path there is nothing to recurse into, so the `BASH_ENV`-clearing
+handshake is gone too. What is deliberately lost is the allowlist; direct
+sourcing applies whatever AMD's script sets.
+
+**It requires bash, and says so loudly.** `settings64.sh` calls the `source`
+builtin, which dash lacks. Under `/bin/sh` each source fails with
+`source: not found` and — because every source is `|| true`, since these scripts
+read unset variables on several releases — it fails *silently*, leaving `PATH`
+untouched and every vendor tool reporting 127. This was found by running
+`docker exec <c> vivado -version` against a container where the other two
+mechanisms worked. The shim now has a bash shebang and the file refuses,
+audibly, in a non-bash shell.
+
+**Most values do not need these mechanisms.** `XILINX_VIVADO`, `VIVADO_PATH`,
+`XILINXD_LICENSE_FILE`, `FINN_ROOT` and `LD_PRELOAD` are all resolved on the host
+and passed as container environment, which a bare exec inherits. Only `PATH`,
+`PYTHONPATH` and `LD_LIBRARY_PATH` come from `settings64.sh`.
+
+**The layout probe stays host-side, and only there.** `finn-toolchain.sh` is
+handed `XILINX_VIVADO` and friends and probes nothing, so there is still exactly
+one resolver for where the tools are. `finn-env` is now a host-side program with
+one subcommand.
 
 ### Workspace path policy is per-tier
 
@@ -515,10 +626,14 @@ compose names an image bake never built. 13 checks that a `SOURCE=supply`
 target with no `.deb` fails the build with the path in the message, because the
 build is the only place that is checked.
 
+Unit tests: **45** in `tests/util/test_finn_env.py`, including the path-dedup
+and idempotence checks, which now drive `finn-toolchain.sh` through bash rather
+than calling a Python function.
+
 Last measured: **27 pass, 0 fail, 4 skip.** Skips are the sbx sandbox, the
 node-locked licence (still unresolved, see above) and the Apptainer `.sif`.
 
-`quicktest.sh`: **2483 passed, 16 skipped, 5 xfailed, 1 xpassed, 32 errors.**
+`quicktest.sh`: **2494 passed, 16 skipped, 5 xfailed, 1 xpassed, 32 errors.**
 The 32 are one file, `tests/util/test_config.py`, where onnxscript's `@script`
 decorator calls `inspect.getsource` on a function pytest's assertion rewriting
 compiled. It is unrelated to containerization and reproduces identically in the

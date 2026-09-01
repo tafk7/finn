@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Run FINN under Apptainer or Singularity.
 #
-#   docker/finn-apptainer [dev|build|build-xrt] [-- command...]
-#   docker/finn-apptainer build                    a shell
-#   docker/finn-apptainer build -- vivado -version one command
-#   docker/finn-apptainer rm build                 delete the cached .sif
+#   docker/finn-apptainer [-- command...]
+#   docker/finn-apptainer                    a shell
+#   docker/finn-apptainer -- vivado -version one command
+#   docker/finn-apptainer rm                 delete the cached .sif
 #
 # For machines where Docker is not available -- typically shared HPC, where a
 # root daemon is not permitted. Apptainer needs no daemon and no privilege.
@@ -36,10 +36,11 @@
 #   The root filesystem is read-only.
 #   The network is the host's. No namespace, so no port publishing.
 #
-# The consequence worth stating plainly: **the dev tier's containment does not
-# hold here.** It has no toolchain baked in, but the toolchain and the licence
-# arrive anyway, through $HOME and the inherited environment. For isolation,
-# this way of running belongs beside the bare host, not beside Docker.
+# The consequence worth stating plainly: **this lane cannot withhold anything.**
+# The toolchain and the licence arrive through $HOME and the inherited
+# environment whatever the image contains. That is why there is no tier here --
+# see the argument block below. For isolation, this way of running belongs
+# beside the bare host, not beside Docker.
 #
 # --cleanenv below is therefore for PREDICTABILITY, not security. It stops the
 # invoking shell from silently changing what runs, so the environment is
@@ -85,23 +86,37 @@ done
 REMOVE=0
 if [ "${1:-}" = "rm" ]; then REMOVE=1; shift; fi
 
-# build by default, unlike finn-sbx. This lane is a quick working environment
-# for someone on a cluster or the wrong distro; they want Vivado. There is no
-# containment story here to protect (see the header), so the narrow tier buys
-# nothing that would justify making tools the opt-in.
 # Accelerator stacks to bake in. Empty is the base image.
 # See docker/runtimes/README.md.
 : "${FINN_RUNTIMES:=}"
 : "${FINN_DEPS:=frozen}"
 
-TIER="${1:-build}"
-case "$TIER" in
-    dev|build) shift || true ;;
-    # Legacy. build-xrt was never a set of grants -- it was XRT, which is now a
-    # runtime target baked into the image and named in its tag.
-    build-xrt) shift || true; TIER="build"; FINN_RUNTIMES="${FINN_RUNTIMES:+$FINN_RUNTIMES,}xrt" ;;
-    --|"") TIER="build" ;;
-    *) recho "Usage: $0 [rm] [dev|build] [-- command...]"; exit 2 ;;
+# THERE IS NO TIER HERE, and that is not an omission.
+#
+# A tier is a set of grants: no toolchain mount, no licence, no egress. This
+# runtime cannot withhold any of them. Read the header: $HOME and $PWD are
+# mounted automatically, the host environment is inherited wholesale, and the
+# network is the host's with no namespace. On this machine `vivado` ran out of
+# the narrow image because the tools live under /home/tkeller/Xilinx.
+#
+# So a `dev` tier here would be a claim we cannot keep. This resolves --tier
+# build and uses whatever the host actually has; when the host has no
+# toolchain, the mount list is simply empty.
+#
+# The legacy positional argument is still accepted, with a warning where it
+# would have meant something, because `run-docker.sh` forwards one.
+case "${1:-}" in
+    dev)
+        yecho "This lane cannot withhold the toolchain -- \$HOME is mounted and the"
+        yecho "host environment is inherited. Ignoring 'dev'; use docker/finn-sbx for"
+        yecho "a sandbox that actually enforces it."
+        shift
+        ;;
+    build) shift ;;
+    build-xrt)
+        shift
+        FINN_RUNTIMES="${FINN_RUNTIMES:+$FINN_RUNTIMES,}xrt"
+        ;;
 esac
 [ "${1:-}" = "--" ] && shift
 export FINN_RUNTIMES
@@ -145,7 +160,7 @@ if [ -n "${FINN_SINGULARITY:-}" ]; then
     gecho "Using the image given by FINN_SINGULARITY: $SIF"
 elif [ -f "$SIF" ]; then
     gecho "Using the cached image $SIF"
-    gecho "($0 rm $TIER to rebuild it)"
+    gecho "($0 rm to rebuild it)"
 else
     # Conversion needs Docker, which the machine that RUNS this may not have.
     # That is normal and expected: build the .sif on a machine with Docker, copy
@@ -153,7 +168,7 @@ else
     command -v docker >/dev/null 2>&1 || {
         recho "No cached .sif at $SIF, and Docker is not available to build one."
         recho "Build it on a machine that has Docker:"
-        recho "  docker/finn-apptainer $TIER"
+        recho "  docker/finn-apptainer"
         recho "then copy the .sif here and set FINN_SINGULARITY to its path."
         exit 1
     }
@@ -183,7 +198,7 @@ fi
 # mounts every path at its own location and cannot remap, so a fixed FINN_ROOT
 # would name a directory that was never mounted -- `import finn` then fails with
 # ModuleNotFoundError and nothing points at the cause.
-INSPECT=$("$REPO/docker/finn-env" inspect --tier "$TIER" --backend apptainer --format json) || {
+INSPECT=$("$REPO/docker/finn-env" inspect --tier auto --backend apptainer --format json) || {
     recho "finn-env inspect failed"; exit 1
 }
 
@@ -221,13 +236,11 @@ for k, v in sorted(json.load(sys.stdin)["env"].items()):
 # so it survives the conversion and needs nothing here. --cleanenv does not
 # remove the image environment, only the caller's.
 
-if [ "$TIER" != "dev" ]; then
-    hosts=$(printf '%s' "$INSPECT" | python3 -c \
-        'import json,sys;print(" ".join(g["host"] for g in json.load(sys.stdin)["egress"]))')
-    # No policy to apply: the network is the host's. Say so once, rather than
-    # letting a reader assume the licence grant happened as it does under sbx.
-    [ -n "$hosts" ] && gecho "Licence server: $hosts (reached directly; there is no network policy here)"
-fi
+hosts=$(printf '%s' "$INSPECT" | python3 -c \
+    'import json,sys;print(" ".join(g["host"] for g in json.load(sys.stdin)["egress"]))')
+# No policy to apply: the network is the host's, with no namespace. Say so once,
+# rather than letting a reader assume the licence grant happened as under sbx.
+[ -n "$hosts" ] && gecho "Licence server: $hosts (reached directly; there is no network policy here)"
 
 set -- "${@:-}"
 if [ "$#" -gt 0 ] && [ -n "$1" ]; then
