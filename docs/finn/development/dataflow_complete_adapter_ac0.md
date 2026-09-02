@@ -217,3 +217,46 @@ removal of `provider_ids`, and retirement of the public scope/compiler-record
 exports. Region/Network values, candidate verdicts, configured parameters,
 source manifests, generated RTL/Tcl/XDC, and legacy artifact identities remain
 covered by exact regression tests.
+
+## AC10 clean-revision closure
+
+Final evidence was produced from the clean implementation revision:
+
+```text
+FINN     e8c436d781697020fbfd169c92bf0a04dd167dd1
+FinnLib  97cdc4ee2961354c17792eec9bf72365553eb55f
+Python   3.10.19
+pytest   6.2.5
+Ruff     0.16.4
+mypy     2.3.1
+Vivado   2025.2
+```
+
+The implementation history is:
+
+| Phase | Commit |
+|---|---|
+| AC0 baseline | `291839e0f` |
+| AC1 immutable declarations | `72fed1a67` |
+| AC2 complete generic frontend | `747777253` |
+| AC3 MVAU shadow declaration | `368afffa2` |
+| AC4–AC7 v7 cutover and compiler consolidation | `7f1068885` |
+| AC8–AC10 composition, retirement, documentation | `e8c436d78` |
+
+All required gates passed:
+
+| Gate | Result | Log | SHA-256 |
+|---|---|---|---|
+| Complete software | 1003 dataflow tests; MVAU cycle regression; Ruff format/lint; strict mypy over 151 files | `adapter-final-software.log` | `666d5fe547c6ad98b7c40d7ca4853ed8f15c6c9c3325f2d1bd110f6d890f9bb9` |
+| Fixture 5 | 8/8 fused-versus-composed configurations, free-running and stalled | `adapter-fixture5.log` | `52f9567304f286474c94c219fbe156bd3cad03864c874d5d3460f87ebc907ab6` |
+| Fixture 6 | soft-vector DSP48E2, packed DSP58, and DSP48E1 synthesis/resource checks | `adapter-fixture6.log` | `5d4f56a1b7ffac0f32d4ba917447f172c01f7059b7dfa04dfba13ee6684cc3b1` |
+| Fixture 7 | two-cell module stitching and reported-pin checks | `fixture7.log` | `d5829af1fe5f961dab28a22d97684f2ebe7523ea2ef280bc1568d1e6c2089fc1` |
+| Fixture 8 | 15/15 numerical cases, free-running and stalled | `fixture8.log` | `817430a6fa1d6b9903edaf377f76f8e76d17864fa9b8af93f2829db05550777a` |
+| Fixture 9 | IP-XACT packaging, catalog resolution, two-cell stitching, wrapper generation | `fixture9.log` | `31078823a9194903d1107706afdb04e03047837eac1e41e9104ced10220252c5` |
+| D6a numerical | unpumped/pumped, free-running/stalled; six output beats in every mode | `d6a-memstream-numeric.log` | `d4c3342c8f197775ed8418e1e2bb71e66ef242a4c3852b9d37fed1937aff3fef` |
+| D6a hardware | 2 DSP primitives, one RAMB18E2, IP-XACT package, catalog stitch | `d6a-memstream-hardware.log` | `7a4ee04c08e4055894028a36f9f7b34366cfadaa0143d93e383e0aa2a643fe58` |
+
+The artifact-substrate branch remained unmerged and unchanged at
+`1e948127e355486bbe721104bbea38cd62efb668`; no file under
+`src/finn/dataflow/artifacts/**` or `tests/dataflow/artifacts/**` was edited by
+this implementation.
