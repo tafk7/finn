@@ -15,7 +15,7 @@ from finn.dataflow._engine import Decided, Engine, Unresolved
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Problem, Space
+from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.model.dotp_axi import (
     DspBlock,
     DotpAxiKernel,
@@ -39,6 +39,11 @@ class Harness(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
 
+    # PE and SIMD change the Region, so a Design owns them.  A standalone Kernel
+    # fixture needs a harness that owns the same choices.
+    pe = Decision(int, domain=divisors_of(matrix_height))
+    simd = Decision(int, domain=divisors_of(matrix_width))
+
 
 def _compile():
     harness = _compile_space(Harness, "dotp_test", problem_namespace="problem.dotp")
@@ -58,6 +63,8 @@ def _compile():
                 "narrow_weights",
                 "target_dsp",
                 "clock_period_ns",
+                "pe",
+                "simd",
             )
         },
         _allow_problem=False,
@@ -108,8 +115,8 @@ def _configure(
     point = engine.commit_assignments(
         point,
         {
-            "dotp_test.kernel.pe": pe,
-            "dotp_test.kernel.simd": simd,
+            "dotp_test.pe": pe,
+            "dotp_test.simd": simd,
             "dotp_test.kernel.compute_pumping": pumping,
         },
     ).point
@@ -161,15 +168,24 @@ def test_dotp_parameter_table_remains_exact() -> None:
     }
 
 
-def test_dotp_owns_all_three_decisions() -> None:
+def test_dotp_owns_only_its_physical_decision() -> None:
     configured = _configure(pe=2, simd=4, pumping=True)
     assert isinstance(configured, Decided)
     assert {path.value for path in configured.value.assignments} == {
-        "dotp_test.kernel.pe",
-        "dotp_test.kernel.simd",
         "dotp_test.kernel.compute_pumping",
     }
-    assert configured.value.imported_decisions == ()
+    assert {path.value for path in configured.value.imported_decisions} == {
+        "dotp_test.pe",
+        "dotp_test.simd",
+    }
+
+
+def test_dotp_region_family_is_inspectable_without_the_kernel_id() -> None:
+    configured = _configure()
+    assert isinstance(configured, Decided)
+    assert configured.value.region_family == "mvau.dot_product"
+    assert configured.value.region_version == "1"
+    assert configured.value.id == "dotp_axi"
 
 
 def test_dotp_feasibility_rejects_numeric_pumping_and_packing_failures() -> None:

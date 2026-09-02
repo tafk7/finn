@@ -21,7 +21,7 @@ from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Problem, Space
+from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.model.dotp_axi import DspBlock, DotpAxiKernel, FINNLIB_SOURCES
 from finn.dataflow.model.kernel import configure_kernel
 from finn.dataflow.spec_algebra import assemble_specs
@@ -199,6 +199,11 @@ class Harness(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
 
+    # PE and SIMD are Region-visible, so a Design owns them; this fixture is
+    # the Design's stand-in for a Kernel-only run.
+    pe = Decision(int, domain=divisors_of(matrix_height))
+    simd = Decision(int, domain=divisors_of(matrix_width))
+
 
 def _filled(
     kind: str, datatype: object, shape: tuple[int, ...], rng: np.random.RandomState
@@ -238,6 +243,8 @@ def _configure(case: Case, weights: np.ndarray):
                 "narrow_weights",
                 "target_dsp",
                 "clock_period_ns",
+                "pe",
+                "simd",
             )
         },
         _allow_problem=False,
@@ -261,8 +268,8 @@ def _configure(case: Case, weights: np.ndarray):
     point = engine.commit_assignments(
         point,
         {
-            "fixture.dotp_axi.pe": case.pe,
-            "fixture.dotp_axi.simd": case.simd,
+            "fixture.pe": case.pe,
+            "fixture.simd": case.simd,
             "fixture.dotp_axi.compute_pumping": case.pumping,
         },
     ).point

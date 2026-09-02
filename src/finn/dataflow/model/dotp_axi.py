@@ -26,20 +26,16 @@ from finn.dataflow.artifacts.abi import (
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
-from finn.dataflow.design.region import (
-    DATAFLOW_REGION_SEMANTICS,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-)
+from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.declarations import (
     Decision,
     Input,
     constraint,
     derived,
-    divisors_of,
     reject,
     unresolved,
 )
-from finn.dataflow.model.kernel import Kernel, Parameter
+from finn.dataflow.model.kernel import Kernel, Parameter, Region
 from finn.dataflow.region import (
     BeatSequence,
     Coordinate,
@@ -406,12 +402,19 @@ class DotpAxiKernel(Kernel):
     target_dsp = Input(DspBlock)
     clock_period_ns = Input(float)
 
-    pe = Decision(int, domain=divisors_of(matrix_height))
-    simd = Decision(int, domain=divisors_of(matrix_width))
+    # PE and SIMD change this Region *and* the replay Region it composes with,
+    # and the beat contract on the edge between them.  They are therefore owned
+    # once by the enclosing Design and arrive here as facts.
+    pe = Input(int)
+    simd = Input(int)
+
+    #: Physical only: pumping preserves the Region exactly.
     compute_pumping = Decision(bool, values=(False, True))
 
-    @derived(
-        DATAFLOW_REGION_SEMANTICS,
+    region = Region(
+        family="mvau.dot_product",
+        version="1",
+        construct=construct_dot_product_region,
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
@@ -421,29 +424,6 @@ class DotpAxiKernel(Kernel):
         pe=pe,
         simd=simd,
     )
-    def region(
-        *,
-        repetitions: int,
-        matrix_width: int,
-        matrix_height: int,
-        activation_type: NumericElementType,
-        weight_type: NumericElementType,
-        output_type: NumericElementType,
-        pe: int,
-        simd: int,
-    ) -> DataflowRegion:
-        return construct_dot_product_region(
-            repetitions,
-            matrix_width,
-            matrix_height,
-            activation_type,
-            weight_type,
-            output_type,
-            pe,
-            simd,
-        )
-
-    exports = (pe, simd)
 
     @derived(int, target=target_dsp)
     def dsp_version(*, target: DspBlock) -> int:

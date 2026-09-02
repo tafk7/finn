@@ -23,17 +23,15 @@ from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.projection import content_digest
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Decision, Input, Problem, Space, derived
+from finn.dataflow.model.declarations import Decision, Input, Problem, Space
 from finn.dataflow.model.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.model.kernel import Kernel, Parameter, configure_kernel
+from finn.dataflow.model.kernel import Kernel, Parameter, Region, configure_kernel
 from finn.dataflow.model.kernel_artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
     resolve_kernel_contributions,
 )
-from finn.dataflow.region import DataflowRegion
 from finn.dataflow.spec_algebra import assemble_specs
 
 from .test_kernel import _region
@@ -46,11 +44,15 @@ class ArtifactKernel(Kernel):
     computation = ComputationContract("test.artifact")
 
     extent = Input(int)
-    lanes = Decision(int, values=(1, 2))
+    lanes = Input(int)
 
-    @derived(DATAFLOW_REGION_SEMANTICS, extent=extent, lanes=lanes)
-    def region(*, extent: int, lanes: int) -> DataflowRegion:
-        return _region(extent, lanes)
+    region = Region(
+        family="test.artifact",
+        version="1",
+        construct=_region,
+        extent=extent,
+        lanes=lanes,
+    )
 
     LANES = Parameter(lanes)
     sources = (
@@ -74,6 +76,7 @@ class ArtifactKernel(Kernel):
 
 class Harness(Space):
     extent = Problem(int)
+    lanes = Decision(int, values=(1, 2))
 
 
 def _configured(namespace: str, lanes: int) -> ArtifactKernel:
@@ -81,7 +84,7 @@ def _configured(namespace: str, lanes: int) -> ArtifactKernel:
     compiled = _compile_space(
         ArtifactKernel,
         namespace,
-        {"extent": cast("_Ref[object]", harness.member("extent"))},
+        {name: cast("_Ref[object]", harness.member(name)) for name in ("extent", "lanes")},
         _allow_problem=False,
     )
     engine = Engine()
@@ -89,7 +92,7 @@ def _configured(namespace: str, lanes: int) -> ArtifactKernel:
         engine.validate(assemble_specs((harness.spec, compiled.spec))),
         {"problem.root.extent": 8},
     )
-    point = engine.commit_assignments(point, {f"{namespace}.lanes": lanes}).point
+    point = engine.commit_assignments(point, {"root.lanes": lanes}).point
     answer = configure_kernel(engine, compiled, point)
     assert isinstance(answer, Decided)
     return answer.value

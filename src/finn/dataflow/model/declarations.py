@@ -609,11 +609,12 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
     exported: dict[str, ValueSource[object]] = {}
     for name in space_type._implicit_exports:
         declaration = members.get(name)
-        if not isinstance(declaration, ValueSource):
-            raise AuthoringError(
-                f"{space_type.__name__} implicitly exports {name!r}, which is not a value member"
-            )
-        exported[name] = declaration
+        # A missing implicit export is not diagnosed here.  The specialization
+        # that declared it -- ``Kernel`` and its ``region`` -- owns the rule and
+        # says so in its own vocabulary; raising first would replace that with
+        # an export-mechanism complaint the author cannot act on.
+        if isinstance(declaration, ValueSource):
+            exported[name] = declaration
     for value in space_type.exports:
         export_name = by_identity.get(id(value))
         if export_name is None:

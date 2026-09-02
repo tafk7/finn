@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import wraps
+from inspect import signature
 from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar, cast
 
@@ -52,6 +54,8 @@ from finn.dataflow.model.declarations import (
     Use,
     ValueSource,
     declared_members,
+    reject,
+    semantics_for,
 )
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region
@@ -60,6 +64,89 @@ T = TypeVar("T")
 K = TypeVar("K", bound="Kernel")
 
 _MISSING = object()
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
+class Region(Derived[DataflowRegion]):
+    """The one canonical Region a Kernel promises to realize.
+
+    ``Region`` is an ordinary ``Derived`` that also carries the semantic family
+    it belongs to.  The generic decorator is mechanically sufficient, but it
+    cannot say *which* compact semantic family produced the resolved value, and
+    a family field parked beside a separate ``@derived`` can drift away from the
+    value it labels.  Keeping both in one declaration also gives the Kernel
+    compiler a single place to run the no-local-Decision dependency audit.
+
+    It defines no second evaluator, wraps no resolved value, and owns no port
+    schema: ports, operands, and beat sequences remain fields of the resolved
+    ``DataflowRegion``.
+    """
+
+    family: str
+    version: str
+    construct: Callable[..., DataflowRegion]
+
+    def __init__(
+        self,
+        *,
+        family: str,
+        version: str,
+        construct: Callable[..., DataflowRegion],
+        name: str | None = None,
+        **dependencies: ValueSource[object],
+    ) -> None:
+        if not family:
+            raise AuthoringError("a Region declaration needs a non-empty family")
+        if not version:
+            raise AuthoringError("a Region declaration needs a non-empty version")
+        if not callable(construct):
+            raise AuthoringError("a Region declaration needs a callable constructor")
+        _check_constructor(family, construct, tuple(dependencies))
+
+        @wraps(construct)
+        def evaluate(**values: object) -> object:
+            try:
+                return construct(**values)
+            except ValueError as error:
+                # A canonical constructor refusing its arguments is a refusal,
+                # not a crash: the facts reached it through Inputs its supplier
+                # owns, and the point that supplied them should be told so.
+                return reject(
+                    "kernel-region-refused",
+                    f"{family} cannot be constructed from these facts: {error}",
+                    values={"family": family, "version": version},
+                )
+
+        object.__setattr__(self, "value_semantics", semantics_for(DATAFLOW_REGION_SEMANTICS))
+        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "dependencies", tuple(dependencies.items()))
+        object.__setattr__(self, "evaluate", evaluate)
+        object.__setattr__(self, "family", family)
+        object.__setattr__(self, "version", version)
+        object.__setattr__(self, "construct", construct)
+
+
+def _check_constructor(
+    family: str,
+    construct: Callable[..., DataflowRegion],
+    dependencies: tuple[str, ...],
+) -> None:
+    parameters = signature(construct).parameters
+    if any(
+        parameter.kind
+        in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD, parameter.POSITIONAL_ONLY)
+        for parameter in parameters.values()
+    ):
+        raise AuthoringError(f"the {family} Region constructor must take only named parameters")
+    accepted = set(parameters)
+    declared = set(dependencies)
+    if accepted != declared:
+        missing = sorted(declared - accepted)
+        extra = sorted(accepted - declared)
+        raise AuthoringError(
+            f"the {family} Region constructor signature does not match its dependency "
+            f"mapping; unused dependencies {missing}, unbound parameters {extra}"
+        )
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -121,7 +208,9 @@ class _KernelCompilation(Generic[K]):
     kernel_id: str
     kernel_version: str
     region: _Ref[DataflowRegion]
-    region_template: Derived[DataflowRegion]
+    region_template: Region
+    region_family: str
+    region_version: str
     computation: ComputationContract
     parameters: tuple[_CompiledParameter, ...]
     feasibility_set: str
@@ -137,6 +226,9 @@ class Kernel(Space):
     version: ClassVar[str] = "1"
     computation: ClassVar[ComputationContract]
     sources: ClassVar[tuple[Contribution, ...]] = ()
+
+    #: The Region is the one automatic Kernel output to a containing Design.
+    _implicit_exports = ("region",)
 
     @classmethod
     def component_abi(cls, configured: Self) -> ComponentABI:
@@ -206,6 +298,18 @@ class Kernel(Space):
     @property
     def resolved_region(self) -> DataflowRegion:
         return cast(DataflowRegion, self._values[id(self._compilation.region_template)])
+
+    @property
+    def region_family(self) -> str:
+        """The semantic Region family, readable without knowing the Kernel id."""
+
+        return self._compilation.region_family
+
+    @property
+    def region_version(self) -> str:
+        """The Region family's schema version."""
+
+        return self._compilation.region_version
 
     @property
     def source_contributions(self) -> tuple[Contribution, ...]:
@@ -292,6 +396,48 @@ def _region_constraint(
     return Constraint(path, EvaluatorSpec((dependency,), evaluate))
 
 
+def _audit_region_ownership(
+    kernel_type: type[Kernel],
+    compiled: _CompiledSpace[K],
+    region: _Ref[DataflowRegion],
+) -> None:
+    """Refuse a Kernel whose own Decisions can change its Region.
+
+    A Kernel-local Decision is physical only: it may reorganize the hardware,
+    never the logical contract a peer or a Design reads.  The mechanical form of
+    that rule is the Region property's transitive value-dependency closure, and
+    it must not reach a decision this Kernel declares -- including one nested in
+    a helper ``Space`` the Kernel uses.  A Decision reached through an ``Input``
+    belongs to the supplier, which is exactly the intended arrangement.
+
+    Applicability is deliberately not walked: an outer gate says whether the
+    Region is asked for, not what it is.
+    """
+
+    owned = {declaration.path: declaration for declaration in compiled.spec.decisions}
+    properties = {declaration.path: declaration for declaration in compiled.spec.properties}
+    pending = [region.path]
+    visited: set[QualifiedPath] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        declaration = properties.get(path)
+        if declaration is None:
+            continue
+        for dependency in declaration.evaluator.dependencies:
+            if dependency.kind is DependencyKind.DECISION:
+                if dependency.path in owned:
+                    raise AuthoringError(
+                        f"{kernel_type.__name__} lets its own Decision "
+                        f"{dependency.path} reach {region.path}; a choice that changes "
+                        "the Region belongs to the enclosing Design and arrives as an Input"
+                    )
+            elif dependency.kind is DependencyKind.PROPERTY:
+                pending.append(dependency.path)
+
+
 def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
     if not kernel_type.id:
         raise AuthoringError(f"{kernel_type.__name__} must declare a non-empty id")
@@ -313,10 +459,15 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
             f"{kernel_type.__name__} must consume external facts through Input; "
             f"Kernel-owned Problem members are {problem_members}"
         )
-    region_template = declarations.get("region")
-    if not isinstance(region_template, Derived):
+    if kernel_type.exports:
         raise AuthoringError(
-            f"{kernel_type.__name__} must declare exactly one derived member named 'region'"
+            f"{kernel_type.__name__} may not publish exports besides its Region; "
+            "a value a peer Kernel needs is a Design-owned semantic fact"
+        )
+    region_template = declarations.get("region")
+    if not isinstance(region_template, Region):
+        raise AuthoringError(
+            f"{kernel_type.__name__} must declare exactly one Region member named 'region'"
         )
     if region_template.value_semantics.type_token is not DATAFLOW_REGION_SEMANTICS.type_token:
         raise AuthoringError(f"{kernel_type.__name__}.region is not a DataflowRegion")
@@ -331,6 +482,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
             f"{kernel_type.__name__} must declare exactly one DataflowRegion; "
             f"compiled Region properties are {tuple(str(path) for path in region_paths)}"
         )
+    _audit_region_ownership(kernel_type, compiled, region_ref)
 
     parameters: list[_CompiledParameter] = []
     physical_names: set[str] = set()
@@ -414,7 +566,9 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         kernel_type.id,
         kernel_type.version,
         region_ref,
-        cast("Derived[DataflowRegion]", region_template),
+        region_template,
+        region_template.family,
+        region_template.version,
         computation,
         tuple(parameters),
         feasibility_name,
@@ -630,4 +784,4 @@ def configure_kernel(
     return Decided(cast(K, instance))
 
 
-__all__ = ["Kernel", "Parameter", "configure_kernel"]
+__all__ = ["Kernel", "Parameter", "Region", "configure_kernel"]
