@@ -53,13 +53,25 @@ class CaseInfo:
     child_branches: tuple[str, ...] = ()
 
     def property_named(self, name: str) -> QualifiedPath:
-        """The case-owned property with this local name."""
+        """The one case-owned property with this local name.
+
+        Ambiguity is an error, not a first match.  A case containing two nested
+        helpers that each publish a ``cost`` has two paths ending ``.cost``, and
+        silently scoring whichever compiled first is exactly the kind of wrong
+        answer a cost-guided policy would never notice.  A caller that means one
+        of them must say which, using the full path the catalog already gives it.
+        """
 
         suffix = f".{name}"
-        for path in self.property_paths:
-            if path.value.endswith(suffix):
-                return path
-        raise KeyError(f"case {self.id!r} owns no property named {name!r}")
+        matches = tuple(path for path in self.property_paths if path.value.endswith(suffix))
+        if not matches:
+            raise KeyError(f"case {self.id!r} owns no property named {name!r}")
+        if len(matches) > 1:
+            raise KeyError(
+                f"case {self.id!r} owns {len(matches)} properties named {name!r}: "
+                f"{tuple(path.value for path in matches)}; name one exactly"
+            )
+        return matches[0]
 
 
 @dataclass(frozen=True, slots=True)

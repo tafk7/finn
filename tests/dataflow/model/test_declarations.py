@@ -11,6 +11,7 @@ from enum import Enum
 import pytest
 
 import finn.dataflow.model as model
+import finn.dataflow.model.kernel as kernel
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Constraint,
@@ -185,6 +186,7 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "Problem",
         "Readiness",
         "Region",
+        "RegionRefused",
         "ReplayBufferKernel",
         "Sink",
         "Space",
@@ -215,3 +217,13 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
 def test_every_named_export_resolves() -> None:
     for name in model.__all__:
         assert getattr(model, name) is not None
+
+
+def test_everything_a_contributor_writes_comes_from_the_facade() -> None:
+    """A Kernel author raising `RegionRefused` should not reach past the package."""
+
+    assert model.Region is kernel.Region
+    assert model.RegionRefused is kernel.RegionRefused
+    assert issubclass(model.RegionRefused, ValueError)
+    for name in ("Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel"):
+        assert name in model.__all__

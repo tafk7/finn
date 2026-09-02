@@ -182,11 +182,16 @@ def first_globally_feasible_case(
     make the enclosing composition invalid.  `evaluate_constraints` with no path
     list assesses everything the space declares, which needs no knowledge of
     where the enclosing feasibility set lives or what it is called.
+
+    ``verdict is True`` and not ``is not False``.  An unresolved verdict means
+    the space has not yet been told enough to judge the case, which is not the
+    same as accepting it; treating it as acceptance would let this helper report
+    a case it has no evidence for.
     """
 
     for case in branch.cases:
         trial = assign_case(engine, point, branch, case.id)
-        if engine.evaluate_constraints(trial).verdict is not False:
+        if engine.evaluate_constraints(trial).verdict is True:
             return case.id, trial
     return None
 
@@ -294,6 +299,42 @@ def test_a_singleton_is_inspectable_without_inventing_a_selector() -> None:
     solo = catalog.branch("root.solo")
     assert solo.selector is None
     assert tuple(case.id for case in solo.cases) == ("costly",)
+
+
+def test_an_ambiguous_case_property_name_is_refused() -> None:
+    """Scoring the first `.cost` that happens to compile is a silent wrong answer."""
+
+    class Priced(Space):
+        size = Input(int)
+
+        @derived(int, size=size)
+        def cost(*, size: int) -> int:
+            return size
+
+        exports = (cost,)
+
+    class TwoPrices(Space):
+        size = Input(int)
+        left = OneOf(Case(Priced, name="only", size=size), outputs=("cost",))
+        right = OneOf(Case(Priced, name="only", size=size), outputs=("cost",))
+        exports = ()
+
+    class Root_(Space):
+        size = Problem(int)
+        branch = OneOf(Case(TwoPrices, name="both", size=size))
+
+    catalog = compile_space_model(Root_, "root", problem_namespace="problem.root").branches
+    case = catalog.branch("root.branch").case("both")
+    with pytest.raises(KeyError, match="properties named 'cost'"):
+        case.property_named("cost")
+    # Naming one exactly still works, off a path the catalog published.
+    assert QualifiedPath("semantic.root.branch.both.left.cost") in case.property_paths
+
+
+def test_a_case_property_name_that_matches_nothing_is_refused() -> None:
+    _engine, _point, catalog = _model()
+    with pytest.raises(KeyError, match="owns no property named"):
+        catalog.branch("root.top").case("costly").property_named("absent")
 
 
 def test_an_unknown_branch_or_case_is_a_deterministic_lookup_error() -> None:

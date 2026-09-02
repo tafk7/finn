@@ -125,7 +125,7 @@ from typing_extensions import Self
 
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model import Decision, Input, Kernel, Parameter, Region
+from finn.dataflow.model import Decision, Input, Kernel, Parameter, Region, RegionRefused
 from finn.dataflow.region import DataflowRegion
 
 

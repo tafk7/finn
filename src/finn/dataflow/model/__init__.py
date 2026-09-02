@@ -39,7 +39,11 @@ segment.
 any selected Region belongs to the enclosing Design and reaches a Kernel as a
 typed `Input`; a Kernel-local `Decision` may only change physical realization.
 The Kernel compiler enforces this by walking the Region property's transitive
-value-dependency closure.
+closure, values and applicability alike: a local Decision that merely *gates*
+what the Region reads still decides whether the Region is there at all.  A
+Region constructor signals an infeasible request by raising `RegionRefused`,
+which becomes a rejecting absence; any other exception stays an
+`EvaluationError`, because a defect must not read as an infeasible point.
 
 **Region family and version.**  `Region(...)` is one ordinary `DerivedProperty`
 that also names the compact semantic family the resolved value belongs to.  That
@@ -91,12 +95,18 @@ if TYPE_CHECKING:
         configure_design,
     )
     from finn.dataflow.model.dot_product_design import DotProductDesign
-    from finn.dataflow.model.kernel import Kernel, Parameter, Region, configure_kernel
+    from finn.dataflow.model.kernel import (
+        Kernel,
+        Parameter,
+        Region,
+        RegionRefused,
+        configure_kernel,
+    )
     from finn.dataflow.model.replay_buffer import ReplayBufferKernel
 
 _LAZY_EXPORTS = {
     name: ("finn.dataflow.model.kernel", name)
-    for name in ("Kernel", "Parameter", "Region", "configure_kernel")
+    for name in ("Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel")
 }
 _LAZY_EXPORTS.update(
     {
@@ -167,6 +177,7 @@ __all__ = [
     "Kernel",
     "Parameter",
     "Region",
+    "RegionRefused",
     "configure_kernel",
     # the Design specialization
     "Boundary",
