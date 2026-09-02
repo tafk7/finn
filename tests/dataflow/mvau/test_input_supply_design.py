@@ -293,7 +293,7 @@ def test_memstream_integrates_with_dot_product_physical_elaboration() -> None:
 
     assert {item.module for item in elaboration.components} == {
         "finn.dataflow.mvau.decomposed_wrapper",
-        "finn-rtllib.mvu.replay_buffer",
+        "finnlib.rtl.replay_buffer",
         "finnlib.rtl.dotp_axi",
         FINN_MEMSTREAM_MODULE,
     }

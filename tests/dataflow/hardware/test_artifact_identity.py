@@ -47,10 +47,10 @@ from finn.dataflow.kernels import Kernel
 from finn.dataflow.ops.mvau.binding import bind_decomposed, source_roots
 from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.replay_buffer import FINN_ROOT as FINN_ROOT_NAME
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
+FINN_ROOT_NAME = "finn"
 
 BUILDER = BuilderIdentity("vivado", "2024.2")
 TARGET = TargetIdentity("xcvc1902-vsva2197-2MP-e-S", 4.0)

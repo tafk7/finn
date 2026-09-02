@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``ReplayBufferKernel``: FINN's ``replay_buffer`` covering the replay Region.
+"""``ReplayBufferKernel``: FinnLib's ``replay_buffer`` covering the replay Region.
 
 Three parameters, no choices, and no target coverage.  ``LEN``, ``REP`` and
 ``W`` are the folding restated in the buffer's own vocabulary, so they are
@@ -32,15 +32,12 @@ from finn.dataflow.kernels import (
 )
 from finn.dataflow.region import DataflowRegion
 
-#: FINN's half of the composition, relative to the FINN root, in compile order.
-FINN_ROOT = "finn"
-FINN_SOURCES = (
-    "finn-rtllib/mvu/mvu_pkg.sv",
-    "finn-rtllib/mvu/replay_buffer.sv",
-)
+#: The standalone component, relative to the FinnLib root.
+FINNLIB_ROOT = "finnlib"
+FINNLIB_SOURCES = ("rtl/infra/replay_buffer.sv",)
 
 #: The physical module this Kernel instantiates.
-REPLAY_BUFFER_MODULE = "finn-rtllib.mvu.replay_buffer"
+REPLAY_BUFFER_MODULE = "finnlib.rtl.replay_buffer"
 
 
 @dataclass(frozen=True)
@@ -71,7 +68,7 @@ class ReplayBufferKernel(Kernel):
             implements=ACTIVATION_REPLAY_COMPUTATION,
             description="the compact-to-expanded activation sequence",
         )
-        design.source(FINN_ROOT, *FINN_SOURCES)
+        design.source(FINNLIB_ROOT, *FINNLIB_SOURCES)
 
         design.parameter("LEN", cast("Ref[object]", facts.length))
         design.parameter("REP", cast("Ref[object]", facts.repetitions))
@@ -91,8 +88,8 @@ class ReplayBufferKernel(Kernel):
 
 
 __all__ = [
-    "FINN_ROOT",
-    "FINN_SOURCES",
+    "FINNLIB_ROOT",
+    "FINNLIB_SOURCES",
     "REPLAY_BUFFER_MODULE",
     "ReplayBufferInputs",
     "ReplayBufferKernel",

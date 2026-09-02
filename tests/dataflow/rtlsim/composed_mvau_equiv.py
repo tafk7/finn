@@ -79,15 +79,17 @@ from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 
 from dataflow.rtlsim.rtl_transport import drive, random_word
 
-#: The fused golden's sources, relative to ``finn-rtllib/mvu``.
-FUSED_SOURCES = (
+#: The fused golden's FINN sources, relative to ``finn-rtllib/mvu``.
+FUSED_FINN_SOURCES = (
     "mvu_pkg.sv",
-    "mvu_vvu_axi.sv",
-    "replay_buffer.sv",
+    "add_multi.sv",
     "mvu.sv",
     "mvu_vvu_8sx9_dsp58.sv",
-    "add_multi.sv",
+    "mvu_vvu_axi.sv",
 )
+
+#: The fused golden's FinnLib replay source, relative to the FinnLib root.
+FUSED_FINNLIB_SOURCES = ("rtl/infra/replay_buffer.sv",)
 
 ACCU_WIDTH = 16
 CLOCK_PERIOD_NS = 4.0
@@ -400,7 +402,7 @@ def _random_weight_beat(generator: np.random.RandomState, config: Config, *, nar
     return beat
 
 
-def run_one(config: Config, finn_root: str) -> bool:
+def run_one(config: Config, finn_root: str, library_root: str) -> bool:
     print(f"\n========== fixture 5: {config.label} ==========")
     requirements = decomposed_requirements(config)
     values = dict(requirements.parameters)
@@ -443,7 +445,10 @@ def run_one(config: Config, finn_root: str) -> bool:
         + " ".join(f"{name}={_verilog(value)}" for name, value in sorted(values.items()))
     )
 
-    fused_sources = _sources(finn_root, "finn-rtllib/mvu", FUSED_SOURCES)
+    fused_sources = [
+        *_sources(library_root, "", FUSED_FINNLIB_SOURCES),
+        *_sources(finn_root, "finn-rtllib/mvu", FUSED_FINN_SOURCES),
+    ]
 
     ok = True
     for stalls in (False, True):
@@ -518,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
     configs = (
         [CONFIGS_BY_LABEL[arguments.config]] if arguments.config is not None else list(CONFIGS)
     )
-    ok = all([run_one(config, root) for config in configs])
+    ok = all([run_one(config, root, library_root) for config in configs])
     print("\nRESULT:", "FIXTURE 5 PASS" if ok else "FIXTURE 5 FAIL")
     return 0 if ok else 1
 

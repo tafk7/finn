@@ -55,7 +55,7 @@ from finn.dataflow.ops.mvau.artifacts.source import (
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
 from finn.dataflow.kernels.dotp_axi import FINNLIB_SOURCES
-from finn.dataflow.kernels.replay_buffer import FINN_SOURCES
+from finn.dataflow.kernels.replay_buffer import FINNLIB_SOURCES as REPLAY_FINNLIB_SOURCES
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
 from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
@@ -101,7 +101,7 @@ def test_elaboration_follows_the_selected_design() -> None:
     decomposed = {item.module for item in elaborate_mvau(_resolved()).components}
     assert decomposed == {
         "finnlib.rtl.dotp_axi",
-        "finn-rtllib.mvu.replay_buffer",
+        "finnlib.rtl.replay_buffer",
         "finn.dataflow.mvau.decomposed_wrapper",
     }
 
@@ -327,14 +327,16 @@ def _manifest(finnlib: Path) -> tuple[tuple[str, str], ...]:
     return resolved_manifest(bind_decomposed(_resolved()), source_roots(FINN_ROOT, finnlib))
 
 
-def test_the_manifest_names_both_repositories_in_compile_order() -> None:
-    """Each Kernel contributes its own sources, replay first because it feeds."""
+def test_the_manifest_names_finnlib_sources_in_compile_order() -> None:
+    """Each Kernel contributes its own FinnLib sources, replay first because it feeds."""
 
     manifest = _manifest(FINN_ROOT / "nowhere")
     names = [name for name, _ in manifest]
     assert names == [
-        *(f"compute.finn.{index}" for index in range(len(FINN_SOURCES))),
-        *(f"compute.finnlib.{index}" for index in range(len(FINNLIB_SOURCES))),
+        *(
+            f"compute.finnlib.{index}"
+            for index in range(len(REPLAY_FINNLIB_SOURCES) + len(FINNLIB_SOURCES))
+        ),
     ]
     # dotp_axi instantiates dotp, which instantiates dotp_8sx9_dsp58; the
     # package comes before everything that imports it.
@@ -344,11 +346,10 @@ def test_the_manifest_names_both_repositories_in_compile_order() -> None:
     )
 
 
-def test_the_manifest_resolves_each_kernels_named_root() -> None:
+def test_the_manifest_resolves_both_kernels_finnlib_root() -> None:
     """A Kernel says ``finnlib/rtl/...``; where that is, is the checkout's business."""
 
     manifest = dict(_manifest(FINN_ROOT / "nowhere"))
-    assert manifest["compute.finn.0"].startswith(str(FINN_ROOT / "finn-rtllib"))
     assert manifest["compute.finnlib.0"].startswith(str(FINN_ROOT / "nowhere"))
 
 

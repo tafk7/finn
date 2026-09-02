@@ -11,6 +11,7 @@ say "this entry is rendered".  Once it can, the special case has nothing to do.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,7 @@ SLOT = DataSlot("weights", DataSlotSpec(32, 1024, "row-major", "weights.dat"))
 
 def _manifest(*, with_slot: bool = True) -> tuple[object, ...]:
     entries: list[object] = [
-        CopiedSource("finn", "finn-rtllib/mvu/replay_buffer.sv", provides=("replay_buffer",)),
+        CopiedSource("finnlib", "rtl/infra/replay_buffer.sv", provides=("replay_buffer",)),
         RenderedSource("mvau_decomposed.sv", WRAPPER, requires=("replay_buffer",)),
     ]
     if with_slot:
@@ -57,8 +58,9 @@ def _manifest(*, with_slot: bool = True) -> tuple[object, ...]:
 
 
 def _resolve(finn_root: Path, **overrides: object) -> object:
+    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
     arguments: dict[str, object] = {
-        "roots": {"finn": finn_root},
+        "roots": {"finnlib": finnlib_root},
         "template_roots": [TEMPLATES],
         "context": CONTEXT,
         "origin": "decomposed",
@@ -73,7 +75,7 @@ def _resolve(finn_root: Path, **overrides: object) -> object:
 def test_a_rendered_entry_needs_no_filename_test_to_be_recognised(finn_root: Path) -> None:
     resolved = _resolve(finn_root)
     paths = [source.path for source in resolved.definition.files]  # type: ignore[attr-defined]
-    assert paths == ["finn-rtllib/mvu/replay_buffer.sv", "mvau_decomposed.sv"]
+    assert paths == ["rtl/infra/replay_buffer.sv", "mvau_decomposed.sv"]
 
 
 def test_declared_order_survives_resolution_exactly(finn_root: Path) -> None:
@@ -88,7 +90,8 @@ def test_declared_order_survives_resolution_exactly(finn_root: Path) -> None:
 
 def test_a_copied_source_is_keyed_by_its_content(finn_root: Path) -> None:
     resolved = _resolve(finn_root)
-    on_disk = (finn_root / "finn-rtllib/mvu/replay_buffer.sv").read_bytes()
+    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    on_disk = (finnlib_root / "rtl/infra/replay_buffer.sv").read_bytes()
     assert resolved.definition.files[0].content == ContentRef(  # type: ignore[attr-defined]
         content_digest(on_disk)
     )

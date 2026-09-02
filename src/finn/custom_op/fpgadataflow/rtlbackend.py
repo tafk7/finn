@@ -37,6 +37,15 @@ from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 finnxsi = xsi if xsi.is_available() else None
 
 
+def get_finnlib_root() -> str:
+    """Return the configured FinnLib checkout, defaulting to FINN's dependency."""
+
+    override = os.environ.get("FINNLIB_ROOT")
+    if override:
+        return override
+    return os.path.join(os.environ["FINN_ROOT"], "deps", "finnlib")
+
+
 class RTLBackend(ABC):
     """RTLBackend class all custom ops that correspond to a module in finn-rtllib
     are using functionality of. Contains different functions every RTL

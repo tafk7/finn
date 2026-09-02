@@ -75,7 +75,7 @@ from dataflow.mvau.mvu_vvu_axi_kernel import (
     covers_numeric_types as fused_covers_numeric_types,
 )
 from dataflow.rtlsim.composed_mvau_equiv import CONFIGS, Config, declared_parameters
-from finn.dataflow.ops.mvau.binding import finnlib_root
+from finn.dataflow.ops.mvau.binding import finnlib_root, source_roots
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.kernels.numeric import DotProductNumericTypes, RoleVerdict
 from finn.dataflow.ops.mvau.problem import (
@@ -939,14 +939,15 @@ def test_port_level_association_is_not_representable_here_yet() -> None:
 # -- the source manifest -----------------------------------------------------
 
 
-def test_the_manifest_is_the_existing_fused_rtl_and_not_a_fork() -> None:
-    """The same six files the legacy fused path compiles.
+def test_the_manifest_is_the_existing_fused_rtl_and_canonical_replay() -> None:
+    """The existing fused core plus FinnLib's canonical replay source.
 
     Compared as a *set*, because the two disagree about order on purpose: the
-    legacy list is whatever ``MVAU_rtl`` accumulated, and this one is
-    dependency order, which is what a staged compile needs. What must not
-    differ is the text -- a fused Kernel built from forked RTL would prove
-    nothing about the core FINN actually ships.
+    The legacy list is whatever ``MVAU_rtl`` accumulates, and this one is
+    dependency order, which is what a staged compile needs. The monolithic core
+    remains FINN-owned while its instantiated replay module resolves from
+    FinnLib; a forked replay definition here would prove nothing about the core
+    FINN actually ships.
     """
 
     legacy = {
@@ -960,22 +961,22 @@ def test_the_manifest_is_the_existing_fused_rtl_and_not_a_fork() -> None:
     declared = {Path(item.path).name for item in FUSED.sources}
 
     assert declared == legacy
-    assert all(item.root == "finn" for item in FUSED.sources)
+    assert {item.root for item in FUSED.sources} == {"finn", "finnlib"}
     # The replay is inside this manifest and inside the core; in the decomposed
     # reading the same file is a separate Kernel's whole manifest.
     assert "replay_buffer.sv" in declared
-    assert {Path(item.path).name for item in REPLAY_BUFFER.sources} == {
-        "mvu_pkg.sv",
-        "replay_buffer.sv",
-    }
+    assert [(item.root, item.path) for item in REPLAY_BUFFER.sources] == [
+        ("finnlib", "rtl/infra/replay_buffer.sv"),
+    ]
 
 
 def test_the_declared_sources_exist_in_this_checkout() -> None:
     """A manifest naming files that are not there is caught here, not in xelab."""
 
     root = Path(__file__).parents[3]
+    roots = source_roots(root)
     for item in FUSED.sources:
-        assert (root / item.path).is_file(), item.path
+        assert (roots[item.root] / item.path).is_file(), item.path
 
 
 # -- the parameter table -----------------------------------------------------

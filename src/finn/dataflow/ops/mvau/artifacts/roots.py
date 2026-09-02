@@ -11,11 +11,11 @@ from pathlib import Path
 from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.replay_buffer import FINN_ROOT
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 
 _SOURCE_PATH = QualifiedPath("hardware.mvau.decomposed")
 
+FINN_ROOT = "finn"
 FINNLIB_DEFAULT_SUBDIRECTORY = "deps/finnlib"
 FINNLIB_ROOT_VARIABLE = "FINNLIB_ROOT"
 
@@ -77,6 +77,7 @@ def verify_manifest(entries: tuple[tuple[str, str], ...]) -> None:
 
 
 __all__ = [
+    "FINN_ROOT",
     "FINNLIB_DEFAULT_SUBDIRECTORY",
     "FINNLIB_ROOT_VARIABLE",
     "finnlib_root",

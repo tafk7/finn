@@ -52,6 +52,7 @@ from finn.dataflow.kernels.dsp import (
     pack_lanes,
 )
 from finn.dataflow.kernels.numeric import DotProductNumericTypes, RoleVerdict
+from finn.dataflow.kernels.replay_buffer import FINNLIB_ROOT, FINNLIB_SOURCES
 from finn.dataflow.kernels.rtl_parameters import (
     DSP_VERSION,
     dsp_version,
@@ -61,9 +62,9 @@ from finn.dataflow.kernels.rtl_parameters import (
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.region import DataflowRegion, NumericElementType, element_width
 
-#: FINN's fused core and everything under it, relative to the FINN root, in
-#: compile order -- ``mvu_vvu_axi`` instantiates ``replay_buffer`` and one of
-#: ``mvu`` / ``mvu_vvu_8sx9_dsp58``, and ``mvu`` instantiates ``add_multi``.
+#: FINN's fused core and its FINN-owned dependencies, relative to the FINN
+#: root, in compile order. ``mvu_vvu_axi`` also instantiates FinnLib's
+#: separately declared ``replay_buffer``; ``mvu`` instantiates ``add_multi``.
 #:
 #: This is the *existing* fused RTL, reused unchanged.  The migration does not
 #: fork it: what changes is who declares it and what that declaration is
@@ -71,7 +72,6 @@ from finn.dataflow.region import DataflowRegion, NumericElementType, element_wid
 FINN_ROOT = "finn"
 FINN_SOURCES = (
     "finn-rtllib/mvu/mvu_pkg.sv",
-    "finn-rtllib/mvu/replay_buffer.sv",
     "finn-rtllib/mvu/add_multi.sv",
     "finn-rtllib/mvu/mvu.sv",
     "finn-rtllib/mvu/mvu_vvu_8sx9_dsp58.sv",
@@ -362,6 +362,7 @@ class MvuVvuAxiKernel(Kernel):
             sink_role=COMPUTE_ROLE,
             description="the replayed activation, realized as wiring inside the core",
         )
+        design.source(FINNLIB_ROOT, *FINNLIB_SOURCES)
         design.source(FINN_ROOT, *FINN_SOURCES)
 
         # -- the one physical choice ---------------------------------------
@@ -526,6 +527,8 @@ __all__ = [
     "COMPUTE_ROLE",
     "FINN_ROOT",
     "FINN_SOURCES",
+    "FINNLIB_ROOT",
+    "FINNLIB_SOURCES",
     "FusedMatrixVectorHardwareInputs",
     "MVU_VVU_AXI_MODULE",
     "REPLAY_ROLE",

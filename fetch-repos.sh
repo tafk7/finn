@@ -47,10 +47,10 @@ KV260_BDF_COMMIT="98e0d3efc901f0b974006bc4370c2a7ad8856c79"
 #   find deps/board_files/ -type f -exec md5sum {} \; | sort -k 2 | md5sum
 EXP_BOARD_FILES_MD5="221a7edc838f4236922afbd9b9a20f17"
 AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
-# FinnLib supplies dotp_axi and its cores, which the decomposed MVAU compiles
-# against.  Bump this together with any change to the decomposed provider's
-# source manifest; FINNLIB_ROOT overrides the checkout for local work.
-FINNLIB_COMMIT="97cdc4ee2961354c17792eec9bf72365553eb55f"
+# FinnLib supplies replay_buffer, dotp_axi, and their cores. Bump this together
+# with any change to their source manifests; FINNLIB_ROOT overrides the checkout
+# for local work.
+FINNLIB_COMMIT="570b680dc22d61a4ab6ba09dcd8b9657e75a2189"
 
 QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"

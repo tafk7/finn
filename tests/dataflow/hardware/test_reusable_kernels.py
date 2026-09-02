@@ -641,9 +641,8 @@ def test_promoted_kernel_parameter_and_source_ownership_is_complete() -> None:
                     DependencyKind.PROPERTY,
                 }
     assert [item.path for item in dot.sources][-1] == "rtl/linalg/dotp_axi.sv"
-    assert [item.path for item in replay.sources] == [
-        "finn-rtllib/mvu/mvu_pkg.sv",
-        "finn-rtllib/mvu/replay_buffer.sv",
+    assert [(item.root, item.path) for item in replay.sources] == [
+        ("finnlib", "rtl/infra/replay_buffer.sv"),
     ]
     assert [item.path for item in memstream.sources] == [
         "finn-rtllib/memstream/hdl/memstream_wrapper_template.v",
