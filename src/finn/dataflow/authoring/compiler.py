@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from types import MappingProxyType
 from typing import cast
@@ -19,12 +19,12 @@ from finn.dataflow.authoring.declarations import (
 )
 from finn.dataflow.authoring.design import DataflowDesign
 from finn.dataflow.authoring.inventory import (
-    DataflowOpAuthoring,
     DataflowDesignEntry,
     DataflowDesignInventory,
     declare_dataflow_design_inventory,
     declare_dataflow_op_authoring,
 )
+from finn.dataflow.authoring.input_supply import InputSupplyDeclaration
 from finn.dataflow.authoring.op_design import OpDesign, ProblemProvenance
 from finn.dataflow.authoring.persistence import (
     DecisionStorageCodec,
@@ -34,6 +34,8 @@ from finn.dataflow.authoring.persistence import (
 from finn.dataflow.authoring.projection import ProjectionPlan
 from finn.dataflow.authoring.scope import AuthoringError, Ref
 from finn.dataflow.design import (
+    DATAFLOW_NETWORK_SEMANTICS,
+    NETWORK_VALIDATION_REPORT_SEMANTICS,
     Answer,
     Decided,
     DependencyView,
@@ -42,7 +44,7 @@ from finn.dataflow.design import (
     QualifiedPath,
 )
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, NetworkRef
+from finn.dataflow.network_validation import NetworkValidationReport, validate_network
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,11 +108,33 @@ class ClosedDesigns:
 
 
 @dataclass(frozen=True, slots=True)
-class AdaptedDesignCompilation:
-    """Temporary private bridge for scope-authored Designs during migration."""
+class SupplyExport:
+    use: UsesInputSupply
+    member_path: str
 
-    authoring: DataflowOpAuthoring
-    persistence_refs: Mapping[int, Ref[object]]
+    def __getattr__(self, name: str) -> SupplyExport:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return SupplyExport(self.use, f"{self.member_path}.{name}")
+
+
+@dataclass(frozen=True, slots=True)
+class UsesInputSupply:
+    """One operation-owned conditional source-supply declaration."""
+
+    factory: Callable[..., object]
+    inputs: object
+    choice: SupplyExport
+
+    def __init__(self, factory: Callable[..., object], inputs: object) -> None:
+        object.__setattr__(self, "factory", factory)
+        object.__setattr__(self, "inputs", inputs)
+        object.__setattr__(self, "choice", SupplyExport(self, "declaration.choice"))
+
+    def __getattr__(self, name: str) -> SupplyExport:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return SupplyExport(self, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +164,13 @@ def _string_setting(owner: type[object], name: str) -> str:
     return value
 
 
-def _resolve_template_value(value: object, declarations: CompiledClassDeclarations) -> object:
+def _resolve_template_value(
+    value: object,
+    declarations: CompiledClassDeclarations,
+    external: Mapping[int, Ref[object]] = MappingProxyType({}),
+) -> object:
+    if id(value) in external:
+        return external[id(value)]
     if isinstance(value, DeclarationTemplate):
         member = declarations.template_members.get(id(value))
         if member is None:
@@ -166,17 +196,21 @@ def _resolve_template_value(value: object, declarations: CompiledClassDeclaratio
     if is_dataclass(value) and not isinstance(value, type):
         return type(value)(
             **{
-                item.name: _resolve_template_value(getattr(value, item.name), declarations)
+                item.name: _resolve_template_value(
+                    getattr(value, item.name), declarations, external
+                )
                 for item in fields(value)
             }
         )
     if isinstance(value, tuple):
-        return tuple(_resolve_template_value(item, declarations) for item in value)
+        return tuple(_resolve_template_value(item, declarations, external) for item in value)
     if isinstance(value, list):
-        return [_resolve_template_value(item, declarations) for item in value]
+        return [_resolve_template_value(item, declarations, external) for item in value]
     if isinstance(value, Mapping):
         return {
-            _resolve_template_value(key, declarations): _resolve_template_value(item, declarations)
+            _resolve_template_value(key, declarations, external): _resolve_template_value(
+                item, declarations, external
+            )
             for key, item in value.items()
         }
     return value
@@ -204,39 +238,11 @@ def _selection_evaluator(
     return EvaluatorSpec(tuple(dependencies), select)
 
 
-def _result_evaluator(
-    selector: Ref[str] | None,
-    networks: Sequence[tuple[str, Ref[object]]],
-    association: Ref[object],
-) -> EvaluatorSpec[Answer[object]]:
-    dependencies = []
-    if selector is not None:
-        dependencies.append(selector.dependency("selected_design"))
-    dependencies.extend(
-        ref.allow_absent().dependency(f"network_{index}")
-        for index, (_design_id, ref) in enumerate(networks)
-    )
-    dependencies.append(association.dependency("source_association"))
-
-    def select(view: DependencyView) -> Answer[object]:
-        selected = networks[0][0] if selector is None else cast(str, view["selected_design"])
-        for index, (design_id, _ref) in enumerate(networks):
-            if design_id == selected:
-                return Decided(
-                    NetworkRef(
-                        selected,
-                        cast(DataflowNetwork, view[f"network_{index}"]),
-                        view["source_association"],
-                    )
-                )
-        raise KeyError(f"selected Design {selected!r} is absent from the closed inventory")
-
-    return EvaluatorSpec(tuple(dependencies), select)
-
-
 def _compile_designs(
     owner: type[object],
     declarations: CompiledClassDeclarations,
+    supplies: Sequence[InputSupplyDeclaration] = (),
+    supplied_refs: Mapping[int, Ref[object]] = MappingProxyType({}),
 ) -> tuple[
     DataflowDesignInventory | None,
     Ref[object] | None,
@@ -251,10 +257,12 @@ def _compile_designs(
         tuple(
             DataflowDesignEntry(
                 use.design,
-                _resolve_template_value(use.inputs, declarations),
+                _resolve_template_value(use.inputs, declarations, supplied_refs),
             )
             for use in closed.uses
         ),
+        input_supplies=supplies,
+        reference_specs=(declarations.scope.spec(),),
     )
     by_use = {id(use): inventory.declaration(use.design.id) for use in closed.uses}
 
@@ -291,7 +299,7 @@ def _compile_designs(
 
     scope = declarations.scope
     association_ref = scope.derived_evaluator(
-        "source_association",
+        "op.source_association",
         first_semantics,
         evaluate=_selection_evaluator(inventory.design_selection, associations),
     )
@@ -300,12 +308,23 @@ def _compile_designs(
         for declaration in inventory.declarations
     )
     result_ref = scope.derived_evaluator(
-        "result",
-        DATAFLOW_OP_RESULT_SEMANTICS,
-        evaluate=_result_evaluator(inventory.design_selection, networks, association_ref),
+        "op.network",
+        DATAFLOW_NETWORK_SEMANTICS,
+        evaluate=_selection_evaluator(inventory.design_selection, networks),
+    )
+    network_validation = scope.derived(
+        "op.network_validation",
+        NETWORK_VALIDATION_REPORT_SEMANTICS,
+        dependencies={"network": result_ref},
+        evaluate=lambda network: validate_network(cast(DataflowNetwork, network)),
+    )
+    scope.constraint(
+        "op.network_structurally_well_formed",
+        dependencies={"report": network_validation},
+        evaluate=lambda report: not cast(NetworkValidationReport, report),
     )
 
-    external: dict[int, Ref[object]] = {}
+    external: dict[int, Ref[object]] = dict(supplied_refs)
     if inventory.design_selection is not None:
         external[id(closed.choice)] = cast("Ref[object]", inventory.design_selection)
     for item in getattr(owner, "persistence", ()):
@@ -322,6 +341,47 @@ def _compile_designs(
             )
         external[id(item.decision)] = exported
     return inventory, result_ref, association_ref, MappingProxyType(external)
+
+
+def _lookup_path(value: object, member_path: str) -> object:
+    current = value
+    for name in member_path.split("."):
+        current = getattr(current, name)
+    return current
+
+
+def _compile_input_supplies(
+    owner: type[object],
+    declarations: CompiledClassDeclarations,
+) -> tuple[tuple[InputSupplyDeclaration, ...], Mapping[int, Ref[object]]]:
+    uses = tuple(
+        value
+        for declaring_class in reversed(owner.__mro__)
+        for value in declaring_class.__dict__.values()
+        if isinstance(value, UsesInputSupply)
+    )
+    compiled_supplies: list[InputSupplyDeclaration] = []
+    refs: dict[int, Ref[object]] = {}
+    for use in uses:
+        inputs = _resolve_template_value(use.inputs, declarations, refs)
+        result = use.factory(inputs)
+        declaration = result.declaration if hasattr(result, "declaration") else result
+        if not isinstance(declaration, InputSupplyDeclaration):
+            raise AuthoringError("an input-supply factory returned an invalid declaration")
+        compiled_supplies.append(declaration)
+        for item in getattr(owner, "persistence", ()):
+            if not isinstance(item, Persist) or not isinstance(item.decision, SupplyExport):
+                continue
+            if item.decision.use is not use:
+                continue
+            exported = _lookup_path(result, item.decision.member_path)
+            if not isinstance(exported, Ref):
+                raise AuthoringError(
+                    f"input supply does not export Ref {item.decision.member_path!r}"
+                )
+            refs[id(item.decision)] = exported
+        refs[id(use.choice)] = cast("Ref[object]", declaration.choice)
+    return tuple(compiled_supplies), MappingProxyType(refs)
 
 
 def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation:
@@ -342,25 +402,11 @@ def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation
     ):
         raise AuthoringError(f"{owner.__name__}.persistence must be a tuple of Persist values")
 
-    adapter = getattr(owner, "design_adapter", None)
-    adapted = adapter.compile(declarations) if adapter is not None else None
+    supplies, supplied_refs = _compile_input_supplies(owner, declarations)
     inventory, generated_result, generated_association, external = _compile_designs(
-        owner, declarations
+        owner, declarations, supplies, supplied_refs
     )
-    if adapted is not None:
-        if not isinstance(adapted, AdaptedDesignCompilation):
-            raise AuthoringError("a Design migration adapter returned an invalid compiler product")
-        authored = adapted.authoring
-        inventory = authored.inventory
-        result = cast("Ref[object]", authored.result)
-        association = authored.source_association
-        specification = authored.specification
-        selection_constraints = authored.selection_constraint_set
-        structural_readiness = authored.structural_readiness_profile
-        artifact_readiness = authored.artifact_readiness_profile
-        feasibility_constraints = authored.feasibility_constraint_sets
-        external = adapted.persistence_refs
-    elif inventory is None:
+    if inventory is None:
         result_member = getattr(owner, "result_member", "result")
         association_member = getattr(owner, "source_association_member", "source_association")
         if not isinstance(result_member, str) or not isinstance(association_member, str):
@@ -377,6 +423,10 @@ def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation
         selection_constraints = (
             getattr(owner, "selection_constraints", None) or f"{namespace}.selection"
         )
+        structural_constraint_set = (
+            getattr(owner, "structural_constraint_set", None)
+            or f"{namespace}.structural_constraints"
+        )
         structural_readiness = (
             getattr(owner, "structural_readiness", None) or f"{namespace}.structural"
         )
@@ -384,11 +434,15 @@ def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation
         authored = declare_dataflow_op_authoring(
             inventory,
             scope,
-            result=cast("Ref[NetworkRef]", generated_result),
+            result=cast("Ref[DataflowNetwork]", generated_result),
             source_association=generated_association,
-            structural_properties=(generated_association, generated_result),
+            structural_properties=(
+                generated_association,
+                generated_result,
+                scope.handle("op.network_validation", NetworkValidationReport),
+            ),
             structural_constraints=scope.constraint_handles,
-            structural_constraint_set=selection_constraints,
+            structural_constraint_set=structural_constraint_set,
             feasibility_constraint_set=selection_constraints,
             structural_readiness_profile=structural_readiness,
             artifact_readiness_profile=artifact_readiness,
@@ -423,12 +477,12 @@ def compile_dataflow_operation(owner: type[object]) -> CompiledDataflowOperation
 
 
 __all__ = [
-    "AdaptedDesignCompilation",
     "BoundTensor",
     "ClosedDesigns",
     "CompiledDataflowOperation",
     "DesignChoice",
     "DesignExport",
     "UsesDesign",
+    "UsesInputSupply",
     "compile_dataflow_operation",
 ]

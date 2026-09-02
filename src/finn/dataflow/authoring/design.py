@@ -16,8 +16,9 @@ therefore remain separate coordinates in one flat ``DesignSpaceSpec``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass
+from types import MappingProxyType
 from typing import Any, Generic, TypeVar, cast
 
 from finn.dataflow.authoring.scope import (
@@ -27,6 +28,13 @@ from finn.dataflow.authoring.scope import (
     Ref,
     Scope,
     T,
+)
+from finn.dataflow.authoring.declarations import (
+    DeclarationGroup,
+    DeclarationLayer,
+    DeclarationTemplate,
+    Derived,
+    compile_class_declarations,
 )
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design import (
@@ -161,10 +169,189 @@ class DataflowDesign:
 
     id: str = ""
     version: str = "1"
+    uses_class_authoring: bool = False
 
     @classmethod
     def define(cls, design: DataflowDesignScope[Any]) -> None:
         raise NotImplementedError(f"{cls.__name__} does not define a dataflow design")
+
+
+@dataclass(frozen=True, slots=True)
+class DesignPortRef:
+    """Unbound reference to one port of a class-declared Region."""
+
+    region: Region
+    port_id: str
+    direction: str
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class Region(DeclarationGroup):
+    """One class-local Region declaration and its computation requirement."""
+
+    node_id: str
+    role: str
+    construct: Callable[..., DataflowRegion]
+    dependencies: tuple[DeclarationTemplate[Any], ...]
+    computation_contract: ComputationContract
+    region: Derived[DataflowRegion]
+    computation: Derived[ComputationContract]
+    layers = frozenset({DeclarationLayer.DESIGN})
+
+    def __init__(
+        self,
+        *,
+        node_id: str,
+        construct: Callable[..., DataflowRegion],
+        dependencies: Sequence[DeclarationTemplate[Any]],
+        computation: ComputationContract,
+        role: str | None = None,
+    ) -> None:
+        if not node_id:
+            raise ValueError("a Region declaration needs a node id")
+        resolved_role = node_id if role is None else role
+        if not resolved_role:
+            raise ValueError("a Region declaration needs a role")
+        object.__setattr__(self, "node_id", node_id)
+        object.__setattr__(self, "role", resolved_role)
+        object.__setattr__(self, "construct", construct)
+        object.__setattr__(self, "dependencies", tuple(dependencies))
+        object.__setattr__(self, "computation_contract", computation)
+        object.__setattr__(
+            self,
+            "region",
+            Derived(
+                DATAFLOW_REGION_SEMANTICS,
+                dependencies,
+                construct,
+                stable_name=f"{resolved_role}.region",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "computation",
+            Derived(
+                ComputationContract,
+                (),
+                lambda: computation,
+                stable_name=f"{resolved_role}.computation",
+            ),
+        )
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        return (
+            (f"{member_name}.region", self.region),
+            (f"{member_name}.computation", self.computation),
+        )
+
+    def input(self, port_id: str) -> DesignPortRef:
+        return DesignPortRef(self, port_id, "input")
+
+    def output(self, port_id: str) -> DesignPortRef:
+        return DesignPortRef(self, port_id, "output")
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class Network(Derived[DataflowNetwork]):
+    """The one flat Network property owned by a Design class."""
+
+    nodes: tuple[Region, ...] = ()
+
+    def __init__(
+        self,
+        *nodes: Region,
+        construct: Callable[..., DataflowNetwork] | None = None,
+        stable_name: str = "network",
+    ) -> None:
+        if not nodes:
+            raise ValueError("a Network declaration needs at least one Region")
+        node_tuple = tuple(nodes)
+        if construct is None:
+            if len(node_tuple) != 1:
+                raise ValueError("only a one-Region Network can omit a constructor")
+            only = node_tuple[0]
+
+            def singleton(region: object) -> object:
+                return singleton_network(only.node_id, cast(DataflowRegion, region))
+
+            evaluate: Callable[..., object] = singleton
+        else:
+            evaluate = construct
+        Derived.__init__(
+            self,
+            DATAFLOW_NETWORK_SEMANTICS,
+            tuple(cast("DeclarationTemplate[Any]", item.region) for item in node_tuple),
+            evaluate,
+            stable_name=stable_name,
+            layers=(DeclarationLayer.DESIGN,),
+        )
+        object.__setattr__(self, "nodes", node_tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class Connection(DeclarationGroup):
+    """Named Network edge used when a placement absorbs the connection."""
+
+    role: str
+    edge_id: str
+    source: DesignPortRef
+    sink: DesignPortRef
+    layers = frozenset({DeclarationLayer.DESIGN})
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceInput(DeclarationGroup):
+    source_operand: str
+    destination: DesignPortRef
+    boundary_id: str
+    coordinates: object | None = None
+    supply_eligible: bool = False
+    layers = frozenset({DeclarationLayer.DESIGN})
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class Kernels(DeclarationGroup):
+    name: str | None
+    covers: tuple[Region, ...]
+    candidates: tuple[type[Kernel], ...]
+    inputs: object
+    absorbs: tuple[Connection, ...] = ()
+    layers = frozenset({DeclarationLayer.DESIGN})
+
+    def __init__(
+        self,
+        *,
+        covers: Sequence[Region],
+        candidates: Sequence[type[Kernel]],
+        inputs: object,
+        absorbs: Sequence[Connection] = (),
+        name: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "covers", tuple(covers))
+        object.__setattr__(self, "candidates", tuple(candidates))
+        object.__setattr__(self, "inputs", inputs)
+        object.__setattr__(self, "absorbs", tuple(absorbs))
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
 
 
 class DataflowDesignScope(Scope, Generic[In]):
@@ -517,6 +704,169 @@ class DataflowDesignScope(Scope, Generic[In]):
 
     def spec(self) -> DesignSpaceSpec:
         return assemble_specs((super().spec(), *self._physical_specs))
+
+
+def _input_refs(inputs: object) -> Mapping[str, Ref[object]]:
+    if isinstance(inputs, Mapping):
+        values = dict(inputs)
+    elif is_dataclass(inputs) and not isinstance(inputs, type):
+        values = {item.name: getattr(inputs, item.name) for item in fields(inputs)}
+    else:
+        raise AuthoringError("class-authored Design inputs must be a mapping or dataclass")
+    if not all(isinstance(value, Ref) for value in values.values()):
+        raise AuthoringError("every class-authored Design input must be a typed Ref")
+    return cast("Mapping[str, Ref[object]]", values)
+
+
+def _resolve_design_value(
+    value: object,
+    compiled: object,
+    nodes: Mapping[int, DesignNode],
+    edges: Mapping[int, DesignEdge],
+) -> object:
+    members = cast(Any, compiled)
+    if isinstance(value, DeclarationTemplate):
+        member = members.template_members.get(id(value))
+        if member is None:
+            raise AuthoringError("a Design value references an undeclared class member")
+        return members.ref(member)
+    if isinstance(value, Region):
+        return nodes[id(value)]
+    if isinstance(value, Connection):
+        return edges[id(value)]
+    if is_dataclass(value) and not isinstance(value, type):
+        return type(value)(
+            **{
+                item.name: _resolve_design_value(getattr(value, item.name), compiled, nodes, edges)
+                for item in fields(value)
+            }
+        )
+    if isinstance(value, tuple):
+        return tuple(_resolve_design_value(item, compiled, nodes, edges) for item in value)
+    if isinstance(value, list):
+        return [_resolve_design_value(item, compiled, nodes, edges) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            _resolve_design_value(key, compiled, nodes, edges): _resolve_design_value(
+                item, compiled, nodes, edges
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
+def compile_dataflow_design_class(
+    design: type[DataflowDesign],
+    namespace: str,
+    inputs: object,
+    *,
+    input_supplies: Sequence[object] = (),
+) -> tuple[object, DataflowDesignScope[object]]:
+    """Lower one direct Design class through the existing private collector."""
+
+    from finn.dataflow.authoring.inventory import (  # noqa: PLC0415 - cycle boundary
+        DataflowDesignDeclaration,
+    )
+
+    scope: DataflowDesignScope[object] = DataflowDesignScope(namespace, inputs)
+    compiled = compile_class_declarations(
+        design,
+        layer=DeclarationLayer.DESIGN,
+        namespace=namespace,
+        imports=_input_refs(inputs),
+        scope=scope,
+    )
+    nodes: dict[int, DesignNode] = {}
+    for member_name, group in compiled.groups.items():
+        if not isinstance(group, Region):
+            continue
+        node = scope.node(
+            group.role,
+            node_id=group.node_id,
+            region=cast("Ref[DataflowRegion]", compiled.ref(f"{member_name}.region")),
+            computation=cast(
+                "Ref[ComputationContract]", compiled.ref(f"{member_name}.computation")
+            ),
+        )
+        nodes[id(group)] = node
+
+    network_members = tuple(
+        item
+        for item in compiled.members
+        if isinstance(getattr(design, item.split(".")[0], None), Network)
+    )
+    if len(network_members) != 1:
+        raise AuthoringError(f"{design.__name__} must declare exactly one Network")
+    scope.use_network(cast("Ref[DataflowNetwork]", compiled.ref(network_members[0])))
+
+    edges: dict[int, DesignEdge] = {}
+    for member_name, group in compiled.groups.items():
+        if not isinstance(group, Connection):
+            continue
+        edge = scope.edge(
+            group.role or member_name,
+            edge_id=group.edge_id,
+            source=nodes[id(group.source.region)],
+            sink=nodes[id(group.sink.region)],
+        )
+        edges[id(group)] = edge
+
+    for member_name, group in compiled.groups.items():
+        if not isinstance(group, SourceInput):
+            continue
+        node = nodes[id(group.destination.region)]
+        consumer = scope.input_interface(
+            f"{member_name}.consumer",
+            node,
+            group.destination.port_id,
+        )
+        scope.map_input(group.source_operand, boundary_id=group.boundary_id, consumer=consumer)
+
+    for member_name, group in compiled.groups.items():
+        if not isinstance(group, Kernels):
+            continue
+        scope.kernels(
+            group.name or member_name,
+            covers=tuple(nodes[id(item)] for item in group.covers),
+            candidates=group.candidates,
+            inputs=_resolve_design_value(group.inputs, compiled, nodes, edges),
+            absorbs=tuple(edges[id(item)] for item in group.absorbs),
+        )
+
+    for supply in input_supplies:
+        cast(Any, supply).apply(scope)
+    declaration = DataflowDesignDeclaration(
+        design.id,
+        design.version,
+        namespace,
+        scope.spec(),
+        scope.network_ref,
+        scope.nodes,
+        scope.placements,
+        scope.input_mappings,
+        scope.hardware_declarations,
+        design,
+        MappingProxyType(
+            {
+                **scope.handles,
+                **{
+                    name: value
+                    for name, value in compiled.members.items()
+                    if isinstance(value, Ref)
+                },
+            }
+        ),
+        scope.decision_handles,
+        (
+            *scope.constraint_handles,
+            *(
+                constraint
+                for kernel in scope.hardware_declarations
+                for constraint in kernel.constraint_handles
+            ),
+        ),
+    )
+    return declaration, scope
 
 
 def singleton_network(node_id: str, region: DataflowRegion) -> DataflowNetwork:

@@ -703,9 +703,9 @@ def run_one(case: Case) -> int:
 
     requirements = requirements_for(case, model)
     values = dict(requirements.parameters)
-    accumulator_width = int(values["ACCU_WIDTH"])  # type: ignore[arg-type]
-    activation_width = int(values["ACTIVATION_WIDTH"])  # type: ignore[arg-type]
-    weight_width = int(values["WEIGHT_WIDTH"])  # type: ignore[arg-type]
+    accumulator_width = int(values["ACCU_WIDTH"])
+    activation_width = int(values["ACTIVATION_WIDTH"])
+    weight_width = int(values["WEIGHT_WIDTH"])
 
     # A wrapped accumulator would make this a test of overflow behaviour while
     # claiming to be a test of arithmetic.  Say so here rather than discover it
@@ -729,8 +729,8 @@ def run_one(case: Case) -> int:
     # label says "unsigned" and whose SIGNED_ACTIVATIONS is 1 would otherwise
     # pass while measuring the case beside it.
     print(
-        f"  dials: SIGNED_ACTIVATIONS={int(values['SIGNED_ACTIVATIONS'])}"  # type: ignore[arg-type]
-        f" NARROW_WEIGHTS={int(values['NARROW_WEIGHTS'])}"  # type: ignore[arg-type]
+        f"  dials: SIGNED_ACTIVATIONS={int(values['SIGNED_ACTIVATIONS'])}"
+        f" NARROW_WEIGHTS={int(values['NARROW_WEIGHTS'])}"
         f" VERSION={values['VERSION']}"
         f" (in {case.activation_values}/{case.weight_values})"
     )

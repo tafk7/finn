@@ -55,13 +55,11 @@ from dataflow.mvau.test_decomposed_op import (
     _wrapped,
 )
 from finn.dataflow.datatypes import is_qonnx_datatype
-from finn.dataflow.design import QualifiedPath
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 from finn.dataflow.ops.mvau.binding import bind_decomposed
 from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
 from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
-from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
-from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.region import NumericElementType
 
@@ -99,7 +97,7 @@ class _Role:
     #: the source carries rather than a property of any tensor.
     tensor: str | None
     attribute: str | None
-    problem_path: QualifiedPath
+    declaration_member: str
     #: ``(binding, interface)`` pairs whose Region operand this type is.
     operands: tuple[tuple[str, str], ...]
     #: The RTL parameters whose values this datatype determines, exactly.
@@ -113,7 +111,7 @@ ROLES = (
         "activation",
         "activation",
         None,
-        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
+        "activation.datatype",
         (("replay", "activation_in"), ("replay", "activation_out"), ("compute", "activation")),
         # ``W`` is the replay buffer's beat width, which is SIMD activations
         # wide -- the activation type reaches both Kernels, not just the core
@@ -125,7 +123,7 @@ ROLES = (
         "weight",
         "weights",
         None,
-        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
+        "weight.datatype",
         (("compute", "weight"),),
         frozenset({"WEIGHT_WIDTH"}),
         frozenset({"WSTREAM"}),
@@ -134,7 +132,7 @@ ROLES = (
         "accumulator",
         None,
         "accDataType",
-        MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
+        "accumulator_element_type",
         # It types no boundary port: the accumulation is internal to the core,
         # and what leaves is the output operand.
         (),
@@ -145,7 +143,7 @@ ROLES = (
         "output",
         "output",
         None,
-        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
+        "output.datatype",
         (("compute", "output"),),
         # None, and sound only because coverage pins it to the accumulator.
         frozenset(),
@@ -211,7 +209,7 @@ def _model(
     return model
 
 
-def _resolved(model: ModelWrapper) -> MVAUResolvedDesign:
+def _resolved(model: ModelWrapper) -> MVAUResolvedDataflowOp:
     operation = _wrapped(model)
     assert isinstance(operation, MvauDataflowOp)
     operation.initialize_dataflow_scope_id()
@@ -292,7 +290,7 @@ def _chain(model: ModelWrapper) -> _Chain:
 
     return _Chain(
         annotation,
-        {role.label: resolved.projection.problem_data[role.problem_path] for role in ROLES},
+        {role.label: resolved.declared_value(role.declaration_member) for role in ROLES},
         {
             (binding, interface): _operand_type(
                 next(iter(by_binding[binding].regions.values())).region, interface

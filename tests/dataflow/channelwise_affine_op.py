@@ -17,35 +17,40 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 from finn.dataflow.authoring import (
     Attribute,
     BuildFlag,
+    Choice,
     ClosedDesigns,
+    Covers,
     DataflowBuildConfigView,
     DataflowOp,
     InputTensor,
+    Imported,
+    Kernels,
+    Network as NetworkDeclaration,
     NoInitializer,
     OptionalInitializer,
     OutputTensor,
+    Parameter,
     Persist,
     RequiredInitializer,
+    Region as RegionDeclaration,
+    RegionClaim,
+    SourceInput,
     SourceScope,
     TargetClockPeriod,
     TargetFpgaPart,
     TensorShape,
     UsesDesign,
+    class_divisors_of,
     constraint,
     derived,
-    divisors_of,
-    finite,
 )
-from finn.dataflow.authoring.design import (
-    DataflowDesign,
-    DataflowDesignScope,
-    DesignNode,
-)
+from finn.dataflow.authoring.design import DataflowDesign
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.design import ABSENT, QualifiedPath
+from finn.dataflow.design import ABSENT, QONNX_DATATYPE_VALUE_SEMANTICS, QualifiedPath
+from finn.dataflow.design import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.kernels import Kernel, KernelScope, PhysicalComponent, scalar_parameters
+from finn.dataflow.kernels import Kernel, PhysicalComponent, scalar_parameters
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -92,7 +97,8 @@ class AffineInputs:
 
 @dataclass(frozen=True)
 class AffineKernelInputs:
-    compute: DesignNode
+    region: Ref[DataflowRegion]
+    computation: Ref[ComputationContract]
     lanes: Ref[int]
 
 
@@ -216,19 +222,17 @@ def _association(
 class AffineStreamKernel(Kernel):
     id = "affine_stream"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define_design(cls, design: KernelScope[AffineKernelInputs]) -> None:
-        inputs = design.inputs
-        design.covers_region(
-            inputs.compute.role,
-            region=inputs.compute.region,
-            computation=inputs.compute.computation,
-            implements=AFFINE_COMPUTATION,
-        )
-        pipeline = design.choice("pipeline", bool, domain=finite((False, True)))
-        design.parameter("LANES", cast("Ref[object]", inputs.lanes))
-        design.parameter("PIPELINE", cast("Ref[object]", pipeline))
+    covered_region = Imported(DATAFLOW_REGION_SEMANTICS, stable_name="region")
+    computation = Imported(ComputationContract)
+    lanes = Imported(int)
+    coverage = Covers(
+        RegionClaim("compute", covered_region, computation, AFFINE_COMPUTATION),
+    )
+    pipeline = Choice(bool, domain=(False, True))
+    lanes_parameter = Parameter("LANES", lanes)
+    pipeline_parameter = Parameter("PIPELINE", pipeline)
 
     @classmethod
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
@@ -244,113 +248,133 @@ class AffineStreamKernel(Kernel):
 class DirectAffineDesign(DataflowDesign):
     id = "direct"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define(cls, design: DataflowDesignScope[AffineInputs]) -> None:
-        inputs = design.inputs
-        lanes = design.choice("lanes", int, domain=divisors_of(inputs.channels))
-        compute = design.region(
-            "compute",
-            node_id="compute",
-            dependencies={
-                "repetitions": inputs.repetitions,
-                "channels": inputs.channels,
-                "datatype": inputs.data_type,
-                "bias_present": inputs.bias_present,
-                "lanes": lanes,
-            },
-            evaluate=lambda repetitions, channels, datatype, bias_present, lanes: _affine_region(
-                repetitions,
-                channels,
-                datatype,
-                bias_present,
-                lanes,
-                reuse=False,
-            ),
-            computation=AFFINE_COMPUTATION,
-        )
-        design.singleton_network(compute)
-        design.kernels(
-            "compute",
-            covers=(compute,),
-            candidates=(AffineStreamKernel,),
-            inputs=AffineKernelInputs(compute, lanes),
-        )
-        design.derived(
-            "source_association",
-            AffineSourceAssociation,
-            dependencies={
-                "source_scope_id": inputs.source_scope_id,
-                "data_id": inputs.data_id,
-                "data_shape": inputs.data_shape,
-                "scale_id": inputs.scale_id,
-                "scale_shape": inputs.scale_shape,
-                "bias_present": inputs.bias_present,
-                "bias_id": inputs.bias_id.allow_absent(),
-                "bias_shape": inputs.bias_shape.allow_absent(),
-                "output_id": inputs.output_id,
-                "output_shape": inputs.output_shape,
-            },
-            evaluate=_association,
-        )
+    source_scope_id = Imported(str)
+    repetitions = Imported(int)
+    channels = Imported(int)
+    data_id = Imported(str)
+    data_shape = Imported(tuple)
+    data_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    scale_id = Imported(str)
+    scale_shape = Imported(tuple)
+    bias_present = Imported(bool)
+    bias_id = Imported(str)
+    bias_shape = Imported(tuple)
+    output_id = Imported(str)
+    output_shape = Imported(tuple)
+
+    lanes = Choice(int, domain=class_divisors_of(channels))
+    compute = RegionDeclaration(
+        node_id="compute",
+        construct=lambda repetitions, channels, datatype, bias_present, lanes: _affine_region(
+            repetitions,
+            channels,
+            datatype,
+            bias_present,
+            lanes,
+            reuse=False,
+        ),
+        dependencies=(repetitions, channels, data_type, bias_present, lanes),
+        computation=AFFINE_COMPUTATION,
+    )
+    network = NetworkDeclaration(compute)
+    data_mapping = SourceInput("data", compute.input("data"), "input.data")
+    scale_mapping = SourceInput("scale", compute.input("scale"), "input.scale")
+    compute_placement = Kernels(
+        name="compute",
+        covers=(compute,),
+        candidates=(AffineStreamKernel,),
+        inputs=AffineKernelInputs(
+            cast("Ref[DataflowRegion]", compute.region),
+            cast("Ref[ComputationContract]", compute.computation),
+            cast("Ref[int]", lanes),
+        ),
+    )
+    source_association = derived(
+        source_scope_id,
+        data_id,
+        data_shape,
+        scale_id,
+        scale_shape,
+        bias_present,
+        bias_id.allow_absent(),
+        bias_shape.allow_absent(),
+        output_id,
+        output_shape,
+        value_type=AffineSourceAssociation,
+    )(_association)
 
 
 class ReuseAffineDesign(DataflowDesign):
     id = "reuse"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define(cls, design: DataflowDesignScope[AffineInputs]) -> None:
-        inputs = design.inputs
-        lanes = design.choice("lanes", int, domain=divisors_of(inputs.channels))
-        channel_tile = design.choice("channel_tile", int, domain=divisors_of(inputs.channels))
-        compute = design.region(
-            "compute",
-            node_id="compute",
-            dependencies={
-                "repetitions": inputs.repetitions,
-                "channels": inputs.channels,
-                "datatype": inputs.data_type,
-                "bias_present": inputs.bias_present,
-                "lanes": lanes,
-                "channel_tile": channel_tile,
-            },
-            evaluate=lambda repetitions, channels, datatype, bias_present, lanes, channel_tile: (
-                _affine_region(
-                    repetitions,
-                    channels,
-                    datatype,
-                    bias_present,
-                    lanes,
-                    reuse=bool(channel_tile),
-                )
-            ),
-            computation=AFFINE_COMPUTATION,
-        )
-        design.singleton_network(compute)
-        design.kernels(
-            "compute",
-            covers=(compute,),
-            candidates=(AffineStreamKernel,),
-            inputs=AffineKernelInputs(compute, lanes),
-        )
-        design.derived(
-            "source_association",
-            AffineSourceAssociation,
-            dependencies={
-                "source_scope_id": inputs.source_scope_id,
-                "data_id": inputs.data_id,
-                "data_shape": inputs.data_shape,
-                "scale_id": inputs.scale_id,
-                "scale_shape": inputs.scale_shape,
-                "bias_present": inputs.bias_present,
-                "bias_id": inputs.bias_id.allow_absent(),
-                "bias_shape": inputs.bias_shape.allow_absent(),
-                "output_id": inputs.output_id,
-                "output_shape": inputs.output_shape,
-            },
-            evaluate=_association,
-        )
+    source_scope_id = Imported(str)
+    repetitions = Imported(int)
+    channels = Imported(int)
+    data_id = Imported(str)
+    data_shape = Imported(tuple)
+    data_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    scale_id = Imported(str)
+    scale_shape = Imported(tuple)
+    bias_present = Imported(bool)
+    bias_id = Imported(str)
+    bias_shape = Imported(tuple)
+    output_id = Imported(str)
+    output_shape = Imported(tuple)
+
+    lanes = Choice(int, domain=class_divisors_of(channels))
+    channel_tile = Choice(int, domain=class_divisors_of(channels))
+    compute = RegionDeclaration(
+        node_id="compute",
+        construct=lambda repetitions, channels, datatype, bias_present, lanes, channel_tile: (
+            _affine_region(
+                repetitions,
+                channels,
+                datatype,
+                bias_present,
+                lanes,
+                reuse=bool(channel_tile),
+            )
+        ),
+        dependencies=(
+            repetitions,
+            channels,
+            data_type,
+            bias_present,
+            lanes,
+            channel_tile,
+        ),
+        computation=AFFINE_COMPUTATION,
+    )
+    network = NetworkDeclaration(compute)
+    data_mapping = SourceInput("data", compute.input("data"), "input.data")
+    scale_mapping = SourceInput("scale", compute.input("scale"), "input.scale")
+    compute_placement = Kernels(
+        name="compute",
+        covers=(compute,),
+        candidates=(AffineStreamKernel,),
+        inputs=AffineKernelInputs(
+            cast("Ref[DataflowRegion]", compute.region),
+            cast("Ref[ComputationContract]", compute.computation),
+            cast("Ref[int]", lanes),
+        ),
+    )
+    source_association = derived(
+        source_scope_id,
+        data_id,
+        data_shape,
+        scale_id,
+        scale_shape,
+        bias_present,
+        bias_id.allow_absent(),
+        bias_shape.allow_absent(),
+        output_id,
+        output_shape,
+        value_type=AffineSourceAssociation,
+    )(_association)
 
 
 class ChannelwiseAffineDataflowOp(DataflowOp):

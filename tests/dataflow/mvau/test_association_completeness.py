@@ -38,7 +38,6 @@ from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE, DOT_PRODUCT_NODE, 
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
 from finn.dataflow.ops.mvau import elaboration as composition
 from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
-from finn.dataflow.design import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
@@ -106,7 +105,6 @@ def test_every_named_region_edge_and_port_is_in_the_selected_network(
     """
 
     result = elaboration.semantic_result
-    assert isinstance(result, NetworkRef)
     network = result.network
 
     nodes = {node.id for node in network.nodes}
@@ -155,7 +153,6 @@ def test_the_two_cores_carry_the_ports_of_the_regions_they_realize(
     """
 
     result = elaboration.semantic_result
-    assert isinstance(result, NetworkRef)
     network = result.network
     associations = _by_id(elaboration)
 

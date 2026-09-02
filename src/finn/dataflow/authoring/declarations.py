@@ -157,7 +157,7 @@ class DivisorsDomain:
 @dataclass(frozen=True, slots=True)
 class DependentDomain:
     dependencies: tuple[DeclarationTemplate[Any], ...]
-    accepts: Callable[..., bool]
+    accepts: Callable[..., object]
     candidates: Callable[..., tuple[object, ...]] | None = None
 
 
@@ -664,19 +664,29 @@ def compile_class_declarations(
     layer: DeclarationLayer,
     namespace: str,
     imports: Mapping[str, Ref[object]] | None = None,
+    scope: Scope | None = None,
 ) -> CompiledClassDeclarations:
     """Bind one class's immutable declaration templates under ``namespace``."""
 
     declarations, aliases, groups = _collect_class_declarations(owner, layer)
-    scope: Scope = OpDesign(namespace) if layer is DeclarationLayer.OP else Scope(namespace)
+    bound_scope = (
+        scope
+        if scope is not None
+        else OpDesign(namespace)
+        if layer is DeclarationLayer.OP
+        else Scope(namespace)
+    )
+    if bound_scope.namespace != namespace:
+        raise AuthoringError("the supplied compiler scope has the wrong namespace")
     bound: OrderedDict[str, Ref[object] | ConstraintRef] = OrderedDict()
     imported = imports or {}
 
     for item in declarations:
         template = item.template
         if isinstance(template, Imported):
+            import_name = template.stable_name or item.member_name
             try:
-                supplied = imported[item.member_name]
+                supplied = imported[import_name]
             except KeyError:
                 raise AuthoringError(
                     f"{owner.__name__}.{item.member_name} requires an imported handle"
@@ -687,8 +697,8 @@ def compile_class_declarations(
                 )
             bound[item.member_name] = supplied
         elif isinstance(template, Problem):
-            assert isinstance(scope, OpDesign)
-            bound[item.member_name] = scope.fact(
+            assert isinstance(bound_scope, OpDesign)
+            bound[item.member_name] = bound_scope.fact(
                 item.stable_name,
                 template.value_type,
                 provenance=template.provenance,
@@ -701,7 +711,7 @@ def compile_class_declarations(
     for item in declarations:
         template = item.template
         if isinstance(template, Choice):
-            bound[item.member_name] = scope.decision(
+            bound[item.member_name] = bound_scope.decision(
                 item.stable_name,
                 template.value_type,
                 domain=_domain(template.domain, aliases=aliases, bound=bound),
@@ -716,7 +726,7 @@ def compile_class_declarations(
                 name: _resolve_ref(dependency, aliases=aliases, bound=bound)
                 for name, dependency in zip(names, template.dependencies)
             }
-            bound[item.member_name] = scope.derived(
+            bound[item.member_name] = bound_scope.derived(
                 item.stable_name,
                 template.value_type,
                 dependencies=dependencies,
@@ -732,7 +742,7 @@ def compile_class_declarations(
                 name: _resolve_ref(dependency, aliases=aliases, bound=bound)
                 for name, dependency in zip(names, template.dependencies)
             }
-            bound[item.member_name] = scope.constraint(
+            bound[item.member_name] = bound_scope.constraint(
                 item.stable_name,
                 dependencies=dependencies,
                 evaluate=template.evaluate,
@@ -751,7 +761,7 @@ def compile_class_declarations(
                     f"{declaring_class.__name__}.{member_name} is unavailable on the "
                     f"{layer.value} layer"
                 )
-            scope.readiness_profile(
+            bound_scope.readiness_profile(
                 value.name,
                 decisions=tuple(
                     _resolve_ref(item, aliases=aliases, bound=bound) for item in value.decisions
@@ -772,7 +782,7 @@ def compile_class_declarations(
         owner,
         layer,
         namespace,
-        scope,
+        bound_scope,
         MappingProxyType(dict(bound)),
         groups,
         aliases,

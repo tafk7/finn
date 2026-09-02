@@ -57,18 +57,17 @@ from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
 from finn.dataflow.kernels.dotp_axi import FINNLIB_SOURCES
 from finn.dataflow.kernels.replay_buffer import FINN_SOURCES
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
-from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
-from finn.dataflow.design import NetworkRef
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _resolved() -> MVAUResolvedDesign:
+def _resolved() -> MVAUResolvedDataflowOp:
     return _committed(_model()).resolve_dataflow(_context())
 
 
-def _batch_resolved() -> MVAUResolvedDesign:
+def _batch_resolved() -> MVAUResolvedDataflowOp:
     model = _model()
     operation = _wrapped(model)
     operation.initialize_dataflow_scope_id()
@@ -136,7 +135,7 @@ def test_the_structure_is_the_network_the_kernels_assembled() -> None:
 def test_the_boundaries_are_the_networks_own() -> None:
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
     network = resolved.result.network
 
     assert {item.id for item in elaboration.boundaries} == {item.id for item in network.boundaries}

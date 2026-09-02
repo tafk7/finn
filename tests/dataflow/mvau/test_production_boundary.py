@@ -11,6 +11,11 @@ import subprocess
 import sys
 
 from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
+from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.finn_rtl_memstream import FinnRtlMemstreamKernel
+from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.elaboration import __all__ as production_provider_exports
 from finn.dataflow.ops.mvau.artifacts.ipxact import PreparedIpPackage
 from finn.dataflow.ops.mvau.artifacts.package import PackagedDecomposedArtifact
@@ -26,11 +31,7 @@ ROOT = Path(__file__).parents[3] / "src" / "finn" / "dataflow"
 PRODUCTION_FILES = (
     ROOT / "ops" / "mvau" / "__init__.py",
     ROOT / "ops" / "mvau" / "op.py",
-    ROOT / "ops" / "mvau" / "source.py",
-    ROOT / "ops" / "mvau" / "projection.py",
-    ROOT / "ops" / "mvau" / "persistence.py",
     ROOT / "ops" / "mvau" / "origin.py",
-    ROOT / "ops" / "mvau" / "assignments.py",
     ROOT / "ops" / "mvau" / "associations.py",
     ROOT / "ops" / "mvau" / "binding.py",
     ROOT / "ops" / "mvau" / "inventory.py",
@@ -74,6 +75,10 @@ DELETED_MVAU_MODULES = (
     "finn.dataflow.mvau.weight_adapter",
     "finn.dataflow.mvau.weight_adapter_kernel",
     "finn.dataflow.mvau_design",
+    "finn.dataflow.ops.mvau.assignments",
+    "finn.dataflow.ops.mvau.persistence",
+    "finn.dataflow.ops.mvau.projection",
+    "finn.dataflow.ops.mvau.source",
     "finn.dataflow.parameters.supply_kernels",
 )
 
@@ -97,6 +102,13 @@ def test_production_dot_product_imports_no_provider_era_api() -> None:
                 for forbidden in FORBIDDEN_MODULES
             ), (path, module)
             assert name not in FORBIDDEN_NAMES, (path, name)
+
+
+def test_production_contributors_have_no_scope_callbacks() -> None:
+    assert "define" not in DotProductDesign.__dict__
+    assert "define" not in BatchInterleavedDesign.__dict__
+    for kernel in (DotpAxiKernel, ReplayBufferKernel, FinnRtlMemstreamKernel):
+        assert "define_design" not in kernel.__dict__
 
 
 def test_removed_binding_wrappers_do_not_reappear_in_production() -> None:

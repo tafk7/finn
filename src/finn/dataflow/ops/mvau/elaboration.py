@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.realization import DesignRealization
-from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
+from finn.dataflow.design import Finding, FindingKind, QualifiedPath
 from finn.dataflow.kernels import Kernel, PhysicalComponent
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau.artifacts.render import WRAPPER_MODULE, byte_aligned
 from finn.dataflow.ops.mvau.binding import bind_decomposed
-from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.input_supply import DELIVERY_EDGE, DELIVERY_NODE
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.origin import mvau_elaboration_origin
 from finn.dataflow.ops.mvau.physical import (
     MVAUElaborationError,
@@ -31,7 +31,6 @@ from finn.dataflow.ops.mvau.physical import (
     MVAUSemanticPortRef,
 )
 from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
-from finn.dataflow.ops.mvau.projection import MVAUResolvedDesign
 from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.region import Port
 
@@ -162,7 +161,7 @@ def _component(kernel: Kernel, prefix: str, parent: str, component_id: str) -> P
     )
 
 
-def elaborate_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboration:
+def elaborate_decomposed(resolved: MVAUResolvedDataflowOp) -> MVAUPhysicalElaboration:
     """Elaborate the decomposed slice into a replay core and a dot-product core."""
 
     bindings = bind_decomposed(resolved)
@@ -170,7 +169,7 @@ def elaborate_decomposed(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboratio
 
 
 def compose(
-    resolved: MVAUResolvedDesign,
+    resolved: MVAUResolvedDataflowOp,
     realization: DesignRealization,
 ) -> MVAUPhysicalElaboration:
     """Wire two bound Kernels into one physical elaboration."""
@@ -545,7 +544,7 @@ def _fail(code: str, message: str) -> MVAUElaborationError:
 
 
 def compose_dot_product_design(
-    resolved: MVAUResolvedDesign,
+    resolved: MVAUResolvedDataflowOp,
     realization: DesignRealization,
 ) -> MVAUPhysicalElaboration:
     """Compose an already-realized DotProduct design under dispatch ownership."""
@@ -558,21 +557,15 @@ def compose_dot_product_design(
     return compose(resolved, realization)
 
 
-def elaborate_mvau(resolved: MVAUResolvedDesign) -> MVAUPhysicalElaboration:
+def elaborate_mvau(resolved: MVAUResolvedDataflowOp) -> MVAUPhysicalElaboration:
     """Elaborate the configured Kernels of the selected production design."""
 
-    selected = MVAU_DESIGN_INVENTORY.inventory.selected(resolved.point)
-    if not isinstance(selected, Decided):
-        raise MVAUElaborationError(selected.findings)
-    if selected.value.id != "dot_product":
+    if resolved.selected_design_id != "dot_product":
         raise _fail(
             "mvau-dispatch-design-semantic-only",
-            f"{selected.value.id} has no production physical Kernel",
+            f"{resolved.selected_design_id} has no production physical Kernel",
         )
-    realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
-    if not isinstance(realization, Decided):
-        raise MVAUElaborationError(realization.findings)
-    return compose_dot_product_design(resolved, realization.value)
+    return compose_dot_product_design(resolved, bind_decomposed(resolved))
 
 
 __all__ = ["elaborate_mvau"]

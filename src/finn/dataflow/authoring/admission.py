@@ -340,6 +340,28 @@ def graph_stage_build_admission(
     return GraphBuildAdmission(admitted, unresolved, tuple(trials))
 
 
+def admissible_dataflow_designs(
+    engine: Engine,
+    point: DesignPoint,
+    inventory: DataflowDesignInventory,
+) -> tuple[str, ...]:
+    """Return Designs whose class-declared source constraints are true."""
+
+    candidates: list[str] = []
+    for declaration in inventory.declarations:
+        assignments: dict[QualifiedPath, object] = {}
+        if inventory.design_selection is not None:
+            assignments[inventory.design_selection.path] = declaration.id
+        trial = point if not assignments else engine.commit_assignments(point, assignments).point
+        constraint_set = f"{declaration.namespace}.source_admission"
+        if constraint_set not in trial.design_space.constraint_sets:
+            candidates.append(declaration.id)
+            continue
+        if engine.evaluate_constraint_set(trial, constraint_set).verdict is True:
+            candidates.append(declaration.id)
+    return tuple(candidates)
+
+
 def resolved_physical_feasibility(
     engine: Engine,
     point: DesignPoint,
@@ -387,6 +409,7 @@ __all__ = [
     "GraphBuildAdmission",
     "PlacementAdmission",
     "ResolvedPhysicalFeasibility",
+    "admissible_dataflow_designs",
     "graph_stage_build_admission",
     "resolved_physical_feasibility",
 ]

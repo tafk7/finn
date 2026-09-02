@@ -60,7 +60,7 @@ from finn.dataflow.ops.mvau.artifacts.synthesis import (
     render_clock_constraints,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_decomposed
-from finn.dataflow.ops.mvau.source import MVAUResolvedDesign
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
@@ -72,7 +72,7 @@ AMBIENT_TYPES = (
     "ModelWrapper",
     "DesignPoint",
     "Engine",
-    "MVAUResolvedDesign",
+    "MVAUResolvedDataflowOp",
     "MVAUDataflowBuildContext",
     "DataflowBuildConfigView",
     "MvauDataflowOp",
@@ -332,7 +332,9 @@ def _parameter_value(source: str, name: str) -> int:
     raise AssertionError(f"no parameter {name!r} in this text")
 
 
-def _resolved_from(requirements: MVAUDecomposedArtifactRequirements) -> MVAUResolvedDesign:
+def _resolved_from(
+    requirements: MVAUDecomposedArtifactRequirements,
+) -> MVAUResolvedDataflowOp:
     """The resolved design behind these requirements, rebuilt the same way.
 
     Rebuilt rather than carried, because ``MVAUDecomposedArtifactRequirements``

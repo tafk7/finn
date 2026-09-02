@@ -17,8 +17,11 @@ of this installation rather than of the hardware.
 from __future__ import annotations
 
 from finn.dataflow.authoring.realization import DesignRealization
+from finn.dataflow.authoring.compiler import CompiledDataflowOperation
+from finn.dataflow.authoring.inventory import DataflowDesignInventory
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 from finn.dataflow.ops.mvau.artifacts.roots import (
@@ -29,7 +32,6 @@ from finn.dataflow.ops.mvau.artifacts.roots import (
     source_roots,
     verify_manifest,
 )
-from finn.dataflow.ops.mvau.projection import MVAUResolvedDesign
 
 _BINDING_PATH = QualifiedPath("hardware.mvau.decomposed")
 
@@ -42,22 +44,28 @@ def _fail(
     )
 
 
-def bind_decomposed(resolved: MVAUResolvedDesign) -> DesignRealization:
+def bind_decomposed(resolved: MVAUResolvedDataflowOp) -> DesignRealization:
     """Return the configured Kernels of a resolved production DotProductDesign."""
 
-    design_path = MVAU_DESIGN_INVENTORY.inventory.design_path
+    compiled = resolved.compiled
+    inventory: DataflowDesignInventory = (
+        compiled.inventory
+        if isinstance(compiled, CompiledDataflowOperation) and compiled.inventory is not None
+        else MVAU_DESIGN_INVENTORY.inventory
+    )
+    design_path = inventory.design_path
     if design_path is None or design_path not in resolved.point.design_space.decisions:
         raise _fail(
             "mvau-decomposed-legacy-point",
-            "production binding requires the v6 MVAU DataflowDesign inventory",
+            "production binding requires the compiled MVAU DataflowDesign inventory",
         )
-    selected_design = MVAU_DESIGN_INVENTORY.inventory.selected(resolved.point)
+    selected_design = inventory.selected(resolved.point)
     if not isinstance(selected_design, Decided) or selected_design.value.id != DotProductDesign.id:
         raise _fail(
             "mvau-decomposed-design-unsupported",
             "this hardware realizes only DotProductDesign",
         )
-    realization = MVAU_DESIGN_INVENTORY.inventory.realize(resolved.engine, resolved.point)
+    realization = inventory.realize(resolved.engine, resolved.point)
     if not isinstance(realization, Decided):
         raise MVAUElaborationError(realization.findings)
     return realization.value

@@ -20,8 +20,6 @@ from finn.dataflow.ops.mvau.inventory import (
     MVAU_STRUCTURAL_READINESS,
     admissible_mvau_designs,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
-from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.problem import (
@@ -30,7 +28,7 @@ from finn.dataflow.ops.mvau.problem import (
     MVAUSourceDescription,
 )
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
-from finn.dataflow.resolution import NetworkRef
+from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 
 INT8 = DataType["INT8"]
@@ -120,11 +118,13 @@ def test_v6_inventory_has_only_the_frozen_decision_paths() -> None:
     }
 
 
-def test_mvau_op_uses_the_inventory_backed_authoring_assembly() -> None:
-    assert MvauDataflowOp.dataflow_authoring() is MVAU_DESIGN_INVENTORY.authoring
-    assert MvauDataflowOp.build_design_space_spec() is MVAU_DESIGN_INVENTORY.specification
-    assert MvauDataflowOp.result_path() == MVAU_DESIGN_INVENTORY.result.path
-    assert MvauDataflowOp.source_association_path() == MVAU_DESIGN_INVENTORY.source_association.path
+def test_mvau_op_uses_the_compiler_owned_inventory() -> None:
+    compiled = MvauDataflowOp.compiled_dataflow_operation()
+    assert compiled is not None and compiled.inventory is not None
+    assert compiled.inventory.design_ids == MVAU_DESIGN_INVENTORY.inventory.design_ids
+    assert MvauDataflowOp.build_design_space_spec() is compiled.specification
+    assert MvauDataflowOp.result_path() == compiled.result.path
+    assert MvauDataflowOp.source_association_path() == compiled.source_association.path
 
 
 def test_structural_metadata_does_not_require_physical_kernel_choices() -> None:
@@ -155,55 +155,40 @@ def test_unselected_design_declarations_are_absent() -> None:
     assert isinstance(engine.query_property(point, batch.network.path), Absent)
 
 
-def test_dot_product_resolves_one_network_and_v11_ownership() -> None:
+def test_dot_product_resolves_one_network_and_logical_association() -> None:
     engine, point = _dot_product()
     result = engine.query_property(point, MVAU_DESIGN_INVENTORY.result.path)
     association_answer = engine.query_property(point, MVAU_DESIGN_INVENTORY.source_association.path)
-    assert isinstance(result, Decided) and isinstance(result.value, NetworkRef)
+    assert isinstance(result, Decided) and isinstance(result.value, DataflowNetwork)
     assert isinstance(association_answer, Decided)
     association = cast(MVAUSourceAssociation, association_answer.value)
-    assert result.value.source_association == association
-    assert association.design_id == DotProductDesign.id
-    assert association.compute_kernel_id == DotpAxiKernel.id
-    assert association.kernel_ids == (DotpAxiKernel.id, ReplayBufferKernel.id)
-    assert association.decision_paths == (
-        QualifiedPath("mvau.design"),
-        QualifiedPath("mvau.input.weight.supply"),
-        MVAU_DESIGN_INVENTORY.dot_product.pe.path,
-        MVAU_DESIGN_INVENTORY.dot_product.simd.path,
-        MVAU_DESIGN_INVENTORY.compute_pumping.path,
-    )
+    assert set(vars(association)) == {
+        "source_node_id",
+        "fused_source_node_ids",
+        "region_declaration_id",
+        "parameter_topology",
+        "operands",
+    }
     assert engine.check_readiness(point, MVAU_STRUCTURAL_READINESS).ready is True
     assert engine.check_readiness(point, MVAU_ARTIFACT_READINESS).ready is True
 
 
-def test_supplied_dot_product_v11_ownership_includes_delivery_kernel_and_choices() -> None:
+def test_supplied_dot_product_changes_topology_without_physical_logical_metadata() -> None:
     engine, point = _dot_product(FINN_RTL_MEMSTREAM_SUPPLY)
     answer = engine.query_property(point, MVAU_DESIGN_INVENTORY.source_association.path)
     assert isinstance(answer, Decided)
     association = cast(MVAUSourceAssociation, answer.value)
-    assert association.supply_kernel_id == FINN_RTL_MEMSTREAM_SUPPLY
-    assert association.kernel_ids == (
-        DotpAxiKernel.id,
-        ReplayBufferKernel.id,
-        FINN_RTL_MEMSTREAM_SUPPLY,
-    )
-    assert association.decision_paths[-2:] == (
-        MVAU_DESIGN_INVENTORY.input_supply.settings.ram_style.path,
-        MVAU_DESIGN_INVENTORY.input_supply.settings.pumped_memory.path,
-    )
+    assert association.parameter_topology.value == "cyclic"
 
 
 def test_batch_interleaved_resolves_semantics_but_is_not_build_admitted() -> None:
     engine, point = _batch_interleaved()
     result = engine.query_property(point, MVAU_DESIGN_INVENTORY.result.path)
     association_answer = engine.query_property(point, MVAU_DESIGN_INVENTORY.source_association.path)
-    assert isinstance(result, Decided) and isinstance(result.value, NetworkRef)
+    assert isinstance(result, Decided) and isinstance(result.value, DataflowNetwork)
     assert isinstance(association_answer, Decided)
     association = cast(MVAUSourceAssociation, association_answer.value)
-    assert association.design_id == BatchInterleavedDesign.id
-    assert association.compute_kernel_id == ""
-    assert association.kernel_ids == ()
+    assert association.parameter_topology.value == "direct"
     assert engine.check_readiness(point, MVAU_STRUCTURAL_READINESS).ready is True
     assert engine.evaluate_constraint_set(point, MVAU_FEASIBILITY_CONSTRAINT_SET).verdict is None
     assert engine.check_readiness(point, MVAU_ARTIFACT_READINESS).ready is None

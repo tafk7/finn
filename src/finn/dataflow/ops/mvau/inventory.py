@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.admission import (
@@ -18,7 +18,6 @@ from finn.dataflow.authoring.inventory import (
     DataflowDesignInventory,
     declare_dataflow_op_authoring,
     declare_dataflow_design_inventory,
-    selected_design_metadata,
 )
 from finn.dataflow.authoring.scope import Ref, Scope, unresolved
 from finn.dataflow.design import (
@@ -31,27 +30,25 @@ from finn.dataflow.design import (
     QualifiedPath,
 )
 from finn.dataflow.ops.mvau.associations import (
-    MVAU_NETWORK_REF_SEMANTICS,
-    MVAUNetworkRef,
     MVAUSourceAssociation,
 )
 from finn.dataflow.ops.mvau.designs.batch_interleaved import (
     BatchInterleavedDesign,
-    BatchInterleavedDesignInputs,
     MVAUBatchInterleavedSemantics,
-    declare_batch_interleaved_semantics,
+    _inputs as batch_interleaved_inputs,
+    _semantics as batch_interleaved_semantics,
 )
 from finn.dataflow.ops.mvau.designs.dot_product import (
     DotProductDesign,
-    DotProductDesignInputs,
+    _inputs as dot_product_inputs,
+    _semantics as dot_product_semantics,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiHandles
 from finn.dataflow.ops.mvau.input_supply import (
     MVAUInputSupply,
     declare_mvau_input_supply,
-    declare_supplied_source_association,
 )
-from finn.dataflow.ops.mvau.semantics import MVAUDotProductSemantics, declare_dot_product_semantics
+from finn.dataflow.ops.mvau.semantics import MVAUDotProductSemantics
 from finn.dataflow.ops.mvau.problem import (
     MVAU_EFFECTIVE_NARROW_WEIGHTS,
     MVAU_PROBLEM,
@@ -66,7 +63,7 @@ from finn.dataflow.network_validation import NetworkValidationReport, validate_n
 MVAU_NETWORK_PATH = QualifiedPath("semantic.mvau.op.network")
 MVAU_NETWORK_VALIDATION_PATH = QualifiedPath("semantic.mvau.op.network_validation")
 MVAU_SOURCE_ASSOCIATION_PATH = QualifiedPath("semantic.mvau.op.source_association")
-MVAU_RESULT_PATH = QualifiedPath("semantic.mvau.op.result")
+MVAU_RESULT_PATH = MVAU_NETWORK_PATH
 
 MVAU_STRUCTURAL_CONSTRAINT_SET = "mvau_op_structural"
 MVAU_FEASIBILITY_CONSTRAINT_SET = "mvau_op_feasibility"
@@ -134,7 +131,7 @@ class MVAUDesignInventoryAssembly:
     network: Ref[DataflowNetwork]
     network_validation: Ref[NetworkValidationReport]
     source_association: Ref[MVAUSourceAssociation]
-    result: Ref[MVAUNetworkRef]
+    result: Ref[DataflowNetwork]
     compute_pumping: Ref[bool]
     authoring: DataflowOpAuthoring
     specification: DesignSpaceSpec
@@ -148,39 +145,17 @@ def declare_mvau_design_inventory(
 ) -> MVAUDesignInventoryAssembly:
     """Declare the fresh v6 inventory without importing any legacy Kernel pool."""
 
-    dot_product = declare_dot_product_semantics(problem)
-    batch_interleaved = declare_batch_interleaved_semantics(problem)
     supply = declare_mvau_input_supply(problem)
-    dot_association, dot_association_spec = declare_supplied_source_association(
-        "mvau.design.dot_product",
-        dot_product.source_association,
-        supply.declaration,
-    )
-    batch_association, batch_association_spec = declare_supplied_source_association(
-        "mvau.design.batch_interleaved",
-        batch_interleaved.source_association,
-        supply.declaration,
-    )
     inventory = declare_dataflow_design_inventory(
         "mvau",
         (
             DataflowDesignEntry(
                 DotProductDesign,
-                DotProductDesignInputs(problem, dot_product, narrow_weights),
-                (dot_product.spec, dot_association_spec),
-                (dot_product.pe, dot_product.simd),
-                dot_product.feasibility_constraints,
+                dot_product_inputs(problem, narrow_weights, supply.declaration.choice),
             ),
             DataflowDesignEntry(
                 BatchInterleavedDesign,
-                BatchInterleavedDesignInputs(batch_interleaved),
-                (batch_interleaved.spec, batch_association_spec),
-                (
-                    batch_interleaved.pe,
-                    batch_interleaved.simd,
-                    batch_interleaved.interleave,
-                ),
-                batch_interleaved.feasibility_constraints,
+                batch_interleaved_inputs(problem, supply.declaration.choice),
             ),
         ),
         input_supplies=(supply.declaration,),
@@ -191,6 +166,8 @@ def declare_mvau_design_inventory(
     design = inventory.design_selection
     dot_declaration = inventory.declaration(DotProductDesign.id)
     batch_declaration = inventory.declaration(BatchInterleavedDesign.id)
+    dot_product = dot_product_semantics(dot_declaration)
+    batch_interleaved = batch_interleaved_semantics(batch_declaration)
     compute = dot_declaration.placement("compute").candidates[0]
     compute_pumping = compute.typed_handles(DotpAxiHandles).compute_pumping
 
@@ -211,37 +188,12 @@ def declare_mvau_design_inventory(
 
     def selected_association(
         design: str,
-        supply_mode: str,
         dot_product: object,
         batch_interleaved: object,
-        dot_compute: object,
-        dot_replay: object,
-        dot_delivery: object,
-        batch_compute: object,
-        batch_delivery: object,
     ) -> object:
-        selected = cast(
+        return cast(
             MVAUSourceAssociation,
             _selected_value(design, dot_product, batch_interleaved),
-        )
-        metadata = selected_design_metadata(
-            inventory,
-            design,
-            supply_modes={supply.declaration.source_operand: supply_mode},
-            placement_selections={
-                (DotProductDesign.id, "compute"): dot_compute,
-                (DotProductDesign.id, "replay"): dot_replay,
-                (DotProductDesign.id, "delivery"): dot_delivery,
-                (BatchInterleavedDesign.id, "compute"): batch_compute,
-                (BatchInterleavedDesign.id, "delivery"): batch_delivery,
-            },
-        )
-        return replace(
-            selected,
-            compute_kernel_id=metadata.kernel_id("compute") or "",
-            design_id=metadata.design_id,
-            decision_paths=metadata.decision_paths,
-            kernel_ids=metadata.kernel_ids,
         )
 
     source_association = operation.derived(
@@ -249,16 +201,8 @@ def declare_mvau_design_inventory(
         MVAUSourceAssociation,
         dependencies={
             "design": design,
-            "supply_mode": supply.declaration.choice,
-            "dot_product": dot_association.allow_absent(),
-            "batch_interleaved": batch_association.allow_absent(),
-            "dot_compute": dot_declaration.placement("compute").selected_kernel.allow_absent(),
-            "dot_replay": dot_declaration.placement("replay").selected_kernel.allow_absent(),
-            "dot_delivery": dot_declaration.placement("delivery").selected_kernel.allow_absent(),
-            "batch_compute": batch_declaration.placement("compute").selected_kernel.allow_absent(),
-            "batch_delivery": batch_declaration.placement(
-                "delivery"
-            ).selected_kernel.allow_absent(),
+            "dot_product": dot_product.source_association.allow_absent(),
+            "batch_interleaved": batch_interleaved.source_association.allow_absent(),
         },
         evaluate=selected_association,
     )
@@ -277,16 +221,7 @@ def declare_mvau_design_inventory(
         evaluate=_valid_network,
         sets=(MVAU_STRUCTURAL_CONSTRAINT_SET, MVAU_FEASIBILITY_CONSTRAINT_SET),
     )
-    result = operation.derived(
-        "result",
-        MVAU_NETWORK_REF_SEMANTICS,
-        dependencies={"network": network, "source_association": source_association},
-        evaluate=lambda network, source_association: MVAUNetworkRef(
-            "mvau",
-            cast(DataflowNetwork, network),
-            cast(MVAUSourceAssociation, source_association),
-        ),
-    )
+    result = network
 
     authoring = declare_dataflow_op_authoring(
         inventory,
@@ -305,8 +240,8 @@ def declare_mvau_design_inventory(
         batch_interleaved,
         supply,
         inventory,
-        dot_association,
-        batch_association,
+        dot_product.source_association,
+        batch_interleaved.source_association,
         network,
         network_validation,
         source_association,

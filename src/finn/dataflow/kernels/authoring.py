@@ -23,9 +23,9 @@ behind it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import replace
-from typing import Generic, TypeVar
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, fields, is_dataclass, replace
+from typing import Any, Generic, TypeVar, cast
 
 from finn.dataflow.authoring.scope import (
     AuthoringError,
@@ -35,6 +35,12 @@ from finn.dataflow.authoring.scope import (
     Ref,
     Scope,
     T,
+)
+from finn.dataflow.authoring.declarations import (
+    DeclarationGroup,
+    DeclarationLayer,
+    DeclarationTemplate,
+    compile_class_declarations,
 )
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design import Answer, DesignSpaceSpec, EvaluatorSpec, ValueSemantics
@@ -56,6 +62,99 @@ In = TypeVar("In")
 #: The constraint-set name coverage conditions register into.  The declaration
 #: reads it back rather than taking a hand-maintained path list.
 COVERAGE = "coverage"
+
+
+@dataclass(frozen=True, slots=True)
+class KernelInput:
+    """Reference to one non-engine value in a Kernel's typed input bundle."""
+
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class RegionClaim:
+    role: str | KernelInput
+    region: DeclarationTemplate[Any]
+    computation: DeclarationTemplate[Any]
+    implements: ComputationContract
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Covers(DeclarationGroup):
+    regions: tuple[RegionClaim, ...]
+    layers = frozenset({DeclarationLayer.KERNEL})
+
+    def __init__(self, *regions: RegionClaim) -> None:
+        if not regions:
+            raise ValueError("Kernel coverage requires at least one Region")
+        object.__setattr__(self, "regions", tuple(regions))
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeClaim(DeclarationGroup):
+    role: str
+    network: DeclarationTemplate[Any]
+    source_role: str
+    sink_role: str
+    description: str = ""
+    layers = frozenset({DeclarationLayer.KERNEL})
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class Parameter(DeclarationGroup):
+    name: str
+    source: DeclarationTemplate[Any]
+    layers = frozenset({DeclarationLayer.KERNEL})
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class Constant(DeclarationGroup):
+    name: str
+    value: object
+    why: str
+    layers = frozenset({DeclarationLayer.KERNEL})
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class Sources(DeclarationGroup):
+    root: str
+    paths: tuple[str, ...]
+    layers = frozenset({DeclarationLayer.KERNEL})
+
+    def __init__(self, root: str, *paths: str) -> None:
+        object.__setattr__(self, "root", root)
+        object.__setattr__(self, "paths", tuple(paths))
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
 
 
 class KernelScope(Scope, Generic[In]):
@@ -235,6 +334,102 @@ class KernelScope(Scope, Generic[In]):
         )
 
 
+def _kernel_input_refs(inputs: object) -> Mapping[str, Ref[object]]:
+    if isinstance(inputs, Mapping):
+        values = dict(inputs)
+    elif is_dataclass(inputs) and not isinstance(inputs, type):
+        values = {item.name: getattr(inputs, item.name) for item in fields(inputs)}
+    else:
+        raise AuthoringError("class-authored Kernel inputs must be a mapping or dataclass")
+    return cast(
+        "Mapping[str, Ref[object]]",
+        {name: value for name, value in values.items() if isinstance(value, Ref)},
+    )
+
+
+def _kernel_input_values(inputs: object) -> Mapping[str, object]:
+    if isinstance(inputs, Mapping):
+        return dict(inputs)
+    if is_dataclass(inputs) and not isinstance(inputs, type):
+        return {item.name: getattr(inputs, item.name) for item in fields(inputs)}
+    raise AuthoringError("class-authored Kernel inputs must be a mapping or dataclass")
+
+
+def _kernel_ref(template: DeclarationTemplate[Any], compiled: object) -> Ref[object]:
+    declarations = cast(Any, compiled)
+    member = declarations.template_members.get(id(template))
+    if member is None:
+        raise AuthoringError("a Kernel declaration references an undeclared class member")
+    return cast("Ref[object]", declarations.ref(member))
+
+
+def compile_kernel_class(
+    kernel: type[Kernel],
+    namespace: str,
+    inputs: object,
+    *,
+    applies_if: EvaluatorSpec[Answer[bool]] | None = None,
+) -> tuple[CompiledKernelDeclaration, KernelScope[object]]:
+    """Lower one direct Kernel class through a private ``KernelScope``."""
+
+    scope: KernelScope[object] = KernelScope(namespace, inputs)
+    input_values = _kernel_input_values(inputs)
+    compiled = compile_class_declarations(
+        kernel,
+        layer=DeclarationLayer.KERNEL,
+        namespace=namespace,
+        imports=_kernel_input_refs(inputs),
+        scope=scope,
+    )
+    for group in compiled.groups.values():
+        if isinstance(group, Covers):
+            for claim in group.regions:
+                scope.covers_region(
+                    cast(str, input_values[claim.role.name])
+                    if isinstance(claim.role, KernelInput)
+                    else claim.role,
+                    region=cast("Ref[DataflowRegion]", _kernel_ref(claim.region, compiled)),
+                    computation=cast(
+                        "Ref[ComputationContract]", _kernel_ref(claim.computation, compiled)
+                    ),
+                    implements=claim.implements,
+                    description=claim.description,
+                )
+        elif isinstance(group, EdgeClaim):
+            scope.absorbs_edge(
+                group.role,
+                network=cast("Ref[DataflowNetwork]", _kernel_ref(group.network, compiled)),
+                source_role=group.source_role,
+                sink_role=group.sink_role,
+                description=group.description,
+            )
+        elif isinstance(group, Parameter):
+            scope.parameter(group.name, _kernel_ref(group.source, compiled))
+        elif isinstance(group, Constant):
+            scope.constant(group.name, group.value, why=group.why)
+        elif isinstance(group, Sources):
+            scope.source(group.root, *group.paths)
+
+    declared = scope.spec()
+    spec = gate_spec(declared, applies_if) if applies_if is not None else declared
+    handle_factory = getattr(kernel, "compiled_handles", None)
+    handles = handle_factory(compiled.members) if callable(handle_factory) else compiled.members
+    return CompiledKernelDeclaration(
+        kernel.id,
+        kernel.version,
+        namespace,
+        spec,
+        scope.declared_coverage,
+        scope.declared_parameters,
+        tuple(item.path for item in scope.constraints_in(COVERAGE)),
+        scope.declared_sources,
+        kernel,
+        handles,
+        scope.decision_handles,
+        scope.constraint_handles,
+    ), scope
+
+
 def declare_kernel(
     kernel: type[Kernel],
     namespace: str,
@@ -256,6 +451,8 @@ def declare_kernel(
 
     if not kernel.id:
         raise AuthoringError(f"{kernel.__name__} must set a Kernel id")
+    if kernel.uses_class_authoring:
+        return compile_kernel_class(kernel, namespace, inputs, applies_if=applies_if)
     design: KernelScope[object] = KernelScope(namespace, inputs)
     handles = kernel.define_design(design)
     declared = design.spec()
@@ -286,7 +483,15 @@ def kernel_namespace(owner: str, kernel_id: str) -> str:
 
 __all__ = [
     "COVERAGE",
+    "Constant",
+    "Covers",
+    "EdgeClaim",
     "KernelScope",
+    "KernelInput",
+    "Parameter",
+    "RegionClaim",
+    "Sources",
+    "compile_kernel_class",
     "declare_kernel",
     "kernel_namespace",
 ]

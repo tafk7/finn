@@ -10,7 +10,8 @@ from enum import Enum
 
 from finn.dataflow.design import Finding, QualifiedPath
 from finn.dataflow.kernels import PhysicalComponent
-from finn.dataflow.ops.mvau.associations import MVAUNetworkRef
+from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
+from finn.dataflow.resolution import ResolvedDataflowOp
 
 
 class MVAUPhysicalDirection(str, Enum):
@@ -102,7 +103,7 @@ class MVAUPhysicalElaboration:
 
     source_scope_id: str
     origin: MVAUElaborationOrigin
-    semantic_result: MVAUNetworkRef
+    semantic_result: ResolvedDataflowOp[MVAUSourceAssociation]
     target_fpga_part: str
     target_clock_period_ns: float
     components: tuple[PhysicalComponent, ...]

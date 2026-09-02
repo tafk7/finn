@@ -588,7 +588,7 @@ def project_graph(
             value = template.decode(raw)
             projected[ref.path] = value
             template_values[id(template)] = value
-        except (KeyError, TypeError, ValueError) as exc:
+        except (AssertionError, KeyError, TypeError, ValueError) as exc:
             findings.append(
                 _finding(
                     ref.path,
@@ -609,13 +609,8 @@ def project_graph(
         try:
             active = _condition_value(tensor.when, template_values)
         except KeyError:
-            findings.append(
-                _finding(
-                    refs["present"].path,
-                    "dataflow-source-condition-unavailable",
-                    f"condition for source operand {tensor.role!r} could not be evaluated",
-                )
-            )
+            # A prerequisite already contributed its own precise finding.
+            # Do not invent a dependent presence value or duplicate the error.
             continue
         projected[refs["present"].path] = active
         template_values[id(tensor.present)] = active

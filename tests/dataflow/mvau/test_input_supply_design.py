@@ -24,9 +24,9 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.artifacts import TargetIdentity, kernel_artifact_identity
 from finn.dataflow.ops.mvau.associations import (
-    BindingLocalStateDestination,
     MVAUParameterTopology,
     MVAUSourceAssociation,
+    SemanticOperandDestination,
 )
 from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.ops.mvau.binding import source_roots
@@ -53,7 +53,7 @@ from finn.dataflow.ops.mvau.input_supply import (
     FINN_RTL_MEMSTREAM_SUPPLY,
 )
 from finn.dataflow.ops.mvau.elaboration import compose_dot_product_design
-from finn.dataflow.ops.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
@@ -61,7 +61,6 @@ from finn.dataflow.ops.mvau.problem import (
     MVAUSourceDescription,
 )
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.ops.mvau.associations import MVAUNetworkRef as NetworkRef
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 INT8 = DataType["INT8"]
@@ -140,24 +139,20 @@ def _realized(supply: str, **kwargs: object):  # type: ignore[no-untyped-def]
     return engine, point, answer.value
 
 
-def _resolved(engine: Engine, point: DesignPoint, network: DataflowNetwork) -> MVAUResolvedDesign:
+def _resolved(
+    engine: Engine, point: DesignPoint, network: DataflowNetwork
+) -> MVAUResolvedDataflowOp:
     assembly = MVAU_DOT_PRODUCT_DESIGN
     association_answer = engine.query_property(point, assembly.source_association.path)
     assert isinstance(association_answer, Decided)
     association = cast(MVAUSourceAssociation, association_answer.value)
-    facts = dict(point.problem)
-    projection = MVAUSourceProjection(
-        cast(MVAUSourceDescription, facts[MVAUProblemPaths.SOURCE_DESCRIPTION]),
-        facts,
-        {},
-    )
-    return MVAUResolvedDesign(
+    return MVAUResolvedDataflowOp(
         engine,
         point,
-        NetworkRef("mvau", network, association),
-        association,
         "scope",
-        projection,
+        "dot_product",
+        network,
+        association,
     )
 
 
@@ -263,15 +258,14 @@ def test_memstream_parameters_match_the_resolved_design_point() -> None:
     assert sets.source.path.value.endswith("input.weight.finn_rtl_memstream.sets")
 
 
-def test_memstream_source_association_moves_weights_to_delivery_local_state() -> None:
+def test_memstream_source_association_keeps_the_semantic_weight_destination() -> None:
     engine, point, _realization_value = _realized(FINN_RTL_MEMSTREAM_SUPPLY)
     association = engine.query_property(point, MVAU_DOT_PRODUCT_DESIGN.source_association.path)
     assert isinstance(association, Decided)
     value = cast(MVAUSourceAssociation, association.value)
     weight = next(item for item in value.operands if item.role == "weight")
     assert value.parameter_topology is MVAUParameterTopology.CYCLIC
-    assert value.supply_kernel_id == FINN_RTL_MEMSTREAM_SUPPLY
-    assert weight.destination == BindingLocalStateDestination(DELIVERY_NODE, "weights")
+    assert weight.destination == SemanticOperandDestination("compute", "W")
 
 
 @pytest.mark.parametrize("runtime_writable", (False, True))

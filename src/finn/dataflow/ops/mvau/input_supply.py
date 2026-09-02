@@ -17,12 +17,7 @@ from finn.dataflow.authoring.input_supply import (
 )
 from finn.dataflow.authoring.scope import Ref, Scope, finite, predicate
 from finn.dataflow.design import Answer, DesignSpaceSpec, EvaluatorSpec
-from finn.dataflow.ops.mvau.associations import (
-    BindingLocalStateDestination,
-    CoordinateMappingKind,
-    MVAUParameterTopology,
-    MVAUSourceAssociation,
-)
+from finn.dataflow.ops.mvau.associations import MVAUParameterTopology, MVAUSourceAssociation
 from finn.dataflow.kernels.finn_rtl_memstream import (
     FinnRtlMemstreamInputs,
     FinnRtlMemstreamKernel,
@@ -160,21 +155,9 @@ def _supplied_source_association(
 ) -> MVAUSourceAssociation:
     if supply == EXTERNAL_SUPPLY:
         return core_source_association
-    operands = tuple(
-        replace(
-            operand,
-            destination=BindingLocalStateDestination(DELIVERY_NODE, "weights"),
-            mapping=CoordinateMappingKind.TRANSPOSE_2D,
-        )
-        if operand.role == WEIGHT_SOURCE_OPERAND
-        else operand
-        for operand in core_source_association.operands
-    )
     return replace(
         core_source_association,
         parameter_topology=MVAUParameterTopology.CYCLIC,
-        operands=operands,
-        supply_kernel_id=FINN_RTL_MEMSTREAM_SUPPLY,
     )
 
 

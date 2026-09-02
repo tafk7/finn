@@ -18,7 +18,6 @@ import numpy as np  # type: ignore[import-not-found]
 from dataflow.rtlsim.composed_mvau_equiv import record_identity
 from dataflow.rtlsim.composed_mvau_numeric import (
     Case,
-    DspBlock,
     _activations,
     _model,
     _weights,
@@ -28,6 +27,7 @@ from dataflow.rtlsim.composed_mvau_numeric import (
 )
 from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow.design import Decided, Engine
+from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
 from finn.dataflow.ops.mvau.designs.dot_product import MVAU_DOT_PRODUCT_DESIGN
 from finn.dataflow.ops.mvau.artifacts.source import (
@@ -40,13 +40,12 @@ from finn.dataflow.ops.mvau.artifacts.supplied import (
 )
 from finn.dataflow.ops.mvau.input_supply import FINN_RTL_MEMSTREAM_SUPPLY
 from finn.dataflow.ops.mvau.elaboration import compose_dot_product_design
-from finn.dataflow.ops.mvau.source import MVAUResolvedDesign, MVAUSourceProjection
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
-from finn.dataflow.design import NetworkRef
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 
 CASE = Case(
@@ -114,21 +113,19 @@ def requirements_for(
     ).point
     realized = assembly.inventory.realize(engine, point)
     if not isinstance(realized, Decided):
-        print(f"realization failed: {realized.findings}")
-        return 1
+        raise RuntimeError(f"realization failed: {realized.findings}")
     realization = realized.value
     association_answer = engine.query_property(point, assembly.source_association.path)
     if not isinstance(association_answer, Decided):
-        print(f"source association failed: {association_answer.findings}")
-        return 1
+        raise RuntimeError(f"source association failed: {association_answer.findings}")
     association = cast(MVAUSourceAssociation, association_answer.value)
-    resolved = MVAUResolvedDesign(
+    resolved = MVAUResolvedDataflowOp(
         engine,
         point,
-        NetworkRef("mvau", realization.network, association),
-        association,
         "mvau_dot_product_memstream",
-        MVAUSourceProjection(source_description, facts, {}),
+        "dot_product",
+        realization.network,
+        association,
     )
     elaboration = compose_dot_product_design(resolved, realization)
     return build_supplied_artifact_requirements(

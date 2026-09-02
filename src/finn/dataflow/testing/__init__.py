@@ -22,7 +22,8 @@ from finn.dataflow.op import (
     DataflowOp,
     DataflowOpError,
 )
-from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
+from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.resolution import ResolvedDataflowOp
 
 
 @dataclass(frozen=True)
@@ -44,8 +45,8 @@ class DataflowOpConformanceCase:
 class DataflowOpConformanceResult:
     """Resolved values observed before and after persistence."""
 
-    original: ResolvedDataflowOp
-    restored: ResolvedDataflowOp
+    original: ResolvedDataflowOp[object]
+    restored: ResolvedDataflowOp[object]
 
 
 def assert_fresh_import_avoids(module: str, forbidden_modules: tuple[str, ...]) -> None:
@@ -178,7 +179,7 @@ def assert_dataflow_op_conforms(
     if split < len(assignment_items):
         reloaded.commit_dataflow_assignments(case.config, dict(assignment_items[split:]))
     original = reloaded.resolve_dataflow(case.config)
-    assert isinstance(original.result, NetworkRef)
+    assert isinstance(original.network, DataflowNetwork)
     reloaded_model.save(case.reload_path)
     final_model = ModelWrapper(str(case.reload_path))
     final_node = next(node for node in final_model.graph.node if node.name == case.node_name)
@@ -186,7 +187,8 @@ def assert_dataflow_op_conforms(
     assert isinstance(final_operation, case.operation_type)
     restored = final_operation.resolve_dataflow(case.config)
     assert restored.point.assignments == original.point.assignments
-    assert restored.result == original.result
+    assert restored.selected_design_id == original.selected_design_id
+    assert restored.network == original.network
     assert restored.source_association == original.source_association
     assert restored.source_scope_id == original.source_scope_id
 

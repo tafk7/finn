@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
@@ -22,48 +21,47 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 from finn.dataflow.authoring import (
     Attribute,
     BuildFact,
+    ClosedDesigns,
     DataflowBuildConfigView,
     DataflowOp,
     DatatypeAttribute,
     InitializerAnalysis,
     InputTensor,
     NoInitializer,
-    NodeAttrCodec,
-    NodeAttributeType,
     OptionalInitializer,
     OutputTensor,
     Persist,
     RequiredInitializer,
     SourceScope,
     TensorShape,
+    UsesDesign,
+    UsesInputSupply,
     constraint,
     derived,
     not_,
 )
 from finn.dataflow.authoring.op_design import Provenance
-from finn.dataflow.authoring.inventory import DataflowOpAuthoring
-from finn.dataflow.design import ABSENT, Engine, Finding, FindingKind, QualifiedPath
+from finn.dataflow.authoring.scope import Ref
+from finn.dataflow.design import ABSENT
+from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.kernels.dsp import DspBlock
-from finn.dataflow.ops.mvau._adapter import MVAU_DESIGN_ADAPTER
-from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS
-from finn.dataflow.ops.mvau.projection import (
-    MVAU_LOGICAL_SOURCE_NODEATTRS,
-    MVAUProjectionContext,
-    MVAUResolvedDesign,
-    MVAUSourceAdapterError,
-    MVAUSourceProjection,
-    classify_mvau_dsp_block,
-    project_mvau_build_problem,
-    project_mvau_graph_source,
-    resolve_mvau_point,
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
+from finn.dataflow.ops.mvau.designs.batch_interleaved import (
+    BatchInterleavedDesign,
+    BatchInterleavedDesignInputs,
 )
-from finn.dataflow.ops.mvau.inventory import (
-    MVAU_DESIGN_INVENTORY,
-    MVAUDataflowOpPaths,
+from finn.dataflow.ops.mvau.designs.dot_product import (
+    DotProductDesign,
+    DotProductDesignInputs,
+)
+from finn.dataflow.ops.mvau.input_supply import declare_mvau_input_supply
+from finn.dataflow.ops.mvau.contracts import (
+    MVAU_DATAFLOW_OP_FAMILY_ID,
+    MVAU_DATAFLOW_OP_FAMILY_VERSION,
 )
 from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
-    MVAU_PROBLEM_PROVENANCE,
+    MVAUProblem,
     MVAUProblemPaths,
     MVAUSourceDescription,
 )
@@ -72,12 +70,6 @@ from finn.dataflow.parameters.cyclic.definition import (
     CyclicTargetMemoryCapabilities,
 )
 from finn.dataflow.region import BeatSequence
-
-#: v6 is the deliberate pre-release cutover from semantic Kernel pools to the
-#: closed ``dot_product | batch_interleaved`` DataflowDesign inventory.  Its
-#: decision paths and node attributes are new; v5 nodes are rejected rather
-#: than interpreted through a migration codec.
-MVAU_DATAFLOW_OP_FAMILY_VERSION = "mvau-dataflow-op-v6"
 
 
 @dataclass(frozen=True)
@@ -126,7 +118,13 @@ def _mvau_target_part(config: object) -> str | None:
 
 def _mvau_target_dsp(config: object) -> DspBlock | None:
     part = _mvau_target_part(config)
-    return None if part is None else classify_mvau_dsp_block(part)
+    if part is None or len(part) < 4 or not part.startswith(("xc", "xq")):
+        return None
+    if part.startswith(("xcvc", "xcve", "xcvp", "xcvm", "xqvc", "xqvm", "xqrvc", "xcv80")):
+        return DspBlock.DSP58
+    if len(part) > 2 and part[2] == "7":
+        return DspBlock.DSP48E1
+    return DspBlock.DSP48E2
 
 
 def _mvau_memory_capabilities(config: object) -> CyclicTargetMemoryCapabilities | None:
@@ -200,7 +198,12 @@ class MvauDataflowOp(DataflowOp):
     """Logical MVAU source operation backed by the reviewed design inventory."""
 
     declaration_namespace = "mvau"
-    design_adapter = MVAU_DESIGN_ADAPTER
+    uses_class_authoring = True
+    selection_constraints = "mvau_op_feasibility"
+    structural_constraint_set = "mvau_op_structural"
+    structural_readiness = "mvau_op_structural"
+    artifact_readiness = "artifact_inputs"
+    feasibility_constraints = ("mvau_op_feasibility",)
 
     # Proposed v7 source/build schema. AC3 compiles this in shadow while the
     # v6 hooks below remain authoritative; AC4 switches ``uses_class_authoring``.
@@ -381,138 +384,103 @@ class MvauDataflowOp(DataflowOp):
     def threshold_shape_supported(shape: tuple[int, ...], matrix_height: int) -> bool:
         return shape[0] == matrix_height
 
+    problem = MVAUProblem(
+        repetitions=cast("Ref[int]", repetitions),
+        matrix_width=cast("Ref[int]", matrix_width),
+        matrix_height=cast("Ref[int]", matrix_height),
+        activation_element_type=cast("Ref[QONNXDataType]", activation.datatype),
+        weight_element_type=cast("Ref[QONNXDataType]", weight.datatype),
+        accumulator_element_type=cast("Ref[QONNXDataType]", accumulator_element_type),
+        output_element_type=cast("Ref[QONNXDataType]", output.datatype),
+        threshold_element_type=cast("Ref[QONNXDataType]", threshold.datatype),
+        threshold_initializer_available=cast("Ref[bool]", threshold.initializer_present),
+        computation_profile=cast("Ref[MVAUComputationProfile]", computation_profile),
+        weight_initializer_available=cast("Ref[bool]", weight.initializer_present),
+        weight_initializer_fingerprint=cast("Ref[str]", weight.initializer_fingerprint),
+        threshold_initializer_fingerprint=cast("Ref[str]", threshold.initializer_fingerprint),
+        source_description=cast("Ref[MVAUSourceDescription]", source_description),
+        initializer_excludes_minimum=cast("Ref[bool]", initializer_excludes_minimum),
+        runtime_weight_range_contract=cast("Ref[bool]", runtime_weight_range_contract),
+        runtime_writable=cast("Ref[bool]", runtime_writable),
+        external_weight_sequence=cast("Ref[BeatSequence]", external_weight_sequence),
+        accumulator_type_analysis_owner=cast("Ref[str]", accumulator_type_analysis_owner),
+        target_dsp_block=cast("Ref[DspBlock]", target_dsp_block),
+        target_fpga_part=cast("Ref[str]", target_fpga_part),
+        target_clock_period_ns=cast("Ref[float]", target_clock_period_ns),
+        target_memory_capabilities=cast(
+            "Ref[CyclicTargetMemoryCapabilities]", target_memory_capabilities
+        ),
+    )
+    weight_supply = UsesInputSupply(declare_mvau_input_supply, problem)
+    dot_product = UsesDesign(
+        DotProductDesign,
+        DotProductDesignInputs(
+            cast("Ref[int]", repetitions),
+            cast("Ref[int]", matrix_width),
+            cast("Ref[int]", matrix_height),
+            cast("Ref[QONNXDataType]", activation.datatype),
+            cast("Ref[QONNXDataType]", weight.datatype),
+            cast("Ref[QONNXDataType]", accumulator_element_type),
+            cast("Ref[QONNXDataType]", output.datatype),
+            cast("Ref[MVAUComputationProfile]", computation_profile),
+            cast("Ref[MVAUSourceDescription]", source_description),
+            cast("Ref[bool]", effective_narrow_weights),
+            cast("Ref[DspBlock]", target_dsp_block),
+            cast("Ref[float]", target_clock_period_ns),
+            cast("Ref[str]", weight_supply.choice),
+        ),
+    )
+    batch_interleaved = UsesDesign(
+        BatchInterleavedDesign,
+        BatchInterleavedDesignInputs(
+            cast("Ref[int]", repetitions),
+            cast("Ref[int]", matrix_width),
+            cast("Ref[int]", matrix_height),
+            cast("Ref[object]", activation.datatype),
+            cast("Ref[object]", weight.datatype),
+            cast("Ref[object]", accumulator_element_type),
+            cast("Ref[object]", output.datatype),
+            cast("Ref[MVAUComputationProfile]", computation_profile),
+            cast("Ref[MVAUSourceDescription]", source_description),
+            cast("Ref[str]", weight_supply.choice),
+        ),
+    )
+    designs = ClosedDesigns(dot_product, batch_interleaved)
+
     persistence = (
-        Persist(design_adapter.refs.design, "dataflow_design"),
-        Persist(design_adapter.refs.dot_product_pe, "dataflow_dot_product_pe"),
-        Persist(design_adapter.refs.dot_product_simd, "dataflow_dot_product_simd"),
-        Persist(design_adapter.refs.batch_interleaved_pe, "dataflow_interleaved_pe"),
-        Persist(design_adapter.refs.batch_interleaved_simd, "dataflow_interleaved_simd"),
+        Persist(designs.choice, "dataflow_design"),
+        Persist(dot_product.pe, "dataflow_dot_product_pe"),
+        Persist(dot_product.simd, "dataflow_dot_product_simd"),
+        Persist(batch_interleaved.pe, "dataflow_interleaved_pe"),
+        Persist(batch_interleaved.simd, "dataflow_interleaved_simd"),
         Persist(
-            design_adapter.refs.batch_interleaved_interleave,
+            batch_interleaved.interleave,
             "dataflow_interleaved_batch",
         ),
-        Persist(design_adapter.refs.weight_supply, "dataflow_weight_supply"),
-        Persist(design_adapter.refs.compute_pumping, "dataflow_dotp_axi_pumping"),
+        Persist(weight_supply.choice, "dataflow_weight_supply"),
+        Persist(dot_product.compute.dotp_axi.compute_pumping, "dataflow_dotp_axi_pumping"),
         Persist(
-            design_adapter.refs.ram_style,
+            weight_supply.settings.ram_style,
             "dataflow_finn_rtl_memstream_ram_style",
         ),
         Persist(
-            design_adapter.refs.pumped_memory,
+            weight_supply.settings.pumped_memory,
             "dataflow_finn_rtl_memstream_pumping",
         ),
     )
 
     @classmethod
     def dataflow_family_id(cls) -> str:
-        return "finn.dataflow.mvau"
+        return MVAU_DATAFLOW_OP_FAMILY_ID
 
     @classmethod
     def dataflow_family_version(cls) -> str:
         return MVAU_DATAFLOW_OP_FAMILY_VERSION
 
-    @classmethod
-    def dataflow_authoring(cls) -> DataflowOpAuthoring:
-        return MVAU_DESIGN_INVENTORY.authoring
+    def resolve_dataflow(self, config: DataflowBuildConfigView) -> MVAUResolvedDataflowOp:
+        """Return the generic resolved record with MVAU association typing."""
 
-    @classmethod
-    def source_nodeattr_types(cls) -> Mapping[str, NodeAttributeType]:
-        return MVAU_LOGICAL_SOURCE_NODEATTRS
-
-    @classmethod
-    def decision_nodeattrs(cls) -> Mapping[QualifiedPath, NodeAttrCodec]:
-        return MVAU_DECISION_NODEATTRS
-
-    def _graph_projection(self) -> MVAUSourceProjection:
-        projection = project_mvau_graph_source(
-            self._attached_model(),
-            self.onnx_node.name,
-            source_scope_id=self.dataflow_scope_id(),
-        )
-        if projection.blocking_findings:
-            raise MVAUSourceAdapterError(projection.blocking_findings)
-        return projection
-
-    def project_graph_problem(self) -> Mapping[QualifiedPath, object]:
-        problem = self._graph_projection().problem_data
-        MVAU_PROBLEM_PROVENANCE.check_graph_projection(problem)
-        return problem
-
-    @staticmethod
-    def _context_parts(
-        config: DataflowBuildConfigView,
-    ) -> tuple[DataflowBuildConfigView, str, bool, BeatSequence | None, bool | None]:
-        if isinstance(config, MVAUDataflowBuildContext):
-            return (
-                config.build_config,
-                config.accumulator_type_analysis_owner,
-                config.runtime_writable_weights,
-                config.external_weight_sequence,
-                config.supports_initialized_uram,
-            )
-        return config, "finn.MinimizeAccumulatorWidth", False, None, None
-
-    @staticmethod
-    def _target_part(config: DataflowBuildConfigView) -> str | None:
-        resolver = getattr(config, "_resolve_fpga_part", None)
-        if callable(resolver):
-            try:
-                value = resolver()
-            except (KeyError, TypeError, ValueError):
-                value = None
-            return value if isinstance(value, str) and value else None
-        value = getattr(config, "fpga_part", None)
-        return value if isinstance(value, str) and value else None
-
-    def project_build_problem(
-        self, config: DataflowBuildConfigView
-    ) -> Mapping[QualifiedPath, object]:
-        base, owner, runtime_writable, external_sequence, supports_uram = self._context_parts(
-            config
-        )
-        context = MVAUProjectionContext(
-            owner,
-            fpga_part=self._target_part(base),
-            clock_period_ns=float(base.synth_clk_period_ns),
-            supports_initialized_uram=supports_uram,
-            external_weight_sequence=external_sequence,
-            runtime_writable_weights=runtime_writable,
-        )
-        if context.fpga_part is not None and classify_mvau_dsp_block(context.fpga_part) is None:
-            raise MVAUSourceAdapterError(
-                (
-                    Finding(
-                        FindingKind.LIMITATION,
-                        "mvau-target-part-unknown",
-                        MVAUProblemPaths.TARGET_DSP_BLOCK,
-                        "target FPGA part cannot be classified into a supported DSP family",
-                        values=(("fpga_part", context.fpga_part),),
-                    ),
-                )
-            )
-        problem = dict(
-            project_mvau_build_problem(
-                context,
-                runtime_writable_weights=runtime_writable,
-            )
-        )
-        problem[MVAUDataflowOpPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER] = owner
-        MVAU_PROBLEM_PROVENANCE.check_build_projection(problem)
-        return problem
-
-    def resolve_dataflow(self, config: DataflowBuildConfigView) -> MVAUResolvedDesign:
-        point = self.hydrate_dataflow_point(config)
-        description = cast(
-            MVAUSourceDescription,
-            point.problem[MVAUDataflowOpPaths.SOURCE_DESCRIPTION],
-        )
-        projection = MVAUSourceProjection(description, point.problem, {}, ())
-        return resolve_mvau_point(
-            Engine(),
-            point,
-            projection,
-            source_scope_id=self.dataflow_scope_id(),
-        )
+        return cast(MVAUResolvedDataflowOp, super().resolve_dataflow(config))
 
     def make_shape_compatible_op(self, model: ModelWrapper) -> NodeProto:
         activation_shape = model.get_tensor_shape(self.onnx_node.input[0])
@@ -560,12 +528,7 @@ class MvauDataflowOp(DataflowOp):
         context[self.onnx_node.output[0]] = result.reshape(output_shape)
 
     def verify_node(self) -> None:
-        no_activation = bool(self.get_nodeattr("noActivation"))
-        expected_inputs = 2 if no_activation else 3
-        if len(self.onnx_node.input) != expected_inputs or len(self.onnx_node.output) != 1:
-            raise ValueError(f"MvauDataflowOp requires {expected_inputs} inputs and one output")
-        # Reuse the source adapter's complete graph/type/shape checks.
-        self._graph_projection()
+        self.validate_declared_source()
 
 
 __all__ = [

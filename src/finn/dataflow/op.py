@@ -12,7 +12,7 @@ from hashlib import sha256
 import json
 from threading import RLock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, TypeAlias, cast
 from uuid import uuid4
 
 from onnx import AttributeProto  # type: ignore[import-not-found]
@@ -39,6 +39,7 @@ from finn.dataflow.design import (
 )
 from finn.dataflow.datatypes import encode_datatype, is_qonnx_datatype
 from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
+from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
 
 if TYPE_CHECKING:
@@ -157,6 +158,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     source_association_member: ClassVar[str] = "source_association"
     persistence: ClassVar[tuple[object, ...]] = ()
     selection_constraints: ClassVar[str | None] = None
+    structural_constraint_set: ClassVar[str | None] = None
     structural_readiness: ClassVar[str | None] = None
     artifact_readiness: ClassVar[str | None] = None
     feasibility_constraints: ClassVar[tuple[str, ...]] = ()
@@ -735,7 +737,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
 
         return self._hydrate_problem(self.problem_instance(config))
 
-    def resolve_dataflow(self, config: DataflowBuildConfigView) -> ResolvedDataflowOp:
+    def resolve_dataflow(self, config: DataflowBuildConfigView) -> ResolvedDataflowOp[Any]:
         """Hydrate the point and require a selected logical result and association."""
 
         point = self.hydrate_dataflow_point(config)
@@ -760,22 +762,37 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                 )
             )
         selected = result.value
-        if not isinstance(selected, NetworkRef):
+        if isinstance(selected, NetworkRef):
+            selected_network = selected.network
+            fallback_design_id = selected.network_id
+        elif isinstance(selected, DataflowNetwork):
+            selected_network = selected
+            fallback_design_id = "network"
+        else:
             raise DataflowOpError(
                 (
                     _finding(
                         FindingKind.AUTHORING,
                         "dataflow-result-type-invalid",
-                        "the result property did not produce NetworkRef",
+                        "the selected Network property did not produce DataflowNetwork",
                     ),
                 )
             )
+        compiled = type(self).compiled_dataflow_operation()
+        selected_design_id = fallback_design_id
+        if compiled is not None and compiled.inventory is not None:
+            selected_design = compiled.inventory.selected(point)
+            if not isinstance(selected_design, Decided):
+                raise DataflowOpError(selected_design.findings)
+            selected_design_id = selected_design.value.id
         return ResolvedDataflowOp(
             engine,
             point,
-            selected,
-            association.value,
             self.dataflow_scope_id(),
+            selected_design_id,
+            selected_network,
+            association.value,
+            compiled,
         )
 
     def realize_dataflow(self, config: DataflowBuildConfigView) -> DesignRealization:

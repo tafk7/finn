@@ -166,7 +166,6 @@ def construct_external_dot_product_source_association(
                 (repetitions, matrix_height),
             ),
         ),
-        "dot_product",
     )
 
 

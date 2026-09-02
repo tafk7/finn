@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeAlias
 
-from finn.dataflow.design import QualifiedPath, ValueSemantics
-from finn.dataflow.resolution import NetworkRef as GenericNetworkRef
+from finn.dataflow.resolution import ResolvedDataflowOp
 
 
 class MVAUParameterTopology(str, Enum):
@@ -49,7 +49,7 @@ class BindingLocalStateDestination:
     state_id: str
 
 
-SourceOperandDestination = SemanticOperandDestination | BindingLocalStateDestination
+SourceOperandDestination = SemanticOperandDestination
 
 
 @dataclass(frozen=True)
@@ -90,36 +90,16 @@ class MVAUSourceAssociation:
     region_declaration_id: str
     parameter_topology: MVAUParameterTopology
     operands: tuple[SourceOperandAssociation, ...]
-    compute_kernel_id: str = ""
-    supply_kernel_id: str | None = None
-    adapter_kernel_id: str | None = None
-    design_id: str = ""
-    decision_paths: tuple[QualifiedPath, ...] = ()
-    kernel_ids: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class MVAUNetworkRef(GenericNetworkRef):
-    """Selected MVAU Network with a typed source association."""
-
-    source_association: MVAUSourceAssociation
-
-
-MVAU_NETWORK_REF_SEMANTICS: ValueSemantics[MVAUNetworkRef] = ValueSemantics(
-    MVAUNetworkRef,
-    "MVAUNetworkRef",
-    lambda value: isinstance(value, MVAUNetworkRef),
-    lambda left, right: left == right,
-    lambda value: value,
-)
+MVAUResolvedDataflowOp: TypeAlias = ResolvedDataflowOp[MVAUSourceAssociation]
 
 
 __all__ = [
     "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "MVAUParameterTopology",
-    "MVAU_NETWORK_REF_SEMANTICS",
-    "MVAUNetworkRef",
+    "MVAUResolvedDataflowOp",
     "MVAUSourceAssociation",
     "SemanticOperandDestination",
     "SourceOperandAssociation",

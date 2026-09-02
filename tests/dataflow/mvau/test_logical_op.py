@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 import pytest
@@ -24,33 +23,25 @@ from finn.dataflow.authoring.declarations import (
     DeclarationLayer,
     compile_class_declarations,
 )
-from finn.dataflow.authoring.compiler import compile_dataflow_operation
 from finn.dataflow.authoring.projection import ProjectionPlan, project_build, project_graph
 from finn.dataflow.design import Decided, Engine, QualifiedPath
 from finn.dataflow.ops.mvau.problem import MVAUComputationProfile
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
-from finn.dataflow.ops.mvau.assignments import MVAU_DECISION_NODEATTRS
 from finn.dataflow.ops.mvau.artifacts.source import build_decomposed_artifact_requirements
 from finn.dataflow.ops.mvau.input_supply import (
     EXTERNAL_SUPPLY,
     FINN_RTL_MEMSTREAM_SUPPLY,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
-from finn.dataflow.ops.mvau.source import (
-    MVAUProjectionContext,
-    MVAUResolvedDesign,
-    project_mvau_source,
-    start_mvau_projection,
-)
 from finn.dataflow.op import (
     DataflowBuildConfigView,
     DataflowOpError,
     dataflow_problem_fingerprint,
 )
-from finn.dataflow.design import NetworkRef
-from finn.dataflow.ops.mvau.inventory import MVAU_DATAFLOW_OP_SPEC, MVAUDataflowOpPaths
+from finn.dataflow.design import ResolvedDataflowOp
+from finn.dataflow.ops.mvau.inventory import MVAUDataflowOpPaths
 from finn.dataflow.datatypes import is_qonnx_datatype
 from finn.dataflow.ops.mvau.op import (
     MVAU_DATAFLOW_OP_FAMILY_VERSION,
@@ -60,7 +51,7 @@ from finn.dataflow.ops.mvau.op import (
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.region import BeatSequence
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
-from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
+from finn.dataflow.ops.mvau.problem import MVAUProblemPaths, MVAUSourceDescription
 
 NODE_ID = "logical_mvau0"
 PART = "xczu3eg-sbva484-1-e"
@@ -212,53 +203,12 @@ def _batch_interleaved() -> dict[QualifiedPath | str, object]:
     }
 
 
-def _standalone(
-    model: ModelWrapper,
-    context: MVAUDataflowBuildContext,
-    assignments: dict[QualifiedPath | str, object],
-) -> MVAUResolvedDesign:
-    build = cast(_BuildConfig, context.build_config)
-    projection = project_mvau_source(
-        model,
-        NODE_ID,
-        MVAUProjectionContext(
-            context.accumulator_type_analysis_owner,
-            fpga_part=build.fpga_part,
-            clock_period_ns=build.synth_clk_period_ns,
-            supports_initialized_uram=context.supports_initialized_uram,
-            external_weight_sequence=context.external_weight_sequence,
-            runtime_writable_weights=context.runtime_writable_weights,
-        ),
-        source_scope_id=f"{NODE_ID}_scope",
-    )
-    return start_mvau_projection(projection, assignments)
-
-
-def _assert_resolution_parity(
-    current: MVAUResolvedDesign,
-    expected: MVAUResolvedDesign,
-) -> None:
-    assert current.point.problem == expected.point.problem
-    assert current.point.assignments == expected.point.assignments
-    assert current.result == expected.result
-    assert current.source_association == expected.source_association
-    for set_name in ("mvau_op_structural", "mvau_op_feasibility"):
-        assert current.engine.evaluate_constraint_set(
-            current.point, set_name
-        ) == expected.engine.evaluate_constraint_set(expected.point, set_name)
-    assert current.engine.check_readiness(
-        current.point, "artifact_inputs"
-    ) == expected.engine.check_readiness(expected.point, "artifact_inputs")
-
-
 @pytest.mark.parametrize("fused", (False, True))
-def test_class_authored_mvau_projection_matches_v6_semantic_facts(fused: bool) -> None:
-    """AC3 shadow path: new operand declarations derive the values v6 copied."""
+def test_class_authored_mvau_projection_derives_semantic_facts(fused: bool) -> None:
 
     model = _model(fused=fused)
     operation = _wrapped(model)
     context = _context()
-    legacy = operation.problem_instance(context)
 
     declarations = compile_class_declarations(
         MvauDataflowOp,
@@ -287,72 +237,53 @@ def test_class_authored_mvau_projection_matches_v6_semantic_facts(fused: bool) -
         assert isinstance(answer, Decided)
         return answer.value
 
-    assert derived_value("repetitions") == legacy[MVAUProblemPaths.REPETITIONS]
-    assert derived_value("matrix_width") == legacy[MVAUProblemPaths.MATRIX_WIDTH]
-    assert derived_value("matrix_height") == legacy[MVAUProblemPaths.MATRIX_HEIGHT]
-    assert derived_value("computation_profile") == legacy[MVAUProblemPaths.COMPUTATION_PROFILE]
-    assert derived_value("source_description") == legacy[MVAUProblemPaths.SOURCE_DESCRIPTION]
+    assert derived_value("repetitions") == 4
+    assert derived_value("matrix_width") == 4
+    assert derived_value("matrix_height") == 4
+    assert derived_value("computation_profile") is (
+        MVAUComputationProfile.FUSED_THRESHOLD
+        if fused
+        else MVAUComputationProfile.ACCUMULATOR_INTEGER
+    )
+    description = derived_value("source_description")
+    assert isinstance(description, MVAUSourceDescription)
+    assert description.source_node_id == f"{NODE_ID}_scope"
     assert derived_value("effective_narrow_weights") is False
 
-    direct_pairs = {
-        "activation.datatype": MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
-        "weight.datatype": MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
-        "accumulator_element_type": MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
-        "output.datatype": MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
-        "weight.initializer_present": MVAUProblemPaths.WEIGHT_INITIALIZER_AVAILABLE,
-        "weight.initializer_fingerprint": MVAUProblemPaths.WEIGHT_INITIALIZER_FINGERPRINT,
-        "runtime_writable": MVAUProblemPaths.RUNTIME_WRITABLE,
-        "accumulator_type_analysis_owner": MVAUProblemPaths.ACCUMULATOR_TYPE_ANALYSIS_OWNER,
-        "target_dsp_block": MVAUProblemPaths.TARGET_DSP_BLOCK,
-        "target_fpga_part": MVAUProblemPaths.TARGET_FPGA_PART,
-        "target_clock_period_ns": MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS,
-        "target_memory_capabilities": MVAUProblemPaths.TARGET_MEMORY_CAPABILITIES,
-    }
     projected = {**graph.values, **build.values}
-    for member, legacy_path in direct_pairs.items():
-        assert projected[declarations.ref(member).path] == legacy[legacy_path]
+    assert projected[declarations.ref("activation.datatype").path] == DataType["INT8"]
+    assert projected[declarations.ref("weight.datatype").path] == DataType["INT8"]
+    assert projected[declarations.ref("accumulator_element_type").path] == DataType["INT16"]
+    assert projected[declarations.ref("target_fpga_part").path] == PART
+    assert projected[declarations.ref("target_clock_period_ns").path] == 5.0
     if fused:
-        assert (
-            projected[declarations.ref("threshold.datatype").path]
-            == legacy[MVAUProblemPaths.THRESHOLD_ELEMENT_TYPE]
-        )
-        assert (
-            projected[declarations.ref("threshold.initializer_present").path]
-            == legacy[MVAUProblemPaths.THRESHOLD_INITIALIZER_AVAILABLE]
-        )
+        assert projected[declarations.ref("threshold.datatype").path] == DataType["INT16"]
+        assert projected[declarations.ref("threshold.initializer_present").path] is True
 
 
-def test_class_authored_mvau_shadow_lifecycle_matches_v6_resolution() -> None:
+def test_class_authored_mvau_compiler_is_the_production_lifecycle() -> None:
     model = _model()
     operation = _wrapped(model)
     context = _context()
-    expected = operation.commit_dataflow_assignments(context, _dot_product()).point
-    expected_result = Engine().query_property(expected, MVAU_DESIGN_INVENTORY.result.path)
-    assert isinstance(expected_result, Decided)
-
-    compiled = compile_dataflow_operation(MvauDataflowOp)
-    graph = project_graph(
-        compiled.projection,
-        operation,
-        model,
-        operation.onnx_node,
-        operation.dataflow_scope_id(),
-    )
-    build = project_build(compiled.projection, context)
-    assert graph.findings == () and build.findings == ()
-    engine = Engine()
-    point = engine.start(
-        engine.validate(compiled.specification),
-        {**graph.values, **build.values},
-    )
-    point = engine.commit_assignments(point, _dot_product()).point
-    actual_result = engine.query_property(point, compiled.result.path)
-    assert actual_result == expected_result
-    assert dataflow_problem_fingerprint(point.problem) == (
+    operation.commit_dataflow_assignments(context, _dot_product())
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+    resolved = operation.resolve_dataflow(context)
+    assert resolved.compiled is compiled
+    assert dataflow_problem_fingerprint(resolved.point.problem) == (
         "8e96ddc2535ee0e97d8df67f5186b7247b03acb528d8b6d99a4f1dc786159b34"
     )
-    assert {path: codec.attribute_name for path, codec in compiled.persistence.items()} == {
-        path: codec.attribute_name for path, codec in MVAU_DECISION_NODEATTRS.items()
+    assert {codec.attribute_name for codec in compiled.persistence.values()} == {
+        "dataflow_design",
+        "dataflow_dot_product_pe",
+        "dataflow_dot_product_simd",
+        "dataflow_interleaved_pe",
+        "dataflow_interleaved_simd",
+        "dataflow_interleaved_batch",
+        "dataflow_weight_supply",
+        "dataflow_dotp_axi_pumping",
+        "dataflow_finn_rtl_memstream_ram_style",
+        "dataflow_finn_rtl_memstream_pumping",
     }
 
 
@@ -360,31 +291,25 @@ def test_logical_mvau_registration_static_spec_and_problem_projection_parity() -
     model = _model()
     operation = _wrapped(model)
     context = _context()
-    expected = project_mvau_source(
-        model,
-        NODE_ID,
-        MVAUProjectionContext(
-            "finn.MinimizeAccumulatorWidth",
-            fpga_part=PART,
-            clock_period_ns=5.0,
-            runtime_writable_weights=False,
-        ),
-        source_scope_id=operation.dataflow_scope_id(),
-    )
-
     assert operation._attached_model() is model
-    assert type(operation).build_design_space_spec() is MVAU_DATAFLOW_OP_SPEC
-    assert operation.problem_instance(context) == expected.problem_data
+    compiled = type(operation).compiled_dataflow_operation()
+    assert compiled is not None
+    assert type(operation).build_design_space_spec() is compiled.specification
+    assert operation.problem_instance(context)[
+        compiled.declarations.ref("activation.shape").path
+    ] == (4, 4)
     assert operation.read_assignments() == {}
 
 
 def test_logical_source_attributes_use_declared_defaults_and_reject_invalid_values() -> None:
     operation = _wrapped(_model(no_activation_attribute=None))
     assert operation.get_nodeattr("noActivation") == 1
-    assert (
-        operation.problem_instance(_context())[MVAUProblemPaths.COMPUTATION_PROFILE]
-        is MVAUComputationProfile.ACCUMULATOR_INTEGER
-    )
+    point = operation.hydrate_dataflow_point(_context())
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+    assert Engine().query_property(
+        point, compiled.declarations.ref("computation_profile").path
+    ) == Decided(MVAUComputationProfile.ACCUMULATOR_INTEGER)
 
     for name in ("noActivation", "binaryXnorMode"):
         invalid = _model(
@@ -394,7 +319,7 @@ def test_logical_source_attributes_use_declared_defaults_and_reject_invalid_valu
         with pytest.raises(DataflowOpError) as malformed:
             _wrapped(invalid).problem_instance(_context())
         assert {finding.code for finding in malformed.value.findings} == {
-            "mvau-logical-source-attribute-invalid"
+            "dataflow-source-attribute-invalid"
         }
 
 
@@ -402,7 +327,11 @@ def _narrow_weights(operation: MvauDataflowOp, context: DataflowBuildConfigView)
     """Ask the operation for its narrow-weight decision, as elaboration does."""
 
     point = operation.hydrate_dataflow_point(context)
-    answer = Engine().query_property(point, MVAUProblemPaths.EFFECTIVE_NARROW_WEIGHTS)
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+    answer = Engine().query_property(
+        point, compiled.declarations.ref("effective_narrow_weights").path
+    )
     assert isinstance(answer, Decided)
     return answer.value
 
@@ -478,29 +407,16 @@ def test_dot_product_network_round_trips_through_node_persistence(tmp_path: Path
     assignments = _dot_product()
     committed = operation.commit_dataflow_assignments(_context(), assignments)
     resolved = operation.resolve_dataflow(_context())
-    expected = project_mvau_source(
-        model,
-        NODE_ID,
-        MVAUProjectionContext(
-            "finn.MinimizeAccumulatorWidth",
-            fpga_part=PART,
-            clock_period_ns=5.0,
-            runtime_writable_weights=False,
-        ),
-        source_scope_id=operation.dataflow_scope_id(),
-    )
-    assert isinstance(resolved, MVAUResolvedDesign)
-    assert isinstance(resolved.result, NetworkRef)
+    assert isinstance(resolved, ResolvedDataflowOp)
+    assert resolved.result is resolved
     assert {node.id for node in resolved.result.network.nodes} == {"compute", "replay"}
-    assert resolved.point.problem == expected.problem_data
     assert resolved.point.assignments == committed.point.assignments
     assert resolved.result.source_association == resolved.source_association
     assert resolved.source_scope_id == operation.get_nodeattr(operation.SCOPE_ID_ATTR)
-    _assert_resolution_parity(resolved, start_mvau_projection(expected, assignments))
     path = tmp_path / "dot-product.onnx"
     model.save(path)
     restored = _wrapped(ModelWrapper(str(path))).resolve_dataflow(_context())
-    _assert_resolution_parity(restored, resolved)
+    assert restored == resolved
 
 
 def test_batch_interleaved_resolves_to_a_singleton_network(tmp_path: Path) -> None:
@@ -510,17 +426,16 @@ def test_batch_interleaved_resolves_to_a_singleton_network(tmp_path: Path) -> No
     assignments = _batch_interleaved()
     operation.commit_dataflow_assignments(context, assignments)
     resolved = operation.resolve_dataflow(context)
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
     assert tuple(node.id for node in resolved.result.network.nodes) == ("compute",)
     assessment = resolved.engine.evaluate_constraint_set(resolved.point, "mvau_op_structural")
     assert assessment.verdict is True
     feasibility = resolved.engine.evaluate_constraint_set(resolved.point, "mvau_op_feasibility")
     assert feasibility.verdict is None
-    _assert_resolution_parity(resolved, _standalone(model, context, assignments))
     path = tmp_path / "batch-interleaved-direct.onnx"
     model.save(path)
     restored = _wrapped(ModelWrapper(str(path))).resolve_dataflow(context)
-    _assert_resolution_parity(restored, resolved)
+    assert restored == resolved
 
 
 def test_memstream_supplied_dot_product_round_trips_without_an_adapter(tmp_path: Path) -> None:
@@ -530,7 +445,7 @@ def test_memstream_supplied_dot_product_round_trips_without_an_adapter(tmp_path:
     assignments = _dot_product(supply=FINN_RTL_MEMSTREAM_SUPPLY)
     operation.commit_dataflow_assignments(context, assignments)
     original = operation.resolve_dataflow(context)
-    assert isinstance(original.result, NetworkRef)
+    assert original.result is original
     assert {node.id for node in original.result.network.nodes} == {
         "compute",
         "delivery",
@@ -540,7 +455,6 @@ def test_memstream_supplied_dot_product_round_trips_without_an_adapter(tmp_path:
         "activation_replay",
         "weight",
     }
-    _assert_resolution_parity(original, _standalone(model, context, assignments))
     path = tmp_path / "cyclic.onnx"
     model.save(path)
     restored = _wrapped(ModelWrapper(str(path))).resolve_dataflow(context)
@@ -599,12 +513,12 @@ def test_logical_mvau_stale_graph_and_build_facts_are_rejected(
     }
 
 
-def test_a_v5_node_is_rejected_for_its_family_version_not_incidentally() -> None:
-    assert MVAU_DATAFLOW_OP_FAMILY_VERSION == "mvau-dataflow-op-v6"
+def test_a_v6_node_is_rejected_for_its_family_version_not_incidentally() -> None:
+    assert MVAU_DATAFLOW_OP_FAMILY_VERSION == "mvau-dataflow-op-v7"
 
     operation = _wrapped(_model())
     operation.commit_dataflow_assignments(_context(), _dot_product())
-    operation.set_nodeattr(operation.FAMILY_VERSION_ATTR, "mvau-dataflow-op-v5")
+    operation.set_nodeattr(operation.FAMILY_VERSION_ATTR, "mvau-dataflow-op-v6")
 
     with pytest.raises(DataflowOpError) as stale:
         operation.hydrate_dataflow_point(_context())
@@ -613,43 +527,36 @@ def test_a_v5_node_is_rejected_for_its_family_version_not_incidentally() -> None
     }
     assert dict(stale.value.findings[0].values) == {
         "actual_family": "finn.dataflow.mvau",
-        "actual_version": "mvau-dataflow-op-v5",
+        "actual_version": "mvau-dataflow-op-v6",
         "expected_family": "finn.dataflow.mvau",
-        "expected_version": "mvau-dataflow-op-v6",
+        "expected_version": "mvau-dataflow-op-v7",
     }
 
 
-def test_a_freshly_saved_v6_selection_reloads_with_its_datatypes_intact() -> None:
+def test_a_freshly_saved_v7_selection_reloads_with_its_datatypes_intact() -> None:
     model = _model()
     operation = _wrapped(model)
     operation.commit_dataflow_assignments(_context(), _dot_product())
-    assert operation.get_nodeattr(operation.FAMILY_VERSION_ATTR) == "mvau-dataflow-op-v6"
+    assert operation.get_nodeattr(operation.FAMILY_VERSION_ATTR) == "mvau-dataflow-op-v7"
+    assert operation.get_nodeattr(operation.PERSISTENCE_FORMAT_ATTR) == "1"
 
     point = operation.hydrate_dataflow_point(_context())
-    for path in (
-        MVAUProblemPaths.ACTIVATION_ELEMENT_TYPE,
-        MVAUProblemPaths.WEIGHT_ELEMENT_TYPE,
-        MVAUProblemPaths.ACCUMULATOR_ELEMENT_TYPE,
-        MVAUProblemPaths.OUTPUT_ELEMENT_TYPE,
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+    for member in (
+        "activation.datatype",
+        "weight.datatype",
+        "accumulator_element_type",
+        "output.datatype",
     ):
+        path = compiled.declarations.ref(member).path
         value = point.problem[path]
         assert is_qonnx_datatype(value), path
         assert value == DataType[value.name], path
 
 
-def test_v6_node_backed_persistence_bytes_are_frozen_for_adapter_migration() -> None:
-    """Pin the old payload so v7 can reject it instead of reinterpreting it."""
-
-    model = _model()
-    operation = _wrapped(model)
-    operation.commit_dataflow_assignments(_context(), _dot_product())
-
-    actual = {
-        attribute.name: attribute.SerializeToString(deterministic=True).hex()
-        for attribute in operation.onnx_node.attribute
-        if attribute.name.startswith("dataflow_")
-    }
-    assert actual == {
+def test_v6_node_backed_persistence_bytes_remain_a_frozen_rejected_fixture() -> None:
+    legacy = {
         "dataflow_design": ("0a0f64617461666c6f775f64657369676e220b646f745f70726f64756374a00103"),
         "dataflow_dot_product_pe": ("0a1764617461666c6f775f646f745f70726f647563745f70651802a00102"),
         "dataflow_dot_product_simd": (
@@ -676,6 +583,15 @@ def test_v6_node_backed_persistence_bytes_are_frozen_for_adapter_migration() -> 
         "dataflow_weight_supply": (
             "0a1664617461666c6f775f7765696768745f737570706c79220865787465726e616ca00103"
         ),
+    }
+    assert len(legacy) == 9
+    operation = _wrapped(_model())
+    operation.commit_dataflow_assignments(_context(), _dot_product())
+    operation.set_nodeattr(operation.FAMILY_VERSION_ATTR, "mvau-dataflow-op-v6")
+    with pytest.raises(DataflowOpError) as rejected:
+        operation.hydrate_dataflow_point(_context())
+    assert {finding.code for finding in rejected.value.findings} == {
+        "dataflow-selection-family-mismatch"
     }
 
 
@@ -812,7 +728,7 @@ def test_partial_mvau_point_exposes_readiness_without_forcing_resolution() -> No
     engine = Engine()
     readiness = engine.check_readiness(point, "mvau_op_structural")
     assert readiness.ready is None
-    result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+    result = engine.query_property(point, MvauDataflowOp.result_path())
     assert not isinstance(result, Decided)
 
 
@@ -831,4 +747,4 @@ def test_logical_mvau_passes_shared_operation_conformance_harness(tmp_path: Path
             mutate_graph_problem=_change_mvau_shape,
         )
     )
-    assert isinstance(result.original.result, NetworkRef)
+    assert result.original.result is result.original

@@ -20,7 +20,6 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDes
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY, FINN_RTL_MEMSTREAM_SUPPLY
-from finn.dataflow.design import NetworkRef
 from finn.dataflow.ops.mvau.associations import MVAUParameterTopology
 from finn.dataflow.ops.mvau.inventory import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
@@ -153,7 +152,7 @@ def _run(
 def test_an_explicit_policy_reproduces_the_direct_point() -> None:
     lowered, transform = _run(ExplicitAssignmentsPolicy({SCOPE: _direct_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
     assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.DIRECT
     assert transform.report.scope(SCOPE).committed
 
@@ -161,15 +160,15 @@ def test_an_explicit_policy_reproduces_the_direct_point() -> None:
 def test_an_explicit_policy_reproduces_the_cyclic_point() -> None:
     lowered, _ = _run(ExplicitAssignmentsPolicy({SCOPE: _cyclic_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
     assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.CYCLIC
 
 
 def test_an_explicit_policy_can_select_the_semantic_only_design() -> None:
     lowered, _ = _run(ExplicitAssignmentsPolicy({SCOPE: _embedded_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert isinstance(resolved.result, NetworkRef)
-    assert resolved.result.source_association.design_id == BatchInterleavedDesign.id
+    assert resolved.result is resolved
+    assert resolved.selected_design_id == BatchInterleavedDesign.id
 
 
 def test_a_policy_is_keyed_by_stable_operation_scope() -> None:
@@ -200,7 +199,7 @@ def test_the_reference_policy_commits_a_complete_coherent_point() -> None:
     lowered, transform = _run(FirstFeasiblePolicy())
     operation = _operation(lowered)
     resolved = operation.resolve_dataflow(_context())
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
     report = transform.report.scope(SCOPE)
     assert report.structural_readiness is not None
     assert report.structural_readiness.ready is True
@@ -235,7 +234,7 @@ def test_enumeration_returns_whole_points_not_one_decision_at_a_time() -> None:
     for point in points:
         assert MVAUDataflowOpPaths.DESIGN in point.assignments
         assert point.assignments[MVAUDataflowOpPaths.DESIGN] == DotProductDesign.id
-        result = engine.query_property(point, MVAUDataflowOpPaths.RESULT)
+        result = engine.query_property(point, MvauDataflowOp.result_path())
         assert isinstance(result, Decided)
 
 
@@ -268,7 +267,8 @@ def test_committed_choices_survive_save_and_reload(tmp_path: Path) -> None:
     restored = _operation(ModelWrapper(str(path))).resolve_dataflow(_context())
     assert restored.point.assignments == original.point.assignments
     assert restored.result == original.result
-    assert restored.source_association.kernel_ids == (
+    realization = _operation(ModelWrapper(str(path))).realize_dataflow(_context())
+    assert tuple(kernel.kernel_id for kernel in realization.kernels.values()) == (
         "dotp_axi",
         "replay_buffer",
         FINN_RTL_MEMSTREAM_SUPPLY,

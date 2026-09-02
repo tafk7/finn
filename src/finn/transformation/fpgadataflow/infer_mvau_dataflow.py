@@ -22,9 +22,13 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 from qonnx.transformation.base import Transformation  # type: ignore[import-not-found]
 
-from finn.dataflow.authoring.admission import AdmissionVerdict, GraphBuildAdmission
+from finn.dataflow.authoring.admission import (
+    AdmissionVerdict,
+    GraphBuildAdmission,
+    admissible_dataflow_designs,
+    graph_stage_build_admission,
+)
 from finn.dataflow.design import Engine, Finding, FindingKind, QualifiedPath
-from finn.dataflow.ops.mvau.inventory import mvau_build_admission
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 
 #: Node attribute carrying every original source node a lowering consumed.
@@ -282,7 +286,16 @@ def mvau_source_admission_report(
         raise TypeError("admission requires a logical MvauDataflowOp node")
     engine = Engine()
     point = engine.start(operation.validated_design_space(), operation.problem_instance(context))
-    return mvau_build_admission(engine, point)
+    compiled = operation.compiled_dataflow_operation()
+    if compiled is None or compiled.inventory is None:
+        raise TypeError("admission requires a compiler-owned Design inventory")
+    return graph_stage_build_admission(
+        engine,
+        point,
+        compiled.inventory,
+        compiled.problem_provenance,
+        design_ids=admissible_dataflow_designs(engine, point, compiled.inventory),
+    )
 
 
 def _contextual_finding(

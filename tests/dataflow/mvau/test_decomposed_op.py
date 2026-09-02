@@ -42,11 +42,10 @@ from finn.dataflow.design import (
     Engine,
     QualifiedPath,
 )
-from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
 from finn.dataflow.ops.mvau.associations import (
-    MVAUNetworkRef as NetworkRef,
+    MVAUResolvedDataflowOp,
     SemanticOperandDestination,
 )
 from finn.dataflow.ops.mvau.inventory import MVAUDataflowOpPaths
@@ -153,10 +152,8 @@ def _batch_interleaved_choices() -> dict[QualifiedPath, object]:
     }
 
 
-def _result(operation: MvauDataflowOp) -> NetworkRef:
-    result = operation.resolve_dataflow(_context()).result
-    assert isinstance(result, NetworkRef)
-    return result
+def _result(operation: MvauDataflowOp) -> MVAUResolvedDataflowOp:
+    return operation.resolve_dataflow(_context())
 
 
 def _network(operation: MvauDataflowOp) -> DataflowNetwork:
@@ -181,7 +178,7 @@ def test_the_operation_selects_both_kernels_and_returns_their_network() -> None:
     operation = _committed(model)
 
     resolved = operation.resolve_dataflow(_context())
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
 
     network = resolved.result.network
     assert {node.id for node in network.nodes} == {REPLAY_NODE, DOT_PRODUCT_NODE}
@@ -196,16 +193,31 @@ def test_the_operation_projects_its_problem_from_the_live_graph() -> None:
     """No geometry is stored on the node; changing a shape changes the problem."""
 
     model = _model(repetitions=4)
-    problem = _wrapped(model).problem_instance(_context())
-    assert problem[MVAUProblemPaths.REPETITIONS] == 4
-    assert problem[MVAUProblemPaths.MATRIX_WIDTH] == MATRIX_WIDTH
-    assert problem[MVAUProblemPaths.MATRIX_HEIGHT] == MATRIX_HEIGHT
+    operation = _wrapped(model)
+    point = operation.hydrate_dataflow_point(_context())
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+
+    def value(member: str) -> object:
+        answer = Engine().query_property(point, compiled.declarations.ref(member).path)
+        assert isinstance(answer, Decided)
+        return answer.value
+
+    assert value("repetitions") == 4
+    assert value("matrix_width") == MATRIX_WIDTH
+    assert value("matrix_height") == MATRIX_HEIGHT
 
     attribute_names = {item.name for item in model.graph.node[0].attribute}
     assert not attribute_names & {"MW", "MH", "inputDataType", "weightDataType"}
 
     other = _model(repetitions=2)
-    assert _wrapped(other).problem_instance(_context())[MVAUProblemPaths.REPETITIONS] == 2
+    other_operation = _wrapped(other)
+    other_point = other_operation.hydrate_dataflow_point(_context())
+    other_compiled = other_operation.compiled_dataflow_operation()
+    assert other_compiled is not None
+    assert Engine().query_property(
+        other_point, other_compiled.declarations.ref("repetitions").path
+    ) == Decided(2)
 
 
 def test_the_boundary_matches_what_the_source_tensors_require() -> None:
@@ -237,9 +249,12 @@ def test_the_source_tensors_are_associated_with_the_nodes_that_carry_them() -> N
     tensors = {item.role: item.source_operand_id for item in association.operands}
     assert tensors == {"activation": "activation", "weight": "weights", "output": "output"}
     assert association.source_node_id == f"{NODE_ID}_scope"
-    assert association.design_id == DotProductDesign.id
-    assert association.compute_kernel_id == "dotp_axi"
-    assert association.kernel_ids == ("dotp_axi", "replay_buffer")
+    assert operation.resolve_dataflow(_context()).selected_design_id == DotProductDesign.id
+    realization = operation.realize_dataflow(_context())
+    assert tuple(kernel.kernel_id for kernel in realization.kernels.values()) == (
+        "dotp_axi",
+        "replay_buffer",
+    )
 
 
 def test_the_association_names_the_operands_the_regions_actually_declare() -> None:
@@ -318,7 +333,10 @@ def test_changing_the_graph_invalidates_the_saved_selection() -> None:
     model.set_tensor_shape("output", [2, MATRIX_HEIGHT])
     after = _wrapped(model).problem_instance(_context())
 
-    assert before[MVAUProblemPaths.REPETITIONS] != after[MVAUProblemPaths.REPETITIONS]
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+    activation_shape = compiled.declarations.ref("activation.shape").path
+    assert before[activation_shape] != after[activation_shape]
 
 
 # -- the boundary is the fused one -------------------------------------------
@@ -357,8 +375,7 @@ def test_batch_interleaved_resolves_to_a_singleton_network() -> None:
             MVAU_DESIGN_INVENTORY.input_supply.declaration.choice.path: EXTERNAL_SUPPLY,
         },
     )
-    result = operation.resolve_dataflow(_context()).result
-    assert isinstance(result, NetworkRef)
+    result = operation.resolve_dataflow(_context())
     assert tuple(node.id for node in result.network.nodes) == ("compute",)
 
 

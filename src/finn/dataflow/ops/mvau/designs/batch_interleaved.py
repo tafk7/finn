@@ -5,14 +5,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import gcd
 from typing import cast
 
 from finn.dataflow.authoring.design import (
     DataflowDesign,
-    DataflowDesignScope,
     singleton_network,
+)
+from finn.dataflow.authoring import (
+    Choice,
+    DependentDomain,
+    Imported,
+    Kernels,
+    Network,
+    Readiness,
+    Region,
+    SourceInput,
+    class_divisors_of,
+    constraint,
+    derived,
 )
 from finn.dataflow.authoring.inventory import (
     DataflowDesignDeclaration,
@@ -33,6 +45,7 @@ from finn.dataflow.design import (
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,
     NETWORK_VALIDATION_REPORT_SEMANTICS,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
     DesignSpaceSpec,
 )
 from finn.dataflow.computation import ComputationContract
@@ -45,9 +58,9 @@ from finn.dataflow.ops.mvau.associations import (
 )
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.ops.mvau.input_supply import (
+    EXTERNAL_SUPPLY,
     MVAUInputSupply,
     declare_mvau_input_supply,
-    declare_supplied_source_association,
 )
 from finn.dataflow.ops.mvau.regions import (
     MVAURegionDeclaration,
@@ -60,6 +73,7 @@ from finn.dataflow.ops.mvau.semantics import (
     dot_product_computation_supported,
 )
 from finn.dataflow.ops.mvau.problem import (
+    MVAUComputationProfile,
     MVAU_PROBLEM,
     MVAU_PROBLEM_SPEC,
     MVAUProblem,
@@ -354,7 +368,38 @@ def declare_batch_interleaved_semantics(
 
 @dataclass(frozen=True)
 class BatchInterleavedDesignInputs:
-    semantics: MVAUBatchInterleavedSemantics
+    repetitions: Ref[int]
+    matrix_width: Ref[int]
+    matrix_height: Ref[int]
+    activation_element_type: Ref[object]
+    weight_element_type: Ref[object]
+    accumulator_element_type: Ref[object]
+    output_element_type: Ref[object]
+    computation_profile: Ref[MVAUComputationProfile]
+    source_description: Ref[MVAUSourceDescription]
+    weight_supply: Ref[str]
+
+
+def _batch_region_form() -> MVAURegionDeclaration:
+    return MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED
+
+
+def _selected_source_association(
+    description: MVAUSourceDescription,
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    supply: str,
+) -> MVAUSourceAssociation:
+    association = construct_external_batch_interleaved_source_association(
+        description,
+        repetitions,
+        matrix_width,
+        matrix_height,
+    )
+    if supply == EXTERNAL_SUPPLY:
+        return association
+    return replace(association, parameter_topology=MVAUParameterTopology.CYCLIC)
 
 
 class BatchInterleavedDesign(DataflowDesign):
@@ -362,22 +407,120 @@ class BatchInterleavedDesign(DataflowDesign):
 
     id = "batch_interleaved"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define(cls, design: DataflowDesignScope[BatchInterleavedDesignInputs]) -> None:
-        semantics = design.inputs.semantics
-        compute = design.node(
-            "compute",
-            node_id=BATCH_INTERLEAVED_NODE,
-            region=semantics.region,
-            computation=semantics.computation,
-        )
-        design.use_network(semantics.network)
-        weight_interface = design.input_interface("compute.weight_interface", compute, "weight")
-        design.map_input("weight", boundary_id="input.weight", consumer=weight_interface)
-        # This design is deliberately semantic-only. TiledMvuKernel is a
-        # separately reviewed future vertical slice, not a hidden fallback.
-        design.kernels("compute", covers=(compute,), candidates=())
+    repetitions = Imported(int)
+    matrix_width = Imported(int)
+    matrix_height = Imported(int)
+    activation_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weight_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    accumulator_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    output_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    computation_profile = Imported(MVAUComputationProfile)
+    source_description = Imported(MVAUSourceDescription)
+    weight_supply = Imported(str)
+
+    pe = Choice(int, domain=class_divisors_of(matrix_height))
+    simd = Choice(int, domain=class_divisors_of(matrix_width))
+    interleave = Choice(
+        int,
+        domain=DependentDomain(
+            (repetitions, pe, simd),
+            _interleave_accepts,
+            _interleave_candidates,
+        ),
+    )
+    computation_supported = constraint(
+        computation_profile,
+        sets=(
+            f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.source_admission",
+            f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.feasibility",
+        ),
+    )(dot_product_computation_supported)
+    accumulator_output_type_supported = constraint(
+        accumulator_element_type,
+        output_element_type,
+        sets=(
+            f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.source_admission",
+            f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.feasibility",
+        ),
+    )(accumulator_output_type_supported)
+    interleave_available = constraint(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        sets=(
+            f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.source_admission",
+            f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.feasibility",
+        ),
+    )(_interleave_available)
+    compute_node = Region(
+        role="compute",
+        node_id=BATCH_INTERLEAVED_NODE,
+        construct=construct_batch_interleaved_streamed_mvau_region,
+        dependencies=(
+            repetitions,
+            matrix_width,
+            matrix_height,
+            activation_element_type,
+            weight_element_type,
+            output_element_type,
+            pe,
+            simd,
+            interleave,
+        ),
+        computation=DOT_PRODUCT_COMPUTATION,
+    )
+    weight_port = derived(
+        compute_node.region,
+        value_type=Port,
+        stable_name="compute.weight_port",
+    )(_weight_port)
+    region_form = derived(
+        value_type=MVAURegionDeclaration,
+        stable_name="compute.region_form",
+    )(_batch_region_form)
+    network = Network(compute_node)
+    network_validation = derived(
+        network,
+        value_type=NETWORK_VALIDATION_REPORT_SEMANTICS,
+    )(lambda network: validate_network(cast(DataflowNetwork, network)))
+    network_structurally_well_formed = constraint(
+        network_validation,
+        sets=(f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.feasibility",),
+    )(lambda report: not cast(NetworkValidationReport, report))
+    physical_kernel_deferred = constraint(
+        sets=(f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.feasibility",)
+    )(_physical_kernel_deferred)
+    source_association = derived(
+        source_description,
+        repetitions,
+        matrix_width,
+        matrix_height,
+        weight_supply,
+        value_type=MVAUSourceAssociation,
+    )(_selected_source_association)
+    weight = SourceInput("weight", compute_node.input("weight"), "input.weight")
+    compute = Kernels(name="compute", covers=(compute_node,), candidates=(), inputs=None)
+    semantic_readiness = Readiness(
+        BATCH_INTERLEAVED_READINESS,
+        decisions=(pe, simd, interleave),
+        properties=(
+            compute_node.region,
+            compute_node.computation,
+            weight_port,
+            region_form,
+            network,
+            network_validation,
+            source_association,
+        ),
+        constraints=(
+            computation_supported,
+            accumulator_output_type_supported,
+            interleave_available,
+            network_structurally_well_formed,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -393,38 +536,92 @@ class BatchInterleavedDesignAssembly:
         return self.inventory.specification
 
 
+def _inputs(problem: MVAUProblem, supply: Ref[str]) -> BatchInterleavedDesignInputs:
+    return BatchInterleavedDesignInputs(
+        problem.repetitions,
+        problem.matrix_width,
+        problem.matrix_height,
+        cast("Ref[object]", problem.activation_element_type),
+        cast("Ref[object]", problem.weight_element_type),
+        cast("Ref[object]", problem.accumulator_element_type),
+        cast("Ref[object]", problem.output_element_type),
+        problem.computation_profile,
+        problem.source_description,
+        supply,
+    )
+
+
+def _semantics(declaration: DataflowDesignDeclaration) -> MVAUBatchInterleavedSemantics:
+    exported = declaration.exports
+    constraints = {
+        item.path.value.rsplit(".", 1)[-1]: item for item in declaration.constraint_handles
+    }
+    source_constraints = tuple(
+        constraints[name]
+        for name in (
+            "computation_supported",
+            "accumulator_output_type_supported",
+            "interleave_available",
+        )
+    )
+    feasibility_constraints = (
+        *source_constraints,
+        constraints["network_structurally_well_formed"],
+        constraints["physical_kernel_deferred"],
+    )
+    return MVAUBatchInterleavedSemantics(
+        declaration.spec,
+        cast("Ref[int]", exported["pe"]),
+        cast("Ref[int]", exported["simd"]),
+        cast("Ref[int]", exported["interleave"]),
+        cast("Ref[DataflowRegion]", exported["compute_node.region"]),
+        cast("Ref[ComputationContract]", exported["compute_node.computation"]),
+        cast("Ref[Port]", exported["weight_port"]),
+        cast("Ref[MVAURegionDeclaration]", exported["region_form"]),
+        declaration.network,
+        cast("Ref[NetworkValidationReport]", exported["network_validation"]),
+        cast("Ref[MVAUSourceAssociation]", exported["source_association"]),
+        source_constraints,
+        feasibility_constraints,
+        f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.source_admission",
+        f"{BATCH_INTERLEAVED_DESIGN_NAMESPACE}.feasibility",
+        (MVAUSemanticDemand("weight", cast("Ref[Port]", exported["weight_port"])),),
+        (
+            MVAUSemanticExport(
+                "region_form",
+                exported["region_form"],
+            ),
+        ),
+        BATCH_INTERLEAVED_READINESS,
+    )
+
+
 def declare_batch_interleaved_design(
     problem: MVAUProblem = MVAU_PROBLEM,
 ) -> BatchInterleavedDesignAssembly:
     """Declare the normalized singleton design with the common MVAU supply policy."""
 
-    semantics = declare_batch_interleaved_semantics(problem)
     supply = declare_mvau_input_supply(problem)
-    source_association, association_spec = declare_supplied_source_association(
-        BATCH_INTERLEAVED_DESIGN_NAMESPACE,
-        semantics.source_association,
-        supply.declaration,
-    )
     inventory = declare_dataflow_design_inventory(
         "mvau",
         (
             DataflowDesignEntry(
                 BatchInterleavedDesign,
-                BatchInterleavedDesignInputs(semantics),
-                (semantics.spec, association_spec),
-                (semantics.pe, semantics.simd, semantics.interleave),
-                semantics.feasibility_constraints,
+                _inputs(problem, supply.declaration.choice),
             ),
         ),
         input_supplies=(supply.declaration,),
         shared_specs=(MVAU_PROBLEM_SPEC,),
     )
+    declaration = inventory.declarations[0]
+    exported = declaration.exports
+    semantics = _semantics(declaration)
     return BatchInterleavedDesignAssembly(
         semantics,
         supply,
         inventory,
-        inventory.declarations[0],
-        source_association,
+        declaration,
+        cast("Ref[MVAUSourceAssociation]", exported["source_association"]),
     )
 
 

@@ -60,7 +60,6 @@ from dataflow.rtlsim import composed_mvau_equiv as fixture
 from finn.dataflow.ops.mvau.semantics import DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.ops.mvau.binding import finnlib_root
 from finn.dataflow.ops.mvau.artifacts.source import MVAUDecomposedArtifactRequirements
-from finn.dataflow.design import NetworkRef
 from finn.dataflow.region import LogicalSchedule, ScheduleLevel
 
 
@@ -78,7 +77,6 @@ def _semantic(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, str
     """The logical dataflow the operation selected, fingerprinted."""
 
     result = requirements.elaboration.semantic_result
-    assert isinstance(result, NetworkRef)
     network = result.network
     return {
         "replay_region": _fingerprint(network.node(REPLAY_NODE).region),
@@ -106,7 +104,6 @@ def _structure(requirements: MVAUDecomposedArtifactRequirements) -> dict[str, st
     """
 
     result = requirements.elaboration.semantic_result
-    assert isinstance(result, NetworkRef)
     network = result.network
     return {
         "replay_region": _fingerprint(normalized(network.node(REPLAY_NODE).region)),
@@ -645,7 +642,6 @@ def test_the_normalized_projection_still_sees_everything_else() -> None:
 
     built = fixture.decomposed_requirements(fixture.CONFIGS_BY_LABEL["softvec"])
     result = built.elaboration.semantic_result
-    assert isinstance(result, NetworkRef)
     region = result.network.node(DOT_PRODUCT_NODE).region
     baseline = normalized(region)
 

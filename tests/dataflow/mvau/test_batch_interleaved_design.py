@@ -11,7 +11,6 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.design import Decided, DesignPoint, Engine, QualifiedPath, Unresolved
 from finn.dataflow.ops.mvau.associations import (
-    BindingLocalStateDestination,
     MVAUParameterTopology,
     MVAUSourceAssociation,
     SemanticOperandDestination,
@@ -123,7 +122,6 @@ def test_batch_interleaved_source_association_targets_the_singleton_node() -> No
         association.region_declaration_id == MVAURegionDeclaration.BATCH_INTERLEAVED_STREAMED.value
     )
     assert association.parameter_topology is MVAUParameterTopology.DIRECT
-    assert association.compute_kernel_id == ""
     assert all(
         isinstance(item.destination, SemanticOperandDestination) for item in association.operands
     )
@@ -156,7 +154,8 @@ def test_common_memstream_supply_attaches_to_the_singleton_weight_boundary() -> 
     assert isinstance(association_answer, Decided)
     association = cast(MVAUSourceAssociation, association_answer.value)
     weight = next(item for item in association.operands if item.role == "weight")
-    assert weight.destination == BindingLocalStateDestination("delivery", "weights")
+    assert association.parameter_topology is MVAUParameterTopology.CYCLIC
+    assert weight.destination == SemanticOperandDestination(BATCH_INTERLEAVED_NODE, "W")
 
 
 def test_batch_interleaved_has_no_physical_compute_kernel_candidate() -> None:

@@ -27,9 +27,9 @@ from finn.dataflow.ops.mvau.artifacts.roots import (
     verify_manifest,
 )
 from finn.dataflow.ops.mvau.binding import bind_decomposed
+from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.origin import mvau_elaboration_origin
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError, MVAUPhysicalElaboration
-from finn.dataflow.ops.mvau.projection import MVAUResolvedDesign
 
 _COMPOSITION_PATH = QualifiedPath("hardware.mvau.composition")
 
@@ -90,7 +90,7 @@ def _canonical_configuration(kernels: tuple[KernelArtifactIdentity, ...]) -> str
 
 
 def build_decomposed_artifact_requirements(
-    resolved: MVAUResolvedDesign,
+    resolved: MVAUResolvedDataflowOp,
     elaboration: MVAUPhysicalElaboration,
     finn_root: str | Path,
     finnlib: str | Path | None = None,

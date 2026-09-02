@@ -496,6 +496,7 @@ class Kernel:
     #: Stable identity of the family.  A subclass sets both.
     id: str = ""
     version: str = "1"
+    uses_class_authoring: bool = False
 
     @classmethod
     def define_design(cls, design: KernelScope[Any]) -> object:

@@ -27,7 +27,6 @@ from finn.dataflow.ops.mvau.inventory import (
     mvau_build_admission,
 )
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
-from finn.dataflow.ops.mvau.inventory import MVAUDataflowOpPaths
 from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
 from finn.transformation.fpgadataflow import infer_mvau_dataflow
 from finn.transformation.fpgadataflow.infer_mvau_dataflow import (
@@ -285,8 +284,14 @@ def test_provenance_records_every_consumed_source_node() -> None:
     operation = lowered.get_customop_wrapper(lowered.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     assert source_nodes_of(operation) == ("matmul0",)
-    problem = operation.problem_instance(_context())
-    description = problem[MVAUDataflowOpPaths.SOURCE_DESCRIPTION]
+    point = operation.hydrate_dataflow_point(_context())
+    compiled = operation.compiled_dataflow_operation()
+    assert compiled is not None
+    description_answer = Engine().query_property(
+        point, compiled.declarations.ref("source_description").path
+    )
+    assert isinstance(description_answer, Decided)
+    description = description_answer.value
     assert getattr(description, "fused_source_node_ids") == ("matmul0",)
 
 
@@ -618,5 +623,5 @@ def test_a_lowered_node_still_resolves_once_kernels_are_selected() -> None:
         },
     )
     resolved = operation.resolve_dataflow(context)
-    result = resolved.engine.query_property(resolved.point, MVAUDataflowOpPaths.RESULT)
+    result = resolved.engine.query_property(resolved.point, MvauDataflowOp.result_path())
     assert isinstance(result, Decided)

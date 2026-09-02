@@ -16,6 +16,7 @@ from finn.dataflow.authoring.design import (
     DesignNode,
     KernelPlacement,
     PlacementSelection,
+    compile_dataflow_design_class,
 )
 from finn.dataflow.authoring.input_supply import InputSupplyDeclaration
 from finn.dataflow.authoring.realization import (
@@ -267,6 +268,14 @@ def declare_dataflow_design(
 
     if not design.id or not design.version:
         raise AuthoringError(f"{design.__name__} must set a design id and version")
+    if design.uses_class_authoring:
+        declaration, direct_scope = compile_dataflow_design_class(
+            design,
+            namespace,
+            inputs,
+            input_supplies=input_supplies,
+        )
+        return cast(DataflowDesignDeclaration, declaration), direct_scope
     scope: DataflowDesignScope[object] = DataflowDesignScope(namespace, inputs)
     design.define(scope)
     for supply in input_supplies:
@@ -396,6 +405,7 @@ def declare_dataflow_design_inventory(
     *,
     input_supplies: Sequence[InputSupplyDeclaration] = (),
     shared_specs: Sequence[DesignSpaceSpec] = (),
+    reference_specs: Sequence[DesignSpaceSpec] = (),
 ) -> DataflowDesignInventory:
     """Compile a closed Operation inventory into one ordinary flat spec."""
 
@@ -464,7 +474,7 @@ def declare_dataflow_design_inventory(
         )
     )
     check_declared_references(
-        specification,
+        assemble_specs((specification, *reference_specs)),
         tuple(kernel for declaration in declarations for kernel in declaration.hardware),
     )
     return DataflowDesignInventory(
@@ -548,7 +558,7 @@ class DataflowOpAuthoring:
     """Compiled operation declarations plus their typed runtime handles."""
 
     specification: DesignSpaceSpec
-    result: Ref[NetworkRef]
+    result: Ref[DataflowNetwork] | Ref[NetworkRef]
     source_association: Ref[object]
     selection_constraint_set: str | None
     structural_readiness_profile: str | None
@@ -561,7 +571,7 @@ def declare_dataflow_op_authoring(
     inventory: DataflowDesignInventory,
     operation: Scope,
     *,
-    result: Ref[NetworkRef],
+    result: Ref[DataflowNetwork] | Ref[NetworkRef],
     source_association: Ref[object],
     structural_properties: Sequence[Ref[object]],
     structural_constraints: Sequence[ConstraintRef],

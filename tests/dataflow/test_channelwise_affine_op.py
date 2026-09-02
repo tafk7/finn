@@ -20,6 +20,9 @@ from dataflow.channelwise_affine_op import (
     DIRECT_DESIGN,
     DIRECT_LANES,
     DIRECT_PIPELINE,
+    DirectAffineDesign,
+    ReuseAffineDesign,
+    AffineStreamKernel,
 )
 from finn.dataflow.authoring import DataflowOpError
 from finn.dataflow.design import QualifiedPath
@@ -104,7 +107,10 @@ def test_channelwise_affine_uses_the_complete_generic_op_lifecycle(tmp_path: Pat
     assert isinstance(operation, ChannelwiseAffineDataflowOp)
     bound = operation.realize_dataflow(AffineBuildConfig())
     assert tuple(bound.kernels) == ("compute",)
-    assert bound.kernels["compute"].parameters == {"LANES": 2, "PIPELINE": True}
+    assert bound.kernels["compute"].parameters == {
+        "LANES": 2,
+        "PIPELINE": True,
+    }
 
 
 def test_optional_bias_and_initializer_fingerprints_are_projected_generically() -> None:
@@ -148,6 +154,9 @@ def test_channelwise_operation_contains_no_manual_projection_or_engine_lifecycle
         "project_build_problem",
         "decision_nodeattrs",
     } & set(ChannelwiseAffineDataflowOp.__dict__)
+    assert "define" not in DirectAffineDesign.__dict__
+    assert "define" not in ReuseAffineDesign.__dict__
+    assert "define_design" not in AffineStreamKernel.__dict__
     imports = {
         node.module
         for node in ast.walk(tree)

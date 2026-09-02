@@ -23,7 +23,6 @@ from finn.dataflow.authoring import DataflowOpError, NodeAttrCodec
 from finn.dataflow.design import QualifiedPath
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.op import dataflow_problem_fingerprint
-from finn.dataflow.resolution import NetworkRef
 from finn.dataflow.testing import DataflowOpConformanceCase, assert_dataflow_op_conforms
 
 from dataflow.synthetic_op import (
@@ -230,7 +229,7 @@ def test_scalar_codecs_partial_and_complete_reload(tmp_path: Path) -> None:
     )
     assert complete.point.assignments == _complete_assignments()
     resolved = partial_reloaded.resolve_dataflow(_config())
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
     assert resolved.source_association == "synthetic-scope"
     complete_path = tmp_path / "complete.onnx"
     partial_reloaded._attached_model().save(complete_path)
@@ -416,7 +415,7 @@ def test_synthetic_operation_passes_shared_conformance_harness(tmp_path: Path) -
         mutate_graph_problem=_change_synthetic_shape,
     )
     result = assert_dataflow_op_conforms(case)
-    assert isinstance(result.original.result, NetworkRef)
+    assert result.original.result is result.original
 
 
 def test_zero_decision_operation_passes_shared_conformance_harness(tmp_path: Path) -> None:
@@ -432,7 +431,7 @@ def test_zero_decision_operation_passes_shared_conformance_harness(tmp_path: Pat
         )
     )
     assert result.original.point.assignments == {}
-    assert isinstance(result.original.result, NetworkRef)
+    assert result.original.result is result.original
 
 
 def _imported_modules(path: Path) -> set[str]:

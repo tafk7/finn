@@ -119,3 +119,33 @@ The shadow lifecycle uses the same ten reviewed decision paths and storage
 attribute names as v6. Tests compare its selected Region, Network, association,
 candidate admission, and configured-Kernel inputs against the production v6
 path before the atomic v7 cutover.
+
+## AC4–AC7 migration record
+
+The canonical logical operation now publishes `mvau-dataflow-op-v7` with
+persistence format `1`. A v6 family header is rejected explicitly, and the v11
+graph-metadata projection/persistence modules and their test-only lifecycle have
+been removed rather than reinterpreted.
+
+`ResolvedDataflowOp` now stores the selected Design id, Network, logical source
+association, source-scope id, immutable point, and private compiler context
+directly. The MVAU logical association contains only source provenance,
+semantic operand mappings, coordinate mappings, and the selected semantic
+parameter topology. Kernel ids, placement identities, decision paths, and
+binding-local state destinations remain in realization/physical provenance.
+
+`MvauDataflowOp`, `DotProductDesign`, `BatchInterleavedDesign`,
+`DotpAxiKernel`, `ReplayBufferKernel`, and `FinnRtlMemstreamKernel` use the
+class-local declaration compiler. The canonical operation no longer calls a
+manual MVAU projection, persistence implementation, or inventory-aggregation
+bridge. Candidate-backed source admission reads the compiler-owned inventory
+and provenance.
+
+The software gate at this checkpoint is:
+
+```text
+1000 dataflow tests passed
+MVAU cycle regression passed
+Ruff format and lint passed
+strict mypy passed over 149 source files
+```

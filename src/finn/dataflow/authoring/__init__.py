@@ -58,10 +58,15 @@ from finn.dataflow.authoring.scope import (
 )
 
 if TYPE_CHECKING:
-    from finn.dataflow.authoring.compiler import ClosedDesigns, UsesDesign
+    from finn.dataflow.authoring.compiler import ClosedDesigns, UsesDesign, UsesInputSupply
     from finn.dataflow.authoring.design import (
+        Connection,
         DataflowDesign,
         DataflowDesignScope,
+        Kernels,
+        Network,
+        Region,
+        SourceInput,
     )
     from finn.dataflow.authoring.input_supply import (
         InputSupplyAlternative,
@@ -72,6 +77,15 @@ if TYPE_CHECKING:
         DataflowDesignInventory,
         declare_dataflow_design_inventory,
         declare_dataflow_op_authoring,
+    )
+    from finn.dataflow.kernels.authoring import (
+        Constant,
+        Covers,
+        EdgeClaim,
+        KernelInput,
+        Parameter,
+        RegionClaim,
+        Sources,
     )
     from finn.dataflow.op import (
         AssignmentMapping,
@@ -84,14 +98,36 @@ if TYPE_CHECKING:
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {}
 _LAZY_EXPORTS.update(
-    {name: ("finn.dataflow.authoring.compiler", name) for name in ("ClosedDesigns", "UsesDesign")}
+    {
+        name: ("finn.dataflow.authoring.compiler", name)
+        for name in ("ClosedDesigns", "UsesDesign", "UsesInputSupply")
+    }
+)
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.kernels.authoring", name)
+        for name in (
+            "Constant",
+            "Covers",
+            "EdgeClaim",
+            "KernelInput",
+            "Parameter",
+            "RegionClaim",
+            "Sources",
+        )
+    }
 )
 _LAZY_EXPORTS.update(
     {
         name: ("finn.dataflow.authoring.design", name)
         for name in (
+            "Connection",
             "DataflowDesign",
             "DataflowDesignScope",
+            "Kernels",
+            "Network",
+            "Region",
+            "SourceInput",
         )
     }
 )
@@ -155,6 +191,9 @@ __all__ = [
     "Choice",
     "ClosedDesigns",
     "Condition",
+    "Connection",
+    "Constant",
+    "Covers",
     "ConstraintRef",
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
@@ -166,32 +205,42 @@ __all__ = [
     "DataflowOpError",
     "DatatypeAttribute",
     "DependentDomain",
+    "EdgeClaim",
     "GRAPH_OWNED",
     "InputSupplyAlternative",
     "InputSupplyDeclaration",
     "InputTensor",
     "InitializerAnalysis",
     "Imported",
+    "KernelInput",
     "NodeAttrCodec",
     "NodeAttributeType",
+    "Network",
     "NoInitializer",
     "OpDesign",
     "OptionalInitializer",
     "OutputTensor",
+    "Parameter",
     "Persist",
     "PortableCodec",
     "ProblemProvenance",
     "Problem",
     "Provenance",
     "Ref",
+    "Region",
+    "RegionClaim",
     "Readiness",
     "RequiredInitializer",
     "Scope",
     "SourceScope",
+    "SourceInput",
+    "Sources",
     "TargetClockPeriod",
     "TargetFpgaPart",
     "TensorShape",
     "UsesDesign",
+    "UsesInputSupply",
+    "Kernels",
     "dataflow_problem_fingerprint",
     "class_divisors_of",
     "constraint",

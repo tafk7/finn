@@ -20,12 +20,18 @@ than smoothed over by a convention imposed on every core.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
-
+from finn.dataflow.authoring import (
+    Covers,
+    Imported,
+    KernelInput,
+    Parameter,
+    RegionClaim,
+    Sources,
+)
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION, ComputationContract
+from finn.dataflow.design import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.kernels import (
-    KernelScope,
     Kernel,
     PhysicalComponent,
     scalar_parameters,
@@ -60,22 +66,26 @@ class ReplayBufferKernel(Kernel):
 
     id = "replay_buffer"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define_design(cls, design: KernelScope[ReplayBufferInputs]) -> None:
-        facts = design.inputs
-        design.covers_region(
-            facts.role,
-            region=facts.region,
-            computation=facts.computation,
-            implements=ACTIVATION_REPLAY_COMPUTATION,
-            description="the compact-to-expanded activation sequence",
+    covered_region = Imported(DATAFLOW_REGION_SEMANTICS, stable_name="region")
+    computation = Imported(ComputationContract)
+    length = Imported(int)
+    repetitions = Imported(int)
+    width = Imported(int)
+    coverage = Covers(
+        RegionClaim(
+            KernelInput("role"),
+            covered_region,
+            computation,
+            ACTIVATION_REPLAY_COMPUTATION,
+            "the compact-to-expanded activation sequence",
         )
-        design.source(FINN_ROOT, *FINN_SOURCES)
-
-        design.parameter("LEN", cast("Ref[object]", facts.length))
-        design.parameter("REP", cast("Ref[object]", facts.repetitions))
-        design.parameter("W", cast("Ref[object]", facts.width))
+    )
+    source_files = Sources(FINN_ROOT, *FINN_SOURCES)
+    length_parameter = Parameter("LEN", length)
+    repetitions_parameter = Parameter("REP", repetitions)
+    width_parameter = Parameter("W", width)
 
     @classmethod
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:

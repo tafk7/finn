@@ -87,7 +87,6 @@ from finn.dataflow.ops.mvau.problem import (
 )
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.design import NetworkRef
 from finn.dataflow.ops.mvau.inventory import MVAU_DATAFLOW_OP_SPEC
 from finn.dataflow.ops.mvau.input_supply import EXTERNAL_SUPPLY
 from dataflow.mvau.test_decomposed_op import (  # noqa: F401 - the real operation fixture
@@ -581,7 +580,7 @@ def test_the_bound_network_is_the_one_the_operation_builds() -> None:
     """
 
     resolved = _committed(_model(repetitions=REPETITIONS)).resolve_dataflow(_context())
-    assert isinstance(resolved.result, NetworkRef)
+    assert resolved.result is resolved
 
     placed = _place(matrix_width=MATRIX_WIDTH, matrix_height=MATRIX_HEIGHT)
     assert placed.network == resolved.result.network

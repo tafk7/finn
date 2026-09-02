@@ -18,13 +18,26 @@ family.  See the vocabulary note section 5.5.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from finn.dataflow.authoring.scope import Ref, finite, reject
+from finn.dataflow.authoring import (
+    Choice,
+    Constant,
+    Covers,
+    Imported,
+    KernelInput,
+    Parameter,
+    RegionClaim,
+    Sources,
+    constraint,
+    derived,
+)
+from finn.dataflow.authoring.scope import Ref, reject
 from finn.dataflow.computation import ComputationContract, DOT_PRODUCT_COMPUTATION
+from finn.dataflow.design import DATAFLOW_REGION_SEMANTICS, QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.kernels import (
-    KernelScope,
     Kernel,
     PhysicalComponent,
     scalar_parameters,
@@ -351,151 +364,108 @@ class DotpAxiKernel(Kernel):
 
     id = "dotp_axi"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define_design(cls, design: KernelScope[DotProductKernelInputs]) -> DotpAxiHandles:
-        facts = design.inputs
-        design.covers_region(
-            facts.role,
-            region=facts.region,
-            computation=facts.computation,
-            implements=DOT_PRODUCT_COMPUTATION,
-            description="the folded dot product over an expanded activation stream",
-        )
-        design.source(FINNLIB_ROOT, *FINNLIB_SOURCES)
+    covered_region = Imported(DATAFLOW_REGION_SEMANTICS, stable_name="region")
+    computation = Imported(ComputationContract)
+    pe = Imported(int)
+    simd = Imported(int)
+    activation_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weight_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    output_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    accumulator_element_type = Imported(QONNX_DATATYPE_VALUE_SEMANTICS)
+    narrow_weights = Imported(bool)
+    target_dsp_block = Imported(DspBlock)
+    target_clock_period_ns = Imported(float)
 
-        # -- the one physical choice --------------------------------------
-        # Pumping changes how fast the datapath runs, not what crosses the
-        # boundary, so the Region is untouched by it.
-        pumping = design.choice("compute_pumping", bool, domain=finite((False, True)))
+    coverage = Covers(
+        RegionClaim(
+            KernelInput("role"),
+            covered_region,
+            computation,
+            DOT_PRODUCT_COMPUTATION,
+            "the folded dot product over an expanded activation stream",
+        )
+    )
+    source_files = Sources(FINNLIB_ROOT, *FINNLIB_SOURCES)
+    compute_pumping = Choice(bool, domain=(False, True))
+    dsp_version_value = derived(target_dsp_block, value_type=int, stable_name="dsp_version")(
+        dsp_version
+    )
+    signed_activations_value = derived(
+        activation_element_type,
+        value_type=bool,
+        stable_name="signed_activations",
+    )(signed_activations)
+    segment_length_value = derived(
+        target_clock_period_ns,
+        compute_pumping,
+        simd,
+        value_type=int,
+        stable_name="segment_length",
+    )(segment_length)
+    activation_width = derived(activation_element_type, value_type=int)(element_width)
+    weight_width = derived(weight_element_type, value_type=int)(element_width)
+    accumulator_width = derived(accumulator_element_type, value_type=int)(element_width)
 
-        # -- derived physical parameters -----------------------------------
-        version = design.derived(
-            "dsp_version",
-            int,
-            dependencies={"target": facts.target_dsp_block},
-            evaluate=dsp_version,
-        )
-        signed = design.derived(
-            "signed_activations",
-            bool,
-            dependencies={"activation": facts.activation_element_type},
-            evaluate=signed_activations,
-        )
-        segment = design.derived(
-            "segment_length",
-            int,
-            dependencies={
-                "clock_period_ns": facts.target_clock_period_ns,
-                "pumping": pumping,
-                "simd": facts.simd,
-            },
-            evaluate=segment_length,
-        )
-        # Widths reach the RTL as declared properties.  Projecting an element
-        # type to its bit count on the way out would put a number in the
-        # artifact that appears nowhere in the design point.
-        activation_width = design.derived(
-            "activation_width",
-            int,
-            dependencies={"element_type": facts.activation_element_type},
-            evaluate=element_width,
-        )
-        weight_width = design.derived(
-            "weight_width",
-            int,
-            dependencies={"element_type": facts.weight_element_type},
-            evaluate=element_width,
-        )
-        accumulator_width = design.derived(
-            "accumulator_width",
-            int,
-            dependencies={"element_type": facts.accumulator_element_type},
-            evaluate=element_width,
-        )
+    operand_types_supported = constraint(
+        activation_element_type,
+        weight_element_type,
+        accumulator_element_type,
+        output_element_type,
+        sets=("coverage",),
+    )(_operand_types_supported)
+    operand_widths_supported = constraint(
+        activation_element_type,
+        weight_element_type,
+        sets=("coverage",),
+    )(_operand_widths_supported)
+    target_supported = constraint(target_dsp_block, sets=("coverage",))(
+        lambda target: target in DSP_VERSION
+    )
+    width_supported = constraint(
+        target_dsp_block,
+        activation_element_type,
+        weight_element_type,
+        accumulator_element_type,
+        output_element_type,
+        sets=("coverage",),
+    )(_width_supported)
+    narrow_weights_supported = constraint(
+        target_dsp_block,
+        activation_element_type,
+        weight_element_type,
+        narrow_weights,
+        sets=("coverage",),
+    )(_narrow_weights_supported)
+    pumping_supported = constraint(compute_pumping, simd, sets=("coverage",))(
+        lambda pumping, simd: simd >= 2 if pumping else True
+    )
 
-        # -- what this core can actually build ------------------------------
-        design.coverage_constraint(
-            "operand_types_supported",
-            # Every numeric role, not just the two that get multiplied.  An
-            # integer dot product with a floating-point accumulator used to pass
-            # here because nothing asked.
-            dependencies={
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-                "accumulator": facts.accumulator_element_type,
-                "output": facts.output_element_type,
-            },
-            evaluate=_operand_types_supported,
-        )
-        design.coverage_constraint(
-            "operand_widths_supported",
-            dependencies={
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-            },
-            evaluate=_operand_widths_supported,
-        )
-        design.coverage_constraint(
-            "target_supported",
-            dependencies={"target": facts.target_dsp_block},
-            evaluate=lambda target: target in DSP_VERSION,
-        )
-        design.coverage_constraint(
-            "width_supported",
-            dependencies={
-                "target": facts.target_dsp_block,
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-                "accumulator": facts.accumulator_element_type,
-                "output": facts.output_element_type,
-            },
-            evaluate=_width_supported,
-        )
-        design.coverage_constraint(
-            "narrow_weights_supported",
-            dependencies={
-                "target": facts.target_dsp_block,
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-                "narrow": facts.narrow_weights,
-            },
-            evaluate=_narrow_weights_supported,
-        )
-        design.coverage_constraint(
-            "pumping_supported",
-            dependencies={"pumping": pumping, "simd": facts.simd},
-            evaluate=lambda pumping, simd: simd >= 2 if pumping else True,
-        )
+    pe_parameter = Parameter("PE", pe)
+    simd_parameter = Parameter("SIMD", simd)
+    pumping_parameter = Parameter("PUMPED_COMPUTE", compute_pumping)
+    activation_width_parameter = Parameter("ACTIVATION_WIDTH", activation_width)
+    weight_width_parameter = Parameter("WEIGHT_WIDTH", weight_width)
+    accumulator_width_parameter = Parameter("ACCU_WIDTH", accumulator_width)
+    version_parameter = Parameter("VERSION", dsp_version_value)
+    signed_parameter = Parameter("SIGNED_ACTIVATIONS", signed_activations_value)
+    segment_parameter = Parameter("SEGMENTLEN", segment_length_value)
+    narrow_parameter = Parameter("NARROW_WEIGHTS", narrow_weights)
+    activation_broadcasting = Constant(
+        "ACTIVATION_BROADCASTING",
+        1,
+        "this implementation broadcasts one activation vector across its parallel output lanes",
+    )
+    force_behavioral = Constant(
+        "FORCE_BEHAVIORAL",
+        0,
+        "synthesis uses the inferred implementation; behavioural is a debug aid",
+    )
 
-        # -- the parameter table --------------------------------------------
-        # No MW or MH: dotp_axi does not take them.  The fused wrapper did, only
-        # to size the replay it contained -- which is now the replay Kernel's
-        # LEN and REP.  That absence is the decomposition in the parameter list.
-        design.parameter("PE", cast("Ref[object]", facts.pe))
-        design.parameter("SIMD", cast("Ref[object]", facts.simd))
-        design.parameter("PUMPED_COMPUTE", cast("Ref[object]", pumping))
-        design.parameter("ACTIVATION_WIDTH", cast("Ref[object]", activation_width))
-        design.parameter("WEIGHT_WIDTH", cast("Ref[object]", weight_width))
-        design.parameter("ACCU_WIDTH", cast("Ref[object]", accumulator_width))
-        design.parameter("VERSION", cast("Ref[object]", version))
-        design.parameter("SIGNED_ACTIVATIONS", cast("Ref[object]", signed))
-        design.parameter("SEGMENTLEN", cast("Ref[object]", segment))
-        design.parameter("NARROW_WEIGHTS", cast("Ref[object]", facts.narrow_weights))
-        design.constant(
-            "ACTIVATION_BROADCASTING",
-            1,
-            why=(
-                "this implementation broadcasts one activation vector across its "
-                "parallel output lanes"
-            ),
-        )
-        design.constant(
-            "FORCE_BEHAVIORAL",
-            0,
-            why="synthesis uses the inferred implementation; behavioural is a debug aid",
-        )
-        return DotpAxiHandles(pumping)
+    @staticmethod
+    def compiled_handles(members: Mapping[str, object]) -> DotpAxiHandles:
+        return DotpAxiHandles(cast("Ref[bool]", members["compute_pumping"]))
 
     @classmethod
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:

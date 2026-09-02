@@ -8,10 +8,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
+from finn.dataflow.authoring import (
+    Covers,
+    Imported,
+    KernelInput,
+    Parameter,
+    RegionClaim,
+    Sources,
+    constraint,
+    derived,
+)
 from finn.dataflow.authoring.scope import Ref, unresolved
-from finn.dataflow.design import ABSENT
+from finn.dataflow.design import ABSENT, DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.kernels import (
-    KernelScope,
     Kernel,
     PhysicalComponent,
     scalar_parameters,
@@ -122,76 +131,56 @@ class FinnRtlMemstreamKernel(Kernel):
 
     id = "finn_rtl_memstream"
     version = "1"
+    uses_class_authoring = True
 
-    @classmethod
-    def define_design(cls, design: KernelScope[FinnRtlMemstreamInputs]) -> None:
-        inputs = design.inputs
-        design.covers_region(
-            inputs.role,
-            region=inputs.region,
-            computation=inputs.computation,
-            implements=CYCLIC_PARAMETER_DELIVERY,
+    covered_region = Imported(DATAFLOW_REGION_SEMANTICS, stable_name="region")
+    computation = Imported(ComputationContract)
+    output_port = Imported(Port)
+    initializer_available = Imported(bool)
+    runtime_writable = Imported(bool)
+    target_memory_capabilities = Imported(CyclicTargetMemoryCapabilities)
+    ram_style = Imported(CyclicRamStyle)
+    pumped_memory = Imported(bool)
+    sets = Imported(int)
+    coverage = Covers(
+        RegionClaim(
+            KernelInput("role"),
+            covered_region,
+            computation,
+            CYCLIC_PARAMETER_DELIVERY,
         )
-        depth = design.derived(
-            "depth", int, dependencies={"output_port": inputs.output_port}, evaluate=_depth
-        )
-        width = design.derived(
-            "width", int, dependencies={"output_port": inputs.output_port}, evaluate=_width
-        )
-        ram_style_name = design.derived(
-            "ram_style_name",
-            str,
-            dependencies={"ram_style": inputs.ram_style},
-            evaluate=_ram_style_name,
-        )
-        init_file = design.derived(
-            "init_file",
-            str,
-            dependencies={
-                "initializer_available": inputs.initializer_available,
-                "ram_style": inputs.ram_style,
-                "runtime_writable": inputs.runtime_writable,
-                "target_memory_capabilities": inputs.target_memory_capabilities.allow_absent(),
-            },
-            evaluate=_initializer_file,
-        )
-        design.coverage_constraint(
-            "initializer_backed",
-            dependencies={"initializer_available": inputs.initializer_available},
-            evaluate=_initializer_backed,
-        )
-        design.coverage_constraint(
-            "pumping_supported",
-            dependencies={
-                "output_port": inputs.output_port,
-                "pumped_memory": inputs.pumped_memory,
-            },
-            evaluate=_pumping_supported,
-        )
-        design.coverage_constraint(
-            "sets_supported",
-            dependencies={"sets": inputs.sets},
-            evaluate=_sets_supported,
-        )
-        design.coverage_constraint(
-            "uram_initialization_supported",
-            dependencies={
-                "initializer_available": inputs.initializer_available,
-                "ram_style": inputs.ram_style,
-                "runtime_writable": inputs.runtime_writable,
-                "target_memory_capabilities": inputs.target_memory_capabilities.allow_absent(),
-            },
-            evaluate=_uram_initialization_supported,
-        )
-        design.parameter("DEPTH", cast("Ref[object]", depth))
-        design.parameter("SETS", cast("Ref[object]", inputs.sets))
-        design.parameter("WIDTH", cast("Ref[object]", width))
-        design.parameter("INIT_FILE", cast("Ref[object]", init_file))
-        design.parameter("RAM_STYLE", cast("Ref[object]", ram_style_name))
-        design.parameter("PUMPED_MEMORY", cast("Ref[object]", inputs.pumped_memory))
-        design.parameter("INITIALIZER_AVAILABLE", cast("Ref[object]", inputs.initializer_available))
-        design.parameter("RUNTIME_WRITABLE", cast("Ref[object]", inputs.runtime_writable))
-        design.source(FINN_MEMSTREAM_ROOT, *FINN_MEMSTREAM_SOURCES)
+    )
+    depth = derived(output_port, value_type=int)(_depth)
+    width = derived(output_port, value_type=int)(_width)
+    ram_style_name = derived(ram_style, value_type=str)(_ram_style_name)
+    init_file = derived(
+        initializer_available,
+        ram_style,
+        runtime_writable,
+        target_memory_capabilities.allow_absent(),
+        value_type=str,
+    )(_initializer_file)
+    initializer_backed = constraint(initializer_available, sets=("coverage",))(_initializer_backed)
+    pumping_supported = constraint(output_port, pumped_memory, sets=("coverage",))(
+        _pumping_supported
+    )
+    sets_supported = constraint(sets, sets=("coverage",))(_sets_supported)
+    uram_initialization_supported = constraint(
+        initializer_available,
+        ram_style,
+        runtime_writable,
+        target_memory_capabilities.allow_absent(),
+        sets=("coverage",),
+    )(_uram_initialization_supported)
+    depth_parameter = Parameter("DEPTH", depth)
+    sets_parameter = Parameter("SETS", sets)
+    width_parameter = Parameter("WIDTH", width)
+    init_file_parameter = Parameter("INIT_FILE", init_file)
+    ram_style_parameter = Parameter("RAM_STYLE", ram_style_name)
+    pumped_parameter = Parameter("PUMPED_MEMORY", pumped_memory)
+    initializer_parameter = Parameter("INITIALIZER_AVAILABLE", initializer_available)
+    writable_parameter = Parameter("RUNTIME_WRITABLE", runtime_writable)
+    source_files = Sources(FINN_MEMSTREAM_ROOT, *FINN_MEMSTREAM_SOURCES)
 
     @classmethod
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
