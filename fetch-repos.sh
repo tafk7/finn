@@ -50,7 +50,7 @@ AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
 # FinnLib supplies replay_buffer, dotp_axi, and their cores. Bump this together
 # with any change to their source manifests; FINNLIB_ROOT overrides the checkout
 # for local work.
-FINNLIB_COMMIT="570b680dc22d61a4ab6ba09dcd8b9657e75a2189"
+FINNLIB_COMMIT="dfeafac81cd2a6da27e647ee03915ade5532186e"
 
 QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"
