@@ -21,6 +21,7 @@ from finn.dataflow._engine import (
     ConstraintSet,
     Decided,
     DependencyKind,
+    DependencyRef,
     DependencyView,
     DesignPoint,
     Engine,
@@ -47,15 +48,14 @@ from finn.dataflow.model.compiler import (
     _compile_space,
     answer_for,
     imported_decisions,
+    resolve_value_source,
 )
 from finn.dataflow.model.declarations import (
     AuthoringError,
-    ChildValue,
     Decision,
     Derived,
     Problem,
     Space,
-    Use,
     ValueSource,
     declared_members,
     reject,
@@ -68,6 +68,23 @@ T = TypeVar("T")
 K = TypeVar("K", bound="Kernel")
 
 _MISSING = object()
+
+
+class RegionRefused(ValueError):
+    """A canonical Region constructor refuses the facts it was given.
+
+    Deliberately distinct from a bare ``ValueError``.  A constructor that
+    refuses infeasible folding is telling its supplier something, and the point
+    should hear it as a rejecting absence.  A constructor that indexes past the
+    end of a tuple is a defect, and turning that into an ordinary infeasible
+    point would hide it: the Design would simply look unsatisfiable at that
+    configuration and nobody would look further.  Only this exception is caught;
+    anything else stays an ``EvaluationError``.
+
+    It subclasses ``ValueError`` so a caller invoking the constructor directly --
+    a fixture, or the canonical model's own tests -- still catches what it always
+    caught.
+    """
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
@@ -111,10 +128,11 @@ class Region(Derived[DataflowRegion]):
         def evaluate(**values: object) -> object:
             try:
                 return construct(**values)
-            except ValueError as error:
-                # A canonical constructor refusing its arguments is a refusal,
-                # not a crash: the facts reached it through Inputs its supplier
-                # owns, and the point that supplied them should be told so.
+            except RegionRefused as error:
+                # A deliberate refusal is a refusal, not a crash: the facts
+                # reached the constructor through Inputs its supplier owns, and
+                # the point that supplied them should be told so.  Any other
+                # exception is a defect and stays an EvaluationError.
                 return reject(
                     "kernel-region-refused",
                     f"{family} cannot be constructed from these facts: {error}",
@@ -335,44 +353,6 @@ def _parameter_members(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[
     return tuple(ordered.items())
 
 
-def _all_value_names(kernel_type: type[Kernel]) -> Mapping[int, str]:
-    found: dict[int, str] = {}
-    for base in reversed(kernel_type.__mro__):
-        if not issubclass(base, Space) or base is Space:
-            continue
-        for name, value in base.__dict__.items():
-            if isinstance(value, ValueSource):
-                found[id(value)] = name
-    return found
-
-
-def _parameter_source(
-    kernel_type: type[Kernel],
-    compiled: _CompiledSpace[Kernel],
-    source: ValueSource[object],
-) -> _Ref[object]:
-    if isinstance(source, ChildValue):
-        use_names: dict[int, str] = {}
-        for base in reversed(kernel_type.__mro__):
-            if not issubclass(base, Space) or base is Space:
-                continue
-            for name, value in base.__dict__.items():
-                if isinstance(value, Use):
-                    use_names[id(value)] = name
-        use_name = use_names.get(id(source.use))
-        if use_name is None:
-            raise AuthoringError(
-                f"{kernel_type.__name__} parameter references a child outside the class"
-            )
-        return compiled.child(use_name).exported(source.member_name)
-    source_name = _all_value_names(kernel_type).get(id(source))
-    if source_name is None:
-        raise AuthoringError(
-            f"{kernel_type.__name__} parameter references a value outside the class"
-        )
-    return compiled.member(source_name)
-
-
 def _region_constraint(
     path: QualifiedPath,
     region: _Ref[DataflowRegion],
@@ -409,17 +389,23 @@ def _audit_region_ownership(
 
     A Kernel-local Decision is physical only: it may reorganize the hardware,
     never the logical contract a peer or a Design reads.  The mechanical form of
-    that rule is the Region property's transitive value-dependency closure, and
-    it must not reach a decision this Kernel declares -- including one nested in
-    a helper ``Space`` the Kernel uses.  A Decision reached through an ``Input``
-    belongs to the supplier, which is exactly the intended arrangement.
+    that rule is the Region property's transitive closure, and it must not reach
+    a decision this Kernel declares -- including one nested in a helper ``Space``
+    the Kernel uses.  A Decision reached through an ``Input`` belongs to the
+    supplier, which is exactly the intended arrangement.
 
-    Applicability is deliberately not walked: an outer gate says whether the
-    Region is asked for, not what it is.
+    Applicability counts as reaching.  A gate is not "whether the Region is
+    asked for" when the thing holding the gate is inside the Kernel: a local
+    Decision that gates a helper whose output feeds the Region makes the Region
+    present or absent, which is a change to the logical contract a peer reads and
+    not a reorganization of hardware.  So both the value graph and the
+    applicability graph are walked.  An *outer* gate -- a Design's segment
+    condition or branch selector -- is still fine, because it is not owned here.
     """
 
-    owned = {declaration.path: declaration for declaration in compiled.spec.decisions}
+    owned = {declaration.path for declaration in compiled.spec.decisions}
     properties = {declaration.path: declaration for declaration in compiled.spec.properties}
+    decisions = {declaration.path: declaration for declaration in compiled.spec.decisions}
     pending = [region.path]
     visited: set[QualifiedPath] = set()
     while pending:
@@ -427,18 +413,28 @@ def _audit_region_ownership(
         if path in visited:
             continue
         visited.add(path)
-        declaration = properties.get(path)
-        if declaration is None:
-            continue
-        for dependency in declaration.evaluator.dependencies:
-            if dependency.kind is DependencyKind.DECISION:
-                if dependency.path in owned:
-                    raise AuthoringError(
-                        f"{kernel_type.__name__} lets its own Decision "
-                        f"{dependency.path} reach {region.path}; a choice that changes "
-                        "the Region belongs to the enclosing Design and arrives as an Input"
-                    )
-            elif dependency.kind is DependencyKind.PROPERTY:
+        edges: list[DependencyRef] = []
+        for declaration in (properties.get(path), decisions.get(path)):
+            if declaration is None:
+                continue
+            evaluator = getattr(declaration, "evaluator", None)
+            if evaluator is not None:
+                edges.extend(evaluator.dependencies)
+            domain = getattr(declaration, "domain", None)
+            if domain is not None:
+                edges.extend(domain.dependencies)
+            applies_if = declaration.applies_if
+            if applies_if is not None:
+                edges.extend(applies_if.dependencies)
+        for dependency in edges:
+            if dependency.kind is DependencyKind.DECISION and dependency.path in owned:
+                raise AuthoringError(
+                    f"{kernel_type.__name__} lets its own Decision "
+                    f"{dependency.path} reach {region.path}; a choice that changes "
+                    "the Region -- including whether it applies at all -- belongs to "
+                    "the enclosing Design and arrives as an Input"
+                )
+            if dependency.kind in (DependencyKind.DECISION, DependencyKind.PROPERTY):
                 pending.append(dependency.path)
 
 
@@ -514,11 +510,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
                 member_name,
                 physical_name,
                 template,
-                _parameter_source(
-                    kernel_type,
-                    cast("_CompiledSpace[Kernel]", compiled),
-                    template.source,
-                ),
+                resolve_value_source(compiled, template.source, "parameter"),
             )
         )
 
@@ -713,4 +705,4 @@ def configure_kernel(
     return Decided(cast(K, instance))
 
 
-__all__ = ["Kernel", "Parameter", "Region", "configure_kernel"]
+__all__ = ["Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel"]

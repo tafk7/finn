@@ -17,6 +17,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import cast
 
 from finn.dataflow.artifacts.derivation import (
     ArtifactRef,
@@ -57,7 +58,10 @@ DEFAULT_LABELS = ("identity", "three_folds", "wide_lanes")
 PART = "xczu3eg-sbva484-1-e"
 CLOCK_PERIOD_NS = 4.0
 UTILIZATION = re.compile(r"^\|\s*([A-Za-z][\w ]*?)\s*\|\s*(\d+)\s*\|", re.MULTILINE)
-STORAGE = ("Register as Flip Flop", "Register as Latch", "Block RAM Tile", "LUT as Memory")
+#: Categories that count as a real ``LEN``-deep store, as opposed to the
+#: handshake registers every stream endpoint has.
+MEMORY = ("Block RAM Tile", "LUT as Memory")
+REGISTERS = ("Register as Flip Flop", "Register as Latch")
 UNLICENSED = "A valid license was not found"
 
 
@@ -206,11 +210,24 @@ def run_one(case: Case) -> int:
             print(f"{case.label}: FAIL")
             return FAIL
         cells = {name: int(count) for name, count in UTILIZATION.findall(report.read_text())}
-        storage = {name: cells.get(name, 0) for name in STORAGE}
-        if sum(storage.values()) <= 0:
-            print(f"{case.label}: FAIL (no storage synthesized; cells={cells})")
+        memory = {name: cells.get(name, 0) for name in MEMORY}
+        registers = {name: cells.get(name, 0) for name in REGISTERS}
+        # `REP == 1` is the identity: nothing is replayed, so a correct buffer
+        # optimizes its store away and only handshake state survives.  Above one
+        # neuron fold a store must actually appear -- accepting "any nonzero
+        # storage category" would let a buffer that kept nothing but its
+        # handshake registers pass, which is precisely the broken case.
+        replays = int(cast(int, kernel.parameters["REP"])) > 1
+        if replays and sum(memory.values()) <= 0:
+            print(f"{case.label}: FAIL (a replaying buffer synthesized no memory; {cells})")
             return FAIL
-        print(f"{case.label}: PASS ({storage})")
+        if not replays and sum(memory.values()) > 0:
+            print(f"{case.label}: FAIL (an identity buffer synthesized memory; {cells})")
+            return FAIL
+        if sum(registers.values()) <= 0:
+            print(f"{case.label}: FAIL (no sequential state at all; {cells})")
+            return FAIL
+        print(f"{case.label}: PASS (memory={memory}, registers={registers})")
         return PASS
 
 

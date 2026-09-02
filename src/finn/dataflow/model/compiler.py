@@ -634,6 +634,11 @@ class _Compilation:
                 raise AuthoringError(
                     f"{self.space_type.__name__}.{member_name} has an empty case id"
                 )
+            if "." in case_id:
+                raise AuthoringError(
+                    f"{self.space_type.__name__}.{member_name} case id {case_id!r} contains a "
+                    "dot; a case id is one path segment of its namespace"
+                )
             declaration.check_case(self.space_type.__name__, member_name, case)
             if case_id in ids:
                 raise AuthoringError(
@@ -766,6 +771,7 @@ class _Compilation:
                     compiled_case.case_id,
                     compiled_case.compiled.namespace,
                     tuple(item.path for item in compiled_case.compiled.spec.decisions),
+                    tuple(item.path for item in compiled_case.compiled.spec.properties),
                     tuple(item.path for item in compiled_case.compiled.spec.constraints),
                     tuple(item.name for item in compiled_case.compiled.spec.readiness_profiles),
                     _direct_branches(compiled_case.compiled.catalog),
@@ -907,6 +913,51 @@ def answer_for(
         return Unresolved(error.findings)
 
 
+def _members_of(space_type: type[Space], kinds: tuple[type, ...]) -> dict[int, str]:
+    return {
+        id(value): name
+        for base in reversed(space_type.__mro__)
+        if issubclass(base, Space) and base is not Space
+        for name, value in base.__dict__.items()
+        if isinstance(value, kinds)
+    }
+
+
+def resolve_value_source(
+    compiled: _CompiledSpace[S],
+    source: ValueSource[object],
+    what: str,
+) -> _Ref[object]:
+    """Resolve any class-body value declaration to its compiled handle.
+
+    A specialization -- a Kernel ``Parameter``, a Design ``when=`` or position
+    map -- reads values the generic compiler has already bound, so it resolves
+    them here rather than reimplementing the walk.  Each partial copy of this
+    was a place where one kind of source silently stopped composing: both
+    handled ``ChildValue`` and neither handled ``BranchOutput``, so a value
+    selected by a ``OneOf`` could not reach a Parameter or a topology condition
+    even though the generic compiler understood it perfectly well.
+    """
+
+    owner = compiled.owner
+    if isinstance(source, BranchOutput):
+        branches = _members_of(owner, (OneOf,))
+        name = branches.get(id(source.branch))
+        if name is None:
+            raise AuthoringError(f"{owner.__name__} {what} names a branch outside the class")
+        return compiled.branch(name).output(source.output_name)
+    if isinstance(source, ChildValue):
+        children = _members_of(owner, (Use,))
+        name = children.get(id(source.use))
+        if name is None:
+            raise AuthoringError(f"{owner.__name__} {what} names a child outside the class")
+        return compiled.child(name).exported(source.member_name)
+    name = _members_of(owner, (ValueSource,)).get(id(source))
+    if name is None:
+        raise AuthoringError(f"{owner.__name__} {what} names a value outside the class")
+    return compiled.member(name)
+
+
 def imported_decisions(
     point: DesignPoint,
     spec: DesignSpaceSpec,
@@ -997,6 +1048,7 @@ def compile_space(
 __all__ = [
     "SpaceModel",
     "answer_for",
+    "resolve_value_source",
     "compile_space",
     "compile_space_model",
     "imported_decisions",

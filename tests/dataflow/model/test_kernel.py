@@ -14,6 +14,7 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import (
+    Absent,
     Decided,
     DependencyKind,
     Engine,
@@ -37,7 +38,13 @@ from finn.dataflow.model.declarations import (
     divisors_of,
     exported_members,
 )
-from finn.dataflow.model.kernel import Kernel, Parameter, Region, configure_kernel
+from finn.dataflow.model.kernel import (
+    Kernel,
+    Parameter,
+    Region,
+    RegionRefused,
+    configure_kernel,
+)
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -552,7 +559,7 @@ def test_parameter_source_must_belong_to_the_kernel_class() -> None:
         OTHER = Parameter(outside)
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="references a value outside the class"):
+    with pytest.raises(AuthoringError, match="names a value outside the class"):
         _compile_space(Broken, "test.broken", _bindings(harness), _allow_problem=False)
 
 
@@ -603,3 +610,132 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
     assert configured.value.STAGES == 2
     assert dict(configured.value.assignments) == {QualifiedPath("composite.pipeline.stages"): 2}
     assert configured.value.imported_decisions == ()
+
+
+def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
+    """Applicability counts as reaching: presence is part of the contract."""
+
+    class Folding(Space):
+        supplied = Input(int)
+
+        @derived(int, supplied=supplied)
+        def lanes(*, supplied: int) -> int:
+            return supplied
+
+        exports = (lanes,)
+
+    class GatedHelper(Kernel):
+        id = "gated_helper"
+        computation = COMPUTATION
+        extent = Input(int)
+        lanes = Input(int)
+        enabled = Decision(bool, values=(False, True))
+        folding = Use(Folding, supplied=lanes, when=enabled)
+        region = Region(
+            family="test.copy",
+            version="1",
+            construct=_region,
+            extent=extent,
+            lanes=folding.lanes,
+        )
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("gated_helper", ())
+
+    harness, _kernel = _compiled()
+    with pytest.raises(AuthoringError, match="including whether it applies at all"):
+        _compile_space(GatedHelper, "test.gated", _bindings(harness), _allow_problem=False)
+
+
+def test_a_local_decision_may_not_gate_the_region_property_itself() -> None:
+    class GatedRegion(Kernel):
+        id = "gated_region"
+        computation = COMPUTATION
+        extent = Input(int)
+        lanes = Input(int)
+        enabled = Decision(bool, values=(False, True))
+
+        @derived(int, lanes=lanes)
+        def widened(*, lanes: int) -> int:
+            return lanes
+
+        region = Region(
+            family="test.copy",
+            version="1",
+            construct=_region,
+            extent=extent,
+            lanes=widened,
+        )
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("gated_region", ())
+
+    harness, _kernel = _compiled()
+    compiled = _compile_space(GatedRegion, "test.plain", _bindings(harness), _allow_problem=False)
+    assert compiled.member("region") is not None
+
+
+def test_an_outer_gate_over_the_region_stays_legal() -> None:
+    """A Design's segment condition is not Kernel-owned, so it is not a leak."""
+
+    class Conditional(Space):
+        extent = Problem(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        present = Decision(bool, values=(False, True))
+        child = Use(ToyKernel, extent=extent, lanes=lanes, when=present)
+
+    compiled = _compile_space(Conditional, "outer", problem_namespace="problem.outer")
+    assert compiled.child("child").exported("region").kind is DependencyKind.PROPERTY
+
+
+def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
+    """A constructor defect must not read as an ordinary infeasible point."""
+
+    def refusing(extent: int) -> DataflowRegion:
+        raise RegionRefused(f"{extent} is not a supported extent")
+
+    def defective(extent: int) -> DataflowRegion:
+        return cast("DataflowRegion", (1, 2, 3)[extent])
+
+    class Refusing(Kernel):
+        id = "refusing"
+        computation = COMPUTATION
+        extent = Input(int)
+        region = Region(family="test.copy", version="1", construct=refusing, extent=extent)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("refusing", ())
+
+    class Defective(Kernel):
+        id = "defective"
+        computation = COMPUTATION
+        extent = Input(int)
+        region = Region(family="test.copy", version="1", construct=defective, extent=extent)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("defective", ())
+
+    harness = _compile_space(Harness, "test", problem_namespace="problem.test")
+    binding = {"extent": cast("_Ref[object]", harness.member("extent"))}
+    engine = Engine()
+
+    refusing_kernel = _compile_space(Refusing, "test.refusing", binding, _allow_problem=False)
+    point = engine.start(
+        engine.validate(assemble_specs((harness.spec, refusing_kernel.spec))),
+        {"problem.test.extent": 8},
+    )
+    answer = engine.query_property(point, "semantic.test.refusing.region")
+    assert isinstance(answer, Absent)
+    assert {finding.code for finding in answer.findings} == {"kernel-region-refused"}
+
+    defective_kernel = _compile_space(Defective, "test.defective", binding, _allow_problem=False)
+    point = engine.start(
+        engine.validate(assemble_specs((harness.spec, defective_kernel.spec))),
+        {"problem.test.extent": 8},
+    )
+    with pytest.raises(EvaluationError):
+        engine.query_property(point, "semantic.test.defective.region")

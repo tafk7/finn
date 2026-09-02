@@ -35,7 +35,7 @@ from finn.dataflow.model.declarations import (
     reject,
     unresolved,
 )
-from finn.dataflow.model.kernel import Kernel, Parameter, Region
+from finn.dataflow.model.kernel import Kernel, Parameter, Region, RegionRefused
 from finn.dataflow.region import (
     BeatSequence,
     Coordinate,
@@ -141,11 +141,11 @@ def construct_dot_product_region(
 
     dimensions = (repetitions, matrix_width, matrix_height, pe, simd)
     if any(type(value) is not int or value <= 0 for value in dimensions):
-        raise ValueError("dot-product dimensions and folding must be positive integers")
+        raise RegionRefused("dot-product dimensions and folding must be positive integers")
     if matrix_width % simd:
-        raise ValueError("SIMD must divide matrix_width exactly")
+        raise RegionRefused("SIMD must divide matrix_width exactly")
     if matrix_height % pe:
-        raise ValueError("PE must divide matrix_height exactly")
+        raise RegionRefused("PE must divide matrix_height exactly")
 
     neuron_folds = matrix_height // pe
     synapse_folds = matrix_width // simd

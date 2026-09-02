@@ -14,6 +14,7 @@ unchanged declaration is the evidence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 
@@ -169,6 +170,49 @@ def exhaustive_trial(
         )
         results.append(Assessment(case.id, _case_is_refused(engine, trial, case), ready))
     return tuple(results)
+
+
+def first_globally_feasible_case(
+    engine: Engine, point: DesignPoint, branch: BranchInfo
+) -> tuple[str, DesignPoint] | None:
+    """Trial each case and keep the first the *whole space* accepts.
+
+    Weaker than `first_feasible_case` in what it assumes and stronger in what it
+    proves: a case can be perfectly satisfiable on its own constraints and still
+    make the enclosing composition invalid.  `evaluate_constraints` with no path
+    list assesses everything the space declares, which needs no knowledge of
+    where the enclosing feasibility set lives or what it is called.
+    """
+
+    for case in branch.cases:
+        trial = assign_case(engine, point, branch, case.id)
+        if engine.evaluate_constraints(trial).verdict is not False:
+            return case.id, trial
+    return None
+
+
+def cheapest_case_by_property(
+    engine: Engine, point: DesignPoint, branch: BranchInfo, name: str
+) -> tuple[str, DesignPoint] | None:
+    """Score each case on a caller-named property the case itself publishes.
+
+    The path comes from `CaseInfo.property_paths`; nothing here builds one.
+    """
+
+    scored: list[tuple[int, str, DesignPoint]] = []
+    for case in branch.cases:
+        try:
+            path = case.property_named(name)
+        except KeyError:
+            continue
+        trial = assign_case(engine, point, branch, case.id)
+        answer = engine.query_property(trial, path)
+        if isinstance(answer, Decided):
+            scored.append((int(cast(int, answer.value)), case.id, trial))
+    if not scored:
+        return None
+    best = min(scored, key=lambda item: (item[0], item[1]))
+    return best[1], best[2]
 
 
 def resolve_recursively(

@@ -51,16 +51,15 @@ from finn.dataflow.model.compiler import (
     _Ref,
     answer_for,
     imported_decisions,
+    resolve_value_source,
 )
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Case,
-    ChildValue,
     Decision,
     OneOf,
     Problem,
     Space,
-    Use,
     ValueSource,
     declared_members,
     semantics_for,
@@ -142,6 +141,22 @@ class DataflowDesign(Space):
         return case.metadata.region_family, case.metadata.region_version
 
 
+def _atomic(what: str, value: str | None) -> None:
+    """A role, node id, or case id is one path segment, not a qualified path.
+
+    Namespaces are built by joining these with dots and read back by splitting
+    on them, so a value containing a dot would compile to something other than
+    what the author wrote and then be silently truncated on the way back.
+    """
+
+    if value is None:
+        return
+    if not value:
+        raise AuthoringError(f"{what} must be non-empty")
+    if "." in value:
+        raise AuthoringError(f"{what} must be one path segment; {value!r} contains a dot")
+
+
 class Kernels(OneOf):
     """One stable Design segment holding exactly one selected Kernel.
 
@@ -170,10 +185,8 @@ class Kernels(OneOf):
     ) -> None:
         if not isinstance(computation, ComputationContract):
             raise AuthoringError("a Kernel segment declares one ComputationContract")
-        if role is not None and not role:
-            raise AuthoringError("a Kernel segment role must be non-empty")
-        if node_id is not None and not node_id:
-            raise AuthoringError("a Kernel segment node id must be non-empty")
+        _atomic("a Kernel segment role", role)
+        _atomic("a Kernel segment node id", node_id)
         # The role *is* the namespace segment, so it travels as the branch's
         # stable name rather than as a second parallel identity.
         self._initialize(cases, ("region",), when, role)
@@ -359,8 +372,14 @@ def topology_members(
 class _CompiledKernelCase:
     """One candidate Kernel compiled beneath a segment namespace."""
 
-    kernel_id: str
+    #: The stable selector value.  Equals ``kernel_id`` unless the author aliased
+    #: the case, which is legal precisely so one Kernel class can appear twice.
+    case_id: str
     compiled: _CompiledSpace[Kernel]
+
+    @property
+    def kernel_id(self) -> str:
+        return self.compiled.owner.id
 
     @property
     def metadata(self) -> _KernelCompilation[Kernel]:
@@ -381,11 +400,11 @@ class _CompiledKernelSegment:
     cases: tuple[_CompiledKernelCase, ...]
     selected_region: _Ref[DataflowRegion]
 
-    def case(self, kernel_id: str) -> _CompiledKernelCase:
+    def case(self, case_id: str) -> _CompiledKernelCase:
         for candidate in self.cases:
-            if candidate.kernel_id == kernel_id:
+            if candidate.case_id == case_id:
                 return candidate
-        raise AuthoringError(f"segment {self.role!r} has no candidate {kernel_id!r}")
+        raise AuthoringError(f"segment {self.role!r} has no candidate {case_id!r}")
 
 
 @dataclass(frozen=True)
@@ -436,7 +455,13 @@ class _DesignCompilation(Generic[D]):
     network: _Ref[DataflowNetwork]
     feasibility_set: str
     readiness_profile: str
-    local_decisions: tuple[tuple[str, _Ref[object]], ...]
+    #: Decisions this Design owns: its own, its helpers', and its selectors.
+    design_decisions: frozenset[QualifiedPath]
+    #: Decisions a contained candidate Kernel owns.  Not the Design's to retain.
+    kernel_decisions: frozenset[QualifiedPath]
+    #: Every decision inside the complete Design fragment.  Nothing in here is
+    #: imported provenance, however deeply nested it sits.
+    internal_decisions: frozenset[QualifiedPath]
 
     def segment(self, role: str) -> _CompiledKernelSegment:
         for candidate in self.segments:
@@ -474,39 +499,6 @@ def _segment(
     )
 
 
-def _value_ref(
-    design_type: type[DataflowDesign],
-    compiled: _CompiledSpace[D],
-    source: ValueSource[object],
-    what: str,
-) -> _Ref[object]:
-    """Resolve one Design-visible value declaration to its compiled handle."""
-
-    if isinstance(source, ChildValue):
-        names = {
-            id(value): name
-            for base in reversed(design_type.__mro__)
-            if issubclass(base, Space) and base is not Space
-            for name, value in base.__dict__.items()
-            if isinstance(value, Use)
-        }
-        child = names.get(id(source.use))
-        if child is None:
-            raise AuthoringError(f"{design_type.__name__} {what} names a child outside the class")
-        return compiled.child(child).exported(source.member_name)
-    names = {
-        id(value): name
-        for base in reversed(design_type.__mro__)
-        if issubclass(base, Space) and base is not Space
-        for name, value in base.__dict__.items()
-        if isinstance(value, ValueSource)
-    }
-    name = names.get(id(source))
-    if name is None:
-        raise AuthoringError(f"{design_type.__name__} {what} names a value outside the class")
-    return compiled.member(name)
-
-
 def _endpoint(
     design_type: type[DataflowDesign],
     by_declaration: Mapping[int, _CompiledKernelSegment],
@@ -529,17 +521,60 @@ def _boolean_ref(
 ) -> _Ref[object] | None:
     if when is None:
         return None
-    reference = _value_ref(design_type, compiled, cast("ValueSource[object]", when), what)
+    reference = resolve_value_source(compiled, cast("ValueSource[object]", when), what)
     if reference.semantics.type_token is not bool:
         raise AuthoringError(f"{design_type.__name__} {what} when= is not Boolean")
     return reference
+
+
+def _gate(active: _Ref[object] | None, scope: str) -> EvaluatorSpec[Answer[bool]] | None:
+    """Lower one topology condition into an applicability evaluator."""
+
+    if active is None:
+        return None
+    name = f"when@{scope}"
+
+    def applies(values: DependencyView) -> Answer[bool]:
+        return Decided(bool(values[name]))
+
+    return EvaluatorSpec((active.dependency(name),), applies)
+
+
+def _position_map_property(
+    path: QualifiedPath,
+    source: _Ref[object],
+    gate: EvaluatorSpec[Answer[bool]] | None,
+) -> DerivedProperty:
+    """Forward one declared position map, under the Connection's own condition.
+
+    The Network cannot depend on the author's map value directly.  A dependency
+    is demanded before the evaluator runs, so an inactive Connection whose map
+    reads an uncommitted Decision would leave the whole Network unresolved --
+    an inactive topology declaration that is not actually inactive.  Routing the
+    map through a property that carries the Connection's gate makes absence the
+    answer, because applicability is decided before dependencies are prepared.
+    """
+
+    def forward(values: DependencyView) -> Answer[object]:
+        return Decided(values["map"])
+
+    return DerivedProperty(
+        path,
+        source.semantics,
+        EvaluatorSpec((source.dependency("map"),), forward),
+        gate,
+    )
 
 
 def _topology(
     design_type: type[D],
     compiled: _CompiledSpace[D],
     segments: tuple[_CompiledKernelSegment, ...],
-) -> tuple[tuple[_CompiledConnection, ...], tuple[_CompiledBoundary, ...]]:
+) -> tuple[
+    tuple[_CompiledConnection, ...],
+    tuple[_CompiledBoundary, ...],
+    tuple[DerivedProperty, ...],
+]:
     by_declaration = {
         id(declaration): segment
         for segment, declaration in zip(
@@ -549,29 +584,40 @@ def _topology(
     }
     connections: list[_CompiledConnection] = []
     boundaries: list[_CompiledBoundary] = []
+    maps: list[DerivedProperty] = []
     for member_name, declaration in topology_members(design_type):
         identity = declaration.stable_name or member_name
         what = f"topology {identity!r}"
         active = _boolean_ref(design_type, compiled, declaration.when, what)
         if isinstance(declaration, Connection):
+            gate = _gate(active, f"{compiled.namespace}.{identity}")
+            sinks: list[_CompiledSink] = []
+            for index, sink in enumerate(declaration.sinks):
+                if sink.position_map is None:
+                    sinks.append(
+                        _CompiledSink(
+                            _endpoint(design_type, by_declaration, sink.endpoint, what), None
+                        )
+                    )
+                    continue
+                source = resolve_value_source(
+                    compiled, cast("ValueSource[object]", sink.position_map), what
+                )
+                map_path = QualifiedPath(
+                    f"semantic.{compiled.namespace}.{identity}.position_map.{index}"
+                )
+                maps.append(_position_map_property(map_path, source, gate))
+                sinks.append(
+                    _CompiledSink(
+                        _endpoint(design_type, by_declaration, sink.endpoint, what),
+                        _Ref(map_path, DependencyKind.PROPERTY, source.semantics),
+                    )
+                )
             connections.append(
                 _CompiledConnection(
                     identity,
                     _endpoint(design_type, by_declaration, declaration.source, what),
-                    tuple(
-                        _CompiledSink(
-                            _endpoint(design_type, by_declaration, sink.endpoint, what),
-                            None
-                            if sink.position_map is None
-                            else _value_ref(
-                                design_type,
-                                compiled,
-                                cast("ValueSource[object]", sink.position_map),
-                                what,
-                            ),
-                        )
-                        for sink in declaration.sinks
-                    ),
+                    tuple(sinks),
                     active,
                 )
             )
@@ -590,7 +636,7 @@ def _topology(
         duplicates = sorted({value for value in values if values.count(value) > 1})
         if duplicates:
             raise AuthoringError(f"{design_type.__name__} declares {label} {duplicates[0]!r} twice")
-    return tuple(connections), tuple(boundaries)
+    return tuple(connections), tuple(boundaries), tuple(maps)
 
 
 def _active(value: object) -> bool:
@@ -881,7 +927,7 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         raise AuthoringError(f"{design_type.__name__} must declare at least one Kernel segment")
     _check_unique(design_type, segments)
 
-    connections, boundaries = _topology(design_type, design, segments)
+    connections, boundaries, map_properties = _topology(design_type, design, segments)
     network_path = QualifiedPath(f"semantic.{design.namespace}.network")
     network_property = _network_property(network_path, segments, connections, boundaries)
     network: _Ref[DataflowNetwork] = _Ref(
@@ -902,16 +948,20 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
     constraint_paths = tuple(item.path for item in constraints)
     feasibility_name = f"{design.namespace}.feasibility"
     readiness_name = f"{design.namespace}.configured"
-    local_decisions = tuple(
-        (name, design.member(name))
-        for name, declaration in declarations.items()
-        if isinstance(declaration, Decision)
-    ) + tuple(
-        (segment.role, segment.selector) for segment in segments if segment.selector is not None
+    internal_decisions = frozenset(item.path for item in design.spec.decisions)
+    kernel_decisions = frozenset(
+        item.path
+        for segment in segments
+        for case in segment.cases
+        for item in case.compiled.spec.decisions
     )
+    # Everything the Design fragment declares that a contained Kernel does not:
+    # its own Decisions, those nested in Design-owned helper Spaces and generic
+    # branches, and the segment selectors, which live in the Design namespace.
+    design_decisions = internal_decisions - kernel_decisions
     specification = replace(
         design.spec,
-        properties=(*design.spec.properties, network_property),
+        properties=(*design.spec.properties, *map_properties, network_property),
         constraints=constraints,
         constraint_sets=(
             *design.spec.constraint_sets,
@@ -938,7 +988,9 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         network,
         feasibility_name,
         readiness_name,
-        local_decisions,
+        design_decisions,
+        kernel_decisions,
+        internal_decisions,
     )
     return replace(design, spec=specification, extension=metadata)
 
@@ -998,7 +1050,7 @@ def _selected_case(
     segment: _CompiledKernelSegment,
 ) -> Answer[str]:
     if segment.selector is None:
-        return Decided(segment.cases[0].kernel_id)
+        return Decided(segment.cases[0].case_id)
     if segment.selector.path not in point.assignments:
         return Unresolved(
             (
@@ -1107,9 +1159,9 @@ def configure_design(
         return cast("Answer[D]", Unresolved(mismatch))
 
     assignments = {
-        reference.path: point.assignments[reference.path]
-        for _name, reference in design.local_decisions
-        if reference.path in point.assignments
+        path: point.assignments[path]
+        for path in sorted(design.design_decisions)
+        if path in point.assignments
     }
     retained = {
         id(declaration): point.assignments[compiled.member(name).path]
@@ -1125,12 +1177,7 @@ def configure_design(
         selected,
         retained,
         assignments,
-        imported_decisions(
-            point,
-            compiled.spec,
-            compiled.inputs,
-            {reference.path for _name, reference in design.local_decisions},
-        ),
+        imported_decisions(point, compiled.spec, compiled.inputs, design.internal_decisions),
     )
     return Decided(instance)
 
@@ -1174,7 +1221,7 @@ def _correspondence_findings(
                     (("role", role), ("node", segment.node_id)),
                 )
             )
-        if type(kernel).id != selected[role]:
+        if type(kernel) is not segment.case(selected[role]).compiled.owner:
             findings.append(
                 Finding(
                     FindingKind.BLOCKER,

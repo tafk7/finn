@@ -26,7 +26,7 @@ from finn.dataflow.model.declarations import (
     Space,
     divisors_of,
 )
-from finn.dataflow.model.design import DataflowDesign, Kernels
+from finn.dataflow.model.design import Boundary, DataflowDesign, Kernels, configure_design
 from finn.dataflow.model.kernel import Kernel, Parameter, Region
 from finn.dataflow.region import (
     BeatSequence,
@@ -454,3 +454,79 @@ def test_kernels_reuses_generic_branch_compilation() -> None:
     extension = design.extension
     assert extension is not None
     assert not hasattr(extension, "coverage")
+
+
+def test_an_aliased_kernel_case_configures_under_its_alias() -> None:
+    """One Kernel class may fill a segment twice, so case id is not Kernel id."""
+
+    class Aliased(DataflowDesign):
+        id = "aliased"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+        compute = Kernels(
+            Case(CopyKernel, name="fast", extent=extent, lanes=lanes),
+            Case(CopyKernel, name="slow", extent=extent, lanes=lanes),
+            computation=COPY,
+        )
+        source = Boundary(compute.input("input"))
+        result = Boundary(compute.output("output"))
+
+    _harness, design = _compiled(Aliased)
+    branch = design.catalog.branch("root.design.compute")
+    assert tuple(case.id for case in branch.cases) == ("fast", "slow")
+    assert tuple(case.namespace for case in branch.cases) == (
+        "root.design.compute.fast",
+        "root.design.compute.slow",
+    )
+    engine, point, _design = _started(Aliased)
+    for alias in ("fast", "slow"):
+        chosen = engine.commit_assignments(
+            point,
+            {
+                "root.design.compute.kernel": alias,
+                f"root.design.compute.{alias}.pumped": False,
+            },
+        ).point
+        answer = configure_design(engine, design, chosen)
+        assert isinstance(answer, Decided), answer
+        assert answer.value.selected_candidates == {"compute": alias}
+        assert isinstance(answer.value.compute, CopyKernel)
+
+
+def test_a_singleton_aliased_case_configures() -> None:
+    class Solo(DataflowDesign):
+        id = "solo"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+        compute = Kernels(
+            Case(CopyKernel, name="only", extent=extent, lanes=lanes), computation=COPY
+        )
+        source = Boundary(compute.input("input"))
+        result = Boundary(compute.output("output"))
+
+    engine, point, design = _started(Solo)
+    chosen = engine.commit_assignments(point, {"root.design.compute.only.pumped": False}).point
+    answer = configure_design(engine, design, chosen)
+    assert isinstance(answer, Decided), answer
+    assert answer.value.selected_candidates == {"compute": "only"}
+
+
+def test_roles_node_ids_and_case_ids_must_be_atomic_path_segments() -> None:
+    with pytest.raises(AuthoringError, match="must be one path segment"):
+        Kernels(Case(CopyKernel), computation=COPY, role="outer.inner")
+    with pytest.raises(AuthoringError, match="must be one path segment"):
+        Kernels(Case(CopyKernel), computation=COPY, node_id="outer.inner")
+
+    class DottedCase(DataflowDesign):
+        id = "dotted"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+        compute = Kernels(
+            Case(CopyKernel, name="a.b", extent=extent, lanes=lanes), computation=COPY
+        )
+
+    with pytest.raises(AuthoringError, match="contains a dot"):
+        _compiled(DottedCase)

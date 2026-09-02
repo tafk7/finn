@@ -23,13 +23,17 @@ from finn.dataflow._engine import Absent, Decided, Engine, QualifiedPath, Unreso
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.model.branching import BranchCatalog
-from finn.dataflow.model.compiler import _Ref, _compile_space
+from finn.dataflow.model.compiler import _Ref, _compile_space, compile_space_model
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Case,
     Decision,
     Input,
+    Problem,
+    Space,
+    Use,
     derived,
+    divisors_of,
 )
 from finn.dataflow.model.design import (
     Boundary,
@@ -59,8 +63,10 @@ from dataflow.model.test_branch_inspection import (
     Root as GenericRoot,
     _model as generic_model,
     assign_case,
+    cheapest_case_by_property,
     exhaustive_trial,
     first_feasible_case,
+    first_globally_feasible_case,
     resolve_recursively,
 )
 from dataflow.model.test_design_compiler import (
@@ -143,9 +149,11 @@ class BufferedConsumerKernel(Kernel):
     def depth(*, buffered: bool) -> int:
         return 4 if buffered else 1
 
-    @derived(int, buffered=buffered, lanes=parallel_lanes)
-    def cost(*, buffered: bool, lanes: int) -> int:
-        return (4 if buffered else 1) * lanes
+    # Deliberately independent of the local Decision: a cost a policy can read
+    # before it has committed anything inside the candidate.
+    @derived(int, lanes=parallel_lanes)
+    def cost(*, lanes: int) -> int:
+        return 2 * lanes
 
     LANES = Parameter(parallel_lanes)
     DEPTH = Parameter(depth)
@@ -234,6 +242,20 @@ class Alternatives(DataflowDesign):
 SELECTOR = QualifiedPath("root.design.consume.kernel")
 
 
+class ClosedRoot(Space):
+    """A closed root: the Design is a child, so the whole thing compiles publicly."""
+
+    extent = Problem(int)
+    lanes = Decision(int, domain=divisors_of(extent))
+    design = Use(Alternatives, extent=extent, lanes=lanes)
+
+
+def _catalog(root_type: type[Space] = ClosedRoot) -> BranchCatalog:
+    """The branch catalog through the supported entry point and nothing else."""
+
+    return compile_space_model(root_type, "root", problem_namespace="problem.root").branches
+
+
 def _compiled(design_type: type[DataflowDesign] = Alternatives):
     harness = _compile_space(Harness, "root", problem_namespace="problem.root")
     design = _compile_space(
@@ -253,10 +275,6 @@ def _started(design_type: type[DataflowDesign] = Alternatives, extent: int = 8, 
         {"problem.root.extent": extent},
     )
     return engine, engine.commit_assignments(point, {"root.lanes": lanes}).point, design
-
-
-def _catalog(design: object) -> BranchCatalog:
-    return cast(BranchCatalog, design.catalog)  # type: ignore[attr-defined]
 
 
 # -- what an alternative may differ in ----------------------------------------
@@ -285,8 +303,7 @@ def test_an_alternative_keeps_the_region_and_changes_only_physical_facts() -> No
 
 
 def test_an_alternative_may_use_candidate_specific_input_names() -> None:
-    _harness, design = _compiled()
-    branch = _catalog(design).branch("root.design.consume")
+    branch = _catalog().branch("root.design.consume")
     assert tuple(case.id for case in branch.cases) == (
         "consumer",
         "buffered_consumer",
@@ -336,22 +353,58 @@ def test_a_candidate_whose_region_breaks_the_topology_is_selectable_but_infeasib
 
 def test_explicit_selection_by_case_id() -> None:
     engine, point, design = _started()
-    branch = _catalog(design).branch("root.design.consume")
+    branch = _catalog().branch("root.design.consume")
     chosen = assign_case(engine, point, branch, "buffered_consumer")
     assert dict(chosen.assignments)[SELECTOR] == "buffered_consumer"
 
 
 def test_first_feasible_case() -> None:
-    engine, point, design = _started()
-    branch = _catalog(design).branch("root.design.consume")
+    engine, point, _design = _started()
+    branch = _catalog().branch("root.design.consume")
     chosen = first_feasible_case(engine, point, branch)
     assert chosen is not None
     assert chosen[0] == "consumer"
 
 
+def test_a_design_wide_feasibility_algorithm_rejects_the_misported_candidate() -> None:
+    """Case-owned constraints are not the whole story, and an algorithm can say so."""
+
+    class MisportedFirst(DataflowDesign):
+        id = "misported_first"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(
+            Case(MisportedConsumerKernel, extent=extent, lanes=lanes),
+            Case(ConsumerKernel, extent=extent, lanes=lanes),
+            computation=CONSUME,
+        )
+        stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
+        source = Boundary(produce.input("source"))
+        result = Boundary(consume.output("result"))
+
+    class MisportedRoot(Space):
+        extent = Problem(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        design = Use(MisportedFirst, extent=extent, lanes=lanes)
+
+    engine, point, design = _started(MisportedFirst)
+    branch = _catalog(MisportedRoot).branch("root.design.consume")
+    assert tuple(case.id for case in branch.cases) == ("misported_consumer", "consumer")
+
+    # Its own constraints accept it; the composition does not.
+    local = first_feasible_case(engine, point, branch)
+    assert local is not None and local[0] == "misported_consumer"
+
+    chosen = first_globally_feasible_case(engine, point, branch)
+    assert chosen is not None and chosen[0] == "consumer"
+    assert isinstance(configure_design(engine, design, chosen[1]), Decided)
+
+
 def test_exhaustive_trial_reports_every_final_case_assessment() -> None:
     engine, point, design = _started()
-    branch = _catalog(design).branch("root.design.consume")
+    branch = _catalog().branch("root.design.consume")
     assessments = exhaustive_trial(engine, point, branch)
     assert tuple(item.case_id for item in assessments) == (
         "consumer",
@@ -359,42 +412,34 @@ def test_exhaustive_trial_reports_every_final_case_assessment() -> None:
         "misported_consumer",
     )
     assert all(isinstance(item, Assessment) for item in assessments)
-    # Kernel feasibility is a candidate-owned constraint set, so a candidate
-    # whose *Design*-level topology fails is not refused by its own constraints.
+    # `exhaustive_trial` scores case-owned constraints, and by those the
+    # misported candidate is fine -- its failure is the composition's, which is
+    # what `first_globally_feasible_case` above is for.
     assert not any(item.refused for item in assessments)
     assert {item.case_id for item in assessments if not item.ready} == {"buffered_consumer"}
 
 
 def test_nested_branch_traversal_reaches_a_kernel_segment() -> None:
     engine, point, design = _started()
-    catalog = _catalog(design)
+    catalog = _catalog()
     for namespace in catalog.namespaces:
         point = resolve_recursively(engine, point, catalog, catalog.branch(namespace))
     assert dict(point.assignments)[SELECTOR] == "consumer"
 
 
 def test_a_cost_guided_algorithm_reads_a_caller_designated_property() -> None:
-    """A Kernel segment selects only its Region, so cost is read where it lives.
+    """The path comes from the catalog; the algorithm never builds one."""
 
-    ``cheapest_case`` in the generic tests scores a branch *output*; a Kernel
-    segment has exactly one, its Region, so the caller designates the candidate
-    property instead.  The seam does not change: still `BranchCatalog` paths and
-    public Engine operations, still no policy on the declaration.
-    """
-
-    engine, point, design = _started()
-    branch = _catalog(design).branch("root.design.consume")
-    scored: list[tuple[int, str]] = []
-    for case in branch.cases:
-        trial = assign_case(engine, point, branch, case.id)
-        path = QualifiedPath(f"semantic.{case.namespace}.cost")
-        if path not in trial.design_space.properties:
-            continue
-        trial = engine.commit_assignments(trial, {f"{case.namespace}.buffered": False}).point
-        answer = engine.query_property(trial, path)
-        assert isinstance(answer, Decided)
-        scored.append((int(cast(int, answer.value)), case.id))
-    assert scored == [(2, "buffered_consumer")]
+    engine, point, _design = _started()
+    branch = _catalog().branch("root.design.consume")
+    assert branch.case("buffered_consumer").property_named("cost") == QualifiedPath(
+        "semantic.root.design.consume.buffered_consumer.cost"
+    )
+    with pytest.raises(KeyError):
+        branch.case("consumer").property_named("cost")
+    chosen = cheapest_case_by_property(engine, point, branch, "cost")
+    assert chosen is not None and chosen[0] == "buffered_consumer"
+    assert dict(chosen[1].assignments)[SELECTOR] == "buffered_consumer"
 
 
 # -- required behaviour -------------------------------------------------------
@@ -402,7 +447,7 @@ def test_a_cost_guided_algorithm_reads_a_caller_designated_property() -> None:
 
 def test_a_rejected_trial_leaves_the_original_point_untouched() -> None:
     engine, point, design = _started()
-    branch = _catalog(design).branch("root.design.consume")
+    branch = _catalog().branch("root.design.consume")
     broken = assign_case(engine, point, branch, "misported_consumer")
     assert dict(point.assignments) == {QualifiedPath("root.lanes"): 2}
     assert broken is not point
@@ -433,7 +478,7 @@ def test_committing_the_selector_changes_only_what_is_allowed_to_vary() -> None:
     plain = configure_design(
         engine,
         design,
-        assign_case(engine, point, _catalog(design).branch("root.design.consume"), "consumer"),
+        assign_case(engine, point, _catalog().branch("root.design.consume"), "consumer"),
     )
     buffered = configure_design(
         engine,
@@ -479,7 +524,7 @@ def test_branch_inspection_stays_usable_outside_kernel_segments() -> None:
 
     _engine, _point, generic = generic_model(GenericRoot)
     _harness, design = _compiled()
-    kernel_branch = _catalog(design).branch("root.design.consume")
+    kernel_branch = _catalog().branch("root.design.consume")
     generic_branch = generic.branch("root.top")
     assert type(kernel_branch) is type(generic_branch)
     assert type(kernel_branch.cases[0]) is type(generic_branch.cases[0])

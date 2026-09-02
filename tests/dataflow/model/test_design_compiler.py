@@ -24,8 +24,10 @@ from finn.dataflow.model.declarations import (
     Case,
     Decision,
     Input,
+    OneOf,
     Problem,
     Space,
+    Use,
     derived,
     divisors_of,
 )
@@ -37,7 +39,7 @@ from finn.dataflow.model.design import (
     Sink,
     configure_design,
 )
-from finn.dataflow.model.kernel import Kernel, Region
+from finn.dataflow.model.kernel import Kernel, Parameter, Region
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -972,3 +974,236 @@ def test_every_configuration_refusal_survives_python_o() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "refused" in result.stdout
+
+
+# -- decision ownership -------------------------------------------------------
+
+
+class Folding(Space):
+    """A Design-owned helper that happens to hold a Decision."""
+
+    extent = Input(int)
+    lanes = Decision(int, domain=divisors_of(extent))
+    exports = (lanes,)
+
+
+class NestedOwnership(DataflowDesign):
+    """A Design whose semantic choice lives in a helper Space it owns."""
+
+    id = "nested_ownership"
+    version = "1"
+
+    extent = Input(int)
+    lanes = Input(int)
+
+    fold = Use(Folding, extent=extent)
+
+    produce = Kernels(Case(ProducerKernel, extent=extent, lanes=fold.lanes), computation=PRODUCE)
+    consume = Kernels(
+        Case(PipelinedConsumerKernel, extent=extent, lanes=fold.lanes), computation=CONSUME
+    )
+
+    stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
+    source = Boundary(produce.input("source"))
+    result = Boundary(consume.output("result"))
+
+
+def test_a_decision_in_a_design_owned_helper_is_a_design_assignment() -> None:
+    answer = _configure(
+        NestedOwnership,
+        **{
+            "root.design.fold.lanes": 2,
+            "root.design.consume.pipelined_consumer.stages": 1,
+        },
+    )
+    assert isinstance(answer, Decided)
+    configured = answer.value
+    assert dict(configured.assignments) == {QualifiedPath("root.design.fold.lanes"): 2}
+    assert configured.imported_decisions == (QualifiedPath("root.lanes"),)
+
+
+def test_a_contained_kernels_decision_is_neither_retained_nor_imported() -> None:
+    answer = _configure(
+        NestedOwnership,
+        **{
+            "root.design.fold.lanes": 2,
+            "root.design.consume.pipelined_consumer.stages": 2,
+        },
+    )
+    assert isinstance(answer, Decided)
+    configured = answer.value
+    stages = QualifiedPath("root.design.consume.pipelined_consumer.stages")
+    assert stages not in configured.assignments
+    assert stages not in configured.imported_decisions
+    # It belongs to the Kernel that owns it, and is retained there.
+    assert dict(configured.consume.assignments) == {stages: 2}
+
+
+def test_a_selector_is_a_design_assignment_not_imported_provenance() -> None:
+    answer = _configure(
+        Selectable,
+        **{
+            "root.design.consume.kernel": "pipelined_consumer",
+            "root.design.consume.pipelined_consumer.stages": 1,
+        },
+    )
+    assert isinstance(answer, Decided)
+    configured = answer.value
+    assert QualifiedPath("root.design.consume.kernel") in configured.assignments
+    assert configured.imported_decisions == (QualifiedPath("root.lanes"),)
+
+
+def test_only_decisions_outside_the_design_are_imported() -> None:
+    """Every path in `imported_decisions` names something the Design does not own."""
+
+    _harness, design = _compiled(NestedOwnership)
+    internal = {str(item.path) for item in design.spec.decisions}
+    answer = _configure(
+        NestedOwnership,
+        **{
+            "root.design.fold.lanes": 2,
+            "root.design.consume.pipelined_consumer.stages": 1,
+        },
+    )
+    assert isinstance(answer, Decided)
+    assert not {str(path) for path in answer.value.imported_decisions} & internal
+
+
+def test_an_inactive_connection_does_not_demand_its_position_map() -> None:
+    """An inactive topology declaration is inactive, maps included."""
+
+    class ConditionalMap(DataflowDesign):
+        id = "conditional_map"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+        supplied = Decision(bool, values=(False, True))
+        reversal = Decision(bool, values=(False, True))
+
+        @derived(bool, supplied=supplied)
+        def external(*, supplied: bool) -> bool:
+            return not supplied
+
+        @derived(POSITION_MAP_SEMANTICS, extent=extent, reversal=reversal)
+        def chosen_map(*, extent: int, reversal: bool) -> PositionMap:
+            if reversal:
+                return PositionMap(((index,), (extent - 1 - index,)) for index in range(extent))
+            return PositionMap(((index,), (index,)) for index in range(extent))
+
+        produce = Kernels(
+            Case(ProducerKernel, extent=extent, lanes=lanes),
+            computation=PRODUCE,
+            when=supplied,
+        )
+        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        stream = Connection(
+            produce.output("stream"),
+            Sink(consume.input("stream"), position_map=chosen_map),
+            when=supplied,
+        )
+        source = Boundary(produce.input("source"), when=supplied)
+        external_stream = Boundary(consume.input("stream"), when=external)
+        result = Boundary(consume.output("result"))
+
+    engine, point, _design = _started(ConditionalMap)
+    # `reversal` is deliberately never committed.
+    inactive = engine.commit_assignments(point, {"root.design.supplied": False}).point
+    network = _network(engine, inactive)
+    assert network.edges == ()
+    assert tuple(node.id for node in network.nodes) == ("consume",)
+    assert _valid(engine, inactive)
+
+    # Active, and now the map genuinely is required.
+    active = engine.commit_assignments(point, {"root.design.supplied": True}).point
+    assert isinstance(engine.query_property(active, "semantic.root.design.network"), Unresolved)
+    resolved = engine.commit_assignments(active, {"root.design.reversal": False}).point
+    assert len(_network(engine, resolved).edges) == 1
+    assert _valid(engine, resolved)
+
+
+def test_a_declared_position_map_is_forwarded_through_its_own_property() -> None:
+    class Mapped(DataflowDesign):
+        id = "mapped"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+
+        @derived(POSITION_MAP_SEMANTICS, extent=extent)
+        def identity_map(*, extent: int) -> PositionMap:
+            return PositionMap(((index,), (index,)) for index in range(extent))
+
+        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        stream = Connection(
+            produce.output("stream"), Sink(consume.input("stream"), position_map=identity_map)
+        )
+        source = Boundary(produce.input("source"))
+        result = Boundary(consume.output("result"))
+
+    engine, point, design = _started(Mapped)
+    assert "semantic.root.design.stream.position_map.0" in {
+        str(item.path) for item in design.spec.properties
+    }
+    assert _valid(engine, point)
+
+
+class Always(Space):
+    """A branch case whose selected output is a Boolean the Design can gate on."""
+
+    extent = Input(int)
+
+    @derived(bool, extent=extent)
+    def flag(*, extent: int) -> bool:
+        return extent > 0
+
+    exports = (flag,)
+
+
+def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -> None:
+    class Chooser(Space):
+        extent = Input(int)
+
+        @derived(int, extent=extent)
+        def depth(*, extent: int) -> int:
+            return extent
+
+        exports = (depth,)
+
+    class Parameterized(Kernel):
+        id = "parameterized"
+        computation = CONSUME
+        extent = Input(int)
+        lanes = Input(int)
+        choice = OneOf(Case(Chooser, name="only", extent=extent), outputs=("depth",))
+        region = Region(
+            family="test.consume",
+            version="1",
+            construct=_consumer_region,
+            extent=extent,
+            lanes=lanes,
+        )
+        DEPTH = Parameter(choice.depth)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("parameterized", (), (("DEPTH", str(configured.DEPTH)),))
+
+    class Gated(DataflowDesign):
+        id = "gated_boundary"
+        version = "1"
+        extent = Input(int)
+        lanes = Input(int)
+        policy = OneOf(Case(Always, name="always", extent=extent), outputs=("flag",))
+        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Case(Parameterized, extent=extent, lanes=lanes), computation=CONSUME)
+        stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
+        source = Boundary(produce.input("source"))
+        result = Boundary(consume.output("result"), when=policy.flag)
+
+    answer = _configure(Gated)
+    assert isinstance(answer, Decided)
+    assert dict(answer.value.consume.parameters) == {"DEPTH": 8}
+    assert tuple(item.id for item in answer.value.resolved_network.boundaries) == (
+        "result",
+        "source",
+    )

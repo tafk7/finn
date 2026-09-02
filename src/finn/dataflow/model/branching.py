@@ -44,9 +44,22 @@ class CaseInfo:
     id: str
     namespace: str
     decision_paths: tuple[QualifiedPath, ...] = ()
+    #: Every derived value the case owns.  Published so a cost- or
+    #: measurement-guided algorithm can *find* the value it was told to score
+    #: instead of rebuilding its path from a naming convention.
+    property_paths: tuple[QualifiedPath, ...] = ()
     constraint_paths: tuple[QualifiedPath, ...] = ()
     readiness_profiles: tuple[str, ...] = ()
     child_branches: tuple[str, ...] = ()
+
+    def property_named(self, name: str) -> QualifiedPath:
+        """The case-owned property with this local name."""
+
+        suffix = f".{name}"
+        for path in self.property_paths:
+            if path.value.endswith(suffix):
+                return path
+        raise KeyError(f"case {self.id!r} owns no property named {name!r}")
 
 
 @dataclass(frozen=True, slots=True)

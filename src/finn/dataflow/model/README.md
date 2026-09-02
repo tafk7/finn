@@ -4,16 +4,21 @@
 ordinary Python classes. It does not wrap or preserve the existing
 `finn.dataflow.authoring` and `finn.dataflow.kernels` APIs.
 
-The stack is intentionally small:
+Three layers share one frontend and lower to one flat spec:
 
 ```text
-Space class
-    -> flat DesignSpaceSpec
-        -> existing _engine validation and evaluation
-
-Kernel(Space)
-    -> configured one-Region Kernel
-        -> artifact-native source and ABI values
+Space                  ordinary declarations, direct child composition,
+                       and OneOf(Case(...), ...) exclusive branching
+   |
+Kernel(Space)          semantic Inputs, physical-only Decisions,
+                       one Region(family, version, construct, **deps)
+   |
+DataflowDesign(Space)  semantic Decisions, Kernels segments,
+                       explicit Connections and Boundaries,
+                       one selected canonical DataflowNetwork
+   |
+   -> flat DesignSpaceSpec -> existing _engine validation and evaluation
+   -> configured Design: one Kernel per role, one validated Network
 ```
 
 `DesignSpaceSpec`, `Engine`, and `DesignPoint` remain the normalized IR and
@@ -109,9 +114,8 @@ same class under several namespaces is deterministic and thread-safe.
 
 - a stable `id` and `version`;
 - one `ComputationContract`;
-- exactly one `@derived` value named `region` whose value is a
-  `DataflowRegion`;
-- its own decisions and feasibility constraints;
+- exactly one `Region(...)` member named `region`;
+- physical-only decisions and its feasibility constraints;
 - scalar physical `Parameter`s;
 - an exact `ComponentABI`; and
 - an ordered source closure.
@@ -121,9 +125,11 @@ from typing_extensions import Self
 
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
-from finn.dataflow.model import Decision, Input, Kernel, Parameter, derived
+from finn.dataflow.model import Decision, Input, Kernel, Parameter, Region
 from finn.dataflow.region import DataflowRegion
+
+
+def build_region(extent: int, lanes: int) -> DataflowRegion: ...
 
 
 class ExampleKernel(Kernel):
@@ -132,10 +138,16 @@ class ExampleKernel(Kernel):
     computation = ComputationContract("example.copy")
 
     extent = Input(int)
-    lanes = Decision(int, values=(1, 2, 4))
+    lanes = Input(int)
+    pipelined = Decision(bool, values=(False, True))
 
-    @derived(DATAFLOW_REGION_SEMANTICS, extent=extent, lanes=lanes)
-    def region(*, extent: int, lanes: int) -> DataflowRegion: ...
+    region = Region(
+        family="example.copy",
+        version="1",
+        construct=build_region,
+        extent=extent,
+        lanes=lanes,
+    )
 
     LANES = Parameter(lanes)
 
@@ -160,16 +172,121 @@ The ABI parameter table must exactly match the Kernel's resolved physical
 parameter table. A physical constant uses `Parameter.constant(value, why=...)`
 so the reason it is not a design-space value is explicit.
 
-## DotpAxi
+`Region(...)` is one ordinary `DerivedProperty` that also names the compact
+semantic family the resolved value belongs to. `@derived` is mechanically
+sufficient but cannot say which family produced a Region, and a family field
+parked beside a separate `@derived` drifts away from the value it labels. The
+constructor stays a pure canonical function; it signals an infeasible request by
+raising `RegionRefused`, which becomes a rejecting absence. Any other exception
+is a defect and stays an `EvaluationError`.
 
-`DotpAxiKernel` is the sole production vertical slice in this experiment. It
-owns the PE, SIMD, and pumping decisions; constructs its folded dot-product
-Region; checks numeric and DSP packing feasibility; derives the FinnLib RTL
-parameters; declares the exact ordered FinnLib source closure; and exposes the
-physical AXI-Stream ABI of `dotp_axi`.
+### Design-owned semantics, Kernel-owned physics
 
-It imports no DataflowOp, DataflowDesign, MVAU operation implementation, or
-legacy Kernel authoring machinery. Direct evidence configures it from a flat
+A choice that changes any selected Region belongs to the enclosing Design and
+reaches a Kernel as a typed `Input`. A Kernel-local `Decision` may only change
+physical realization. The compiler enforces this: it walks the Region property's
+transitive closure -- values *and* applicability -- and refuses any Kernel-owned
+Decision in it, including one nested in a helper `Space`. A local Decision that
+merely gates a helper the Region reads is still a refusal, because it makes the
+Region present or absent.
+
+The Kernel-to-Design interface has exactly one automatic value, the Region. A
+concrete Kernel may not add public `exports`; a value a peer needs is a
+Design-owned fact.
+
+## Exclusive branching
+
+`OneOf(Case(A, ...), Case(B, ...), outputs=(...))` embeds exactly one of several
+child Spaces. Several cases generate one ordinary selector `Decision` over
+stable case ids and gate every case fragment through it; a singleton generates
+no selector but keeps the same selected-output paths, so adding an alternative
+later renames nothing that already existed. Each `Case` owns its own exact
+`Input` bindings, so alternatives may have unrelated Input vocabularies.
+
+The declaration stores no selection algorithm. `compile_space_model()` returns
+the ordinary spec plus a `BranchCatalog` of namespaces, selector paths, case ids,
+and each case's decision, property, constraint, and readiness paths. An external
+algorithm reads that, trials immutable successor points, and commits the
+selector like any other decision. Nothing about that is Kernel-specific.
+
+## A DataflowDesign
+
+`DataflowDesign` owns every choice that changes a selected Region or the Network
+they form. It consumes external facts only through `Input`, never `Problem`.
+
+```python
+from finn.dataflow.model import (
+    Boundary,
+    Case,
+    Connection,
+    DataflowDesign,
+    Decision,
+    Input,
+    Kernels,
+    Sink,
+    configure_design,
+    divisors_of,
+)
+
+
+class ExampleDesign(DataflowDesign):
+    id = "example"
+    version = "1"
+
+    extent = Input(int)
+    lanes = Decision(int, domain=divisors_of(extent))
+
+    produce = Kernels(
+        Case(ProducerKernel, extent=extent, lanes=lanes),
+        computation=PRODUCE,
+    )
+    consume = Kernels(
+        Case(ExampleKernel, extent=extent, lanes=lanes),
+        Case(AlternativeKernel, width=extent, parallel_lanes=lanes),
+        computation=CONSUME,
+    )
+
+    stream = Connection(produce.output("stream"), Sink(consume.input("input")))
+    source = Boundary(produce.input("source"))
+    result = Boundary(consume.output("output"))
+```
+
+`Kernels` is a thin `OneOf` specialization. It adds the required
+`ComputationContract` that every candidate must declare, a default case id taken
+from `Kernel.id`, the implicit selected Region output, and the stable Design role
+and Network node id. Roles, node ids, and case ids are single path segments.
+
+`Connection` and `Boundary` generate one ordinary property,
+`semantic.<design>.network`, from the exact selected Regions. A `Sink` owns its
+position map because a canonical fan-out is one Edge with several sink
+contracts; omitting the map means the identity over the selected source port's
+image. Endpoints carry only segment, port id, and expected direction -- the
+Region owns the real port list -- so a claim the Region cannot honour is named
+by canonical `validate_network` with the canon's own issue code. The one
+Design-specific supplement is `segments_match_network`.
+
+`when=` on a segment, a Connection, or a Boundary makes it conditional.
+Complementarity is not proved syntactically; canonical endpoint ownership
+rejects both-active and neither-active at every point.
+
+### Configured Design
+
+`configure_design(engine, compiled, point)` checks readiness, checks
+feasibility, resolves each active segment's selection, configures exactly those
+Kernels, resolves the Network, and proves each configured Kernel realizes its
+node's Region. The result is an instance of the authored class holding the
+selected Network, one Kernel per active role, the selected case ids,
+Design-owned assignments, external decision provenance, and static
+role/node/Region-family metadata -- and no Engine, point, compiled record,
+unselected candidate, or branch catalog.
+
+## The production slice
+
+`DotProductDesign` composes `ReplayBufferKernel` and `DotpAxiKernel`. The Design
+owns PE and SIMD once, because each changes both Regions and the beat contract on
+the edge between them; DotpAxi keeps pumping, which preserves its Region exactly.
+Neither Kernel imports a DataflowOp, a Design, an MVAU operation implementation,
+or legacy Kernel authoring machinery. Direct evidence configures each from a flat
 engine point and tests its RTL numerically and through OOC synthesis.
 
 ## Artifact boundary
@@ -192,9 +309,9 @@ the Kernel object.
 
 ## Deliberate boundary of this experiment
 
-This package does not define or preserve DataflowDesign or DataflowOp. It does
-not place Kernels into a Network, connect Region boundaries, attach input
-supply, project ONNX graph context, or persist operation selections. Those are
-the responsibilities to assess only after this Kernel-level contract is
-reviewed. Existing upper-stack collection failures caused by retired artifact
-interfaces are therefore non-gating here.
+This package does not define DataflowOp. It does not attach input supply,
+project ONNX graph context, compose artifacts across Kernels, or persist a
+selection. `Region.family`/`version` and the configured Design's role-to-node
+metadata preserve the seam a future annotated-ONNX carrier would need; no ONNX
+object exists in the stack. Existing upper-stack collection failures caused by
+retired artifact interfaces are non-gating here.

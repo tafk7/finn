@@ -13,13 +13,21 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Decided, Engine, QualifiedPath
+from finn.dataflow.artifacts.derivation import ArtifactRef, build_key
 from finn.dataflow.artifacts.rtl import Declined, check_abi
+from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.model.kernel import configure_kernel
+from finn.dataflow.model.kernel_artifacts import (
+    kernel_source_derivation,
+    portable_kernel_component,
+    resolve_kernel_contributions,
+)
 from finn.dataflow.model.replay_buffer import (
+    FINN_ROOT,
     FINN_SOURCES,
     ReplayBufferKernel,
     construct_activation_replay_region,
@@ -293,3 +301,41 @@ def test_replay_refuses_folding_it_cannot_realize() -> None:
     assert QualifiedPath("semantic.loose.kernel.region") in {
         finding.path for finding in answer.findings
     }
+
+
+def test_replay_source_closure_completes_and_round_trips_through_store(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).parents[3]
+    if not (root / FINN_SOURCES[0]).is_file():
+        pytest.skip("finn-rtllib sources are not present")
+    kernel = _configure()
+    resolved = resolve_kernel_contributions(kernel, roots={FINN_ROOT: root})
+    derivation = kernel_source_derivation(kernel, resolved)
+    store = ArtifactStore(tmp_path / "store")
+    workspace = store.workspace(derivation)
+    for source in resolved.definition.files:
+        destination = workspace / source.path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((root / source.path).read_bytes())
+    published = store.publish(derivation, workspace, entry_points=(kernel.abi.entry_point,))
+    found = store.lookup(derivation)
+    assert found == published
+    assert found.files == tuple(source.path for source in resolved.definition.files)
+    assert found.files == FINN_SOURCES
+
+
+def test_replay_packages_into_a_portable_component(tmp_path: Path) -> None:
+    root = Path(__file__).parents[3]
+    if not (root / FINN_SOURCES[0]).is_file():
+        pytest.skip("finn-rtllib sources are not present")
+    kernel = _configure()
+    resolved = resolve_kernel_contributions(kernel, roots={FINN_ROOT: root})
+    derivation = kernel_source_derivation(kernel, resolved)
+    component = portable_kernel_component(
+        kernel, ArtifactRef(derivation.kind, build_key(derivation)), resolved
+    )
+    assert component.entry_point == "replay_buffer"
+    assert component.abi is kernel.abi
+    assert tuple(path for path, _content in component.files) == FINN_SOURCES
+    del tmp_path
