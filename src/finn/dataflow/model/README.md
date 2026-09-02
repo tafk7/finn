@@ -172,6 +172,16 @@ The ABI parameter table must exactly match the Kernel's resolved physical
 parameter table. A physical constant uses `Parameter.constant(value, why=...)`
 so the reason it is not a design-space value is explicit.
 
+### RTL source ownership
+
+Reusable RTL components are declared beneath their owning named source root;
+the root is resolved by the caller and never embedded as an absolute path in a
+Kernel or artifact identity. `replay_buffer` is owned by FinnLib at
+`rtl/infra/replay_buffer.sv`. Both ReplayBufferKernel APIs and the legacy
+MVAU/VVA custom operations consume that one source. FINN's
+`finn-rtllib/mvu/mvu_vvu_axi.sv` continues to instantiate the unchanged module
+ABI, but FINN no longer carries a second editable module definition.
+
 `Region(...)` is one ordinary `DerivedProperty` that also names the compact
 semantic family the resolved value belongs to. `@derived` is mechanically
 sufficient but cannot say which family produced a Region, and a family field
