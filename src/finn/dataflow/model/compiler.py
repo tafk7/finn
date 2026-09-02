@@ -160,6 +160,7 @@ class _Compilation:
         problem_namespace: str | None,
         applies_if: EvaluatorSpec[Answer[bool]] | None,
         allow_problem: bool,
+        ancestors: tuple[type[Space], ...],
     ) -> None:
         if not namespace:
             raise AuthoringError("a Space compilation needs a namespace")
@@ -169,6 +170,7 @@ class _Compilation:
         self.problem_namespace = problem_namespace
         self.applies_if = applies_if
         self.allow_problem = allow_problem
+        self.ancestors = ancestors
         self.declarations = declared_members(space_type)
         self.names = {id(value): name for name, value in self.declarations}
         declaration_types = (
@@ -497,6 +499,7 @@ class _Compilation:
                 bound,
                 applies_if=gate,
                 _allow_problem=False,
+                _ancestors=(*self.ancestors, self.space_type),
             )
             self.uses[key] = child
             return child
@@ -512,11 +515,15 @@ def _compile_space(
     problem_namespace: str | None = None,
     applies_if: EvaluatorSpec[Answer[bool]] | None = None,
     _allow_problem: bool = True,
+    _ancestors: tuple[type[Space], ...] = (),
 ) -> _CompiledSpace[S]:
     """Compile one class declaration into an ordinary flat spec fragment."""
 
     if not issubclass(space_type, Space):
         raise AuthoringError("only a Space subclass can be compiled")
+    if space_type in _ancestors:
+        cycle = " -> ".join(item.__name__ for item in (*_ancestors, space_type))
+        raise AuthoringError(f"Use cycle: {cycle}")
     compiled = _Compilation(
         space_type,
         namespace,
@@ -524,6 +531,7 @@ def _compile_space(
         problem_namespace=problem_namespace,
         applies_if=applies_if,
         allow_problem=_allow_problem,
+        ancestors=_ancestors,
     ).compile()
     return cast("_CompiledSpace[S]", compiled)
 

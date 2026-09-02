@@ -10,6 +10,7 @@ from enum import Enum
 
 import pytest
 
+import finn.dataflow.model as model
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Constraint,
@@ -142,8 +143,49 @@ def test_export_must_name_an_effective_value_member() -> None:
         exported_members(Broken)
 
 
+def test_inherited_export_follows_a_compatible_override() -> None:
+    class Base(Space):
+        value = Input(int)
+        exports = (value,)
+
+    class Leaf(Base):
+        value = Input(int, allow_absent=True)
+
+    assert exported_members(Leaf) == {"value": Leaf.value}
+
+
 def test_decision_requires_exactly_one_domain_form() -> None:
     with pytest.raises(AuthoringError, match="exactly one"):
         Decision(int)
     with pytest.raises(AuthoringError, match="exactly one"):
         Decision(int, values=(1,), domain=finite((1,)))
+
+
+def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
+    assert set(model.__all__) == {
+        "AuthoringError",
+        "ConstraintGroup",
+        "Decision",
+        "DotpAxiKernel",
+        "DspBlock",
+        "Input",
+        "Kernel",
+        "Parameter",
+        "Problem",
+        "Readiness",
+        "Space",
+        "Use",
+        "compile_space",
+        "configure_kernel",
+        "constraint",
+        "derived",
+        "divisors_of",
+        "domain",
+        "finite",
+        "kernel_source_derivation",
+        "portable_kernel_component",
+        "reject",
+        "resolve_kernel_contributions",
+        "unresolved",
+    }
+    assert not {"Constraint", "Derived", "Domain"} & set(model.__all__)

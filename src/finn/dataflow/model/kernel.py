@@ -44,9 +44,12 @@ from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.compiler import _CompiledSpace, _Ref, _compile_space
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    ChildValue,
     Decision,
     Derived,
+    Problem,
     Space,
+    Use,
     ValueSource,
     declared_members,
 )
@@ -170,6 +173,20 @@ class Kernel(Space):
             raise AuthoringError(
                 f"{type(self).__name__}.component_abi() did not return ComponentABI"
             )
+        expected_parameters = tuple(
+            sorted(
+                (
+                    name,
+                    str(int(value)) if isinstance(value, bool) else str(value),
+                )
+                for name, value in self.parameters.items()
+            )
+        )
+        if self.abi.parameters != expected_parameters:
+            raise AuthoringError(
+                f"{type(self).__name__}.component_abi() must expose its exact resolved "
+                "physical parameter table"
+            )
 
     def _space_value(self, declaration: ValueSource[object]) -> object:
         try:
@@ -221,6 +238,33 @@ def _all_value_names(kernel_type: type[Kernel]) -> Mapping[int, str]:
     return found
 
 
+def _parameter_source(
+    kernel_type: type[Kernel],
+    compiled: _CompiledSpace[Kernel],
+    source: ValueSource[object],
+) -> _Ref[object]:
+    if isinstance(source, ChildValue):
+        use_names: dict[int, str] = {}
+        for base in reversed(kernel_type.__mro__):
+            if not issubclass(base, Space) or base is Space:
+                continue
+            for name, value in base.__dict__.items():
+                if isinstance(value, Use):
+                    use_names[id(value)] = name
+        use_name = use_names.get(id(source.use))
+        if use_name is None:
+            raise AuthoringError(
+                f"{kernel_type.__name__} parameter references a child outside the class"
+            )
+        return compiled.child(use_name).exported(source.member_name)
+    source_name = _all_value_names(kernel_type).get(id(source))
+    if source_name is None:
+        raise AuthoringError(
+            f"{kernel_type.__name__} parameter references a value outside the class"
+        )
+    return compiled.member(source_name)
+
+
 def _region_constraint(
     path: QualifiedPath,
     region: _Ref[DataflowRegion],
@@ -256,8 +300,19 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
     computation = getattr(kernel_type, "computation", None)
     if not isinstance(computation, ComputationContract):
         raise AuthoringError(f"{kernel_type.__name__} must declare one ComputationContract")
+    abi_owner = next(base for base in kernel_type.__mro__ if "component_abi" in base.__dict__)
+    if abi_owner is Kernel:
+        raise AuthoringError(f"{kernel_type.__name__} must declare a component_abi()")
 
     declarations = dict(declared_members(kernel_type))
+    problem_members = tuple(
+        name for name, declaration in declarations.items() if isinstance(declaration, Problem)
+    )
+    if problem_members:
+        raise AuthoringError(
+            f"{kernel_type.__name__} must consume external facts through Input; "
+            f"Kernel-owned Problem members are {problem_members}"
+        )
     region_template = declarations.get("region")
     if not isinstance(region_template, Derived):
         raise AuthoringError(
@@ -266,8 +321,17 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
     if region_template.value_semantics.type_token is not DATAFLOW_REGION_SEMANTICS.type_token:
         raise AuthoringError(f"{kernel_type.__name__}.region is not a DataflowRegion")
     region_ref = cast("_Ref[DataflowRegion]", compiled.member("region"))
+    region_paths = tuple(
+        declaration.path
+        for declaration in compiled.spec.properties
+        if declaration.value_semantics.type_token is DATAFLOW_REGION_SEMANTICS.type_token
+    )
+    if region_paths != (region_ref.path,):
+        raise AuthoringError(
+            f"{kernel_type.__name__} must declare exactly one DataflowRegion; "
+            f"compiled Region properties are {tuple(str(path) for path in region_paths)}"
+        )
 
-    names = _all_value_names(kernel_type)
     parameters: list[_CompiledParameter] = []
     physical_names: set[str] = set()
     for member_name, template in _parameter_members(kernel_type):
@@ -289,17 +353,16 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
                 )
             )
             continue
-        source_name = names.get(id(template.source))
-        if source_name is None:
-            raise AuthoringError(
-                f"{kernel_type.__name__}.{member_name} references a value outside the class"
-            )
         parameters.append(
             _CompiledParameter(
                 member_name,
                 physical_name,
                 template,
-                compiled.member(source_name),
+                _parameter_source(
+                    kernel_type,
+                    cast("_CompiledSpace[Kernel]", compiled),
+                    template.source,
+                ),
             )
         )
 
@@ -322,10 +385,12 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         if parameter.source is not None and parameter.source.kind is DependencyKind.PROPERTY:
             if parameter.source.path not in property_paths:
                 property_paths.append(parameter.source.path)
-    decision_refs = tuple(
-        (name, compiled.member(name))
-        for name, declaration in declarations.items()
-        if isinstance(declaration, Decision)
+    decision_refs: tuple[tuple[str, _Ref[object]], ...] = tuple(
+        (
+            decision.path.value,
+            _Ref(decision.path, DependencyKind.DECISION, decision.value_semantics),
+        )
+        for decision in compiled.spec.decisions
     )
     specification = replace(
         compiled.spec,
@@ -544,10 +609,9 @@ def configure_kernel(
     retained = {
         id(metadata.region_template): cast(DataflowRegion, region_answer.value),
         **{
-            id(declaration): point.assignments[reference.path]
-            for name, reference in metadata.local_decisions
-            for declaration_name, declaration in declared_members(metadata.owner)
-            if declaration_name == name
+            id(declaration): point.assignments[compiled.member(name).path]
+            for name, declaration in declared_members(metadata.owner)
+            if isinstance(declaration, Decision)
         },
     }
     instance = object.__new__(metadata.owner)

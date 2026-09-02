@@ -9,11 +9,8 @@ from typing import TYPE_CHECKING
 from finn.dataflow.model.compiler import compile_space
 from finn.dataflow.model.declarations import (
     AuthoringError,
-    Constraint,
     ConstraintGroup,
     Decision,
-    Derived,
-    Domain,
     Input,
     Problem,
     Readiness,
@@ -62,12 +59,9 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "AuthoringError",
-    "Constraint",
     "ConstraintGroup",
     "Decision",
     "DspBlock",
-    "Derived",
-    "Domain",
     "DotpAxiKernel",
     "Input",
     "Kernel",

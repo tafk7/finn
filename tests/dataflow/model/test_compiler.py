@@ -8,15 +8,27 @@ from __future__ import annotations
 import ast
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from finn.dataflow._engine import (
     Absent,
+    Answer,
     Decided,
+    Decision as EngineDecision,
+    DecisionDomain,
     DependencyKind,
+    DependencyRef,
+    DependencyView,
+    DerivedProperty,
+    DesignSpaceSpec,
     Engine,
+    EvaluatorSpec,
+    ProblemField,
+    ProblemSchema,
     QualifiedPath,
+    ReadinessProfile,
 )
 from finn.dataflow.model.compiler import _Ref, _compile_space, compile_space
 from finn.dataflow.model.declarations import (
@@ -121,6 +133,83 @@ def test_space_exposes_root_specification_without_a_compiler_object() -> None:
     assert tuple(item.path.value for item in spec.decisions) == ("folding.parallelism",)
 
 
+def test_space_matches_a_hand_authored_raw_spec() -> None:
+    compiled = compile_space(FoldingSweep, "folding", problem_namespace="problem.folding")
+    problem_semantics = compiled.problem_schema.fields[0].value_semantics
+    decision_semantics = compiled.decisions[0].value_semantics
+    property_semantics = compiled.properties[0].value_semantics
+    extent = DependencyRef.problem("extent", "problem.folding.extent", problem_semantics)
+    parallelism = DependencyRef.decision("parallelism", "folding.parallelism", decision_semantics)
+
+    def accepts(candidate: object, values: DependencyView) -> Answer[bool]:
+        value = cast(int, values["extent"])
+        return Decided(type(candidate) is int and candidate > 0 and value % candidate == 0)
+
+    def candidates(values: DependencyView) -> Answer[tuple[object, ...]]:
+        value = cast(int, values["extent"])
+        return Decided(tuple(item for item in range(1, value + 1) if value % item == 0))
+
+    def cycles(values: DependencyView) -> Answer[object]:
+        return Decided(cast(int, values["extent"]) // cast(int, values["parallelism"]))
+
+    raw = DesignSpaceSpec(
+        ProblemSchema((ProblemField(QualifiedPath("problem.folding.extent"), problem_semantics),)),
+        (
+            EngineDecision(
+                QualifiedPath("folding.parallelism"),
+                decision_semantics,
+                DecisionDomain(
+                    (extent,),
+                    accepts,
+                    EvaluatorSpec((extent,), candidates),
+                ),
+            ),
+        ),
+        (
+            DerivedProperty(
+                QualifiedPath("semantic.folding.cycles"),
+                property_semantics,
+                EvaluatorSpec((extent, parallelism), cycles),
+            ),
+        ),
+        readiness_profiles=(
+            ReadinessProfile(
+                "folding.ready",
+                (QualifiedPath("folding.parallelism"),),
+                (QualifiedPath("semantic.folding.cycles"),),
+            ),
+        ),
+    )
+
+    assert compiled.problem_schema == raw.problem_schema
+    assert tuple(
+        (item.path, item.value_semantics, item.domain.dependencies) for item in compiled.decisions
+    ) == tuple(
+        (item.path, item.value_semantics, item.domain.dependencies) for item in raw.decisions
+    )
+    assert tuple(
+        (item.path, item.value_semantics, item.evaluator.dependencies)
+        for item in compiled.properties
+    ) == tuple(
+        (item.path, item.value_semantics, item.evaluator.dependencies) for item in raw.properties
+    )
+    assert compiled.constraints == raw.constraints
+    assert compiled.constraint_sets == raw.constraint_sets
+    assert compiled.readiness_profiles == raw.readiness_profiles
+
+    engine = Engine()
+    compiled_point = engine.start(engine.validate(compiled), {"problem.folding.extent": 16})
+    raw_point = engine.start(engine.validate(raw), {"problem.folding.extent": 16})
+    assert engine.enumerate_candidates(compiled_point, "folding.parallelism") == (
+        engine.enumerate_candidates(raw_point, "folding.parallelism")
+    )
+    compiled_point = engine.commit_assignments(compiled_point, {"folding.parallelism": 4}).point
+    raw_point = engine.commit_assignments(raw_point, {"folding.parallelism": 4}).point
+    assert engine.query_property(compiled_point, "semantic.folding.cycles") == (
+        engine.query_property(raw_point, "semantic.folding.cycles")
+    )
+
+
 def test_input_may_bind_to_problem_decision_or_property() -> None:
     compiled = _compile_space(
         ThreeSources,
@@ -161,6 +250,19 @@ def test_nested_space_cannot_introduce_problem_fields() -> None:
 
     with pytest.raises(AuthoringError, match="inside a reusable child Space"):
         _compile_space(Broken, "broken", problem_namespace="problem.broken")
+
+
+def test_recursive_use_cycle_is_an_authoring_error() -> None:
+    class Left(Space):
+        pass
+
+    class Right(Space):
+        left = Use(Left)
+
+    Left.right = Use(Right)
+
+    with pytest.raises(AuthoringError, match=r"Use cycle: Left -> Right -> Left"):
+        _compile_space(Left, "left")
 
 
 def test_repeated_uses_are_rebased_without_mutating_templates() -> None:

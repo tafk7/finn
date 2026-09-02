@@ -11,6 +11,8 @@ from typing import cast
 
 from typing_extensions import Self
 
+import pytest
+
 from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.contributions import CopiedSource
@@ -19,10 +21,12 @@ from finn.dataflow.artifacts.formats import RtlModuleDirectory
 from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.projection import content_digest
+from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Input, Problem, Space, derived
+from finn.dataflow.model.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.model.kernel import Kernel, Parameter, configure_kernel
 from finn.dataflow.model.kernel_artifacts import (
     kernel_source_derivation,
@@ -33,6 +37,7 @@ from finn.dataflow.region import DataflowRegion
 from finn.dataflow.spec_algebra import assemble_specs
 
 from .test_kernel import _region
+from .test_dotp_axi import _configure as _configure_dotp
 
 
 class ArtifactKernel(Kernel):
@@ -167,3 +172,28 @@ def test_resolved_source_order_must_match_the_kernel_declaration(tmp_path: Path)
         assert "declared source order" in str(error)
     else:
         raise AssertionError("a mismatched resolved source set was accepted")
+
+
+def test_dotp_source_closure_completes_and_round_trips_through_store(tmp_path: Path) -> None:
+    root = Path(__file__).parents[3] / "deps/finnlib"
+    if not root.is_dir():
+        pytest.skip("the pinned FinnLib checkout is unavailable")
+    answer = _configure_dotp(pe=2, simd=4, pumping=True)
+    assert isinstance(answer, Decided)
+    kernel = answer.value
+    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
+    derivation = kernel_source_derivation(kernel, resolved)
+    store = ArtifactStore(tmp_path / "store")
+    workspace = store.workspace(derivation)
+    for source in resolved.definition.files:
+        destination = workspace / source.path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((root / source.path).read_bytes())
+    published = store.publish(
+        derivation,
+        workspace,
+        entry_points=(kernel.abi.entry_point,),
+    )
+    found = store.lookup(derivation)
+    assert found == published
+    assert found.files == tuple(source.path for source in resolved.definition.files)

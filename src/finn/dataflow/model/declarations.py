@@ -461,9 +461,13 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
     """Resolve the class's declared export objects to effective member names."""
 
     members = dict(declared_members(space_type))
-    by_identity = {
-        id(value): name for name, value in members.items() if isinstance(value, ValueSource)
-    }
+    by_identity: dict[int, str] = {}
+    for base in reversed(space_type.__mro__):
+        if not issubclass(base, Space) or base is Space:
+            continue
+        for name, value in base.__dict__.items():
+            if isinstance(value, ValueSource):
+                by_identity[id(value)] = name
     exported: dict[str, ValueSource[object]] = {}
     for name in space_type._implicit_exports:
         declaration = members.get(name)
@@ -478,7 +482,12 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
             raise AuthoringError(
                 f"{space_type.__name__} exports a value that is not an effective class member"
             )
-        exported[export_name] = cast(ValueSource[object], members[export_name])
+        declaration = members.get(export_name)
+        if not isinstance(declaration, ValueSource):
+            raise AuthoringError(
+                f"{space_type.__name__} exports a value that is not an effective class member"
+            )
+        exported[export_name] = declaration
     return exported
 
 

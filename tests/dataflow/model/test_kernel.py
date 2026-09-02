@@ -215,6 +215,46 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
     with pytest.raises(AuthoringError, match="not a DataflowRegion"):
         _compile_space(WrongRegion, "wrong", {}, _allow_problem=False)
 
+    class TwoRegions(Kernel):
+        id = "two"
+        computation = COMPUTATION
+
+        @derived(DATAFLOW_REGION_SEMANTICS)
+        def region() -> DataflowRegion:
+            return _region(1, 1)
+
+        @derived(DATAFLOW_REGION_SEMANTICS)
+        def another() -> DataflowRegion:
+            return _region(1, 1)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("two", ())
+
+    with pytest.raises(AuthoringError, match="exactly one DataflowRegion"):
+        _compile_space(TwoRegions, "two", {}, _allow_problem=False)
+
+    class RegionFragment(Space):
+        @derived(DATAFLOW_REGION_SEMANTICS)
+        def nested_region() -> DataflowRegion:
+            return _region(1, 1)
+
+    class NestedRegion(Kernel):
+        id = "nested"
+        computation = COMPUTATION
+        fragment = Use(RegionFragment)
+
+        @derived(DATAFLOW_REGION_SEMANTICS)
+        def region() -> DataflowRegion:
+            return _region(1, 1)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("nested", ())
+
+    with pytest.raises(AuthoringError, match="exactly one DataflowRegion"):
+        _compile_space(NestedRegion, "nested", {}, _allow_problem=False)
+
     class NoComputation(Kernel):
         id = "no_computation"
 
@@ -228,6 +268,66 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
     with pytest.raises(AuthoringError, match="ComputationContract"):
         _compile_space(NoComputation, "no_computation", {}, _allow_problem=False)
+
+    class NoAbi(Kernel):
+        id = "no_abi"
+        computation = COMPUTATION
+
+        @derived(DATAFLOW_REGION_SEMANTICS)
+        def region() -> DataflowRegion:
+            return _region(1, 1)
+
+    with pytest.raises(AuthoringError, match=r"declare a component_abi\(\)"):
+        _compile_space(NoAbi, "no_abi", {}, _allow_problem=False)
+
+    class OwnsProblem(Kernel):
+        id = "owns_problem"
+        computation = COMPUTATION
+        extent = Problem(int)
+
+        @derived(DATAFLOW_REGION_SEMANTICS, extent=extent)
+        def region(*, extent: int) -> DataflowRegion:
+            return _region(extent, 1)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("owns_problem", ())
+
+    with pytest.raises(AuthoringError, match="external facts through Input"):
+        _compile_space(
+            OwnsProblem,
+            "owns_problem",
+            {},
+            problem_namespace="problem.owns_problem",
+        )
+
+
+def test_kernel_abi_must_expose_every_resolved_physical_parameter() -> None:
+    class IncompleteAbi(ToyKernel):
+        id = "incomplete_abi"
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI("toy", ())
+
+    harness, _kernel = _compiled()
+    compiled = _compile_space(
+        IncompleteAbi,
+        "test.incomplete",
+        {"extent": cast("_Ref[object]", harness.member("extent"))},
+        _allow_problem=False,
+    )
+    engine = Engine()
+    point = engine.start(
+        engine.validate(assemble_specs((harness.spec, compiled.spec))),
+        {"problem.test.extent": 8},
+    )
+    point = engine.commit_assignments(
+        point,
+        {"test.incomplete.lanes": 2, "test.incomplete.pumped": False},
+    ).point
+    with pytest.raises(AuthoringError, match="exact resolved physical parameter table"):
+        configure_kernel(engine, compiled, point)
 
 
 def test_kernel_input_may_be_an_upstream_decision_and_is_recorded_as_provenance() -> None:
@@ -292,3 +392,40 @@ def test_kernel_region_is_implicitly_exported() -> None:
 
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
     assert compiled.child("child").exported("region").kind is DependencyKind.PROPERTY
+
+
+def test_kernel_owns_nested_space_decisions_and_may_parameterize_from_exports() -> None:
+    class Pipeline(Space):
+        stages = Decision(int, values=(1, 2))
+        exports = (stages,)
+
+    class CompositeKernel(Kernel):
+        id = "composite"
+        computation = COMPUTATION
+        pipeline = Use(Pipeline)
+
+        @derived(DATAFLOW_REGION_SEMANTICS)
+        def region() -> DataflowRegion:
+            return _region(1, 1)
+
+        STAGES = Parameter(pipeline.stages)
+
+        @classmethod
+        def component_abi(cls, configured: Self) -> ComponentABI:
+            return ComponentABI(
+                "composite",
+                (),
+                (("STAGES", str(configured.STAGES)),),
+            )
+
+    compiled = _compile_space(CompositeKernel, "composite", {}, _allow_problem=False)
+    engine = Engine()
+    point = engine.start(engine.validate(compiled.spec), {})
+    pending = configure_kernel(engine, compiled, point)
+    assert isinstance(pending, Unresolved)
+    point = engine.commit_assignments(point, {"composite.pipeline.stages": 2}).point
+    configured = configure_kernel(engine, compiled, point)
+    assert isinstance(configured, Decided)
+    assert configured.value.STAGES == 2
+    assert dict(configured.value.assignments) == {QualifiedPath("composite.pipeline.stages"): 2}
+    assert configured.value.imported_decisions == ()
