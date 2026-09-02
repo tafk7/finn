@@ -164,26 +164,35 @@ def test_decision_requires_exactly_one_domain_form() -> None:
 def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
     assert set(model.__all__) == {
         "AuthoringError",
+        "Boundary",
         "BranchCatalog",
         "BranchInfo",
         "BranchOutputInfo",
         "Case",
         "CaseInfo",
+        "Connection",
         "ConstraintGroup",
+        "DataflowDesign",
         "Decision",
+        "DotProductDesign",
         "DotpAxiKernel",
         "DspBlock",
         "Input",
         "Kernel",
+        "Kernels",
         "OneOf",
         "Parameter",
         "Problem",
         "Readiness",
+        "Region",
+        "ReplayBufferKernel",
+        "Sink",
         "Space",
         "SpaceModel",
         "Use",
         "compile_space",
         "compile_space_model",
+        "configure_design",
         "configure_kernel",
         "constraint",
         "derived",
@@ -196,4 +205,13 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "resolve_kernel_contributions",
         "unresolved",
     }
-    assert not {"Constraint", "Derived", "Domain"} & set(model.__all__)
+    # No private compiler record, engine declaration, or `_Ref` reaches an author.
+    assert not {"Constraint", "Derived", "Domain", "BranchOutput", "SegmentEndpoint"} & set(
+        model.__all__
+    )
+    assert all(not name.startswith("_") for name in model.__all__)
+
+
+def test_every_named_export_resolves() -> None:
+    for name in model.__all__:
+        assert getattr(model, name) is not None
