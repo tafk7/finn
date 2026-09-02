@@ -128,6 +128,8 @@ class _CompiledBranch:
     cases: tuple[_CompiledCase, ...]
     outputs: tuple[tuple[str, _Ref[object]], ...]
     info: BranchInfo
+    #: The ``when=`` condition, if the branch is conditional at all.
+    active: _Ref[object] | None = None
 
     def case(self, case_id: str) -> _CompiledCase:
         for candidate in self.cases:
@@ -629,6 +631,7 @@ class _Compilation:
                 raise AuthoringError(
                     f"{self.space_type.__name__}.{member_name} has an empty case id"
                 )
+            declaration.check_case(self.space_type.__name__, member_name, case)
             if case_id in ids:
                 raise AuthoringError(
                     f"{self.space_type.__name__}.{member_name} declares case id {case_id!r} twice"
@@ -689,6 +692,11 @@ class _Compilation:
         branch_name = _local_name(member_name, declaration)
         namespace = f"{self.namespace}.{branch_name}"
         case_ids = self._case_ids(member_name, declaration)
+        active = (
+            None
+            if declaration.when is None
+            else self._source_ref(cast("ValueSource[object]", declaration.when))
+        )
         branch_gate = self._when_gate(member_name, declaration.when, namespace)
 
         selector: _Ref[object] | None = None
@@ -770,6 +778,7 @@ class _Compilation:
             tuple(compiled_cases),
             tuple(outputs),
             info,
+            active,
         )
 
     def _compile_case(

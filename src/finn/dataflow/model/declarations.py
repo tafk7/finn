@@ -512,6 +512,11 @@ class OneOf:
 
         return case.stable_name
 
+    def check_case(self, owner_name: str, member_name: str, case: Case) -> None:
+        """A specialization's own admission rule for one case; generic branches have none."""
+
+        del owner_name, member_name, case
+
     def __getattr__(self, member_name: str) -> BranchOutput[object]:
         if member_name.startswith("_"):
             raise AttributeError(member_name)
