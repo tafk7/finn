@@ -17,8 +17,9 @@ reason.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
@@ -27,23 +28,35 @@ from finn.dataflow._engine import (
     Absent,
     Answer,
     Constraint,
+    ConstraintSet,
     Decided,
     DependencyKind,
     DependencyRef,
     DependencyView,
     DerivedProperty,
+    DesignPoint,
+    Engine,
     EvaluatorSpec,
     Finding,
     FindingKind,
     QualifiedPath,
+    ReadinessProfile,
+    Unresolved,
 )
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design.region import DATAFLOW_NETWORK_SEMANTICS
-from finn.dataflow.model.compiler import _CompiledBranch, _CompiledSpace, _Ref
+from finn.dataflow.model.compiler import (
+    _CompiledBranch,
+    _CompiledSpace,
+    _Ref,
+    answer_for,
+    imported_decisions,
+)
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Case,
     ChildValue,
+    Decision,
     OneOf,
     Problem,
     Space,
@@ -52,7 +65,7 @@ from finn.dataflow.model.declarations import (
     declared_members,
     semantics_for,
 )
-from finn.dataflow.model.kernel import Kernel, _KernelCompilation
+from finn.dataflow.model.kernel import Kernel, _KernelCompilation, configure_kernel
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -77,6 +90,56 @@ class DataflowDesign(Space):
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
         return _finalize_design(cls, compiled)
+
+    def _initialize(
+        self,
+        compilation: _DesignCompilation[DataflowDesign],
+        network: DataflowNetwork,
+        kernels: Mapping[str, Kernel],
+        selected: Mapping[str, str],
+        values: Mapping[int, object],
+        assignments: Mapping[QualifiedPath, object],
+        imported: Sequence[QualifiedPath],
+    ) -> None:
+        self._compilation = compilation
+        self._values = MappingProxyType(dict(values))
+        self.resolved_network = network
+        self.kernels = MappingProxyType(dict(kernels))
+        self.selected_candidates = MappingProxyType(dict(selected))
+        self.assignments = MappingProxyType(dict(assignments))
+        self.imported_decisions = tuple(imported)
+
+    def _space_value(self, declaration: ValueSource[object]) -> object:
+        try:
+            return self._values[id(declaration)]
+        except KeyError:
+            raise AttributeError(
+                "this declaration is not retained on the configured Design; "
+                "only Design-owned decisions and selectors are"
+            ) from None
+
+    def _design_kernel(self, declaration: Kernels) -> Kernel:
+        for segment in self._compilation.segments:
+            if segment.declaration is declaration:
+                try:
+                    return self.kernels[segment.role]
+                except KeyError:
+                    raise AttributeError(
+                        f"segment {segment.role!r} is not active in this configuration"
+                    ) from None
+        raise AttributeError("this segment does not belong to the configured Design")
+
+    def node_id(self, role: str) -> str:
+        """The stable Network node this Design role occupies."""
+
+        return self._compilation.segment(role).node_id
+
+    def region_family(self, role: str) -> tuple[str, str]:
+        """The selected Region's semantic family and version at one role."""
+
+        segment = self._compilation.segment(role)
+        case = segment.case(self.selected_candidates[role])
+        return case.metadata.region_family, case.metadata.region_version
 
 
 class Kernels(OneOf):
@@ -144,6 +207,14 @@ class Kernels(OneOf):
         """The candidate-independent selected Region of this segment."""
 
         return self.__getattr__("region")
+
+    def __get__(self, instance: object | None, owner: type[object]) -> object:
+        if instance is None:
+            return self
+        resolver = getattr(instance, "_design_kernel", None)
+        if resolver is None:
+            raise AttributeError("a selected Kernel exists only on a configured Design")
+        return resolver(self)
 
     def input(self, port_id: str) -> SegmentEndpoint:
         """An immutable claim that the selected Region has this input port."""
@@ -301,6 +372,7 @@ class _CompiledKernelSegment:
     """One stable Design role and the Kernel branch that fills it."""
 
     member_name: str
+    declaration: Kernels
     role: str
     node_id: str
     required_computation: ComputationContract
@@ -362,6 +434,9 @@ class _DesignCompilation(Generic[D]):
     connections: tuple[_CompiledConnection, ...]
     boundaries: tuple[_CompiledBoundary, ...]
     network: _Ref[DataflowNetwork]
+    feasibility_set: str
+    readiness_profile: str
+    local_decisions: tuple[tuple[str, _Ref[object]], ...]
 
     def segment(self, role: str) -> _CompiledKernelSegment:
         for candidate in self.segments:
@@ -388,6 +463,7 @@ def _segment(
         cases.append(_CompiledKernelCase(case.case_id, compiled))
     return _CompiledKernelSegment(
         member_name,
+        declaration,
         role,
         declaration.node_id or role,
         declaration.computation,
@@ -822,10 +898,34 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
             segments,
         ),
     )
+    constraints = (*design.spec.constraints, *generated)
+    constraint_paths = tuple(item.path for item in constraints)
+    feasibility_name = f"{design.namespace}.feasibility"
+    readiness_name = f"{design.namespace}.configured"
+    local_decisions = tuple(
+        (name, design.member(name))
+        for name, declaration in declarations.items()
+        if isinstance(declaration, Decision)
+    ) + tuple(
+        (segment.role, segment.selector) for segment in segments if segment.selector is not None
+    )
     specification = replace(
         design.spec,
         properties=(*design.spec.properties, network_property),
-        constraints=(*design.spec.constraints, *generated),
+        constraints=constraints,
+        constraint_sets=(
+            *design.spec.constraint_sets,
+            ConstraintSet(feasibility_name, constraint_paths),
+        ),
+        readiness_profiles=(
+            *design.spec.readiness_profiles,
+            ReadinessProfile(
+                readiness_name,
+                tuple(item.path for item in design.spec.decisions),
+                _readiness_properties(segments, network),
+                constraint_paths,
+            ),
+        ),
     )
 
     metadata: _DesignCompilation[D] = _DesignCompilation(
@@ -836,8 +936,32 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         connections,
         boundaries,
         network,
+        feasibility_name,
+        readiness_name,
+        local_decisions,
     )
     return replace(design, spec=specification, extension=metadata)
+
+
+def _readiness_properties(
+    segments: tuple[_CompiledKernelSegment, ...],
+    network: _Ref[DataflowNetwork],
+) -> tuple[QualifiedPath, ...]:
+    """Selected Regions, the Network, and each candidate's own physical values.
+
+    Taking the candidates' ``configured`` profiles rather than every property in
+    the flat spec keeps readiness to the values a configured Design will actually
+    retain; an inactive candidate's obligations reduce to final absence anyway.
+    """
+
+    paths = [network.path, *(segment.selected_region.path for segment in segments)]
+    for segment in segments:
+        for case in segment.cases:
+            wanted = case.metadata.readiness_profile
+            for profile in case.compiled.spec.readiness_profiles:
+                if profile.name == wanted:
+                    paths.extend(profile.properties)
+    return tuple(dict.fromkeys(paths))
 
 
 def _check_unique(
@@ -861,6 +985,208 @@ def _region_path(segment: _CompiledKernelSegment) -> QualifiedPath:
     return reference.path
 
 
+# -- configuration ------------------------------------------------------------
+
+
+def _blocked(namespace: str, code: str, message: str) -> Unresolved:
+    return Unresolved((Finding(FindingKind.BLOCKER, code, QualifiedPath(namespace), message),))
+
+
+def _selected_case(
+    engine: Engine,
+    point: DesignPoint,
+    segment: _CompiledKernelSegment,
+) -> Answer[str]:
+    if segment.selector is None:
+        return Decided(segment.cases[0].kernel_id)
+    if segment.selector.path not in point.assignments:
+        return Unresolved(
+            (
+                Finding(
+                    FindingKind.BLOCKER,
+                    "design-selector-uncommitted",
+                    segment.selector.path,
+                    "a Design segment selector is not committed",
+                ),
+            )
+        )
+    return Decided(cast(str, point.assignments[segment.selector.path]))
+
+
+def _segment_is_active(
+    engine: Engine,
+    point: DesignPoint,
+    segment: _CompiledKernelSegment,
+) -> Answer[bool]:
+    if segment.active is None:
+        return Decided(True)
+    answer = answer_for(engine, point, segment.active)
+    if isinstance(answer, Decided):
+        return Decided(bool(answer.value))
+    if isinstance(answer, Absent):
+        # An absent condition is not a true one: the segment simply is not there.
+        return Decided(False)
+    return Unresolved(answer.findings)
+
+
+def configure_design(
+    engine: Engine,
+    compiled: _CompiledSpace[D],
+    point: DesignPoint,
+) -> Answer[D]:
+    """Resolve one selected Design, then detach it from the engine and point."""
+
+    metadata = compiled.extension
+    if not isinstance(metadata, _DesignCompilation):
+        raise AuthoringError(f"{compiled.owner.__name__} is not a compiled DataflowDesign")
+    design = cast("_DesignCompilation[D]", metadata)
+
+    readiness = engine.check_readiness(point, design.readiness_profile)
+    if readiness.ready is not True:
+        findings = tuple(
+            finding
+            for answer in readiness.answers.values()
+            if isinstance(answer, Unresolved)
+            for finding in answer.findings
+        )
+        return cast(
+            "Answer[D]",
+            Unresolved(findings)
+            if findings
+            else _blocked(
+                compiled.namespace,
+                "design-not-ready",
+                f"{design.design_id} is not ready to configure",
+            ),
+        )
+
+    assessment = engine.evaluate_constraint_set(point, design.feasibility_set)
+    if assessment.verdict is not True:
+        findings = tuple(
+            finding
+            for answer in assessment.answers.values()
+            if isinstance(answer, (Absent, Unresolved))
+            for finding in answer.findings
+        )
+        return cast(
+            "Answer[D]",
+            Unresolved(findings)
+            if findings
+            else _blocked(
+                compiled.namespace,
+                "design-infeasible",
+                f"{design.design_id} does not cover this configuration",
+            ),
+        )
+
+    kernels: dict[str, Kernel] = {}
+    selected: dict[str, str] = {}
+    for segment in design.segments:
+        active = _segment_is_active(engine, point, segment)
+        if not isinstance(active, Decided):
+            return cast("Answer[D]", active)
+        if not active.value:
+            continue
+        chosen = _selected_case(engine, point, segment)
+        if not isinstance(chosen, Decided):
+            return cast("Answer[D]", chosen)
+        case = segment.case(chosen.value)
+        configured = configure_kernel(engine, case.compiled, point)
+        if not isinstance(configured, Decided):
+            return cast("Answer[D]", configured)
+        kernels[segment.role] = configured.value
+        selected[segment.role] = chosen.value
+
+    resolved = engine.query_property(point, design.network.path)
+    if not isinstance(resolved, Decided):
+        return cast("Answer[D]", Unresolved(resolved.findings))
+    network = cast(DataflowNetwork, resolved.value)
+
+    mismatch = _correspondence_findings(compiled.namespace, design, network, kernels, selected)
+    if mismatch:
+        return cast("Answer[D]", Unresolved(mismatch))
+
+    assignments = {
+        reference.path: point.assignments[reference.path]
+        for _name, reference in design.local_decisions
+        if reference.path in point.assignments
+    }
+    retained = {
+        id(declaration): point.assignments[compiled.member(name).path]
+        for name, declaration in declared_members(design.owner)
+        if isinstance(declaration, Decision) and compiled.member(name).path in point.assignments
+    }
+    instance = object.__new__(design.owner)
+    DataflowDesign._initialize(
+        instance,
+        cast("_DesignCompilation[DataflowDesign]", design),
+        network,
+        kernels,
+        selected,
+        retained,
+        assignments,
+        imported_decisions(
+            point,
+            compiled.spec,
+            compiled.inputs,
+            {reference.path for _name, reference in design.local_decisions},
+        ),
+    )
+    return Decided(instance)
+
+
+def _correspondence_findings(
+    namespace: str,
+    design: _DesignCompilation[D],
+    network: DataflowNetwork,
+    kernels: Mapping[str, Kernel],
+    selected: Mapping[str, str],
+) -> tuple[Finding, ...]:
+    """Exact role, node, Region, and configured-Kernel correspondence.
+
+    The generated constraint already proved node-to-Region correspondence over
+    values.  This proves the extra thing configuration introduces: the object
+    now sitting at each node promises exactly that node's Region.
+    """
+
+    findings: list[Finding] = []
+    nodes = {node.id: node.region for node in network.nodes}
+    expected = {design.segment(role).node_id for role in kernels}
+    if expected != set(nodes):
+        findings.append(
+            Finding(
+                FindingKind.BLOCKER,
+                "design-configured-node-mismatch",
+                QualifiedPath(namespace),
+                "configured segments and Network nodes must correspond exactly",
+            )
+        )
+    for role, kernel in kernels.items():
+        segment = design.segment(role)
+        node_region = nodes.get(segment.node_id)
+        if node_region is None or kernel.resolved_region != node_region:
+            findings.append(
+                Finding(
+                    FindingKind.BLOCKER,
+                    "design-configured-region-mismatch",
+                    QualifiedPath(namespace),
+                    "a configured Kernel does not realize its Network node's Region",
+                    (("role", role), ("node", segment.node_id)),
+                )
+            )
+        if type(kernel).id != selected[role]:
+            findings.append(
+                Finding(
+                    FindingKind.BLOCKER,
+                    "design-configured-candidate-mismatch",
+                    QualifiedPath(namespace),
+                    "a configured Kernel is not the selected candidate",
+                    (("role", role), ("selected", selected[role])),
+                )
+            )
+    return tuple(findings)
+
+
 __all__ = [
     "TOPOLOGY_TYPES",
     "Boundary",
@@ -870,5 +1196,6 @@ __all__ = [
     "SegmentEndpoint",
     "Sink",
     "TopologyDeclaration",
+    "configure_design",
     "topology_members",
 ]

@@ -21,7 +21,6 @@ from finn.dataflow._engine import (
     ConstraintSet,
     Decided,
     DependencyKind,
-    DependencyRef,
     DependencyView,
     DesignPoint,
     Engine,
@@ -30,7 +29,6 @@ from finn.dataflow._engine import (
     FindingKind,
     QualifiedPath,
     ReadinessProfile,
-    RequestError,
     Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
@@ -43,7 +41,13 @@ from finn.dataflow.artifacts.contributions import (
 from finn.dataflow.artifacts.derivation import Scalar
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
-from finn.dataflow.model.compiler import _CompiledSpace, _Ref, _compile_space
+from finn.dataflow.model.compiler import (
+    _CompiledSpace,
+    _Ref,
+    _compile_space,
+    answer_for,
+    imported_decisions,
+)
 from finn.dataflow.model.declarations import (
     AuthoringError,
     ChildValue,
@@ -605,82 +609,6 @@ def _compile_kernel(
     return compiled
 
 
-def _answer_for(
-    engine: Engine,
-    point: DesignPoint,
-    reference: _Ref[object],
-) -> Answer[object]:
-    if reference.kind is DependencyKind.PROBLEM:
-        if reference.path not in point.problem:
-            return Unresolved(
-                (
-                    Finding(
-                        FindingKind.BLOCKER,
-                        "kernel-input-problem-absent",
-                        reference.path,
-                        "a required Kernel input is absent from the problem",
-                    ),
-                )
-            )
-        return Decided(point.problem[reference.path])
-    if reference.kind is DependencyKind.DECISION:
-        if reference.path not in point.assignments:
-            return Unresolved(
-                (
-                    Finding(
-                        FindingKind.BLOCKER,
-                        "kernel-decision-unassigned",
-                        reference.path,
-                        "a required Kernel decision is not committed",
-                    ),
-                )
-            )
-        return Decided(point.assignments[reference.path])
-    try:
-        return engine.query_property(point, reference.path)
-    except RequestError as error:
-        return Unresolved(error.findings)
-
-
-def _imported_decisions(
-    point: DesignPoint,
-    compiled: _CompiledSpace[Kernel],
-    metadata: _KernelCompilation[Kernel],
-) -> tuple[QualifiedPath, ...]:
-    owned = {reference.path for _name, reference in metadata.local_decisions}
-    pending: list[DependencyRef] = []
-    for declaration in (
-        *compiled.spec.decisions,
-        *compiled.spec.properties,
-        *compiled.spec.constraints,
-    ):
-        evaluator = getattr(declaration, "evaluator", None)
-        if evaluator is not None:
-            pending.extend(evaluator.dependencies)
-        domain = getattr(declaration, "domain", None)
-        if domain is not None:
-            pending.extend(domain.dependencies)
-    pending.extend(reference.dependency(name) for name, reference in compiled.inputs)
-    found: list[QualifiedPath] = []
-    visited: set[tuple[QualifiedPath, DependencyKind]] = set()
-    while pending:
-        dependency = pending.pop()
-        key = (dependency.path, dependency.kind)
-        if key in visited:
-            continue
-        visited.add(key)
-        if dependency.kind is DependencyKind.DECISION:
-            if dependency.path not in owned and dependency.path in point.assignments:
-                found.append(dependency.path)
-            continue
-        if dependency.kind is not DependencyKind.PROPERTY:
-            continue
-        declared = point.design_space.properties.get(dependency.path)
-        if declared is not None:
-            pending.extend(declared.evaluator.dependencies)
-    return tuple(dict.fromkeys(found))
-
-
 def configure_kernel(
     engine: Engine,
     compiled: _CompiledSpace[K],
@@ -730,7 +658,7 @@ def configure_kernel(
             )
         )
 
-    region_answer = _answer_for(engine, point, cast("_Ref[object]", metadata.region))
+    region_answer = answer_for(engine, point, cast("_Ref[object]", metadata.region))
     if not isinstance(region_answer, Decided):
         return Unresolved(region_answer.findings)
 
@@ -739,7 +667,7 @@ def configure_kernel(
         if parameter.source is None:
             value = parameter.constant
         else:
-            answer = _answer_for(engine, point, parameter.source)
+            answer = answer_for(engine, point, parameter.source)
             if not isinstance(answer, Decided):
                 return Unresolved(answer.findings)
             value = answer.value
@@ -775,10 +703,11 @@ def configure_kernel(
         retained,
         assignments,
         parameter_values,
-        _imported_decisions(
+        imported_decisions(
             point,
-            cast("_CompiledSpace[Kernel]", compiled),
-            cast("_KernelCompilation[Kernel]", metadata),
+            compiled.spec,
+            compiled.inputs,
+            {reference.path for _name, reference in metadata.local_decisions},
         ),
     )
     return Decided(cast(K, instance))

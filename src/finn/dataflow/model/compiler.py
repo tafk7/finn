@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Set as AbstractSet
 from dataclasses import dataclass, replace
 from inspect import signature
 from types import MappingProxyType
@@ -25,7 +25,9 @@ from finn.dataflow._engine import (
     DependencyRef,
     DependencyView,
     DerivedProperty,
+    DesignPoint,
     DesignSpaceSpec,
+    Engine,
     EvaluatorSpec,
     Finding,
     FindingKind,
@@ -33,6 +35,7 @@ from finn.dataflow._engine import (
     ProblemSchema,
     QualifiedPath,
     ReadinessProfile,
+    RequestError,
     Unresolved,
     ValueSemantics,
 )
@@ -865,6 +868,87 @@ def _compile_space(
     return cast("_CompiledSpace[S]", compiled)
 
 
+def answer_for(
+    engine: Engine,
+    point: DesignPoint,
+    reference: _Ref[object],
+) -> Answer[object]:
+    """Read one bound handle at a point, whatever kind of declaration it is."""
+
+    if reference.kind is DependencyKind.PROBLEM:
+        if reference.path not in point.problem:
+            return Unresolved(
+                (
+                    Finding(
+                        FindingKind.BLOCKER,
+                        "kernel-input-problem-absent",
+                        reference.path,
+                        "a required Kernel input is absent from the problem",
+                    ),
+                )
+            )
+        return Decided(point.problem[reference.path])
+    if reference.kind is DependencyKind.DECISION:
+        if reference.path not in point.assignments:
+            return Unresolved(
+                (
+                    Finding(
+                        FindingKind.BLOCKER,
+                        "kernel-decision-unassigned",
+                        reference.path,
+                        "a required Kernel decision is not committed",
+                    ),
+                )
+            )
+        return Decided(point.assignments[reference.path])
+    try:
+        return engine.query_property(point, reference.path)
+    except RequestError as error:
+        return Unresolved(error.findings)
+
+
+def imported_decisions(
+    point: DesignPoint,
+    spec: DesignSpaceSpec,
+    inputs: tuple[tuple[str, _Ref[object]], ...],
+    owned: AbstractSet[QualifiedPath],
+) -> tuple[QualifiedPath, ...]:
+    """Every committed decision this fragment reads but does not own.
+
+    Provenance, not ownership: a configured Kernel or Design keeps the paths of
+    the outside choices it was configured against, so a later reader can tell
+    which external commitments its values depend on.
+    """
+
+    pending: list[DependencyRef] = []
+    for declaration in (*spec.decisions, *spec.properties, *spec.constraints):
+        evaluator = getattr(declaration, "evaluator", None)
+        if evaluator is not None:
+            pending.extend(evaluator.dependencies)
+        domain = getattr(declaration, "domain", None)
+        if domain is not None:
+            pending.extend(domain.dependencies)
+    pending.extend(reference.dependency(name) for name, reference in inputs)
+    found: list[QualifiedPath] = []
+    visited: set[tuple[QualifiedPath, DependencyKind]] = set()
+    while pending:
+        dependency = pending.pop()
+        key = (dependency.path, dependency.kind)
+        if key in visited:
+            continue
+        visited.add(key)
+        if dependency.kind is DependencyKind.DECISION:
+            if dependency.path not in owned and dependency.path in point.assignments:
+                found.append(dependency.path)
+            continue
+        if dependency.kind is not DependencyKind.PROPERTY:
+            continue
+        declared = point.design_space.properties.get(dependency.path)
+        if declared is not None:
+            pending.extend(declared.evaluator.dependencies)
+    return tuple(dict.fromkeys(found))
+
+
 @dataclass(frozen=True, slots=True)
 class SpaceModel:
     """One compiled Space: the ordinary flat spec plus its branch catalog.
@@ -910,4 +994,10 @@ def compile_space(
     ).specification
 
 
-__all__ = ["SpaceModel", "compile_space", "compile_space_model"]
+__all__ = [
+    "SpaceModel",
+    "answer_for",
+    "compile_space",
+    "compile_space_model",
+    "imported_decisions",
+]
