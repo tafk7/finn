@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run FINN's Docker-built environment through Docker, sbx, or Apptainer.
+# Run FINN's Docker-built environment through Docker or sbx.
 
 set -euo pipefail
 
@@ -15,40 +15,35 @@ usage () {
 Usage: docker/run [OPTIONS] [-- COMMAND...]
 
 Options:
-  --backend NAME     docker (default), sbx, or apptainer
+  --sbx              run in an sbx sandbox instead of Docker
   -n, --name NAME    set the Docker container or sbx sandbox name
   --fpga             grant access to the configured Xilinx toolchain
-  --runtime NAME     add an image runtime such as xrt; repeatable
+  --runtime NAME     add image content such as xrt; repeatable
   --deps MODE        frozen (default), live, or auto
   --notebook         start the Docker notebook service
-  --remove           remove the prepared sbx sandbox or cached SIF
+  --remove           remove the selected sbx sandbox
   --rebuild          rebuild image layers without cache
   --no-build         require an existing prepared artifact
   --print            print the resolved request without running it
   -h, --help         show this help
 
-With no command, the selected backend opens an interactive shell.
+With no command, Docker opens a shell or sbx attaches to the sandbox.
 EOF
 }
 
-BACKEND=docker
+SBX=0
 FPGA=0
 NOTEBOOK=0
-PREPARE_ONLY=0
 REMOVE=0
 PRINT_ONLY=0
 INSTANCE_NAME=""
 NAME_EXPLICIT=0
 RUNTIMES="${FINN_RUNTIMES:-}"
 DEPS="${FINN_DEPS:-frozen}"
-DEPS_EXPLICIT=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --backend)
-            [ "$#" -ge 2 ] || { echo "--backend needs a value" >&2; exit 2; }
-            BACKEND=$2; shift 2 ;;
-        --backend=*) BACKEND=${1#*=}; shift ;;
+        --sbx) SBX=1; shift ;;
         -n|--name)
             [ "$#" -ge 2 ] || { echo "$1 needs a value" >&2; exit 2; }
             INSTANCE_NAME=$2; NAME_EXPLICIT=1; shift 2 ;;
@@ -61,13 +56,12 @@ while [ "$#" -gt 0 ]; do
             value=${1#*=}; RUNTIMES="${RUNTIMES:+$RUNTIMES,}$value"; shift ;;
         --deps)
             [ "$#" -ge 2 ] || { echo "--deps needs a value" >&2; exit 2; }
-            DEPS=$2; DEPS_EXPLICIT=1; shift 2 ;;
-        --deps=*) DEPS=${1#*=}; DEPS_EXPLICIT=1; shift ;;
+            DEPS=$2; shift 2 ;;
+        --deps=*) DEPS=${1#*=}; shift ;;
         --notebook) NOTEBOOK=1; shift ;;
         --remove) REMOVE=1; shift ;;
         --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
         --no-build) export FINN_CONTAINER_NO_BUILD=1; shift ;;
-        --prepare-only) PREPARE_ONLY=1; shift ;;
         --print) PRINT_ONLY=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --) shift; break ;;
@@ -76,52 +70,24 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-case "$BACKEND" in
-    docker|sbx|apptainer) ;;
-    *) echo "Unknown backend: $BACKEND" >&2; exit 2 ;;
-esac
 case "$DEPS" in
     frozen|live|auto) ;;
     *) echo "Unknown dependency mode: $DEPS" >&2; exit 2 ;;
 esac
-if [ "$NOTEBOOK" = 1 ] && [ "$BACKEND" != docker ]; then
-    echo "--notebook is available only with the Docker backend" >&2
+if [ "$NOTEBOOK" = 1 ] && [ "$SBX" = 1 ]; then
+    echo "--notebook is available only with Docker" >&2
     exit 2
 fi
-if [ "$NAME_EXPLICIT" = 1 ] && [ "$BACKEND" = apptainer ]; then
-    echo "--name applies to the Docker and sbx backends, not Apptainer" >&2
+if [ "$REMOVE" = 1 ] && [ "$SBX" != 1 ]; then
+    echo "--remove applies only with --sbx" >&2
     exit 2
 fi
-if [ "$REMOVE" = 1 ] && [ "$BACKEND" = docker ]; then
-    echo "--remove applies only to the sbx and apptainer backends" >&2
-    exit 2
-fi
-if [ "$REMOVE" = 1 ] && { [ "$PREPARE_ONLY" = 1 ] || [ "$NOTEBOOK" = 1 ] || [ "$#" -gt 0 ]; }; then
-    echo "--remove cannot be combined with preparation, notebook, or a command" >&2
+if [ "$REMOVE" = 1 ] && { [ "$NOTEBOOK" = 1 ] || [ "$#" -gt 0 ]; }; then
+    echo "--remove cannot be combined with a notebook or command" >&2
     exit 2
 fi
 if [ "$NOTEBOOK" = 1 ] && [ "$#" -gt 0 ]; then
     echo "--notebook does not accept a command" >&2
-    exit 2
-fi
-if [ "$PREPARE_ONLY" = 1 ] && [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ]; then
-    echo "--no-build cannot be combined with artifact preparation" >&2
-    exit 2
-fi
-if [ "$PREPARE_ONLY" = 1 ] && [ "$#" -gt 0 ]; then
-    echo "artifact preparation does not accept a command" >&2
-    exit 2
-fi
-if [ "$PREPARE_ONLY" = 1 ] && [ "$FPGA" = 1 ]; then
-    echo "--fpga is a run-time grant and does not apply to docker/build" >&2
-    exit 2
-fi
-if [ "$PREPARE_ONLY" = 1 ] && [ "$DEPS_EXPLICIT" = 1 ]; then
-    echo "--deps controls source selection at run time and does not apply to docker/build" >&2
-    exit 2
-fi
-if [ "$PREPARE_ONLY" = 1 ] && [ "$NAME_EXPLICIT" = 1 ]; then
-    echo "--name identifies a run-time instance and does not apply to docker/build" >&2
     exit 2
 fi
 if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ]; then
@@ -132,31 +98,34 @@ fi
 RUNTIMES=$(finn_normalize_runtimes "$RUNTIMES")
 TIER=dev
 [ "$FPGA" = 1 ] && TIER=build
-[ "$BACKEND" = apptainer ] && [ "$FPGA" != 1 ] && TIER=auto
-[ "$PREPARE_ONLY" = 1 ] && DEPS=frozen
 if [ "$NAME_EXPLICIT" != 1 ]; then
-    case "$BACKEND" in
-        docker) INSTANCE_NAME="${FINN_CONTAINER_NAME:-}" ;;
-        sbx) INSTANCE_NAME="${FINN_SBX_NAME:-}" ;;
-        apptainer) INSTANCE_NAME="" ;;
-    esac
+    if [ "$SBX" = 1 ]; then
+        INSTANCE_NAME="${FINN_SBX_NAME:-}"
+    else
+        INSTANCE_NAME="${FINN_CONTAINER_NAME:-}"
+    fi
 fi
 
 export FINN_RUNTIMES="$RUNTIMES"
 export FINN_DEPS="$DEPS"
 export FINN_DOCKER_TARGET="$TIER"
-case "$BACKEND" in
-    docker) [ -z "$INSTANCE_NAME" ] || export FINN_CONTAINER_NAME="$INSTANCE_NAME" ;;
-    sbx) [ -z "$INSTANCE_NAME" ] || export FINN_SBX_NAME="$INSTANCE_NAME" ;;
-esac
+if [ "$SBX" = 1 ]; then
+    [ -z "$INSTANCE_NAME" ] || export FINN_SBX_NAME="$INSTANCE_NAME"
+else
+    [ -z "$INSTANCE_NAME" ] || export FINN_CONTAINER_NAME="$INSTANCE_NAME"
+fi
 
 if [ "$PRINT_ONLY" = 1 ]; then
-    variant=""; [ "$BACKEND" = sbx ] && variant=sbx
+    runner=docker
+    variant=""
+    if [ "$SBX" = 1 ]; then
+        runner=sbx
+        variant=sbx
+    fi
     target=$(finn_bake_target "$RUNTIMES" "$variant")
     operation=run
-    [ "$PREPARE_ONLY" = 1 ] && operation=prepare
     [ "$REMOVE" = 1 ] && operation=remove
-    printf 'backend=%s\n' "$BACKEND"
+    printf 'runner=%s\n' "$runner"
     printf 'tier=%s\n' "$TIER"
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'deps=%s\n' "$DEPS"
@@ -172,40 +141,19 @@ if [ "$PRINT_ONLY" = 1 ]; then
 fi
 
 cd "$REPO"
-case "$BACKEND" in
-    docker)
-        [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ] && export FINN_DOCKER_PREBUILT=1
-        if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ]; then
-            FINN_DOCKER_BUILD_EXTRA="${FINN_DOCKER_BUILD_EXTRA:+$FINN_DOCKER_BUILD_EXTRA }--no-cache"
-            export FINN_DOCKER_BUILD_EXTRA
-        fi
-        if [ "$PREPARE_ONLY" = 1 ]; then
-            exec "$DOCKER_DIR/run-docker" build "$TIER"
-        elif [ "$NOTEBOOK" = 1 ]; then
-            exec "$DOCKER_DIR/run-docker" notebook
-        else
-            exec "$DOCKER_DIR/run-docker" "$@"
-        fi
-        ;;
-    sbx)
-        if [ "$REMOVE" = 1 ]; then
-            exec "$DOCKER_DIR/run-sbx" rm "$TIER"
-        fi
-        if [ "$PREPARE_ONLY" = 1 ]; then
-            exec "$DOCKER_DIR/run-sbx" prepare "$TIER"
-        fi
-        exec "$DOCKER_DIR/run-sbx" "$TIER" -- "$@"
-        ;;
-    apptainer)
-        if [ "$REMOVE" = 1 ]; then
-            exec "$DOCKER_DIR/run-apptainer" rm
-        fi
-        if [ "$FPGA" = 1 ]; then
-            "$DOCKER_DIR/config" inspect --tier build --backend apptainer >/dev/null
-        fi
-        if [ "$PREPARE_ONLY" = 1 ]; then
-            exec "$DOCKER_DIR/run-apptainer" prepare
-        fi
-        exec "$DOCKER_DIR/run-apptainer" -- "$@"
-        ;;
-esac
+if [ "$SBX" = 1 ]; then
+    if [ "$REMOVE" = 1 ]; then
+        exec "$DOCKER_DIR/run-sbx" rm "$TIER"
+    fi
+    exec "$DOCKER_DIR/run-sbx" "$TIER" -- "$@"
+fi
+
+[ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ] && export FINN_DOCKER_PREBUILT=1
+if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ]; then
+    FINN_DOCKER_BUILD_EXTRA="${FINN_DOCKER_BUILD_EXTRA:+$FINN_DOCKER_BUILD_EXTRA }--no-cache"
+    export FINN_DOCKER_BUILD_EXTRA
+fi
+if [ "$NOTEBOOK" = 1 ]; then
+    exec "$DOCKER_DIR/run-docker" notebook
+fi
+exec "$DOCKER_DIR/run-docker" "$@"

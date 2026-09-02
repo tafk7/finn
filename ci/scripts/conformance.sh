@@ -3,6 +3,8 @@
 #
 #   ci/scripts/conformance.sh             all checks
 #   ci/scripts/conformance.sh 4 5 11      selected historical check numbers
+#
+# Check 11 runs an explicitly exported SIF when FINN_TEST_SIF names one.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."

@@ -241,7 +241,7 @@ def resolve_workspace(tier, backend, policy="auto"):
     workspace_host = hostpath(
         os.environ.get("FINN_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     )
-    forced_mirror = backend in ("sbx", "apptainer") or tier in FPGA_TIERS
+    forced_mirror = backend == "sbx" or tier in FPGA_TIERS
     if policy == "auto":
         policy = "mirror" if forced_mirror else DEFAULT_DEV_WORKSPACE_POLICY
     elif policy == "fixed" and forced_mirror:
@@ -486,7 +486,8 @@ def compose_override(data, services):
 
 
 def cmd_inspect(args):
-    data = resolve_host(args.tier, args.backend, args.workspace_policy)
+    backend = "sbx" if args.sbx else "docker"
+    data = resolve_host(args.tier, backend, args.workspace_policy)
     if args.format == "json":
         json.dump(data, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
@@ -530,12 +531,12 @@ def cmd_sbx(args):
     return 0
 
 
-def add_resolution_arguments(parser, include_backend=True):
+def add_resolution_arguments(parser, include_sbx=True):
     parser.add_argument(
         "--tier", default=os.environ.get("FINN_DOCKER_TARGET", "auto"), choices=TIERS + ("auto",)
     )
-    if include_backend:
-        parser.add_argument("--backend", default="docker", choices=("docker", "sbx", "apptainer"))
+    if include_sbx:
+        parser.add_argument("--sbx", action="store_true", help="resolve sbx-specific policy")
     parser.add_argument("--workspace-policy", default="auto", choices=("auto", "fixed", "mirror"))
 
 
@@ -549,7 +550,7 @@ def main():
     p.set_defaults(func=cmd_inspect)
 
     p = sub.add_parser("compose", help="render an ephemeral Compose override")
-    add_resolution_arguments(p, include_backend=False)
+    add_resolution_arguments(p, include_sbx=False)
     p.add_argument(
         "--service", action="append", help="service to configure; repeat for multiple services"
     )

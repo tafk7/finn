@@ -125,18 +125,14 @@ def _inspect(env, tier, backend="docker"):
     """Run the real CLI in a clean environment, so nothing leaks in."""
     base = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp")}
     base.update(env)
+    command = [sys.executable, FINN_ENV, "inspect", "--tier", tier]
+    if backend == "sbx":
+        command.append("--sbx")
+    else:
+        assert backend == "docker"
+    command.extend(["--format", "json"])
     proc = subprocess.run(
-        [
-            sys.executable,
-            FINN_ENV,
-            "inspect",
-            "--tier",
-            tier,
-            "--backend",
-            backend,
-            "--format",
-            "json",
-        ],
+        command,
         capture_output=True,
         env=base,
         text=True,
@@ -282,11 +278,7 @@ def test_egress_enforcement_is_reported_per_backend(tmp_path):
     claiming it."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     env = {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"}
-    for backend, expected in (
-        ("sbx", "enforced"),
-        ("docker", "declared"),
-        ("apptainer", "declared"),
-    ):
+    for backend, expected in (("sbx", "enforced"), ("docker", "declared")):
         data = json.loads(_inspect(env, "build", backend=backend).stdout)
         assert data["egress_enforcement"] == expected, backend
 
@@ -669,8 +661,8 @@ def test_sh_output_is_not_an_injection_path():
 # Each of these reads files and needs no docker, no sbx and no toolchain. In
 # the conformance suite they ran on one machine, behind a `have_docker` or a
 # cached-.sif guard; here they run on every PR. The suite keeps only what
-# genuinely needs hardware -- the bare `docker exec` / `sbx exec` / apptainer
-# checks, and the real `bake --print`.
+# genuinely needs hardware -- bare `docker exec` / `sbx exec`, direct SIF
+# execution, and the real `bake --print`.
 # --------------------------------------------------------------------------
 
 
@@ -687,9 +679,8 @@ def test_nothing_requests_host_privilege():
         "docker/run",
         "docker/run-docker",
         "docker/run-sbx",
-        "docker/run-apptainer",
+        "docker/export-sif",
         "docker/finn-sbx",
-        "docker/finn-apptainer",
     ]
     offenders = []
     for rel in launchers:
@@ -721,22 +712,6 @@ def test_setup_local_has_not_regrown_the_hardcoded_layout():
             if line.lstrip().startswith("#"):
                 continue
             assert "$FINN_XILINX_PATH/Vivado/" not in line, "%s:%d" % (rel, n)
-
-
-def test_apptainer_backend_forces_the_mirror_workspace_policy(tmp_path):
-    """Apptainer cannot remap a mount, so a fixed FINN_ROOT would name a
-    directory that was never mounted and `import finn` would fail with
-    ModuleNotFoundError pointing nowhere near the cause."""
-    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
-    for tier in ("dev", "build"):
-        data = json.loads(
-            _inspect(
-                {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"},
-                tier,
-                backend="apptainer",
-            ).stdout
-        )
-        assert data["workspace"]["policy"] == "mirror", tier
 
 
 def test_custom_runtime_sets_use_the_parameterized_bake_target():
@@ -885,6 +860,9 @@ def test_container_docs_do_not_reference_retired_interfaces():
     for retired in (
         "<<Claude",
         "scripts/finn-env.sh",
+        "--backend",
+        "FINN_SINGULARITY",
+        "docker/finn-apptainer",
         "XRT_DEB_VERSION",
         "V80PP_DEB_PACKAGE",
         "FINN_XRT_SHA256",

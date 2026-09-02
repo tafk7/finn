@@ -47,8 +47,8 @@ FINN has two setup paths:
     - You need a portable dependency environment, agent isolation, or an HPC image
 
 The Docker-built image executes through Docker Compose by default. The
-``--backend sbx`` option imports it into an agent sandbox. The
-``--backend apptainer`` option converts it to a SIF for HPC execution.
+``--sbx`` option imports it into an agent sandbox. ``docker/build`` can also
+export the image as a SIF for standard Apptainer or Singularity execution.
 
 For the native path, continue with ``./setup-local.sh`` and
 ``source scripts/activate.sh``. Detailed native prerequisites and validation
@@ -110,8 +110,7 @@ default execution backend:
 Use ``-n NAME`` or ``--name NAME`` to assign the Docker container name. This
 is useful for finding parallel interactive sessions with ``docker ps`` and
 targeting one with standard commands such as ``docker exec``. The same option
-selects the persistent sandbox identity with ``--backend sbx``. Apptainer has
-no equivalent named-instance object, so that backend rejects the option.
+selects the persistent sandbox identity with ``--sbx``.
 
 The run command prepares a missing artifact automatically. Preparation is also
 available separately:
@@ -120,8 +119,8 @@ available separately:
 
   ./docker/build
   ./docker/build --runtime xrt
-  ./docker/build --backend sbx
-  ./docker/build --backend apptainer
+  ./docker/build --sbx
+  ./docker/build --export-sif ./finn.sif
 
 The static ``compose.yaml`` can also be used directly. Supply the generated
 host override in the same invocation so Compose receives the correct uid,
@@ -136,7 +135,7 @@ workspace, build directory and capability mounts:
 
 The override is generated at launch and should not be committed. The ``dev``
 tier adds no toolchain, licence or secret mounts. Docker networking remains
-open; use ``./docker/run --backend sbx`` when egress must be denied.
+open; use ``./docker/run --sbx`` when egress must be denied.
 
 If Docker is new to you, there are good `online resources <https://docker-curriculum.com/>`_.
 Read :ref:`General FINN Docker tips` and :ref:`Environment variables` also.
@@ -210,7 +209,7 @@ The common choices are command-line options:
 * ``--runtime NAME`` selects image content such as XRT; repeat the option for
   multiple runtimes.
 * ``--deps frozen|live|auto`` selects dependency source behavior.
-* ``--backend docker|sbx|apptainer`` selects how the Docker-built image runs.
+* ``--sbx`` runs the image in an sbx sandbox instead of Docker.
 * ``--rebuild`` rebuilds without the BuildKit cache.
 * ``--no-build`` requires an already prepared artifact.
 
@@ -235,7 +234,6 @@ legacy callers. The most relevant are:
 * (optional) ``FINN_DEPS`` (default "frozen") selects the source of qonnx, brevitas and finn-experimental. ``frozen`` uses the wheels in the image, at the versions in ``deps.env``. ``live`` uses the checkouts in ``deps/``, so your edits take effect immediately; if a checkout is missing, FINN stops and tells you which one. ``auto`` uses a checkout if it is present, and the wheel if it is not.
 * (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
 * (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
-* ``FINN_SINGULARITY`` may point to a prebuilt ``.sif`` consumed by the Apptainer backend.
 
 General FINN Docker tips
 ************************
@@ -280,11 +278,11 @@ microVM with its own kernel. Network access is denied until you permit a host.
 
 .. code-block:: bash
 
-  ./docker/run --backend sbx                         # repository only
-  ./docker/run --backend sbx --fpga                  # toolchain and licence
-  ./docker/run --backend sbx --name agent-1          # a distinct parallel sandbox
-  ./docker/run --backend sbx -- pytest -m util       # one command
-  ./docker/run --backend sbx --fpga --remove         # remove the sandbox
+  ./docker/run --sbx                         # repository only
+  ./docker/run --sbx --fpga                  # toolchain and licence
+  ./docker/run --sbx --name agent-1          # a distinct parallel sandbox
+  ./docker/run --sbx -- pytest -m util       # one command
+  ./docker/run --sbx --fpga --remove         # remove the sandbox
 
 You must have `sbx <https://docs.docker.com/ai/sandboxes/>`_ 0.39.0 or later,
 and you must be signed in. The ``sbx env`` command and file format are
@@ -385,27 +383,36 @@ The local installation has some limitations compared to Docker:
 If you encounter issues, please try the Docker-based installation first to verify the
 issue is not environment-specific.
 
-Using the Docker image with Apptainer
-=====================================
+Exporting the Docker image for Apptainer
+========================================
 
-Apptainer is an HPC execution backend for the same Docker-built environment. A
-Docker-capable machine must first build the image and convert it to a SIF:
-
-.. code-block:: bash
-
-  ./docker/build --backend apptainer
-
-The command prints the cached SIF path. Copy that file to the HPC system, then
-select it explicitly:
+FINN does not wrap Apptainer execution. It exports the Docker-built environment
+as a SIF, after which the normal Apptainer or Singularity commands apply. The
+export machine needs Docker and either Apptainer or Singularity:
 
 .. code-block:: bash
 
-  export FINN_SINGULARITY=/path/to/finn.sif
-  ./docker/run --backend apptainer -- python -c 'import finn'
+  ./docker/build --export-sif ./finn.sif
+  ./docker/build --runtime xrt --export-sif ./finn-xrt.sif
 
-The HPC system needs Singularity or Apptainer but does not need Docker. This
-backend uses the host kernel, network and identity; it is not an isolation
-boundary like sbx.
+Copy the SIF and a FINN checkout to the HPC system, enter the checkout, and run
+the image directly:
+
+.. code-block:: bash
+
+  apptainer exec \
+    --cleanenv \
+    --bind "$PWD:$PWD" \
+    --pwd "$PWD" \
+    --env FINN_ROOT="$PWD" \
+    /path/to/finn.sif \
+    python -c 'import finn'
+
+Use ``singularity exec`` instead when that is the command supplied by the HPC
+system. The HPC machine does not need Docker. Apptainer uses the host kernel,
+network and identity; it is not an isolation boundary like sbx.
+The SIF does not contain Vivado or Vitis. Expose a site installation with the
+normal Apptainer bind and environment mechanisms when FPGA tools are required.
 
 Supported FPGA Hardware
 =======================

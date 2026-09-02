@@ -8,9 +8,3 @@ Sphinx either by:
 
 If you're looking for content that was hosted on the FINN project page
 with GitHub Pages, that has moved to the [github-pages branch](https://github.com/Xilinx/finn/tree/github-pages).
-
-Repository-level engineering records:
-
-- [Containerization design](containerization.md)
-- [Image identity](image-identity.md)
-- [Deferred CI/Jenkins container debt](ci-container-debt.md)

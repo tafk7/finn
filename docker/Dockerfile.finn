@@ -33,7 +33,6 @@
 # `dev` and `build` are runtime grant tiers, not image stages. XRT/SLASH are
 # distro-specific userspace packages and remain image content selected through
 # FINN_RUNTIMES. The sbx stage adds its explicit in-container privilege contract.
-# See docs/containerization.md for the design rationale.
 
 # Ubuntu base for every stage. Not free to choose once a runtime target is
 # selected: it must match the release that target's packages were built for.
@@ -43,7 +42,7 @@
 # A date-pinned base gives rebuilds a stable starting point. apt and pip inputs
 # are intentionally refreshed when layers rebuild, so the image digest -- not
 # the human-readable FINN tag -- is the immutable identity of a particular
-# build. See docs/image-identity.md.
+# build.
 ARG UBUNTU_TAG=jammy-20230126
 
 

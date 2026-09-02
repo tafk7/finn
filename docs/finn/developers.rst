@@ -59,8 +59,7 @@ further detailed below:
 Container architecture
 ======================
 
-The detailed rationale lives in ``docs/containerization.md``. The operational
-model is deliberately small:
+The container architecture has a deliberately small operational model:
 
 * ``docker/Dockerfile.finn`` defines one dependency image, optional accelerator
   runtime packages, and an sbx contract layer.
@@ -69,14 +68,14 @@ model is deliberately small:
   ``docker/config``.
 * ``compose.yaml`` contains only static service behavior. ``docker/config compose``
   renders the host-specific mounts, uid/gid and environment at launch.
-* ``docker/run`` is the containerized-environment interface. Docker is its
-  default backend; sbx and Apptainer consume the same Docker-built image.
-* ``docker/build`` prepares Docker images, sbx templates, or Apptainer SIFs.
+* ``docker/run`` runs the environment with Docker by default or sbx when
+  ``--sbx`` is selected.
+* ``docker/build`` prepares Docker images and sbx templates, or exports a
+  Docker-built image as an Apptainer SIF.
 * The historical ``docker/finn-*`` commands are compatibility interfaces. New
   host facts must never be derived there.
 * The root ``run-docker.sh`` exists only as a temporary Jenkins compatibility
-  bridge. It is not a user interface; its remaining callers are tracked in
-  ``docs/ci-container-debt.md``.
+  bridge. It is not a user interface.
 
 ``dev`` and ``build`` are grant tiers, not image tiers. ``build`` adds the
 read-only toolchain, platform and licence mounts. Accelerator userspace is
@@ -92,7 +91,8 @@ To build without launching:
 
   ./docker/build
   ./docker/build --runtime xrt
-  ./docker/build --backend apptainer
+  ./docker/build --sbx
+  ./docker/build --export-sif ./finn.sif
   FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
 
 Arbitrary runtime combinations use the parameterized ``finn-runtime`` and
@@ -149,24 +149,24 @@ tier decides whether a Xilinx toolchain is available to consume it.
 Launch sequence
 ---------------
 
-1. ``docker/run`` normalizes the requested backend, FPGA grants, runtime set,
+1. ``docker/run`` normalizes the Docker/sbx choice, FPGA grants, runtime set,
    dependency mode and command.
-2. ``docker/build`` or the selected backend prepares the required artifact.
+2. ``docker/build`` or the selected runner prepares the required artifact.
    Bake builds the underlying image. ``deps.env`` supplies repository pins;
    the shared ``docker/pip-*.txt`` files supply Python pins.
 3. ``docker/config`` resolves the workspace, build directory, toolchain, platform,
    licence, environment and mounts once.
 4. ``docker/config compose`` renders an ephemeral Compose override. The static
    Compose file does not rediscover host state.
-5. The selected backend runs the image directly with Compose, imports it into
-   sbx, or converts it into an Apptainer SIF. The entrypoint handles only runtime state. Python source resolution is
+5. Docker runs the image through Compose, while sbx imports its specialized
+   image variant. ``docker/build --export-sif`` is a separate artifact export,
+   not another runtime backend. The entrypoint handles only runtime state. Python source resolution is
    installed in site-packages, toolchain application is shared by the
    entrypoint/BASH_ENV/tool shims, and ``finn_xsi`` builds on demand.
 
 Container images are periodically rebuilt rather than bit-for-bit reproducible
 from their human-readable tag. Treat the image digest as the identity of the
-environment and use an SBOM to inspect its package contents. See
-``docs/image-identity.md``.
+environment and use an SBOM to inspect its package contents.
 
 (Re-)launching builds outside of Docker
 ========================================

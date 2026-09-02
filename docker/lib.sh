@@ -6,11 +6,10 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# docs/containerization.md's central claim is that every fact is derived in
-# exactly one place, and four defects came from two code paths deriving the same
-# fact and drifting. That discipline was applied rigorously to HOST facts -- and
-# not at all to BUILD-MATRIX facts, which were duplicated across four launchers
-# and two CI scripts. They had already drifted, in three ways, all silent:
+# Every fact must be derived in exactly one place. Four defects came from two
+# code paths deriving the same host fact and drifting. That discipline was not
+# originally applied to build-matrix facts, which were duplicated across four
+# launchers and two CI scripts. They had already drifted in three silent ways:
 #
 #   - the `git describe` fallback was `local` in five places and `unknown` in
 #     ci/scripts/build-images.sh -- a tag bake will never emit, so a provenance

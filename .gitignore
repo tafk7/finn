@@ -116,3 +116,6 @@ MANIFEST
 # See docker/runtimes/README.md.
 docker/packages/*.deb
 docker/packages/*.rpm
+
+# Exported Apptainer/Singularity images are generated build artifacts.
+*.sif

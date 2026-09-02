@@ -39,16 +39,16 @@ Container examples:
 
 ```bash
 ./docker/run -- quicktest.sh
-./docker/run --backend sbx -- pytest -m util
-./docker/build --backend apptainer
+./docker/run --sbx -- pytest -m util
+./docker/build --export-sif ./finn.sif
 ```
 
-See [docker/README.md](docker/README.md) for backend and artifact details.
+See [docker/README.md](docker/README.md) for runner and artifact details.
 
 The Docker-built environment runs through Docker Compose by default. Select
-`--backend sbx` for agent isolation or `--backend apptainer` to prepare and run
-a SIF on an HPC system. Use `--fpga` when the environment needs your Xilinx
-installation, which is mounted read-only.
+`--sbx` for agent isolation, or export the image as a SIF and run it with the
+standard Apptainer/Singularity commands on an HPC system. Use `--fpga` when the
+environment needs your Xilinx installation, which is mounted read-only.
 
 Due to the complex dependencies of this project, we recommend one of the
 container-based methods.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Compatibility entry point. Prefer: ./docker/run --backend sbx
+# Compatibility entry point. Prefer: ./docker/run --sbx
 
 set -euo pipefail
 DIR=$(dirname "$(readlink -f "$0")")
-args=(--backend sbx)
+args=(--sbx)
 case "${1:-}" in
     -h|--help) exec "$DIR/run" --help ;;
     rm)

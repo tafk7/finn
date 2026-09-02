@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Internal helper: build the selected Docker image and export it as a SIF.
+
+set -euo pipefail
+
+SCRIPT=$(readlink -f "$0")
+DOCKER_DIR=$(dirname "$SCRIPT")
+REPO=$(dirname "$DOCKER_DIR")
+OUTPUT=${1:?SIF output path is required}
+
+# shellcheck source=/dev/null
+. "$DOCKER_DIR/lib.sh"
+
+RUNTIME=""
+for candidate in apptainer singularity; do
+    command -v "$candidate" >/dev/null 2>&1 && { RUNTIME="$candidate"; break; }
+done
+[ -n "$RUNTIME" ] || {
+    recho "SIF export requires apptainer or singularity on PATH."
+    recho "  Ubuntu:  sudo apt install singularity-container"
+    recho "  Or:      https://github.com/apptainer/apptainer/releases"
+    exit 1
+}
+
+case "$OUTPUT" in
+    /*) ;;
+    *) OUTPUT="$PWD/$OUTPUT" ;;
+esac
+OUTPUT=$(readlink -m "$OUTPUT")
+[ ! -d "$OUTPUT" ] || { recho "SIF output path is a directory: $OUTPUT"; exit 2; }
+
+cd "$REPO"
+: "${FINN_RUNTIMES:=}"
+FINN_RUNTIMES=$(finn_normalize_runtimes "$FINN_RUNTIMES")
+export FINN_RUNTIMES
+GIT_DESCRIBE=$(finn_git_describe)
+export GIT_DESCRIBE
+
+BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES")
+TAG=$(finn_bake_tag "$BAKE_TARGET")
+[ -n "$TAG" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
+
+BUILD_ARGS=()
+[ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && BUILD_ARGS+=(--no-cache)
+finn_bake_build "$BAKE_TARGET" "${BUILD_ARGS[@]}" || exit 1
+
+mkdir -p "$(dirname "$OUTPUT")"
+TAR=$(mktemp -t finn-sif-XXXXXX.tar)
+trap 'rm -f "$TAR"' EXIT
+gecho "Exporting $TAG"
+docker save "$TAG" -o "$TAR" || { recho "docker save failed"; exit 1; }
+gecho "Converting to $OUTPUT"
+"$RUNTIME" build --force "$OUTPUT" "docker-archive://$TAR" \
+    || { recho "$RUNTIME build failed"; exit 1; }
+gecho "Exported SIF: $OUTPUT"
+sha256sum "$OUTPUT"

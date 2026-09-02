@@ -1,23 +1,99 @@
 #!/usr/bin/env bash
-# Prepare FINN's Docker image, sbx template, or Apptainer SIF.
+# Build a FINN Docker image, prepare its sbx variant, or export it as a SIF.
 
 set -euo pipefail
-DIR=$(dirname "$(readlink -f "$0")")
-case "${1:-}" in
-    -h|--help)
-        cat <<'EOF'
+
+SCRIPT=$(readlink -f "$0")
+DOCKER_DIR=$(dirname "$SCRIPT")
+REPO=$(dirname "$DOCKER_DIR")
+
+# shellcheck source=/dev/null
+. "$DOCKER_DIR/lib.sh"
+
+usage () {
+    cat <<'EOF'
 Usage: docker/build [OPTIONS]
 
-Prepare a Docker image (default), sbx template, or Apptainer SIF.
-
 Options:
-  --backend NAME     docker (default), sbx, or apptainer
-  --runtime NAME     add an image runtime such as xrt; repeatable
-  --rebuild          rebuild without cache and replace derived artifacts
-  --print            print the resolved preparation request
+  --sbx              prepare the sbx image variant and template
+  --export-sif PATH  export the Docker-built image as an Apptainer SIF
+  --runtime NAME     add image content such as xrt; repeatable
+  --rebuild          rebuild image layers without cache
+  --print            print the resolved build request
   -h, --help         show this help
 EOF
-        exit 0
+}
+
+SBX=0
+SIF_OUTPUT=""
+SIF_REQUESTED=0
+RUNTIMES="${FINN_RUNTIMES:-}"
+PRINT_ONLY=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --sbx) SBX=1; shift ;;
+        --export-sif)
+            [ "$#" -ge 2 ] || { echo "--export-sif needs a path" >&2; exit 2; }
+            SIF_OUTPUT=$2; SIF_REQUESTED=1; shift 2 ;;
+        --export-sif=*) SIF_OUTPUT=${1#*=}; SIF_REQUESTED=1; shift ;;
+        --runtime)
+            [ "$#" -ge 2 ] || { echo "--runtime needs a value" >&2; exit 2; }
+            RUNTIMES="${RUNTIMES:+$RUNTIMES,}$2"; shift 2 ;;
+        --runtime=*)
+            value=${1#*=}; RUNTIMES="${RUNTIMES:+$RUNTIMES,}$value"; shift ;;
+        --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
+        --print) PRINT_ONLY=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+
+[ "$#" -eq 0 ] || { echo "docker/build does not accept a command" >&2; exit 2; }
+[ "$SIF_REQUESTED" != 1 ] || [ -n "$SIF_OUTPUT" ] || {
+    echo "--export-sif needs a path" >&2
+    exit 2
+}
+[ "$SIF_REQUESTED" != 1 ] || [ "$SBX" != 1 ] || {
+    echo "--sbx and --export-sif are mutually exclusive" >&2
+    exit 2
+}
+
+RUNTIMES=$(finn_normalize_runtimes "$RUNTIMES")
+export FINN_RUNTIMES="$RUNTIMES"
+
+artifact=docker
+variant=""
+if [ "$SBX" = 1 ]; then
+    artifact=sbx
+    variant=sbx
+elif [ "$SIF_REQUESTED" = 1 ]; then
+    artifact=sif
+fi
+target=$(finn_bake_target "$RUNTIMES" "$variant")
+
+if [ "$PRINT_ONLY" = 1 ]; then
+    printf 'artifact=%s\n' "$artifact"
+    printf 'runtimes=%s\n' "$RUNTIMES"
+    printf 'bake_target=%s\n' "$target"
+    printf 'rebuild=%s\n' "${FINN_CONTAINER_REBUILD:-0}"
+    printf 'output=%s\n' "$SIF_OUTPUT"
+    exit 0
+fi
+
+cd "$REPO"
+case "$artifact" in
+    docker)
+        [ "${FINN_CONTAINER_REBUILD:-0}" != 1 ] \
+            || export FINN_DOCKER_BUILD_EXTRA="${FINN_DOCKER_BUILD_EXTRA:+$FINN_DOCKER_BUILD_EXTRA }--no-cache"
+        exec "$DOCKER_DIR/run-docker" build dev
+        ;;
+    sbx)
+        exec "$DOCKER_DIR/run-sbx" prepare dev
+        ;;
+    sif)
+        exec "$DOCKER_DIR/export-sif" "$SIF_OUTPUT"
         ;;
 esac
-exec "$DIR/run" --prepare-only "$@"

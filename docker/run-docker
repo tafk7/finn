@@ -31,7 +31,7 @@
 # INTERNAL DOCKER BACKEND. This script owns no host facts.
 #
 # docker/run is the user interface. The root run-docker.sh bridge also delegates
-# here only because Jenkins has not yet migrated; see docs/ci-container-debt.md.
+# here only because Jenkins has not yet migrated.
 # Historical verbs and environment variables remain only for that automation.
 #
 #   build matrix, args, tags   docker-bake.hcl
@@ -45,10 +45,9 @@
 #   ./docker/run -- quicktest.sh
 #   ./docker/run --fpga
 #   docker buildx bake -f docker-bake.hcl finn-xrt
-#   ./docker/run --backend sbx --fpga
+#   ./docker/run --sbx --fpga
 #
-# The invariant is that this script derives no host facts. See
-# docs/containerization.md.
+# The invariant is that this script derives no host facts.
 # ============================================================================
 
 set -uo pipefail
@@ -168,8 +167,8 @@ GIT_DESCRIBE="$(finn_git_describe)"
 export GIT_DESCRIBE
 
 # The target for the axes resolved above. finn_bake_target and finn_bake_tag
-# live in docker/lib.sh -- they were duplicated across this script, finn-sbx,
-# finn-apptainer and two CI scripts, and had drifted in three ways.
+# live in docker/lib.sh -- they were duplicated across the runtime scripts and
+# two CI scripts, and had drifted in three ways.
 finn_target () {
     local variant=""
     [ "$FINN_SBX_VARIANT" = "1" ] && variant="sbx"

@@ -1,8 +1,7 @@
 # FINN Jenkins CI guide
 
-Deferred container-related Jenkins and shared-image concerns are tracked in
-[`docs/ci-container-debt.md`](../docs/ci-container-debt.md). They require team
-agreement before changing shared agent or transport behavior.
+Container-related Jenkins and shared-image changes require team agreement
+before changing shared agent or transport behavior.
 
 ## How the pipeline works
 
@@ -255,7 +254,7 @@ nodeid=<nodeid> stage=<stage> shard=<i>/<n> stash=<stash> group=<group> weight_s
 
 ### DSL environment variables
 
-These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by the temporary Jenkins compatibility launcher and the FINN flow rather than by the pipeline itself. Their migration is tracked in `docs/ci-container-debt.md`.
+These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by the temporary Jenkins compatibility launcher and the FINN flow rather than by the pipeline itself. Migrating those callers requires agreement with the CI owners.
 
 | Env var               | What it sets                                                                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |

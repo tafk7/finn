@@ -10,8 +10,8 @@
 # This is the OCI-archive path: where a registry is unavailable and NFS is the
 # only transport, the image is saved to a shared directory and other agents load
 # it rather than rebuilding. Prefer publishing by digest to a registry when one
-# exists -- see ci/scripts/build-images.sh, and D6 in
-# docs/containerization.md for why a tag alone is not enough.
+# exists; see ci/scripts/build-images.sh. A tag alone is not an immutable image
+# identity.
 #
 # Reads FINN_DOCKER_SHARED_IMAGE_DIR and FINN_DOCKER_PREBUILT, exactly as
 # before. Exits 0 having loaded nothing when neither is set, so callers can

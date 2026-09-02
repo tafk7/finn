@@ -1,6 +1,6 @@
-"""Runtime conformance tests for FINN's container backends.
+"""Runtime conformance tests for FINN's container artifacts and runners.
 
-These tests intentionally exercise real Docker, sbx and Apptainer behavior.
+These tests intentionally exercise real Docker, sbx and SIF behavior.
 Unavailable runtimes or host resources are reported as pytest skips. Static
 resolver behavior belongs in ``tests/util/test_container_config.py``.
 """
@@ -93,20 +93,13 @@ def resolved(tier, backend="docker", policy="auto", env=None):
     child_env = dict(os.environ)
     if env:
         child_env.update(env)
-    proc = run(
-        [
-            sys.executable,
-            FINN_ENV,
-            "inspect",
-            "--tier",
-            tier,
-            "--backend",
-            backend,
-            "--workspace-policy",
-            policy,
-        ],
-        env=child_env,
-    )
+    command = [sys.executable, FINN_ENV, "inspect", "--tier", tier]
+    if backend == "sbx":
+        command.append("--sbx")
+    else:
+        assert backend == "docker"
+    command.extend(["--workspace-policy", policy])
+    proc = run(command, env=child_env)
     if proc.returncode:
         pytest.fail(proc.stderr)
     return json.loads(proc.stdout)
@@ -268,7 +261,7 @@ def test_05_bare_sbx_exec(docker_daemon):
     require_command("sbx")
     name = "finn-conformance"
     child_env = dict(os.environ)
-    command = [REPO / "docker/run", "--backend", "sbx", "--name", name]
+    command = [REPO / "docker/run", "--sbx", "--name", name]
     if os.environ.get("FINN_XILINX_PATH"):
         command.append("--fpga")
     command.extend(["--", "true"])
@@ -293,7 +286,7 @@ def test_05_bare_sbx_exec(docker_daemon):
     finally:
         if os.environ.get("KEEP_SANDBOX") != "1":
             run(
-                [REPO / "docker/run", "--backend", "sbx", "--name", name, "--remove"],
+                [REPO / "docker/run", "--sbx", "--name", name, "--remove"],
                 timeout=120,
             )
 
@@ -395,21 +388,36 @@ def test_10_bare_host_toolchain_resolution():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_11_apptainer_runs_the_cached_image():
-    """Apptainer/Singularity can execute a cached FINN SIF directly."""
+def test_11_exported_sif_runs_with_the_standard_cli():
+    """Apptainer/Singularity can execute an explicitly selected FINN SIF."""
     runtime = shutil.which("apptainer") or shutil.which("singularity")
     if not runtime:
         pytest.skip("neither apptainer nor singularity is installed")
-    runtimes = os.environ.get("FINN_RUNTIMES", "")
-    git_describe = run(["git", "describe", "--always", "--tags"]).stdout.strip() or "local"
-    tag = bake_tag(
-        "finn-runtime" if runtimes else "finn", runtimes=runtimes, git_describe=git_describe
-    )
-    cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
-    sif = cache / "finn/sif" / (tag.replace("/", "_").replace(":", "_") + ".sif")
+    configured = os.environ.get("FINN_TEST_SIF")
+    if not configured:
+        pytest.skip("set FINN_TEST_SIF to exercise an exported SIF")
+    sif = Path(configured)
     if not sif.is_file():
-        pytest.skip("no cached SIF for %s" % tag)
-    run([runtime, "exec", sif, "python", "-c", "import sys"], timeout=180, check=True)
+        pytest.fail("FINN_TEST_SIF does not exist: %s" % sif)
+    run(
+        [
+            runtime,
+            "exec",
+            "--cleanenv",
+            "--bind",
+            "%s:%s" % (REPO, REPO),
+            "--pwd",
+            REPO,
+            "--env",
+            "FINN_ROOT=%s" % REPO,
+            sif,
+            "python",
+            "-c",
+            "import finn",
+        ],
+        timeout=180,
+        check=True,
+    )
 
 
 def test_12_bake_owns_runtime_tags_and_custom_flavors():
