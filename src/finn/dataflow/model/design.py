@@ -476,7 +476,10 @@ def _segment(
     declaration: Kernels,
     branch: _CompiledBranch,
 ) -> _CompiledKernelSegment:
-    role = branch.namespace.rsplit(".", 1)[-1]
+    # Taken from the declaration, not split back out of the namespace it was
+    # joined into.  Reconstruction happened to work only because roles are
+    # atomic, and would have gone quietly wrong the moment one was not.
+    role = declaration.stable_name or member_name
     cases = []
     for case in branch.cases:
         compiled = cast("_CompiledSpace[Kernel]", case.compiled)
