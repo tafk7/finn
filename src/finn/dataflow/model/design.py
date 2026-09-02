@@ -17,24 +17,53 @@ reason.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import ClassVar, Generic, TypeVar, cast
 
-from finn.dataflow._engine import DependencyKind, QualifiedPath
+from finn.dataflow._engine import (
+    ABSENT,
+    AbsenceMode,
+    Absent,
+    Answer,
+    Constraint,
+    Decided,
+    DependencyKind,
+    DependencyRef,
+    DependencyView,
+    DerivedProperty,
+    EvaluatorSpec,
+    Finding,
+    FindingKind,
+    QualifiedPath,
+)
 from finn.dataflow.computation import ComputationContract
+from finn.dataflow.design.region import DATAFLOW_NETWORK_SEMANTICS
 from finn.dataflow.model.compiler import _CompiledBranch, _CompiledSpace, _Ref
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Case,
+    ChildValue,
     OneOf,
     Problem,
     Space,
+    Use,
     ValueSource,
     declared_members,
+    semantics_for,
 )
 from finn.dataflow.model.kernel import Kernel, _KernelCompilation
-from finn.dataflow.network import PositionMap
-from finn.dataflow.region import DataflowRegion
+from finn.dataflow.network import (
+    BoundaryContract,
+    DataflowNetwork,
+    Edge,
+    NetworkNode,
+    PositionMap,
+    RegionEndpoint,
+    SinkContract,
+)
+from finn.dataflow.network_validation import validate_network
+from finn.dataflow.region import BeatSequence, DataflowRegion, Port
 
 D = TypeVar("D", bound="DataflowDesign")
 
@@ -288,6 +317,41 @@ class _CompiledKernelSegment:
 
 
 @dataclass(frozen=True)
+class _CompiledEndpoint:
+    """One resolved segment endpoint claim: node, port, expected direction."""
+
+    role: str
+    node_id: str
+    port_id: str
+    output: bool
+
+    @property
+    def endpoint(self) -> RegionEndpoint:
+        return RegionEndpoint(self.node_id, self.port_id)
+
+
+@dataclass(frozen=True)
+class _CompiledSink:
+    endpoint: _CompiledEndpoint
+    position_map: _Ref[object] | None
+
+
+@dataclass(frozen=True)
+class _CompiledConnection:
+    edge_id: str
+    source: _CompiledEndpoint
+    sinks: tuple[_CompiledSink, ...]
+    active: _Ref[object] | None
+
+
+@dataclass(frozen=True)
+class _CompiledBoundary:
+    boundary_id: str
+    endpoint: _CompiledEndpoint
+    active: _Ref[object] | None
+
+
+@dataclass(frozen=True)
 class _DesignCompilation(Generic[D]):
     """Design-only metadata attached to a generic compiled Space."""
 
@@ -295,6 +359,9 @@ class _DesignCompilation(Generic[D]):
     design_id: str
     design_version: str
     segments: tuple[_CompiledKernelSegment, ...]
+    connections: tuple[_CompiledConnection, ...]
+    boundaries: tuple[_CompiledBoundary, ...]
+    network: _Ref[DataflowNetwork]
 
     def segment(self, role: str) -> _CompiledKernelSegment:
         for candidate in self.segments:
@@ -331,6 +398,382 @@ def _segment(
     )
 
 
+def _value_ref(
+    design_type: type[DataflowDesign],
+    compiled: _CompiledSpace[D],
+    source: ValueSource[object],
+    what: str,
+) -> _Ref[object]:
+    """Resolve one Design-visible value declaration to its compiled handle."""
+
+    if isinstance(source, ChildValue):
+        names = {
+            id(value): name
+            for base in reversed(design_type.__mro__)
+            if issubclass(base, Space) and base is not Space
+            for name, value in base.__dict__.items()
+            if isinstance(value, Use)
+        }
+        child = names.get(id(source.use))
+        if child is None:
+            raise AuthoringError(f"{design_type.__name__} {what} names a child outside the class")
+        return compiled.child(child).exported(source.member_name)
+    names = {
+        id(value): name
+        for base in reversed(design_type.__mro__)
+        if issubclass(base, Space) and base is not Space
+        for name, value in base.__dict__.items()
+        if isinstance(value, ValueSource)
+    }
+    name = names.get(id(source))
+    if name is None:
+        raise AuthoringError(f"{design_type.__name__} {what} names a value outside the class")
+    return compiled.member(name)
+
+
+def _endpoint(
+    design_type: type[DataflowDesign],
+    by_declaration: Mapping[int, _CompiledKernelSegment],
+    endpoint: SegmentEndpoint,
+    what: str,
+) -> _CompiledEndpoint:
+    segment = by_declaration.get(id(endpoint.segment))
+    if segment is None:
+        raise AuthoringError(
+            f"{design_type.__name__} {what} names a Kernel segment outside the class"
+        )
+    return _CompiledEndpoint(segment.role, segment.node_id, endpoint.port_id, endpoint.output)
+
+
+def _boolean_ref(
+    design_type: type[DataflowDesign],
+    compiled: _CompiledSpace[D],
+    when: ValueSource[bool] | None,
+    what: str,
+) -> _Ref[object] | None:
+    if when is None:
+        return None
+    reference = _value_ref(design_type, compiled, cast("ValueSource[object]", when), what)
+    if reference.semantics.type_token is not bool:
+        raise AuthoringError(f"{design_type.__name__} {what} when= is not Boolean")
+    return reference
+
+
+def _topology(
+    design_type: type[D],
+    compiled: _CompiledSpace[D],
+    segments: tuple[_CompiledKernelSegment, ...],
+) -> tuple[tuple[_CompiledConnection, ...], tuple[_CompiledBoundary, ...]]:
+    by_declaration = {
+        id(declaration): segment
+        for segment, declaration in zip(
+            segments,
+            (value for _name, value in declared_members(design_type) if isinstance(value, Kernels)),
+        )
+    }
+    connections: list[_CompiledConnection] = []
+    boundaries: list[_CompiledBoundary] = []
+    for member_name, declaration in topology_members(design_type):
+        identity = declaration.stable_name or member_name
+        what = f"topology {identity!r}"
+        active = _boolean_ref(design_type, compiled, declaration.when, what)
+        if isinstance(declaration, Connection):
+            connections.append(
+                _CompiledConnection(
+                    identity,
+                    _endpoint(design_type, by_declaration, declaration.source, what),
+                    tuple(
+                        _CompiledSink(
+                            _endpoint(design_type, by_declaration, sink.endpoint, what),
+                            None
+                            if sink.position_map is None
+                            else _value_ref(
+                                design_type,
+                                compiled,
+                                cast("ValueSource[object]", sink.position_map),
+                                what,
+                            ),
+                        )
+                        for sink in declaration.sinks
+                    ),
+                    active,
+                )
+            )
+        else:
+            boundaries.append(
+                _CompiledBoundary(
+                    identity,
+                    _endpoint(design_type, by_declaration, declaration.endpoint, what),
+                    active,
+                )
+            )
+    for label, values in (
+        ("edge id", tuple(item.edge_id for item in connections)),
+        ("boundary id", tuple(item.boundary_id for item in boundaries)),
+    ):
+        duplicates = sorted({value for value in values if values.count(value) > 1})
+        if duplicates:
+            raise AuthoringError(f"{design_type.__name__} declares {label} {duplicates[0]!r} twice")
+    return tuple(connections), tuple(boundaries)
+
+
+def _active(value: object) -> bool:
+    """An absent condition is not a true one: the branch simply is not there."""
+
+    return value is not ABSENT and bool(value)
+
+
+_EMPTY_SEQUENCE = BeatSequence(0, ())
+
+
+def _source_port(regions: Mapping[str, DataflowRegion], endpoint: _CompiledEndpoint) -> Port | None:
+    region = regions.get(endpoint.role)
+    if region is None:
+        return None
+    try:
+        return (
+            region.output_interface(endpoint.port_id).port
+            if endpoint.output
+            else region.input_interface(endpoint.port_id).port
+        )
+    except KeyError:
+        return None
+
+
+def _network_property(
+    path: QualifiedPath,
+    segments: tuple[_CompiledKernelSegment, ...],
+    connections: tuple[_CompiledConnection, ...],
+    boundaries: tuple[_CompiledBoundary, ...],
+) -> DerivedProperty:
+    """One ordinary property holding the Network the selected Regions form.
+
+    The evaluator receives values only: segment activity, the exact selected
+    Regions, topology conditions, and explicit position maps.  It never sees a
+    Kernel object, an Engine, a point, or a compiler record.
+
+    Where a claim cannot be honoured -- a port that the selected Region does not
+    have, an edge into an inactive segment -- it builds the node-qualified
+    endpoint anyway and lets canonical ``validate_network`` name the failure, so
+    the diagnostics stay the canon's rather than a Design-specific paraphrase.
+    """
+
+    dependencies: list[DependencyRef] = []
+    for segment in segments:
+        dependencies.append(
+            replace(segment.selected_region, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                f"region@{segment.role}"
+            )
+        )
+        if segment.active is not None:
+            dependencies.append(
+                replace(segment.active, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                    f"segment_active@{segment.role}"
+                )
+            )
+    for connection in connections:
+        if connection.active is not None:
+            dependencies.append(
+                replace(connection.active, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                    f"edge_active@{connection.edge_id}"
+                )
+            )
+        for index, sink in enumerate(connection.sinks):
+            if sink.position_map is not None:
+                dependencies.append(
+                    replace(sink.position_map, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                        f"map@{connection.edge_id}#{index}"
+                    )
+                )
+    for boundary in boundaries:
+        if boundary.active is not None:
+            dependencies.append(
+                replace(boundary.active, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                    f"boundary_active@{boundary.boundary_id}"
+                )
+            )
+
+    def build(values: DependencyView) -> Answer[object]:
+        regions: dict[str, DataflowRegion] = {}
+        nodes: list[NetworkNode] = []
+        for segment in segments:
+            if segment.active is not None and not _active(values[f"segment_active@{segment.role}"]):
+                continue
+            region = values[f"region@{segment.role}"]
+            if region is ABSENT:
+                return Absent(
+                    (
+                        Finding(
+                            FindingKind.REJECTION,
+                            "design-active-segment-without-region",
+                            path,
+                            "an active segment did not resolve a Region",
+                            (("role", segment.role),),
+                        ),
+                    )
+                )
+            regions[segment.role] = cast(DataflowRegion, region)
+            nodes.append(NetworkNode(segment.node_id, cast(DataflowRegion, region)))
+
+        edges: list[Edge] = []
+        for connection in connections:
+            if connection.active is not None and not _active(
+                values[f"edge_active@{connection.edge_id}"]
+            ):
+                continue
+            source_port = _source_port(regions, connection.source)
+            identity = (
+                PositionMap(())
+                if source_port is None
+                else PositionMap.identity(source_port.beat_sequence.image)
+            )
+            sinks: list[SinkContract] = []
+            for index, sink in enumerate(connection.sinks):
+                declared = (
+                    None
+                    if sink.position_map is None
+                    else values[f"map@{connection.edge_id}#{index}"]
+                )
+                if declared is ABSENT:
+                    return Absent(
+                        (
+                            Finding(
+                                FindingKind.REJECTION,
+                                "design-position-map-absent",
+                                path,
+                                "an active sink did not resolve its position map",
+                                (("edge", connection.edge_id),),
+                            ),
+                        )
+                    )
+                sinks.append(
+                    SinkContract(
+                        sink.endpoint.endpoint,
+                        identity if declared is None else cast(PositionMap, declared),
+                    )
+                )
+            edges.append(Edge(connection.edge_id, connection.source.endpoint, tuple(sinks)))
+
+        contracts: list[BoundaryContract] = []
+        for boundary in boundaries:
+            if boundary.active is not None and not _active(
+                values[f"boundary_active@{boundary.boundary_id}"]
+            ):
+                continue
+            port = _source_port(regions, boundary.endpoint)
+            contracts.append(
+                BoundaryContract(
+                    boundary.boundary_id,
+                    boundary.endpoint.endpoint,
+                    _EMPTY_SEQUENCE if port is None else port.beat_sequence,
+                )
+            )
+        return Decided(DataflowNetwork(tuple(nodes), tuple(edges), tuple(contracts)))
+
+    return DerivedProperty(
+        path,
+        semantics_for(DATAFLOW_NETWORK_SEMANTICS),
+        EvaluatorSpec(tuple(dependencies), build),
+    )
+
+
+def _network_valid_constraint(path: QualifiedPath, network: _Ref[DataflowNetwork]) -> Constraint:
+    """Adapt every canonical network issue, preserving its code."""
+
+    def evaluate(values: DependencyView) -> Answer[bool]:
+        report = validate_network(cast(DataflowNetwork, values["network"]))
+        if not report.issues:
+            return Decided(True)
+        return Absent(
+            tuple(
+                Finding(
+                    FindingKind.REJECTION,
+                    f"design-network-{issue.code}",
+                    path,
+                    issue.message,
+                    (("network_path", issue.path),),
+                    (network.path,),
+                )
+                for issue in report.issues
+            )
+        )
+
+    return Constraint(path, EvaluatorSpec((network.dependency("network"),), evaluate))
+
+
+def _correspondence_constraint(
+    path: QualifiedPath,
+    network: _Ref[DataflowNetwork],
+    segments: tuple[_CompiledKernelSegment, ...],
+) -> Constraint:
+    """The one Design-specific supplement to canonical Network validation.
+
+    Canonical validation already proves every semantic topology claim.  What it
+    cannot know is that these nodes are exactly this Design's active segments and
+    hold exactly their selected Regions -- which is the whole relationship a
+    coverage object would otherwise have to carry.
+    """
+
+    dependencies = [network.dependency("network")]
+    for segment in segments:
+        dependencies.append(
+            replace(segment.selected_region, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                f"region@{segment.role}"
+            )
+        )
+        if segment.active is not None:
+            dependencies.append(
+                replace(segment.active, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
+                    f"segment_active@{segment.role}"
+                )
+            )
+
+    def evaluate(values: DependencyView) -> Answer[bool]:
+        resolved = cast(DataflowNetwork, values["network"])
+        expected: dict[str, DataflowRegion] = {}
+        for segment in segments:
+            if segment.active is not None and not _active(values[f"segment_active@{segment.role}"]):
+                continue
+            region = values[f"region@{segment.role}"]
+            if region is not ABSENT:
+                expected[segment.node_id] = cast(DataflowRegion, region)
+        findings: list[Finding] = []
+        if not expected:
+            findings.append(
+                Finding(
+                    FindingKind.REJECTION,
+                    "design-no-active-segment",
+                    path,
+                    "a Design point must leave at least one segment active",
+                )
+            )
+        actual = {node.id: node.region for node in resolved.nodes}
+        for node_id in sorted(set(expected) ^ set(actual)):
+            findings.append(
+                Finding(
+                    FindingKind.REJECTION,
+                    "design-segment-node-mismatch",
+                    path,
+                    "active segments and Network nodes must correspond exactly",
+                    (("node", node_id),),
+                )
+            )
+        for node_id in sorted(set(expected) & set(actual)):
+            if expected[node_id] != actual[node_id]:
+                findings.append(
+                    Finding(
+                        FindingKind.REJECTION,
+                        "design-node-region-mismatch",
+                        path,
+                        "a Network node does not hold its segment's selected Region",
+                        (("node", node_id),),
+                    )
+                )
+        return Decided(True) if not findings else Absent(tuple(findings))
+
+    return Constraint(path, EvaluatorSpec(tuple(dependencies), evaluate))
+
+
 def _finalize_design(design_type: type[D], compiled: object) -> object:
     """Validate one Design and attach its private compilation record."""
 
@@ -362,13 +805,39 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         raise AuthoringError(f"{design_type.__name__} must declare at least one Kernel segment")
     _check_unique(design_type, segments)
 
+    connections, boundaries = _topology(design_type, design, segments)
+    network_path = QualifiedPath(f"semantic.{design.namespace}.network")
+    network_property = _network_property(network_path, segments, connections, boundaries)
+    network: _Ref[DataflowNetwork] = _Ref(
+        network_path, DependencyKind.PROPERTY, network_property.value_semantics
+    )
+    generated = (
+        _network_valid_constraint(
+            QualifiedPath(f"constraint.{design.namespace}.network_structurally_valid"),
+            network,
+        ),
+        _correspondence_constraint(
+            QualifiedPath(f"constraint.{design.namespace}.segments_match_network"),
+            network,
+            segments,
+        ),
+    )
+    specification = replace(
+        design.spec,
+        properties=(*design.spec.properties, network_property),
+        constraints=(*design.spec.constraints, *generated),
+    )
+
     metadata: _DesignCompilation[D] = _DesignCompilation(
         design_type,
         design_type.id,
         design_type.version,
         segments,
+        connections,
+        boundaries,
+        network,
     )
-    return replace(design, extension=metadata)
+    return replace(design, spec=specification, extension=metadata)
 
 
 def _check_unique(

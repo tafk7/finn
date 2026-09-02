@@ -10,7 +10,7 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     is_qonnx_datatype,
 )
-from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.network import DataflowNetwork, PositionMap
 from finn.dataflow.network_validation import NetworkValidationReport
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import RegionValidationReport
@@ -53,6 +53,10 @@ DATAFLOW_NETWORK_SEMANTICS = ValueSemantics.immutable_nominal(
     DataflowNetwork,
     name="DataflowNetwork",
 )
+POSITION_MAP_SEMANTICS = ValueSemantics.immutable_nominal(
+    PositionMap,
+    name="PositionMap",
+)
 NETWORK_VALIDATION_REPORT_SEMANTICS = ValueSemantics.immutable_nominal(
     NetworkValidationReport,
     name="NetworkValidationReport",
@@ -62,6 +66,7 @@ __all__ = [
     "DATAFLOW_REGION_SEMANTICS",
     "DATAFLOW_NETWORK_SEMANTICS",
     "NETWORK_VALIDATION_REPORT_SEMANTICS",
+    "POSITION_MAP_SEMANTICS",
     "QONNX_DATATYPE_SEMANTICS",
     "QONNX_DATATYPE_VALUE_SEMANTICS",
     "REGION_VALIDATION_REPORT_SEMANTICS",
