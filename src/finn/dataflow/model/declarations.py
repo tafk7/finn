@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Generic, TypeVar, Union, cast
+from typing import ClassVar, Generic, TypeVar, Union, cast
 
 from finn.dataflow._engine import (
     AbsenceMode,
@@ -405,6 +405,139 @@ class Use(Generic[S]):
         return ChildValue(declaration.value_semantics, cast("Use[Space]", self), member_name)
 
 
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class Case:
+    """One named alternative child Space inside an exclusive branch.
+
+    A ``Case`` is a declaration record, not a runtime level.  It owns the exact
+    Input bindings of its own child Space, so alternatives with unrelated Input
+    vocabularies stay legible without a parallel case-to-binding map.
+
+    Deliberately not generic in its Space type: a branch's whole point is to
+    hold unrelated classes side by side, and an invariant ``Case[S]`` makes
+    ``OneOf(Case(A, ...), Case(B, ...))`` uninferrable at every call site.  A
+    specialization such as ``Kernels`` states its own requirement as a compile
+    check with a message, which is what an author needs anyway.
+    """
+
+    space_type: type[Space]
+    bindings: tuple[tuple[str, ValueSource[object]], ...]
+    stable_name: str | None
+
+    def __init__(
+        self,
+        space_type: type[Space],
+        /,
+        *,
+        name: str | None = None,
+        **bindings: ValueSource[object],
+    ) -> None:
+        if not isinstance(space_type, type) or not issubclass(space_type, Space):
+            raise AuthoringError("Case requires a Space subclass")
+        if name is not None and not name:
+            raise AuthoringError("a Case name must be non-empty")
+        object.__setattr__(self, "space_type", space_type)
+        object.__setattr__(self, "bindings", tuple(bindings.items()))
+        object.__setattr__(self, "stable_name", name)
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
+class BranchOutput(ValueSource[T_co]):
+    """One selected output of an exclusive branch, forwarded from the live case."""
+
+    branch: OneOf
+    output_name: str
+
+    def __init__(
+        self,
+        value_semantics: ValueSemantics[object],
+        branch: OneOf,
+        output_name: str,
+    ) -> None:
+        object.__setattr__(self, "value_semantics", value_semantics)
+        object.__setattr__(self, "stable_name", None)
+        object.__setattr__(self, "branch", branch)
+        object.__setattr__(self, "output_name", output_name)
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class OneOf:
+    """Compile-time placement of exactly one of several child Spaces.
+
+    ``OneOf`` is declaration, never policy.  It says which cases exist, lowers
+    them beneath stable disjoint namespaces, and -- when there is more than one
+    -- adds one ordinary selector ``Decision``.  It stores no search callback:
+    an external specialization algorithm discovers the selector through the
+    compiled branch catalog and commits it like any other decision.
+    """
+
+    cases: tuple[Case, ...]
+    outputs: tuple[str, ...]
+    when: ValueSource[bool] | None
+    stable_name: str | None
+
+    #: Local name of the generated selector; specializations may rename it.
+    selector_name: ClassVar[str] = "case"
+
+    def __init__(
+        self,
+        *cases: Case,
+        outputs: Sequence[str] = (),
+        when: ValueSource[bool] | None = None,
+        name: str | None = None,
+    ) -> None:
+        self._initialize(cases, outputs, when, name)
+
+    def _initialize(
+        self,
+        cases: Sequence[Case],
+        outputs: Sequence[str],
+        when: ValueSource[bool] | None,
+        name: str | None,
+    ) -> None:
+        if not cases:
+            raise AuthoringError("a branch needs at least one Case")
+        if any(not isinstance(case, Case) for case in cases):
+            raise AuthoringError("a branch takes Case declarations as positional arguments")
+        ordered = tuple(outputs)
+        if len(set(ordered)) != len(ordered):
+            raise AuthoringError("a branch names one selected output twice")
+        object.__setattr__(self, "cases", tuple(cases))
+        object.__setattr__(self, "outputs", ordered)
+        object.__setattr__(self, "when", when)
+        object.__setattr__(self, "stable_name", name)
+
+    def case_id(self, case: Case) -> str | None:
+        """The stable case id, or ``None`` when the author must supply one."""
+
+        return case.stable_name
+
+    def __getattr__(self, member_name: str) -> BranchOutput[object]:
+        if member_name.startswith("_"):
+            raise AttributeError(member_name)
+        if member_name not in self.outputs:
+            raise AttributeError(f"this branch does not select an output named {member_name!r}")
+        semantics = self._output_semantics(member_name)
+        return BranchOutput(semantics, self, member_name)
+
+    def _output_semantics(self, output_name: str) -> ValueSemantics[object]:
+        first: ValueSemantics[object] | None = None
+        for case in self.cases:
+            exported = exported_members(case.space_type)
+            declaration = exported.get(output_name)
+            if declaration is None:
+                raise AuthoringError(f"{case.space_type.__name__} does not export {output_name!r}")
+            if first is None:
+                first = declaration.value_semantics
+            elif not first.is_compatible_with(declaration.value_semantics):
+                raise AuthoringError(
+                    f"branch output {output_name!r} changes value semantics from "
+                    f"{first.name} to {declaration.value_semantics.name}"
+                )
+        assert first is not None
+        return first
+
+
 Declaration = Union[
     Problem[object],
     Input[object],
@@ -414,23 +547,28 @@ Declaration = Union[
     ConstraintGroup,
     Readiness,
     Use[Space],
+    OneOf,
 ]
+
+#: Every class-body value the declarative compiler recognizes as a declaration.
+DECLARATION_TYPES: tuple[type, ...] = (
+    Problem,
+    Input,
+    Decision,
+    Derived,
+    Constraint,
+    ConstraintGroup,
+    Readiness,
+    Use,
+    OneOf,
+)
 
 
 def declared_members(space_type: type[Space]) -> tuple[tuple[str, Declaration], ...]:
     """Collect effective declarations in deterministic inherited order."""
 
     ordered: dict[str, Declaration] = {}
-    declaration_types = (
-        Problem,
-        Input,
-        Decision,
-        Derived,
-        Constraint,
-        ConstraintGroup,
-        Readiness,
-        Use,
-    )
+    declaration_types = DECLARATION_TYPES
     for base in reversed(space_type.__mro__):
         if not issubclass(base, Space) or base is Space:
             continue
@@ -482,17 +620,20 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
             raise AuthoringError(
                 f"{space_type.__name__} exports a value that is not an effective class member"
             )
-        declaration = members.get(export_name)
-        if not isinstance(declaration, ValueSource):
-            raise AuthoringError(
-                f"{space_type.__name__} exports a value that is not an effective class member"
-            )
-        exported[export_name] = declaration
+        member = members.get(export_name)
+        # A ``ChildValue`` or ``BranchOutput`` is a derived handle on another
+        # declaration rather than a declaration of its own, so it never appears
+        # in ``declared_members``.  Re-exporting one is still legal: the
+        # compiler resolves it through the child or branch that owns it.
+        exported[export_name] = member if isinstance(member, ValueSource) else value
     return exported
 
 
 __all__ = [
+    "DECLARATION_TYPES",
     "AuthoringError",
+    "BranchOutput",
+    "Case",
     "ChildValue",
     "Constraint",
     "ConstraintGroup",
@@ -500,6 +641,7 @@ __all__ = [
     "Derived",
     "Domain",
     "Input",
+    "OneOf",
     "PendingFinding",
     "Problem",
     "Readiness",

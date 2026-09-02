@@ -6,12 +6,20 @@
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-from finn.dataflow.model.compiler import compile_space
+from finn.dataflow.model.branching import (
+    BranchCatalog,
+    BranchInfo,
+    BranchOutputInfo,
+    CaseInfo,
+)
+from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_space_model
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    Case,
     ConstraintGroup,
     Decision,
     Input,
+    OneOf,
     Problem,
     Readiness,
     Space,
@@ -59,12 +67,19 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "AuthoringError",
+    "BranchCatalog",
+    "BranchInfo",
+    "BranchOutputInfo",
+    "Case",
+    "CaseInfo",
     "ConstraintGroup",
     "Decision",
     "DspBlock",
     "DotpAxiKernel",
     "Input",
     "Kernel",
+    "OneOf",
+    "SpaceModel",
     "Parameter",
     "Problem",
     "Readiness",
@@ -72,6 +87,7 @@ __all__ = [
     "Use",
     "constraint",
     "compile_space",
+    "compile_space_model",
     "configure_kernel",
     "derived",
     "divisors_of",
