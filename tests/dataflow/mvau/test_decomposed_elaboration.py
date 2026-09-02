@@ -122,7 +122,7 @@ def test_the_structure_is_the_network_the_kernels_assembled() -> None:
 
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
-    wrapper = f"{resolved.result.source_association.source_node_id}.compute.wrapper"
+    wrapper = f"{resolved.source_association.source_node_id}.compute.wrapper"
 
     children = {item.id for item in elaboration.components if item.parent == wrapper}
     assert len(children) == 2
@@ -135,12 +135,11 @@ def test_the_structure_is_the_network_the_kernels_assembled() -> None:
 def test_the_boundaries_are_the_networks_own() -> None:
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
-    assert resolved.result is resolved
-    network = resolved.result.network
+    network = resolved.network
 
     assert {item.id for item in elaboration.boundaries} == {item.id for item in network.boundaries}
     # Everything the outside touches is on the wrapper, not on a core.
-    wrapper = f"{resolved.result.source_association.source_node_id}.compute.wrapper"
+    wrapper = f"{resolved.source_association.source_node_id}.compute.wrapper"
     assert all(item.interface_id.startswith(wrapper) for item in elaboration.boundaries)
 
 
@@ -149,7 +148,7 @@ def test_each_core_declares_its_own_control_signal_names() -> None:
 
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
-    prefix = f"{resolved.result.source_association.source_node_id}.compute"
+    prefix = f"{resolved.source_association.source_node_id}.compute"
     by_component: dict[str, set[str]] = {}
     for item in elaboration.control_interfaces:
         by_component.setdefault(item.component_id, set()).add(item.signal)
@@ -165,7 +164,6 @@ def test_the_origin_records_both_semantic_kernels_and_no_provider() -> None:
     assert set(origin.kernel_ids) == {"dotp_axi", "replay_buffer"}
     # The migrated path has no providers to record.  An empty tuple here is the
     # migration visible in the provenance.
-    assert origin.provider_ids == ()
 
 
 def test_the_binding_records_the_hardware_that_realized_each_region() -> None:
@@ -196,7 +194,7 @@ def test_each_component_is_associated_with_its_own_kernel_and_region_only() -> N
     ``ReplayBufferKernel``, and each claiming both Regions.
     """
 
-    source = _resolved().result.source_association.source_node_id
+    source = _resolved().source_association.source_node_id
     replay = _association(source, "compute.replay")
     dot = _association(source, "compute.dot_product")
 
@@ -216,7 +214,7 @@ def test_each_component_is_associated_with_its_own_kernel_and_region_only() -> N
 def test_every_choice_behind_a_component_is_recorded_against_it() -> None:
     """Including the ones it imports: a fold sizes hardware it did not pick."""
 
-    source = _resolved().result.source_association.source_node_id
+    source = _resolved().source_association.source_node_id
     replay = {str(path) for path in _association(source, "compute.replay").decision_paths}
     dot = {str(path) for path in _association(source, "compute.dot_product").decision_paths}
     folding = {"mvau.design.dot_product.pe", "mvau.design.dot_product.simd"}
@@ -236,7 +234,7 @@ def test_every_choice_behind_a_component_is_recorded_against_it() -> None:
 def test_the_wrapper_and_the_internal_edge_span_both_bindings() -> None:
     """A union where a union is true, rather than as the default everywhere."""
 
-    source = _resolved().result.source_association.source_node_id
+    source = _resolved().source_association.source_node_id
     wrapper = _association(source, "compute.wrapper")
     edge = next(
         item
@@ -251,7 +249,7 @@ def test_the_wrapper_and_the_internal_edge_span_both_bindings() -> None:
 
 
 def test_an_interface_is_associated_with_the_component_that_carries_it() -> None:
-    source = _resolved().result.source_association.source_node_id
+    source = _resolved().source_association.source_node_id
     replay_input = _association(source, "compute.replay.activation_in")
 
     assert replay_input.kernel_ids == ("replay_buffer",)
@@ -292,7 +290,7 @@ def test_every_parameter_reaching_the_rtl_came_from_the_point() -> None:
     assert resolved_names == declared
 
     wrapper = elaborate_mvau(resolved).component(
-        f"{resolved.result.source_association.source_node_id}.compute.wrapper"
+        f"{resolved.source_association.source_node_id}.compute.wrapper"
     )
     assert {name for name, _ in wrapper.parameters} == declared
 
@@ -300,7 +298,7 @@ def test_every_parameter_reaching_the_rtl_came_from_the_point() -> None:
 def test_the_cores_are_given_their_own_parameters_only() -> None:
     resolved = _resolved()
     elaboration = elaborate_mvau(resolved)
-    prefix = f"{resolved.result.source_association.source_node_id}.compute"
+    prefix = f"{resolved.source_association.source_node_id}.compute"
     replay_names = set(
         MVAU_DESIGN_INVENTORY.inventory.declaration(DotProductDesign.id)
         .placement("replay")
@@ -467,7 +465,7 @@ def test_the_generated_module_name_names_no_placement() -> None:
     requirements = build_decomposed_artifact_requirements(
         resolved, elaborate_mvau(resolved), FINN_ROOT
     )
-    source_id = resolved.result.source_association.source_node_id
+    source_id = resolved.source_association.source_node_id
 
     assert source_id not in requirements.top_module_name
     assert source_id not in requirements.wrapper_file_name

@@ -20,9 +20,10 @@ from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.authoring.compiler import CompiledDataflowOperation
 from finn.dataflow.authoring.inventory import DataflowDesignInventory
 from finn.dataflow.design import Decided, Finding, FindingKind, QualifiedPath
+from finn.dataflow.op import realize_resolved_dataflow
+from finn.dataflow.op_contracts import DataflowOpError
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
-from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY
 from finn.dataflow.ops.mvau.physical import MVAUElaborationError
 from finn.dataflow.ops.mvau.artifacts.roots import (
     FINNLIB_DEFAULT_SUBDIRECTORY,
@@ -48,11 +49,23 @@ def bind_decomposed(resolved: MVAUResolvedDataflowOp) -> DesignRealization:
     """Return the configured Kernels of a resolved production DotProductDesign."""
 
     compiled = resolved.compiled
-    inventory: DataflowDesignInventory = (
-        compiled.inventory
-        if isinstance(compiled, CompiledDataflowOperation) and compiled.inventory is not None
-        else MVAU_DESIGN_INVENTORY.inventory
-    )
+    if isinstance(compiled, CompiledDataflowOperation) and compiled.inventory is not None:
+        if resolved.selected_design_id != DotProductDesign.id:
+            raise _fail(
+                "mvau-decomposed-design-unsupported",
+                "this hardware realizes only DotProductDesign",
+            )
+        try:
+            return realize_resolved_dataflow(resolved)
+        except DataflowOpError as error:
+            raise MVAUElaborationError(error.findings) from error
+
+    # Historical tests may still build a pre-adapter resolved value directly.
+    # Keep that bridge lazy so no production MVAU import loads or depends on the
+    # retired hand-assembled inventory.
+    from finn.dataflow.ops.mvau.inventory import MVAU_DESIGN_INVENTORY  # noqa: PLC0415
+
+    inventory: DataflowDesignInventory = MVAU_DESIGN_INVENTORY.inventory
     design_path = inventory.design_path
     if design_path is None or design_path not in resolved.point.design_space.decisions:
         raise _fail(

@@ -174,7 +174,31 @@ def test_production_elaboration_import_does_not_load_provider_era_modules() -> N
 
 
 def test_production_mvau_op_import_does_not_load_provider_era_modules() -> None:
-    assert_fresh_import_avoids("finn.dataflow.ops.mvau.op", FORBIDDEN_RUNTIME_MODULES)
+    assert_fresh_import_avoids(
+        "finn.dataflow.ops.mvau.op",
+        (
+            *FORBIDDEN_RUNTIME_MODULES,
+            "finn.dataflow.ops.mvau.problem",
+            "finn.dataflow.ops.mvau.inventory",
+            "finn.dataflow.ops.mvau.elaboration",
+            "finn.dataflow.ops.mvau.physical",
+            "finn.dataflow.ops.mvau.artifacts.source",
+        ),
+    )
+
+
+def test_artifact_handoff_does_not_accept_realization_or_configured_kernels() -> None:
+    for relative in ("artifacts/source.py", "artifacts/supplied.py"):
+        path = ROOT / "ops" / "mvau" / relative
+        tree = ast.parse(path.read_text(), filename=str(path))
+        imports = {
+            (node.module, name.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+            for name in node.names
+        }
+        assert ("finn.dataflow.authoring.realization", "DesignRealization") not in imports
+        assert ("finn.dataflow.kernels.kernel", "Kernel") not in imports
 
 
 def test_operation_namespace_does_not_eagerly_load_mvau() -> None:
@@ -253,7 +277,8 @@ def test_physical_kernel_vocabulary_has_one_canonical_package() -> None:
             "import importlib.util",
             "import finn.dataflow.kernels as kernels",
             "assert kernels.Kernel.__name__ == 'Kernel'",
-            "assert kernels.KernelScope.__name__ == 'KernelScope'",
+            "assert not hasattr(kernels, 'KernelScope')",
+            "assert not hasattr(kernels, 'CoveragePattern')",
             "assert not hasattr(kernels, 'HardwareKernel')",
             "assert not hasattr(kernels, 'HardwareDesign')",
             "assert not hasattr(kernels, 'HardwareKernelSelection')",

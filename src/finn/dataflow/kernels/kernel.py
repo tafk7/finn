@@ -38,7 +38,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import cast
 
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.computation import ComputationContract
@@ -62,9 +62,6 @@ from finn.dataflow.kernels._declaration import (
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.spec_algebra import SpecAuthoringError, SpecAuthoringIssue, duplicate_values
-
-if TYPE_CHECKING:  # the authoring scope imports this module, not the reverse
-    from finn.dataflow.kernels.authoring import KernelScope
 
 #: Where a binding failure is reported when it belongs to no single Kernel.
 BINDING_PATH = QualifiedPath("hardware.binding")
@@ -481,10 +478,9 @@ class KernelOrigin:
 class Kernel:
     """One physical Kernel family, and one bound instance of it.
 
-    Subclass it to declare a hardware design.  A subclass carries a stable
-    ``id`` and ``version`` and one ``define_design`` hook; passing it to
-    ``declare_kernel`` runs that hook under a namespace and returns the
-    ordinary engine declarations it produced.
+    Subclass it to declare a hardware design. A subclass carries a stable
+    ``id`` and ``version`` plus immutable class-local declarations compiled
+    under each placement namespace.
 
     An *instance* is that Kernel as bound at one point: the Regions it was told
     it covers, its own committed choices, and its resolved parameters.  It does
@@ -497,17 +493,6 @@ class Kernel:
     id: str = ""
     version: str = "1"
     uses_class_authoring: bool = False
-
-    @classmethod
-    def define_design(cls, design: KernelScope[Any]) -> object:
-        """Declare this Kernel's coverage, choices, parameters, and sources.
-
-        The scope carries the typed inputs the covered semantics wired in, so a
-        subclass narrows the parameter to its own input bundle.  The base cannot
-        know that type, which is what the ``Any`` records.
-        """
-
-        raise NotImplementedError(f"{cls.__name__} does not define a design")
 
     @classmethod
     def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:

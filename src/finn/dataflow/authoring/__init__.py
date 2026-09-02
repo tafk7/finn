@@ -6,13 +6,7 @@
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-from finn.dataflow.authoring.op_design import (
-    BUILD_OWNED,
-    GRAPH_OWNED,
-    OpDesign,
-    ProblemProvenance,
-    Provenance,
-)
+from finn.dataflow.authoring.provenance import Provenance
 from finn.dataflow.authoring.persistence import Persist, PortableCodec
 from finn.dataflow.authoring.projection import (
     Attribute,
@@ -47,12 +41,6 @@ from finn.dataflow.authoring.declarations import (
 )
 from finn.dataflow.authoring.scope import (
     AuthoringError,
-    ConstraintRef,
-    Ref,
-    Scope,
-    divisors_of,
-    domain,
-    finite,
     reject,
     unresolved,
 )
@@ -62,21 +50,11 @@ if TYPE_CHECKING:
     from finn.dataflow.authoring.design import (
         Connection,
         DataflowDesign,
-        DataflowDesignScope,
         Kernels,
         Network,
+        PhysicalComposition,
         Region,
         SourceInput,
-    )
-    from finn.dataflow.authoring.input_supply import (
-        InputSupplyAlternative,
-        InputSupplyDeclaration,
-    )
-    from finn.dataflow.authoring.inventory import (
-        DataflowDesignEntry,
-        DataflowDesignInventory,
-        declare_dataflow_design_inventory,
-        declare_dataflow_op_authoring,
     )
     from finn.dataflow.kernels.authoring import (
         Constant,
@@ -123,28 +101,11 @@ _LAZY_EXPORTS.update(
         for name in (
             "Connection",
             "DataflowDesign",
-            "DataflowDesignScope",
             "Kernels",
             "Network",
+            "PhysicalComposition",
             "Region",
             "SourceInput",
-        )
-    }
-)
-_LAZY_EXPORTS.update(
-    {
-        name: ("finn.dataflow.authoring.input_supply", name)
-        for name in ("InputSupplyAlternative", "InputSupplyDeclaration")
-    }
-)
-_LAZY_EXPORTS.update(
-    {
-        name: ("finn.dataflow.authoring.inventory", name)
-        for name in (
-            "DataflowDesignEntry",
-            "DataflowDesignInventory",
-            "declare_dataflow_design_inventory",
-            "declare_dataflow_op_authoring",
         )
     }
 )
@@ -184,7 +145,6 @@ __all__ = [
     "AssignmentMapping",
     "AuthoringError",
     "Attribute",
-    "BUILD_OWNED",
     "BuildFact",
     "BuildFlag",
     "BuildString",
@@ -194,21 +154,14 @@ __all__ = [
     "Connection",
     "Constant",
     "Covers",
-    "ConstraintRef",
     "DataflowAssignmentCommit",
     "DataflowBuildConfigView",
     "DataflowDesign",
-    "DataflowDesignEntry",
-    "DataflowDesignInventory",
-    "DataflowDesignScope",
     "DataflowOp",
     "DataflowOpError",
     "DatatypeAttribute",
     "DependentDomain",
     "EdgeClaim",
-    "GRAPH_OWNED",
-    "InputSupplyAlternative",
-    "InputSupplyDeclaration",
     "InputTensor",
     "InitializerAnalysis",
     "Imported",
@@ -217,21 +170,18 @@ __all__ = [
     "NodeAttributeType",
     "Network",
     "NoInitializer",
-    "OpDesign",
     "OptionalInitializer",
     "OutputTensor",
     "Parameter",
+    "PhysicalComposition",
     "Persist",
     "PortableCodec",
-    "ProblemProvenance",
     "Problem",
     "Provenance",
-    "Ref",
     "Region",
     "RegionClaim",
     "Readiness",
     "RequiredInitializer",
-    "Scope",
     "SourceScope",
     "SourceInput",
     "Sources",
@@ -244,12 +194,7 @@ __all__ = [
     "dataflow_problem_fingerprint",
     "class_divisors_of",
     "constraint",
-    "declare_dataflow_design_inventory",
-    "declare_dataflow_op_authoring",
-    "divisors_of",
     "derived",
-    "domain",
-    "finite",
     "finite_values",
     "not_",
     "present",

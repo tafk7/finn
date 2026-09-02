@@ -152,22 +152,19 @@ def _run(
 def test_an_explicit_policy_reproduces_the_direct_point() -> None:
     lowered, transform = _run(ExplicitAssignmentsPolicy({SCOPE: _direct_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert resolved.result is resolved
-    assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.DIRECT
+    assert resolved.source_association.parameter_topology is MVAUParameterTopology.DIRECT
     assert transform.report.scope(SCOPE).committed
 
 
 def test_an_explicit_policy_reproduces_the_cyclic_point() -> None:
     lowered, _ = _run(ExplicitAssignmentsPolicy({SCOPE: _cyclic_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert resolved.result is resolved
-    assert resolved.result.source_association.parameter_topology is MVAUParameterTopology.CYCLIC
+    assert resolved.source_association.parameter_topology is MVAUParameterTopology.CYCLIC
 
 
 def test_an_explicit_policy_can_select_the_semantic_only_design() -> None:
     lowered, _ = _run(ExplicitAssignmentsPolicy({SCOPE: _embedded_assignments()}))
     resolved = _operation(lowered).resolve_dataflow(_context())
-    assert resolved.result is resolved
     assert resolved.selected_design_id == BatchInterleavedDesign.id
 
 
@@ -199,7 +196,7 @@ def test_the_reference_policy_commits_a_complete_coherent_point() -> None:
     lowered, transform = _run(FirstFeasiblePolicy())
     operation = _operation(lowered)
     resolved = operation.resolve_dataflow(_context())
-    assert resolved.result is resolved
+    assert resolved.selected_design_id == DotProductDesign.id
     report = transform.report.scope(SCOPE)
     assert report.structural_readiness is not None
     assert report.structural_readiness.ready is True
@@ -266,7 +263,7 @@ def test_committed_choices_survive_save_and_reload(tmp_path: Path) -> None:
     lowered.save(path)
     restored = _operation(ModelWrapper(str(path))).resolve_dataflow(_context())
     assert restored.point.assignments == original.point.assignments
-    assert restored.result == original.result
+    assert restored == original
     realization = _operation(ModelWrapper(str(path))).realize_dataflow(_context())
     assert tuple(kernel.kernel_id for kernel in realization.kernels.values()) == (
         "dotp_axi",

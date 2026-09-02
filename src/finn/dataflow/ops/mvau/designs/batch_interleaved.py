@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from math import gcd
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from finn.dataflow.authoring.design import (
     DataflowDesign,
@@ -72,16 +72,17 @@ from finn.dataflow.ops.mvau.semantics import (
     accumulator_output_type_supported,
     dot_product_computation_supported,
 )
-from finn.dataflow.ops.mvau.problem import (
+from finn.dataflow.ops.mvau.contracts import (
     MVAUComputationProfile,
-    MVAU_PROBLEM,
-    MVAU_PROBLEM_SPEC,
     MVAUProblem,
     MVAUSourceDescription,
 )
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import NetworkValidationReport, validate_network
 from finn.dataflow.region import DataflowRegion, Port
+
+if TYPE_CHECKING:
+    MVAU_BATCH_INTERLEAVED_DESIGN: BatchInterleavedDesignAssembly
 
 BATCH_INTERLEAVED_DESIGN_NAMESPACE = "mvau.design.batch_interleaved"
 BATCH_INTERLEAVED_NODE = "compute"
@@ -597,9 +598,15 @@ def _semantics(declaration: DataflowDesignDeclaration) -> MVAUBatchInterleavedSe
 
 
 def declare_batch_interleaved_design(
-    problem: MVAUProblem = MVAU_PROBLEM,
+    problem: MVAUProblem | None = None,
 ) -> BatchInterleavedDesignAssembly:
     """Declare the normalized singleton design with the common MVAU supply policy."""
+
+    if problem is None:
+        from finn.dataflow.ops.mvau.problem import MVAU_PROBLEM  # noqa: PLC0415
+
+        problem = MVAU_PROBLEM
+    from finn.dataflow.ops.mvau.problem import MVAU_PROBLEM_SPEC  # noqa: PLC0415
 
     supply = declare_mvau_input_supply(problem)
     inventory = declare_dataflow_design_inventory(
@@ -625,7 +632,12 @@ def declare_batch_interleaved_design(
     )
 
 
-MVAU_BATCH_INTERLEAVED_DESIGN = declare_batch_interleaved_design()
+def __getattr__(name: str) -> object:
+    if name != "MVAU_BATCH_INTERLEAVED_DESIGN":
+        raise AttributeError(name)
+    value = declare_batch_interleaved_design()
+    globals()[name] = value
+    return value
 
 
 __all__ = [
@@ -636,7 +648,6 @@ __all__ = [
     "BatchInterleavedDesignAssembly",
     "BatchInterleavedDesignInputs",
     "MVAUBatchInterleavedSemantics",
-    "MVAU_BATCH_INTERLEAVED_DESIGN",
     "construct_external_batch_interleaved_source_association",
     "declare_batch_interleaved_design",
     "declare_batch_interleaved_semantics",

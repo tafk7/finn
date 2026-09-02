@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from finn.dataflow.authoring.design import (
     DataflowDesign,
@@ -50,8 +50,10 @@ from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
 from finn.dataflow.kernels.kernel import BoundRegion, Kernel, bind_kernel, check_declared_references
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.network_validation import validate_network
-from finn.dataflow.resolution import NetworkRef
 from finn.dataflow.spec_algebra import assemble_specs, duplicate_values, gate_spec
+
+if TYPE_CHECKING:
+    from finn.dataflow.authoring.composition import PhysicalCompositionContext
 
 
 def _finding(code: str, message: str, **values: object) -> Finding:
@@ -88,6 +90,12 @@ class DataflowDesignDeclaration:
     exports: Mapping[str, Ref[object]] = field(default_factory=dict, repr=False, compare=False)
     decision_handles: tuple[Ref[object], ...] = field(default=(), repr=False, compare=False)
     constraint_handles: tuple[ConstraintRef, ...] = field(default=(), repr=False, compare=False)
+    composer: Callable[[PhysicalCompositionContext], object] | str | None = field(
+        default=None, repr=False, compare=False
+    )
+    composition_inputs: Mapping[str, Ref[object]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def placement(self, name: str) -> KernelPlacement:
         for placement in self.placements:
@@ -277,7 +285,10 @@ def declare_dataflow_design(
         )
         return cast(DataflowDesignDeclaration, declaration), direct_scope
     scope: DataflowDesignScope[object] = DataflowDesignScope(namespace, inputs)
-    design.define(scope)
+    define = getattr(design, "define", None)
+    if not callable(define):
+        raise AuthoringError(f"{design.__name__} has no class-local declarations")
+    define(scope)
     for supply in input_supplies:
         supply.apply(scope)
     declaration = DataflowDesignDeclaration(
@@ -558,7 +569,7 @@ class DataflowOpAuthoring:
     """Compiled operation declarations plus their typed runtime handles."""
 
     specification: DesignSpaceSpec
-    result: Ref[DataflowNetwork] | Ref[NetworkRef]
+    result: Ref[DataflowNetwork]
     source_association: Ref[object]
     selection_constraint_set: str | None
     structural_readiness_profile: str | None
@@ -571,7 +582,7 @@ def declare_dataflow_op_authoring(
     inventory: DataflowDesignInventory,
     operation: Scope,
     *,
-    result: Ref[DataflowNetwork] | Ref[NetworkRef],
+    result: Ref[DataflowNetwork],
     source_association: Ref[object],
     structural_properties: Sequence[Ref[object]],
     structural_constraints: Sequence[ConstraintRef],

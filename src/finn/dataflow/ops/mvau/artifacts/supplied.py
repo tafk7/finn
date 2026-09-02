@@ -12,18 +12,19 @@ from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
-from finn.dataflow.authoring.realization import DesignRealization
-from finn.dataflow.artifacts import composed_artifact_identity, kernel_artifact_identity
+from finn.dataflow.artifacts import composed_artifact_identity
 from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
 from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
 from finn.dataflow.ops.mvau.binding import source_roots
 from finn.dataflow.ops.mvau.artifacts.render import render_decomposed_wrapper
 from finn.dataflow.ops.mvau.artifacts.source import (
     MVAUDecomposedArtifactRequirements,
+    _kernel_identity,
+    _origin_by_placement,
+    _source_dependencies,
     decomposed_top_module_name,
 )
 from finn.dataflow.kernels.finn_rtl_memstream import FINN_MEMSTREAM_SOURCES
-from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.region import NumericElementType, Port
 
 
@@ -215,7 +216,6 @@ def _memstream_initializer(
 
 def build_supplied_artifact_requirements(
     resolved: MVAUResolvedDataflowOp,
-    realization: DesignRealization,
     elaboration: MVAUPhysicalElaboration,
     weights: np.ndarray,
     finn_root: str | Path,
@@ -223,24 +223,31 @@ def build_supplied_artifact_requirements(
 ) -> MVAUDecomposedArtifactRequirements:
     """Build generated, packaged, synthesis, and IP-XACT inputs for supplied weights."""
 
-    replay = realization.kernel("replay")
-    compute = realization.kernel("compute")
-    delivery = realization.kernel("delivery")
+    context = elaboration.semantic_result
+    if (
+        context.network != resolved.network
+        or context.source_association != resolved.source_association
+        or context.source_scope_id != resolved.source_scope_id
+    ):
+        raise ValueError("the elaboration does not belong to the selected semantic result")
     roots = source_roots(finn_root, finnlib)
+    origins = _origin_by_placement(elaboration)
     kernels = tuple(
-        kernel_artifact_identity(realization.kernel(placement), roots)
+        _kernel_identity(origins[placement], roots)
         for placement in ("replay", "compute", "delivery")
     )
     top = decomposed_top_module_name(kernels)
     compute_module = f"{top}_compute"
     delivery_module = f"{top}_delivery"
-    replay_region = replay.regions["replay"].region
-    compute_region = compute.regions["compute"].region
-    activation_bits = _byte_aligned(
-        replay_region.input_interface("activation_in").port.logical_beat_bits
-    )
-    weight_bits = _byte_aligned(compute_region.input_interface("weight").port.logical_beat_bits)
-    output_bits = _byte_aligned(compute_region.output_interface("output").port.logical_beat_bits)
+    source_id = context.source_association.source_node_id
+    wrapper = elaboration.component(f"{source_id}.compute.wrapper")
+    replay = elaboration.component(f"{source_id}.compute.replay")
+    compute = elaboration.component(f"{source_id}.compute.dot_product")
+    delivery = elaboration.component(f"{source_id}.delivery.wrapper")
+    interfaces = {item.id: item for item in elaboration.numeric_interfaces}
+    activation_bits = _byte_aligned(interfaces[f"{wrapper.id}.activation"].logical_width_bits)
+    weight_bits = _byte_aligned(interfaces[f"{wrapper.id}.weight"].logical_width_bits)
+    output_bits = _byte_aligned(interfaces[f"{wrapper.id}.output"].logical_width_bits)
     compute_source = render_decomposed_wrapper(
         compute_module,
         dict(replay.parameters),
@@ -273,24 +280,14 @@ def build_supplied_artifact_requirements(
         output_bits=output_bits,
         address_bits=address_bits,
     )
-    source_dependencies: list[tuple[str, str]] = []
-    counts: dict[str, int] = {}
-    for placement in ("replay", "compute", "delivery"):
-        kernel = realization.kernel(placement)
-        for source in kernel.sources:
-            if source.path.endswith("memstream_wrapper_template.v"):
-                continue
-            index = counts.get(source.root, 0)
-            counts[source.root] = index + 1
-            source_dependencies.append(
-                (f"{placement}.{source.root}.{index}", str(roots[source.root] / source.path))
-            )
-    try:
-        declared_weight_type = resolved.declared_value("weight.datatype")
-    except KeyError:
-        declared_weight_type = resolved.point.problem[MVAUProblemPaths.WEIGHT_ELEMENT_TYPE]
-    weight_type = cast(NumericElementType, declared_weight_type)
-    delivery_port = realization.network.node("delivery").region.output_interface("weight").port
+    source_dependencies = _source_dependencies(
+        origins,
+        roots,
+        ("replay", "compute", "delivery"),
+        skip_suffix="memstream_wrapper_template.v",
+    )
+    weight_type = cast(NumericElementType, context.facts["weight_element_type"])
+    delivery_port = context.network.node("delivery").region.output_interface("weight").port
     initializer = _memstream_initializer(
         weights,
         weight_type,
@@ -298,15 +295,12 @@ def build_supplied_artifact_requirements(
         depth=depth,
         pumped_memory=cast(bool, delivery_parameters["PUMPED_MEMORY"]),
     )
-    wrapper = elaboration.component(
-        f"{resolved.result.source_association.source_node_id}.compute.wrapper"
-    )
     return MVAUDecomposedArtifactRequirements(
         top,
-        cast(str, resolved.point.problem[MVAUProblemPaths.TARGET_FPGA_PART]),
-        cast(float, resolved.point.problem[MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS]),
+        elaboration.target_fpga_part,
+        elaboration.target_clock_period_ns,
         wrapper.parameters,
-        tuple(source_dependencies),
+        source_dependencies,
         f"{top}.sv",
         "\n".join((delivery_source, compute_source, top_source)),
         f"{top}_wrapper.v",

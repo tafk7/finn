@@ -10,8 +10,7 @@ from enum import Enum
 
 from finn.dataflow.design import Finding, QualifiedPath
 from finn.dataflow.kernels import PhysicalComponent
-from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
-from finn.dataflow.resolution import ResolvedDataflowOp
+from finn.dataflow.authoring.composition import PhysicalCompositionProvenance
 
 
 class MVAUPhysicalDirection(str, Enum):
@@ -40,7 +39,6 @@ class MVAUElaborationOrigin:
     problem_fingerprint: str
     assignments: tuple[tuple[QualifiedPath, object], ...]
     kernel_ids: tuple[str, ...]
-    provider_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, order=True)
@@ -94,7 +92,6 @@ class MVAUPhysicalAssociation:
     semantic_edge_ids: tuple[str, ...] = ()
     decision_paths: tuple[QualifiedPath, ...] = ()
     kernel_ids: tuple[str, ...] = ()
-    provider_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,7 +100,7 @@ class MVAUPhysicalElaboration:
 
     source_scope_id: str
     origin: MVAUElaborationOrigin
-    semantic_result: ResolvedDataflowOp[MVAUSourceAssociation]
+    semantic_result: PhysicalCompositionProvenance
     target_fpga_part: str
     target_clock_period_ns: float
     components: tuple[PhysicalComponent, ...]

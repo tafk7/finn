@@ -33,12 +33,8 @@ from dataclasses import dataclass
 from typing import cast
 
 from finn.dataflow.authoring.scope import Ref, finite, reject
-from finn.dataflow.kernels import (
-    KernelScope,
-    Kernel,
-    PhysicalComponent,
-    scalar_parameters,
-)
+from finn.dataflow.kernels import Kernel, PhysicalComponent, scalar_parameters
+from finn.dataflow.kernels.authoring import KernelScope
 from finn.dataflow.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     ComputationContract,

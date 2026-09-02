@@ -149,3 +149,71 @@ MVAU cycle regression passed
 Ruff format and lint passed
 strict mypy passed over 149 source files
 ```
+
+## AC8–AC9 composition and retirement record
+
+Physical composition is now registered by `DotProductDesign` through a
+`PhysicalComposition` declaration. Generic operation code selects the compiled
+Design, realizes it, resolves only the declared composition facts, and invokes
+the composer with a `PhysicalCompositionContext`. The MVAU composer cannot see
+an `Engine` or `DesignPoint`.
+
+The context is reduced to immutable `PhysicalCompositionProvenance` before it
+is retained by the MVAU physical result. The MVAU artifact handoff derives the
+legacy artifact-owned identities and source paths from `KernelOrigin`
+projections; neither configured Kernels nor `DesignRealization` cross that
+handoff. The generic artifact package remains unchanged for the separately
+owned artifact-substrate integration.
+
+The public façades now expose only the intended contributor vocabulary:
+
+```text
+finn.dataflow.authoring
+    immutable Op/Design/Kernel declarations and generic runtime entry types
+
+finn.dataflow.design
+    evaluation values, including ResolvedDataflowOp
+
+finn.dataflow.kernels
+    Kernel, PhysicalComponent, scalar_parameters
+
+finn.dataflow.ops.mvau
+    MVAUDataflowBuildContext, MvauDataflowOp
+```
+
+`OpDesign`, `Scope`, `Ref`, `DataflowDesignScope`, `KernelScope`, compiled
+declarations, inventories, placement/coverage records, and legacy assembly
+functions remain reachable only from private implementation modules where old
+equivalence tests still require them. `DataflowDesign` and `Kernel` no longer
+advertise scope-callback methods. `NetworkRef`, `MVAUNetworkRef`, and
+`DataflowOpResult` have been removed.
+
+The public MVAU import path no longer loads the retired `problem`, `inventory`,
+physical-composition, or artifact-stage modules. `problem.py` and
+`inventory.py` remain private migration fixtures only; production v7 source
+types live in `ops.mvau.contracts`, and production selection uses the compiled
+operation inventory.
+
+## Final MVAU responsibility map
+
+| Module | Responsibility |
+|---|---|
+| `ops/mvau/op.py` | Source schema, generic projections, operation facts, closed Designs, persistence declarations, and QONNX behavior |
+| `ops/mvau/contracts.py` | Stable family ids and pure typed Op-to-Design facts |
+| `ops/mvau/designs/dot_product.py` | Dot-product Regions, Network, mappings, placements, and registered composition |
+| `ops/mvau/designs/batch_interleaved.py` | Semantic-only batch-interleaved Region, Network, mappings, and readiness |
+| `ops/mvau/input_supply.py` | Closed external/memstream weight-supply policy |
+| `kernels/dotp_axi.py` | Dot-product Kernel coverage, choices, parameters, sources, and component elaboration |
+| `kernels/replay_buffer.py` | Replay Kernel coverage, parameters, sources, and component elaboration |
+| `kernels/finn_rtl_memstream.py` | Memstream Kernel coverage, choices, parameters, sources, and component elaboration |
+| `ops/mvau/elaboration.py` | Restricted Design-owned MVAU physical composition |
+| `ops/mvau/physical.py` | MVAU-specific physical records and association validation |
+| `ops/mvau/artifacts/*` | Existing adapter-first rendering, staging, synthesis, packaging, and IP-XACT compatibility surface |
+| `ops/mvau/problem.py`, `ops/mvau/inventory.py` | Private pre-v7 equivalence fixtures; absent from production imports |
+
+Intentional schema/API changes are the v7 family identifier, format-1 generic
+persistence, direct Network result, logical/physical association split,
+removal of `provider_ids`, and retirement of the public scope/compiler-record
+exports. Region/Network values, candidate verdicts, configured parameters,
+source manifests, generated RTL/Tcl/XDC, and legacy artifact identities remain
+covered by exact regression tests.

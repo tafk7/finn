@@ -43,7 +43,7 @@ from finn.dataflow.ops.mvau.regions import (
     construct_dot_product_region,
     construct_standard_mvau_weight_port,
 )
-from finn.dataflow.ops.mvau.problem import (
+from finn.dataflow.ops.mvau.contracts import (
     MVAUComputationProfile,
     MVAUProblem,
     MVAUSourceDescription,

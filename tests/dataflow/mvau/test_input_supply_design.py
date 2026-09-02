@@ -330,7 +330,6 @@ def test_supplied_artifact_identity_tracks_initializer_but_not_source_occurrence
         elaboration = compose_dot_product_design(resolved, realization)
         return build_supplied_artifact_requirements(
             resolved,
-            realization,
             elaboration,
             values,
             Path(__file__).parents[3],
@@ -353,7 +352,6 @@ def test_supplied_generated_packaged_synthesis_and_ipxact_inputs_are_complete(
     weights = np.arange(24, dtype=np.float32).reshape(4, 6) - 12
     requirements = build_supplied_artifact_requirements(
         resolved,
-        realization,
         elaboration,
         weights,
         Path(__file__).parents[3],

@@ -25,7 +25,8 @@ from finn.dataflow.authoring.inventory import (
     declare_dataflow_op_authoring,
 )
 from finn.dataflow.authoring.input_supply import InputSupplyDeclaration
-from finn.dataflow.authoring.op_design import OpDesign, ProblemProvenance
+from finn.dataflow.authoring.op_design import OpDesign
+from finn.dataflow.authoring.provenance import ProblemProvenance
 from finn.dataflow.authoring.persistence import (
     DecisionStorageCodec,
     Persist,

@@ -8,15 +8,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
+from finn.dataflow.authoring.composition import PhysicalCompositionContext
 from finn.dataflow.authoring.realization import DesignRealization
 from finn.dataflow.design import Finding, FindingKind, QualifiedPath
 from finn.dataflow.kernels import Kernel, PhysicalComponent
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.mvau.artifacts.render import WRAPPER_MODULE, byte_aligned
-from finn.dataflow.ops.mvau.binding import bind_decomposed
 from finn.dataflow.ops.mvau.input_supply import DELIVERY_EDGE, DELIVERY_NODE
-from finn.dataflow.ops.mvau.associations import MVAUResolvedDataflowOp
+from finn.dataflow.ops.mvau.associations import (
+    MVAUResolvedDataflowOp,
+    MVAUSourceAssociation,
+)
 from finn.dataflow.ops.mvau.origin import mvau_elaboration_origin
+from finn.dataflow.op import compose_resolved_dataflow, physical_composition_context
+from finn.dataflow.op_contracts import DataflowOpError
 from finn.dataflow.ops.mvau.physical import (
     MVAUElaborationError,
     MVAUPhysicalAssociation,
@@ -30,7 +35,6 @@ from finn.dataflow.ops.mvau.physical import (
     MVAUPhysicalNumericProtocol,
     MVAUSemanticPortRef,
 )
-from finn.dataflow.ops.mvau.problem import MVAUProblemPaths
 from finn.dataflow.ops.mvau.semantics import ACTIVATION_EDGE, DOT_PRODUCT_NODE, REPLAY_NODE
 from finn.dataflow.region import Port
 
@@ -164,16 +168,13 @@ def _component(kernel: Kernel, prefix: str, parent: str, component_id: str) -> P
 def elaborate_decomposed(resolved: MVAUResolvedDataflowOp) -> MVAUPhysicalElaboration:
     """Elaborate the decomposed slice into a replay core and a dot-product core."""
 
-    bindings = bind_decomposed(resolved)
-    return compose(resolved, bindings)
+    return elaborate_mvau(resolved)
 
 
-def compose(
-    resolved: MVAUResolvedDataflowOp,
-    realization: DesignRealization,
-) -> MVAUPhysicalElaboration:
+def compose_mvau_context(context: PhysicalCompositionContext) -> MVAUPhysicalElaboration:
     """Wire two bound Kernels into one physical elaboration."""
 
+    realization = context.realization
     network = realization.network
     replay = realization.kernel("replay")
     compute = realization.kernel("compute")
@@ -194,7 +195,8 @@ def compose(
     weight = compute_region.input_interface("weight").port
     output = compute_region.output_interface("output").port
 
-    source_id = resolved.result.source_association.source_node_id
+    source_association = cast(MVAUSourceAssociation, context.source_association)
+    source_id = source_association.source_node_id
     prefix = f"{source_id}.compute"
     wrapper_id = f"{prefix}.wrapper"
     replay_component = _component(replay, prefix, wrapper_id, "replay")
@@ -435,8 +437,8 @@ def compose(
     )
 
     owners = (
-        resolved.result.source_association.source_node_id,
-        *resolved.result.source_association.fused_source_node_ids,
+        source_association.source_node_id,
+        *source_association.fused_source_node_ids,
     )
     # Provenance is per binding, not one payload shared by everything.  A single
     # merged record makes the replay component claim the dot product's Kernel
@@ -482,7 +484,6 @@ def compose(
             edges,
             provenance.decisions,
             provenance.kernels,
-            (),
         )
 
     associations = (
@@ -523,10 +524,10 @@ def compose(
     )
     return MVAUPhysicalElaboration(
         source_id,
-        mvau_elaboration_origin(resolved, realization),
-        resolved.result,
-        cast(str, resolved.point.problem[MVAUProblemPaths.TARGET_FPGA_PART]),
-        cast(float, resolved.point.problem[MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS]),
+        mvau_elaboration_origin(context),
+        context.provenance(),
+        cast(str, context.facts["target_fpga_part"]),
+        cast(float, context.facts["target_clock_period_ns"]),
         components,
         interfaces,
         controls,
@@ -534,6 +535,51 @@ def compose(
         boundaries,
         associations,
     )
+
+
+def compose(
+    resolved: MVAUResolvedDataflowOp,
+    realization: DesignRealization,
+) -> MVAUPhysicalElaboration:
+    """Compatibility entry that projects the restricted composition context."""
+
+    if resolved.compiled is not None:
+        return compose_mvau_context(physical_composition_context(resolved, realization=realization))
+
+    # Historical tests construct resolved records from the pre-adapter
+    # inventory. Keep that projection out of the registered production path.
+    from finn.dataflow.op import dataflow_problem_fingerprint  # noqa: PLC0415
+    from finn.dataflow.ops.mvau.contracts import (  # noqa: PLC0415
+        MVAU_DATAFLOW_OP_FAMILY_ID,
+        MVAU_DATAFLOW_OP_FAMILY_VERSION,
+    )
+    from finn.dataflow.ops.mvau.problem import MVAUProblemPaths  # noqa: PLC0415
+
+    context = PhysicalCompositionContext(
+        family_id=MVAU_DATAFLOW_OP_FAMILY_ID,
+        family_version=MVAU_DATAFLOW_OP_FAMILY_VERSION,
+        problem_fingerprint=dataflow_problem_fingerprint(resolved.point.problem),
+        assignments=tuple(
+            (str(path), value) for path, value in sorted(resolved.point.assignments.items())
+        ),
+        source_scope_id=resolved.source_scope_id,
+        selected_design_id=resolved.selected_design_id,
+        selected_design_version="1",
+        network=resolved.network,
+        source_association=resolved.source_association,
+        facts={
+            "target_fpga_part": resolved.point.problem[MVAUProblemPaths.TARGET_FPGA_PART],
+            "target_clock_period_ns": resolved.point.problem[
+                MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS
+            ],
+            "weight_element_type": resolved.point.problem[MVAUProblemPaths.WEIGHT_ELEMENT_TYPE],
+        },
+        kernel_origins=tuple(
+            (name, kernel.origin()) for name, kernel in sorted(realization.kernels.items())
+        ),
+        realization=realization,
+    )
+    return compose_mvau_context(context)
 
 
 _DISPATCH_PATH = QualifiedPath("mvau.elaboration.dispatch")
@@ -549,7 +595,7 @@ def compose_dot_product_design(
 ) -> MVAUPhysicalElaboration:
     """Compose an already-realized DotProduct design under dispatch ownership."""
 
-    if resolved.result.network != realization.network:
+    if resolved.network != realization.network:
         raise _fail(
             "mvau-dispatch-network-mismatch",
             "the source envelope and DotProduct realization name different Networks",
@@ -565,7 +611,16 @@ def elaborate_mvau(resolved: MVAUResolvedDataflowOp) -> MVAUPhysicalElaboration:
             "mvau-dispatch-design-semantic-only",
             f"{resolved.selected_design_id} has no production physical Kernel",
         )
-    return compose_dot_product_design(resolved, bind_decomposed(resolved))
+    try:
+        elaboration = compose_resolved_dataflow(resolved)
+    except DataflowOpError as error:
+        raise MVAUElaborationError(error.findings) from error
+    if not isinstance(elaboration, MVAUPhysicalElaboration):
+        raise _fail(
+            "mvau-dispatch-result-invalid",
+            "the selected MVAU Design composer returned an unexpected result",
+        )
+    return elaboration
 
 
 __all__ = ["elaborate_mvau"]

@@ -5,14 +5,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from hashlib import sha256
+from importlib import import_module
 import json
 from threading import RLock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, TypeAlias, TypeVar, cast
 from uuid import uuid4
 
 from onnx import AttributeProto  # type: ignore[import-not-found]
@@ -22,6 +23,7 @@ from finn.dataflow.authoring.compiler import (
     CompiledDataflowOperation,
     compile_dataflow_operation,
 )
+from finn.dataflow.authoring.composition import PhysicalCompositionContext
 from finn.dataflow.authoring.persistence import DecisionStorageCodec
 from finn.dataflow.authoring.projection import project_build, project_graph
 from finn.dataflow.authoring.realization import DesignRealization
@@ -40,16 +42,17 @@ from finn.dataflow.design import (
 from finn.dataflow.datatypes import encode_datatype, is_qonnx_datatype
 from finn.dataflow.op_contracts import DataflowOpError, NodeAttrCodec, NodeAttributeType
 from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.resolution import NetworkRef, ResolvedDataflowOp
+from finn.dataflow.resolution import ResolvedDataflowOp
 
 if TYPE_CHECKING:
-    from finn.dataflow.authoring.inventory import DataflowOpAuthoring
+    from finn.dataflow.authoring.inventory import DataflowDesignDeclaration, DataflowOpAuthoring
     from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 
 AssignmentMapping: TypeAlias = (
     Mapping[QualifiedPath, object] | Mapping[str, object] | Mapping[QualifiedPath | str, object]
 )
+AssociationT = TypeVar("AssociationT")
 
 
 class DataflowBuildConfigView(Protocol):
@@ -145,6 +148,130 @@ def dataflow_problem_fingerprint(problem: Mapping[QualifiedPath, object]) -> str
     return sha256(serialized).hexdigest()
 
 
+def _compiled_inventory(
+    resolved: ResolvedDataflowOp[AssociationT],
+) -> tuple[CompiledDataflowOperation, DataflowDesignDeclaration]:
+    compiled = resolved.compiled
+    if not isinstance(compiled, CompiledDataflowOperation) or compiled.inventory is None:
+        raise DataflowOpError(
+            (
+                _finding(
+                    FindingKind.REQUEST,
+                    "dataflow-realization-unavailable",
+                    "this result has no compiler-owned Design inventory",
+                ),
+            )
+        )
+    try:
+        declaration = compiled.inventory.declaration(resolved.selected_design_id)
+    except KeyError as exc:
+        raise DataflowOpError(
+            (
+                _finding(
+                    FindingKind.AUTHORING,
+                    "dataflow-selected-design-unknown",
+                    f"the resolved Design {resolved.selected_design_id!r} is not in its inventory",
+                ),
+            )
+        ) from exc
+    return compiled, declaration
+
+
+def realize_resolved_dataflow(resolved: ResolvedDataflowOp[AssociationT]) -> DesignRealization:
+    """Exactly bind the Design selected by an already-resolved operation."""
+
+    _compiled, declaration = _compiled_inventory(resolved)
+    answer = declaration.realize(resolved.engine, resolved.point)
+    if not isinstance(answer, Decided):
+        raise DataflowOpError(answer.findings)
+    if not isinstance(answer.value, DesignRealization):
+        raise DataflowOpError(
+            (
+                _finding(
+                    FindingKind.AUTHORING,
+                    "dataflow-realization-type-invalid",
+                    "the selected Design did not produce a DesignRealization",
+                ),
+            )
+        )
+    return answer.value
+
+
+def physical_composition_context(
+    resolved: ResolvedDataflowOp[AssociationT],
+    *,
+    realization: DesignRealization | None = None,
+) -> PhysicalCompositionContext:
+    """Project only declared inputs into a Design's composition capability."""
+
+    compiled, declaration = _compiled_inventory(resolved)
+    selected_realization = realization or realize_resolved_dataflow(resolved)
+    if (
+        selected_realization.design_id != declaration.id
+        or selected_realization.network != resolved.network
+    ):
+        raise DataflowOpError(
+            (
+                _finding(
+                    FindingKind.REQUEST,
+                    "dataflow-composition-realization-mismatch",
+                    "the supplied realization does not match the resolved Design and Network",
+                ),
+            )
+        )
+    facts: dict[str, object] = {}
+    for name, ref in declaration.composition_inputs.items():
+        if ref.path in resolved.point.problem:
+            facts[name] = resolved.point.problem[ref.path]
+            continue
+        answer = resolved.engine.query_property(resolved.point, ref.path)
+        if not isinstance(answer, Decided):
+            raise DataflowOpError(answer.findings)
+        facts[name] = answer.value
+    return PhysicalCompositionContext(
+        family_id=getattr(compiled.owner, "dataflow_family_id")(),
+        family_version=getattr(compiled.owner, "dataflow_family_version")(),
+        problem_fingerprint=dataflow_problem_fingerprint(resolved.point.problem),
+        assignments=tuple(
+            (str(path), value) for path, value in sorted(resolved.point.assignments.items())
+        ),
+        source_scope_id=resolved.source_scope_id,
+        selected_design_id=declaration.id,
+        selected_design_version=declaration.version,
+        network=resolved.network,
+        source_association=resolved.source_association,
+        facts=facts,
+        kernel_origins=tuple(
+            (name, kernel.origin()) for name, kernel in sorted(selected_realization.kernels.items())
+        ),
+        realization=selected_realization,
+    )
+
+
+def compose_resolved_dataflow(resolved: ResolvedDataflowOp[AssociationT]) -> object:
+    """Dispatch composition through the selected Design's compiled declaration."""
+
+    _compiled, declaration = _compiled_inventory(resolved)
+    composer = declaration.composer
+    if composer is None:
+        raise DataflowOpError(
+            (
+                _finding(
+                    FindingKind.LIMITATION,
+                    "dataflow-composition-unsupported",
+                    f"Design {declaration.id!r} declares no physical composer",
+                ),
+            )
+        )
+    if isinstance(composer, str):
+        module_name, attribute_name = composer.split(":", 1)
+        composer = cast(
+            Callable[[PhysicalCompositionContext], object],
+            getattr(import_module(module_name), attribute_name),
+        )
+    return composer(physical_composition_context(resolved))
+
+
 class DataflowOp(CustomOp):  # type: ignore[misc]
     """Base for logical FINN operations backed by a static design space."""
 
@@ -235,7 +362,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
 
     @classmethod
     def result_path(cls) -> QualifiedPath:
-        """Return the selected ``NetworkRef`` property path."""
+        """Return the selected ``DataflowNetwork`` property path."""
 
         compiled = cls.compiled_dataflow_operation()
         if compiled is not None:
@@ -762,10 +889,7 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
                 )
             )
         selected = result.value
-        if isinstance(selected, NetworkRef):
-            selected_network = selected.network
-            fallback_design_id = selected.network_id
-        elif isinstance(selected, DataflowNetwork):
+        if isinstance(selected, DataflowNetwork):
             selected_network = selected
             fallback_design_id = "network"
         else:
@@ -798,32 +922,17 @@ class DataflowOp(CustomOp):  # type: ignore[misc]
     def realize_dataflow(self, config: DataflowBuildConfigView) -> DesignRealization:
         """Resolve and exactly bind the selected class-authored Design inventory."""
 
-        compiled = type(self).compiled_dataflow_operation()
-        if compiled is None or compiled.inventory is None:
-            raise DataflowOpError(
-                (
-                    _finding(
-                        FindingKind.REQUEST,
-                        "dataflow-realization-unavailable",
-                        "this operation does not expose a compiler-owned Design inventory",
-                    ),
-                )
-            )
-        resolved = self.resolve_dataflow(config)
-        answer = compiled.inventory.realize(resolved.engine, resolved.point)
-        if not isinstance(answer, Decided):
-            raise DataflowOpError(answer.findings)
-        if not isinstance(answer.value, DesignRealization):
-            raise DataflowOpError(
-                (
-                    _finding(
-                        FindingKind.AUTHORING,
-                        "dataflow-realization-type-invalid",
-                        "the selected Design did not produce a DesignRealization",
-                    ),
-                )
-            )
-        return answer.value
+        return realize_resolved_dataflow(self.resolve_dataflow(config))
+
+    def physical_composition_context(
+        self, config: DataflowBuildConfigView
+    ) -> PhysicalCompositionContext:
+        return physical_composition_context(self.resolve_dataflow(config))
+
+    def compose_dataflow(self, config: DataflowBuildConfigView) -> object:
+        """Dispatch the selected Design's registered restricted composer."""
+
+        return compose_resolved_dataflow(self.resolve_dataflow(config))
 
     def _encode_assignments(
         self, assignments: Mapping[QualifiedPath, object]
@@ -980,5 +1089,8 @@ __all__ = [
     "DataflowOpError",
     "NodeAttrCodec",
     "NodeAttributeType",
+    "compose_resolved_dataflow",
     "dataflow_problem_fingerprint",
+    "physical_composition_context",
+    "realize_resolved_dataflow",
 ]

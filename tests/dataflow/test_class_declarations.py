@@ -12,7 +12,6 @@ from finn.dataflow.authoring import (
     AuthoringError,
     Choice,
     Problem,
-    Provenance,
     Readiness,
     constraint,
     derived,
@@ -22,6 +21,7 @@ from finn.dataflow.authoring.declarations import (
     DeclarationLayer,
     compile_class_declarations,
 )
+from finn.dataflow.authoring.op_design import Provenance
 from finn.dataflow.design import Decided, Engine, QualifiedPath
 
 

@@ -31,6 +31,7 @@ from finn.dataflow.authoring import (
     OutputTensor,
     Parameter,
     Persist,
+    PhysicalComposition,
     RequiredInitializer,
     Region as RegionDeclaration,
     RegionClaim,
@@ -45,6 +46,10 @@ from finn.dataflow.authoring import (
     derived,
 )
 from finn.dataflow.authoring.design import DataflowDesign
+from finn.dataflow.authoring.composition import (
+    PhysicalCompositionContext,
+    PhysicalCompositionProvenance,
+)
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design import ABSENT, QONNX_DATATYPE_VALUE_SEMANTICS, QualifiedPath
@@ -100,6 +105,19 @@ class AffineKernelInputs:
     region: Ref[DataflowRegion]
     computation: Ref[ComputationContract]
     lanes: Ref[int]
+
+
+@dataclass(frozen=True)
+class AffinePhysicalElaboration:
+    provenance: PhysicalCompositionProvenance
+    components: tuple[PhysicalComponent, ...]
+
+
+def compose_affine(context: PhysicalCompositionContext) -> AffinePhysicalElaboration:
+    return AffinePhysicalElaboration(
+        context.provenance(),
+        context.realization.kernel("compute").components(),
+    )
 
 
 def _affine_region(
@@ -304,6 +322,7 @@ class DirectAffineDesign(DataflowDesign):
         output_shape,
         value_type=AffineSourceAssociation,
     )(_association)
+    composition = PhysicalComposition(compose_affine)
 
 
 class ReuseAffineDesign(DataflowDesign):
@@ -375,6 +394,7 @@ class ReuseAffineDesign(DataflowDesign):
         output_shape,
         value_type=AffineSourceAssociation,
     )(_association)
+    composition = PhysicalComposition(compose_affine)
 
 
 class ChannelwiseAffineDataflowOp(DataflowOp):
@@ -506,6 +526,7 @@ DIRECT_PIPELINE = QualifiedPath("channelwise_affine.design.direct.compute.affine
 
 __all__ = [
     "AffineBuildConfig",
+    "AffinePhysicalElaboration",
     "AffineSourceAssociation",
     "ChannelwiseAffineDataflowOp",
     "DIRECT_DESIGN",

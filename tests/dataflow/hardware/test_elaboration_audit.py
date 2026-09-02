@@ -40,9 +40,9 @@ from finn.dataflow.design import Decided
 from finn.dataflow.kernels import (
     Kernel,
     PhysicalComponent,
-    audit_elaboration,
     scalar_parameters,
 )
+from finn.dataflow.kernels.kernel import audit_elaboration
 from finn.dataflow.spec_algebra import SpecAuthoringError
 
 SOURCE_ROOT = Path(__file__).resolve().parents[3] / "src" / "finn" / "dataflow"

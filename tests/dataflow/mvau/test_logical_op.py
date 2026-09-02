@@ -35,6 +35,7 @@ from finn.dataflow.ops.mvau.input_supply import (
     FINN_RTL_MEMSTREAM_SUPPLY,
 )
 from finn.dataflow.ops.mvau.elaboration import elaborate_mvau
+from finn.dataflow.ops.mvau.physical import MVAUPhysicalElaboration
 from finn.dataflow.op import (
     DataflowBuildConfigView,
     DataflowOpError,
@@ -408,10 +409,8 @@ def test_dot_product_network_round_trips_through_node_persistence(tmp_path: Path
     committed = operation.commit_dataflow_assignments(_context(), assignments)
     resolved = operation.resolve_dataflow(_context())
     assert isinstance(resolved, ResolvedDataflowOp)
-    assert resolved.result is resolved
-    assert {node.id for node in resolved.result.network.nodes} == {"compute", "replay"}
+    assert {node.id for node in resolved.network.nodes} == {"compute", "replay"}
     assert resolved.point.assignments == committed.point.assignments
-    assert resolved.result.source_association == resolved.source_association
     assert resolved.source_scope_id == operation.get_nodeattr(operation.SCOPE_ID_ATTR)
     path = tmp_path / "dot-product.onnx"
     model.save(path)
@@ -426,8 +425,7 @@ def test_batch_interleaved_resolves_to_a_singleton_network(tmp_path: Path) -> No
     assignments = _batch_interleaved()
     operation.commit_dataflow_assignments(context, assignments)
     resolved = operation.resolve_dataflow(context)
-    assert resolved.result is resolved
-    assert tuple(node.id for node in resolved.result.network.nodes) == ("compute",)
+    assert tuple(node.id for node in resolved.network.nodes) == ("compute",)
     assessment = resolved.engine.evaluate_constraint_set(resolved.point, "mvau_op_structural")
     assert assessment.verdict is True
     feasibility = resolved.engine.evaluate_constraint_set(resolved.point, "mvau_op_feasibility")
@@ -445,13 +443,12 @@ def test_memstream_supplied_dot_product_round_trips_without_an_adapter(tmp_path:
     assignments = _dot_product(supply=FINN_RTL_MEMSTREAM_SUPPLY)
     operation.commit_dataflow_assignments(context, assignments)
     original = operation.resolve_dataflow(context)
-    assert original.result is original
-    assert {node.id for node in original.result.network.nodes} == {
+    assert {node.id for node in original.network.nodes} == {
         "compute",
         "delivery",
         "replay",
     }
-    assert {edge.id for edge in original.result.network.edges} == {
+    assert {edge.id for edge in original.network.edges} == {
         "activation_replay",
         "weight",
     }
@@ -459,7 +456,7 @@ def test_memstream_supplied_dot_product_round_trips_without_an_adapter(tmp_path:
     model.save(path)
     restored = _wrapped(ModelWrapper(str(path))).resolve_dataflow(context)
     assert restored.point.assignments == original.point.assignments
-    assert restored.result == original.result
+    assert restored == original
     assert restored.source_scope_id == original.source_scope_id
 
 
@@ -470,8 +467,26 @@ def test_node_backed_result_is_accepted_by_dot_product_physical_path() -> None:
     resolved = operation.resolve_dataflow(_context())
     elaboration = elaborate_mvau(resolved)
     requirements = build_decomposed_artifact_requirements(resolved, elaboration, Path.cwd())
-    assert elaboration.semantic_result == resolved.result
+    assert elaboration.semantic_result.network == resolved.network
+    assert elaboration.semantic_result.source_association == resolved.source_association
     assert requirements.elaboration.origin == elaboration.origin
+
+
+def test_design_registered_composer_receives_only_restricted_context() -> None:
+    operation = _wrapped(_model())
+    operation.commit_dataflow_assignments(_context(), _dot_product())
+    context = operation.physical_composition_context(_context())
+    assert not hasattr(context, "point")
+    assert not hasattr(context, "engine")
+    assert set(context.facts) == {
+        "target_fpga_part",
+        "target_clock_period_ns",
+        "weight_element_type",
+    }
+    composed = operation.compose_dataflow(_context())
+    assert isinstance(composed, MVAUPhysicalElaboration)
+    assert composed.semantic_result.network == context.network
+    assert not hasattr(composed.semantic_result, "realization")
 
 
 def test_runtime_writable_policy_is_projected_from_build_context() -> None:
@@ -620,7 +635,7 @@ assert isinstance(op, MvauDataflowOp)
 resolved = op.resolve_dataflow(Config())
 print(json.dumps({
     'assignments': sorted(str(path) for path in resolved.point.assignments),
-    'result': repr(resolved.result),
+    'result': repr(resolved),
     'scope': resolved.source_scope_id,
 }, sort_keys=True))
 """
@@ -638,7 +653,7 @@ print(json.dumps({
     payload = __import__("json").loads(completed.stdout)
     assert payload == {
         "assignments": sorted(str(path) for path in expected.point.assignments),
-        "result": repr(expected.result),
+        "result": repr(expected),
         "scope": expected.source_scope_id,
     }
 
@@ -652,7 +667,7 @@ def test_logical_mvau_node_rename_preserves_scope_selection_and_provider_lookup(
 
     renamed = operation.resolve_dataflow(_context())
     assert renamed.source_scope_id == original.source_scope_id
-    assert renamed.result == original.result
+    assert renamed == original
     elaboration = elaborate_mvau(renamed)
     requirements = build_decomposed_artifact_requirements(renamed, elaboration, Path.cwd())
     assert requirements.elaboration.source_scope_id == original.source_scope_id
@@ -747,4 +762,4 @@ def test_logical_mvau_passes_shared_operation_conformance_harness(tmp_path: Path
             mutate_graph_problem=_change_mvau_shape,
         )
     )
-    assert result.original.result is result.original
+    assert result.original.selected_design_id == DotProductDesign.id

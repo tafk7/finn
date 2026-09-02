@@ -14,7 +14,8 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.authoring import OpDesign, Ref, finite
+from finn.dataflow.authoring.op_design import OpDesign
+from finn.dataflow.authoring.scope import Ref, finite
 from finn.dataflow.authoring.design import (
     DataflowDesign,
     DataflowDesignScope,

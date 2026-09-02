@@ -50,6 +50,8 @@ from finn.dataflow.authoring import (
     finite_values,
 )
 from finn.dataflow.authoring.design import singleton_network
+from finn.dataflow.design import DATAFLOW_NETWORK_SEMANTICS
+from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -62,7 +64,6 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, NetworkRef
 
 __all__ = ["ClassAuthoredDataflowOp", "SyntheticDataflowOp", "ZeroDecisionDataflowOp"]
 
@@ -96,18 +97,13 @@ class ClassAuthoredDataflowOp(DataflowOp):
     def source_association(source_scope_id: str) -> str:
         return source_scope_id
 
-    @derived(data.shape, lanes, source_association, value_type=DATAFLOW_OP_RESULT_SEMANTICS)
+    @derived(data.shape, lanes, value_type=DATAFLOW_NETWORK_SEMANTICS)
     def result(
         shape: tuple[int, ...],
         lanes: int,
-        source_association: str,
-    ) -> NetworkRef:
+    ) -> DataflowNetwork:
         del lanes
-        return NetworkRef(
-            "class_authored",
-            singleton_network("compute", _region(shape[0])),
-            source_association,
-        )
+        return singleton_network("compute", _region(shape[0]))
 
     persistence = (Persist(lanes, "dataflow_class_lanes"),)
 
@@ -209,13 +205,8 @@ def _derive_fixed_region(dependencies: DependencyView) -> Answer[object]:
 
 
 def _derive_result(dependencies: DependencyView) -> Answer[object]:
-    return Decided(
-        NetworkRef(
-            "synthetic",
-            singleton_network("compute", cast(DataflowRegion, dependencies["region"])),
-            cast(str, dependencies["association"]),
-        )
-    )
+    cast(str, dependencies["association"])
+    return Decided(singleton_network("compute", cast(DataflowRegion, dependencies["region"])))
 
 
 def build_synthetic_spec() -> DesignSpaceSpec:
@@ -257,7 +248,7 @@ def build_synthetic_spec() -> DesignSpaceSpec:
             ),
             DerivedProperty(
                 SyntheticPaths.RESULT,
-                DATAFLOW_OP_RESULT_SEMANTICS,
+                cast("ValueSemantics[object]", DATAFLOW_NETWORK_SEMANTICS),
                 EvaluatorSpec((region_ref, association_ref), _derive_result),
             ),
         ),
@@ -290,7 +281,7 @@ def build_zero_decision_spec() -> DesignSpaceSpec:
             ),
             DerivedProperty(
                 SyntheticPaths.RESULT,
-                DATAFLOW_OP_RESULT_SEMANTICS,
+                cast("ValueSemantics[object]", DATAFLOW_NETWORK_SEMANTICS),
                 EvaluatorSpec((region_ref, association_ref), _derive_result),
             ),
         ),

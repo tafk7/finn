@@ -40,7 +40,7 @@ from finn.dataflow.authoring import (
     derived,
     not_,
 )
-from finn.dataflow.authoring.op_design import Provenance
+from finn.dataflow.authoring.provenance import Provenance
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import ABSENT
 from finn.dataflow.datatypes import QONNXDataType
@@ -58,11 +58,8 @@ from finn.dataflow.ops.mvau.input_supply import declare_mvau_input_supply
 from finn.dataflow.ops.mvau.contracts import (
     MVAU_DATAFLOW_OP_FAMILY_ID,
     MVAU_DATAFLOW_OP_FAMILY_VERSION,
-)
-from finn.dataflow.ops.mvau.problem import (
     MVAUComputationProfile,
     MVAUProblem,
-    MVAUProblemPaths,
     MVAUSourceDescription,
 )
 from finn.dataflow.parameters.cyclic.definition import (
@@ -325,7 +322,7 @@ class MvauDataflowOp(DataflowOp):
         provenance=Provenance.TARGET,
         required=False,
         accessor=_mvau_target_dsp,
-        path=MVAUProblemPaths.TARGET_DSP_BLOCK,
+        path="problem.target.dsp_block",
     )
     target_fpga_part = BuildFact(
         "fpga_part",
@@ -333,7 +330,7 @@ class MvauDataflowOp(DataflowOp):
         provenance=Provenance.TARGET,
         required=False,
         accessor=_mvau_target_part,
-        path=MVAUProblemPaths.TARGET_FPGA_PART,
+        path="problem.target.fpga_part",
     )
     target_clock_period_ns = BuildFact(
         "clock_period_ns",
@@ -341,7 +338,7 @@ class MvauDataflowOp(DataflowOp):
         provenance=Provenance.TARGET,
         required=False,
         accessor=_mvau_clock_period,
-        path=MVAUProblemPaths.TARGET_CLOCK_PERIOD_NS,
+        path="problem.target.clock_period_ns",
     )
     target_memory_capabilities = BuildFact(
         "memory_capabilities",
@@ -425,6 +422,7 @@ class MvauDataflowOp(DataflowOp):
             cast("Ref[MVAUComputationProfile]", computation_profile),
             cast("Ref[MVAUSourceDescription]", source_description),
             cast("Ref[bool]", effective_narrow_weights),
+            cast("Ref[str]", target_fpga_part),
             cast("Ref[DspBlock]", target_dsp_block),
             cast("Ref[float]", target_clock_period_ns),
             cast("Ref[str]", weight_supply.choice),

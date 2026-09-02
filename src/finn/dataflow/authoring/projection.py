@@ -24,7 +24,7 @@ from finn.dataflow.authoring.declarations import (
     Problem,
     collect_class_declarations,
 )
-from finn.dataflow.authoring.op_design import Provenance
+from finn.dataflow.authoring.provenance import Provenance
 from finn.dataflow.authoring.scope import Ref, semantics_for
 from finn.dataflow.datatypes import (
     QONNXDataType,

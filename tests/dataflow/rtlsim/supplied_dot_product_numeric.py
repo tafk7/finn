@@ -130,7 +130,6 @@ def requirements_for(
     elaboration = compose_dot_product_design(resolved, realization)
     return build_supplied_artifact_requirements(
         resolved,
-        realization,
         elaboration,
         weights,
         root,

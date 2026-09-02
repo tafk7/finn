@@ -32,7 +32,7 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.authoring import Ref
+from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import (
     Absent,
     Answer,
@@ -45,14 +45,13 @@ from finn.dataflow.design import (
     RequestError,
     Unresolved,
 )
-from finn.dataflow.kernels import (
+from finn.dataflow.kernels import Kernel
+from finn.dataflow.kernels.authoring import declare_kernel, kernel_namespace
+from finn.dataflow.kernels.kernel import (
     BoundRegion,
-    Kernel,
     bind_kernel,
     bound_regions,
     check_declared_references,
-    declare_kernel,
-    kernel_namespace,
 )
 from finn.dataflow.kernels._declaration import CompiledKernelDeclaration
 from finn.dataflow.ops.mvau.semantics import (
@@ -580,10 +579,9 @@ def test_the_bound_network_is_the_one_the_operation_builds() -> None:
     """
 
     resolved = _committed(_model(repetitions=REPETITIONS)).resolve_dataflow(_context())
-    assert resolved.result is resolved
 
     placed = _place(matrix_width=MATRIX_WIDTH, matrix_height=MATRIX_HEIGHT)
-    assert placed.network == resolved.result.network
+    assert placed.network == resolved.network
 
 
 def test_the_fused_kernel_reads_the_operations_own_network_property() -> None:

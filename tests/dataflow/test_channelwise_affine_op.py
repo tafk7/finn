@@ -15,6 +15,7 @@ from qonnx.util.basic import qonnx_make_model  # type: ignore[import-not-found]
 
 from dataflow.channelwise_affine_op import (
     AffineBuildConfig,
+    AffinePhysicalElaboration,
     AffineSourceAssociation,
     ChannelwiseAffineDataflowOp,
     DIRECT_DESIGN,
@@ -111,6 +112,13 @@ def test_channelwise_affine_uses_the_complete_generic_op_lifecycle(tmp_path: Pat
         "LANES": 2,
         "PIPELINE": True,
     }
+    physical = operation.compose_dataflow(AffineBuildConfig())
+    assert isinstance(physical, AffinePhysicalElaboration)
+    assert physical.provenance.selected_design_id == "direct"
+    assert not hasattr(physical.provenance, "realization")
+    assert tuple(component.module for component in physical.components) == (
+        "test.channelwise_affine",
+    )
 
 
 def test_optional_bias_and_initializer_fingerprints_are_projected_generically() -> None:

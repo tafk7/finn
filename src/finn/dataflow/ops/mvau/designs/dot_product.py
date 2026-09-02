@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from finn.dataflow.authoring import (
     Choice,
@@ -14,6 +14,7 @@ from finn.dataflow.authoring import (
     Imported,
     Kernels,
     Network,
+    PhysicalComposition,
     Readiness,
     Region,
     SourceInput,
@@ -49,13 +50,9 @@ from finn.dataflow.ops.mvau.associations import (
 )
 from finn.dataflow.ops.mvau.input_supply import (
     EXTERNAL_SUPPLY,
-    MVAUInputSupply,
     declare_mvau_input_supply,
 )
-from finn.dataflow.ops.mvau.problem import (
-    MVAU_EFFECTIVE_NARROW_WEIGHTS,
-    MVAU_PROBLEM,
-    MVAU_PROBLEM_SPEC,
+from finn.dataflow.ops.mvau.contracts import (
     MVAUComputationProfile,
     MVAUProblem,
     MVAUSourceDescription,
@@ -88,6 +85,11 @@ from finn.dataflow.region import (
     element_width,
 )
 
+if TYPE_CHECKING:
+    from finn.dataflow.ops.mvau.input_supply import MVAUInputSupply
+
+    MVAU_DOT_PRODUCT_DESIGN: DotProductDesignAssembly
+
 
 @dataclass(frozen=True)
 class DotProductDesignInputs:
@@ -101,6 +103,7 @@ class DotProductDesignInputs:
     computation_profile: Ref[MVAUComputationProfile]
     source_description: Ref[MVAUSourceDescription]
     narrow_weights: Ref[bool]
+    target_fpga_part: Ref[str]
     target_dsp_block: Ref[DspBlock]
     target_clock_period_ns: Ref[float]
     weight_supply: Ref[str]
@@ -154,6 +157,7 @@ class DotProductDesign(DataflowDesign):
     computation_profile = Imported(MVAUComputationProfile)
     source_description = Imported(MVAUSourceDescription)
     narrow_weights = Imported(bool)
+    target_fpga_part = Imported(str)
     target_dsp_block = Imported(DspBlock)
     target_clock_period_ns = Imported(float)
     weight_supply = Imported(str)
@@ -312,6 +316,14 @@ class DotProductDesign(DataflowDesign):
             network_structurally_well_formed,
         ),
     )
+    composition = PhysicalComposition(
+        "finn.dataflow.ops.mvau.elaboration:compose_mvau_context",
+        inputs={
+            "target_fpga_part": target_fpga_part,
+            "target_clock_period_ns": target_clock_period_ns,
+            "weight_element_type": weight_element_type,
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -344,6 +356,7 @@ def _inputs(
         problem.computation_profile,
         problem.source_description,
         narrow_weights,
+        problem.target_fpga_part,
         problem.target_dsp_block,
         problem.target_clock_period_ns,
         supply,
@@ -388,10 +401,20 @@ def _semantics(declaration: DataflowDesignDeclaration) -> MVAUDotProductSemantic
 
 
 def declare_dot_product_design(
-    problem: MVAUProblem = MVAU_PROBLEM,
+    problem: MVAUProblem | None = None,
     *,
-    narrow_weights: Ref[bool] = MVAU_EFFECTIVE_NARROW_WEIGHTS,
+    narrow_weights: Ref[bool] | None = None,
 ) -> DotProductDesignAssembly:
+    if problem is None or narrow_weights is None:
+        from finn.dataflow.ops.mvau.problem import (  # noqa: PLC0415
+            MVAU_EFFECTIVE_NARROW_WEIGHTS,
+            MVAU_PROBLEM,
+        )
+
+        problem = MVAU_PROBLEM if problem is None else problem
+        narrow_weights = MVAU_EFFECTIVE_NARROW_WEIGHTS if narrow_weights is None else narrow_weights
+    from finn.dataflow.ops.mvau.problem import MVAU_PROBLEM_SPEC  # noqa: PLC0415
+
     supply = declare_mvau_input_supply(problem)
     inventory = declare_dataflow_design_inventory(
         "mvau",
@@ -415,13 +438,17 @@ def declare_dot_product_design(
     )
 
 
-MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()
+def __getattr__(name: str) -> object:
+    if name != "MVAU_DOT_PRODUCT_DESIGN":
+        raise AttributeError(name)
+    value = declare_dot_product_design()
+    globals()[name] = value
+    return value
 
 
 __all__ = [
     "DotProductDesign",
     "DotProductDesignAssembly",
     "DotProductDesignInputs",
-    "MVAU_DOT_PRODUCT_DESIGN",
     "declare_dot_product_design",
 ]

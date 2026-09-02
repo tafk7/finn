@@ -31,7 +31,6 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "Answer",
         "CommitResult",
         "ConstraintAssessment",
-        "DataflowOpResult",
         "Decided",
         "DecisionState",
         "DesignPoint",
@@ -41,7 +40,6 @@ def test_public_design_api_is_deliberate_and_pinned() -> None:
         "Finding",
         "FindingKind",
         "ItemOutcome",
-        "NetworkRef",
         "ProposalAdoptionMode",
         "ProposalAdoptionResult",
         "QualifiedPath",
@@ -78,26 +76,32 @@ def test_design_import_loads_engine_and_region_by_design() -> None:
 def test_resolved_operation_values_have_an_evaluation_time_canonical_import() -> None:
     resolution = import_module("finn.dataflow.resolution")
 
-    assert design.DataflowOpResult is resolution.NetworkRef
-    assert design.NetworkRef is resolution.NetworkRef
     assert design.ResolvedDataflowOp is resolution.ResolvedDataflowOp
+    assert not hasattr(resolution, "DataflowOpResult")
+    assert not hasattr(resolution, "NetworkRef")
     assert not hasattr(resolution, "RegionRef")
 
 
 def test_authoring_facade_exposes_design_declaration_entry_points() -> None:
     authoring = import_module("finn.dataflow.authoring")
     design_implementation = import_module("finn.dataflow.authoring.design")
-    supply_implementation = import_module("finn.dataflow.authoring.input_supply")
-    inventory_implementation = import_module("finn.dataflow.authoring.inventory")
 
     assert authoring.DataflowDesign is design_implementation.DataflowDesign
-    assert authoring.DataflowDesignScope is design_implementation.DataflowDesignScope
-    assert authoring.InputSupplyAlternative is supply_implementation.InputSupplyAlternative
-    assert authoring.InputSupplyDeclaration is supply_implementation.InputSupplyDeclaration
-    assert (
-        authoring.declare_dataflow_design_inventory
-        is inventory_implementation.declare_dataflow_design_inventory
-    )
+    assert authoring.PhysicalComposition is design_implementation.PhysicalComposition
+    for private_name in (
+        "DataflowDesignEntry",
+        "DataflowDesignInventory",
+        "DataflowDesignScope",
+        "DataflowOpAuthoring",
+        "InputSupplyAlternative",
+        "InputSupplyDeclaration",
+        "OpDesign",
+        "Ref",
+        "Scope",
+        "declare_dataflow_design_inventory",
+        "declare_dataflow_op_authoring",
+    ):
+        assert not hasattr(authoring, private_name)
 
 
 def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
@@ -107,7 +111,6 @@ def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
             "AssignmentMapping",
             "AuthoringError",
             "Attribute",
-            "BUILD_OWNED",
             "BuildFact",
             "BuildFlag",
             "BuildString",
@@ -117,21 +120,14 @@ def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
             "Connection",
             "Constant",
             "Covers",
-            "ConstraintRef",
             "DataflowAssignmentCommit",
             "DataflowBuildConfigView",
             "DataflowDesign",
-            "DataflowDesignEntry",
-            "DataflowDesignInventory",
-            "DataflowDesignScope",
             "DataflowOp",
             "DataflowOpError",
             "DatatypeAttribute",
             "DependentDomain",
             "EdgeClaim",
-            "GRAPH_OWNED",
-            "InputSupplyAlternative",
-            "InputSupplyDeclaration",
             "InputTensor",
             "InitializerAnalysis",
             "Imported",
@@ -140,21 +136,18 @@ def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
             "NodeAttributeType",
             "Network",
             "NoInitializer",
-            "OpDesign",
             "OptionalInitializer",
             "OutputTensor",
             "Parameter",
+            "PhysicalComposition",
             "Persist",
             "PortableCodec",
-            "ProblemProvenance",
             "Problem",
             "Provenance",
-            "Ref",
             "Region",
             "RegionClaim",
             "Readiness",
             "RequiredInitializer",
-            "Scope",
             "SourceScope",
             "SourceInput",
             "Sources",
@@ -167,12 +160,7 @@ def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
             "dataflow_problem_fingerprint",
             "class_divisors_of",
             "constraint",
-            "declare_dataflow_design_inventory",
-            "declare_dataflow_op_authoring",
-            "divisors_of",
             "derived",
-            "domain",
-            "finite",
             "finite_values",
             "not_",
             "present",
@@ -180,6 +168,18 @@ def test_public_authoring_api_is_declaration_only_and_pinned() -> None:
             "unresolved",
         ),
     )
+
+
+def test_public_kernel_api_is_declaration_only_and_pinned() -> None:
+    assert_public_surface(
+        "finn.dataflow.kernels",
+        ("Kernel", "PhysicalComponent", "scalar_parameters"),
+    )
+    kernels = import_module("finn.dataflow.kernels")
+    authoring = import_module("finn.dataflow.authoring")
+    assert "define" not in kernels.Kernel.__dict__
+    assert "define_design" not in kernels.Kernel.__dict__
+    assert "define" not in authoring.DataflowDesign.__dict__
 
 
 def test_operation_namespaces_have_one_narrow_public_entry() -> None:
@@ -225,9 +225,13 @@ def test_runtime_modules_do_not_construct_domain_declarations() -> None:
 
 def test_authoring_implementation_responsibilities_are_physically_split() -> None:
     authoring = import_module("finn.dataflow.authoring")
+    supply = import_module("finn.dataflow.authoring.input_supply")
+    inventory = import_module("finn.dataflow.authoring.inventory")
     assert authoring.DataflowDesign.__module__ == "finn.dataflow.authoring.design"
-    assert authoring.InputSupplyDeclaration.__module__ == "finn.dataflow.authoring.input_supply"
-    assert authoring.DataflowDesignInventory.__module__ == "finn.dataflow.authoring.inventory"
+    assert supply.InputSupplyDeclaration.__module__ == "finn.dataflow.authoring.input_supply"
+    assert inventory.DataflowDesignInventory.__module__ == "finn.dataflow.authoring.inventory"
+    assert not hasattr(authoring, "InputSupplyDeclaration")
+    assert not hasattr(authoring, "DataflowDesignInventory")
 
 
 def test_region_result_is_rejected_by_static_operation_authoring_type() -> None:

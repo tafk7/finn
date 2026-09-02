@@ -67,12 +67,9 @@ from finn.dataflow.region_validation import (  # noqa: F401 - internal compatibi
 )
 
 if TYPE_CHECKING:
-    from finn.dataflow.resolution import DataflowOpResult, NetworkRef, ResolvedDataflowOp
+    from finn.dataflow.resolution import ResolvedDataflowOp
 
-_LAZY_EXPORTS = {
-    name: ("finn.dataflow.resolution", name)
-    for name in ("DataflowOpResult", "NetworkRef", "ResolvedDataflowOp")
-}
+_LAZY_EXPORTS = {"ResolvedDataflowOp": ("finn.dataflow.resolution", "ResolvedDataflowOp")}
 
 
 def __getattr__(name: str) -> object:
@@ -93,7 +90,6 @@ __all__ = [
     "Answer",
     "CommitResult",
     "ConstraintAssessment",
-    "DataflowOpResult",
     "Decided",
     "DecisionState",
     "DesignPoint",
@@ -103,7 +99,6 @@ __all__ = [
     "Finding",
     "FindingKind",
     "ItemOutcome",
-    "NetworkRef",
     "ProposalAdoptionMode",
     "ProposalAdoptionResult",
     "QualifiedPath",

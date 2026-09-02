@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The reviewed MVAU ``DataflowDesign`` inventory and operation result."""
+"""Private pre-v7 MVAU inventory retained for migration-equivalence tests."""
 
 from __future__ import annotations
 

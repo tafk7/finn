@@ -40,13 +40,9 @@ import pytest
 import finn.dataflow.kernels as hardware
 from finn.dataflow.authoring import (
     AuthoringError,
-    OpDesign,
-    Ref,
-    divisors_of,
-    finite,
-    reject,
 )
-from finn.dataflow.authoring.scope import semantics_for
+from finn.dataflow.authoring.op_design import OpDesign
+from finn.dataflow.authoring.scope import Ref, divisors_of, finite, reject, semantics_for
 from finn.dataflow.design import (
     Answer,
     Decided,
@@ -57,17 +53,13 @@ from finn.dataflow.design import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.kernels import (
+from finn.dataflow.kernels import Kernel, PhysicalComponent, scalar_parameters
+from finn.dataflow.kernels.authoring import KernelScope, declare_kernel, kernel_namespace
+from finn.dataflow.kernels.kernel import (
     BoundRegion,
-    KernelScope,
-    Kernel,
-    PhysicalComponent,
     bind_kernel,
     bound_regions,
     check_declared_references,
-    declare_kernel,
-    kernel_namespace,
-    scalar_parameters,
 )
 from finn.dataflow.kernels.selection import KernelCandidateSelection
 from finn.dataflow.kernels._declaration import CompiledKernelDeclaration

@@ -30,7 +30,6 @@ class CoordinateMappingKind(str, Enum):
 
     FLATTEN_LEADING = "flatten_leading"
     TRANSPOSE_2D = "transpose_2d"
-    BINDING_LOCAL_STATE = "binding_local_state"
 
 
 @dataclass(frozen=True)
@@ -42,23 +41,12 @@ class SemanticOperandDestination:
 
 
 @dataclass(frozen=True)
-class BindingLocalStateDestination:
-    """Qualified binding-local state destination."""
-
-    owner_id: str
-    state_id: str
-
-
-SourceOperandDestination = SemanticOperandDestination
-
-
-@dataclass(frozen=True)
 class SourceOperandAssociation:
     """Explicit association from one source operand to a semantic target."""
 
     role: str
     source_operand_id: str
-    destination: SourceOperandDestination
+    destination: SemanticOperandDestination
     mapping: CoordinateMappingKind
     source_shape: tuple[int, ...]
     destination_shape: tuple[int, ...]
@@ -96,12 +84,10 @@ MVAUResolvedDataflowOp: TypeAlias = ResolvedDataflowOp[MVAUSourceAssociation]
 
 
 __all__ = [
-    "BindingLocalStateDestination",
     "CoordinateMappingKind",
     "MVAUParameterTopology",
     "MVAUResolvedDataflowOp",
     "MVAUSourceAssociation",
     "SemanticOperandDestination",
     "SourceOperandAssociation",
-    "SourceOperandDestination",
 ]

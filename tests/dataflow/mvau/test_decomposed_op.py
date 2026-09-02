@@ -6,7 +6,7 @@
 The Network constructor and its tests show the two Regions assemble.  This
 shows ``MvauDataflowOp`` doing it: projecting its problem from a live
 ``ModelWrapper``, selecting the decomposed compute member and its replay
-Kernel, returning a ``NetworkRef``, associating the source tensors with the two
+Kernel, returning a resolved Network, associating the source tensors with the two
 nodes that now carry them, and reconstituting all of that after a save and
 reload.
 
@@ -178,9 +178,7 @@ def test_the_operation_selects_both_kernels_and_returns_their_network() -> None:
     operation = _committed(model)
 
     resolved = operation.resolve_dataflow(_context())
-    assert resolved.result is resolved
-
-    network = resolved.result.network
+    network = resolved.network
     assert {node.id for node in network.nodes} == {REPLAY_NODE, DOT_PRODUCT_NODE}
     assert [edge.id for edge in network.edges] == [ACTIVATION_EDGE]
     assert list(validate_network(network)) == []

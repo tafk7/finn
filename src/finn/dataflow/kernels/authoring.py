@@ -1,10 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Scoped engine authoring for one ``Kernel`` subclass.
+"""Private lowering support for one physical ``Kernel`` subclass.
 
-``KernelScope`` is the scope a hardware author is handed.  Like
-``KernelDesign`` it owns no problem namespace -- a Kernel never reads a
+``KernelScope`` binds immutable class declarations. Legacy tests also exercise
+its callback bridge directly. Like the removed public ``KernelDesign`` API it
+owns no problem namespace -- a Kernel never reads a
 ``ModelWrapper``, an ONNX node, or a build configuration.  Everything it knows
 about the outside arrives as typed handles the covered semantics wired in,
 reachable as ``design.inputs``.
@@ -454,7 +455,10 @@ def declare_kernel(
     if kernel.uses_class_authoring:
         return compile_kernel_class(kernel, namespace, inputs, applies_if=applies_if)
     design: KernelScope[object] = KernelScope(namespace, inputs)
-    handles = kernel.define_design(design)
+    define = getattr(kernel, "define_design", None)
+    if not callable(define):
+        raise AuthoringError(f"{kernel.__name__} has no class-local declarations")
+    handles = define(design)
     declared = design.spec()
     spec = gate_spec(declared, applies_if) if applies_if is not None else declared
     return CompiledKernelDeclaration(

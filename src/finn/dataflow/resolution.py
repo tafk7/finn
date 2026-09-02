@@ -7,30 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
-from finn.dataflow.design import Decided, DesignPoint, Engine, ValueSemantics
+from finn.dataflow.design import Decided, DesignPoint, Engine
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.network import DataflowNetwork
-
-
-@dataclass(frozen=True)
-class NetworkRef:
-    """Private transitional engine value for selected Network aggregation."""
-
-    network_id: str
-    network: DataflowNetwork
-    source_association: object
-
-
-DataflowOpResult = NetworkRef
-
-DATAFLOW_OP_RESULT_SEMANTICS: ValueSemantics[object] = ValueSemantics(
-    DataflowOpResult,
-    "DataflowOpResult",
-    lambda value: isinstance(value, NetworkRef),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-
 
 AssociationT = TypeVar("AssociationT")
 
@@ -46,18 +25,6 @@ class ResolvedDataflowOp(Generic[AssociationT]):
     network: DataflowNetwork
     source_association: AssociationT
     compiled: object | None = field(default=None, compare=False, repr=False)
-
-    @property
-    def result(self) -> ResolvedDataflowOp[AssociationT]:
-        """Compatibility spelling during removal of the old result wrapper."""
-
-        return self
-
-    @property
-    def network_id(self) -> str:
-        """Compatibility spelling for the selected Design identity."""
-
-        return self.selected_design_id
 
     def declared_value(self, member_name: str) -> object:
         """Resolve one compiler-declared member without exposing raw point traversal."""
@@ -77,8 +44,5 @@ class ResolvedDataflowOp(Generic[AssociationT]):
 
 
 __all__ = [
-    "DATAFLOW_OP_RESULT_SEMANTICS",
-    "DataflowOpResult",
-    "NetworkRef",
     "ResolvedDataflowOp",
 ]

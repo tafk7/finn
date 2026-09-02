@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Scoped engine authoring for one ``DataflowOp``.
+"""Private scoped lowering support for one ``DataflowOp``.
 
-``OpDesign`` is the ``Scope`` an operation author is handed.  It adds the two
-things a Kernel scope must not have: ownership of the problem namespace, and
-a recorded provenance for every fact in it.
+``OpDesign`` is used while binding class-local operation declarations. Legacy
+tests also exercise it directly, but it is not part of the public contributor
+façade.
 
 Provenance is FINN authoring metadata, not an engine problem-field kind.  It
 answers one question the engine has no opinion about -- *who is entitled to
@@ -17,97 +17,21 @@ moment it happens rather than a value silently overwritten later.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
-from enum import Enum
+from collections.abc import Callable
 from types import MappingProxyType
 
+from finn.dataflow.authoring.provenance import (
+    BUILD_OWNED,
+    GRAPH_OWNED,
+    ProblemProvenance,
+    Provenance,
+)
 from finn.dataflow.authoring.scope import AuthoringError, Ref, Scope, T
 from finn.dataflow.design import QualifiedPath, ValueSemantics
-
-
-class Provenance(Enum):
-    """Who is entitled to supply one problem field."""
-
-    #: Read directly from the source graph: identities, shapes, datatypes,
-    #: initializer presence, node attributes carrying source semantics.
-    GRAPH = "graph"
-    #: Recovered by an analysis over the source graph, such as an accumulator
-    #: width or an initializer value range.  Still graph-owned; the graph is
-    #: the only input.
-    GRAPH_ANALYSIS = "graph_analysis"
-    #: A property of the deployment target: part, DSP family, clock, memory.
-    TARGET = "target"
-    #: A build-configuration or invocation fact: requested behaviour, analysis
-    #: ownership, contracts the caller promises to honour.
-    BUILD = "build"
-    #: Supplied by an enclosing assembly rather than projected at all.
-    UPSTREAM = "upstream"
-
-
-#: The provenances a graph projection may supply.
-GRAPH_OWNED: frozenset[Provenance] = frozenset({Provenance.GRAPH, Provenance.GRAPH_ANALYSIS})
-
-#: The provenances a build projection may supply.
-BUILD_OWNED: frozenset[Provenance] = frozenset(
-    {Provenance.TARGET, Provenance.BUILD, Provenance.UPSTREAM}
-)
 
 #: The path root under which target facts live, shared across operations
 #: because the target is not owned by any one of them.
 TARGET_ROOT = "target"
-
-
-@dataclass(frozen=True, slots=True)
-class ProblemProvenance:
-    """The provenance of every problem field one operation declared."""
-
-    kinds: Mapping[QualifiedPath, Provenance]
-
-    def kind_of(self, path: QualifiedPath) -> Provenance | None:
-        return self.kinds.get(path)
-
-    def paths_for(self, *kinds: Provenance | Iterable[Provenance]) -> frozenset[QualifiedPath]:
-        wanted: set[Provenance] = set()
-        for item in kinds:
-            if isinstance(item, Provenance):
-                wanted.add(item)
-            else:
-                wanted.update(item)
-        return frozenset(path for path, kind in self.kinds.items() if kind in wanted)
-
-    def check(
-        self,
-        supplied: Mapping[QualifiedPath, object],
-        *,
-        allowed: Iterable[Provenance],
-        owner: str,
-    ) -> None:
-        """Raise unless every supplied path is one this owner may supply.
-
-        An unknown path is reported separately from a misowned one: the first
-        is usually a typo or a stale constant, the second is a real ownership
-        error, and telling an author which one they made is most of the value.
-        """
-
-        permitted = frozenset(allowed)
-        unknown = sorted(str(path) for path in supplied if path not in self.kinds)
-        misowned = sorted(
-            f"{path} is {self.kinds[path].value}"
-            for path in supplied
-            if path in self.kinds and self.kinds[path] not in permitted
-        )
-        if unknown or misowned:
-            raise AuthoringError(
-                f"{owner} projection supplied fields it does not own; "
-                f"undeclared {unknown}, wrong provenance {misowned}"
-            )
-
-    def check_graph_projection(self, supplied: Mapping[QualifiedPath, object]) -> None:
-        self.check(supplied, allowed=GRAPH_OWNED, owner="graph")
-
-    def check_build_projection(self, supplied: Mapping[QualifiedPath, object]) -> None:
-        self.check(supplied, allowed=BUILD_OWNED, owner="build")
 
 
 class OpDesign(Scope):

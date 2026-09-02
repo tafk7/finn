@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from types import MappingProxyType
-from typing import Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from finn.dataflow.authoring.scope import (
     AuthoringError,
@@ -63,6 +63,9 @@ from finn.dataflow.spec_algebra import (
 )
 
 In = TypeVar("In")
+
+if TYPE_CHECKING:
+    from finn.dataflow.authoring.composition import PhysicalCompositionContext
 
 _COMPUTATION_SEMANTICS = as_object_semantics(
     ValueSemantics.immutable_nominal(ComputationContract, name="ComputationContract")
@@ -170,10 +173,6 @@ class DataflowDesign:
     id: str = ""
     version: str = "1"
     uses_class_authoring: bool = False
-
-    @classmethod
-    def define(cls, design: DataflowDesignScope[Any]) -> None:
-        raise NotImplementedError(f"{cls.__name__} does not define a dataflow design")
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,8 +353,32 @@ class Kernels(DeclarationGroup):
         return ()
 
 
+@dataclass(frozen=True, slots=True)
+class PhysicalComposition(DeclarationGroup):
+    composer: Callable[[PhysicalCompositionContext], object] | str
+    inputs: Mapping[str, DeclarationTemplate[Any]]
+    layers = frozenset({DeclarationLayer.DESIGN})
+
+    def __init__(
+        self,
+        composer: Callable[[PhysicalCompositionContext], object] | str,
+        *,
+        inputs: Mapping[str, DeclarationTemplate[Any]] = MappingProxyType({}),
+    ) -> None:
+        if not callable(composer) and (not isinstance(composer, str) or ":" not in composer):
+            raise ValueError("a composer must be callable or a 'module:name' reference")
+        object.__setattr__(self, "composer", composer)
+        object.__setattr__(self, "inputs", MappingProxyType(dict(inputs)))
+
+    def declaration_items(
+        self, member_name: str
+    ) -> tuple[tuple[str, DeclarationTemplate[Any]], ...]:
+        del member_name
+        return ()
+
+
 class DataflowDesignScope(Scope, Generic[In]):
-    """The scoped authoring surface handed to a ``DataflowDesign`` subclass."""
+    """Private lowering scope for one ``DataflowDesign`` class."""
 
     def __init__(self, namespace: str, inputs: In) -> None:
         super().__init__(namespace)
@@ -833,6 +856,23 @@ def compile_dataflow_design_class(
             absorbs=tuple(edges[id(item)] for item in group.absorbs),
         )
 
+    compositions = tuple(
+        group for group in compiled.groups.values() if isinstance(group, PhysicalComposition)
+    )
+    if len(compositions) > 1:
+        raise AuthoringError(f"{design.__name__} declares more than one physical composer")
+    composer = compositions[0] if compositions else None
+    composition_inputs = (
+        MappingProxyType(
+            {
+                name: cast("Ref[object]", _resolve_design_value(value, compiled, nodes, edges))
+                for name, value in composer.inputs.items()
+            }
+        )
+        if composer is not None
+        else MappingProxyType({})
+    )
+
     for supply in input_supplies:
         cast(Any, supply).apply(scope)
     declaration = DataflowDesignDeclaration(
@@ -865,6 +905,8 @@ def compile_dataflow_design_class(
                 for constraint in kernel.constraint_handles
             ),
         ),
+        None if composer is None else composer.composer,
+        composition_inputs,
     )
     return declaration, scope
 

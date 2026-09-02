@@ -22,7 +22,7 @@ from finn.dataflow.kernels.finn_rtl_memstream import (
     FinnRtlMemstreamInputs,
     FinnRtlMemstreamKernel,
 )
-from finn.dataflow.ops.mvau.problem import MVAUProblem
+from finn.dataflow.ops.mvau.contracts import MVAUProblem
 from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
 from finn.dataflow.parameters.cyclic.definition import CyclicRamStyle
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region

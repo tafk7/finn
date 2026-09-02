@@ -15,22 +15,21 @@ from typing import cast
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 import finn.dataflow.authoring as dataflow_authoring
-from finn.dataflow.authoring import (
-    OpDesign,
-    Ref,
-    Scope,
-    declare_dataflow_op_authoring,
-    divisors_of,
-    finite,
-    reject,
-    unresolved,
-)
 from finn.dataflow.authoring.admission import (
     AdmissionVerdict,
     graph_stage_build_admission,
     resolved_physical_feasibility,
 )
-from finn.dataflow.authoring.scope import predicate
+from finn.dataflow.authoring.op_design import OpDesign
+from finn.dataflow.authoring.scope import (
+    Ref,
+    Scope,
+    divisors_of,
+    finite,
+    predicate,
+    reject,
+    unresolved,
+)
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.authoring.design import (
     DataflowDesign,
@@ -49,6 +48,7 @@ from finn.dataflow.authoring.inventory import (
     DataflowDesignInventory,
     declare_dataflow_design,
     declare_dataflow_design_inventory,
+    declare_dataflow_op_authoring,
     selected_design_metadata,
 )
 from finn.dataflow.authoring.realization import DesignRealization
@@ -64,12 +64,10 @@ from finn.dataflow.design import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.resolution import DATAFLOW_OP_RESULT_SEMANTICS, NetworkRef
-from finn.dataflow.kernels import (
+from finn.dataflow.kernels import Kernel, PhysicalComponent
+from finn.dataflow.kernels.authoring import KernelScope
+from finn.dataflow.kernels.kernel import (
     BoundRegion,
-    KernelScope,
-    Kernel,
-    PhysicalComponent,
     bind_kernel,
     bound_regions,
 )
@@ -1243,14 +1241,7 @@ def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> 
         dependencies={},
         evaluate=lambda: "synthetic",
     )
-    selected_result = operation.derived(
-        "result",
-        DATAFLOW_OP_RESULT_SEMANTICS,
-        dependencies={"network": selected_network, "association": source_association},
-        evaluate=lambda network, association: NetworkRef(
-            "synthetic", cast(DataflowNetwork, network), association
-        ),
-    )
+    selected_result = selected_network
     structurally_valid = operation.constraint(
         "structurally_valid",
         dependencies={"network": selected_network},
@@ -1260,7 +1251,7 @@ def test_operation_assembly_uses_inventory_owned_constraints_and_readiness() -> 
     authored = declare_dataflow_op_authoring(
         inventory,
         operation,
-        result=cast("Ref[NetworkRef]", selected_result),
+        result=selected_result,
         source_association=cast("Ref[object]", source_association),
         structural_properties=(selected_network, source_association, selected_result),
         structural_constraints=(structurally_valid,),
@@ -1516,19 +1507,31 @@ def test_generic_design_and_supply_authoring_has_no_mvau_dependency() -> None:
 def test_public_design_authoring_surface_excludes_compiled_metadata() -> None:
     assert {
         "DataflowDesign",
-        "DataflowDesignScope",
-        "InputSupplyAlternative",
-        "declare_dataflow_design_inventory",
+        "Kernels",
+        "Network",
+        "PhysicalComposition",
+        "Region",
     } <= set(dataflow_authoring.__all__)
     assert {
+        "DataflowDesignEntry",
+        "DataflowDesignInventory",
         "DataflowDesignDeclaration",
+        "DataflowDesignScope",
+        "DataflowOpAuthoring",
+        "InputSupplyAlternative",
+        "InputSupplyDeclaration",
         "CompiledKernelDeclaration",
         "KernelDesign",
         "KernelPlacement",
         "KernelProvider",
         "KernelSelection",
+        "OpDesign",
         "PlacementSelection",
+        "Ref",
         "RegionRef",
+        "Scope",
+        "declare_dataflow_design_inventory",
+        "declare_dataflow_op_authoring",
     }.isdisjoint(dataflow_authoring.__all__)
 
 

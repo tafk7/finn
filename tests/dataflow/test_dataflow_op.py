@@ -137,7 +137,7 @@ def test_direct_class_frontend_projects_and_persists_without_custom_hooks(
 
     operation.commit_dataflow_assignments(_config(), {QualifiedPath("class_authored.lanes"): 2})
     resolved = operation.resolve_dataflow(_config())
-    assert resolved.result.network.node("compute").region.inputs[0].port.operand.shape == (4,)
+    assert resolved.network.node("compute").region.inputs[0].port.operand.shape == (4,)
     assert resolved.source_association == "synthetic-scope"
 
     path = tmp_path / "class-authored.onnx"
@@ -147,7 +147,7 @@ def test_direct_class_frontend_projects_and_persists_without_custom_hooks(
     assert isinstance(restored, ClassAuthoredDataflowOp)
     restored_result = restored.resolve_dataflow(_config())
     assert restored_result.point.assignments == resolved.point.assignments
-    assert restored_result.result == resolved.result
+    assert restored_result == resolved
     assert restored_result.source_scope_id == resolved.source_scope_id
 
 
@@ -229,13 +229,12 @@ def test_scalar_codecs_partial_and_complete_reload(tmp_path: Path) -> None:
     )
     assert complete.point.assignments == _complete_assignments()
     resolved = partial_reloaded.resolve_dataflow(_config())
-    assert resolved.result is resolved
     assert resolved.source_association == "synthetic-scope"
     complete_path = tmp_path / "complete.onnx"
     partial_reloaded._attached_model().save(complete_path)
     restored = _wrapped(ModelWrapper(str(complete_path))).resolve_dataflow(_config())
     assert restored.point.assignments == resolved.point.assignments
-    assert restored.result == resolved.result
+    assert restored == resolved
     assert restored.source_scope_id == resolved.source_scope_id
 
 
@@ -310,7 +309,7 @@ def test_scope_identity_is_stored_independently_of_node_name() -> None:
     wrapped.onnx_node.name = "renamed"
     assert wrapped.dataflow_scope_id() == scope_id
     renamed = wrapped.resolve_dataflow(_config())
-    assert renamed.result == original.result
+    assert renamed == original
 
     cloned_model = ModelWrapper(model.model, make_deepcopy=True)
     cloned = _wrapped(cloned_model)
@@ -415,7 +414,7 @@ def test_synthetic_operation_passes_shared_conformance_harness(tmp_path: Path) -
         mutate_graph_problem=_change_synthetic_shape,
     )
     result = assert_dataflow_op_conforms(case)
-    assert result.original.result is result.original
+    assert result.original.selected_design_id == "network"
 
 
 def test_zero_decision_operation_passes_shared_conformance_harness(tmp_path: Path) -> None:
@@ -431,7 +430,7 @@ def test_zero_decision_operation_passes_shared_conformance_harness(tmp_path: Pat
         )
     )
     assert result.original.point.assignments == {}
-    assert result.original.result is result.original
+    assert result.original.selected_design_id == "network"
 
 
 def _imported_modules(path: Path) -> set[str]:

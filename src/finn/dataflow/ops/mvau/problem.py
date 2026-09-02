@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The MVAU operation's problem: every fact it owns, declared once.
+"""Private compatibility declarations for pre-v7 MVAU tests.
 
 This module is the answer to "who owns ``problem.mvau.*``".  Previously the
 compute Kernel pool carried a ``MVAUComputeProblemPaths`` table and the supply
@@ -9,9 +9,9 @@ pool carried another, so a Kernel module was the definition site for facts no
 Kernel projects, and every consumer -- source projection, elaboration,
 artifacts -- reached into a Kernel module to name them.
 
-The operation declares them here through one ``OpDesign``, each with a
-provenance saying who may supply it, and hands out typed ``Ref`` handles.  A
-Kernel reads a fact through the handle it was given; it does not name a path.
+The production v7 operation declares these facts directly on
+``MvauDataflowOp``. This module preserves the former scope-built handles for
+historical equivalence tests; production imports do not load it.
 
 This module deliberately imports nothing from ``finn.dataflow.mvau`` beyond
 the leaf computation profile, so the Kernel modules can depend on it.
@@ -19,12 +19,14 @@ the leaf computation profile, so the Kernel modules can depend on it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-
 from finn.dataflow.authoring.op_design import OpDesign, ProblemProvenance
 from finn.dataflow.authoring.scope import Ref
 from finn.dataflow.design import DesignSpaceSpec, QualifiedPath
+from finn.dataflow.ops.mvau.contracts import (
+    MVAUComputationProfile,
+    MVAUProblem,
+    MVAUSourceDescription,
+)
 from finn.dataflow.parameters.cyclic.definition import (
     CyclicParameterKernelPaths,
     CyclicTargetMemoryCapabilities,
@@ -32,38 +34,6 @@ from finn.dataflow.parameters.cyclic.definition import (
 from finn.dataflow.kernels.dsp import DspBlock
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.region import BeatSequence, NumericElementType, is_element_type
-
-
-class MVAUComputationProfile(str, Enum):
-    """Evidenced source-computation profiles supported by MVAU bindings."""
-
-    __dataflow_identity_token__ = "finn.dataflow.mvau_problem.MVAUComputationProfile"
-
-    ACCUMULATOR_INTEGER = "accumulator_integer"
-    BIPOLAR_XNOR_ACCUMULATOR = "bipolar_xnor_accumulator"
-    FUSED_THRESHOLD = "fused_threshold"
-
-
-@dataclass(frozen=True)
-class MVAUSourceDescription:
-    """Compiler-owned source identities and shapes for one MVAU scope."""
-
-    __dataflow_identity_token__ = "finn.dataflow.mvau_problem.MVAUSourceDescription"
-
-    source_node_id: str
-    activation_operand_id: str
-    weight_operand_id: str
-    output_operand_id: str
-    leading_shape: tuple[int, ...]
-    threshold_operand_id: str | None = None
-    fused_source_node_ids: tuple[str, ...] = ()
-    threshold_shape: tuple[int, ...] | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "leading_shape", tuple(self.leading_shape))
-        object.__setattr__(self, "fused_source_node_ids", tuple(self.fused_source_node_ids))
-        if self.threshold_shape is not None:
-            object.__setattr__(self, "threshold_shape", tuple(self.threshold_shape))
 
 
 # -- field validators --------------------------------------------------------
@@ -117,40 +87,6 @@ def _source_description_valid(value: object) -> bool:
 
 
 # -- the declared problem ----------------------------------------------------
-
-
-@dataclass(frozen=True)
-class MVAUProblem:
-    """Typed handles to every fact the MVAU operation owns.
-
-    Kernel modules, source projection, and elaboration all read facts through
-    these handles rather than through a path table, so the declaration site and
-    the use site cannot drift apart.
-    """
-
-    repetitions: Ref[int]
-    matrix_width: Ref[int]
-    matrix_height: Ref[int]
-    activation_element_type: Ref[NumericElementType]
-    weight_element_type: Ref[NumericElementType]
-    accumulator_element_type: Ref[NumericElementType]
-    output_element_type: Ref[NumericElementType]
-    threshold_element_type: Ref[NumericElementType]
-    threshold_initializer_available: Ref[bool]
-    computation_profile: Ref[MVAUComputationProfile]
-    weight_initializer_available: Ref[bool]
-    weight_initializer_fingerprint: Ref[str]
-    threshold_initializer_fingerprint: Ref[str]
-    source_description: Ref[MVAUSourceDescription]
-    initializer_excludes_minimum: Ref[bool]
-    runtime_weight_range_contract: Ref[bool]
-    runtime_writable: Ref[bool]
-    external_weight_sequence: Ref[BeatSequence]
-    accumulator_type_analysis_owner: Ref[str]
-    target_dsp_block: Ref[DspBlock]
-    target_fpga_part: Ref[str]
-    target_clock_period_ns: Ref[float]
-    target_memory_capabilities: Ref[CyclicTargetMemoryCapabilities]
 
 
 def build_mvau_problem(design: OpDesign) -> MVAUProblem:

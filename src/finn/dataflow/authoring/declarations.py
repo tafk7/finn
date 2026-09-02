@@ -19,7 +19,8 @@ from inspect import Parameter, signature
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar, cast
 
-from finn.dataflow.authoring.op_design import OpDesign, Provenance
+from finn.dataflow.authoring.op_design import OpDesign
+from finn.dataflow.authoring.provenance import Provenance
 from finn.dataflow.authoring.scope import (
     AuthoringError,
     ConstraintRef,
