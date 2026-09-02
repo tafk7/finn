@@ -29,7 +29,7 @@ from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.model.kernel import configure_kernel
-from finn.dataflow.model.replay_buffer import FINN_SOURCES, ReplayBufferKernel
+from finn.dataflow.model.replay_buffer import FINNLIB_SOURCES, ReplayBufferKernel
 from finn.dataflow.spec_algebra import assemble_specs
 
 from dataflow.rtlsim.rtl_transport import drive
@@ -93,13 +93,29 @@ class Harness(Space):
 
 def record_identity() -> None:
     root = Path(os.environ["FINN_ROOT"])
+    finnlib = Path(os.environ["FINNLIB_ROOT"])
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
     ).stdout.strip()
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
     ).stdout.strip()
+    library = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=finnlib,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    library_dirty = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=finnlib,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     print(f"FINN: {head} ({'dirty' if dirty else 'clean'})")
+    print(f"FinnLib: {library} ({'dirty' if library_dirty else 'clean'})")
 
 
 def _configure(case: Case) -> ReplayBufferKernel:
@@ -173,8 +189,8 @@ def run_one(case: Case) -> int:
         return FAIL
 
     top = f"replay_kernel_{case.label}"
-    root = Path(os.environ["FINN_ROOT"])
-    sources = [str(root / path) for path in FINN_SOURCES]
+    finnlib = Path(os.environ["FINNLIB_ROOT"])
+    sources = [str(finnlib / path) for path in FINNLIB_SOURCES]
     ok = True
     for stalls in (False, True):
         with tempfile.TemporaryDirectory() as directory:

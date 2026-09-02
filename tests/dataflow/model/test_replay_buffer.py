@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 from typing import cast
 
@@ -27,8 +28,8 @@ from finn.dataflow.model.kernel_artifacts import (
     resolve_kernel_contributions,
 )
 from finn.dataflow.model.replay_buffer import (
-    FINN_ROOT,
-    FINN_SOURCES,
+    FINNLIB_ROOT,
+    FINNLIB_SOURCES,
     ReplayBufferKernel,
     construct_activation_replay_region,
 )
@@ -95,6 +96,15 @@ def _configure(
     answer = configure_kernel(engine, kernel, point)  # type: ignore[arg-type]
     assert isinstance(answer, Decided), answer
     return cast(ReplayBufferKernel, answer.value)
+
+
+def _finnlib_root() -> Path:
+    """Return the caller-selected FinnLib checkout, or FINN's pinned default."""
+
+    override = os.environ.get("FINNLIB_ROOT")
+    if override:
+        return Path(override).resolve()
+    return (Path(__file__).parents[3] / "deps/finnlib").resolve()
 
 
 #: One and several repetitions, neuron folds, synapse folds; several legal
@@ -207,7 +217,8 @@ def test_several_neuron_folds_multiply_the_output_beats() -> None:
 
 def test_replay_sources_and_abi_are_exact() -> None:
     configured = _configure(simd=2, activation="INT8")
-    assert tuple(source.path for source in configured.source_contributions) == FINN_SOURCES
+    assert {source.root for source in configured.source_contributions} == {FINNLIB_ROOT}
+    assert tuple(source.path for source in configured.source_contributions) == FINNLIB_SOURCES
     assert configured.abi.entry_point == "replay_buffer"
     assert set(configured.abi.physical_names()) == {
         "clk",
@@ -232,12 +243,12 @@ def test_replay_sources_and_abi_are_exact() -> None:
     assert configured.abi.parameters == (("LEN", "4"), ("REP", "2"), ("W", "16"))
 
 
-def test_replay_abi_agrees_with_the_pinned_rtl() -> None:
+def test_replay_abi_agrees_with_the_selected_finnlib_rtl() -> None:
     configured = _configure()
-    root = Path(__file__).parents[3]
-    sources = tuple(root / path for path in FINN_SOURCES)
+    root = _finnlib_root()
+    sources = tuple(root / path for path in FINNLIB_SOURCES)
     if any(not path.is_file() for path in sources):
-        pytest.skip("finn-rtllib sources are not present")
+        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     result = check_abi(
         configured.abi,
         sources,
@@ -306,11 +317,11 @@ def test_replay_refuses_folding_it_cannot_realize() -> None:
 def test_replay_source_closure_completes_and_round_trips_through_store(
     tmp_path: Path,
 ) -> None:
-    root = Path(__file__).parents[3]
-    if not (root / FINN_SOURCES[0]).is_file():
-        pytest.skip("finn-rtllib sources are not present")
+    root = _finnlib_root()
+    if not (root / FINNLIB_SOURCES[0]).is_file():
+        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     kernel = _configure()
-    resolved = resolve_kernel_contributions(kernel, roots={FINN_ROOT: root})
+    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
     derivation = kernel_source_derivation(kernel, resolved)
     store = ArtifactStore(tmp_path / "store")
     workspace = store.workspace(derivation)
@@ -322,20 +333,20 @@ def test_replay_source_closure_completes_and_round_trips_through_store(
     found = store.lookup(derivation)
     assert found == published
     assert found.files == tuple(source.path for source in resolved.definition.files)
-    assert found.files == FINN_SOURCES
+    assert found.files == FINNLIB_SOURCES
 
 
 def test_replay_packages_into_a_portable_component(tmp_path: Path) -> None:
-    root = Path(__file__).parents[3]
-    if not (root / FINN_SOURCES[0]).is_file():
-        pytest.skip("finn-rtllib sources are not present")
+    root = _finnlib_root()
+    if not (root / FINNLIB_SOURCES[0]).is_file():
+        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     kernel = _configure()
-    resolved = resolve_kernel_contributions(kernel, roots={FINN_ROOT: root})
+    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
     derivation = kernel_source_derivation(kernel, resolved)
     component = portable_kernel_component(
         kernel, ArtifactRef(derivation.kind, build_key(derivation)), resolved
     )
     assert component.entry_point == "replay_buffer"
     assert component.abi is kernel.abi
-    assert tuple(path for path, _content in component.files) == FINN_SOURCES
+    assert tuple(path for path, _content in component.files) == FINNLIB_SOURCES
     del tmp_path

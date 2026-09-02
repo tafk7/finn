@@ -13,6 +13,7 @@ is permitted and the honest scope of the guarantee is whatever is left.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -70,15 +71,17 @@ FINNLIB_CLOSURE = (
 
 @pytest.fixture(name="replay")
 def _replay(finn_root: Path) -> Path:
-    path = finn_root / "finn-rtllib/mvu/replay_buffer.sv"
+    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    path = finnlib_root / "rtl/infra/replay_buffer.sv"
     if not path.is_file():
-        pytest.skip("finn-rtllib is not present")
+        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     return path
 
 
 @pytest.fixture(name="finnlib")
 def _finnlib(finn_root: Path) -> tuple[Path, ...]:
-    files = tuple(finn_root / "deps/finnlib" / name for name in FINNLIB_CLOSURE)
+    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    files = tuple(finnlib_root / name for name in FINNLIB_CLOSURE)
     if any(not path.is_file() for path in files):
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     return files

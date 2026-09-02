@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Declarative one-Region model of FINN's ``replay_buffer``.
+"""Declarative one-Region model of FinnLib's ``replay_buffer``.
 
 The buffer presents each activation row once per neuron fold.  That expansion is
 what the monolithic MVAU Region performed implicitly by scheduling its activation
@@ -58,11 +58,8 @@ from finn.dataflow.region import (
     element_width,
 )
 
-FINN_ROOT = "finn"
-FINN_SOURCES = (
-    "finn-rtllib/mvu/mvu_pkg.sv",
-    "finn-rtllib/mvu/replay_buffer.sv",
-)
+FINNLIB_ROOT = "finnlib"
+FINNLIB_SOURCES = ("rtl/infra/replay_buffer.sv",)
 
 
 def _compact_beats(
@@ -206,12 +203,10 @@ class ReplayBufferKernel(Kernel):
     W = Parameter(data_width)
 
     sources = (
-        CopiedSource(FINN_ROOT, FINN_SOURCES[0], provides=("package:mvu_pkg",)),
         CopiedSource(
-            FINN_ROOT,
-            FINN_SOURCES[1],
+            FINNLIB_ROOT,
+            FINNLIB_SOURCES[0],
             provides=("module:replay_buffer",),
-            requires=("package:mvu_pkg",),
         ),
     )
 
@@ -258,8 +253,8 @@ class ReplayBufferKernel(Kernel):
 
 __all__ = [
     "ACTIVATION_REPLAY_COMPUTATION",
-    "FINN_ROOT",
-    "FINN_SOURCES",
+    "FINNLIB_ROOT",
+    "FINNLIB_SOURCES",
     "ReplayBufferKernel",
     "construct_activation_replay_region",
 ]

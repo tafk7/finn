@@ -44,6 +44,7 @@ from finn.dataflow.model.kernel_artifacts import (
     portable_kernel_component,
     resolve_kernel_contributions,
 )
+from finn.dataflow.model.replay_buffer import FINNLIB_ROOT
 from finn.util.basic import get_vivado_version
 
 from dataflow.model.rtlsim.replay_buffer_numeric import (
@@ -81,13 +82,13 @@ def _toolchain() -> ToolchainIdentity:
 
 def _package(case: Case, directory: Path):
     kernel = _configure(case)
-    root = Path(os.environ["FINN_ROOT"])
-    resolved = resolve_kernel_contributions(kernel, roots={"finn": root})
+    finnlib = Path(os.environ["FINNLIB_ROOT"])
+    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: finnlib})
     source_derivation = kernel_source_derivation(kernel, resolved)
     source_ref = ArtifactRef(source_derivation.kind, build_key(source_derivation))
     component = portable_kernel_component(kernel, source_ref, resolved)
     blobs = {
-        source.content.digest: (root / source.path).read_bytes()
+        source.content.digest: (finnlib / source.path).read_bytes()
         for source in resolved.definition.files
     }
     package = plan_package(
