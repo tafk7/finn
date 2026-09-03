@@ -134,6 +134,43 @@ CanonicalValue = Union[None, bool, int, str, list[object], dict[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
+class PersistentCodec(Generic[T_contra]):
+    """How one ``Decision``'s values are written down and read back.
+
+    Declaration-owned and versioned, exactly as :class:`CanonicalValueCodec`
+    already is for a ``Problem`` -- and for the same reason: what a value's
+    persisted form is, is the business of the declaration that admits the
+    value, not of the value's class and not of a process-global registry.
+
+    Two directions, both explicit, and never ``repr``/``eval``.  A value that
+    cannot be written and read back to something the Decision's domain accepts
+    must fail where the Decision is *written*, and a repr is exactly the
+    encoding that looks like it worked until a reload.
+
+    ``identity`` and ``version`` travel with every persisted value, so changing
+    how a type is encoded is a refusal on the next load rather than a silent
+    reinterpretation of bytes written under the old rules.
+    """
+
+    identity: str
+    version: int
+    encode: Callable[[T_contra], CanonicalValue]
+    decode: Callable[[CanonicalValue], object]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, str) or not self.identity:
+            raise AuthoringError("a PersistentCodec identity is a non-empty stable string")
+        if type(self.version) is not int or self.version < 1:
+            raise AuthoringError(f"PersistentCodec {self.identity!r} needs a positive version")
+        if not callable(self.encode) or not callable(self.decode):
+            raise AuthoringError(f"PersistentCodec {self.identity!r} needs two callables")
+
+    @property
+    def tag(self) -> str:
+        return f"{self.identity}@{self.version}"
+
+
+@dataclass(frozen=True, slots=True)
 class CanonicalValueCodec(Generic[T_contra]):
     """How one declaration's values are encoded into a persistent fingerprint.
 
@@ -775,6 +812,11 @@ class Decision(ValueSource[T_co]):
     """A value selected within this Space."""
 
     domain: Domain
+    #: How committed values of this Decision are persisted.  ``None`` means the
+    #: structural default is to be used, and a Decision whose value semantics
+    #: the structural default does not cover is refused when the persistence
+    #: layer first walks the model -- not silently written as a repr.
+    canonical: PersistentCodec[Any] | None = None
 
     def __init__(
         self,
@@ -783,12 +825,16 @@ class Decision(ValueSource[T_co]):
         domain: Domain | None = None,
         values: Iterable[object] | None = None,
         name: str | None = None,
+        canonical: PersistentCodec[Any] | None = None,
     ) -> None:
         if (domain is None) == (values is None):
             raise AuthoringError("a Decision needs exactly one of domain= or values=")
+        if canonical is not None and not isinstance(canonical, PersistentCodec):
+            raise AuthoringError("a Decision canonical= is one PersistentCodec")
         object.__setattr__(self, "value_semantics", semantics_for(value_type))
         object.__setattr__(self, "stable_name", name)
         object.__setattr__(self, "domain", domain if domain is not None else finite(values or ()))
+        object.__setattr__(self, "canonical", canonical)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -1331,6 +1377,7 @@ __all__ = [
     "Input",
     "OccurrenceContext",
     "PendingFinding",
+    "PersistentCodec",
     "Problem",
     "Projection",
     "Readiness",

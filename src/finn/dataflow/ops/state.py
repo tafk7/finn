@@ -21,10 +21,21 @@ So the design state is one document, written whole::
       "problem_fingerprint": "...",
       "commitment_stage": "dataflow",
       "assignments": {
-        "design.$selection": "dot_product",
-        "design.dot_product.pe": 2
+        "design.case": {"codec": "dataflow.selector@1", "value": "dot_product"},
+        "design.dot_product.pe": {"codec": "dataflow.int@1", "value": 2}
       }
     }
+
+The keys are **root-relative compiled paths**, not friendly operation-local
+aliases.  ``"PE"`` cannot name a Decision nested three Subspaces down, cannot
+distinguish two Decisions called ``tile`` in different subspaces, and requires
+somebody to have remembered to list it.  A compiled path is generated, unique
+by construction, and discovered from the model -- so a Decision added to a
+Design is persisted without anyone touching the operation.
+
+Every value carries the identity and version of the codec that wrote it, so a
+changed encoding is a refusal on the next load rather than old bytes silently
+reinterpreted under new rules.
 
 **What stays outside it, and why.**  ``dataflow_scope_id`` is separate because
 it is how the node is *found* before its state can be parsed or replaced.  The
@@ -48,9 +59,13 @@ from dataclasses import dataclass
 from enum import Enum
 from json import dumps, loads
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
-from finn.dataflow.model.declarations import AuthoringError, CanonicalValue
+from finn.dataflow.model.declarations import (
+    AuthoringError,
+    CanonicalValue,
+    PersistentCodec,
+)
 
 #: The one attribute the design state lives in.
 STATE_ATTRIBUTE = "dataflow_state"
@@ -65,31 +80,11 @@ class DecodeError(ValueError):
     """A node's design state cannot be read as this layer's document."""
 
 
-@dataclass(frozen=True, slots=True)
-class DecisionCodec:
-    """How one Decision's values cross the persistence boundary.
-
-    Declaration-owned and versioned, exactly as ``CanonicalValueCodec`` already
-    is for a ``Problem``.  There is no ``repr()`` fallback: a value that cannot
-    be written and read back to something the Decision's domain accepts must
-    fail where the Decision is *written*, not where it is next loaded, and a
-    repr is precisely the encoding that looks like it worked.
-    """
-
-    identity: str
-    version: int
-    encode: Any
-    decode: Any
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.identity, str) or not self.identity:
-            raise AuthoringError("a DecisionCodec identity is a non-empty stable string")
-        if type(self.version) is not int or self.version < 1:
-            raise AuthoringError(f"DecisionCodec {self.identity!r} needs a positive version")
-
-    @property
-    def tag(self) -> str:
-        return f"{self.identity}@{self.version}"
+#: The layer's name for a Decision's persistence codec.  It *is*
+#: :class:`~finn.dataflow.model.declarations.PersistentCodec`, because a
+#: Decision declares it and a Decision lives in ``model/`` -- two types would
+#: mean a declaration could carry one the persistence layer did not accept.
+DecisionCodec = PersistentCodec
 
 
 def _encode_structural(value: object) -> CanonicalValue:
@@ -101,25 +96,77 @@ def _encode_structural(value: object) -> CanonicalValue:
         if not isfinite(value):
             raise AuthoringError("a persisted float must be finite")
         return {"float_hex": value.hex()}
-    if isinstance(value, Enum):
-        return {"enum": str(value.value)}
     raise AuthoringError(
         f"a Decision value of type {type(value).__name__} has no canonical encoding; "
         "give its Decision a canonical=DecisionCodec(...)"
     )
 
 
+def _decode_structural(value: CanonicalValue) -> object:
+    """Read back what ``_encode_structural`` wrote, and nothing else.
+
+    A float and an Enum are tagged on the way out precisely so they can be
+    recognized on the way in; an untagged mapping is not something this codec
+    produced, so it is refused rather than handed back as a dict.
+    """
+
+    if isinstance(value, dict):
+        if set(value) == {"float_hex"}:
+            return float.fromhex(str(value["float_hex"]))
+        raise DecodeError(f"the structural codec did not write {value!r}")
+    return value
+
+
 #: The structural default: the value kinds whose encoding is not a judgement
 #: call.  Anything else -- a tile shape, a scheduling record, a policy object --
 #: declares its own, because only its author knows what its identity is.
-STRUCTURAL_DECISION_CODEC = DecisionCodec(
-    "dataflow.structural", 1, _encode_structural, lambda value: value
+STRUCTURAL_DECISION_CODEC: PersistentCodec[Any] = DecisionCodec(
+    "dataflow.structural", 1, _encode_structural, _decode_structural
 )
 
 #: A Variant selector's alternative id.  Given its own codec even though the
 #: values are stable strings today, so that a future change to how a selection
 #: is written is a version bump rather than a silent reinterpretation.
-SELECTOR_CODEC = DecisionCodec("dataflow.selector", 1, str, str)
+SELECTOR_CODEC: PersistentCodec[Any] = DecisionCodec("dataflow.selector", 1, str, str)
+
+
+def enum_codec(enum_type: type[Enum]) -> PersistentCodec[Any]:
+    """The structural default for an Enum-valued Decision.
+
+    Its *member value*, never its ordinal: reordering the members of an enum is
+    an ordinary refactor and must not silently repoint every saved graph at a
+    different alternative.  Decoding goes back through the enum type, so a value
+    the enum no longer has is a refusal rather than a bare string that fails the
+    Decision's domain check much later.
+    """
+
+    return DecisionCodec(
+        f"dataflow.enum.{enum_type.__module__}.{enum_type.__qualname__}",
+        1,
+        lambda value: cast(CanonicalValue, enum_type(value).value),
+        lambda value: enum_type(value),
+    )
+
+
+#: The commitment stages a document may name.  Checked on decode, so a
+#: misspelled or future stage is a refusal rather than a value that compares
+#: unequal to everything and quietly means "unchecked".
+KNOWN_STAGES = frozenset({"dataflow", "physical"})
+
+#: Exactly the members a document has.  Both directions are checked: a missing
+#: one is incomplete, and an extra one means the writer knew something this
+#: reader does not.
+ENVELOPE_MEMBERS = frozenset(
+    {"schema", "family", "family_version", "problem_fingerprint", "commitment_stage", "assignments"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Assignment:
+    """One persisted choice: the codec that wrote it, and what it wrote."""
+
+    codec: str
+    value: CanonicalValue
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,7 +177,7 @@ class DataflowState:
     family_version: str
     problem_fingerprint: str
     commitment_stage: str
-    assignments: Mapping[str, object]
+    assignments: Mapping[str, Assignment]
 
 
 def encode_state(
@@ -139,7 +186,7 @@ def encode_state(
     family_version: str,
     problem_fingerprint: str,
     commitment_stage: str,
-    assignments: Mapping[str, object],
+    assignments: Mapping[str, Assignment],
 ) -> str:
     """Serialize one design state canonically.
 
@@ -154,13 +201,22 @@ def encode_state(
         "family_version": family_version,
         "problem_fingerprint": problem_fingerprint,
         "commitment_stage": commitment_stage,
-        "assignments": dict(assignments),
+        "assignments": {
+            path: {"codec": item.codec, "value": item.value} for path, item in assignments.items()
+        },
     }
     return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def decode_state(raw: str | bytes) -> DataflowState:
-    """Read one design state back, refusing anything this layer did not write."""
+    """Read one design state back, refusing anything this layer did not write.
+
+    Strict in every direction.  A permissive reader turns a renamed
+    declaration, a stale path or a changed codec into a silently dropped
+    assignment -- and a silently dropped assignment is a design that reloads as
+    something other than what was saved, which is the one failure persistence
+    exists to prevent.
+    """
 
     text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
     if not text:
@@ -171,21 +227,47 @@ def decode_state(raw: str | bytes) -> DataflowState:
         raise DecodeError(f"this node's dataflow state is not valid JSON: {error}") from error
     if not isinstance(payload, dict):
         raise DecodeError("a dataflow state document is a JSON object")
-    schema = payload.get("schema")
-    if schema != STATE_SCHEMA:
+    if payload.get("schema") != STATE_SCHEMA:
         raise DecodeError(
-            f"this node's dataflow state is {schema!r}; this build writes {STATE_SCHEMA!r}. "
-            "A schema this build does not know is not reinterpreted"
+            f"this node's dataflow state is {payload.get('schema')!r}; this build writes "
+            f"{STATE_SCHEMA!r}.  A schema this build does not know is not reinterpreted"
         )
-    assignments = payload.get("assignments")
-    if not isinstance(assignments, dict):
+    missing = sorted(ENVELOPE_MEMBERS - set(payload))
+    if missing:
+        raise DecodeError(f"this node's dataflow state is missing {missing}")
+    extra = sorted(set(payload) - ENVELOPE_MEMBERS)
+    if extra:
+        raise DecodeError(
+            f"this node's dataflow state carries {extra}, which this build does not know; "
+            "it was written by a later writer and is not reinterpreted"
+        )
+    stage = payload["commitment_stage"]
+    if stage not in KNOWN_STAGES:
+        raise DecodeError(f"this node's dataflow state names commitment stage {stage!r}")
+    raw_assignments = payload["assignments"]
+    if not isinstance(raw_assignments, dict):
         raise DecodeError("a dataflow state document's assignments are a JSON object")
+    assignments: dict[str, Assignment] = {}
+    for path, entry in raw_assignments.items():
+        if not isinstance(path, str) or not path or path != path.strip():
+            raise DecodeError(f"{path!r} is not a canonical assignment path")
+        if not isinstance(entry, dict) or set(entry) != {"codec", "value"}:
+            raise DecodeError(
+                f"the assignment at {path!r} is not a {{codec, value}} pair; every persisted "
+                "value carries the identity and version of the codec that wrote it"
+            )
+        if not isinstance(entry["codec"], str) or "@" not in entry["codec"]:
+            raise DecodeError(f"the assignment at {path!r} has no codec identity@version tag")
+        assignments[path] = Assignment(entry["codec"], entry["value"])
+    for name in ("family", "family_version", "problem_fingerprint"):
+        if not isinstance(payload[name], str):
+            raise DecodeError(f"a dataflow state document's {name} is a string")
     return DataflowState(
-        str(payload.get("family", "")),
-        str(payload.get("family_version", "")),
-        str(payload.get("problem_fingerprint", "")),
-        str(payload.get("commitment_stage", "")),
-        MappingProxyType(dict(assignments)),
+        payload["family"],
+        payload["family_version"],
+        payload["problem_fingerprint"],
+        stage,
+        MappingProxyType(assignments),
     )
 
 
@@ -219,12 +301,16 @@ def format_dataflow_state(node: Any) -> str:
     if not state.assignments:
         lines.append("    (none)")
     for path in sorted(state.assignments):
-        lines.append(f"    {path} = {state.assignments[path]!r}")
+        item = state.assignments[path]
+        lines.append(f"    {path} = {item.value!r}   [{item.codec}]")
     return "\n".join(lines)
 
 
 __all__ = [
+    "ENVELOPE_MEMBERS",
+    "KNOWN_STAGES",
     "SELECTOR_CODEC",
+    "Assignment",
     "STATE_ATTRIBUTE",
     "STATE_SCHEMA",
     "STRUCTURAL_DECISION_CODEC",
@@ -233,6 +319,7 @@ __all__ = [
     "DecodeError",
     "decode_dataflow_state",
     "decode_state",
+    "enum_codec",
     "encode_state",
     "format_dataflow_state",
 ]

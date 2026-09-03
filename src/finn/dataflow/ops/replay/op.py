@@ -31,12 +31,8 @@ from finn.dataflow.ops.association import (
     OperandAssociation,
     SourceAssociation,
 )
-from finn.dataflow.ops.base import (
-    INT_CODEC,
-    DataflowOp,
-    DataflowOpError,
-    DecisionAttribute,
-)
+from finn.dataflow.ops.base import DataflowOp
+from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
 from finn.dataflow.ops.schema import Attribute, InputTensor, OutputTensor
 
@@ -69,6 +65,12 @@ class ActivationReplayOp(DataflowOp):
             return reject(
                 "replay-activation-rank",
                 f"a replay buffer repeats rows of a matrix-shaped activation; got {shape}",
+                values={"shape": list(shape)},
+            )
+        if any(extent <= 0 for extent in shape):
+            return reject(
+                "replay-degenerate-extent",
+                f"an activation needs positive extents in every dimension; got {shape}",
                 values={"shape": list(shape)},
             )
         return shape
@@ -117,11 +119,6 @@ class ActivationReplayOp(DataflowOp):
         matrix_width=matrix_width,
         matrix_height=matrix_height,
         activation_type=activation.datatype,
-    )
-
-    attributes = (
-        DecisionAttribute("PE", _design, ActivationReplayDesign.pe, INT_CODEC),
-        DecisionAttribute("SIMD", _design, ActivationReplayDesign.simd, INT_CODEC),
     )
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
@@ -173,35 +170,15 @@ class ActivationReplayOp(DataflowOp):
             )
         )
 
-    def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
-        activation = self.source.operand("activation")
+    def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
+        activation = source.operand("activation")
         if len(activation.shape) < 2:
             return {}
         leading = 1
         for extent in activation.shape[:-1]:
             leading *= extent
-        folds = int(cast(int, self.source.attributes["neuron_folds"]))
+        folds = int(cast(int, source.attributes["neuron_folds"]))
         return {"expanded": ((leading * folds, activation.shape[-1]), activation.datatype)}
-
-    def make_shape_compatible_op(self, model: Any) -> Any:
-        del model
-        from onnx import helper  # type: ignore[import-not-found] # noqa: PLC0415
-
-        expected = self.expected_outputs().get("expanded")
-        if expected is None or expected[0] is None:
-            raise DataflowOpError(
-                f"{self.source.node_name} cannot state a shape-compatible op: its activation "
-                "is not matrix-shaped"
-            )
-        return helper.make_node(
-            "RandomNormal", [], [self.onnx_node.output[0]], shape=list(expected[0])
-        )
-
-    def infer_node_datatype(self, model: Any) -> None:
-        expected = self.expected_outputs().get("expanded")
-        if expected is None or expected[1] is None:
-            return
-        model.set_tensor_datatype(self.onnx_node.output[0], expected[1])
 
 
 __all__ = ["ActivationReplayOp"]

@@ -30,19 +30,40 @@ different and detectable thing.  Mutation finds the live node again by scope
 id, at the moment effects are applied, which is why the applier needs a stable
 identity rather than an object reference.
 
+**Two deviations, stated rather than implied.**
+
+*The projection is composed in Python, not compiled.*  ``DataflowOp`` is the
+root Space, but ``dataflow`` is a generic composition of this operation's own
+source assessment with the selected Design's assessment -- not one flat
+compiled ``Projection`` declaration.  It has to be: a child's projection
+*obligations* do not travel with its exported value, and which child is
+selected is a runtime fact.  ``combine_assessments`` centralizes the reduction
+so there is still exactly one definition of the normative ordering, but this is
+not the "synthesize a Projection declaration" shape the Kernel and Design
+layers use, and it should not be described as though it were.
+
+*No folding abstraction is introduced.*  ``PE``, ``SIMD``, tiling and the rest
+remain ordinary Decisions owned by the Design whose Region or Network structure
+they affect.  They are persisted because they are committed Decisions beneath
+the root, discovered generically -- not because anything here knows what
+folding is.  A common optimization interface is deferred until several
+materially different folding paradigms can inform it.
+
 **Persistence is one authority.**  Everything that survives a save lives on the
-node: the operation's scope id, its family and version, the fingerprint of the
-problem the choices were made against, and one attribute per persistent
-Decision.  A reload replays exactly those through the ordinary public
-assignment API.
+node: the operation's scope id and one canonical state document.  What goes
+into that document is *discovered from the compiled model* -- every selector
+and every committed Decision beneath this root, named by root-relative compiled
+path -- so an operation never lists its own choices and a Decision added three
+levels down is persisted without anyone editing the operation.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from copy import deepcopy
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from types import MappingProxyType
+from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
@@ -51,12 +72,19 @@ from finn.dataflow._engine import Answer, Decided, RequestError, Unresolved
 from finn.dataflow.model.declarations import (
     AuthoringError,
     ConstraintGroup,
-    Decision,
     OccurrenceContext,
+    PersistentCodec,
     Problem,
     Space,
+    check_canonical,
 )
-from finn.dataflow.model.occurrence import ProjectionAssessment, VariantView
+from finn.dataflow.model.occurrence import (
+    PersistableChoice,
+    ProjectionAssessment,
+    occurrence_answer_at,
+    occurrence_commit_paths,
+    occurrence_persistable,
+)
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.association import SourceAssociation
 from finn.dataflow.ops.schema import (
@@ -73,10 +101,14 @@ from finn.dataflow.ops.source import SourceError, SourceNode, read_source_node
 from finn.dataflow.ops.state import (
     SELECTOR_CODEC,
     STATE_ATTRIBUTE,
+    STRUCTURAL_DECISION_CODEC,
+    Assignment,
+    DataflowState,
     DecisionCodec,
     DecodeError,
     decode_dataflow_state,
     encode_state,
+    enum_codec,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -144,11 +176,23 @@ class SourceBinding:
     again when effects are applied, which is the only operation that needs it.
     """
 
-    node: Any
+    #: The node as *bytes*, not as a protobuf.  A frozen dataclass holding a
+    #: mutable message is not frozen: every successor shares one binding, so a
+    #: single ``set_nodeattr`` would edit the snapshot the whole lineage reads.
+    node_bytes: bytes
     node_identity: str
     opset_version: int
     source: SourceNode
     build: BuildFacts
+
+    def materialize(self) -> Any:
+        """A fresh private ``NodeProto`` for one occurrence to hold."""
+
+        from onnx import NodeProto  # noqa: PLC0415 - deferred; onnx is a heavy import
+
+        node = NodeProto()
+        node.ParseFromString(self.node_bytes)
+        return node
 
 
 #: Kept as the layer's name for a Decision codec.  It is
@@ -159,59 +203,15 @@ class SourceBinding:
 AttributeCodec = DecisionCodec
 
 
-INT_CODEC = DecisionCodec("dataflow.int", 1, int, int)
-BOOL_CODEC = DecisionCodec("dataflow.bool", 1, bool, bool)
-STRING_CODEC = DecisionCodec("dataflow.string", 1, str, str)
-
-
-@dataclass(frozen=True, slots=True)
-class DecisionAttribute:
-    """One nested Decision persisted under one ONNX attribute name.
-
-    ``navigate`` reaches the occurrence that owns the Decision, from the root,
-    using nothing but the public descriptor navigation.  Declaring the route
-    rather than a compiled path is what keeps persistence independent of the
-    namespace the root happened to be started under, and what makes a rename of
-    an authored member a type error instead of a silently dead attribute.
-    """
-
-    #: The path this choice occupies inside the state document.
-    name: str
-    navigate: Callable[[Space], Space]
-    declaration: Decision[Any]
-    codec: DecisionCodec
-
-    def apply(self, root: Space, value: object) -> Space:
-        owner = self.navigate(root)
-        return owner.assign(self.declaration, value).root
-
-    def read(self, root: Space) -> object:
-        owner = self.navigate(root)
-        return owner.answer(self.declaration)
-
-
-@dataclass(frozen=True, slots=True)
-class SelectorAttribute:
-    """One Variant's chosen alternative, persisted under one attribute name.
-
-    A selector is not a public ``Decision`` -- the Variant generates it -- so it
-    is committed the way a caller commits it, through the bound view.  Selectors
-    are applied before ordinary Decisions, because which alternative is live
-    decides which Decisions exist at all.
-    """
-
-    name: str
-    navigate: Callable[[Space], VariantView]
-
-    def apply(self, root: Space, value: object) -> Space:
-        view = self.navigate(root)
-        return view.select(str(value)).root
-
-    def read(self, root: Space) -> Answer[str]:
-        return self.navigate(root).selected()
-
-
-PersistentAttribute = DecisionAttribute | SelectorAttribute
+INT_CODEC: PersistentCodec[Any] = DecisionCodec(
+    "dataflow.int", 1, lambda value: int(value), lambda value: int(cast(int, value))
+)
+BOOL_CODEC: PersistentCodec[Any] = DecisionCodec(
+    "dataflow.bool", 1, lambda value: bool(value), lambda value: bool(value)
+)
+STRING_CODEC: PersistentCodec[Any] = DecisionCodec(
+    "dataflow.string", 1, lambda value: str(value), lambda value: str(value)
+)
 
 
 def source_declarations(
@@ -244,9 +244,6 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     family: ClassVar[str] = ""
     family_version: ClassVar[str] = "1"
 
-    #: The Decisions and selectors that survive a save, in application order.
-    attributes: ClassVar[tuple[PersistentAttribute, ...]] = ()
-
     #: The namespace the root occurrence is started under.  Fixed per family so
     #: that a compiled path means the same thing in every graph.
     root_namespace: ClassVar[str] = "op"
@@ -268,6 +265,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             for name, value in declarations.items()
             if isinstance(value, SOURCE_DECLARATION_TYPES)
         }
+        _check_indices(cls, schema)
         for name, member in lower_source_schema(cls, schema).items():
             if name in declarations:
                 raise AuthoringError(
@@ -299,7 +297,9 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
         del context
         instance = object.__new__(cls)
-        instance.onnx_node = binding.node
+        # A private copy per occurrence, so a successor cannot observe -- or be
+        # edited through -- the node its predecessor holds.
+        instance.onnx_node = binding.materialize()
         instance.onnx_opset_version = binding.opset_version
         instance._model = None
         instance._binding = binding
@@ -314,30 +314,12 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         with every persisted choice replayed onto it.
         """
 
-        scope = self.recorded_scope_id()
-        if scope is not None:
-            duplicates = sum(
-                1
-                for node in getattr(getattr(model, "graph", None), "node", ())
-                if _string_attribute(node, SCOPE_ID_ATTRIBUTE) == scope
-            )
-            if duplicates > 1:
-                raise SourceError(
-                    f"{duplicates} nodes in this graph carry dataflow scope id {scope!r}; "
-                    "a change addressed to it would find more than one, and a recorded "
-                    "choice would be attributable to either.  Run AssignDataflowScopeIds "
-                    "over the graph first"
-                )
-        if scope is None:
-            raise SourceError(
-                f"{self.onnx_node.name!r} has no dataflow scope id, so nothing can be "
-                "addressed to it and no recorded choice can be attributed to it; run "
-                "AssignDataflowScopeIds over the graph first.  Identity belongs to "
-                "whoever constructs the node, and a query that allocated one would "
-                "mutate the graph on read"
-            )
         binding = self.read_binding(model, build)
-        return type(self)._start_bound(binding, self._recorded_on(self.onnx_node))
+        try:
+            state = decode_dataflow_state(binding.materialize())
+        except DecodeError as error:
+            raise DataflowOpError(f"{binding.source.node_name}: {error}") from error
+        return type(self)._start_bound(binding, state)
 
     def rebind(self, model: Any, build: Any) -> Any:
         """Locate the live node by scope id and read it again, deliberately.
@@ -360,7 +342,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return type(self)(node, self.binding.opset_version).bind(model, build)
 
     @classmethod
-    def _start_bound(cls, binding: SourceBinding, recorded: Mapping[str, object]) -> Any:
+    def _start_bound(cls, binding: SourceBinding, recorded: DataflowState | None) -> Any:
         facts = cls._problem_values(binding)
         root = cls.start(
             facts,
@@ -402,17 +384,44 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return values
 
     def read_binding(self, model: Any, build: Any) -> SourceBinding:
-        """Freeze this node, its operands, and the build scalars, once."""
+        """Freeze the live node, its operands, and the build scalars, once.
+
+        The *live* node, resolved from the supplied model by scope identity --
+        the same rule ``rebind`` uses, so there is one.  Reading structure off
+        ``self.onnx_node`` while reading tensor facts from ``model`` would let
+        a wrapper from one graph and a same-named node in another combine into
+        an occurrence describing neither.
+        """
 
         operation = type(self)
-        declarations = source_declarations(operation)
+        node = self._live_node(model)
+        build_values: dict[str, object] = {}
+        for member_name, declaration in source_declarations(operation):
+            if isinstance(declaration, BuildFact):
+                build_values[member_name] = _build_value(operation, member_name, declaration, build)
+        return SourceBinding(
+            node.SerializeToString(deterministic=True),
+            self.recorded_scope_id() or "",
+            int(self.onnx_opset_version),
+            self._read_source(model, node),
+            BuildFacts(MappingProxyType(build_values)),
+        )
+
+    def _read_source(self, model: Any, node: Any) -> SourceNode:
+        """The operand and attribute reading both entry points share.
+
+        Everything here comes from the node and the model.  Nothing here needs
+        a build configuration, which is exactly why QONNX's shape and datatype
+        passes can use it.
+        """
+
+        operation = type(self)
         inputs: list[tuple[int, str]] = []
         outputs: list[tuple[int, str]] = []
         optional: list[str] = []
         digested: list[str] = []
         attributes: dict[str, object] = {}
-        build_values: dict[str, object] = {}
-        for member_name, declaration in declarations:
+        for member_name, declaration in source_declarations(operation):
             if isinstance(declaration, (InputTensor, OutputTensor)):
                 (outputs if declaration.output else inputs).append((declaration.index, member_name))
                 if isinstance(declaration, InputTensor):
@@ -421,26 +430,17 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                     if declaration.fingerprint_initializer:
                         digested.append(member_name)
             elif isinstance(declaration, DatatypeAttribute):
-                attributes[member_name] = _datatype_attribute(self, member_name, declaration)
+                attributes[member_name] = _datatype_attribute(node, member_name, declaration)
             elif isinstance(declaration, Attribute):
-                attributes[member_name] = declaration.value_type(self.get_nodeattr(member_name))
-            elif isinstance(declaration, BuildFact):
-                build_values[member_name] = _build_value(operation, member_name, declaration, build)
-        source = read_source_node(
+                attributes[member_name] = _plain_attribute(node, member_name, declaration)
+        return read_source_node(
             model,
-            self.onnx_node,
-            inputs=_positional(operation, inputs, "input"),
-            outputs=_positional(operation, outputs, "output"),
+            node,
+            inputs=_positional(inputs),
+            outputs=_positional(outputs),
             optional_inputs=tuple(optional),
             digest_inputs=tuple(digested),
             attributes=attributes,
-        )
-        return SourceBinding(
-            deepcopy(self.onnx_node),
-            self.recorded_scope_id() or "",
-            int(self.onnx_opset_version),
-            source,
-            BuildFacts(MappingProxyType(build_values)),
         )
 
     def is_stale(self, problem: Any = None) -> bool:
@@ -501,7 +501,26 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             raise DataflowOpError(
                 f"this operation's problem is {self.problem_fingerprint}, not {expected}"
             )
-        return type(self)._start_bound(binding, {})
+        return type(self)._start_bound(binding, None)
+
+    def _live_node(self, model: Any) -> Any:
+        """The one node in this model this wrapper addresses."""
+
+        from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415 - see graph_effects
+
+        scope = self.recorded_scope_id()
+        if scope is None:
+            raise SourceError(
+                f"{self.onnx_node.name!r} has no dataflow scope id, so nothing can be "
+                "addressed to it and no recorded choice can be attributed to it; run "
+                "AssignDataflowScopeIds over the graph first.  Identity belongs to "
+                "whoever constructs the node, and a query that allocated one would "
+                "mutate the graph on read"
+            )
+        try:
+            return find_node(model, scope)
+        except DataflowOpError as error:
+            raise SourceError(str(error)) from error
 
     # -- what a bound occurrence knows ----------------------------------------
 
@@ -541,6 +560,23 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             self._model = model
         return self
 
+    def set_nodeattr(self, name: str, value: Any) -> None:
+        """Refused on a bound occurrence, which is a snapshot and not the graph.
+
+        Inherited from ``CustomOp`` and perfectly reasonable there.  Here it
+        would edit a frozen copy: the write would appear to succeed, the live
+        graph would be untouched, and every later question would be answered
+        from a snapshot that no longer matches anything.
+        """
+
+        if self._binding is not None:
+            raise DataflowOpError(
+                f"{type(self).__name__} is a bound occurrence and its node is a frozen "
+                f"snapshot; {name!r} cannot be set through it.  Plan the change with "
+                "graph_effects() and apply it with apply_graph_effects(model, effects)"
+            )
+        CustomOp.set_nodeattr(self, name, value)
+
     def get_nodeattr_types(self) -> Mapping[str, tuple[str, bool, object]]:
         declared: dict[str, tuple[str, bool, object]] = {
             SCOPE_ID_ATTRIBUTE: ("s", False, ""),
@@ -554,11 +590,63 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 declared[member_name] = (kind, False, declaration.default)
         return declared
 
+    def source_snapshot(self, model: Any) -> SourceNode:
+        """Read this node's operands and attributes, needing no build context.
+
+        The QONNX boundary.  ``InferShapes`` and ``InferDataTypes`` run on the
+        ordinary wrapper from ``get_customop_wrapper`` and have no synthesis
+        configuration to give -- nor should they need one, because an output
+        shape is a fact about the *operation*, not about the target it will be
+        built for.
+
+        So the source reading splits from the design-space binding: this needs
+        a NodeProto and a ModelWrapper, and ``bind`` additionally freezes the
+        build facts a Design and its Kernels require.  A bound occurrence
+        answers from the snapshot it already has, so both paths reach the same
+        declaration-owned output formula and cannot drift.
+        """
+
+        if self._binding is not None:
+            return self._binding.source
+        return self.read_source(model)
+
     def make_shape_compatible_op(self, model: Any) -> Any:
-        raise NotImplementedError(f"{type(self).__name__} does not declare a shape-compatible op")
+        """A shape-compatible stand-in for QONNX shape inference.
+
+        Applies no transaction: shape inference asks what this node produces,
+        it does not commit a design.
+        """
+
+        expected = self.expected_for(self.source_snapshot(model))
+        first = next(iter(self.onnx_node.output), None)
+        entry = expected.get(self._output_operand())
+        if first is None or entry is None or entry[0] is None:
+            raise DataflowOpError(
+                f"{self.onnx_node.name} cannot state a shape-compatible op from these operands"
+            )
+        from onnx import helper  # noqa: PLC0415 - deferred, as above
+
+        return helper.make_node("RandomNormal", [], [first], shape=list(entry[0]))
 
     def infer_node_datatype(self, model: Any) -> None:
-        """Datatypes are source facts this layer reads, never ones it invents."""
+        """QONNX's in-place API, taking its value from the same derivation."""
+
+        expected = self.expected_for(self.source_snapshot(model))
+        entry = expected.get(self._output_operand())
+        if entry is None or entry[1] is None:
+            return
+        model.set_tensor_datatype(self.onnx_node.output[0], entry[1])
+
+    def _output_operand(self) -> str:
+        for member_name, declaration in source_declarations(type(self)):
+            if isinstance(declaration, OutputTensor) and declaration.index == 0:
+                return member_name
+        raise DataflowOpError(f"{type(self).__name__} declares no output operand")
+
+    def read_source(self, model: Any) -> SourceNode:
+        """Read the live node into a frozen record, without any build context."""
+
+        return self._read_source(model, self._live_node(model))
 
     def execute_node(self, context: Any, graph: Any) -> None:
         raise NotImplementedError(f"{type(self).__name__} does not execute its source semantics")
@@ -630,19 +718,26 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
     # -- reconciliation --------------------------------------------------------
 
-    def expected_outputs(self) -> Mapping[str, tuple[tuple[int, ...] | None, Any]]:
-        """What this operation says each output tensor's shape and datatype are.
+    def expected_for(self, source: SourceNode) -> Mapping[str, tuple[tuple[int, ...] | None, Any]]:
+        """What this operation produces, given one frozen source reading.
 
-        Derived once, from source semantics, and used for three things: the
-        graph effects that repair an annotation, the QONNX compatibility
-        methods, and the reconciliation report.  Restating the formula in each
-        of those is how they come to disagree.
+        Written once and read by everything: the graph effects that repair an
+        annotation, QONNX's shape and datatype passes, and the reconciliation
+        report.  It takes the reading rather than reading ``self``, so the
+        unbound QONNX path and the bound design-space path cannot end up with
+        two formulas that disagree.
 
         Keyed by operand id.  ``None`` in either position means "this operation
         does not claim that", not "empty".
         """
 
+        del source
         return {}
+
+    def expected_outputs(self) -> Mapping[str, tuple[tuple[int, ...] | None, Any]]:
+        """:meth:`expected_for` over this bound occurrence's own source."""
+
+        return self.expected_for(self.source)
 
     def reconciliation(self) -> tuple[str, ...]:
         """Where the graph's annotations differ from what this operation derives.
@@ -658,7 +753,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             if not self.source.has(operand_id):
                 continue
             observed = self.source.operand(operand_id)
-            if shape is not None and tuple(observed.shape) != tuple(shape):
+            if shape is not None and observed.annotated and tuple(observed.shape) != tuple(shape):
                 differences.append(
                     f"{operand_id}: the graph annotates shape {tuple(observed.shape)}, "
                     f"this operation produces {tuple(shape)}"
@@ -688,7 +783,6 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             CommitmentStage,
             GraphEffects,
             check_commitment,
-            node_digest,
         )
 
         binding = self.binding
@@ -700,20 +794,14 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         stage = CommitmentStage.DATAFLOW if require is None else require
         check_commitment({CommitmentStage.DATAFLOW: self.dataflow}, stage)
 
-        encoded: dict[str, object] = {}
-        for item in type(self).attributes:
-            value = _reachable_value(self, item)
-            if value is _UNREACHABLE:
-                continue
-            codec = SELECTOR_CODEC if isinstance(item, SelectorAttribute) else item.codec
-            encoded[item.name] = codec.encode(value)
+        encoded = _serialize_point(self)
         return GraphEffects(
             binding.node_identity,
             type(self).family,
             type(self).family_version,
             stage,
             self.problem_fingerprint,
-            node_digest(binding.node),
+            sha256(binding.node_bytes).hexdigest(),
             encode_state(
                 family=type(self).family,
                 family_version=type(self).family_version,
@@ -765,28 +853,25 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
         if self._binding is None:
             return self._recorded_on(self.onnx_node)
-        present: dict[str, object] = {}
-        for item in type(self).attributes:
-            value = _reachable_value(self, item)
-            if value is not _UNREACHABLE:
-                present[item.name] = value
-        return MappingProxyType(present)
+        return MappingProxyType(
+            {
+                choice.path: answer.value
+                for choice in occurrence_persistable(self)
+                if isinstance(answer := occurrence_answer_at(self, choice.reference), Decided)
+            }
+        )
 
     @classmethod
     def _recorded_on(cls, node: Any) -> Mapping[str, object]:
+        """Every choice physically present on this node, by compiled path."""
+
         try:
             state = decode_dataflow_state(node)
         except DecodeError as error:
             raise DataflowOpError(f"{node.name}: {error}") from error
         if state is None:
             return MappingProxyType({})
-        present: dict[str, object] = {}
-        for item in cls.attributes:
-            if item.name not in state.assignments:
-                continue
-            codec = SELECTOR_CODEC if isinstance(item, SelectorAttribute) else item.codec
-            present[item.name] = codec.decode(state.assignments[item.name])
-        return MappingProxyType(present)
+        return MappingProxyType({path: item.value for path, item in state.assignments.items()})
 
 
 def _root_projection(operation: DataflowOp) -> ProjectionAssessment[DataflowNetwork]:
@@ -816,33 +901,63 @@ def _root_projection(operation: DataflowOp) -> ProjectionAssessment[DataflowNetw
     )
 
 
-#: "This choice is not reachable at this point", distinguished from every real
-#: value a Decision could hold -- including ``None``.
-_UNREACHABLE = object()
+def _codec_for(operation: DataflowOp, choice: PersistableChoice) -> PersistentCodec[Any]:
+    """The codec that writes one choice, or a refusal naming the declaration.
 
-
-def _reachable_value(operation: DataflowOp, item: PersistentAttribute) -> object:
-    """One recorded choice, or ``_UNREACHABLE`` if it does not arise here.
-
-    Navigation itself can fail -- a Decision under an unselected alternative has
-    no occurrence to be read from -- and that is a legitimate answer, not an
-    error.  It is the difference between "this point does not have that dial"
-    and "this point is broken".
+    Refused when the model is first walked rather than when a value happens to
+    need writing, so an unpersistable Decision is found by any test that saves
+    anything -- not by the one configuration that first commits it.
     """
 
-    try:
-        answer = item.read(operation)
-    except (DataflowOpError, AuthoringError, RequestError):
-        return _UNREACHABLE
-    if isinstance(answer, Decided):
-        return answer.value
-    return _UNREACHABLE
+    if choice.selector:
+        return SELECTOR_CODEC
+    if choice.codec is not None:
+        return cast("PersistentCodec[Any]", choice.codec)
+    token = choice.reference.semantics.type_token
+    if isinstance(token, type) and issubclass(token, Enum):
+        return enum_codec(token)
+    if token in _STRUCTURAL_TOKENS:
+        return STRUCTURAL_DECISION_CODEC
+    raise AuthoringError(
+        f"{choice.owner}.{choice.member} is a committable Decision of "
+        f"{choice.reference.semantics.name}, which the structural codec does not cover; "
+        "give it canonical=PersistentCodec(...).  A persisted value is never a repr"
+    )
 
 
-def _positional(
-    operation_type: type[DataflowOp], declared: list[tuple[int, str]], what: str
-) -> tuple[str, ...]:
-    """Turn declared operand indices into a positional list, or refuse.
+#: What the structural codec covers.  Everything else is a judgement call its
+#: author has to make.
+_STRUCTURAL_TOKENS = frozenset({bool, int, float, str})
+
+
+def _serialize_point(operation: DataflowOp) -> dict[str, Assignment]:
+    """Every committed, reachable choice beneath this root, discovered generically.
+
+    Nothing here knows what operation this is.  The choices come from the
+    compiled model, their names are root-relative compiled paths, and their
+    codecs come from their own declarations -- so a Decision added to a Design
+    three levels down is persisted without anybody editing the operation, and
+    two Decisions called ``tile`` in different subspaces cannot collide.
+
+    *Reachable* is the filter: a Decision that is finally inapplicable at this
+    point -- one under an alternative no longer selected -- is dropped rather
+    than written and then unreplayable.
+    """
+
+    encoded: dict[str, Assignment] = {}
+    for choice in occurrence_persistable(operation):
+        codec = _codec_for(operation, choice)
+        answer = occurrence_answer_at(operation, choice.reference)
+        if not isinstance(answer, Decided):
+            continue
+        encoded[choice.path] = Assignment(
+            codec.tag, check_canonical(codec.encode(answer.value), f"the codec {codec.tag}")
+        )
+    return encoded
+
+
+def _check_indices(operation_type: type, schema: Mapping[str, Any]) -> None:
+    """Refuse a sparse or repeated operand schema where it is written.
 
     An index is an *index*, not a hint about ordering.  Sorting by it and
     handing the names to a positional reader silently reinterprets
@@ -851,40 +966,60 @@ def _positional(
     what optional operands make ordinary.
     """
 
-    indices = sorted(index for index, _name in declared)
-    if indices != list(range(len(indices))):
-        raise AuthoringError(
-            f"{operation_type.__name__} declares {what} indices {indices}; they must be "
-            "unique and contiguous from zero, because an ONNX operand list is positional"
+    for what, wanted in (("input", False), ("output", True)):
+        indices = sorted(
+            declaration.index
+            for declaration in schema.values()
+            if isinstance(declaration, (InputTensor, OutputTensor)) and declaration.output is wanted
         )
+        if indices != list(range(len(indices))):
+            raise AuthoringError(
+                f"{operation_type.__name__} declares {what} indices {indices}; they must be "
+                "unique and contiguous from zero, because an ONNX operand list is positional"
+            )
+
+
+def _positional(declared: list[tuple[int, str]]) -> tuple[str, ...]:
     return tuple(name for _index, name in sorted(declared))
 
 
 def _check_authoring(operation_type: type[DataflowOp]) -> None:
     if not operation_type.family:
         raise AuthoringError(f"{operation_type.__name__} must declare a non-empty family")
-    names = [item.name for item in operation_type.attributes]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
-    if duplicates:
-        raise AuthoringError(
-            f"{operation_type.__name__} persists attribute {duplicates[0]!r} twice"
-        )
-    clashes = sorted(set(names) & RESERVED_ATTRIBUTES)
+    clashes = sorted(
+        {name for name, _ in source_declarations(operation_type)} & RESERVED_ATTRIBUTES
+    )
     if clashes:
         raise AuthoringError(
-            f"{operation_type.__name__} persists {clashes[0]!r}, which the dataflow layer owns"
+            f"{operation_type.__name__} declares source attribute {clashes[0]!r}, which the "
+            "dataflow layer owns"
         )
 
 
-def _datatype_attribute(
-    operation: DataflowOp, member_name: str, declaration: DatatypeAttribute
-) -> object:
+def _raw_attribute(node: Any, name: str) -> Any | None:
+    attribute = _attribute(node, name)
+    if attribute is None:
+        return None
+    return attribute.s if attribute.type == attribute.STRING else attribute.i
+
+
+def _datatype_attribute(node: Any, member_name: str, declaration: DatatypeAttribute) -> object:
     from finn.dataflow.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
     from qonnx.core.datatype import DataType  # type: ignore[import-not-found] # noqa: PLC0415
 
-    raw = operation.get_nodeattr(member_name) or declaration.default
-    name = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-    return canonical_qonnx_datatype(DataType[name])
+    raw = _raw_attribute(node, member_name)
+    name = declaration.default if raw is None else raw
+    text = name.decode("utf-8") if isinstance(name, bytes) else str(name)
+    return canonical_qonnx_datatype(DataType[text])
+
+
+def _plain_attribute(node: Any, member_name: str, declaration: Attribute) -> object:
+    raw = _raw_attribute(node, member_name)
+    if raw is None:
+        return declaration.default
+    if declaration.value_type is str:
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    return declaration.value_type(raw)
 
 
 def _build_value(
@@ -907,8 +1042,8 @@ def _build_value(
 def _check_recorded_identity(
     operation_type: type[DataflowOp], binding: SourceBinding, root: Space
 ) -> None:
-    node = binding.node
-    name = getattr(node, "name", "<node>")
+    node = binding.materialize()
+    name = binding.source.node_name
     try:
         state = decode_dataflow_state(node)
     except DecodeError as error:
@@ -935,29 +1070,59 @@ def _check_recorded_identity(
 def _hydrate(
     operation_type: type[DataflowOp],
     binding: SourceBinding,
-    root: Space,
-    recorded: Mapping[str, object],
+    root: Any,
+    state: DataflowState | None,
 ) -> Any:
-    """Replay the recorded choices through the ordinary public assignment API.
+    """Replay a recorded document onto a fresh root, strictly.
 
-    Selectors first, then Decisions: which alternative is live decides which
-    Decisions exist at all.  There is no second path by which a point comes
-    into existence.
+    Every stored path must be one this model still has, and every stored codec
+    tag must be the one its declaration currently declares.  A permissive
+    reader would drop a renamed declaration's assignment and hand back a design
+    that is not the one that was saved -- which is precisely the failure
+    persistence exists to prevent, and the one hardest to notice.
+
+    Selectors are committed before Decisions, because which alternative is live
+    decides which Decisions exist at all.  Each group goes through one
+    path-keyed commit, which is the same engine operation ``assign`` performs.
     """
 
-    ordered: tuple[PersistentAttribute, ...] = (
-        *(item for item in operation_type.attributes if isinstance(item, SelectorAttribute)),
-        *(item for item in operation_type.attributes if isinstance(item, DecisionAttribute)),
-    )
-    for item in ordered:
-        if item.name not in recorded:
+    if state is None:
+        return root
+    known = {choice.path: choice for choice in occurrence_persistable(root)}
+    unknown = sorted(set(state.assignments) - set(known))
+    if unknown:
+        raise DataflowOpError(
+            f"{binding.source.node_name} records a choice at {unknown[0]!r}, which this "
+            f"build's {operation_type.__name__} has no declaration for.  A renamed or "
+            "removed declaration is a schema change, not a value to discard"
+        )
+    for selectors in (True, False):
+        values: dict[Any, object] = {}
+        for path, entry in state.assignments.items():
+            choice = known[path]
+            if choice.selector is not selectors:
+                continue
+            codec = _codec_for(root, choice)
+            if entry.codec != codec.tag:
+                raise DataflowOpError(
+                    f"{binding.source.node_name} recorded {path!r} with codec "
+                    f"{entry.codec!r} and this build declares {codec.tag!r}; a changed "
+                    "encoding is not reinterpreted"
+                )
+            try:
+                values[choice.reference.path] = codec.decode(entry.value)
+            except (ValueError, TypeError, DecodeError) as error:
+                raise DataflowOpError(
+                    f"{binding.source.node_name} cannot decode {path!r}: {error}"
+                ) from error
+        if not values:
             continue
         try:
-            root = item.apply(root, recorded[item.name])
+            root = occurrence_commit_paths(root, values)
         except (RequestError, AuthoringError, ValueError, TypeError) as error:
             raise DataflowOpError(
-                f"{binding.source.node_name} attribute {item.name!r} does not replay onto "
-                f"this problem: {error}",
+                f"{binding.source.node_name} recorded choices that do not replay onto this "
+                f"problem: {error}",
                 getattr(error, "findings", ()),
             ) from error
     return root
@@ -1003,9 +1168,6 @@ __all__ = [
     "BuildFacts",
     "DataflowOp",
     "DataflowOpError",
-    "DecisionAttribute",
-    "PersistentAttribute",
-    "SelectorAttribute",
     "SourceBinding",
     "source_declarations",
     "unresolved_reason",

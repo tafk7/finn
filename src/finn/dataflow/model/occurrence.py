@@ -1011,6 +1011,128 @@ _PASSTHROUGH: ValueSemantics[object] = ValueSemantics(
 
 
 @dataclass(frozen=True, slots=True)
+class PersistableChoice:
+    """One committable choice in a compiled tree, named relative to its root.
+
+    ``path`` is the compiled path with the root's namespace removed, so the
+    same design saved under two different root namespaces produces the same
+    document and reloads under either.
+
+    ``codec`` is ``None`` for a Variant selector, whose values are alternative
+    ids the branch itself owns; the persistence layer supplies the selector
+    encoding rather than each Variant declaring one.
+    """
+
+    path: str
+    reference: _Ref[object]
+    codec: object | None
+    selector: bool
+    #: Where the declaration lives, for a diagnostic that has to name it.
+    owner: str
+    member: str
+
+
+def occurrence_persistable(instance: Space) -> tuple[PersistableChoice, ...]:
+    """Every selector and Decision beneath this root, discovered from the model.
+
+    The whole point of generic persistence: an operation does not enumerate its
+    own choices.  A Decision nested three Subspaces down, a selector inside an
+    alternative, a second Decision named ``tile`` in a different subspace --
+    each is found here with a root-relative compiled identity that cannot
+    collide, because compiled paths already cannot.
+
+    Ordering is selectors before Decisions and outermost first, which is the
+    order they must be replayed in: which alternative is live decides which
+    Decisions exist at all.
+    """
+
+    state = _occurrence_state(instance)
+    tree = state.runtime.lineage.tree
+    prefix = f"{tree.namespace}."
+    selectors: list[PersistableChoice] = []
+    decisions: list[PersistableChoice] = []
+    _collect_persistable(tree, prefix, selectors, decisions)
+    return (*selectors, *decisions)
+
+
+def _relative(path: QualifiedPath, prefix: str) -> str:
+    text = str(path)
+    return text[len(prefix) :] if text.startswith(prefix) else text
+
+
+def _collect_persistable(
+    compiled: _CompiledSpace[Space],
+    prefix: str,
+    selectors: list[PersistableChoice],
+    decisions: list[PersistableChoice],
+) -> None:
+    owner = compiled.owner.__name__
+    for name, declaration in declared_members(compiled.owner):
+        if not isinstance(declaration, Decision):
+            continue
+        reference = compiled.member(name)
+        decisions.append(
+            PersistableChoice(
+                _relative(reference.path, prefix),
+                reference,
+                declaration.canonical,
+                False,
+                owner,
+                name,
+            )
+        )
+    for name, branch in compiled.branches:
+        if branch.selector is not None:
+            selectors.append(
+                PersistableChoice(
+                    _relative(branch.selector.path, prefix),
+                    branch.selector,
+                    None,
+                    True,
+                    owner,
+                    name,
+                )
+            )
+        for case in branch.cases:
+            _collect_persistable(case.compiled, prefix, selectors, decisions)
+    for _name, child in compiled.children:
+        _collect_persistable(child, prefix, selectors, decisions)
+
+
+def occurrence_answer_at(instance: Space, reference: _Ref[object]) -> Answer[object]:
+    """Answer one compiled reference discovered by :func:`occurrence_persistable`."""
+
+    state = _occurrence_state(instance)
+    lineage = state.runtime.lineage
+    with lineage.lock:
+        return answer_for(lineage.engine, state.runtime.point, reference)
+
+
+def occurrence_commit_paths(instance: S, values: Mapping[QualifiedPath, object]) -> S:
+    """Commit several choices by compiled path and return the successor root.
+
+    The seam persistence replays through.  A document stores *paths*, because a
+    friendly alias is exactly the thing that cannot express a nested or
+    repeated declaration -- so hydration needs a path-keyed commit.  It is the
+    same engine operation ``assign`` performs, with the same refusals; what it
+    does not do is require the caller to already hold the occurrence that owns
+    each declaration, which for a path read out of a file they do not.
+
+    Private to the layers, like :func:`layer_runtime`.  Nothing generic reaches
+    a Decision by string.
+    """
+
+    if not values:
+        return instance
+    state = _occurrence_state(instance)
+    lineage = state.runtime.lineage
+    with lineage.lock:
+        committed = lineage.engine.commit_assignments(state.runtime.point, dict(values))
+    _raise_failed_assignment(committed.outcomes)
+    return cast(S, _successor_root(state.runtime.successor(committed.point)))
+
+
+@dataclass(frozen=True, slots=True)
 class LayerRuntime:
     """The seam a layer specialization implements its own projection through.
 

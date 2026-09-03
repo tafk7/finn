@@ -61,6 +61,13 @@ class SourceOperand:
     datatype: QONNXDataType
     initializer: bool = False
     initializer_digest: str | None = None
+    #: Whether the graph actually annotates this operand's shape.  ``False``
+    #: for an output the operation has not written a shape for yet, which is
+    #: the ordinary state *before* shape inference -- and shape inference is
+    #: exactly the pass that asks the operation what the shape should be.
+    #: Refusing there would make the operation require the annotation it exists
+    #: to produce.
+    annotated: bool = True
 
     @property
     def elements(self) -> int:
@@ -98,10 +105,15 @@ class SourceNode:
 
 
 def _tensor_facts(
-    model: Any, tensor: str, operand_id: str, node_name: str, digest: bool
-) -> tuple[tuple[int, ...], QONNXDataType, bool, str | None]:
+    model: Any,
+    tensor: str,
+    operand_id: str,
+    node_name: str,
+    digest: bool,
+    required: bool = True,
+) -> tuple[tuple[int, ...], QONNXDataType, bool, str | None, bool]:
     shape = model.get_tensor_shape(tensor)
-    if shape is None:
+    if shape is None and required:
         raise SourceError(
             f"{node_name} operand {operand_id!r} has no shape; the graph must be "
             "shape-inferred before a dataflow operation reads it"
@@ -111,10 +123,11 @@ def _tensor_facts(
         raise SourceError(f"{node_name} operand {operand_id!r} has no annotated datatype")
     initializer = model.get_initializer(tensor)
     return (
-        tuple(int(extent) for extent in shape),
+        () if shape is None else tuple(int(extent) for extent in shape),
         canonical_qonnx_datatype(datatype),
         initializer is not None,
         _digest(initializer) if digest and initializer is not None else None,
+        shape is not None,
     )
 
 
@@ -175,20 +188,27 @@ def read_source_node(
             if operand_id in optional:
                 continue
             raise SourceError(f"{node.name} requires operand {operand_id!r}")
-        shape, datatype, initializer, digest = _tensor_facts(
+        shape, datatype, initializer, digest, annotated = _tensor_facts(
             model, tensor, operand_id, node.name, operand_id in digested
         )
-        read_inputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer, digest))
+        read_inputs.append(
+            SourceOperand(operand_id, tensor, shape, datatype, initializer, digest, annotated)
+        )
 
     read_outputs: list[SourceOperand] = []
     for index, operand_id in enumerate(outputs):
         tensor = node.output[index]
         if not tensor:
             raise SourceError(f"{node.name} requires output operand {operand_id!r}")
-        shape, datatype, initializer, digest = _tensor_facts(
-            model, tensor, operand_id, node.name, False
+        # An output annotation is an *observation*: the operation derives what
+        # it should be, and shape inference is the pass that asks.  Requiring
+        # it here would make the operation demand the very thing it produces.
+        shape, datatype, initializer, digest, annotated = _tensor_facts(
+            model, tensor, operand_id, node.name, False, required=False
         )
-        read_outputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer, digest))
+        read_outputs.append(
+            SourceOperand(operand_id, tensor, shape, datatype, initializer, digest, annotated)
+        )
 
     return SourceNode(
         node.name,

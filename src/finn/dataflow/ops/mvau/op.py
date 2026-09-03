@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import Answer, Decided
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.model.declarations import (
     ConstraintGroup,
     Space,
@@ -41,42 +41,19 @@ from finn.dataflow.ops.association import (
     SourceAssociation,
     StreamDestination,
 )
-from finn.dataflow.ops.base import (
-    BOOL_CODEC,
-    INT_CODEC,
-    DataflowOp,
-    DataflowOpError,
-    DecisionAttribute,
-    SelectorAttribute,
-    unresolved_reason,
-)
+from finn.dataflow.ops.base import DataflowOp, DataflowOpError, unresolved_reason
+from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
     SuppliedDotProductDesign,
-    WeightSupply,
 )
-from finn.dataflow.ops.state import DecisionCodec
 from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
     DatatypeAttribute,
     InputTensor,
     OutputTensor,
-)
-
-
-def _decode_supply(value: object) -> WeightSupply:
-    text = value.decode("utf-8") if isinstance(value, bytes) else str(value)
-    return WeightSupply(text)
-
-
-#: The weight-supply mode crosses the persistence boundary as its own stable
-#: string.  Never the enum's ordinal: reordering the members would silently
-#: repoint every saved graph at a different mode.  Versioned, so a future change
-#: to the spelling is a refusal rather than a reinterpretation.
-SUPPLY_CODEC = DecisionCodec(
-    "finn.dataflow.weight_supply", 1, lambda value: WeightSupply(value).value, _decode_supply
 )
 
 
@@ -185,6 +162,15 @@ class MvauDataflowOp(DataflowOp):
                 f"matrix-vector multiplication needs a rank-2 matrix; this one is {shape}",
                 values={"shape": list(shape)},
             )
+        if any(extent <= 0 for extent in shape):
+            # Checked here for the same reason the rank is: everything
+            # downstream divides by the width, and a zero would raise before
+            # any constraint got to say what was wrong.
+            return reject(
+                "mvau-degenerate-extent",
+                f"a matrix needs positive extents; this one is {shape}",
+                values={"shape": list(shape)},
+            )
         return shape
 
     @derived(int, shape=matrix)
@@ -197,11 +183,11 @@ class MvauDataflowOp(DataflowOp):
 
     @derived(int, shape=activation.shape, width=matrix_width)
     def repetitions(*, shape: tuple[int, ...], width: int) -> object:
-        if not shape:
+        if not shape or any(extent <= 0 for extent in shape):
             return reject(
-                "mvau-activation-rank",
-                "an activation with no dimensions has nothing to multiply",
-                values={"shape": []},
+                "mvau-degenerate-extent",
+                f"an activation needs positive extents in every dimension; got {shape}",
+                values={"shape": list(shape)},
             )
         total = 1
         for extent in shape:
@@ -275,24 +261,6 @@ class MvauDataflowOp(DataflowOp):
         },
     )
 
-    #: In application order.  Two selectors precede every Decision, because
-    #: which alternative is live decides which Decisions exist to be assigned.
-    attributes = (
-        SelectorAttribute("dataflow_design", _design_view),
-        SelectorAttribute("dataflow_compute", _compute_segment),
-        DecisionAttribute("PE", _selected_design, WeightedDotProductDesign.pe, INT_CODEC),
-        DecisionAttribute("SIMD", _selected_design, WeightedDotProductDesign.simd, INT_CODEC),
-        DecisionAttribute(
-            "weight_supply",
-            _selected_design,
-            SuppliedDotProductDesign.weight_supply,
-            SUPPLY_CODEC,
-        ),
-        DecisionAttribute(
-            "pumpedCompute", _compute_kernel, DotpAxiKernel.compute_pumping, BOOL_CODEC
-        ),
-    )
-
     # -- the projections ------------------------------------------------------
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
@@ -358,51 +326,24 @@ class MvauDataflowOp(DataflowOp):
 
     # -- what this operation is authoritative for -----------------------------
 
-    def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
-        """What this operation produces, derived once and used everywhere.
+    def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
+        """The output contract, from the reading alone.
 
-        The graph effects, the QONNX compatibility methods and the
-        reconciliation report all read this, so the formula has one home.
+        Takes the reading rather than ``self`` so QONNX's shape and datatype
+        passes -- which run on an unbound wrapper and have no synthesis
+        configuration -- reach the same formula the graph effects do.
         """
 
-        activation = self.source.operand("activation")
-        weight = self.source.operand("weight")
+        activation = source.operand("activation")
+        weight = source.operand("weight")
         if len(weight.shape) != 2 or not activation.shape:
             return {}
-        accumulator = self.answer(type(self).accumulator_type)
         return {
             "output": (
                 (*activation.shape[:-1], weight.shape[1]),
-                accumulator.value if isinstance(accumulator, Decided) else None,
+                cast(Any, source.attributes["accumulator_type"]),
             )
         }
-
-    def make_shape_compatible_op(self, model: Any) -> Any:
-        """A shape-compatible stand-in, from the same derivation, applying nothing."""
-
-        del model
-        from onnx import helper  # type: ignore[import-not-found] # noqa: PLC0415
-
-        expected = self.expected_outputs().get("output")
-        if expected is None or expected[0] is None:
-            raise DataflowOpError(
-                f"{self.source.node_name} cannot state a shape-compatible op: its operands "
-                "are not a matrix and a compatible activation"
-            )
-        return helper.make_node(
-            "RandomNormal",
-            [],
-            [self.onnx_node.output[0]],
-            shape=list(expected[0]),
-        )
-
-    def infer_node_datatype(self, model: Any) -> None:
-        """QONNX's in-place API, taking its value from the same derivation."""
-
-        expected = self.expected_outputs().get("output")
-        if expected is None or expected[1] is None:
-            return
-        model.set_tensor_datatype(self.onnx_node.output[0], expected[1])
 
 
 def _internal_destination(
@@ -413,10 +354,7 @@ def _internal_destination(
     Two genuinely different answers, and the record says which.  A decoupled
     matrix is *traffic*: it reaches a real port on a real node, reached without
     crossing the Design's edge.  An embedded matrix is *state*: it is baked into
-    the node and there is no port at all.  The previous version reported the
-    second case as a port named ``"embedded"``, which is a port that does not
-    exist -- a consumer looking it up finds nothing, and the empty shape that
-    came with it reads as a zero-element tensor.
+    the node and there is no port at all.
     """
 
     for node in network.nodes:
