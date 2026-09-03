@@ -14,7 +14,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar, Generic, TypeVar, Union, cast
+from typing import ClassVar, Generic, TypeVar, Union, cast, overload
+
+from typing_extensions import Self
 
 from finn.dataflow._engine import (
     AbsenceMode,
@@ -133,18 +135,32 @@ class Space:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class ValueSource(Generic[T_co]):
-    """Base for immutable declarations that produce a typed engine value."""
+    """Base for immutable declarations that produce a typed engine value.
+
+    Two accesses, two meanings, and the overloads say which is which.  Reached
+    on the class, a declaration *is* the declaration -- ``Stage.lanes`` is the
+    ``Decision`` object an occurrence is asked about.  Reached on a configured
+    instance, it is that declaration's resolved value.  Typing both as ``object``
+    would make the whole declaration-oriented occurrence API untypeable at its
+    call sites, which is the surface the phase exists to make usable.
+    """
 
     value_semantics: ValueSemantics[object]
     stable_name: str | None = None
 
-    def __get__(self, instance: object | None, owner: type[object]) -> object:
+    @overload
+    def __get__(self, instance: None, owner: type[object]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: object, owner: type[object]) -> T_co: ...
+
+    def __get__(self, instance: object | None, owner: type[object]) -> Self | T_co:
         if instance is None:
             return self
         resolver = getattr(instance, "_space_value", None)
         if resolver is None:
             raise AttributeError("declarative values exist only on configured instances")
-        return resolver(self)
+        return cast(T_co, resolver(self))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -326,10 +342,19 @@ class ConstraintGroup:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Readiness:
-    """A named readiness profile over declarations in this Space."""
+    """A named readiness profile over declarations in this Space.
+
+    ``properties`` takes any value declaration, not only a locally declared
+    ``Derived``.  A profile's whole job is to name the values that must be final
+    before a question can be asked, and the interesting one is routinely a
+    child's export or a branch's selected output -- which are handles on a
+    declaration elsewhere rather than declarations of this class.  The compiler
+    resolves all three the same way, so narrowing the annotation would only
+    force the author to launder the value through a forwarding property.
+    """
 
     decisions: tuple[Decision[object], ...] = ()
-    properties: tuple[Derived[object], ...] = ()
+    properties: tuple[ValueSource[object], ...] = ()
     constraints: tuple[Constraint, ...] = ()
     stable_name: str | None = None
 
@@ -337,7 +362,7 @@ class Readiness:
         self,
         *,
         decisions: Sequence[Decision[object]] = (),
-        properties: Sequence[Derived[object]] = (),
+        properties: Sequence[ValueSource[object]] = (),
         constraints: Sequence[Constraint] | ConstraintGroup = (),
         name: str | None = None,
     ) -> None:

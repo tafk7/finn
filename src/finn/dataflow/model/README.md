@@ -21,6 +21,16 @@ DataflowDesign(Space)  semantic Decisions, Kernels segments,
    -> configured Design: one Kernel per role, one validated Network
 ```
 
+One lifecycle sits above all three:
+
+```text
+SpaceModel.start(problem)
+    -> Occurrence          one private runtime, one immutable point
+        child views        namespace-bound, capability-restricted
+        assign             an immutable successor, the same view
+        answer / assess    values, readiness, and constraint groups
+```
+
 `DesignSpaceSpec`, `Engine`, and `DesignPoint` remain the normalized IR and
 runtime. The model package is a source-language frontend, not another design
 space evaluator.
@@ -289,6 +299,33 @@ selected Network, one Kernel per active role, the selected case ids,
 Design-owned assignments, external decision provenance, and static
 role/node/Region-family metadata -- and no Engine, point, compiled record,
 unselected candidate, or branch catalog.
+
+## Occurrences and validated projections
+
+`compile_space_model` returns a `SpaceModel`. Starting it against one problem
+freezes that problem and returns an `Occurrence`: one lifecycle-bearing view of
+one immutable point.
+
+```python
+model = compile_space_model(Root, "root", problem_namespace="problem.root")
+root = model.start({"problem.root.width": 4})
+
+stage = root.child(Root.pair).child(Pair.first)  # a namespace-bound view
+stage = stage.assign(Stage.lanes, 2)  # the same view, a successor
+stage.project(Stage.model_view)  # Answer[int]
+stage.assess(Stage.model_view)  # readiness + constraints + output
+stage.root  # the successor root
+```
+
+Exactly one private runtime owns the compiled model, the engine, the point, and
+the frozen problem. A child holds that runtime, its own namespace, and nothing
+else: no nested Engine, no copied point, no independently mutable state. The
+public surface has no `.point()`, no `.engine()`, and no path query; a caller
+names the declaration objects it wrote.
+
+A view accepts only declarations its own class declares. One class placed at
+several roles is therefore never guessed at: `root.assign(Stage.lanes, 2)` is
+refused with the list of namespaces where `Stage` occurs.
 
 ## The production slice
 

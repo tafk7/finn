@@ -181,6 +181,7 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "Input",
         "Kernel",
         "Kernels",
+        "Occurrence",
         "OneOf",
         "Parameter",
         "Problem",

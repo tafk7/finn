@@ -37,6 +37,7 @@ def test_package_root_is_a_deliberate_primary_api() -> None:
         "Finding",
         "FindingKind",
         "ItemOutcome",
+        "PathMapping",
         "ProblemField",
         "ProblemSchema",
         "ProposalAdoptionMode",

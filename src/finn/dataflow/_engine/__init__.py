@@ -24,7 +24,7 @@ from .declarations import (
 from .engine import Engine
 from .errors import EvaluationError, RequestError, ValidationError
 from .points import CommitResult, DesignPoint, ProposalAdoptionResult
-from .primitives import QualifiedPath, ValueSemantics
+from .primitives import PathMapping, QualifiedPath, ValueSemantics
 from .results import (
     Absent,
     Answer,
@@ -66,6 +66,7 @@ __all__ = [
     "Finding",
     "FindingKind",
     "ItemOutcome",
+    "PathMapping",
     "ProblemField",
     "ProblemSchema",
     "ProposalAdoptionMode",

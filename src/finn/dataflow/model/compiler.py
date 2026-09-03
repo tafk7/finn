@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Set as AbstractSet
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from inspect import signature
+from threading import RLock
 from types import MappingProxyType
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
@@ -26,11 +27,13 @@ from finn.dataflow._engine import (
     DependencyView,
     DerivedProperty,
     DesignPoint,
+    DesignSpace,
     DesignSpaceSpec,
     Engine,
     EvaluatorSpec,
     Finding,
     FindingKind,
+    PathMapping,
     ProblemField,
     ProblemSchema,
     QualifiedPath,
@@ -71,6 +74,9 @@ from finn.dataflow.model.declarations import (
     finite,
 )
 from finn.dataflow.spec_algebra import assemble_specs, combine_applicability, gate_spec
+
+if TYPE_CHECKING:
+    from finn.dataflow.model.occurrence import Occurrence
 
 S = TypeVar("S", bound=Space)
 T_co = TypeVar("T_co", covariant=True)
@@ -163,6 +169,15 @@ class _CompiledSpace(Generic[S]):
     extension: object | None = None
     branches: tuple[tuple[str, _CompiledBranch], ...] = ()
     catalog: BranchCatalog = BranchCatalog()
+    #: Constraint members by class-member name.  Kept beside ``members``, which
+    #: only holds value declarations, because a diagnostic that cannot name the
+    #: constraint that refused is exactly the one nobody can act on.
+    constraint_members: tuple[tuple[str, QualifiedPath], ...] = ()
+    #: Readiness and ConstraintGroup members mapped to the engine names the
+    #: generic lowering gave them, so an occurrence can name a declaration and
+    #: never rebuild a profile name from a naming convention.
+    readiness_names: tuple[tuple[str, str], ...] = ()
+    constraint_set_names: tuple[tuple[str, str], ...] = ()
 
     def branch(self, name: str) -> _CompiledBranch:
         try:
@@ -325,6 +340,21 @@ class _Compilation:
             None,
             branches,
             self._catalog(),
+            tuple(
+                (name, self.constraints[id(declaration)])
+                for name, declaration in self.declarations
+                if isinstance(declaration, Constraint)
+            ),
+            tuple(
+                (name, self._group_name(name, declaration))
+                for name, declaration in self.declarations
+                if isinstance(declaration, Readiness)
+            ),
+            tuple(
+                (name, self._group_name(name, declaration))
+                for name, declaration in self.declarations
+                if isinstance(declaration, ConstraintGroup)
+            ),
         )
         finalized = self.space_type._finalize_compilation(compiled)
         if not isinstance(finalized, _CompiledSpace):
@@ -391,6 +421,24 @@ class _Compilation:
                 self.refs[identity] = self.refs[id(declaration)]
             elif isinstance(declaration, Constraint):
                 self.constraints[identity] = self.constraints[id(declaration)]
+
+    def _group_name(self, member_name: str, declaration: object) -> str:
+        """The one engine name a ConstraintGroup or Readiness member is given.
+
+        Stated once and read by both the spec lowering and the occurrence
+        layer.  Two copies of this rule is how a caller ends up naming a profile
+        the engine does not have.
+        """
+
+        return f"{self.namespace}.{_local_name(member_name, declaration)}"
+
+    def _member_name(self, declaration: object, what: str) -> str:
+        name = self.alias_names.get(id(declaration))
+        if name is None:
+            raise AuthoringError(
+                f"{self.space_type.__name__} {what} names a declaration outside the class"
+            )
+        return name
 
     def _catalog(self) -> BranchCatalog:
         """Flatten this Space's branches outermost-first in declaration order."""
@@ -555,7 +603,7 @@ class _Compilation:
             elif isinstance(declaration, ConstraintGroup):
                 groups.append(
                     ConstraintSet(
-                        f"{self.namespace}.{_local_name(member_name, declaration)}",
+                        self._group_name(member_name, declaration),
                         tuple(self._constraint_path(item) for item in declaration.constraints),
                     )
                 )
@@ -567,7 +615,7 @@ class _Compilation:
             elif isinstance(declaration, Readiness):
                 readiness.append(
                     ReadinessProfile(
-                        f"{self.namespace}.{_local_name(member_name, declaration)}",
+                        self._group_name(member_name, declaration),
                         tuple(self._source_ref(item).path for item in declaration.decisions),
                         tuple(self._source_ref(item).path for item in declaration.properties),
                         tuple(self._constraint_path(item) for item in declaration.constraints),
@@ -1000,18 +1048,81 @@ def imported_decisions(
     return tuple(dict.fromkeys(found))
 
 
+class _ModelSupport:
+    """The runtime state one compiled model owns: an Engine and its memo.
+
+    Kept off ``SpaceModel`` itself so the model stays a frozen, comparable
+    value.  Validation is memoized rather than eager because compiling a Space
+    and validating one are separate questions, and existing callers compile
+    specifications they never intend to run.
+
+    One ``Engine`` per compiled model, shared by every occurrence started from
+    it.  That is deliberate: the engine's caches are keyed by point, so sharing
+    it reuses compilation work across successors without letting one point's
+    evaluation reach another's.  ``lock`` guards both this memo and every engine
+    call the occurrence layer makes, because the engine's own caches are plain
+    dictionaries in a ``WeakKeyDictionary``.
+    """
+
+    __slots__ = ("lock", "engine", "_space")
+
+    def __init__(self) -> None:
+        self.lock = RLock()
+        self.engine = Engine()
+        self._space: DesignSpace | None = None
+
+    def design_space(self, specification: DesignSpaceSpec) -> DesignSpace:
+        with self.lock:
+            if self._space is None:
+                self._space = self.engine.validate(specification)
+            return self._space
+
+
 @dataclass(frozen=True, slots=True)
 class SpaceModel:
     """One compiled Space: the ordinary flat spec plus its branch catalog.
 
-    The two are deliberately separate values.  ``specification`` is everything
-    the engine sees; ``branches`` is the class-to-flat-spec relationship the
-    engine does not model and a specialization algorithm needs.  Neither
-    exposes a compiled declaration, a ``_Ref``, or an evaluator.
+    The two public fields are deliberately separate values.  ``specification``
+    is everything the engine sees; ``branches`` is the class-to-flat-spec
+    relationship the engine does not model and a specialization algorithm
+    needs.  Neither exposes a compiled declaration, a ``_Ref``, or an evaluator.
+
+    ``start`` adds the third thing a caller needs and neither of those two can
+    give: a bound occurrence.  The compiled declaration tree it needs is held
+    privately, because it is exactly the record that would let a contributor
+    reconstruct paths.
     """
 
     specification: DesignSpaceSpec
     branches: BranchCatalog
+    _tree: _CompiledSpace[Space] | None = field(default=None, repr=False, compare=False)
+    _support: _ModelSupport = field(default_factory=_ModelSupport, repr=False, compare=False)
+
+    def start(self, problem: PathMapping) -> Occurrence:
+        """Freeze one problem into a new root occurrence."""
+
+        # Imported here rather than at module scope: the occurrence layer is
+        # built on this compiler, so naming it at import time is a cycle.  This
+        # is the only direction that has to be deferred.
+        from finn.dataflow.model.occurrence import (  # noqa: PLC0415 - see comment above
+            make_root_occurrence,
+        )
+
+        tree = self._compiled_tree()
+        return make_root_occurrence(self, tree, self._initial_point(problem))
+
+    def _compiled_tree(self) -> _CompiledSpace[Space]:
+        if self._tree is None:
+            raise AuthoringError(
+                "this SpaceModel was built without its compiled declarations and cannot "
+                "start an occurrence; use compile_space_model()"
+            )
+        return self._tree
+
+    def _initial_point(self, problem: PathMapping) -> DesignPoint:
+        design_space = self._support.design_space(self.specification)
+        with self._support.lock:
+            return self._support.engine.start(design_space, problem)
 
 
 def compile_space_model(
@@ -1027,7 +1138,7 @@ def compile_space_model(
         namespace,
         problem_namespace=problem_namespace,
     )
-    return SpaceModel(compiled.spec, compiled.catalog)
+    return SpaceModel(compiled.spec, compiled.catalog, compiled)
 
 
 def compile_space(
