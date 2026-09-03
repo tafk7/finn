@@ -12,6 +12,8 @@ separately rather than pretending the difference away.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -425,3 +427,33 @@ def test_both_operations_use_the_same_persistence_authority(tmp_path: Path) -> N
         restored = _op(ModelWrapper(str(path)), name)
         assert dict(restored.recorded()) == dict(operation.recorded())
         assert not restored.is_stale(Build())
+
+
+def test_every_refusal_survives_python_o() -> None:
+    """Transactionality must not be carried by an assert.
+
+    ``python -O`` strips assertions, and a persistence layer whose "the node
+    was not touched" guarantee lived in one would silently start writing
+    half-committed graphs in exactly the configuration a production build uses.
+    """
+
+    script = (
+        "from dataflow.ops.test_dataflow_op import Build, _mvau_model, _op\n"
+        "from finn.dataflow.ops.base import DataflowOpError\n"
+        "model = _mvau_model()\n"
+        "operation = _op(model, 'mvau0')\n"
+        "operation.commit(Build(), {'dataflow_design': 'dot_product'})\n"
+        "before = model.graph.node[0].SerializeToString(deterministic=True)\n"
+        "try:\n"
+        "    operation.commit(Build(), {'PE': 3})\n"
+        "except DataflowOpError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise SystemExit('PE=3 was accepted')\n"
+        "after = model.graph.node[0].SerializeToString(deterministic=True)\n"
+        "raise SystemExit(0 if after == before else 'the node changed')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
