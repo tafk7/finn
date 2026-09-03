@@ -28,7 +28,7 @@ SpaceModel.start(problem)
     -> Occurrence          one private runtime, one immutable point
         child views        namespace-bound, capability-restricted
         assign             an immutable successor, the same view
-        answer / assess    values, readiness, and constraint groups
+        project / assess   validated projections over that one point
 ```
 
 `DesignSpaceSpec`, `Engine`, and `DesignPoint` remain the normalized IR and
@@ -326,6 +326,26 @@ names the declaration objects it wrote.
 A view accepts only declarations its own class declares. One class placed at
 several roles is therefore never guessed at: `root.assign(Stage.lanes, 2)` is
 refused with the list of namespaces where `Stage` occurs.
+
+A `Projection` binds one output to one readiness profile and any number of
+constraint groups, and reduces them in a fixed order:
+
+```text
+an obligation is not final yet          -> Unresolved(findings)
+the output is finally inapplicable      -> Absent(findings)
+a constraint refuses                    -> Absent(rejection findings)
+everything final, every constraint true -> Decided(snapshot(output))
+```
+
+Readiness and validity stay separate on purpose. A point can be completely
+ready -- nothing left to decide -- and still be refused, because a constraint
+answered a final `False`; `ProjectionAssessment` keeps the readiness, each
+constraint assessment, and the raw output beside the reduced answer so a caller
+can tell those cases apart. Constraint membership is many-to-many: one group may
+belong to several projections and one constraint to several groups.
+
+A projection adds no engine declaration. It names paths the generic lowering
+already produced, so declaring one cannot change the compiled `DesignSpaceSpec`.
 
 ## The production slice
 

@@ -185,6 +185,8 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "OneOf",
         "Parameter",
         "Problem",
+        "Projection",
+        "ProjectionAssessment",
         "Readiness",
         "Region",
         "RegionRefused",

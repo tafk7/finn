@@ -8,12 +8,14 @@ about a generic lifecycle, and justifying it against MVAU would prove only that
 the layer fits the one shape it was written beside.  Nothing here names a
 Kernel, a Region, a Design, or a Network.
 
-This module covers the occurrence lifecycle itself:
+The suite is the U1 forcing matrix, in order:
 
 ```text
 one root, two occurrences of one child class      Stage under `pair`
 nested Use and OneOf                              Pair.inner inside Root.pair
 child assignment ambiguity rejection              §ambiguity
+readiness True, projection still rejected         §validated projections
+one constraint in two projections                 Stage.fits in model and build
 partial then complete successor occurrence        §specialization
 no raw runtime through public methods             §capability
 callback capability audit in a subprocess         §capability
@@ -30,6 +32,8 @@ from typing import cast
 import pytest
 
 from finn.dataflow._engine import (
+    Absent,
+    Answer,
     Decided,
     DesignPoint,
     DesignSpace,
@@ -47,6 +51,7 @@ from finn.dataflow.model.declarations import (
     Input,
     OneOf,
     Problem,
+    Projection,
     Readiness,
     Space,
     Use,
@@ -54,13 +59,13 @@ from finn.dataflow.model.declarations import (
     derived,
     reject,
 )
-from finn.dataflow.model.occurrence import Occurrence
+from finn.dataflow.model.occurrence import Occurrence, ProjectionAssessment
 
 # -- synthetic spaces ---------------------------------------------------------
 
 
 class Stage(Space):
-    """A leaf placed five times over, so no view can guess which one is meant."""
+    """A leaf placed five times over, with two projections sharing a constraint."""
 
     width = Input(int)
     lanes = Decision(int, values=(1, 2, 3, 4))
@@ -84,6 +89,13 @@ class Stage(Space):
     ready = Readiness(decisions=(lanes,), properties=(throughput,), name="ready")
     model_checks = ConstraintGroup(fits, name="model_checks")
     build_checks = ConstraintGroup(fits, lanes_are_powers_of_two, name="build_checks")
+
+    #: Two projections over one output.  ``fits`` belongs to both groups and so
+    #: to both projections, which is the many-to-many membership the contract
+    #: requires: one constraint can be a model obligation and a build obligation
+    #: at once without being declared twice.
+    model_view = Projection(throughput, readiness=ready, constraints=model_checks)
+    build_view = Projection(throughput, readiness=ready, constraints=build_checks)
 
     exports = (throughput,)
 
@@ -126,12 +138,14 @@ class Root(Space):
     )
     selected = choice.throughput
 
-    #: A conditional placement, so a value can be *finally inapplicable* rather
-    #: than merely unresolved.
+    #: A conditional placement, so a projection can be *finally inapplicable*
+    #: rather than merely unresolved.
     optional = Use(Stage, when=supplied, width=width)
     optional_value = optional.throughput
 
     chosen_ready = Readiness(properties=(selected,), name="chosen_ready")
+    result = Projection(selected, readiness=chosen_ready, name="result")
+    supply = Projection(optional_value, name="supply")
 
 
 def model() -> SpaceModel:
@@ -144,6 +158,11 @@ def start(*, width: int = 4, supplied: bool = True) -> Occurrence:
 
 def first_stage(occurrence: Occurrence) -> Occurrence:
     return occurrence.child(Root.pair).child(Pair.first)
+
+
+def codes(answer: Answer[object]) -> tuple[str, ...]:
+    assert isinstance(answer, (Absent, Unresolved))
+    return tuple(finding.code for finding in answer.findings)
 
 
 # -- the shape of an occurrence -----------------------------------------------
@@ -313,10 +332,233 @@ def test_a_value_outside_the_declared_domain_is_refused_with_findings() -> None:
 
 def test_a_query_never_commits_anything() -> None:
     root = start()
-    root.answer(Root.selected)
-    first_stage(root).assess(Stage.ready)
-    first_stage(root).assess(Stage.model_checks)
+    root.assess(Root.result)
+    root.project(Root.supply)
+    first_stage(root).assess(Stage.model_view)
     assert isinstance(first_stage(root).answer(Stage.lanes), Unresolved)
+
+
+# -- validated projections ----------------------------------------------------
+
+
+def test_an_unmet_readiness_obligation_reduces_to_unresolved() -> None:
+    assessment = first_stage(start()).assess(Stage.model_view)
+    assert assessment.readiness is not None and assessment.readiness.ready is None
+    assert isinstance(assessment.accepted_answer, Unresolved)
+    assert "readiness-decision-unassigned" in codes(assessment.accepted_answer)
+
+
+def test_a_final_output_with_accepting_constraints_reduces_to_decided() -> None:
+    stage = first_stage(start()).assign(Stage.lanes, 2)
+    assessment = stage.assess(Stage.model_view)
+    assert assessment.readiness is not None and assessment.readiness.ready is True
+    assert [group.verdict for group in assessment.constraints] == [True]
+    assert assessment.output == Decided(8)
+    assert assessment.accepted_answer == Decided(8)
+    assert stage.project(Stage.model_view) == Decided(8)
+
+
+def test_readiness_can_be_true_while_the_projection_is_still_rejected() -> None:
+    """Readiness and validity are different questions, and this is the proof.
+
+    Every obligation is final -- there is nothing left to decide and nothing
+    unresolved -- and the output is a perfectly available ``Decided(20)``.  The
+    projection is nevertheless ``Absent``, because a constraint answered a final
+    refusal.  Collapsing the two into one Boolean is how a point no hardware
+    could build gets handed on as merely incomplete.
+    """
+
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    assessment = stage.assess(Stage.model_view)
+    assert assessment.readiness is not None and assessment.readiness.ready is True
+    assert assessment.output == Decided(20)
+    assert [group.verdict for group in assessment.constraints] == [False]
+    assert isinstance(assessment.accepted_answer, Absent)
+    assert codes(assessment.accepted_answer) == ("stage-too-wide",)
+
+
+def test_one_constraint_participates_in_two_projections() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    shared = QualifiedPath("constraint.root.pair.first.fits")
+    model_view = stage.assess(Stage.model_view)
+    build_view = stage.assess(Stage.build_view)
+    assert shared in model_view.constraints[0].answers
+    assert shared in build_view.constraints[0].answers
+    assert isinstance(model_view.accepted_answer, Absent)
+    assert isinstance(build_view.accepted_answer, Absent)
+
+
+def test_a_projection_can_own_an_obligation_the_other_does_not() -> None:
+    """Same output, same readiness, different verdict -- because of one group."""
+
+    stage = first_stage(start(width=2)).assign(Stage.lanes, 3)
+    assert stage.project(Stage.model_view) == Decided(6)
+    refused = stage.project(Stage.build_view)
+    assert isinstance(refused, Absent)
+    assert codes(refused) == ("stage-odd-lanes",)
+
+
+def test_a_finally_inapplicable_output_reduces_to_absent_not_unresolved() -> None:
+    root = start(supplied=False)
+    answer = root.project(Root.supply)
+    assert isinstance(answer, Absent)
+    assert not isinstance(answer, Unresolved)
+
+
+def test_the_same_projection_resolves_once_its_conditional_placement_applies() -> None:
+    root = start(supplied=True)
+    assert isinstance(root.project(Root.supply), Unresolved)
+    committed = root.child(Root.optional).assign(Stage.lanes, 2).root
+    assert committed.project(Root.supply) == Decided(8)
+
+
+def test_a_projection_without_a_readiness_profile_still_reduces() -> None:
+    assessment = start().assess(Root.supply)
+    assert assessment.readiness is None
+    assert assessment.constraints == ()
+    assert isinstance(assessment.accepted_answer, Unresolved)
+
+
+def test_the_assessment_keeps_the_raw_output_beside_the_accepted_answer() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    assessment = stage.assess(Stage.model_view)
+    assert isinstance(assessment, ProjectionAssessment)
+    assert assessment.name == "root.pair.first.model_view"
+    assert assessment.output != assessment.accepted_answer
+
+
+def test_a_projection_declaration_of_another_occurrence_is_refused() -> None:
+    root = start()
+    with pytest.raises(AuthoringError, match="not owned by Root at root"):
+        root.assess(Stage.model_view)
+
+
+def test_assess_refuses_anything_that_is_not_one_of_the_three_questions() -> None:
+    root = start()
+    with pytest.raises(AuthoringError, match="Readiness, a ConstraintGroup, or a Projection"):
+        root.assess(cast("Readiness", Root.pair))
+
+
+def test_readiness_and_constraint_groups_are_assessable_on_their_own() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    assert stage.assess(Stage.ready).ready is True
+    assert stage.assess(Stage.ready).profile == "root.pair.first.ready"
+    assert stage.assess(Stage.model_checks).verdict is False
+
+
+# -- authoring rules for a projection ----------------------------------------
+
+
+def test_a_projection_needs_a_value_declaration_as_its_output() -> None:
+    with pytest.raises(AuthoringError, match="names one value declaration"):
+        Projection(cast("Decision[int]", "throughput"))
+
+
+def test_a_projection_readiness_must_be_a_readiness_declaration() -> None:
+    with pytest.raises(AuthoringError, match="readiness= is one Readiness"):
+        Projection(Stage.throughput, readiness=cast("Readiness", Stage.model_checks))
+
+
+def test_a_projection_constraint_must_be_a_constraint_group() -> None:
+    with pytest.raises(AuthoringError, match="constraints= are ConstraintGroup"):
+        Projection(Stage.throughput, constraints=cast("ConstraintGroup", Stage.fits))
+
+
+def test_a_projection_may_not_name_a_declaration_of_another_class() -> None:
+    class Borrower(Space):
+        width = Problem(int)
+
+        @derived(int, width=width)
+        def value(*, width: int) -> int:
+            return width
+
+        stolen = Projection(value, readiness=Stage.ready)
+
+    with pytest.raises(AuthoringError, match="names a declaration outside the class"):
+        compile_space_model(Borrower, "root", problem_namespace="problem.root")
+
+
+def test_a_projection_may_not_name_one_constraint_group_twice() -> None:
+    class Doubled(Space):
+        width = Problem(int)
+
+        @derived(int, width=width)
+        def value(*, width: int) -> int:
+            return width
+
+        @constraint(width=width)
+        def positive(*, width: int) -> object:
+            return width > 0
+
+        checks = ConstraintGroup(positive)
+        view = Projection(value, constraints=(checks, checks))
+
+    with pytest.raises(AuthoringError, match="names constraint group 'checks' twice"):
+        compile_space_model(Doubled, "root", problem_namespace="problem.root")
+
+
+def test_adding_a_projection_changes_no_engine_declaration() -> None:
+    """A projection is a stored question over paths that already exist."""
+
+    class Plain(Space):
+        width = Problem(int)
+
+        @derived(int, width=width)
+        def value(*, width: int) -> int:
+            return width
+
+        @constraint(width=width)
+        def positive(*, width: int) -> object:
+            return width > 0
+
+        checks = ConstraintGroup(positive)
+        ready = Readiness(properties=(value,), name="ready")
+
+    class Projected(Space):
+        width = Problem(int)
+
+        @derived(int, width=width)
+        def value(*, width: int) -> int:
+            return width
+
+        @constraint(width=width)
+        def positive(*, width: int) -> object:
+            return width > 0
+
+        checks = ConstraintGroup(positive)
+        ready = Readiness(properties=(value,), name="ready")
+        view = Projection(value, readiness=ready, constraints=checks)
+
+    plain = compile_space_model(Plain, "root", problem_namespace="problem.root").specification
+    projected = compile_space_model(
+        Projected, "root", problem_namespace="problem.root"
+    ).specification
+    assert [item.path for item in plain.decisions] == [item.path for item in projected.decisions]
+    assert [item.path for item in plain.properties] == [item.path for item in projected.properties]
+    assert [item.path for item in plain.constraints] == [
+        item.path for item in projected.constraints
+    ]
+    assert [item.name for item in plain.constraint_sets] == [
+        item.name for item in projected.constraint_sets
+    ]
+    assert [item.name for item in plain.readiness_profiles] == [
+        item.name for item in projected.readiness_profiles
+    ]
+
+
+def test_the_declared_namespaces_of_the_existing_stack_are_unchanged() -> None:
+    """U1 renames, reparents, and removes no path."""
+
+    paths = {str(item.path) for item in model().specification.decisions}
+    assert paths == {
+        "root.choice.case",
+        "root.choice.stage.lanes",
+        "root.optional.lanes",
+        "root.pair.first.lanes",
+        "root.pair.inner.case",
+        "root.pair.inner.stage.lanes",
+        "root.pair.second.lanes",
+    }
 
 
 # -- capability boundary ------------------------------------------------------
@@ -344,6 +586,7 @@ def test_the_occurrence_surface_is_exactly_the_supported_operations() -> None:
         "branch",
         "child",
         "namespace",
+        "project",
         "root",
         "scope",
         "space_type",
@@ -357,6 +600,8 @@ def test_no_returned_value_carries_a_runtime_object() -> None:
         stage.answer(Stage.throughput),
         stage.assess(Stage.ready),
         stage.assess(Stage.model_checks),
+        stage.assess(Stage.model_view),
+        stage.project(Stage.model_view),
         stage.root.branch(Root.choice),
     ]
     for value in returned:

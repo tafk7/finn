@@ -63,6 +63,7 @@ from finn.dataflow.model.declarations import (
     OneOf,
     PendingFinding,
     Problem,
+    Projection,
     Readiness,
     Rejected,
     Space,
@@ -156,6 +157,25 @@ class _CompiledBranch:
 
 
 @dataclass(frozen=True)
+class _CompiledProjection:
+    """One compiled :class:`Projection`: its output handle and its obligations.
+
+    ``readiness`` and ``constraint_sets`` are the engine-facing *names* the
+    generic lowering already gave the profile and the groups, not copies of the
+    declarations.  A projection therefore adds no engine declaration of its own:
+    it is a stored question over paths that already exist, which is why adding
+    one to a Space cannot change the compiled ``DesignSpaceSpec``.
+    """
+
+    member_name: str
+    name: str
+    template: object
+    output: _Ref[object]
+    readiness: str | None
+    constraint_sets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _CompiledSpace(Generic[S]):
     """One bound, namespaced Space declaration and its typed member handles."""
 
@@ -174,10 +194,19 @@ class _CompiledSpace(Generic[S]):
     #: constraint that refused is exactly the one nobody can act on.
     constraint_members: tuple[tuple[str, QualifiedPath], ...] = ()
     #: Readiness and ConstraintGroup members mapped to the engine names the
-    #: generic lowering gave them, so an occurrence can name a declaration and
-    #: never rebuild a profile name from a naming convention.
+    #: generic lowering gave them, so a Projection can name a declaration and
+    #: the occurrence layer never rebuilds a profile name from a convention.
     readiness_names: tuple[tuple[str, str], ...] = ()
     constraint_set_names: tuple[tuple[str, str], ...] = ()
+    projections: tuple[tuple[str, _CompiledProjection], ...] = ()
+
+    def projection(self, name: str) -> _CompiledProjection:
+        try:
+            return dict(self.projections)[name]
+        except KeyError:
+            raise AuthoringError(
+                f"{self.owner.__name__} has no Projection member {name!r}"
+            ) from None
 
     def branch(self, name: str) -> _CompiledBranch:
         try:
@@ -355,6 +384,11 @@ class _Compilation:
                 for name, declaration in self.declarations
                 if isinstance(declaration, ConstraintGroup)
             ),
+            tuple(
+                (name, self._compile_projection(name, declaration))
+                for name, declaration in self.declarations
+                if isinstance(declaration, Projection)
+            ),
         )
         finalized = self.space_type._finalize_compilation(compiled)
         if not isinstance(finalized, _CompiledSpace):
@@ -425,9 +459,9 @@ class _Compilation:
     def _group_name(self, member_name: str, declaration: object) -> str:
         """The one engine name a ConstraintGroup or Readiness member is given.
 
-        Stated once and read by both the spec lowering and the occurrence
-        layer.  Two copies of this rule is how a caller ends up naming a profile
-        the engine does not have.
+        Stated once and read by both the spec lowering and the projection
+        lowering.  Two copies of this rule is how a Projection ends up naming a
+        profile the engine does not have.
         """
 
         return f"{self.namespace}.{_local_name(member_name, declaration)}"
@@ -439,6 +473,42 @@ class _Compilation:
                 f"{self.space_type.__name__} {what} names a declaration outside the class"
             )
         return name
+
+    def _compile_projection(
+        self, member_name: str, declaration: Projection[object]
+    ) -> _CompiledProjection:
+        effective = dict(self.declarations)
+        what = f"Projection {_local_name(member_name, declaration)!r}"
+        readiness_name: str | None = None
+        if declaration.readiness is not None:
+            name = self._member_name(declaration.readiness, what)
+            resolved = effective.get(name)
+            if not isinstance(resolved, Readiness):
+                raise AuthoringError(f"{self.space_type.__name__} {what} readiness= is not one")
+            readiness_name = self._group_name(name, resolved)
+        groups: list[str] = []
+        for group in declaration.constraints:
+            name = self._member_name(group, what)
+            resolved_group = effective.get(name)
+            if not isinstance(resolved_group, ConstraintGroup):
+                raise AuthoringError(
+                    f"{self.space_type.__name__} {what} names {name!r}, which is not a "
+                    "ConstraintGroup"
+                )
+            group_name = self._group_name(name, resolved_group)
+            if group_name in groups:
+                raise AuthoringError(
+                    f"{self.space_type.__name__} {what} names constraint group {name!r} twice"
+                )
+            groups.append(group_name)
+        return _CompiledProjection(
+            member_name,
+            self._group_name(member_name, declaration),
+            declaration,
+            self._source_ref(declaration.output),
+            readiness_name,
+            tuple(groups),
+        )
 
     def _catalog(self) -> BranchCatalog:
         """Flatten this Space's branches outermost-first in declaration order."""

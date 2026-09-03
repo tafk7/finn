@@ -65,7 +65,7 @@ from finn.dataflow.model.branching import (
     CaseInfo,
 )
 from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_space_model
-from finn.dataflow.model.occurrence import Occurrence
+from finn.dataflow.model.occurrence import Occurrence, ProjectionAssessment
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Case,
@@ -74,6 +74,7 @@ from finn.dataflow.model.declarations import (
     Input,
     OneOf,
     Problem,
+    Projection,
     Readiness,
     Space,
     Use,
@@ -164,6 +165,7 @@ __all__ = [
     "Input",
     "OneOf",
     "Problem",
+    "Projection",
     "Readiness",
     "Space",
     "Use",
@@ -189,6 +191,7 @@ __all__ = [
     "configure_design",
     # the occurrence lifecycle over one compiled model and one point
     "Occurrence",
+    "ProjectionAssessment",
     # lowering, and the policy-neutral seam specialization code reads
     "BranchCatalog",
     "BranchInfo",

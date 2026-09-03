@@ -15,6 +15,8 @@ SpaceModel.start(problem)
             -> child Occurrence   the same point, a bound namespace
         .assign(declaration, v)
             -> successor          a new immutable point, the same view
+        .project(Projection)
+            -> Answer[T]          readiness, output, and constraints combined
 ```
 
 **One point, several views.**  Exactly one private runtime owns the compiled
@@ -46,19 +48,21 @@ selector -- is a ``RequestError`` carrying findings, because the caller's source
 is fine and the point is not where they thought.
 
 **Nothing here changes ``_engine``.**  Every query and commit goes through the
-public ``Engine`` operations; this module adds resolution, scope, and a lock,
-and subtracts capability.
+public ``Engine`` operations; this module adds resolution, scope, a validated
+projection reduction, and a lock, and subtracts capability.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
 
 from finn.dataflow._engine import (
+    Absent,
     Answer,
     ConstraintAssessment,
+    Decided,
     DesignPoint,
     Finding,
     FindingKind,
@@ -66,10 +70,12 @@ from finn.dataflow._engine import (
     QualifiedPath,
     ReadinessAssessment,
     RequestError,
+    Unresolved,
 )
 from finn.dataflow.model.branching import BranchInfo
 from finn.dataflow.model.compiler import (
     _CompiledBranch,
+    _CompiledProjection,
     _CompiledSpace,
     _members_of,
     _ModelSupport,
@@ -83,6 +89,7 @@ from finn.dataflow.model.declarations import (
     ConstraintGroup,
     Decision,
     OneOf,
+    Projection,
     Readiness,
     Space,
     Use,
@@ -93,10 +100,139 @@ if TYPE_CHECKING:
     from finn.dataflow.model.compiler import SpaceModel
 
 T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound=Space)
 
 #: Dispositions ``commit_assignments`` reports for a value that was accepted.
 _ACCEPTED = ("committed", "unchanged")
+
+
+# -- validated projections ----------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionAssessment(Generic[T_co]):
+    """Readiness, constraint acceptance, and output availability, kept apart.
+
+    ``accepted_answer`` is the reduction a caller normally wants and
+    ``Occurrence.project`` returns.  The other three fields are why it must not
+    be the only thing exposed: an occurrence can be perfectly *ready* -- every
+    obligation final, nothing left to decide -- and still be refused, because a
+    constraint answered a final ``False``.  Collapsing the three into one
+    Boolean is exactly the confusion that lets a rejected point be handed on as
+    if it were merely incomplete.
+
+    ``output`` is the raw answer for the projection's distinguished value,
+    before any constraint had a say.  Keeping it lets a diagnostic say "the
+    Region resolved and the width constraint refused it", which is a different
+    sentence from "the Region did not resolve".
+    """
+
+    name: str
+    readiness: ReadinessAssessment | None
+    constraints: tuple[ConstraintAssessment, ...]
+    output: Answer[T_co]
+    accepted_answer: Answer[T_co]
+
+
+def _unresolved_findings(answers: Iterable[Answer[object]]) -> tuple[Finding, ...]:
+    return tuple(
+        finding
+        for answer in answers
+        if isinstance(answer, Unresolved)
+        for finding in answer.findings
+    )
+
+
+def _rejection_findings(assessment: ConstraintAssessment, owner: QualifiedPath) -> list[Finding]:
+    """Every reason one constraint set said no, in both of its spellings."""
+
+    findings: list[Finding] = []
+    for path in assessment.refused:
+        answer = assessment.answers[path]
+        if isinstance(answer, Absent) and answer.findings:
+            findings.extend(answer.findings)
+            continue
+        findings.append(
+            Finding(
+                FindingKind.REJECTION,
+                "projection-constraint-refused",
+                owner,
+                "a projection constraint refused this point",
+                (("constraint", path),),
+                (path,),
+            )
+        )
+    return findings
+
+
+def _reduce(
+    record: _CompiledProjection,
+    readiness: ReadinessAssessment | None,
+    output: Answer[object],
+    constraints: tuple[ConstraintAssessment, ...],
+) -> Answer[object]:
+    """The normative projection reduction.
+
+    The order is the contract, not an implementation detail.  *Unresolved*
+    dominates, because an obligation that has not been met yet is not evidence
+    of anything.  A final *inapplicability* comes next and is reported as the
+    output's own ``Absent``, so a projection that legitimately does not arise
+    keeps saying so in the engine's vocabulary.  Only then does a constraint
+    refusal turn a perfectly available value into a rejecting ``Absent``.  A
+    ``Decided`` is exposed last and only when every obligation is final and
+    every constraint accepted.
+    """
+
+    owner = QualifiedPath(record.name)
+    if readiness is not None and readiness.ready is not True:
+        findings = _unresolved_findings(readiness.answers.values())
+        return Unresolved(
+            findings
+            or (
+                Finding(
+                    FindingKind.BLOCKER,
+                    "projection-not-ready",
+                    owner,
+                    "this projection's readiness profile is not final",
+                ),
+            )
+        )
+    if isinstance(output, Unresolved):
+        return output
+    if any(assessment.verdict is None for assessment in constraints):
+        pending = tuple(
+            finding
+            for assessment in constraints
+            if assessment.verdict is None
+            for finding in _unresolved_findings(
+                cast("Iterable[Answer[object]]", assessment.answers.values())
+            )
+        )
+        return Unresolved(
+            pending
+            or (
+                Finding(
+                    FindingKind.BLOCKER,
+                    "projection-constraints-unresolved",
+                    owner,
+                    "a projection constraint could not be evaluated at this point",
+                ),
+            )
+        )
+    if isinstance(output, Absent):
+        return output
+    refusals: list[Finding] = []
+    for assessment in constraints:
+        if assessment.verdict is False:
+            refusals.extend(_rejection_findings(assessment, owner))
+    if refusals:
+        return Absent(tuple(refusals))
+    # The one snapshot the reduction promises.  It is the *output declaration's*
+    # own policy, taken from its value semantics, and it re-checks the nominal
+    # type on the way out: a projection is where a value stops being a cached
+    # engine fact and starts being an answer somebody else will keep.
+    return Decided(record.output.semantics.freeze(output.value))
 
 
 # -- the private runtime ------------------------------------------------------
@@ -191,6 +327,14 @@ class Occurrence:
         with support.lock:
             return cast("Answer[T]", answer_for(support.engine, self._runtime.point, reference))
 
+    def project(self, projection: Projection[T]) -> Answer[T]:
+        """The validated answer for one projection: the normative reduction."""
+
+        return self.assess(projection).accepted_answer
+
+    @overload
+    def assess(self, target: Projection[T]) -> ProjectionAssessment[T]: ...
+
     @overload
     def assess(self, target: Readiness) -> ReadinessAssessment: ...
 
@@ -198,11 +342,11 @@ class Occurrence:
     def assess(self, target: ConstraintGroup) -> ConstraintAssessment: ...
 
     def assess(
-        self, target: Readiness | ConstraintGroup
-    ) -> ReadinessAssessment | ConstraintAssessment:
-        """Assess one readiness profile or one constraint group.
+        self, target: Projection[T] | Readiness | ConstraintGroup
+    ) -> ProjectionAssessment[T] | ReadinessAssessment | ConstraintAssessment:
+        """Assess one readiness profile, one constraint group, or one projection.
 
-        Two return types rather than one, because they answer two different
+        Three return types rather than one, because they answer three different
         questions and a common supertype would only invite treating them as
         interchangeable.
         """
@@ -220,7 +364,11 @@ class Occurrence:
             )
             with support.lock:
                 return support.engine.evaluate_constraint_set(self._runtime.point, group)
-        raise AuthoringError("assess takes a Readiness or a ConstraintGroup declaration")
+        if isinstance(target, Projection):
+            return self._assess_projection(target)
+        raise AuthoringError(
+            "assess takes a Readiness, a ConstraintGroup, or a Projection declaration"
+        )
 
     # -- navigation -----------------------------------------------------------
 
@@ -302,6 +450,30 @@ class Occurrence:
         if refused:
             raise RequestError(_refusal_findings(refused))
         return Occurrence(self._runtime.successor(result.point), self._compiled, self._scope)
+
+    def _assess_projection(self, declaration: Projection[T]) -> ProjectionAssessment[T]:
+        name = self._member_of(declaration, (Projection,), "projection")
+        record = self._compiled.projection(name)
+        support = self._support
+        point = self._runtime.point
+        with support.lock:
+            readiness = (
+                None
+                if record.readiness is None
+                else support.engine.check_readiness(point, record.readiness)
+            )
+            output = answer_for(support.engine, point, record.output)
+            constraints = tuple(
+                support.engine.evaluate_constraint_set(point, group)
+                for group in record.constraint_sets
+            )
+        return ProjectionAssessment(
+            record.name,
+            readiness,
+            constraints,
+            cast("Answer[T]", output),
+            cast("Answer[T]", _reduce(record, readiness, output, constraints)),
+        )
 
     def _live_case(self, name: str, record: _CompiledBranch) -> str:
         if record.selector is None:
@@ -413,4 +585,4 @@ def _occurrences_of(
     return tuple(found)
 
 
-__all__ = ["Occurrence", "make_root_occurrence"]
+__all__ = ["Occurrence", "ProjectionAssessment", "make_root_occurrence"]

@@ -375,6 +375,73 @@ class Readiness:
         object.__setattr__(self, "stable_name", name)
 
 
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class Projection(Generic[T_co]):
+    """One named question a Space promises to answer about its own point.
+
+    A projection binds three things an occurrence would otherwise have to be
+    asked for separately: *which* value is the answer, *when* the point is final
+    enough to be inspected at all, and *which* constraint groups must accept
+    before that value may be exposed.  Keeping them in one declaration is the
+    whole reason readiness, validity, and availability can stay three different
+    questions at the answer boundary rather than collapsing into one Boolean.
+
+    ``constraints`` is a tuple because membership is many-to-many in both
+    directions: one projection may own several groups, and one group may be
+    owned by several projections when each of them legitimately depends on it.
+    A group is named, never inferred from what its constraints happen to read;
+    a physical feasibility constraint can depend on exactly the same folding
+    decisions as a model constraint and still say something entirely different.
+
+    There is no snapshot-policy field.  The reduction exposes
+    ``Decided(snapshot(output))``, and the output declaration already owns its
+    ``ValueSemantics.snapshot``; a second policy beside it could only disagree
+    with the value's own definition of what a snapshot is.
+
+    There is no absence-policy field either.  The reduction fixes what a final
+    inapplicability means -- ``Absent`` -- so a per-projection override could
+    only contradict it.  The one thing a policy could legitimately record, that
+    absence is an *expected* answer here, has no consumer until a Kernel needs
+    to say its physical realization is unsupported, and belongs with that
+    forcing case rather than ahead of it.
+    """
+
+    output: ValueSource[T_co]
+    readiness: Readiness | None
+    constraints: tuple[ConstraintGroup, ...]
+    stable_name: str | None
+
+    def __init__(
+        self,
+        output: ValueSource[T_co],
+        *,
+        readiness: Readiness | None = None,
+        constraints: ConstraintGroup | Sequence[ConstraintGroup] = (),
+        name: str | None = None,
+    ) -> None:
+        if not isinstance(output, ValueSource):
+            raise AuthoringError("a Projection names one value declaration as its output")
+        if readiness is not None and not isinstance(readiness, Readiness):
+            raise AuthoringError("a Projection's readiness= is one Readiness declaration")
+        if isinstance(constraints, ConstraintGroup):
+            groups: tuple[ConstraintGroup, ...] = (constraints,)
+        elif isinstance(constraints, Sequence):
+            groups = tuple(constraints)
+        else:
+            groups = (cast(ConstraintGroup, constraints),)
+        if any(not isinstance(group, ConstraintGroup) for group in groups):
+            raise AuthoringError(
+                "a Projection's constraints= are ConstraintGroup declarations; a bare "
+                "Constraint belongs to a group, so that the group can be named and shared"
+            )
+        if name is not None and not name:
+            raise AuthoringError("a Projection name must be non-empty")
+        object.__setattr__(self, "output", output)
+        object.__setattr__(self, "readiness", readiness)
+        object.__setattr__(self, "constraints", groups)
+        object.__setattr__(self, "stable_name", name)
+
+
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
 class ChildValue(ValueSource[T_co]):
     """One exported value of a recursively used child Space."""
@@ -576,6 +643,7 @@ Declaration = Union[
     Constraint,
     ConstraintGroup,
     Readiness,
+    Projection[object],
     Use[Space],
     OneOf,
 ]
@@ -589,6 +657,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Constraint,
     ConstraintGroup,
     Readiness,
+    Projection,
     Use,
     OneOf,
 )
@@ -675,6 +744,7 @@ __all__ = [
     "OneOf",
     "PendingFinding",
     "Problem",
+    "Projection",
     "Readiness",
     "Rejected",
     "Space",
