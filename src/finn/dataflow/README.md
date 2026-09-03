@@ -14,7 +14,7 @@ finn.dataflow.designs   the generic Design contract and topology
 finn.dataflow.ops       DataflowOps and their own Design inventories
 ```
 
-Three layers share that frontend and lower to one flat spec:
+Four layers share that frontend and lower to one flat spec:
 
 ```text
 Space                  ordinary declarations, direct Subspace composition,
@@ -27,8 +27,11 @@ DataflowDesign(Space)  semantic Decisions, Kernels segments,
                        explicit Connections and Boundaries,
                        one selected canonical DataflowNetwork
    |
-   -> flat DesignSpaceSpec -> existing _engine validation and evaluation
-   -> configured Design: one Kernel per role, one validated Network
+DataflowOp             one ONNX node, frozen source facts, a closed set of
+   (holds a root)      Designs, and the choices that survive a save
+   |
+   -> flat DesignSpaceSpec -> _engine validation and evaluation
+   -> two projections per layer: what it *means*, and what it *builds*
 ```
 
 `DesignSpaceSpec`, `Engine`, and `DesignPoint` remain the normalized IR and
@@ -432,18 +435,8 @@ selector like any other decision. Nothing about that is Kernel-specific.
 they form. It consumes external facts only through `Input`, never `Problem`.
 
 ```python
-from finn.dataflow.model import (
-    Boundary,
-    Connection,
-    DataflowDesign,
-    Decision,
-    Input,
-    Kernels,
-    Sink,
-    Subspace,
-    configure_design,
-    divisors_of,
-)
+from finn.dataflow.designs import Boundary, Connection, DataflowDesign, Kernels, Sink
+from finn.dataflow.model import Decision, Input, Subspace, divisors_of
 
 
 class ExampleDesign(DataflowDesign):
@@ -489,16 +482,31 @@ Design-specific supplement is `segments_match_network`.
 Complementarity is not proved syntactically; canonical endpoint ownership
 rejects both-active and neither-active at every point.
 
-### Configured Design
+### Asking a Design
 
-`configure_design(engine, compiled, point)` checks readiness, checks
-feasibility, resolves each active segment's selection, configures exactly those
-Kernels, resolves the Network, and proves each configured Kernel realizes its
-node's Region. The result is an instance of the authored class holding the
-selected Network, one Kernel per active role, the selected case ids,
-Design-owned assignments, external decision provenance, and static
-role/node/Region-family metadata -- and no Engine, point, compiled record,
-unselected candidate, or branch catalog.
+`design.dataflow` is the Design's one question and there is no resolved-Design
+wrapper in between. Everything else is asked of the same attached occurrence:
+
+```python
+design.dataflow  # ProjectionAssessment[DataflowNetwork]
+design.roles  # ("replay", "compute")
+design.region(role)  # Answer[DataflowRegion]
+design.region_family(role)  # Answer[(family, version)]
+design.computation(role)  # ComputationContract
+design.node_id(role)  # the stable Network node
+design.is_active(role)  # Answer[bool]
+design.selected(role)  # Answer[str], the candidate id
+design.kernel(role)  # Answer[Kernel], the child occurrence
+design.assignments  # Design-owned, including its selectors
+design.imported_decisions  # provenance
+```
+
+The Network resolves from semantics alone. Its readiness profile lists the
+Network and the selected Regions and nothing else, and its constraint set
+excludes each candidate's `physical_support`, so a Kernel that cannot be built
+at this configuration still contributes a Region. `design_dataflow(engine,
+compiled, point)` is the same projection for a caller holding a compiled
+fragment.
 
 ## The production slice
 
@@ -513,15 +521,20 @@ engine point and tests its RTL numerically and through OOC synthesis.
 ## Artifact boundary
 
 The artifact substrate remains downstream and does not import this package.
-The one-way helpers in `kernels/artifacts.py` turn a configured Kernel into
+The one-way helpers in `kernels/artifacts.py` take a **detached**
+`KernelPhysicalResult` -- never an occurrence -- and turn it into
 artifact-native values:
 
 ```text
-configured Kernel + declared source roots
+kernel.physical -> KernelPhysicalResult + declared source roots
     -> ResolvedContributions
     -> Derivation for the reusable source closure
     -> PortableComponent carrying source ArtifactRef + ComponentABI
 ```
+
+A build unit therefore holds no handle back into the design space, and an
+implementation with no realization for a configuration its Region accepts says
+so by raising `PhysicallyUnsupported` rather than by inventing an ABI.
 
 Artifact keys contain only values read by the corresponding artifact stage.
 Occurrence namespaces and filesystem locations do not enter portable
@@ -534,12 +547,48 @@ to another thread and waits for it would deadlock. Moving synchronization into
 the engine's own cache operations is U7 work, and U1 deliberately changes no
 `_engine` semantics.
 
-## Deliberate boundary of this slice
+## Operations
 
-U1 does not migrate Kernel, DataflowDesign, or DataflowOp to occurrences. This
-package does not yet attach input supply, project ONNX graph context, compose
-artifacts across Kernels, or persist a selection. `Region.family`/`version` and
-the configured Design's role-to-node metadata preserve the seam a future
-annotated-ONNX carrier would need; no ONNX object exists in the stack. Existing
-upper-stack collection failures caused by retired artifact interfaces are
-non-gating here.
+`finn.dataflow.ops.base.DataflowOp` is a QONNX `CustomOp` that *wraps* a root
+occurrence rather than being one:
+
+```text
+NodeProto + ModelWrapper + build config
+    -> read once   SourceNode        (frozen; the graph is not reread)
+    -> freeze      Problem snapshot  + fingerprint
+    -> start       root occurrence
+    -> hydrate     node attributes replayed as ordinary assignments
+    -> ask         network(), association()
+```
+
+Persistence is one authority, on the node: scope id, family, version, problem
+fingerprint, and one attribute per persistent Decision. A persisted Decision
+declares its *route* -- a navigator from the root plus the declaration object --
+so it survives the root being started under another namespace. A changed
+problem is refused, never rebased.
+
+`SourceAssociation` is logical only. It records the tensor, the Network
+boundary (or none), the node and port reached, and the coordinate
+correspondence; it carries no Kernel identity, component id or artifact key,
+and it is read off the resolved Network, so a matrix produced internally
+reports no boundary while a pumped core and an unpumped one associate the same.
+
+MVAU and ActivationReplay are the two operations, deliberately unalike -- two
+Design alternatives against one fixed `Subspace`, three operands against two --
+because the only way to know the layer is not MVAU-shaped is for something that
+is not MVAU to use it unchanged.
+
+## Deliberate boundary
+
+Physical composition is a contract, not an implementation: there is no
+`DesignPhysicalResult`, no wrapper generation and no composed packaging here.
+Nor is there a specialization policy, ONNX lowering, or a Region CustomOp.
+`Region.family`/`version` and the Design's role-to-node metadata preserve the
+seam a future annotated-ONNX carrier would need; no ONNX object reaches the
+engine.
+
+Evaluator callbacks run under the per-lineage lock. Re-entry from the same
+thread is safe because the lock is re-entrant; a callback that hands work to
+another thread and waits for it would deadlock. Moving synchronization into the
+engine's own cache operations is later work, and nothing so far changes
+`_engine` semantics -- its diff from the pre-unified baseline is empty.
