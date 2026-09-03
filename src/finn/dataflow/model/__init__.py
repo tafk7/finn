@@ -73,6 +73,7 @@ from finn.dataflow.model.declarations import (
     Space,
     Subspace,
     Variant,
+    allow_absent,
     constraint,
     derived,
     divisors_of,
@@ -84,6 +85,7 @@ from finn.dataflow.model.declarations import (
 from finn.dataflow.model.occurrence import (
     OccurrenceDiagnostic,
     ProjectionAssessment,
+    RootFactory,
     VariantView,
 )
 
@@ -104,8 +106,10 @@ __all__ = [
     "Readiness",
     "Space",
     "Subspace",
+    "RootFactory",
     "Variant",
     "VariantView",
+    "allow_absent",
     "constraint",
     "derived",
     "divisors_of",

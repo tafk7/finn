@@ -51,6 +51,7 @@ from finn.dataflow.model.declarations import (
     DECLARATION_TYPES,
     AuthoringError,
     BranchOutput,
+    _AbsenceTolerant,
     ChildValue,
     Constraint,
     ConstraintGroup,
@@ -491,6 +492,14 @@ class _Compilation:
         return BranchCatalog(tuple(collected))
 
     def _source_ref(self, source: ValueSource[object]) -> _Ref[object]:
+        if isinstance(source, _AbsenceTolerant):
+            # Lowered here rather than in ``_dependency_refs`` so the tolerance
+            # survives wherever a value is named -- a Projection output and a
+            # trace path resolve through this method too.
+            return replace(
+                self._source_ref(cast("ValueSource[object]", source.source)),
+                absence=AbsenceMode.ALLOWS_ABSENT,
+            )
         if isinstance(source, BranchOutput):
             branch = source.variant
             branch_name = self.branch_names.get(id(branch))
@@ -1190,6 +1199,7 @@ class SpaceModel(Generic[S]):
         problem: ProblemSource,
         *,
         expected_problem_fingerprint: str | None = None,
+        root_factory: Callable[[Any], S] | None = None,
     ) -> S:
         """Freeze one problem into a new root occurrence of the authored class.
 
@@ -1197,12 +1207,16 @@ class SpaceModel(Generic[S]):
         pipeline that processes many occurrences of one family holds the model
         and calls this repeatedly; ``Space.start`` is the ergonomic one-shot
         spelling, compiles a fresh model, and ends up here.
+
+        ``root_factory`` allocates the root, and only the root, when the caller
+        owns context the design space knows nothing about.
         """
 
         started = _occurrence_api().start_from_model(
             self,
             problem,
             expected_problem_fingerprint=expected_problem_fingerprint,
+            root_factory=root_factory,
         )
         return cast("S", started)
 

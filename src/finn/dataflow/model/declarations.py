@@ -427,8 +427,15 @@ class Space:
         *,
         namespace: str = "root",
         expected_problem_fingerprint: str | None = None,
+        root_factory: Callable[[OccurrenceContext], S] | None = None,
     ) -> S:
-        """Start one class-centered root occurrence over a frozen problem."""
+        """Start one class-centered root occurrence over a frozen problem.
+
+        ``root_factory`` allocates the root occurrence -- and every successor
+        root of the same lineage -- for a caller holding context the design
+        space has no declaration for.  It is never used for a child, so nothing
+        it captures is reachable from a nested Design or Kernel.
+        """
 
         api = _occurrence_api()
         return cast(
@@ -438,6 +445,7 @@ class Space:
                 problem,
                 namespace=namespace,
                 expected_problem_fingerprint=expected_problem_fingerprint,
+                root_factory=root_factory,
             ),
         )
 
@@ -639,6 +647,51 @@ class Input(ValueSource[T_co]):
             "absence",
             AbsenceMode.ALLOWS_ABSENT if allow_absent else AbsenceMode.REQUIRES_APPLICABLE,
         )
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class _AbsenceTolerant(ValueSource[T_co]):
+    """One *dependency* marked absence-tolerant at its use site.
+
+    Not a declaration and never a class member: it wraps a declaration where a
+    ``Derived`` or ``Constraint`` names it, and the compiler lowers it to the
+    same ``AbsenceMode.ALLOWS_ABSENT`` that ``Input(allow_absent=True)``
+    already produces.  The distinction matters because absence tolerance is a
+    property of *this reader*, not of the value: a Design's network constraint
+    tolerates an inactive segment contributing no Region, while the same Region
+    remains required by everything inside the segment that is active.
+    """
+
+    # Defaulted only because ``ValueSource`` defaults ``stable_name`` above it;
+    # ``init=False`` means the real value always arrives through ``__init__``.
+    source: ValueSource[Any] = cast("ValueSource[Any]", None)
+
+    def __init__(self, source: ValueSource[T_co]) -> None:
+        if not isinstance(source, ValueSource):
+            raise AuthoringError("allow_absent() takes one value declaration")
+        if isinstance(source, _AbsenceTolerant):
+            raise AuthoringError("allow_absent() is already applied to this dependency")
+        object.__setattr__(self, "value_semantics", source.value_semantics)
+        object.__setattr__(self, "stable_name", source.stable_name)
+        object.__setattr__(self, "source", source)
+
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        raise AuthoringError(
+            f"{owner.__name__}.{name} is an allow_absent() marker in a class body; it marks "
+            "one dependency where a Derived or Constraint names it, and declares nothing"
+        )
+
+
+def allow_absent(source: ValueSource[T]) -> ValueSource[T]:
+    """Mark one dependency of a ``Derived`` or ``Constraint`` as absence-tolerant.
+
+    Without it a reader of a conditionally-absent value is unwritable: the
+    dependency resolves to a final ``Absent`` and the reader propagates it,
+    which is right for a Kernel reading its own Region and wrong for a Design
+    constraint whose whole job is to say "an inactive role contributes no node".
+    """
+
+    return cast("ValueSource[T]", _AbsenceTolerant(source))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1263,6 +1316,7 @@ __all__ = [
     "Unresolvable",
     "ValueSource",
     "Variant",
+    "allow_absent",
     "check_canonical",
     "check_reserved_names",
     "constraint",

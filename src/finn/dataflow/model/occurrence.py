@@ -87,6 +87,18 @@ T = TypeVar("T")
 
 ProblemSource = Mapping[Any, object] | Callable[[], Mapping[Any, object]]
 
+#: How a caller that owns something outside the design space -- an operation
+#: holding a frozen ONNX node -- allocates the *root* occurrence of a lineage.
+#:
+#: A factory rather than a payload on :class:`OccurrenceContext`, and the
+#: distinction is the whole point: a payload would be readable by every authored
+#: class in the tree, handing a contributor-written Kernel a channel to the
+#: operation's node, model and build configuration.  A factory is consulted for
+#: the root and for successor roots only, so a child Design or Kernel cannot
+#: observe anything the caller captured, and ``OccurrenceContext`` gains no
+#: field.
+RootFactory = Callable[[OccurrenceContext], S]
+
 
 class _NotAttached(RuntimeError):
     """A lifecycle operation reached an instance with no occurrence runtime.
@@ -200,6 +212,10 @@ class _Lineage:
     problem_snapshot: Mapping[Problem[object], object]
     problem_fingerprint: str
     lock: RLock
+    #: Private, and never reachable from an authored class.  ``None`` for an
+    #: ordinary lineage; a closure for one started by a caller that owns
+    #: external context its root must carry.
+    root_factory: RootFactory[Space] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,14 +276,29 @@ def _make_occurrence(
     without calling ``__init__``, but now that is a documented contract with a
     seam, and the runtime is attached *after* the class has had its say so no
     constructor ever sees the Engine or the point.
+
+    A lineage started with a :data:`RootFactory` allocates its *root* through
+    that factory instead.  ``root is None`` is the exact test, so the factory
+    runs for the first root and for every successor root and for nothing else;
+    a child view is always allocated by its own authored class, which is what
+    keeps external context unreachable from anywhere but the root.
     """
 
     owner = compiled.owner
     context = OccurrenceContext(owner, compiled.namespace, scope, root)
-    instance = owner._new_occurrence(context)
+    factory = runtime.lineage.root_factory
+    if root is None and factory is not None:
+        instance = factory(context)
+    else:
+        instance = owner._new_occurrence(context)
+    allocator = (
+        "the lineage root factory"
+        if root is None and factory is not None
+        else f"{owner.__name__}._new_occurrence"
+    )
     if not isinstance(instance, owner):
         raise AuthoringError(
-            f"{owner.__name__}._new_occurrence returned "
+            f"{allocator} returned "
             f"{type(instance).__name__}, which is not an instance of {owner.__name__}"
         )
     # A hook that hands back something it made earlier -- a cached singleton, a
@@ -277,13 +308,11 @@ def _make_occurrence(
     # already-attached result is refused before anything is written to it.
     if is_attached_occurrence(instance):
         raise AuthoringError(
-            f"{owner.__name__}._new_occurrence returned an occurrence that is already "
+            f"{allocator} returned an occurrence that is already "
             "attached; each root, child, and successor needs a fresh instance"
         )
     if root is not None and instance is root:
-        raise AuthoringError(
-            f"{owner.__name__}._new_occurrence returned its own root as a child occurrence"
-        )
+        raise AuthoringError(f"{allocator} returned its own root as a child occurrence")
     typed = instance
     object.__setattr__(
         typed,
@@ -411,6 +440,7 @@ def start_from_model(
     problem: ProblemSource,
     *,
     expected_problem_fingerprint: str | None = None,
+    root_factory: RootFactory[S] | None = None,
 ) -> S:
     """Freeze one problem into a new root occurrence over a reusable model.
 
@@ -444,7 +474,14 @@ def start_from_model(
             )
         )
     lineage = _Lineage(
-        cast("SpaceModel[Space]", model), tree, engine, problem, frozen, fingerprint, RLock()
+        cast("SpaceModel[Space]", model),
+        tree,
+        engine,
+        problem,
+        frozen,
+        fingerprint,
+        RLock(),
+        cast("RootFactory[Space] | None", root_factory),
     )
     return _make_occurrence(_Runtime(lineage, point), typed_tree, (typed_tree.namespace,))
 
@@ -467,6 +504,7 @@ def start_occurrence(
     *,
     namespace: str = "root",
     expected_problem_fingerprint: str | None = None,
+    root_factory: RootFactory[S] | None = None,
 ) -> S:
     """Start one root occurrence of the authored class through the model service.
 
@@ -485,6 +523,7 @@ def start_occurrence(
         model,
         problem,
         expected_problem_fingerprint=expected_problem_fingerprint,
+        root_factory=root_factory,
     )
 
 
@@ -529,7 +568,13 @@ def occurrence_reconstruct(
     *,
     expected_problem_fingerprint: str | None = None,
 ) -> S:
-    """Strictly construct a fresh root lineage, retaining no old assignments."""
+    """Strictly construct a fresh root lineage, retaining no old assignments.
+
+    Assignments are discarded; the *allocation* contract is not.  A lineage
+    started through a root factory is reconstructed through the same factory,
+    because dropping it would silently hand back a root of the right class with
+    none of the external context the caller bound it to.
+    """
 
     state = _occurrence_state(instance)
     lineage = state.runtime.lineage
@@ -537,6 +582,7 @@ def occurrence_reconstruct(
         lineage.model,
         lineage.problem_source if problem is None else problem,
         expected_problem_fingerprint=expected_problem_fingerprint,
+        root_factory=lineage.root_factory,
     )
     if state.compiled is lineage.tree:
         return cast(S, fresh_root)
@@ -1147,6 +1193,7 @@ __all__ = [
     "OccurrenceDiagnostic",
     "ProblemSource",
     "ProjectionAssessment",
+    "RootFactory",
     "VariantView",
     "LayerRuntime",
     "evaluate_projection",
