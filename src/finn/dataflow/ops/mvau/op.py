@@ -9,26 +9,37 @@ Kernels, and everything above it belongs to the graph.  What lives here is the
 part only this operation can say: which two Designs are its alternatives, how a
 matrix-vector node's tensors become the facts they read, and where each of
 those tensors ends up in whichever Network is selected.
+
+The operation *is* the root Space.  Its Problem members are its declared
+tensors and attributes, lowered from the source schema, and its ``design``
+Variant is an ordinary structural choice on the same class.  There is no
+separate source Space and no wrapper between the node and the point.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import Answer, Decided
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.model.declarations import Problem, Space, Subspace, Variant
-from finn.dataflow.model.occurrence import VariantView
-from finn.dataflow.model.semantics import (
-    QONNX_DATATYPE_CODEC,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
+from finn.dataflow.model.declarations import (
+    ConstraintGroup,
+    Space,
+    Subspace,
+    Variant,
+    constraint,
+    derived,
+    reject,
 )
+from finn.dataflow.model.occurrence import ProjectionAssessment, VariantView
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.association import (
+    BoundaryDestination,
     CoordinateMapping,
     OperandAssociation,
+    RegionStateDestination,
     SourceAssociation,
+    StreamDestination,
 )
 from finn.dataflow.ops.base import (
     BOOL_CODEC,
@@ -46,68 +57,7 @@ from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
     SuppliedDotProductDesign,
     WeightSupply,
 )
-from finn.dataflow.ops.source import SourceError, SourceNode, read_source_node
-
-
-class MvauSource(Space):
-    """The graph-side facts of one matrix-vector node, and its Design choice.
-
-    Every member is a ``Problem``: these are read from the model once, frozen,
-    and fingerprinted.  A Decision would mean the design space could change one
-    of them, and a design space that can change a tensor's shape is not
-    describing that tensor.
-
-    The two alternatives are a closed set.  ``dot_product`` is the reference
-    composition with the matrix always arriving from outside; ``supplied`` is
-    the same composition with the weight path as its own dial.  Both are
-    ``WeightedDotProductDesign`` subclasses, which is what lets ``pe`` and
-    ``simd`` be one Decision object and therefore one persisted attribute
-    whichever alternative is live.
-    """
-
-    repetitions = Problem(int)
-    matrix_width = Problem(int)
-    matrix_height = Problem(int)
-    activation_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    weight_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    accumulator_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    output_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    narrow_weights = Problem(bool)
-    target_dsp = Problem(DspBlock)
-    clock_period_ns = Problem(float)
-    initializer_present = Problem(bool)
-
-    design = Variant(
-        {
-            "dot_product": Subspace(
-                DotProductDesign,
-                repetitions=repetitions,
-                matrix_width=matrix_width,
-                matrix_height=matrix_height,
-                activation_type=activation_type,
-                weight_type=weight_type,
-                accumulator_type=accumulator_type,
-                output_type=output_type,
-                narrow_weights=narrow_weights,
-                target_dsp=target_dsp,
-                clock_period_ns=clock_period_ns,
-            ),
-            "supplied": Subspace(
-                SuppliedDotProductDesign,
-                repetitions=repetitions,
-                matrix_width=matrix_width,
-                matrix_height=matrix_height,
-                activation_type=activation_type,
-                weight_type=weight_type,
-                accumulator_type=accumulator_type,
-                output_type=output_type,
-                narrow_weights=narrow_weights,
-                target_dsp=target_dsp,
-                clock_period_ns=clock_period_ns,
-                initializer_present=initializer_present,
-            ),
-        },
-    )
+from finn.dataflow.ops.schema import Attribute, BuildFact, InputTensor, OutputTensor
 
 
 def _decode_supply(value: object) -> WeightSupply:
@@ -119,6 +69,11 @@ def _decode_supply(value: object) -> WeightSupply:
 #: Never the enum's ordinal: reordering the members would silently repoint every
 #: saved graph at a different mode.
 SUPPLY_CODEC = AttributeCodec(lambda value: WeightSupply(value).value, _decode_supply, kind="s")
+
+
+def _target_dsp(build: Any) -> DspBlock:
+    value = getattr(build, "target_dsp", DspBlock.DSP58)
+    return value if isinstance(value, DspBlock) else DspBlock(str(value))
 
 
 def _design_view(root: Space) -> VariantView:
@@ -153,11 +108,137 @@ def _compute_kernel(root: Space) -> Space:
 
 
 class MvauDataflowOp(DataflowOp):
-    """One matrix-vector node, projected onto the unified Space stack."""
+    """One matrix-vector node, projected onto the unified Space stack.
+
+    **Ownership.**  Each restriction below is written where something can argue
+    for it, rather than copied down from an earlier implementation:
+
+    ``weight`` is rank 2
+        Matrix-vector multiplication is defined on a matrix.  An operation
+        constraint, because it is the operation's own definition.
+
+    the output shape follows the activation and the matrix
+        Likewise the operation's own contract, and the thing
+        ``make_shape_compatible_op`` and the graph effects both derive from.
+
+    the activation may be constant
+        Deliberately *not* restricted.  A constant activation is
+        mathematically valid, and the previous ``NoInitializer`` was inherited
+        rather than argued for.
+
+    rank
+        A rank-1 activation is a valid *problem*; what it has no applicable
+        composition for is a Design.  The rejection therefore lives on
+        ``WeightedDotProductDesign``, so such a node yields a valid occurrence
+        with no applicable Design rather than a refused source reading.
+    """
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
-    source_space: ClassVar[type[Space]] = MvauSource
+
+    # -- the source schema ----------------------------------------------------
+
+    activation = InputTensor(index=0)
+    weight = InputTensor(index=1, fingerprint=True)
+    output = OutputTensor(index=0)
+
+    narrow_weights = Attribute(bool, default=False)
+
+    target_dsp = BuildFact(DspBlock, accessor=_target_dsp)
+    clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
+
+    # -- what the composition below reads -------------------------------------
+
+    @derived(int, shape=weight.shape)
+    def matrix_width(*, shape: tuple[int, ...]) -> object:
+        return shape[0]
+
+    @derived(int, shape=weight.shape)
+    def matrix_height(*, shape: tuple[int, ...]) -> object:
+        return shape[1]
+
+    @derived(int, shape=activation.shape, width=matrix_width)
+    def repetitions(*, shape: tuple[int, ...], width: int) -> object:
+        total = 1
+        for extent in shape:
+            total *= extent
+        return total // width
+
+    @constraint(shape=weight.shape)
+    def weight_is_a_matrix(*, shape: tuple[int, ...]) -> object:
+        if len(shape) == 2:
+            return True
+        return reject(
+            "mvau-weight-not-a-matrix",
+            f"matrix-vector multiplication needs a rank-2 matrix; this one is {shape}",
+            values={"shape": list(shape)},
+        )
+
+    @constraint(activation=activation.shape, width=matrix_width)
+    def activation_matches_the_matrix(*, activation: tuple[int, ...], width: int) -> object:
+        if activation and activation[-1] == width:
+            return True
+        return reject(
+            "mvau-activation-width-mismatch",
+            f"the activation's last dimension {activation[-1:]} does not match the "
+            f"matrix width {width}",
+            values={"activation": list(activation), "width": width},
+        )
+
+    @constraint(observed=output.shape, activation=activation.shape, height=matrix_height)
+    def output_shape_is_consistent(
+        *, observed: tuple[int, ...], activation: tuple[int, ...], height: int
+    ) -> object:
+        expected = (*activation[:-1], height)
+        if tuple(observed) == expected:
+            return True
+        return reject(
+            "mvau-output-shape-mismatch",
+            f"the graph annotates the output as {tuple(observed)}; this operation "
+            f"produces {expected}",
+            values={"observed": list(observed), "expected": list(expected)},
+        )
+
+    source_accepts = ConstraintGroup(
+        weight_is_a_matrix, activation_matches_the_matrix, output_shape_is_consistent
+    )
+
+    # -- the composition ------------------------------------------------------
+
+    design = Variant(
+        {
+            "dot_product": Subspace(
+                DotProductDesign,
+                repetitions=repetitions,
+                matrix_width=matrix_width,
+                matrix_height=matrix_height,
+                activation_type=activation.datatype,
+                weight_type=weight.datatype,
+                # The accumulator is the output's own type: this core drives it
+                # straight out, and inventing a wider one here would be the
+                # design space deciding a numeric fact the graph already states.
+                accumulator_type=output.datatype,
+                output_type=output.datatype,
+                narrow_weights=narrow_weights,
+                target_dsp=target_dsp,
+                clock_period_ns=clock_period_ns,
+            ),
+            "supplied": Subspace(
+                SuppliedDotProductDesign,
+                repetitions=repetitions,
+                matrix_width=matrix_width,
+                matrix_height=matrix_height,
+                activation_type=activation.datatype,
+                weight_type=weight.datatype,
+                accumulator_type=output.datatype,
+                output_type=output.datatype,
+                narrow_weights=narrow_weights,
+                target_dsp=target_dsp,
+                clock_period_ns=clock_period_ns,
+                initializer_present=weight.initializer_present,
+            ),
+        },
+    )
 
     #: In application order.  Two selectors precede every Decision, because
     #: which alternative is live decides which Decisions exist to be assigned.
@@ -177,65 +258,23 @@ class MvauDataflowOp(DataflowOp):
         ),
     )
 
-    def source_nodeattr_types(self) -> Mapping[str, tuple[str, bool, object]]:
-        return {"narrow_weights": ("i", False, 0)}
+    # -- the projections ------------------------------------------------------
 
-    def read_source(self) -> SourceNode:
-        model = self._attached()
-        return read_source_node(
-            model,
-            self.onnx_node,
-            inputs=("activation", "weight"),
-            outputs=("output",),
-            attributes={"narrow_weights": bool(self.get_nodeattr("narrow_weights"))},
-        )
+    @property
+    def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
+        return _selected_design(self).dataflow
 
-    def source_facts(self, source: SourceNode, build: Any) -> Mapping[Problem[Any], object]:
-        activation = source.operand("activation")
-        weight = source.operand("weight")
-        output = source.operand("output")
-        if len(activation.shape) < 2 or len(weight.shape) != 2:
-            raise SourceError(
-                f"{source.node_name} expects a rank-2 matrix and a matrix-shaped activation; "
-                f"got {activation.shape} and {weight.shape}"
-            )
-        matrix_width, matrix_height = weight.shape
-        if activation.shape[-1] != matrix_width:
-            raise SourceError(
-                f"{source.node_name} activation last dimension {activation.shape[-1]} "
-                f"does not match matrix width {matrix_width}"
-            )
-        repetitions = activation.elements // matrix_width
-        return {
-            MvauSource.repetitions: repetitions,
-            MvauSource.matrix_width: matrix_width,
-            MvauSource.matrix_height: matrix_height,
-            MvauSource.activation_type: activation.datatype,
-            MvauSource.weight_type: weight.datatype,
-            # The accumulator is the output's own type: this core drives it
-            # straight out, and inventing a wider one here would be the design
-            # space deciding a numeric fact the graph already states.
-            MvauSource.accumulator_type: output.datatype,
-            MvauSource.output_type: output.datatype,
-            MvauSource.narrow_weights: bool(source.attributes["narrow_weights"]),
-            MvauSource.target_dsp: _target_dsp(build),
-            MvauSource.clock_period_ns: float(build.synth_clk_period_ns),
-            MvauSource.initializer_present: weight.initializer,
-        }
-
-    def network(self, build: Any) -> Answer[DataflowNetwork]:
-        return _selected_design(self.occurrence(build)).dataflow.accepted_answer
-
-    def association(self, build: Any) -> Answer[SourceAssociation]:
+    @property
+    def association(self) -> Answer[SourceAssociation]:
         """Where each tensor crosses, given whichever Network was selected.
 
-        Read off the resolved Network rather than off the Design's declarations,
-        so that a mode which produces the matrix internally reports no boundary
-        instead of reporting the boundary it would have had.
+        Read off the resolved Network rather than off the Design's
+        declarations, so that a mode which produces the matrix internally
+        reports what actually happens to it instead of the boundary it would
+        have had.
         """
 
-        source = self.read_source()
-        answer = self.network(build)
+        answer = self.network
         if not isinstance(answer, Decided):
             return cast("Answer[SourceAssociation]", answer)
         network = answer.value
@@ -247,78 +286,92 @@ class MvauDataflowOp(DataflowOp):
             ("weight", "weight", CoordinateMapping.TRANSPOSE_2D),
             ("output", "output", CoordinateMapping.FLATTEN_LEADING),
         ):
-            operand = source.operand(operand_id)
+            operand = self.source.operand(operand_id)
             boundary = boundaries.get(boundary_id)
-            if boundary is None:
+            destination = (
+                BoundaryDestination(
+                    boundary_id, boundary.endpoint.node_id, boundary.endpoint.port_id
+                )
+                if boundary is not None
                 # No boundary is a fact about this Network, not a gap: an
                 # embedded or decoupled matrix never crosses the Design's edge.
-                node_id, port_id = _internal_weight_destination(network)
-                operands.append(
-                    OperandAssociation(
-                        operand_id,
-                        operand.tensor,
-                        None,
-                        node_id,
-                        port_id,
-                        correspondence,
-                        operand.shape,
-                        _selected_shape(network, node_id, port_id),
-                    )
-                )
-                continue
-            node_id = boundary.endpoint.node_id
-            port_id = boundary.endpoint.port_id
+                else _internal_destination(network, operand_id)
+            )
             operands.append(
                 OperandAssociation(
                     operand_id,
                     operand.tensor,
-                    boundary_id,
-                    node_id,
-                    port_id,
+                    destination,
                     correspondence,
                     operand.shape,
-                    _selected_shape(network, node_id, port_id),
+                    _selected_shape(network, destination),
                 )
             )
+        binding = self.binding
         return Decided(
             SourceAssociation(
-                self.scope_id(),
-                source.node_name,
+                binding.node_identity,
+                self.source.node_name,
                 type(self).family,
                 type(self).family_version,
                 tuple(operands),
             )
         )
 
+    # -- what this operation is authoritative for -----------------------------
 
-def _internal_weight_destination(network: DataflowNetwork) -> tuple[str, str]:
-    """Where a matrix that never crosses a boundary is consumed, or held."""
+    def graph_shapes(self) -> dict[str, tuple[int, ...]]:
+        activation = self.source.operand("activation")
+        weight = self.source.operand("weight")
+        output = self.source.operand("output")
+        return {output.tensor: (*activation.shape[:-1], weight.shape[1])}
+
+
+def _internal_destination(
+    network: DataflowNetwork, operand_id: str
+) -> StreamDestination | RegionStateDestination:
+    """Where an operand that never crosses a boundary actually goes.
+
+    Two genuinely different answers, and the record says which.  A decoupled
+    matrix is *traffic*: it reaches a real port on a real node, reached without
+    crossing the Design's edge.  An embedded matrix is *state*: it is baked into
+    the node and there is no port at all.  The previous version reported the
+    second case as a port named ``"embedded"``, which is a port that does not
+    exist -- a consumer looking it up finds nothing, and the empty shape that
+    came with it reads as a zero-element tensor.
+    """
 
     for node in network.nodes:
         for item in node.region.inputs:
-            if item.port.id == "weight":
-                return node.id, item.port.id
-    # Embedded: the matrix is state of the compute node rather than traffic.
+            if item.port.id == operand_id:
+                return StreamDestination(node.id, item.port.id)
     for node in network.nodes:
         if node.id == "compute":
-            return node.id, "embedded"
-    raise DataflowOpError("the selected Network has nowhere for the matrix to go")
+            return RegionStateDestination(node.id, operand_id)
+    raise DataflowOpError(f"the selected Network has nowhere for {operand_id!r} to go")
 
 
-def _selected_shape(network: DataflowNetwork, node_id: str, port_id: str) -> tuple[int, ...]:
-    node = network.node(node_id)
+def _selected_shape(
+    network: DataflowNetwork,
+    destination: BoundaryDestination | StreamDestination | RegionStateDestination,
+) -> tuple[int, ...] | None:
+    """The shape at the destination port, or ``None`` when there is no port.
+
+    ``None`` rather than ``()``: an empty tuple is the shape of a scalar, and a
+    consumer that compared it against the operand's own shape would report a
+    mismatch instead of "this operand has no port to have a shape at".
+    """
+
+    if isinstance(destination, RegionStateDestination):
+        return None
+    node = network.node(destination.node_id)
     for interface in node.region.inputs:
-        if interface.port.id == port_id:
+        if interface.port.id == destination.port_id:
             return tuple(interface.port.operand.shape)
     for output in node.region.outputs:
-        if output.port.id == port_id:
+        if output.port.id == destination.port_id:
             return tuple(output.port.operand.shape)
-    return ()
+    return None
 
 
-def _target_dsp(build: Any) -> DspBlock:
-    value = getattr(build, "target_dsp", DspBlock.DSP58)
-    return value if isinstance(value, DspBlock) else DspBlock(str(value))
-
-
-__all__ = ["MvauDataflowOp", "MvauSource"]
+__all__ = ["MvauDataflowOp"]

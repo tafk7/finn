@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -46,6 +47,12 @@ class SourceOperand:
     ``initializer`` records presence only.  The values themselves are the
     artifact layer's business, and an operation that folded them into its
     design space would make every query depend on megabytes of weights.
+
+    ``initializer_digest`` is the one concession, and it is a scalar: an
+    operand whose *values* change what gets built needs its identity to move
+    when they do.  A digest computed once at read time does that without any
+    array entering the design point -- which is the property that keeps a
+    fingerprint cheap and an engine cache sound.
     """
 
     id: str
@@ -53,6 +60,7 @@ class SourceOperand:
     shape: tuple[int, ...]
     datatype: QONNXDataType
     initializer: bool = False
+    initializer_digest: str | None = None
 
     @property
     def elements(self) -> int:
@@ -90,8 +98,8 @@ class SourceNode:
 
 
 def _tensor_facts(
-    model: Any, tensor: str, operand_id: str, node_name: str
-) -> tuple[tuple[int, ...], QONNXDataType, bool]:
+    model: Any, tensor: str, operand_id: str, node_name: str, digest: bool
+) -> tuple[tuple[int, ...], QONNXDataType, bool, str | None]:
     shape = model.get_tensor_shape(tensor)
     if shape is None:
         raise SourceError(
@@ -101,11 +109,33 @@ def _tensor_facts(
     datatype = model.get_tensor_datatype(tensor)
     if datatype is None:
         raise SourceError(f"{node_name} operand {operand_id!r} has no annotated datatype")
+    initializer = model.get_initializer(tensor)
     return (
         tuple(int(extent) for extent in shape),
         canonical_qonnx_datatype(datatype),
-        model.get_initializer(tensor) is not None,
+        initializer is not None,
+        _digest(initializer) if digest and initializer is not None else None,
     )
+
+
+def _digest(values: Any) -> str:
+    """A stable digest of one initializer, computed once and never stored whole.
+
+    Shape and dtype travel with the bytes, because two arrays with the same
+    buffer and different shapes are different weights.  ``ascontiguousarray``
+    is not cosmetic: a transposed view has the same buffer as its base, and
+    hashing that buffer would give two genuinely different matrices one
+    identity.
+    """
+
+    import numpy  # type: ignore[import-not-found] # noqa: PLC0415 - heavy import
+
+    contiguous = numpy.ascontiguousarray(values)
+    payload = sha256()
+    payload.update(str(contiguous.dtype).encode("utf-8"))
+    payload.update(str(contiguous.shape).encode("utf-8"))
+    payload.update(contiguous.tobytes())
+    return payload.hexdigest()
 
 
 def read_source_node(
@@ -115,6 +145,7 @@ def read_source_node(
     inputs: Sequence[str],
     outputs: Sequence[str],
     optional_inputs: Sequence[str] = (),
+    digest_inputs: Sequence[str] = (),
     attributes: Mapping[str, object] | None = None,
 ) -> SourceNode:
     """Read one node's operands and attributes into a frozen record.
@@ -127,6 +158,7 @@ def read_source_node(
     """
 
     optional = set(optional_inputs)
+    digested = set(digest_inputs)
     if len(node.input) > len(inputs):
         raise SourceError(
             f"{node.name} has {len(node.input)} inputs; {node.op_type} declares {len(inputs)}"
@@ -143,16 +175,20 @@ def read_source_node(
             if operand_id in optional:
                 continue
             raise SourceError(f"{node.name} requires operand {operand_id!r}")
-        shape, datatype, initializer = _tensor_facts(model, tensor, operand_id, node.name)
-        read_inputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer))
+        shape, datatype, initializer, digest = _tensor_facts(
+            model, tensor, operand_id, node.name, operand_id in digested
+        )
+        read_inputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer, digest))
 
     read_outputs: list[SourceOperand] = []
     for index, operand_id in enumerate(outputs):
         tensor = node.output[index]
         if not tensor:
             raise SourceError(f"{node.name} requires output operand {operand_id!r}")
-        shape, datatype, initializer = _tensor_facts(model, tensor, operand_id, node.name)
-        read_outputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer))
+        shape, datatype, initializer, digest = _tensor_facts(
+            model, tensor, operand_id, node.name, False
+        )
+        read_outputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer, digest))
 
     return SourceNode(
         node.name,

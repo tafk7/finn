@@ -6,22 +6,27 @@
 Written second and deliberately unlike the first.  It has one input operand and
 no optional one, no Design alternatives and therefore no selector attribute, a
 one-node Network, and an association with two entries rather than three.  Where
-MVAU's ``source_facts`` has to reconcile two operands against a matrix shape,
-this one reads a single tensor -- and the layer between them does not change.
+MVAU reconciles two operands against a matrix shape, this one reads a single
+tensor -- and the layer between them does not change.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, cast
+from typing import ClassVar, cast
 
 from finn.dataflow._engine import Answer, Decided
-from finn.dataflow.model.declarations import Problem, Space, Subspace
-from finn.dataflow.model.semantics import (
-    QONNX_DATATYPE_CODEC,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
+from finn.dataflow.model.declarations import (
+    ConstraintGroup,
+    Space,
+    Subspace,
+    constraint,
+    derived,
+    reject,
 )
+from finn.dataflow.model.occurrence import ProjectionAssessment
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.association import (
+    BoundaryDestination,
     CoordinateMapping,
     OperandAssociation,
     SourceAssociation,
@@ -32,29 +37,7 @@ from finn.dataflow.ops.base import (
     DecisionAttribute,
 )
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
-from finn.dataflow.ops.source import SourceError, SourceNode, read_source_node
-
-
-class ActivationReplaySource(Space):
-    """One activation tensor, the fold it is replayed across, and its Design.
-
-    A fixed ``Subspace``, not a ``Variant``.  There is one way to do this, and
-    declaring a one-alternative choice to look like MVAU would add a selector
-    that no caller could usefully set.
-    """
-
-    repetitions = Problem(int)
-    matrix_width = Problem(int)
-    matrix_height = Problem(int)
-    activation_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-
-    design = Subspace(
-        ActivationReplayDesign,
-        repetitions=repetitions,
-        matrix_width=matrix_width,
-        matrix_height=matrix_height,
-        activation_type=activation_type,
-    )
+from finn.dataflow.ops.schema import Attribute, InputTensor, OutputTensor
 
 
 def _design(root: Space) -> ActivationReplayDesign:
@@ -66,84 +49,134 @@ class ActivationReplayOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
     family_version: ClassVar[str] = "1"
-    source_space: ClassVar[type[Space]] = ActivationReplaySource
+
+    activation = InputTensor(index=0)
+    expanded = OutputTensor(index=0)
+
+    neuron_folds = Attribute(int, default=1)
+
+    @derived(int, shape=activation.shape)
+    def matrix_width(*, shape: tuple[int, ...]) -> object:
+        return shape[-1]
+
+    @derived(int, shape=activation.shape, width=matrix_width)
+    def repetitions(*, shape: tuple[int, ...], width: int) -> object:
+        total = 1
+        for extent in shape:
+            total *= extent
+        return total // width
+
+    #: The buffer's fold is stated as a height over one PE lane, which is the
+    #: vocabulary its Region already speaks.
+    @derived(int, folds=neuron_folds)
+    def matrix_height(*, folds: int) -> object:
+        return folds
+
+    @constraint(folds=neuron_folds)
+    def at_least_one_fold(*, folds: int) -> object:
+        if folds >= 1:
+            return True
+        return reject(
+            "replay-no-folds",
+            f"a replay buffer repeats each row at least once; this one asks for {folds}",
+            values={"neuron_folds": folds},
+        )
+
+    @constraint(observed=expanded.shape, shape=activation.shape, folds=neuron_folds)
+    def expanded_shape_is_consistent(
+        *, observed: tuple[int, ...], shape: tuple[int, ...], folds: int
+    ) -> object:
+        """The graph's annotation is checked against what this operation produces.
+
+        Read for reconciliation, never for identity: the observed output shape
+        is not part of the problem fingerprint, so repairing it does not
+        invalidate the choices that were recorded against the repaired node.
+        """
+
+        leading = 1
+        for extent in shape[:-1]:
+            leading *= extent
+        expected = (leading * folds, shape[-1])
+        if tuple(observed) == expected:
+            return True
+        return reject(
+            "replay-output-shape-mismatch",
+            f"the graph annotates the output as {tuple(observed)}; replaying "
+            f"{shape} across {folds} folds produces {expected}",
+            values={"observed": list(observed), "expected": list(expected)},
+        )
+
+    source_accepts = ConstraintGroup(at_least_one_fold, expanded_shape_is_consistent)
+
+    design = Subspace(
+        ActivationReplayDesign,
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation_type=activation.datatype,
+    )
 
     attributes = (
         DecisionAttribute("PE", _design, ActivationReplayDesign.pe, INT_CODEC),
         DecisionAttribute("SIMD", _design, ActivationReplayDesign.simd, INT_CODEC),
     )
 
-    def source_nodeattr_types(self) -> dict[str, tuple[str, bool, object]]:
-        return {"neuron_folds": ("i", True, 1)}
+    @property
+    def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
+        return _design(self).dataflow
 
-    def read_source(self) -> SourceNode:
-        return read_source_node(
-            self._attached(),
-            self.onnx_node,
-            inputs=("activation",),
-            outputs=("expanded",),
-            attributes={"neuron_folds": int(self.get_nodeattr("neuron_folds"))},
-        )
-
-    def source_facts(self, source: SourceNode, build: Any) -> dict[Problem[Any], object]:
-        del build
-        activation = source.operand("activation")
-        if len(activation.shape) < 2:
-            raise SourceError(
-                f"{source.node_name} replays a matrix-shaped activation; got {activation.shape}"
-            )
-        matrix_width = activation.shape[-1]
-        neuron_folds = int(cast(int, source.attributes["neuron_folds"]))
-        if neuron_folds < 1:
-            raise SourceError(f"{source.node_name} needs at least one neuron fold")
-        return {
-            ActivationReplaySource.repetitions: activation.elements // matrix_width,
-            ActivationReplaySource.matrix_width: matrix_width,
-            # The buffer's fold is stated as a height over one PE lane, which is
-            # the vocabulary its Region already speaks.
-            ActivationReplaySource.matrix_height: neuron_folds,
-            ActivationReplaySource.activation_type: activation.datatype,
-        }
-
-    def network(self, build: Any) -> Answer[DataflowNetwork]:
-        return _design(self.occurrence(build)).dataflow.accepted_answer
-
-    def association(self, build: Any) -> Answer[SourceAssociation]:
-        source = self.read_source()
-        answer = self.network(build)
+    @property
+    def association(self) -> Answer[SourceAssociation]:
+        answer = self.network
         if not isinstance(answer, Decided):
             return cast("Answer[SourceAssociation]", answer)
-        boundaries = {item.id: item for item in answer.value.boundaries}
-        operands = tuple(
-            OperandAssociation(
-                operand_id,
-                source.operand(operand_id).tensor,
-                operand_id,
-                boundaries[operand_id].endpoint.node_id,
-                boundaries[operand_id].endpoint.port_id,
-                CoordinateMapping.FLATTEN_LEADING,
-                source.operand(operand_id).shape,
-                tuple(
-                    answer.value.node(boundaries[operand_id].endpoint.node_id)
-                    .region.input_interface(boundaries[operand_id].endpoint.port_id)
-                    .port.operand.shape
-                    if operand_id == "activation"
-                    else answer.value.node(boundaries[operand_id].endpoint.node_id)
-                    .region.output_interface(boundaries[operand_id].endpoint.port_id)
-                    .port.operand.shape
-                ),
+        network = answer.value
+        boundaries = {item.id: item for item in network.boundaries}
+        operands: list[OperandAssociation] = []
+        for operand_id in ("activation", "expanded"):
+            operand = self.source.operand(operand_id)
+            boundary = boundaries[operand_id]
+            destination = BoundaryDestination(
+                operand_id, boundary.endpoint.node_id, boundary.endpoint.port_id
             )
-            for operand_id in ("activation", "expanded")
-        )
+            node = network.node(destination.node_id)
+            interfaces = node.region.inputs if operand_id == "activation" else node.region.outputs
+            selected = next(
+                (
+                    tuple(item.port.operand.shape)
+                    for item in interfaces
+                    if item.port.id == destination.port_id
+                ),
+                None,
+            )
+            operands.append(
+                OperandAssociation(
+                    operand_id,
+                    operand.tensor,
+                    destination,
+                    CoordinateMapping.FLATTEN_LEADING,
+                    operand.shape,
+                    selected,
+                )
+            )
         return Decided(
             SourceAssociation(
-                self.scope_id(),
-                source.node_name,
+                self.binding.node_identity,
+                self.source.node_name,
                 type(self).family,
                 type(self).family_version,
-                operands,
+                tuple(operands),
             )
         )
 
+    def graph_shapes(self) -> dict[str, tuple[int, ...]]:
+        activation = self.source.operand("activation")
+        expanded = self.source.operand("expanded")
+        leading = 1
+        for extent in activation.shape[:-1]:
+            leading *= extent
+        folds = int(cast(int, self.source.attributes["neuron_folds"]))
+        return {expanded.tensor: (leading * folds, activation.shape[-1])}
 
-__all__ = ["ActivationReplayOp", "ActivationReplaySource"]
+
+__all__ = ["ActivationReplayOp"]

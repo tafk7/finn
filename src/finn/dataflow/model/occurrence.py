@@ -413,6 +413,12 @@ def _problem_fingerprint(
     something that encodes like nothing".  The codec identity and version travel
     with the value, so changing how a type is encoded can never be mistaken for
     the value having changed.
+
+    A field declared ``fingerprint=False`` is skipped entirely: it is an
+    observation the Space is authoritative for and reconciles against, not a
+    fact it depends on.  Skipped rather than recorded as absent, so that marking
+    one field an observation does not move the digest of every problem that
+    never had one.
     """
 
     payload = {
@@ -429,6 +435,7 @@ def _problem_fingerprint(
                 ),
             }
             for name, declaration in _problem_members(space_type)
+            if declaration.fingerprint
         ],
     }
     encoded = dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -40,22 +40,80 @@ class CoordinateMapping(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class BoundaryDestination:
+    """The operand crosses the Design's edge at a named boundary."""
+
+    boundary: str
+    node_id: str
+    port_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class StreamDestination:
+    """The operand reaches a real port without crossing a boundary.
+
+    A decoupled matrix produced inside the Design is still *traffic*: there is
+    a port, it has a shape, and a consumer can look it up.
+    """
+
+    node_id: str
+    port_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RegionStateDestination:
+    """The operand is state of a node, and there is no port at all.
+
+    An embedded matrix is baked into the node.  The distinction from
+    :class:`StreamDestination` is the whole reason this is a union: reporting
+    embedded state as a port named ``"embedded"`` names a port that does not
+    exist, so a consumer resolving it finds nothing, and the empty shape that
+    came with it reads as a zero-element tensor rather than as "no port".
+    """
+
+    node_id: str
+    operand_id: str
+
+
+#: Where one operand's data actually goes.  Three cases, because they are three
+#: different facts and a caller acts differently on each.
+OperandDestination = BoundaryDestination | StreamDestination | RegionStateDestination
+
+
+@dataclass(frozen=True, slots=True)
 class OperandAssociation:
     """One source operand and the selected place its data crosses."""
 
     operand: str
     tensor: str
-    #: The selected Network *boundary* id when the data crosses the Design's
-    #: edge, and ``None`` when it does not -- an embedded matrix crosses no
-    #: boundary, which is a fact about the Network and is recorded as one.
-    boundary: str | None
-    #: The Region node and port the data reaches, whether or not it crossed a
-    #: boundary to get there.
-    node_id: str
-    port_id: str
+    destination: OperandDestination
     correspondence: CoordinateMapping
     source_shape: tuple[int, ...]
-    selected_shape: tuple[int, ...]
+    #: The shape at the destination port, or ``None`` when there is no port.
+    #: Not ``()``: an empty tuple is the shape of a scalar.
+    selected_shape: tuple[int, ...] | None
+
+    @property
+    def boundary(self) -> str | None:
+        """The boundary id when this operand crosses the Design's edge."""
+
+        return (
+            self.destination.boundary if isinstance(self.destination, BoundaryDestination) else None
+        )
+
+    @property
+    def node_id(self) -> str:
+        return self.destination.node_id
+
+    @property
+    def port_id(self) -> str | None:
+        """The port id, or ``None`` for an operand that is node state."""
+
+        return (
+            None
+            if isinstance(self.destination, RegionStateDestination)
+            else self.destination.port_id
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +140,11 @@ class SourceAssociation:
 
 
 __all__ = [
+    "BoundaryDestination",
     "CoordinateMapping",
     "OperandAssociation",
+    "OperandDestination",
+    "RegionStateDestination",
     "SourceAssociation",
+    "StreamDestination",
 ]

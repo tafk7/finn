@@ -631,6 +631,15 @@ class Problem(ValueSource[T_co]):
     #: fingerprint.  Declared here because it defines persisted identity, which
     #: is this declaration's business and not the value class's.
     canonical: CanonicalValueCodec[Any] = STRUCTURAL_CODEC
+    #: Whether this field is part of the problem's *identity*.
+    #:
+    #: Almost always yes.  The exception is a field the Space is authoritative
+    #: for and merely *observes*: an operation reads its output tensor's current
+    #: shape so it can reconcile the graph against what it derives, and folding
+    #: that observation into the identity would mean applying the correction
+    #: invalidated the fingerprint the correction was committed under.  An
+    #: observation is not a fact the space depends on, so it does not name it.
+    fingerprint: bool = True
 
     def __init__(
         self,
@@ -641,6 +650,7 @@ class Problem(ValueSource[T_co]):
         description: str = "",
         name: str | None = None,
         canonical: CanonicalValueCodec[Any] | None = None,
+        fingerprint: bool = True,
     ) -> None:
         if canonical is not None and not isinstance(canonical, CanonicalValueCodec):
             raise AuthoringError("a Problem canonical= is one CanonicalValueCodec")
@@ -650,6 +660,7 @@ class Problem(ValueSource[T_co]):
         object.__setattr__(self, "validate", validate)
         object.__setattr__(self, "description", description)
         object.__setattr__(self, "canonical", canonical or STRUCTURAL_CODEC)
+        object.__setattr__(self, "fingerprint", fingerprint)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
