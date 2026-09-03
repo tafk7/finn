@@ -651,34 +651,29 @@ def test_an_export_only_edit_is_visible_to_the_next_compilation() -> None:
     assert "doubled" in dict(after._compiled_tree().child("inner").exports)
 
 
-def test_a_legacy_configured_instance_still_resolves_through_its_own_hook() -> None:
-    """Attached and configured are two protocols; the dispatcher must not guess."""
+def test_declared_values_exist_only_on_an_attached_occurrence() -> None:
+    """One protocol.
 
-    class Legacy(Space):
-        size = Problem(int)
+    U2 and U3 retired the detached *configured* Kernel and Design objects that
+    answered through a second ``_space_value`` hook, so the dispatcher no longer
+    has two protocols to choose between and an unattached instance is simply an
+    instance with no values.  ``_space_value`` stays reserved: the failure the
+    reservation prevents -- two protocols deciding by inheritance order -- is a
+    property of having a hook at all, not of anyone currently using it.
+    """
 
-        def __init__(self, value: int) -> None:
-            self._value = value
-
-        def _space_value(self, declaration: object) -> object:
-            del declaration
-            return self._value
-
-    configured = Legacy(11)
-    assert not is_attached_occurrence(configured)
-    assert configured.size == 11
-
-    attached = Legacy.start({Legacy.size: 4})
-    assert is_attached_occurrence(attached)
-    assert attached.size == 4
-
-
-def test_an_instance_that_is_neither_attached_nor_configured_has_no_values() -> None:
     class Plain(Space):
         size = Problem(int)
 
-    with pytest.raises(AttributeError, match="configured instances"):
-        _ = Plain().size
+    bare = object.__new__(Plain)
+    assert not is_attached_occurrence(bare)
+    with pytest.raises(AttributeError, match="only on an attached Space occurrence"):
+        _ = bare.size
+
+    attached = Plain.start({Plain.size: 4})
+    assert is_attached_occurrence(attached)
+    assert attached.size == 4
+    assert "_space_value" in RESERVED_PROTOCOL_NAMES
 
 
 # -- C3: projection, navigation, errors, fingerprints -------------------------

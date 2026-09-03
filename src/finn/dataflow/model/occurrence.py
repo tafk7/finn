@@ -875,6 +875,62 @@ def occurrence_project(instance: Space, declaration: Projection[T]) -> Projectio
         return evaluate_projection(lineage.engine, state.runtime.point, compiled)
 
 
+@dataclass(frozen=True, slots=True)
+class LayerRuntime:
+    """The seam a layer specialization implements its own projection through.
+
+    Not the contributor facade and not reachable from it.  ``Kernel`` and
+    ``DataflowDesign`` are written *against* this package, not with it: they
+    generate compiled projections during lowering and need the compiled record
+    and the point to evaluate them.  Giving that one named, documented seam is
+    honest about the dependency; the alternative -- each layer reaching for
+    ``_occurrence_state`` and reading private fields -- is the same capability
+    with none of the visibility.
+
+    No public method or property returns one, and nothing here widens what a
+    contributor can reach.
+    """
+
+    engine: Engine
+    point: DesignPoint
+    compiled: _CompiledSpace[Space]
+    lock: RLock
+
+
+def layer_runtime(instance: Space) -> LayerRuntime:
+    """The compiled record and point behind one attached occurrence."""
+
+    state = _occurrence_state(instance)
+    return LayerRuntime(
+        state.runtime.lineage.engine,
+        state.runtime.point,
+        state.compiled,
+        state.runtime.lineage.lock,
+    )
+
+
+def occurrence_project_named(instance: Space, name: str) -> ProjectionAssessment[T]:
+    """Evaluate a projection a specialization generated during lowering.
+
+    A ``Projection`` declaration names a value declaration, which is enough for
+    a Kernel: its Region is written in the class body.  A Design's Network is
+    not -- it is generated from the compiled segments and topology, so there is
+    no class member for a declaration to point at.  Rather than inventing a
+    placeholder declaration whose evaluator could not be written until after
+    compilation, the specialization registers the compiled projection under a
+    name and its own accessor asks for it here.
+
+    Private to the layers: nothing generic reaches a projection by string.
+    """
+
+    state = _occurrence_state(instance)
+    lineage = state.runtime.lineage
+    with lineage.lock:
+        return evaluate_projection(
+            lineage.engine, state.runtime.point, state.compiled.projection(name)
+        )
+
+
 def _subject_findings(subject: object) -> tuple[Finding, ...]:
     if isinstance(subject, RequestError):
         return ordered_findings(list(subject.findings))
@@ -1092,7 +1148,10 @@ __all__ = [
     "ProblemSource",
     "ProjectionAssessment",
     "VariantView",
+    "LayerRuntime",
     "evaluate_projection",
+    "layer_runtime",
+    "occurrence_project_named",
     "is_attached_occurrence",
     "start_from_model",
     "start_occurrence",

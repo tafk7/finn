@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import subprocess
 import sys
@@ -38,8 +38,8 @@ from finn.dataflow.designs.design import (
     DataflowDesign,
     Kernels,
     Sink,
-    configure_design,
 )
+from finn.dataflow.model.occurrence import VariantView
 from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
 from finn.dataflow.network import (
     BoundaryContract,
@@ -737,11 +737,55 @@ def test_a_both_active_conditional_edge_and_boundary_is_refused() -> None:
 # -- KD5: configured Design ---------------------------------------------------
 
 
-def _configure(design_type: type[DataflowDesign], extent: int = 8, lanes: int = 2, **assignments):
-    engine, point, design = _started(design_type, extent, lanes)
-    if assignments:
-        point = engine.commit_assignments(point, assignments).point
-    return configure_design(engine, design, point)
+def _placed(design_type: type[DataflowDesign]) -> type[Space]:
+    """A root Space placing one Design at exactly the namespace `_started` uses.
+
+    The engine paths are identical to the fragment form above -- ``root.lanes``,
+    ``root.design....`` -- so a test may probe either way and mean the same
+    point.  Written as a factory rather than one class per Design because the
+    Design under test is the parameter.
+    """
+
+    class Root(Space):
+        extent = Problem(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        design = Subspace(design_type, extent=extent, lanes=lanes)
+
+    return Root
+
+
+def _occurrence(
+    design_type: type[DataflowDesign],
+    extent: int = 8,
+    lanes: int = 2,
+    *,
+    select: Mapping[str, str] | None = None,
+    design_decisions: Sequence[tuple[Decision[object], object]] = (),
+    kernel_decisions: Sequence[tuple[str, str, Decision[object], object]] = (),
+) -> DataflowDesign:
+    """One attached Design occurrence, specialized only through the public API.
+
+    Every step is a descriptor or a lifecycle call: select an alternative
+    through its segment's view, assign a Design Decision on the Design, assign a
+    candidate's own Decision on that candidate.  Each returns a successor, and
+    the Design at that successor is reached back through ``root`` -- which is
+    the navigation the class-centered design intends and the reason no test here
+    needs an engine path.
+    """
+
+    root_type = _placed(design_type)
+    root = root_type.start({root_type.extent: extent}, namespace="root")
+    design = cast(DataflowDesign, root.assign(root_type.lanes, lanes).design)
+    for role, alternative in (select or {}).items():
+        view = cast(VariantView, getattr(design, role))
+        design = cast(DataflowDesign, view.select(alternative).root.design)
+    for declaration, value in design_decisions:
+        design = design.assign(declaration, value)
+    for role, alternative, declaration, value in kernel_decisions:
+        view = cast(VariantView, getattr(design, role))
+        kernel = view.alternative(alternative)
+        design = cast(DataflowDesign, kernel.assign(declaration, value).root.design)
+    return design
 
 
 class Selectable(DataflowDesign):
@@ -765,98 +809,83 @@ class Selectable(DataflowDesign):
     result = Boundary(consume.output("result"))
 
 
-def test_a_design_generates_its_feasibility_set_and_readiness_profile() -> None:
+def test_a_design_generates_its_dataflow_projection_over_regions_alone() -> None:
     _harness, design = _compiled(Chain)
-    assert "root.design.feasibility" in {item.name for item in design.spec.constraint_sets}
+    assert "root.design.dataflow_accepts" in {item.name for item in design.spec.constraint_sets}
     profile = next(
-        item for item in design.spec.readiness_profiles if item.name == "root.design.configured"
+        item for item in design.spec.readiness_profiles if item.name == "root.design.dataflow_ready"
     )
-    assert "semantic.root.design.network" in {str(path) for path in profile.properties}
-    assert {
+    assert {str(path) for path in profile.properties} == {
+        "semantic.root.design.network",
         "semantic.root.design.produce.region",
         "semantic.root.design.consume.region",
-    } <= {str(path) for path in profile.properties}
-
-
-def test_configuration_returns_an_instance_of_the_authored_class() -> None:
-    answer = _configure(Chain)
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert isinstance(configured, Chain)
-    assert type(configured).id == "chain"
-    assert set(configured.kernels) == {"produce", "consume"}
-    assert configured.kernels["produce"].kernel_id == "producer"
-    assert configured.produce is configured.kernels["produce"]
-    assert configured.consume is configured.kernels["consume"]
-    assert configured.selected_candidates == {"produce": "producer", "consume": "consumer"}
-    assert configured.resolved_network == _network(*_started(Chain)[:2])
-
-
-def test_the_configured_kernel_region_is_the_exact_network_node_region() -> None:
-    answer = _configure(Chain)
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    for role, kernel in configured.kernels.items():
-        node = configured.resolved_network.node(configured.node_id(role))
-        assert kernel.region is node.region or kernel.region == node.region
-
-
-def test_the_configured_design_retains_only_approved_state() -> None:
-    answer = _configure(Selectable, **{"root.design.consume.kernel": "consumer"})
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert set(vars(configured)) == {
-        "_compilation",
-        "_values",
-        "resolved_network",
-        "kernels",
-        "selected_candidates",
-        "assignments",
-        "imported_decisions",
     }
-    values = list(vars(configured).values())
-    assert not any(isinstance(value, Engine) for value in values)
-    assert not any(hasattr(value, "design_space") for value in values)
-    assert not any(
-        hasattr(value, "assignments") and value is not configured.assignments
-        for value in values
-        if not isinstance(value, dict)
+    projection = design.projection("dataflow")
+    assert projection.name == "root.design.dataflow"
+    assert projection.output.path == QualifiedPath("semantic.root.design.network")
+
+
+def test_the_design_occurrence_answers_its_network_with_no_wrapper() -> None:
+    design = _occurrence(Chain)
+    assert isinstance(design, Chain)
+    assert type(design).id == "chain"
+    assessment = design.dataflow
+    assert assessment.readiness.ready is True
+    assert assessment.accepted_answer == Decided(_network(*_started(Chain)[:2]))
+    assert set(design.roles) == {"produce", "consume"}
+    assert design.selected("produce") == Decided("producer")
+    assert design.selected("consume") == Decided("consumer")
+
+
+def test_each_role_reports_its_own_region_node_and_computation() -> None:
+    design = _occurrence(Chain)
+    network = design.dataflow.accepted_answer
+    assert isinstance(network, Decided)
+    for role in design.roles:
+        region = design.region(role)
+        assert isinstance(region, Decided)
+        assert network.value.node(design.node_id(role)).region == region.value
+        assert design.computation(role) is (PRODUCE if role == "produce" else CONSUME)
+    assert design.region_family("produce") == Decided(("test.produce", "1"))
+
+
+def test_the_selected_kernel_is_reached_as_an_occurrence_not_a_copy() -> None:
+    design = _occurrence(Chain)
+    produce = design.kernel("produce")
+    assert isinstance(produce, Decided)
+    assert isinstance(produce.value, ProducerKernel)
+    assert produce.value.dataflow.accepted_answer == design.region("produce")
+
+
+def test_the_network_resolves_before_any_candidate_is_physically_ready() -> None:
+    """U3's claim: a Region is not waiting on a parameter, an ABI or a target."""
+
+    design = _occurrence(Selectable, select={"consume": "pipelined_consumer"})
+    # `stages` is the chosen candidate's own physical Decision and is uncommitted.
+    consume = design.kernel("consume")
+    assert isinstance(consume, Decided)
+    assert isinstance(consume.value.physical.accepted_answer, Unresolved)
+
+    assessment = design.dataflow
+    assert assessment.readiness.ready is True
+    assert isinstance(assessment.accepted_answer, Decided)
+    assert {node.id for node in assessment.accepted_answer.value.nodes} == {
+        "produce",
+        "consume",
+    }
+
+
+def test_an_uncommitted_selector_leaves_the_network_unresolved() -> None:
+    design = _occurrence(Selectable)
+    assessment = design.dataflow
+    assert isinstance(assessment.accepted_answer, Unresolved)
+    assert any(
+        "root.design.consume.kernel" in str(finding.path)
+        for finding in assessment.accepted_answer.findings
     )
 
 
-def test_the_configured_design_records_selections_without_branch_baggage() -> None:
-    answer = _configure(
-        Selectable,
-        **{
-            "root.design.consume.kernel": "pipelined_consumer",
-            "root.design.consume.pipelined_consumer.stages": 2,
-        },
-    )
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert configured.selected_candidates["consume"] == "pipelined_consumer"
-    assert dict(configured.assignments) == {
-        QualifiedPath("root.design.consume.kernel"): "pipelined_consumer"
-    }
-    assert not hasattr(configured, "catalog")
-    assert not hasattr(configured, "branches")
-
-
-def test_design_and_kernel_provenance_are_recorded() -> None:
-    answer = _configure(Chain)
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert configured.imported_decisions == (QualifiedPath("root.lanes"),)
-    assert configured.region_family("produce") == ("test.produce", "1")
-
-
-def test_an_incomplete_selector_refuses_configuration() -> None:
-    answer = _configure(Selectable)
-    assert isinstance(answer, Unresolved)
-    assert any("root.design.consume.kernel" in str(finding.path) for finding in answer.findings)
-
-
-def test_an_incomplete_design_decision_refuses_configuration() -> None:
+def test_an_uncommitted_design_decision_leaves_the_network_unresolved() -> None:
     class Chosen(DataflowDesign):
         id = "chosen"
         version = "1"
@@ -867,34 +896,12 @@ def test_an_incomplete_design_decision_refuses_configuration() -> None:
         source = Boundary(produce.input("source"))
         stream = Boundary(produce.output("stream"))
 
-    assert isinstance(_configure(Chosen), Unresolved)
-    assert isinstance(_configure(Chosen, **{"root.design.spare": 1}), Decided)
+    assert isinstance(_occurrence(Chosen).dataflow.accepted_answer, Unresolved)
+    complete = _occurrence(Chosen, design_decisions=((Chosen.spare, 1),))
+    assert isinstance(complete.dataflow.accepted_answer, Decided)
 
 
-def test_an_incomplete_kernel_physical_decision_refuses_configuration() -> None:
-    pending = _configure(Selectable, **{"root.design.consume.kernel": "pipelined_consumer"})
-    assert isinstance(pending, Unresolved)
-    assert any(
-        "root.design.consume.pipelined_consumer.stages" in str(finding.path)
-        for finding in pending.findings
-    )
-    complete = _configure(
-        Selectable,
-        **{
-            "root.design.consume.kernel": "pipelined_consumer",
-            "root.design.consume.pipelined_consumer.stages": 2,
-        },
-    )
-    assert isinstance(complete, Decided)
-
-
-def test_an_inactive_case_is_never_configured() -> None:
-    answer = _configure(Selectable, **{"root.design.consume.kernel": "consumer"})
-    assert isinstance(answer, Decided)
-    assert answer.value.kernels["consume"].kernel_id == "consumer"
-
-
-def test_an_inactive_segment_contributes_no_configured_kernel() -> None:
+def test_an_inactive_segment_contributes_no_node() -> None:
     class Optional(DataflowDesign):
         id = "optional_segment"
         version = "1"
@@ -917,32 +924,31 @@ def test_an_inactive_segment_contributes_no_configured_kernel() -> None:
         supplied = Boundary(consume.input("stream"), when=external)
         result = Boundary(consume.output("result"))
 
-    answer = _configure(Optional, **{"root.design.present": False})
-    assert isinstance(answer, Decided)
-    assert set(answer.value.kernels) == {"consume"}
-    assert tuple(node.id for node in answer.value.resolved_network.nodes) == ("consume",)
+    design = _occurrence(Optional, design_decisions=((Optional.present, False),))
+    network = design.dataflow.accepted_answer
+    assert isinstance(network, Decided)
+    assert tuple(node.id for node in network.value.nodes) == ("consume",)
+    assert design.is_active("produce") == Decided(False)
+    assert design.is_active("consume") == Decided(True)
+    assert isinstance(design.region("produce"), Absent)
 
 
-def test_two_occurrences_of_one_design_configure_independently() -> None:
-    harness = _compile_space(Harness, "root", problem_namespace="problem.root")
-    bindings = {name: cast("_Ref[object]", harness.member(name)) for name in ("extent", "lanes")}
-    left = _compile_space(Chain, "root.left", bindings, _allow_problem=False)
-    right = _compile_space(Chain, "root.right", bindings, _allow_problem=False)
-    engine = Engine()
-    point = engine.start(
-        engine.validate(assemble_specs((harness.spec, left.spec, right.spec))),
-        {"problem.root.extent": 8},
-    )
-    point = engine.commit_assignments(point, {"root.lanes": 2}).point
-    first = configure_design(engine, left, point)
-    second = configure_design(engine, right, point)
-    assert isinstance(first, Decided) and isinstance(second, Decided)
-    assert first.value is not second.value
-    assert first.value.kernels["produce"] is not second.value.kernels["produce"]
-    assert first.value.resolved_network == second.value.resolved_network
+def test_two_occurrences_of_one_design_resolve_independently() -> None:
+    class Root(Space):
+        extent = Problem(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        left = Subspace(Chain, extent=extent, lanes=lanes)
+        right = Subspace(Chain, extent=extent, lanes=lanes)
+
+    root = Root.start({Root.extent: 8}, namespace="root").assign(Root.lanes, 2)
+    first = cast(Chain, root.left)
+    second = cast(Chain, root.right)
+    assert first is not second
+    assert first.kernel("produce") != second.kernel("produce")
+    assert first.dataflow.accepted_answer == second.dataflow.accepted_answer
 
 
-def test_an_infeasible_point_refuses_configuration() -> None:
+def test_a_structurally_invalid_topology_refuses_the_network() -> None:
     class Broken(DataflowDesign):
         id = "broken"
         version = "1"
@@ -953,19 +959,19 @@ def test_an_infeasible_point_refuses_configuration() -> None:
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         result = Boundary(consume.output("result"))
 
-    answer = _configure(Broken)
-    assert isinstance(answer, Unresolved)
+    answer = _occurrence(Broken).dataflow.accepted_answer
+    assert isinstance(answer, Absent)
     assert "design-network-endpoint.input_ownership" in {
         finding.code for finding in answer.findings
     }
 
 
-def test_every_configuration_refusal_survives_python_o() -> None:
+def test_every_network_refusal_survives_python_o() -> None:
     script = (
         "from dataflow.designs.test_design_compiler import (\n"
-        "    Selectable, _configure)\n"
+        "    Selectable, _occurrence)\n"
         "from finn.dataflow._engine import Unresolved\n"
-        "answer = _configure(Selectable)\n"
+        "answer = _occurrence(Selectable).dataflow.accepted_answer\n"
         "assert type(answer) is Unresolved, answer\n"
         "print('refused')\n"
     )
@@ -1013,65 +1019,57 @@ class NestedOwnership(DataflowDesign):
     result = Boundary(consume.output("result"))
 
 
+def _nested(stages: int = 1) -> DataflowDesign:
+    design = _occurrence(NestedOwnership)
+    fold = cast(Space, design.fold)
+    design = cast(DataflowDesign, fold.assign(Folding.lanes, 2).root.design)
+    return _occurrence_assign_candidate(design, "consume", "pipelined_consumer", stages)
+
+
+def _occurrence_assign_candidate(
+    design: DataflowDesign, role: str, alternative: str, stages: int
+) -> DataflowDesign:
+    view = cast(VariantView, getattr(design, role))
+    kernel = view.alternative(alternative)
+    return cast(DataflowDesign, kernel.assign(PipelinedConsumerKernel.stages, stages).root.design)
+
+
 def test_a_decision_in_a_design_owned_helper_is_a_design_assignment() -> None:
-    answer = _configure(
-        NestedOwnership,
-        **{
-            "root.design.fold.lanes": 2,
-            "root.design.consume.pipelined_consumer.stages": 1,
-        },
-    )
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert dict(configured.assignments) == {QualifiedPath("root.design.fold.lanes"): 2}
-    assert configured.imported_decisions == (QualifiedPath("root.lanes"),)
+    design = _nested()
+    assert dict(design.assignments) == {QualifiedPath("root.design.fold.lanes"): 2}
+    assert design.imported_decisions == (QualifiedPath("root.lanes"),)
 
 
 def test_a_contained_kernels_decision_is_neither_retained_nor_imported() -> None:
-    answer = _configure(
-        NestedOwnership,
-        **{
-            "root.design.fold.lanes": 2,
-            "root.design.consume.pipelined_consumer.stages": 2,
-        },
-    )
-    assert isinstance(answer, Decided)
-    configured = answer.value
+    design = _nested(stages=2)
     stages = QualifiedPath("root.design.consume.pipelined_consumer.stages")
-    assert stages not in configured.assignments
-    assert stages not in configured.imported_decisions
-    # It belongs to the Kernel that owns it, and is retained there.
-    assert dict(configured.consume.assignments) == {"stages": 2}
+    assert stages not in design.assignments
+    assert stages not in design.imported_decisions
+    # It belongs to the Kernel that owns it, and is carried in its build unit.
+    consume = design.kernel("consume")
+    assert isinstance(consume, Decided)
+    built = consume.value.physical.accepted_answer
+    assert isinstance(built, Decided)
+    assert dict(built.value.assignments) == {"stages": 2}
 
 
 def test_a_selector_is_a_design_assignment_not_imported_provenance() -> None:
-    answer = _configure(
+    design = _occurrence(
         Selectable,
-        **{
-            "root.design.consume.kernel": "pipelined_consumer",
-            "root.design.consume.pipelined_consumer.stages": 1,
-        },
+        select={"consume": "pipelined_consumer"},
+        kernel_decisions=(("consume", "pipelined_consumer", PipelinedConsumerKernel.stages, 1),),
     )
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert QualifiedPath("root.design.consume.kernel") in configured.assignments
-    assert configured.imported_decisions == (QualifiedPath("root.lanes"),)
+    assert QualifiedPath("root.design.consume.kernel") in design.assignments
+    assert design.imported_decisions == (QualifiedPath("root.lanes"),)
 
 
 def test_only_decisions_outside_the_design_are_imported() -> None:
     """Every path in `imported_decisions` names something the Design does not own."""
 
-    _harness, design = _compiled(NestedOwnership)
-    internal = {str(item.path) for item in design.spec.decisions}
-    answer = _configure(
-        NestedOwnership,
-        **{
-            "root.design.fold.lanes": 2,
-            "root.design.consume.pipelined_consumer.stages": 1,
-        },
-    )
-    assert isinstance(answer, Decided)
-    assert not {str(path) for path in answer.value.imported_decisions} & internal
+    _harness, compiled = _compiled(NestedOwnership)
+    internal = {str(item.path) for item in compiled.spec.decisions}
+    design = _nested()
+    assert not {str(path) for path in design.imported_decisions} & internal
 
 
 def test_an_inactive_connection_does_not_demand_its_position_map() -> None:
@@ -1205,21 +1203,23 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         source = Boundary(produce.input("source"))
         result = Boundary(consume.output("result"), when=policy.flag)
 
-    answer = _configure(Gated)
-    assert isinstance(answer, Decided)
-    assert dict(answer.value.consume.parameters) == {"DEPTH": 8}
-    assert tuple(item.id for item in answer.value.resolved_network.boundaries) == (
-        "result",
-        "source",
-    )
+    design = _occurrence(Gated)
+    consume = design.kernel("consume")
+    assert isinstance(consume, Decided)
+    built = consume.value.physical.accepted_answer
+    assert isinstance(built, Decided)
+    assert dict(built.value.parameters) == {"DEPTH": 8}
+    network = design.dataflow.accepted_answer
+    assert isinstance(network, Decided)
+    assert tuple(item.id for item in network.value.boundaries) == ("result", "source")
 
 
-def test_a_configured_design_resolves_through_the_retained_value_hook():
-    """The occurrence descriptor dispatcher must not change configured Designs."""
+def test_the_design_occurrence_is_attached_and_answers_its_own_declarations() -> None:
+    """One protocol now: values exist on an attached occurrence and nowhere else."""
 
-    answer = _configure(Chain)
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert not is_attached_occurrence(configured)
-    assert configured.node_id("produce")
-    assert configured.region_family("produce")
+    design = _occurrence(Chain)
+    assert is_attached_occurrence(design)
+    assert design.node_id("produce") == "produce"
+    assert design.region_family("produce") == Decided(("test.produce", "1"))
+    with pytest.raises(AttributeError, match="only on an attached Space occurrence"):
+        _ = Chain.__new__(Chain).extent

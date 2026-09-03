@@ -15,8 +15,10 @@ from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
     QONNXDataType,
     canonical_qonnx_datatype,
+    encode_datatype,
     is_qonnx_datatype,
 )
+from finn.dataflow.model.declarations import CanonicalValue, CanonicalValueCodec
 from finn.dataflow.network import DataflowNetwork, PositionMap
 from finn.dataflow.network_validation import NetworkValidationReport
 from finn.dataflow.region import DataflowRegion
@@ -42,6 +44,30 @@ QONNX_DATATYPE_SEMANTICS: ValueSemantics[object] = as_object_semantics(
     QONNX_DATATYPE_VALUE_SEMANTICS
 )
 
+
+#: How a ``Problem(QONNX_DATATYPE_VALUE_SEMANTICS)`` field is fingerprinted.
+#:
+#: Declaration-owned, because QONNX's ``BaseDataType`` is a class this project
+#: does not own and must not teach to encode itself, and because the structural
+#: default would refuse it outright.  The payload is the canonical name and
+#: nothing else -- see ``encode_datatype`` for why a family-and-width pair
+#: would give ``TERNARY`` and ``INT2`` the same fingerprint.
+def _encode_qonnx_datatype(value: object) -> CanonicalValue:
+    """``encode_datatype`` widened to the canonical result type.
+
+    ``dict[str, str]`` is a canonical value and ``dict[str, object]`` is the
+    declared one, but the first is not a subtype of the second because
+    ``dict`` is invariant.  Widening here rather than in ``encode_datatype``
+    keeps that module's own contract exact for its other callers.
+    """
+
+    return dict(encode_datatype(value))
+
+
+QONNX_DATATYPE_CODEC: CanonicalValueCodec[object] = CanonicalValueCodec(
+    "finn.dataflow.qonnx_datatype", 1, _encode_qonnx_datatype
+)
+
 DATAFLOW_REGION_SEMANTICS = ValueSemantics.immutable_nominal(
     DataflowRegion,
     name="DataflowRegion",
@@ -65,6 +91,7 @@ NETWORK_VALIDATION_REPORT_SEMANTICS = ValueSemantics.immutable_nominal(
 
 __all__ = [
     "DATAFLOW_REGION_SEMANTICS",
+    "QONNX_DATATYPE_CODEC",
     "DATAFLOW_NETWORK_SEMANTICS",
     "NETWORK_VALIDATION_REPORT_SEMANTICS",
     "POSITION_MAP_SEMANTICS",

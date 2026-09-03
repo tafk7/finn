@@ -35,7 +35,13 @@ from finn.dataflow.model.declarations import (
     reject,
     unresolved,
 )
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, RegionRefused
+from finn.dataflow.kernels.kernel import (
+    Kernel,
+    Parameter,
+    PhysicallyUnsupported,
+    Region,
+    RegionRefused,
+)
 from finn.dataflow.region import (
     BeatSequence,
     Coordinate,
@@ -227,6 +233,47 @@ def construct_dot_product_region(
                 availability,
             ),
         ),
+    )
+
+
+def construct_embedded_dot_product_region(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    activation_type: NumericElementType,
+    weight_type: NumericElementType,
+    output_type: NumericElementType,
+    pe: int,
+    simd: int,
+) -> DataflowRegion:
+    """The same arithmetic with the weights already inside.
+
+    A *different Region*, not the streamed one with a port suppressed.  Where
+    the weights come from is a physical question, but whether they cross this
+    Region's boundary is a semantic one: an embedded core presents no weight
+    input, so a Network that placed it has no weight edge and no weight
+    boundary to substitute.  Saying that with a flag on one Region would make
+    the boundary contract depend on a physical choice, which is the thing the
+    Region exists to be independent of.
+
+    The matrix itself is not an operand here.  It is not traffic; it is state
+    the realization carries, and U6 owns how it gets there.
+    """
+
+    streamed = construct_dot_product_region(
+        repetitions,
+        matrix_width,
+        matrix_height,
+        activation_type,
+        weight_type,
+        output_type,
+        pe,
+        simd,
+    )
+    return DataflowRegion(
+        streamed.schedule,
+        tuple(item for item in streamed.inputs if item.port.id != "weight"),
+        streamed.outputs,
     )
 
 
@@ -610,11 +657,53 @@ class DotpAxiKernel(Kernel):
         )
 
 
+class EmbeddedDotpAxiKernel(DotpAxiKernel):
+    """The dot product with its matrix held locally rather than streamed in.
+
+    Everything about the arithmetic is DotpAxi's, so this inherits it: the same
+    folding Inputs, the same physical parameter table, the same numeric and
+    packing constraints.  What differs is the one thing that belongs to the
+    Region -- there is no weight input interface -- and that is enough to make a
+    Network placing this Kernel structurally different from one placing its
+    streamed sibling.
+
+    Its physical projection is explicitly unavailable at this phase.  Embedded
+    realization needs a weight data slot, an initializer loaded into it, and the
+    artifact stages that carry both; U6 owns all three.  Declaring that plainly
+    is the point of ``PhysicallyUnsupported``: the Network is fully resolved and
+    the build unit honestly is not there yet.
+    """
+
+    id = "dotp_axi_embedded"
+
+    region = Region(
+        family="mvau.dot_product.embedded",
+        version="1",
+        construct=construct_embedded_dot_product_region,
+        repetitions=DotpAxiKernel.repetitions,
+        matrix_width=DotpAxiKernel.matrix_width,
+        matrix_height=DotpAxiKernel.matrix_height,
+        activation_type=DotpAxiKernel.activation_type,
+        weight_type=DotpAxiKernel.weight_type,
+        output_type=DotpAxiKernel.output_type,
+        pe=DotpAxiKernel.pe,
+        simd=DotpAxiKernel.simd,
+    )
+
+    @classmethod
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
+        raise PhysicallyUnsupported(
+            "embedded weight realization arrives in U6 with its data slot and loader"
+        )
+
+
 __all__ = [
     "DOT_PRODUCT_COMPUTATION",
     "DspBlock",
     "DotpAxiKernel",
+    "EmbeddedDotpAxiKernel",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
     "construct_dot_product_region",
+    "construct_embedded_dot_product_region",
 ]

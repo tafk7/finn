@@ -17,7 +17,7 @@ reason.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar, cast
@@ -47,6 +47,7 @@ from finn.dataflow.computation import ComputationContract
 from finn.dataflow.model.semantics import DATAFLOW_NETWORK_SEMANTICS
 from finn.dataflow.model.compiler import (
     _CompiledBranch,
+    _CompiledProjection,
     _CompiledSpace,
     _Ref,
     answer_for,
@@ -55,7 +56,8 @@ from finn.dataflow.model.compiler import (
 )
 from finn.dataflow.model.declarations import (
     AuthoringError,
-    Decision,
+    ConstraintGroup,
+    Constraint as DeclaredConstraint,
     Problem,
     Space,
     Subspace,
@@ -66,11 +68,16 @@ from finn.dataflow.model.declarations import (
 )
 from finn.dataflow.kernels.kernel import (
     Kernel,
-    KernelPhysicalResult,
     _KernelCompilation,
-    kernel_physical,
 )
-from finn.dataflow.model.occurrence import is_attached_occurrence
+from finn.dataflow.model.occurrence import (
+    ProjectionAssessment,
+    VariantView,
+    evaluate_projection,
+    layer_runtime,
+    occurrence_project_named,
+    occurrence_variant,
+)
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -87,7 +94,19 @@ D = TypeVar("D", bound="DataflowDesign")
 
 
 class DataflowDesign(Space):
-    """One authored composition of Kernel segments and explicit topology."""
+    """One authored composition of Kernel segments and explicit topology.
+
+    The Design is asked for its Network the same way a Kernel is asked for its
+    Region -- ``design.dataflow`` -- and there is no resolved-Design wrapper in
+    between.  Everything a caller used to read off that wrapper is a question
+    put to the occurrence itself, so a partially specialized Design answers what
+    it can instead of refusing to exist.
+
+    The Network resolves from semantic facts alone.  No candidate's physical
+    projection is consulted, no ABI or source is required, and a Kernel whose
+    build unit is explicitly unavailable still contributes its Region.  That is
+    the U3 claim and ``dataflow`` is where it is checkable.
+    """
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
@@ -96,55 +115,126 @@ class DataflowDesign(Space):
     def _finalize_compilation(cls, compiled: object) -> object:
         return _finalize_design(cls, compiled)
 
-    def _initialize(
-        self,
-        compilation: _DesignCompilation[DataflowDesign],
-        network: DataflowNetwork,
-        kernels: Mapping[str, KernelPhysicalResult],
-        selected: Mapping[str, str],
-        values: Mapping[int, object],
-        assignments: Mapping[QualifiedPath, object],
-        imported: Sequence[QualifiedPath],
-    ) -> None:
-        self._compilation = compilation
-        self._values = MappingProxyType(dict(values))
-        self.resolved_network = network
-        self.kernels = MappingProxyType(dict(kernels))
-        self.selected_candidates = MappingProxyType(dict(selected))
-        self.assignments = MappingProxyType(dict(assignments))
-        self.imported_decisions = tuple(imported)
+    # -- the projection -------------------------------------------------------
 
-    def _space_value(self, declaration: ValueSource[object]) -> object:
-        try:
-            return self._values[id(declaration)]
-        except KeyError:
-            raise AttributeError(
-                "this declaration is not retained on the configured Design; "
-                "only Design-owned decisions and selectors are"
-            ) from None
+    @property
+    def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
+        """Readiness, constraint acceptance and the one selected Network."""
 
-    def _design_kernel(self, declaration: Kernels) -> KernelPhysicalResult:
-        for segment in self._compilation.segments:
-            if segment.declaration is declaration:
-                try:
-                    return self.kernels[segment.role]
-                except KeyError:
-                    raise AttributeError(
-                        f"segment {segment.role!r} is not active in this configuration"
-                    ) from None
-        raise AttributeError("this segment does not belong to the configured Design")
+        return cast(
+            "ProjectionAssessment[DataflowNetwork]",
+            occurrence_project_named(self, DATAFLOW_PROJECTION),
+        )
+
+    # -- what the Network is made of, role by role ----------------------------
+
+    @property
+    def roles(self) -> tuple[str, ...]:
+        """Every Design role, in declaration order, active or not."""
+
+        return tuple(segment.role for segment in _design_metadata(self).segments)
 
     def node_id(self, role: str) -> str:
         """The stable Network node this Design role occupies."""
 
-        return self._compilation.segment(role).node_id
+        return _design_metadata(self).segment(role).node_id
 
-    def region_family(self, role: str) -> tuple[str, str]:
+    def computation(self, role: str) -> ComputationContract:
+        """What the traffic at this role is required to mean."""
+
+        return _design_metadata(self).segment(role).required_computation
+
+    def is_active(self, role: str) -> Answer[bool]:
+        """Whether this role is present at this point."""
+
+        segment = _design_metadata(self).segment(role)
+        if segment.active is None:
+            return Decided(True)
+        answer = _design_answer(self, segment.active)
+        if isinstance(answer, Decided):
+            return Decided(bool(answer.value))
+        # An absent condition is not a true one: the segment simply is not there.
+        return Decided(False) if isinstance(answer, Absent) else Unresolved(answer.findings)
+
+    def selected(self, role: str) -> Answer[str]:
+        """The candidate id filling this role."""
+
+        return self._segment_view(role).selected()
+
+    def kernel(self, role: str) -> Answer[Kernel]:
+        """The child Kernel occurrence at this role's selected candidate."""
+
+        chosen = self.selected(role)
+        if not isinstance(chosen, Decided):
+            return cast("Answer[Kernel]", chosen)
+        return Decided(cast(Kernel, self._segment_view(role).alternative(chosen.value)))
+
+    def region(self, role: str) -> Answer[DataflowRegion]:
+        """The selected Region at this role, independent of which candidate won."""
+
+        return cast(
+            "Answer[DataflowRegion]",
+            _design_answer(self, _design_metadata(self).segment(role).selected_region),
+        )
+
+    def region_family(self, role: str) -> Answer[tuple[str, str]]:
         """The selected Region's semantic family and version at one role."""
 
-        segment = self._compilation.segment(role)
-        case = segment.case(self.selected_candidates[role])
-        return case.metadata.region_family, case.metadata.region_version
+        chosen = self.selected(role)
+        if not isinstance(chosen, Decided):
+            return cast("Answer[tuple[str, str]]", chosen)
+        metadata = _design_metadata(self).segment(role).case(chosen.value).metadata
+        return Decided((metadata.region_family, metadata.region_version))
+
+    # -- provenance -----------------------------------------------------------
+
+    @property
+    def assignments(self) -> Mapping[QualifiedPath, object]:
+        """Every committed Decision this Design owns: its own, and its selectors."""
+
+        runtime = layer_runtime(self)
+        committed = runtime.point.assignments
+        return MappingProxyType(
+            {
+                path: committed[path]
+                for path in sorted(_design_metadata(self).design_decisions)
+                if path in committed
+            }
+        )
+
+    @property
+    def imported_decisions(self) -> tuple[QualifiedPath, ...]:
+        """Committed Decisions this Design reads but no part of it owns."""
+
+        runtime = layer_runtime(self)
+        return imported_decisions(
+            runtime.point,
+            runtime.compiled.spec,
+            runtime.compiled.inputs,
+            _design_metadata(self).internal_decisions,
+        )
+
+    def _segment_view(self, role: str) -> VariantView:
+        """The bound Variant view of one role, reached by its own declaration."""
+
+        return occurrence_variant(self, _design_metadata(self).segment(role).declaration)
+
+
+#: The compiled name of the Design's one generated projection.
+DATAFLOW_PROJECTION = "dataflow"
+
+
+def _design_metadata(design: DataflowDesign) -> _DesignCompilation[DataflowDesign]:
+    metadata = layer_runtime(design).compiled.extension
+    if not isinstance(metadata, _DesignCompilation):
+        raise AuthoringError(f"{type(design).__name__} is not a compiled DataflowDesign")
+    return cast("_DesignCompilation[DataflowDesign]", metadata)
+
+
+def _design_answer(design: DataflowDesign, reference: _Ref[object]) -> Answer[object]:
+    runtime = layer_runtime(design)
+    with runtime.lock:
+        return answer_for(runtime.engine, runtime.point, reference)
 
 
 def _atomic(what: str, value: str | None) -> None:
@@ -248,24 +338,6 @@ class Kernels(Variant):
         """The candidate-independent selected Region of this segment."""
 
         return self.__getattr__("region")
-
-    def __get__(  # type: ignore[override]  # widened for configured Designs
-        self, instance: object | None, owner: type[object]
-    ) -> object:
-        if instance is None:
-            return self
-        # Two protocols meet here, which is why the override is deliberately
-        # wider than ``Variant.__get__``.  An attached occurrence gets the
-        # generic bound Variant view; a *configured* Design -- the retained
-        # pre-migration object, whose protocol U2 removes -- keeps returning its
-        # already-selected Kernel.  Asked in that order and explicitly, so the
-        # MRO never decides which one an instance is speaking.
-        if isinstance(instance, Space) and is_attached_occurrence(instance):
-            return super().__get__(instance, owner)
-        resolver = getattr(instance, "_design_kernel", None)
-        if resolver is None:
-            raise AttributeError("a selected Kernel exists only on a configured Design")
-        return resolver(self)
 
     def input(self, port_id: str) -> SegmentEndpoint:
         """An immutable claim that the selected Region has this input port."""
@@ -985,10 +1057,22 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
             segments,
         ),
     )
+    _check_constraints_are_classified(design_type, declarations)
     constraints = (*design.spec.constraints, *generated)
-    constraint_paths = tuple(item.path for item in constraints)
-    feasibility_name = f"{design.namespace}.feasibility"
-    readiness_name = f"{design.namespace}.configured"
+    # Every constraint in the flat fragment except the ones a candidate Kernel
+    # declared as gating its build unit alone.  This is where U3's claim stops
+    # being a hope: a DotpAxi that cannot pump at one SIMD lane, or has no
+    # realization for this DSP generation, must not make the Network refuse --
+    # it did not change a Region, and something else may build the same Region.
+    physical_only = frozenset(
+        path
+        for segment in segments
+        for case in segment.cases
+        for path in case.metadata.physical_only_constraints
+    )
+    constraint_paths = tuple(item.path for item in constraints if item.path not in physical_only)
+    feasibility_name = f"{design.namespace}.dataflow_accepts"
+    readiness_name = f"{design.namespace}.dataflow_ready"
     internal_decisions = frozenset(item.path for item in design.spec.decisions)
     kernel_decisions = frozenset(
         item.path
@@ -1012,7 +1096,7 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
             *design.spec.readiness_profiles,
             ReadinessProfile(
                 readiness_name,
-                tuple(item.path for item in design.spec.decisions),
+                tuple(sorted(design_decisions)),
                 _readiness_properties(segments, network),
                 constraint_paths,
             ),
@@ -1033,30 +1117,77 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         kernel_decisions,
         internal_decisions,
     )
-    return replace(design, spec=specification, extension=metadata)
+    # The Network is generated during lowering, so its projection is too.  A
+    # ``Projection`` declaration names a class member, and there is no class
+    # member here to name -- see ``occurrence_project_named``.
+    projection: _CompiledProjection[object] = _CompiledProjection(
+        DATAFLOW_PROJECTION,
+        f"{design.namespace}.{DATAFLOW_PROJECTION}",
+        cast("_Ref[object]", network),
+        readiness_name,
+        (feasibility_name,),
+    )
+    return replace(
+        design,
+        spec=specification,
+        extension=metadata,
+        projections=(*design.projections, (DATAFLOW_PROJECTION, projection)),
+    )
+
+
+def _check_constraints_are_classified(
+    design_type: type[DataflowDesign], declarations: Mapping[str, object]
+) -> None:
+    """Every authored Design Constraint gates the dataflow projection, explicitly.
+
+    The same rule the Kernel layer states, for the same reason: a constraint in
+    no group is compiled, evaluated and consulted by nothing.  A Design has one
+    projection today, so there is one group to be in; when U5 adds the physical
+    one, this is the place that will make each existing constraint say which.
+    """
+
+    group = declarations.get("dataflow_support")
+    if group is not None and not isinstance(group, ConstraintGroup):
+        raise AuthoringError(
+            f"{design_type.__name__}.dataflow_support is a {type(group).__name__}; it names "
+            "one ConstraintGroup of the constraints that gate the Network projection"
+        )
+    grouped = (
+        {id(item) for item in group.constraints} if isinstance(group, ConstraintGroup) else set()
+    )
+    ungrouped = sorted(
+        name
+        for name, declaration in declarations.items()
+        if isinstance(declaration, DeclaredConstraint) and id(declaration) not in grouped
+    )
+    if ungrouped:
+        raise AuthoringError(
+            f"{design_type.__name__} declares Constraint {ungrouped[0]!r} outside "
+            "dataflow_support; a Design says which projection each of its constraints "
+            "gates, because a constraint in no group refuses nothing"
+        )
 
 
 def _readiness_properties(
     segments: tuple[_CompiledKernelSegment, ...],
     network: _Ref[DataflowNetwork],
 ) -> tuple[QualifiedPath, ...]:
-    """Selected Regions, the Network, and each candidate's own physical values.
+    """The Network and the selected Region at every role.  Nothing physical.
 
-    Taking the candidates' ``configured`` profiles rather than every property in
-    the flat spec keeps readiness to the values a configured Design will actually
-    retain; an inactive candidate's obligations reduce to final absence anyway.
+    This is where U3's claim is enforced rather than merely asserted.  The
+    profile deliberately does *not* reach into a candidate's parameter table,
+    ABI or physical readiness: a Design whose chosen Kernel has an uncommitted
+    pumping Decision, or no realization for this target at all, still has a
+    fully resolved Network, because none of that changes a Region.
+
+    The Design's own Decisions are in the profile's decision list, not here.
+    An inactive segment's Region reduces to final absence, which is a final
+    answer and therefore ready.
     """
 
-    paths = [network.path, *(segment.selected_region.path for segment in segments)]
-    for segment in segments:
-        for case in segment.cases:
-            wanted = case.compiled.engine_name(
-                case.compiled.readiness_names, "physical_ready", "Readiness"
-            )
-            for profile in case.compiled.spec.readiness_profiles:
-                if profile.name == wanted:
-                    paths.extend(profile.properties)
-    return tuple(dict.fromkeys(paths))
+    return tuple(
+        dict.fromkeys([network.path, *(segment.selected_region.path for segment in segments)])
+    )
 
 
 def _check_unique(
@@ -1080,204 +1211,23 @@ def _region_path(segment: _CompiledKernelSegment) -> QualifiedPath:
     return reference.path
 
 
-# -- configuration ------------------------------------------------------------
-
-
-def _blocked(namespace: str, code: str, message: str) -> Unresolved:
-    return Unresolved((Finding(FindingKind.BLOCKER, code, QualifiedPath(namespace), message),))
-
-
-def _selected_case(
-    engine: Engine,
-    point: DesignPoint,
-    segment: _CompiledKernelSegment,
-) -> Answer[str]:
-    if segment.selector is None:
-        return Decided(segment.cases[0].case_id)
-    if segment.selector.path not in point.assignments:
-        return Unresolved(
-            (
-                Finding(
-                    FindingKind.BLOCKER,
-                    "design-selector-uncommitted",
-                    segment.selector.path,
-                    "a Design segment selector is not committed",
-                ),
-            )
-        )
-    return Decided(cast(str, point.assignments[segment.selector.path]))
-
-
-def _segment_is_active(
-    engine: Engine,
-    point: DesignPoint,
-    segment: _CompiledKernelSegment,
-) -> Answer[bool]:
-    if segment.active is None:
-        return Decided(True)
-    answer = answer_for(engine, point, segment.active)
-    if isinstance(answer, Decided):
-        return Decided(bool(answer.value))
-    if isinstance(answer, Absent):
-        # An absent condition is not a true one: the segment simply is not there.
-        return Decided(False)
-    return Unresolved(answer.findings)
-
-
-def configure_design(
+def design_dataflow(
     engine: Engine,
     compiled: _CompiledSpace[D],
     point: DesignPoint,
-) -> Answer[D]:
-    """Resolve one selected Design, then detach it from the engine and point."""
+) -> ProjectionAssessment[DataflowNetwork]:
+    """Ask one compiled Design fragment for its Network at one point.
 
-    metadata = compiled.extension
-    if not isinstance(metadata, _DesignCompilation):
-        raise AuthoringError(f"{compiled.owner.__name__} is not a compiled DataflowDesign")
-    design = cast("_DesignCompilation[D]", metadata)
-
-    readiness = engine.check_readiness(point, design.readiness_profile)
-    if readiness.ready is not True:
-        findings = tuple(
-            finding
-            for answer in readiness.answers.values()
-            if isinstance(answer, Unresolved)
-            for finding in answer.findings
-        )
-        return cast(
-            "Answer[D]",
-            Unresolved(findings)
-            if findings
-            else _blocked(
-                compiled.namespace,
-                "design-not-ready",
-                f"{design.design_id} is not ready to configure",
-            ),
-        )
-
-    assessment = engine.evaluate_constraint_set(point, design.feasibility_set)
-    if assessment.verdict is not True:
-        findings = tuple(
-            finding
-            for answer in assessment.answers.values()
-            if isinstance(answer, (Absent, Unresolved))
-            for finding in answer.findings
-        )
-        return cast(
-            "Answer[D]",
-            Unresolved(findings)
-            if findings
-            else _blocked(
-                compiled.namespace,
-                "design-infeasible",
-                f"{design.design_id} does not cover this configuration",
-            ),
-        )
-
-    kernels: dict[str, KernelPhysicalResult] = {}
-    selected: dict[str, str] = {}
-    for segment in design.segments:
-        active = _segment_is_active(engine, point, segment)
-        if not isinstance(active, Decided):
-            return cast("Answer[D]", active)
-        if not active.value:
-            continue
-        chosen = _selected_case(engine, point, segment)
-        if not isinstance(chosen, Decided):
-            return cast("Answer[D]", chosen)
-        case = segment.case(chosen.value)
-        # One reduction, the occurrence layer's.  A Design resolving a selected
-        # candidate is asking that candidate's own physical projection, not a
-        # second question that happens to look like it.
-        physical = kernel_physical(engine, case.compiled, point)
-        if not isinstance(physical.accepted_answer, Decided):
-            return cast("Answer[D]", physical.accepted_answer)
-        kernels[segment.role] = physical.accepted_answer.value
-        selected[segment.role] = chosen.value
-
-    resolved = engine.query_property(point, design.network.path)
-    if not isinstance(resolved, Decided):
-        return cast("Answer[D]", Unresolved(resolved.findings))
-    network = cast(DataflowNetwork, resolved.value)
-
-    mismatch = _correspondence_findings(compiled.namespace, design, network, kernels, selected)
-    if mismatch:
-        return cast("Answer[D]", Unresolved(mismatch))
-
-    assignments = {
-        path: point.assignments[path]
-        for path in sorted(design.design_decisions)
-        if path in point.assignments
-    }
-    retained = {
-        id(declaration): point.assignments[compiled.member(name).path]
-        for name, declaration in declared_members(design.owner)
-        if isinstance(declaration, Decision) and compiled.member(name).path in point.assignments
-    }
-    instance = object.__new__(design.owner)
-    DataflowDesign._initialize(
-        instance,
-        cast("_DesignCompilation[DataflowDesign]", design),
-        network,
-        kernels,
-        selected,
-        retained,
-        assignments,
-        imported_decisions(point, compiled.spec, compiled.inputs, design.internal_decisions),
-    )
-    return Decided(instance)
-
-
-def _correspondence_findings(
-    namespace: str,
-    design: _DesignCompilation[D],
-    network: DataflowNetwork,
-    kernels: Mapping[str, KernelPhysicalResult],
-    selected: Mapping[str, str],
-) -> tuple[Finding, ...]:
-    """Exact role, node, Region, and configured-Kernel correspondence.
-
-    The generated constraint already proved node-to-Region correspondence over
-    values.  This proves the extra thing configuration introduces: the object
-    now sitting at each node promises exactly that node's Region.
+    The direct-fragment form of ``design.dataflow``, for a caller holding a
+    compiled record rather than an attached occurrence -- an operation that
+    embeds a Design, or evidence driving one from a flat engine point.  Same
+    compiled projection, same reduction.
     """
 
-    findings: list[Finding] = []
-    nodes = {node.id: node.region for node in network.nodes}
-    expected = {design.segment(role).node_id for role in kernels}
-    if expected != set(nodes):
-        findings.append(
-            Finding(
-                FindingKind.BLOCKER,
-                "design-configured-node-mismatch",
-                QualifiedPath(namespace),
-                "configured segments and Network nodes must correspond exactly",
-            )
-        )
-    for role, kernel in kernels.items():
-        segment = design.segment(role)
-        node_region = nodes.get(segment.node_id)
-        if node_region is None or kernel.region != node_region:
-            findings.append(
-                Finding(
-                    FindingKind.BLOCKER,
-                    "design-configured-region-mismatch",
-                    QualifiedPath(namespace),
-                    "a configured Kernel does not realize its Network node's Region",
-                    (("role", role), ("node", segment.node_id)),
-                )
-            )
-        if kernel.kernel_id != segment.case(selected[role]).compiled.owner.id:
-            findings.append(
-                Finding(
-                    FindingKind.BLOCKER,
-                    "design-configured-candidate-mismatch",
-                    QualifiedPath(namespace),
-                    "a configured Kernel is not the selected candidate",
-                    (("role", role), ("selected", selected[role])),
-                )
-            )
-    return tuple(findings)
+    return cast(
+        "ProjectionAssessment[DataflowNetwork]",
+        evaluate_projection(engine, point, compiled.projection(DATAFLOW_PROJECTION)),
+    )
 
 
 __all__ = [
@@ -1288,7 +1238,8 @@ __all__ = [
     "Kernels",
     "SegmentEndpoint",
     "Sink",
+    "DATAFLOW_PROJECTION",
     "TopologyDeclaration",
-    "configure_design",
+    "design_dataflow",
     "topology_members",
 ]

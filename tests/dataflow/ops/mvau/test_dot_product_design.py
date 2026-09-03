@@ -10,19 +10,35 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Answer, Decided, Engine, QualifiedPath, Unresolved
+from finn.dataflow._engine import (
+    Absent,
+    Answer,
+    Decided,
+    Engine,
+    QualifiedPath,
+    Unresolved,
+)
 from finn.dataflow.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.semantics import (
+    QONNX_DATATYPE_CODEC,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+)
 from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Problem, Space
-from finn.dataflow.designs.design import configure_design
+from finn.dataflow.model.declarations import Problem, Space, Subspace, ValueSource
+from finn.dataflow.designs.design import design_dataflow
 from finn.dataflow.ops.mvau.designs.dot_product import DESIGN_INPUTS, DotProductDesign
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.kernel import KernelPhysicalResult, kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.network import DirectConnection, FanoutMode, PassCorrespondence
+from finn.dataflow.network import (
+    DataflowNetwork,
+    DirectConnection,
+    FanoutMode,
+    PassCorrespondence,
+)
 from finn.dataflow.network_validation import validate_network
 from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region as baseline_replay,
@@ -42,13 +58,29 @@ class Problem_(Space):
     repetitions = Problem(int)
     matrix_width = Problem(int)
     matrix_height = Problem(int)
-    activation_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weight_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS)
-    accumulator_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS)
-    output_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS)
+    activation_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
+    weight_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
+    accumulator_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
+    output_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
     narrow_weights = Problem(bool)
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
+
+
+class Placed(Problem_):
+    """The same facts, with the Design placed at the same namespace.
+
+    ``Problem_`` alone is the fragment form the topology tests drive directly.
+    Placing the Design as a ``Subspace`` named ``dot_product`` gives the
+    occurrence form over identical engine paths, so the two agree by
+    construction rather than by two lists of strings staying in step.
+    """
+
+    design = Subspace(
+        DotProductDesign,
+        name="dot_product",
+        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in DESIGN_INPUTS},
+    )
 
 
 def _compile(namespace: str = "mvau.dot_product"):
@@ -62,7 +94,7 @@ def _compile(namespace: str = "mvau.dot_product"):
     return root, design
 
 
-def _configure(
+def _occurrence(
     *,
     repetitions: int = 2,
     matrix_width: int = 8,
@@ -75,33 +107,46 @@ def _configure(
     pe: int = 2,
     simd: int = 2,
     pumping: bool = False,
-) -> Answer[DotProductDesign]:
-    root, design = _compile()
-    engine = Engine()
-    point = engine.start(
-        engine.validate(assemble_specs((root.spec, design.spec))),
+) -> DotProductDesign:
+    """One attached DotProductDesign, specialized through the public API."""
+
+    root = Placed.start(
         {
-            "problem.mvau.repetitions": repetitions,
-            "problem.mvau.matrix_width": matrix_width,
-            "problem.mvau.matrix_height": matrix_height,
-            "problem.mvau.activation_type": DataType[activation],
-            "problem.mvau.weight_type": DataType[weight],
-            "problem.mvau.accumulator_type": DataType[accumulator],
-            "problem.mvau.output_type": DataType[accumulator],
-            "problem.mvau.narrow_weights": narrow,
-            "problem.mvau.target_dsp": target,
-            "problem.mvau.clock_period_ns": CLOCK_PERIOD_NS,
+            Placed.repetitions: repetitions,
+            Placed.matrix_width: matrix_width,
+            Placed.matrix_height: matrix_height,
+            Placed.activation_type: DataType[activation],
+            Placed.weight_type: DataType[weight],
+            Placed.accumulator_type: DataType[accumulator],
+            Placed.output_type: DataType[accumulator],
+            Placed.narrow_weights: narrow,
+            Placed.target_dsp: target,
+            Placed.clock_period_ns: CLOCK_PERIOD_NS,
         },
+        namespace="mvau",
     )
-    point = engine.commit_assignments(
-        point,
-        {
-            "mvau.dot_product.pe": pe,
-            "mvau.dot_product.simd": simd,
-            "mvau.dot_product.compute.dotp_axi.compute_pumping": pumping,
-        },
-    ).point
-    return configure_design(engine, design, point)
+    design = cast(DotProductDesign, root.design)
+    design = design.assign(DotProductDesign.pe, pe).assign(DotProductDesign.simd, simd)
+    compute = cast(DotpAxiKernel, design.compute.alternative("dotp_axi"))
+    return cast(
+        DotProductDesign,
+        compute.assign(DotpAxiKernel.compute_pumping, pumping).root.design,
+    )
+
+
+def _configure(**kwargs: object) -> Answer[DataflowNetwork]:
+    """The accepted Network of one specialized Design."""
+
+    return _occurrence(**kwargs).dataflow.accepted_answer  # type: ignore[arg-type]
+
+
+def _built(role: str, **kwargs: object) -> Answer[KernelPhysicalResult]:
+    """The detached build unit at one role of one specialized Design."""
+
+    kernel = _occurrence(**kwargs).kernel(role)  # type: ignore[arg-type]
+    if not isinstance(kernel, Decided):
+        return cast("Answer[KernelPhysicalResult]", kernel)
+    return kernel.value.physical.accepted_answer
 
 
 #: PE and SIMD at one and above one, one and several repetitions, signed and
@@ -150,7 +195,7 @@ def test_the_design_matches_the_retained_decomposed_authority(
     pumping: bool,
 ) -> None:
     del label
-    answer = _configure(
+    design = _occurrence(
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
@@ -162,8 +207,6 @@ def test_the_design_matches_the_retained_decomposed_authority(
         simd=simd,
         pumping=pumping,
     )
-    assert isinstance(answer, Decided), answer
-    configured = answer.value
 
     expected_replay = baseline_replay(
         repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
@@ -178,18 +221,18 @@ def test_the_design_matches_the_retained_decomposed_authority(
         pe,
         simd,
     )
-    assert configured.kernels["replay"].region == expected_replay
-    assert configured.kernels["compute"].region == expected_compute
-    assert configured.resolved_network == construct_decomposed_mvau_network(
-        expected_replay, expected_compute
-    )
-    assert not validate_network(configured.resolved_network).issues
+    assert design.region("replay") == Decided(expected_replay)
+    assert design.region("compute") == Decided(expected_compute)
+    network = design.dataflow.accepted_answer
+    assert network == Decided(construct_decomposed_mvau_network(expected_replay, expected_compute))
+    assert isinstance(network, Decided)
+    assert not validate_network(network.value).issues
 
 
 def test_the_selected_network_has_exactly_two_nodes_one_edge_three_boundaries() -> None:
     answer = _configure()
     assert isinstance(answer, Decided)
-    network = answer.value.resolved_network
+    network = answer.value
     assert tuple(node.id for node in network.nodes) == ("compute", "replay")
     assert tuple(edge.id for edge in network.edges) == ("activation_replay",)
     assert tuple(item.id for item in network.boundaries) == ("activation", "output", "weight")
@@ -203,21 +246,19 @@ def test_the_selected_network_has_exactly_two_nodes_one_edge_three_boundaries() 
     assert frozenset(left for left, _right in entries) == source.beat_sequence.image
 
 
-def test_the_configured_design_contains_exactly_two_kernels() -> None:
-    answer = _configure()
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert set(configured.kernels) == {"replay", "compute"}
-    assert configured.replay.kernel_id == "replay_buffer"
-    assert configured.compute.kernel_id == "dotp_axi"
-    assert configured.selected_candidates == {
-        "replay": "replay_buffer",
-        "compute": "dotp_axi",
-    }
-    assert configured.replay.computation == ACTIVATION_REPLAY_COMPUTATION
-    assert configured.compute.computation == DOT_PRODUCT_COMPUTATION
-    assert configured.region_family("replay") == ("mvau.activation_replay", "1")
-    assert configured.region_family("compute") == ("mvau.dot_product", "1")
+def test_the_design_reports_two_roles_and_what_fills_each() -> None:
+    design = _occurrence()
+    assert set(design.roles) == {"replay", "compute"}
+    assert design.selected("replay") == Decided("replay_buffer")
+    assert design.selected("compute") == Decided("dotp_axi")
+    assert design.computation("replay") == ACTIVATION_REPLAY_COMPUTATION
+    assert design.computation("compute") == DOT_PRODUCT_COMPUTATION
+    assert design.region_family("replay") == Decided(("mvau.activation_replay", "1"))
+    assert design.region_family("compute") == Decided(("mvau.dot_product", "1"))
+    assert design.node_id("replay") == "replay"
+    replay = design.kernel("replay")
+    assert isinstance(replay, Decided)
+    assert isinstance(replay.value, ReplayBufferKernel)
 
 
 def test_pe_and_simd_appear_only_at_design_scope() -> None:
@@ -233,28 +274,27 @@ def test_pe_and_simd_appear_only_at_design_scope() -> None:
 
 
 def test_the_design_owns_pe_and_simd_and_the_kernels_import_them() -> None:
-    answer = _configure(pe=2, simd=4)
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert dict(configured.assignments) == {
+    design = _occurrence(pe=2, simd=4)
+    assert dict(design.assignments) == {
         QualifiedPath("mvau.dot_product.pe"): 2,
         QualifiedPath("mvau.dot_product.simd"): 4,
     }
-    for kernel in configured.kernels.values():
-        assert {path.value for path in kernel.imported_decisions} >= {
+    for role, expected in (("compute", {"compute_pumping": False}), ("replay", {})):
+        built = _built(role, pe=2, simd=4)
+        assert isinstance(built, Decided)
+        assert {path.value for path in built.value.imported_decisions} >= {
             "mvau.dot_product.pe",
             "mvau.dot_product.simd",
         }
-    assert dict(configured.compute.assignments) == {"compute_pumping": False}
-    assert dict(configured.replay.assignments) == {}
+        assert dict(built.value.assignments) == expected
 
 
 def test_the_physical_parameter_tables_stay_kernel_local() -> None:
-    answer = _configure(pe=2, simd=2, target=DspBlock.DSP48E2)
-    assert isinstance(answer, Decided)
-    configured = answer.value
-    assert dict(configured.replay.parameters) == {"LEN": 4, "REP": 2, "W": 16}
-    assert dict(configured.compute.parameters) == {
+    replay = _built("replay", pe=2, simd=2, target=DspBlock.DSP48E2)
+    compute = _built("compute", pe=2, simd=2, target=DspBlock.DSP48E2)
+    assert isinstance(replay, Decided) and isinstance(compute, Decided)
+    assert dict(replay.value.parameters) == {"LEN": 4, "REP": 2, "W": 16}
+    assert dict(compute.value.parameters) == {
         "PE": 2,
         "SIMD": 2,
         "PUMPED_COMPUTE": False,
@@ -268,7 +308,8 @@ def test_the_physical_parameter_tables_stay_kernel_local() -> None:
         "ACTIVATION_BROADCASTING": 1,
         "FORCE_BEHAVIORAL": 0,
     }
-    assert not hasattr(configured, "parameters")
+    # The Design has no parameter table of its own; each build unit owns its.
+    assert not hasattr(_occurrence(), "parameters")
 
 
 def test_an_incomplete_or_infeasible_point_refuses() -> None:
@@ -289,13 +330,14 @@ def test_an_incomplete_or_infeasible_point_refuses() -> None:
             "problem.mvau.clock_period_ns": CLOCK_PERIOD_NS,
         },
     )
-    assert isinstance(configure_design(engine, design, point), Unresolved)
+    assert isinstance(design_dataflow(engine, design, point).accepted_answer, Unresolved)
 
-    # DotpAxi drives its accumulator straight out, so a narrower output refuses.
-    mismatched = _configure(accumulator="INT32")
-    assert isinstance(mismatched, Decided)
-    refused = _configure(simd=1, pumping=True)
-    assert isinstance(refused, Unresolved)
+    # DotpAxi cannot pump at one SIMD lane.  That is a *physical* refusal now,
+    # so the Network is untouched and the build unit is the thing that says no.
+    assert isinstance(_configure(simd=1, pumping=True), Decided)
+    refused = _built("compute", simd=1, pumping=True)
+    assert isinstance(refused, Absent)
+    assert "dotp-axi" in str(refused.findings) or refused.findings
 
 
 def test_no_kernel_export_coverage_or_binding_object_appears() -> None:
@@ -340,9 +382,12 @@ def test_two_occurrences_of_the_design_stay_independent() -> None:
             "mvau.right.compute.dotp_axi.compute_pumping": False,
         },
     ).point
-    first = configure_design(engine, left, point)
-    second = configure_design(engine, right, point)
+    first = design_dataflow(engine, left, point).accepted_answer
+    second = design_dataflow(engine, right, point).accepted_answer
     assert isinstance(first, Decided) and isinstance(second, Decided)
-    assert first.value.resolved_network != second.value.resolved_network
-    assert first.value.compute.parameters["PE"] == 2
-    assert second.value.compute.parameters["PE"] == 4
+    assert first.value != second.value
+    for compiled, expected in ((left, 2), (right, 4)):
+        segment = compiled.extension.segment("compute")
+        built = kernel_physical(engine, segment.cases[0].compiled, point).accepted_answer
+        assert isinstance(built, Decided)
+        assert built.value.parameters["PE"] == expected

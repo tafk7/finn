@@ -549,26 +549,23 @@ class Space:
 def resolve_declared_value(instance: object, declaration: ValueSource[object]) -> object:
     """The one dispatcher every value descriptor goes through.
 
-    Two protocols reach the same attribute access and must not be allowed to
-    decide by inheritance order.  An *attached occurrence* resolves through the
-    occurrence runtime; a *legacy configured instance* -- what
-    ``configure_kernel`` and ``configure_design`` still return -- resolves
-    through the ``_space_value`` hook those classes already implement.  Asking
-    "is this attached?" first, explicitly, is what keeps a configured Kernel's
-    behaviour identical while an attached Kernel occurrence gets the runtime,
-    even though both are instances of the same class.
-
-    Neither present is an ``AttributeError``, because a bare declaration-only
-    instance has no values at all.
+    There is now one protocol.  U2 and U3 retired the detached *configured*
+    Kernel and Design objects that used to answer through a ``_space_value``
+    hook, so an instance either carries an occurrence runtime or has no values
+    at all -- and a bare declaration-only instance saying ``AttributeError`` is
+    the right answer for the latter.  ``_space_value`` stays a reserved
+    protocol name because a future layer may reintroduce a second protocol, and
+    the failure of two protocols deciding by inheritance order is exactly what
+    the reservation prevents.
     """
 
     api = _occurrence_api()
-    if api.is_attached_occurrence(instance):
-        return api.occurrence_value(instance, declaration)
-    resolver = getattr(instance, "_space_value", None)
-    if resolver is None:
-        raise AttributeError("declarative values exist only on configured instances")
-    return resolver(declaration)
+    if not api.is_attached_occurrence(instance):
+        raise AttributeError(
+            "declarative values exist only on an attached Space occurrence; "
+            f"start one with {type(instance).__name__}.start(...)"
+        )
+    return api.occurrence_value(instance, declaration)
 
 
 @dataclass(frozen=True, slots=True, eq=False)

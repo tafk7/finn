@@ -41,9 +41,9 @@ from finn.dataflow.designs.design import (
     DataflowDesign,
     Kernels,
     Sink,
-    configure_design,
+    design_dataflow,
 )
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
+from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, kernel_physical
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -277,6 +277,31 @@ def _started(design_type: type[DataflowDesign] = Alternatives, extent: int = 8, 
     return engine, engine.commit_assignments(point, {"root.lanes": lanes}).point, design
 
 
+def _built(engine, design, point, role: str):
+    """The selected candidate's build unit at one role, from a compiled fragment.
+
+    Test scaffolding, deliberately not a second public accessor set: the
+    supported way to ask a Design about a role is the attached occurrence, and
+    a parallel fragment-level API would be the two-protocols mistake again.
+    These fragment-driven tests drive an engine point directly, so they compose
+    the two supported fragment entries themselves.
+    """
+
+    metadata = design.extension
+    segment = metadata.segment(role)
+    case_id = (
+        segment.cases[0].case_id
+        if segment.selector is None
+        else point.assignments[segment.selector.path]
+    )
+    answer = kernel_physical(engine, segment.case(case_id).compiled, point).accepted_answer
+    return case_id, answer
+
+
+def _network(engine, design, point):
+    return design_dataflow(engine, design, point).accepted_answer
+
+
 # -- what an alternative may differ in ----------------------------------------
 
 
@@ -290,16 +315,15 @@ def test_an_alternative_keeps_the_region_and_changes_only_physical_facts() -> No
     region = "semantic.root.design.consume.region"
     assert engine.query_property(plain, region) == engine.query_property(buffered, region)
 
-    first = configure_design(engine, design, plain)
-    second = configure_design(engine, design, buffered)
+    first_id, first = _built(engine, design, plain, "consume")
+    second_id, second = _built(engine, design, buffered, "consume")
     assert isinstance(first, Decided) and isinstance(second, Decided)
-    assert first.value.consume.kernel_id == "consumer"
-    assert second.value.consume.kernel_id == "buffered_consumer"
-    assert dict(first.value.consume.parameters) == {}
-    assert dict(second.value.consume.parameters) == {"LANES": 2, "DEPTH": 4}
-    assert first.value.consume.contributions == ()
-    assert len(second.value.consume.contributions) == 2
-    assert first.value.resolved_network == second.value.resolved_network
+    assert (first_id, second_id) == ("consumer", "buffered_consumer")
+    assert dict(first.value.parameters) == {}
+    assert dict(second.value.parameters) == {"LANES": 2, "DEPTH": 4}
+    assert first.value.contributions == ()
+    assert len(second.value.contributions) == 2
+    assert _network(engine, design, plain) == _network(engine, design, buffered)
 
 
 def test_an_alternative_may_use_candidate_specific_input_names() -> None:
@@ -335,7 +359,7 @@ def test_an_incompatible_computation_is_refused_at_authoring() -> None:
 def test_a_candidate_whose_region_breaks_the_topology_is_selectable_but_infeasible() -> None:
     engine, point, design = _started()
     broken = engine.commit_assignments(point, {SELECTOR: "misported_consumer"}).point
-    assessment = engine.evaluate_constraint_set(broken, "root.design.feasibility")
+    assessment = engine.evaluate_constraint_set(broken, "root.design.dataflow_accepts")
     assert assessment.verdict is False
     codes = {
         finding.code
@@ -345,7 +369,7 @@ def test_a_candidate_whose_region_breaks_the_topology_is_selectable_but_infeasib
     }
     # The canon names it, and no adapter is silently inserted.
     assert "design-network-edge.sink_missing_or_not_input" in codes
-    assert isinstance(configure_design(engine, design, broken), Unresolved)
+    assert isinstance(_network(engine, design, broken), Absent)
 
 
 # -- external algorithms, imported unchanged ----------------------------------
@@ -399,7 +423,7 @@ def test_a_design_wide_feasibility_algorithm_rejects_the_misported_candidate() -
 
     chosen = first_globally_feasible_case(engine, point, branch)
     assert chosen is not None and chosen[0] == "consumer"
-    assert isinstance(configure_design(engine, design, chosen[1]), Decided)
+    assert isinstance(_network(engine, design, chosen[1]), Decided)
 
 
 def test_exhaustive_trial_reports_every_final_case_assessment() -> None:
@@ -452,13 +476,16 @@ def test_a_rejected_trial_leaves_the_original_point_untouched() -> None:
     assert dict(point.assignments) == {QualifiedPath("root.lanes"): 2}
     assert broken is not point
     good = assign_case(engine, point, branch, "consumer")
-    assert isinstance(configure_design(engine, design, good), Decided)
+    assert isinstance(_network(engine, design, good), Decided)
 
 
 def test_an_unresolved_nested_decision_stays_visible_rather_than_refusing() -> None:
     engine, point, design = _started()
     pending = engine.commit_assignments(point, {SELECTOR: "buffered_consumer"}).point
-    answer = configure_design(engine, design, pending)
+    # The Network does not wait on a candidate's physical Decision ...
+    assert isinstance(_network(engine, design, pending), Decided)
+    # ... and its build unit says exactly which one is still open.
+    _case_id, answer = _built(engine, design, pending, "consume")
     assert isinstance(answer, Unresolved)
     assert any("buffered_consumer.buffered" in str(finding.path) for finding in answer.findings)
 
@@ -466,7 +493,7 @@ def test_an_unresolved_nested_decision_stays_visible_rather_than_refusing() -> N
 def test_an_inactive_candidates_constraints_do_not_reject_a_sibling() -> None:
     engine, point, design = _started()
     chosen = engine.commit_assignments(point, {SELECTOR: "consumer"}).point
-    assert engine.evaluate_constraint_set(chosen, "root.design.feasibility").verdict is True
+    assert engine.evaluate_constraint_set(chosen, "root.design.dataflow_accepts").verdict is True
     for namespace in ("buffered_consumer", "misported_consumer"):
         absent = engine.query_property(chosen, f"semantic.root.design.consume.{namespace}.region")
         assert isinstance(absent, Absent)
@@ -475,48 +502,46 @@ def test_an_inactive_candidates_constraints_do_not_reject_a_sibling() -> None:
 
 def test_committing_the_selector_changes_only_what_is_allowed_to_vary() -> None:
     engine, point, design = _started()
-    plain = configure_design(
-        engine,
-        design,
-        assign_case(engine, point, _catalog().branch("root.design.consume"), "consumer"),
-    )
-    buffered = configure_design(
-        engine,
-        design,
-        engine.commit_assignments(
-            point,
-            {
-                SELECTOR: "buffered_consumer",
-                "root.design.consume.buffered_consumer.buffered": False,
-            },
-        ).point,
-    )
+    plain_point = assign_case(engine, point, _catalog().branch("root.design.consume"), "consumer")
+    buffered_point = engine.commit_assignments(
+        point,
+        {
+            SELECTOR: "buffered_consumer",
+            "root.design.consume.buffered_consumer.buffered": False,
+        },
+    ).point
+    plain = _network(engine, design, plain_point)
+    buffered = _network(engine, design, buffered_point)
     assert isinstance(plain, Decided) and isinstance(buffered, Decided)
-    assert plain.value.resolved_network == buffered.value.resolved_network
-    assert plain.value.node_id("consume") == buffered.value.node_id("consume")
-    assert plain.value.region_family("consume") == buffered.value.region_family("consume")
-    assert plain.value.selected_candidates != buffered.value.selected_candidates
-    assert plain.value.consume.kernel_id != buffered.value.consume.kernel_id
+    assert plain.value == buffered.value
 
-
-def test_the_configured_design_keeps_the_selection_but_not_the_catalog() -> None:
-    engine, point, design = _started()
-    answer = configure_design(
-        engine,
-        design,
-        engine.commit_assignments(
-            point,
-            {
-                SELECTOR: "buffered_consumer",
-                "root.design.consume.buffered_consumer.buffered": True,
-            },
-        ).point,
+    metadata = design.extension
+    segment = metadata.segment("consume")
+    plain_id, plain_built = _built(engine, design, plain_point, "consume")
+    buffered_id, buffered_built = _built(engine, design, buffered_point, "consume")
+    assert plain_id != buffered_id
+    assert isinstance(plain_built, Decided) and isinstance(buffered_built, Decided)
+    assert plain_built.value.region == buffered_built.value.region
+    assert segment.case(plain_id).metadata.region_family == (
+        segment.case(buffered_id).metadata.region_family
     )
+
+
+def test_the_build_unit_records_the_selection_but_carries_no_catalog() -> None:
+    engine, point, design = _started()
+    chosen = engine.commit_assignments(
+        point,
+        {
+            SELECTOR: "buffered_consumer",
+            "root.design.consume.buffered_consumer.buffered": True,
+        },
+    ).point
+    case_id, answer = _built(engine, design, chosen, "consume")
+    assert case_id == "buffered_consumer"
     assert isinstance(answer, Decided)
-    configured = answer.value
-    assert configured.selected_candidates["consume"] == "buffered_consumer"
-    assert not any(isinstance(value, BranchCatalog) for value in vars(configured).values())
-    assert not any(callable(value) for value in vars(configured).values())
+    values = [getattr(answer.value, name) for name in type(answer.value).__slots__]
+    assert not any(isinstance(value, BranchCatalog) for value in values)
+    assert not any(callable(value) for value in values)
 
 
 def test_branch_inspection_stays_usable_outside_kernel_segments() -> None:

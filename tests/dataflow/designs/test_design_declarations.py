@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from typing import cast
 
@@ -27,7 +27,8 @@ from finn.dataflow.model.declarations import (
     Variant,
     divisors_of,
 )
-from finn.dataflow.designs.design import Boundary, DataflowDesign, Kernels, configure_design
+from finn.dataflow.designs.design import Boundary, DataflowDesign, Kernels
+from finn.dataflow.model.occurrence import VariantView
 from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
 from finn.dataflow.region import (
     BeatSequence,
@@ -192,6 +193,38 @@ def _started(design_type: type[DataflowDesign], extent: int = 8, lanes: int = 2)
         {"problem.root.extent": extent},
     )
     return engine, engine.commit_assignments(point, {"root.lanes": lanes}).point, design
+
+
+def _placed(design_type: type[DataflowDesign]) -> type[Space]:
+    class Root(Space):
+        extent = Problem(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        design = Subspace(design_type, extent=extent, lanes=lanes)
+
+    return Root
+
+
+def _occurrence(
+    design_type: type[DataflowDesign],
+    extent: int = 8,
+    lanes: int = 2,
+    *,
+    select: Mapping[str, str] | None = None,
+    kernel_decisions: Sequence[tuple[str, str, Decision[object], object]] = (),
+) -> DataflowDesign:
+    """The same point `_started` builds, reached through the occurrence API."""
+
+    root_type = _placed(design_type)
+    root = root_type.start({root_type.extent: extent}, namespace="root")
+    design = cast(DataflowDesign, root.assign(root_type.lanes, lanes).design)
+    for role, alternative in (select or {}).items():
+        view = cast(VariantView, getattr(design, role))
+        design = cast(DataflowDesign, view.select(alternative).root.design)
+    for role, alternative, declaration, value in kernel_decisions:
+        view = cast(VariantView, getattr(design, role))
+        kernel = view.alternative(alternative)
+        design = cast(DataflowDesign, kernel.assign(declaration, value).root.design)
+    return design
 
 
 # -- segment lowering ---------------------------------------------------------
@@ -480,19 +513,18 @@ def test_an_aliased_kernel_case_configures_under_its_alias() -> None:
         "root.design.compute.fast",
         "root.design.compute.slow",
     )
-    engine, point, _design = _started(Aliased)
     for alias in ("fast", "slow"):
-        chosen = engine.commit_assignments(
-            point,
-            {
-                "root.design.compute.kernel": alias,
-                f"root.design.compute.{alias}.pumped": False,
-            },
-        ).point
-        answer = configure_design(engine, design, chosen)
-        assert isinstance(answer, Decided), answer
-        assert answer.value.selected_candidates == {"compute": alias}
-        assert answer.value.compute.kernel_id == "copy"
+        design_occurrence = _occurrence(
+            Aliased,
+            select={"compute": alias},
+            kernel_decisions=(("compute", alias, CopyKernel.pumped, False),),
+        )
+        assert design_occurrence.selected("compute") == Decided(alias)
+        chosen_kernel = design_occurrence.kernel("compute")
+        assert isinstance(chosen_kernel, Decided)
+        # One Kernel class, two candidate slots: the alias is the candidate id
+        # and the Kernel id stays the implementation's own.
+        assert type(chosen_kernel.value).id == "copy"
 
 
 def test_a_singleton_aliased_case_configures() -> None:
@@ -507,11 +539,9 @@ def test_a_singleton_aliased_case_configures() -> None:
         source = Boundary(compute.input("input"))
         result = Boundary(compute.output("output"))
 
-    engine, point, design = _started(Solo)
-    chosen = engine.commit_assignments(point, {"root.design.compute.only.pumped": False}).point
-    answer = configure_design(engine, design, chosen)
-    assert isinstance(answer, Decided), answer
-    assert answer.value.selected_candidates == {"compute": "only"}
+    design = _occurrence(Solo, kernel_decisions=(("compute", "only", CopyKernel.pumped, False),))
+    assert design.selected("compute") == Decided("only")
+    assert isinstance(design.dataflow.accepted_answer, Decided)
 
 
 def test_roles_node_ids_and_case_ids_must_be_atomic_path_segments() -> None:

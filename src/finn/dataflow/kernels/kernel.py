@@ -339,6 +339,11 @@ class _KernelCompilation(Generic[K]):
     physical_decisions: tuple[QualifiedPath, ...]
     #: Outside Decisions this fragment reads.  Provenance, never ownership.
     imported_decisions: tuple[QualifiedPath, ...]
+    #: Compiled paths of the constraints that gate only the *physical*
+    #: projection.  An enclosing Design reads this to keep them out of its own
+    #: dataflow question: a Kernel that cannot be built here has not thereby
+    #: stopped contributing a Region.
+    physical_only_constraints: frozenset[QualifiedPath]
 
 
 class Kernel(Space):
@@ -822,6 +827,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         raise AuthoringError(f"{kernel_type.__name__}.sources contains a non-Contribution")
 
     physical_ref = cast("_Ref[KernelPhysicalResult]", compiled.member("physical_result"))
+    physical_only = _physical_only_constraints(declarations, compiled)
     provenance = _external_decisions(compiled)
     specification = replace(
         compiled.spec,
@@ -857,6 +863,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         in_closure,
         tuple(declaration.path for declaration in compiled.spec.decisions),
         provenance,
+        physical_only,
     )
     exports = dict(compiled.exports)
     exports.setdefault("region", cast("_Ref[object]", region_ref))
@@ -865,6 +872,23 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         spec=specification,
         exports=tuple(exports.items()),
         extension=metadata,
+    )
+
+
+def _physical_only_constraints(
+    declarations: Mapping[str, object], compiled: _CompiledSpace[K]
+) -> frozenset[QualifiedPath]:
+    """The compiled paths of the constraints that gate the build unit alone."""
+
+    group = declarations.get("physical_support")
+    if not isinstance(group, ConstraintGroup):
+        return frozenset()
+    owned = {id(item) for item in group.constraints}
+    by_member = dict(compiled.constraint_members)
+    return frozenset(
+        by_member[name]
+        for name, declaration in declarations.items()
+        if isinstance(declaration, Constraint) and id(declaration) in owned and name in by_member
     )
 
 

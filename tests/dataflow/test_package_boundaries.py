@@ -135,12 +135,13 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "ReplayBufferKernel",
     }
     assert set(import_module("finn.dataflow.designs").__all__) == {
+        "DATAFLOW_PROJECTION",
         "Boundary",
         "Connection",
         "DataflowDesign",
         "Kernels",
         "Sink",
-        "configure_design",
+        "design_dataflow",
     }
 
 
