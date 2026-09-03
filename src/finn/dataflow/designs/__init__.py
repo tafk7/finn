@@ -18,11 +18,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from finn.dataflow.designs.design import (
-        DATAFLOW_PROJECTION,
         Boundary,
         Connection,
         DataflowDesign,
         Kernels,
+        SelectedNetwork,
         Sink,
         design_dataflow,
     )
@@ -30,11 +30,11 @@ if TYPE_CHECKING:
 _LAZY_EXPORTS = {
     name: ("finn.dataflow.designs.design", name)
     for name in (
-        "DATAFLOW_PROJECTION",
         "Boundary",
         "Connection",
         "DataflowDesign",
         "Kernels",
+        "SelectedNetwork",
         "Sink",
         "design_dataflow",
     )
@@ -54,11 +54,11 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "DATAFLOW_PROJECTION",
     "Boundary",
     "Connection",
     "DataflowDesign",
     "Kernels",
+    "SelectedNetwork",
     "Sink",
     "design_dataflow",
 ]

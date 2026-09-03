@@ -340,20 +340,23 @@ def test_an_alternative_may_use_candidate_specific_input_names() -> None:
 
 
 def test_an_incompatible_computation_is_refused_at_authoring() -> None:
-    class WrongOffer(DataflowDesign):
-        id = "wrong_offer"
-        version = "1"
-        extent = Input(int)
-        lanes = Input(int)
-        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes),
-            Subspace(ProducingKernel, extent=extent, lanes=lanes),
-            computation=CONSUME,
-        )
+    """At authoring means at the class statement, which is where it is written."""
 
     with pytest.raises(AuthoringError, match="requires computation test.consume"):
-        _compiled(WrongOffer)
+
+        class WrongOffer(DataflowDesign):
+            id = "wrong_offer"
+            version = "1"
+            extent = Input(int)
+            lanes = Input(int)
+            produce = Kernels(
+                Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
+            )
+            consume = Kernels(
+                Subspace(ConsumerKernel, extent=extent, lanes=lanes),
+                Subspace(ProducingKernel, extent=extent, lanes=lanes),
+                computation=CONSUME,
+            )
 
 
 def test_a_candidate_whose_region_breaks_the_topology_is_selectable_but_infeasible() -> None:

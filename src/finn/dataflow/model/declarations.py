@@ -305,9 +305,21 @@ class PendingFinding:
 
 @dataclass(frozen=True, slots=True)
 class Rejected:
-    """A constraint or property explicitly does not apply at this point."""
+    """A constraint or property explicitly does not apply at this point.
 
-    finding: PendingFinding
+    Several findings, not one.  A validator that finds five structural faults in
+    one Network has five things to say, and reporting only the first would make
+    the other four appear one at a time as each is fixed -- which reads as four
+    new regressions rather than one report.  ``reject()`` still builds the
+    ordinary single-reason refusal; ``reject_all()`` is for a validator that
+    genuinely produced a list.
+    """
+
+    findings: tuple[PendingFinding, ...]
+
+    def __post_init__(self) -> None:
+        if not self.findings:
+            raise AuthoringError("a rejection must carry at least one reason")
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,14 +337,27 @@ def reject(
     trace: Sequence[ValueSource[object] | QualifiedPath] = (),
 ) -> Rejected:
     return Rejected(
-        PendingFinding(
-            FindingKind.REJECTION,
-            code,
-            message,
-            tuple((name, value) for name, value in (values or {}).items()),
-            tuple(trace),
+        (
+            PendingFinding(
+                FindingKind.REJECTION,
+                code,
+                message,
+                tuple((name, value) for name, value in (values or {}).items()),
+                tuple(trace),
+            ),
         )
     )
+
+
+def reject_all(reasons: Iterable[Rejected]) -> Rejected:
+    """Combine several refusals into one, keeping every reason.
+
+    For an evaluator wrapping a validator that reports a list of issues.  The
+    alternative -- returning the first and discarding the rest -- turns one
+    report into a queue of apparent regressions.
+    """
+
+    return Rejected(tuple(finding for reason in reasons for finding in reason.findings))
 
 
 def unresolved(
@@ -1328,6 +1353,7 @@ __all__ = [
     "exported_members",
     "finite",
     "reject",
+    "reject_all",
     "resolve_declared_value",
     "semantics_for",
     "unresolved",

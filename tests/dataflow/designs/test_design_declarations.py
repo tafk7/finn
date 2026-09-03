@@ -373,34 +373,39 @@ def test_a_design_needs_an_id_a_version_and_a_segment() -> None:
 
 
 def test_a_non_kernel_case_is_rejected() -> None:
+    """Refused where it is written, not where it is compiled.
+
+    Synthesis asks each candidate for its exported Region, so the candidate
+    check has to run at class-definition time.  That is the better place for it
+    anyway: the class statement is the mistake.
+    """
+
     class Helper(Space):
         extent = Input(int)
 
-    class NotAKernel(DataflowDesign):
-        id = "not_a_kernel"
-        version = "1"
-        extent = Input(int)
-        lanes = Input(int)
-        compute = Kernels(Subspace(Helper, name="helper", extent=extent), computation=COPY)
-
     with pytest.raises(AuthoringError, match="is not a Kernel"):
-        _compiled(NotAKernel)
+
+        class NotAKernel(DataflowDesign):
+            id = "not_a_kernel"
+            version = "1"
+            extent = Input(int)
+            lanes = Input(int)
+            compute = Kernels(Subspace(Helper, name="helper", extent=extent), computation=COPY)
 
 
 def test_a_candidate_computation_must_equal_the_segment_requirement() -> None:
-    class Mismatched(DataflowDesign):
-        id = "mismatched"
-        version = "1"
-        extent = Input(int)
-        lanes = Input(int)
-        compute = Kernels(
-            Subspace(CopyKernel, extent=extent, lanes=lanes),
-            Subspace(ScaleKernel, extent=extent, lanes=lanes),
-            computation=COPY,
-        )
-
     with pytest.raises(AuthoringError, match="requires computation test.copy"):
-        _compiled(Mismatched)
+
+        class Mismatched(DataflowDesign):
+            id = "mismatched"
+            version = "1"
+            extent = Input(int)
+            lanes = Input(int)
+            compute = Kernels(
+                Subspace(CopyKernel, extent=extent, lanes=lanes),
+                Subspace(ScaleKernel, extent=extent, lanes=lanes),
+                computation=COPY,
+            )
 
 
 def test_a_segment_needs_a_computation_contract() -> None:

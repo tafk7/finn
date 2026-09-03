@@ -537,16 +537,21 @@ class _Compilation:
         if isinstance(result, (Decided, Absent, Unresolved)):
             return cast(Answer[object], result)
         if isinstance(result, (Rejected, Unresolvable)):
-            pending: PendingFinding = result.finding
-            finding = Finding(
-                pending.kind,
-                pending.code,
-                owner,
-                pending.message,
-                pending.values,
-                tuple(self._trace_path(item) for item in pending.trace),
+            pending: tuple[PendingFinding, ...] = (
+                result.findings if isinstance(result, Rejected) else (result.finding,)
             )
-            return Absent((finding,)) if isinstance(result, Rejected) else Unresolved((finding,))
+            findings = tuple(
+                Finding(
+                    item.kind,
+                    item.code,
+                    owner,
+                    item.message,
+                    item.values,
+                    tuple(self._trace_path(entry) for entry in item.trace),
+                )
+                for item in pending
+            )
+            return Absent(findings) if isinstance(result, Rejected) else Unresolved(findings)
         return Decided(result)
 
     def _evaluator(

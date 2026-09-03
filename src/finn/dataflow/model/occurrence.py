@@ -955,28 +955,6 @@ def layer_runtime(instance: Space) -> LayerRuntime:
     )
 
 
-def occurrence_project_named(instance: Space, name: str) -> ProjectionAssessment[T]:
-    """Evaluate a projection a specialization generated during lowering.
-
-    A ``Projection`` declaration names a value declaration, which is enough for
-    a Kernel: its Region is written in the class body.  A Design's Network is
-    not -- it is generated from the compiled segments and topology, so there is
-    no class member for a declaration to point at.  Rather than inventing a
-    placeholder declaration whose evaluator could not be written until after
-    compilation, the specialization registers the compiled projection under a
-    name and its own accessor asks for it here.
-
-    Private to the layers: nothing generic reaches a projection by string.
-    """
-
-    state = _occurrence_state(instance)
-    lineage = state.runtime.lineage
-    with lineage.lock:
-        return evaluate_projection(
-            lineage.engine, state.runtime.point, state.compiled.projection(name)
-        )
-
-
 def _subject_findings(subject: object) -> tuple[Finding, ...]:
     if isinstance(subject, RequestError):
         return ordered_findings(list(subject.findings))
@@ -1198,7 +1176,6 @@ __all__ = [
     "LayerRuntime",
     "evaluate_projection",
     "layer_runtime",
-    "occurrence_project_named",
     "is_attached_occurrence",
     "start_from_model",
     "start_occurrence",

@@ -19,16 +19,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from inspect import Parameter as _SignatureParameter, Signature
 from types import MappingProxyType
-from typing import ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
     AbsenceMode,
     Absent,
     Answer,
-    Constraint,
-    ConstraintSet,
     Decided,
     DependencyKind,
     DependencyRef,
@@ -40,14 +39,12 @@ from finn.dataflow._engine import (
     Finding,
     FindingKind,
     QualifiedPath,
-    ReadinessProfile,
     Unresolved,
 )
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.model.semantics import DATAFLOW_NETWORK_SEMANTICS
 from finn.dataflow.model.compiler import (
     _CompiledBranch,
-    _CompiledProjection,
     _CompiledSpace,
     _Ref,
     answer_for,
@@ -58,12 +55,18 @@ from finn.dataflow.model.declarations import (
     AuthoringError,
     ConstraintGroup,
     Constraint as DeclaredConstraint,
+    Derived,
     Problem,
+    Projection,
+    Readiness,
     Space,
     Subspace,
     ValueSource,
     Variant,
+    allow_absent,
     declared_members,
+    reject,
+    reject_all,
     semantics_for,
 )
 from finn.dataflow.kernels.kernel import (
@@ -75,7 +78,6 @@ from finn.dataflow.model.occurrence import (
     VariantView,
     evaluate_projection,
     layer_runtime,
-    occurrence_project_named,
     occurrence_variant,
 )
 from finn.dataflow.network import (
@@ -93,6 +95,63 @@ from finn.dataflow.region import BeatSequence, DataflowRegion, Port
 D = TypeVar("D", bound="DataflowDesign")
 
 
+@dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
+class SelectedNetwork(Derived[DataflowNetwork]):
+    """The Network the selected Regions form, as an ordinary declared member.
+
+    A placeholder at declaration time and a real property after lowering.  The
+    evaluator cannot be written in a class body: it needs the compiled position
+    maps, whose gating is a lowering concern, and it needs each segment's
+    resolved node identity.  What *can* be fixed in the class body is the thing
+    that matters -- that a Design's Network is a declaration like any other,
+    with a stable member name, ordinary value semantics, and an export a
+    containing Space can name.
+
+    That is the difference from the string-keyed generated projection it
+    replaces.  A Network was previously reachable only by asking the occurrence
+    layer for a projection called ``"dataflow"``, so an operation could not
+    depend on a Design's Network the way a Design depends on a Kernel's Region.
+    Now it can.
+    """
+
+    def __init__(self, *, name: str | None = None) -> None:
+        object.__setattr__(self, "value_semantics", semantics_for(DATAFLOW_NETWORK_SEMANTICS))
+        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "dependencies", ())
+        object.__setattr__(self, "evaluate", _unbuilt_network)
+
+
+def _unbuilt_network() -> object:
+    """Reached only if lowering failed to substitute the real evaluator.
+
+    Not a point state, so not an ``unresolved()``: every compiled Design
+    replaces this, and a Design that did not is a defect in this module rather
+    than a design space missing information.
+    """
+
+    raise AuthoringError(
+        "this Design's network member was never lowered; _finalize_design must substitute "
+        "the evaluator built from its segments and topology"
+    )
+
+
+#: The member names ``DataflowDesign.__init_subclass__`` writes onto every
+#: concrete subclass.  A declaration under one of these would be silently
+#: replaced, so it is refused in the class body instead -- the same rule and the
+#: same reason as ``RESERVED_KERNEL_NAMES``.  ``network`` is in the set because
+#: the base declares it and its evaluator is lowering's to supply.
+RESERVED_DESIGN_NAMES: frozenset[str] = frozenset(
+    {
+        "network",
+        "network_structurally_valid",
+        "segments_match_network",
+        "dataflow_accepts",
+        "dataflow_ready",
+        "dataflow",
+    }
+)
+
+
 class DataflowDesign(Space):
     """One authored composition of Kernel segments and explicit topology.
 
@@ -106,25 +165,43 @@ class DataflowDesign(Space):
     projection is consulted, no ABI or source is required, and a Kernel whose
     build unit is explicitly unavailable still contributes its Region.  That is
     the U3 claim and ``dataflow`` is where it is checkable.
+
+    Like ``Kernel``, the projection is synthesized per concrete subclass from
+    the parts the author wrote -- the segments, the topology, and at most one
+    ``dataflow_support`` group.  What the author does not write is the Network
+    itself, its two structural constraints, or the readiness profile: each has
+    exactly one correct form, and a Design that had to assemble them by hand
+    would be a Design that could assemble them wrongly.
     """
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
 
+    #: The Network is the one automatic Design output to a containing Space.
+    #: This is what lets an operation compose a Design exactly as a Design
+    #: composes a Kernel.
+    network = SelectedNetwork()
+    _implicit_exports = ("network",)
+
+    if TYPE_CHECKING:
+        # Written onto every concrete subclass by ``__init_subclass__``, which a
+        # type checker cannot see.  Annotated and never assigned, so it stays
+        # out of ``__dict__`` -- ``declared_members`` and the reserved-name
+        # check both read that, and an assignment here would make the base look
+        # as though it had declared its own projection.
+        dataflow: Projection[DataflowNetwork]
+        network_structurally_valid: DeclaredConstraint
+        segments_match_network: DeclaredConstraint
+        dataflow_accepts: ConstraintGroup
+        dataflow_ready: Readiness
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        _synthesize_design_projection(cls)
+
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
         return _finalize_design(cls, compiled)
-
-    # -- the projection -------------------------------------------------------
-
-    @property
-    def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
-        """Readiness, constraint acceptance and the one selected Network."""
-
-        return cast(
-            "ProjectionAssessment[DataflowNetwork]",
-            occurrence_project_named(self, DATAFLOW_PROJECTION),
-        )
 
     # -- what the Network is made of, role by role ----------------------------
 
@@ -218,10 +295,6 @@ class DataflowDesign(Space):
         """The bound Variant view of one role, reached by its own declaration."""
 
         return occurrence_variant(self, _design_metadata(self).segment(role).declaration)
-
-
-#: The compiled name of the Design's one generated projection.
-DATAFLOW_PROJECTION = "dataflow"
 
 
 def _design_metadata(design: DataflowDesign) -> _DesignCompilation[DataflowDesign]:
@@ -912,101 +985,222 @@ def _network_property(
     )
 
 
-def _network_valid_constraint(path: QualifiedPath, network: _Ref[DataflowNetwork]) -> Constraint:
-    """Adapt every canonical network issue, preserving its code."""
+def _declared_segments(
+    design_type: type[DataflowDesign],
+) -> tuple[tuple[str, str, Kernels], ...]:
+    """Every Kernel segment's role and node id, read from the class body alone.
 
-    def evaluate(values: DependencyView) -> Answer[bool]:
-        report = validate_network(cast(DataflowNetwork, values["network"]))
+    The same derivation ``_segment`` performs during lowering, available before
+    compilation because it consults only what the author wrote.  Keeping the two
+    in step matters: a synthesized constraint that named a different node id
+    from the one the Network is built with would compare a Design against a
+    Design that does not exist.
+    """
+
+    resolved: list[tuple[str, str, Kernels]] = []
+    for member_name, declaration in declared_members(design_type):
+        if not isinstance(declaration, Kernels):
+            continue
+        # The candidate check the compiler would run later, run now.  Synthesis
+        # is about to ask each alternative for its exported Region, and a
+        # non-Kernel candidate would fail that with "does not export 'region'"
+        # -- true, unhelpful, and not the thing the author got wrong.
+        for _alternative_id, subspace in declaration.alternatives:
+            declaration.check_alternative(design_type.__name__, member_name, subspace)
+        role = declaration.stable_name or member_name
+        resolved.append((role, declaration.node_id or role, declaration))
+    return tuple(resolved)
+
+
+def _segment_region(declaration: Kernels) -> ValueSource[object]:
+    """One segment's selected-Region handle, past mypy's descriptor rule.
+
+    ``Kernels.region`` returns a ``ValueSource``, and a type checker applies the
+    descriptor protocol to any attribute whose declared type defines
+    ``__get__`` -- so the handle types as the resolved Region it would produce
+    on an attached occurrence.  Here it is a declaration being wired into
+    another declaration, and no occurrence exists yet.
+    """
+
+    return cast("ValueSource[object]", declaration.region)
+
+
+def _network_valid_constraint(network: ValueSource[object]) -> DeclaredConstraint:
+    """Adapt every canonical network issue, preserving its code.
+
+    Every issue, not the first.  ``validate_network`` reports a list because a
+    malformed topology is routinely malformed in several ways at once, and a
+    constraint that surfaced one at a time would turn one report into a queue of
+    apparent regressions.
+    """
+
+    def evaluate(*, network: object) -> object:
+        report = validate_network(cast(DataflowNetwork, network))
         if not report.issues:
-            return Decided(True)
-        return Absent(
-            tuple(
-                Finding(
-                    FindingKind.REJECTION,
-                    f"design-network-{issue.code}",
-                    path,
-                    issue.message,
-                    (("network_path", issue.path),),
-                    (network.path,),
-                )
-                for issue in report.issues
+            return True
+        return reject_all(
+            reject(
+                f"design-network-{issue.code}",
+                issue.message,
+                values={"network_path": issue.path},
             )
+            for issue in report.issues
         )
 
-    return Constraint(path, EvaluatorSpec((network.dependency("network"),), evaluate))
+    return DeclaredConstraint((("network", network),), evaluate)
 
 
 def _correspondence_constraint(
-    path: QualifiedPath,
-    network: _Ref[DataflowNetwork],
-    segments: tuple[_CompiledKernelSegment, ...],
-) -> Constraint:
+    design_type: type[DataflowDesign], network: ValueSource[object]
+) -> DeclaredConstraint:
     """The one Design-specific supplement to canonical Network validation.
 
     Canonical validation already proves every semantic topology claim.  What it
     cannot know is that these nodes are exactly this Design's active segments and
     hold exactly their selected Regions -- which is the whole relationship a
     coverage object would otherwise have to carry.
+
+    Its dependencies are the ordinary declared handles the author already has:
+    each segment's selected ``region`` branch output and, where one exists, the
+    segment's own ``when``.  Both are ``allow_absent`` because an inactive role
+    contributes no node, and reporting that as "the Design refused" rather than
+    "this role is not here" is exactly the confusion the marker exists to stop.
     """
 
-    dependencies = [network.dependency("network")]
-    for segment in segments:
-        dependencies.append(
-            replace(segment.selected_region, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
-                f"region@{segment.role}"
-            )
-        )
-        if segment.active is not None:
+    segments = _declared_segments(design_type)
+    dependencies: list[tuple[str, ValueSource[object]]] = [("network", network)]
+    # Positional keys, not roles: a dependency name is an evaluator parameter,
+    # and a role is only required to be a single path segment.
+    plan: list[tuple[str, str, str, str | None]] = []
+    for index, (role, node_id, declaration) in enumerate(segments):
+        region_key = f"region_{index}"
+        dependencies.append((region_key, allow_absent(_segment_region(declaration))))
+        active_key: str | None = None
+        if declaration.when is not None:
+            active_key = f"active_{index}"
             dependencies.append(
-                replace(segment.active, absence=AbsenceMode.ALLOWS_ABSENT).dependency(
-                    f"segment_active@{segment.role}"
-                )
+                (active_key, allow_absent(cast("ValueSource[object]", declaration.when)))
             )
+        plan.append((role, node_id, region_key, active_key))
 
-    def evaluate(values: DependencyView) -> Answer[bool]:
+    def evaluate(**values: object) -> object:
         resolved = cast(DataflowNetwork, values["network"])
         expected: dict[str, DataflowRegion] = {}
-        for segment in segments:
-            if segment.active is not None and not _active(values[f"segment_active@{segment.role}"]):
+        for _role, node_id, region_key, active_key in plan:
+            if active_key is not None and not _active(values[active_key]):
                 continue
-            region = values[f"region@{segment.role}"]
+            region = values[region_key]
             if region is not ABSENT:
-                expected[segment.node_id] = cast(DataflowRegion, region)
-        findings: list[Finding] = []
+                expected[node_id] = cast(DataflowRegion, region)
+        reasons = []
         if not expected:
-            findings.append(
-                Finding(
-                    FindingKind.REJECTION,
+            reasons.append(
+                reject(
                     "design-no-active-segment",
-                    path,
                     "a Design point must leave at least one segment active",
                 )
             )
         actual = {node.id: node.region for node in resolved.nodes}
         for node_id in sorted(set(expected) ^ set(actual)):
-            findings.append(
-                Finding(
-                    FindingKind.REJECTION,
+            reasons.append(
+                reject(
                     "design-segment-node-mismatch",
-                    path,
                     "active segments and Network nodes must correspond exactly",
-                    (("node", node_id),),
+                    values={"node": node_id},
                 )
             )
         for node_id in sorted(set(expected) & set(actual)):
             if expected[node_id] != actual[node_id]:
-                findings.append(
-                    Finding(
-                        FindingKind.REJECTION,
+                reasons.append(
+                    reject(
                         "design-node-region-mismatch",
-                        path,
                         "a Network node does not hold its segment's selected Region",
-                        (("node", node_id),),
+                        values={"node": node_id},
                     )
                 )
-        return Decided(True) if not findings else Absent(tuple(findings))
+        return True if not reasons else reject_all(reasons)
 
-    return Constraint(path, EvaluatorSpec(tuple(dependencies), evaluate))
+    # Generated evaluator, generated parameter list: stated explicitly rather
+    # than weakening the compiler's signature check for every author.
+    evaluate.__signature__ = Signature(  # type: ignore[attr-defined]
+        [_SignatureParameter(name, _SignatureParameter.KEYWORD_ONLY) for name, _ in dependencies]
+    )
+    return DeclaredConstraint(tuple(dependencies), evaluate)
+
+
+def _synthesize_design_projection(design_type: type[DataflowDesign]) -> None:
+    """Write the dataflow projection and its parts onto one concrete Design class.
+
+    The Design counterpart of ``_synthesize_projections``, and for the same
+    reason: the output of the projection is this class's Network over this
+    class's segments, and a base class has neither.
+
+    An abstract intermediate -- a Design with no ``Kernels`` segment yet -- is
+    left alone.  ``_finalize_design`` is where a class that is actually compiled
+    is required to be complete, so an incomplete base is an ordinary thing to
+    write and not an error until someone tries to use it.
+    """
+
+    shadowed = sorted(RESERVED_DESIGN_NAMES & set(design_type.__dict__))
+    if shadowed:
+        raise AuthoringError(
+            f"{design_type.__name__} declares {shadowed[0]!r}, which the Design layer "
+            "synthesizes from its Kernel segments, its topology and its support group"
+        )
+
+    segments = _declared_segments(design_type)
+    if not segments:
+        return
+
+    declarations = dict(declared_members(design_type))
+    network = declarations.get("network")
+    if not isinstance(network, SelectedNetwork):
+        raise AuthoringError(
+            f"{design_type.__name__} has no SelectedNetwork member named 'network'; "
+            "it is declared by DataflowDesign and must not be replaced"
+        )
+    network_source = cast("ValueSource[object]", network)
+
+    support = declarations.get("dataflow_support")
+    if support is not None and not isinstance(support, ConstraintGroup):
+        raise AuthoringError(
+            f"{design_type.__name__}.dataflow_support is a {type(support).__name__}; it names "
+            "one ConstraintGroup of the constraints that gate the Network projection"
+        )
+
+    network_valid = _network_valid_constraint(network_source)
+    correspondence = _correspondence_constraint(design_type, network_source)
+    dataflow_accepts = ConstraintGroup(
+        network_valid,
+        correspondence,
+        *(support.constraints if isinstance(support, ConstraintGroup) else ()),
+    )
+    # The Network and every role's selected Region.  Nothing physical: see
+    # ``_readiness_properties``.  The Design's own Decisions cannot be named
+    # here -- they include selectors and Decisions nested in helper Spaces --
+    # and are added to the compiled profile by ``_finalize_design``.
+    dataflow_ready = Readiness(
+        properties=(
+            network_source,
+            *(_segment_region(declaration) for _r, _n, declaration in segments),
+        ),
+        constraints=dataflow_accepts,
+    )
+
+    setattr(design_type, "network_structurally_valid", network_valid)
+    setattr(design_type, "segments_match_network", correspondence)
+    setattr(design_type, "dataflow_accepts", dataflow_accepts)
+    setattr(design_type, "dataflow_ready", dataflow_ready)
+    setattr(
+        design_type,
+        "dataflow",
+        Projection(
+            cast("ValueSource[DataflowNetwork]", network),
+            readiness=dataflow_ready,
+            constraints=(dataflow_accepts,),
+            name="dataflow",
+        ),
+    )
 
 
 def _finalize_design(design_type: type[D], compiled: object) -> object:
@@ -1041,24 +1235,9 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
     _check_unique(design_type, segments)
 
     connections, boundaries, map_properties = _topology(design_type, design, segments)
-    network_path = QualifiedPath(f"semantic.{design.namespace}.network")
-    network_property = _network_property(network_path, segments, connections, boundaries)
-    network: _Ref[DataflowNetwork] = _Ref(
-        network_path, DependencyKind.PROPERTY, network_property.value_semantics
-    )
-    generated = (
-        _network_valid_constraint(
-            QualifiedPath(f"constraint.{design.namespace}.network_structurally_valid"),
-            network,
-        ),
-        _correspondence_constraint(
-            QualifiedPath(f"constraint.{design.namespace}.segments_match_network"),
-            network,
-            segments,
-        ),
-    )
+    network = _substituted_network(design_type, design)
+    network_property = _network_property(network.path, segments, connections, boundaries)
     _check_constraints_are_classified(design_type, declarations)
-    constraints = (*design.spec.constraints, *generated)
     # Every constraint in the flat fragment except the ones a candidate Kernel
     # declared as gating its build unit alone.  This is where U3's claim stops
     # being a hope: a DotpAxi that cannot pump at one SIMD lane, or has no
@@ -1070,9 +1249,10 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         for case in segment.cases
         for path in case.metadata.physical_only_constraints
     )
-    constraint_paths = tuple(item.path for item in constraints if item.path not in physical_only)
-    feasibility_name = f"{design.namespace}.dataflow_accepts"
-    readiness_name = f"{design.namespace}.dataflow_ready"
+    feasibility_name = design.engine_name(
+        design.constraint_set_names, "dataflow_accepts", "ConstraintGroup"
+    )
+    readiness_name = design.engine_name(design.readiness_names, "dataflow_ready", "Readiness")
     internal_decisions = frozenset(item.path for item in design.spec.decisions)
     kernel_decisions = frozenset(
         item.path
@@ -1084,22 +1264,38 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
     # its own Decisions, those nested in Design-owned helper Spaces and generic
     # branches, and the segment selectors, which live in the Design namespace.
     design_decisions = internal_decisions - kernel_decisions
+    accepted = tuple(
+        path
+        for item in design.spec.constraint_sets
+        if item.name == feasibility_name
+        for path in item.constraints
+        if path not in physical_only
+    )
     specification = replace(
         design.spec,
-        properties=(*design.spec.properties, *map_properties, network_property),
-        constraints=constraints,
-        constraint_sets=(
-            *design.spec.constraint_sets,
-            ConstraintSet(feasibility_name, constraint_paths),
-        ),
-        readiness_profiles=(
-            *design.spec.readiness_profiles,
-            ReadinessProfile(
-                readiness_name,
-                tuple(sorted(design_decisions)),
-                _readiness_properties(segments, network),
-                constraint_paths,
+        properties=(
+            *(
+                # The one substitution: the declared placeholder keeps its path,
+                # its semantics and its member identity, and gains the evaluator
+                # that only lowering could write.
+                network_property if declaration.path == network.path else declaration
+                for declaration in design.spec.properties
             ),
+            *map_properties,
+        ),
+        constraint_sets=tuple(
+            replace(item, constraints=accepted) if item.name == feasibility_name else item
+            for item in design.spec.constraint_sets
+        ),
+        readiness_profiles=tuple(
+            # The author's profile named the Network and the selected Regions.
+            # The Design's own Decisions are added here because they cannot be
+            # named in a class body: they include the segment selectors and any
+            # Decision nested in a Design-owned helper Space.
+            replace(item, decisions=tuple(sorted(design_decisions)), constraints=accepted)
+            if item.name == readiness_name
+            else item
+            for item in design.spec.readiness_profiles
         ),
     )
 
@@ -1117,22 +1313,45 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         kernel_decisions,
         internal_decisions,
     )
-    # The Network is generated during lowering, so its projection is too.  A
-    # ``Projection`` declaration names a class member, and there is no class
-    # member here to name -- see ``occurrence_project_named``.
-    projection: _CompiledProjection[object] = _CompiledProjection(
-        DATAFLOW_PROJECTION,
-        f"{design.namespace}.{DATAFLOW_PROJECTION}",
-        cast("_Ref[object]", network),
-        readiness_name,
-        (feasibility_name,),
+    exports = dict(design.exports)
+    exports.setdefault("network", cast("_Ref[object]", network))
+    return replace(design, spec=specification, exports=tuple(exports.items()), extension=metadata)
+
+
+def _substituted_network(design_type: type[D], design: _CompiledSpace[D]) -> _Ref[DataflowNetwork]:
+    """Locate the declared placeholder this Design's real Network replaces.
+
+    By member identity, never by rebuilding ``semantic.<ns>.network``.  A path
+    string reconstructed here is a second copy of a convention only the compiler
+    is entitled to state, and the failure it produces -- a property quietly
+    written at a path nothing reads -- looks like an unresolved Network rather
+    than like a lowering bug.
+
+    Each refusal below is a way the substitution could silently do nothing.
+    """
+
+    declarations = dict(declared_members(design_type))
+    if not isinstance(declarations.get("network"), SelectedNetwork):
+        raise AuthoringError(
+            f"{design_type.__name__} has no SelectedNetwork member named 'network'"
+        )
+    reference = design.member("network")
+    if reference.kind is not DependencyKind.PROPERTY:
+        raise AuthoringError(f"{design_type.__name__}.network did not compile to a property")
+    if reference.semantics.type_token is not DATAFLOW_NETWORK_SEMANTICS.type_token:
+        raise AuthoringError(
+            f"{design_type.__name__}.network is not a DataflowNetwork; it compiled as "
+            f"{reference.semantics.name}"
+        )
+    occupants = tuple(
+        declaration for declaration in design.spec.properties if declaration.path == reference.path
     )
-    return replace(
-        design,
-        spec=specification,
-        extension=metadata,
-        projections=(*design.projections, (DATAFLOW_PROJECTION, projection)),
-    )
+    if len(occupants) != 1:
+        raise AuthoringError(
+            f"{design_type.__name__} has {len(occupants)} compiled properties at "
+            f"{reference.path}; the Network placeholder must be exactly one"
+        )
+    return cast("_Ref[DataflowNetwork]", reference)
 
 
 def _check_constraints_are_classified(
@@ -1146,15 +1365,20 @@ def _check_constraints_are_classified(
     one, this is the place that will make each existing constraint say which.
     """
 
-    group = declarations.get("dataflow_support")
-    if group is not None and not isinstance(group, ConstraintGroup):
-        raise AuthoringError(
-            f"{design_type.__name__}.dataflow_support is a {type(group).__name__}; it names "
-            "one ConstraintGroup of the constraints that gate the Network projection"
-        )
-    grouped = (
-        {id(item) for item in group.constraints} if isinstance(group, ConstraintGroup) else set()
-    )
+    grouped: set[int] = set()
+    for name in ("dataflow_accepts", "dataflow_support"):
+        group = declarations.get(name)
+        if (
+            name == "dataflow_support"
+            and group is not None
+            and not isinstance(group, ConstraintGroup)
+        ):
+            raise AuthoringError(
+                f"{design_type.__name__}.dataflow_support is a {type(group).__name__}; it names "
+                "one ConstraintGroup of the constraints that gate the Network projection"
+            )
+        if isinstance(group, ConstraintGroup):
+            grouped.update(id(item) for item in group.constraints)
     ungrouped = sorted(
         name
         for name, declaration in declarations.items()
@@ -1166,28 +1390,6 @@ def _check_constraints_are_classified(
             "dataflow_support; a Design says which projection each of its constraints "
             "gates, because a constraint in no group refuses nothing"
         )
-
-
-def _readiness_properties(
-    segments: tuple[_CompiledKernelSegment, ...],
-    network: _Ref[DataflowNetwork],
-) -> tuple[QualifiedPath, ...]:
-    """The Network and the selected Region at every role.  Nothing physical.
-
-    This is where U3's claim is enforced rather than merely asserted.  The
-    profile deliberately does *not* reach into a candidate's parameter table,
-    ABI or physical readiness: a Design whose chosen Kernel has an uncommitted
-    pumping Decision, or no realization for this target at all, still has a
-    fully resolved Network, because none of that changes a Region.
-
-    The Design's own Decisions are in the profile's decision list, not here.
-    An inactive segment's Region reduces to final absence, which is a final
-    answer and therefore ready.
-    """
-
-    return tuple(
-        dict.fromkeys([network.path, *(segment.selected_region.path for segment in segments)])
-    )
 
 
 def _check_unique(
@@ -1218,27 +1420,32 @@ def design_dataflow(
 ) -> ProjectionAssessment[DataflowNetwork]:
     """Ask one compiled Design fragment for its Network at one point.
 
-    The direct-fragment form of ``design.dataflow``, for a caller holding a
-    compiled record rather than an attached occurrence -- an operation that
-    embeds a Design, or evidence driving one from a flat engine point.  Same
-    compiled projection, same reduction.
+    The direct-fragment form of ``design.dataflow``, and the exact counterpart
+    of ``kernel_dataflow``: for a caller holding a compiled record rather than
+    an attached occurrence -- evidence driving a composed fragment from a flat
+    engine point.  Same compiled projection, same reduction.
+
+    Unlike the string-keyed projection it used to resolve, ``"dataflow"`` here
+    is the ordinary member name of a declared ``Projection``, registered by the
+    generic compiler like any other.
     """
 
     return cast(
         "ProjectionAssessment[DataflowNetwork]",
-        evaluate_projection(engine, point, compiled.projection(DATAFLOW_PROJECTION)),
+        evaluate_projection(engine, point, compiled.projection("dataflow")),
     )
 
 
 __all__ = [
+    "RESERVED_DESIGN_NAMES",
     "TOPOLOGY_TYPES",
     "Boundary",
     "Connection",
     "DataflowDesign",
     "Kernels",
     "SegmentEndpoint",
+    "SelectedNetwork",
     "Sink",
-    "DATAFLOW_PROJECTION",
     "TopologyDeclaration",
     "design_dataflow",
     "topology_members",
