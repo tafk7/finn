@@ -14,7 +14,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar, Generic, TypeVar, Union, cast
+from importlib import import_module
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, Union, cast
+
+from typing_extensions import Self
 
 from finn.dataflow._engine import (
     AbsenceMode,
@@ -28,6 +31,10 @@ T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound="Space")
 E = TypeVar("E", bound=Enum)
+
+if TYPE_CHECKING:
+    from finn.dataflow._engine import Answer, ConstraintAssessment, ReadinessAssessment
+    from finn.dataflow.model.occurrence import BranchView, ProblemSource
 
 
 class AuthoringError(ValueError):
@@ -129,6 +136,66 @@ class Space:
         """Private specialization hook; generic Spaces leave the result unchanged."""
 
         return compiled
+
+    @classmethod
+    def start(
+        cls: type[S],
+        problem: ProblemSource,
+        *,
+        namespace: str = "root",
+    ) -> S:
+        """Start one class-centered root occurrence over a frozen problem."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("S", api.start_occurrence(cls, problem, namespace=namespace))
+
+    def assign(self, declaration: Decision[T], value: T) -> Self:
+        """Return the same authored occurrence class over a successor point."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("Self", api.occurrence_assign(self, declaration, value))
+
+    def answer(self, declaration: ValueSource[T]) -> Answer[T]:
+        """Query one declaration through this occurrence's bound scope."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("Answer[T]", api.occurrence_answer(self, declaration))
+
+    def assess(
+        self, declaration: Readiness | ConstraintGroup | Constraint
+    ) -> ReadinessAssessment | ConstraintAssessment:
+        """Assess one readiness or constraint declaration in this scope."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast(
+            "ReadinessAssessment | ConstraintAssessment",
+            api.occurrence_assess(self, declaration),
+        )
+
+    def branch(self, declaration: OneOf) -> BranchView:
+        """Return a capability-limited view of one branch in this scope."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("BranchView", api.occurrence_branch(self, declaration))
+
+    def child(self, declaration: Use[S] | Case | type[S]) -> S:
+        """Return one exact direct child occurrence of this scope."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("S", api.occurrence_child(self, declaration))
+
+    @property
+    def root(self) -> Space:
+        """The root facade at this occurrence's immutable point."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("Space", api.occurrence_root(self))
+
+    def _space_value(self, declaration: ValueSource[object]) -> object:
+        """Resolve descriptors on generic occurrence instances."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return api.occurrence_value(self, declaration)
 
 
 @dataclass(frozen=True, slots=True, eq=False)

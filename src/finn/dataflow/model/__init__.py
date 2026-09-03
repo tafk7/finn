@@ -84,6 +84,7 @@ from finn.dataflow.model.declarations import (
     reject,
     unresolved,
 )
+from finn.dataflow.model.occurrence import BranchView, OccurrenceError
 
 if TYPE_CHECKING:
     from finn.dataflow.model.design import (
@@ -157,11 +158,13 @@ def __getattr__(name: str) -> object:
 __all__ = [
     # authoring vocabulary shared by every layer
     "AuthoringError",
+    "BranchView",
     "Case",
     "ConstraintGroup",
     "Decision",
     "Input",
     "OneOf",
+    "OccurrenceError",
     "Problem",
     "Readiness",
     "Space",
