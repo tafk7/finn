@@ -8,22 +8,26 @@ Getting Started
 Quickstart
 ==========
 
-1. Use an Ubuntu 22.04 x86-64 system with Python 3.10.
-2. Clone the FINN compiler: ``git clone https://github.com/Xilinx/finn/``. Go
-   into the new directory.
-3. Install fundamental host packages with
-   ``sudo ./scripts/install-system-deps.sh`` if needed.
-4. Optionally verify the support contract with ``./setup-local.sh --check``,
-   then run ``./setup-local.sh``.
-5. Activate the environment with ``source scripts/activate.sh``.
-6. Run ``./scripts/quicktest-local.sh`` to verify the Python environment.
-   No Xilinx installation is needed for this command.
-   Warnings during the tests are normal. FINN uses warnings to tell you about
-   some conditions. The installation is correct if all tests pass.
-7. For Vivado or Vitis work, set ``FINN_XILINX_PATH`` and
-   ``FINN_XILINX_VERSION`` before setup or activation.
-8. If the host does not match the supported native environment, use the
-   Docker-built environment described below.
+1. Clone FINN and enter the checkout: ``git clone https://github.com/Xilinx/finn/``
+   followed by ``cd finn``.
+2. Select a path using `Choose an installation`_: use native installation on
+   Ubuntu 22.04 x86-64 with Python 3.10, or the Docker-built environment on
+   other hosts and when you want a disposable environment.
+3. Prepare that path. For native installation, run
+   ``sudo ./scripts/install-system-deps.sh``, ``./setup-local.sh --check``,
+   ``./setup-local.sh``, and ``source scripts/activate.sh``; see
+   `Native installation details`_. For Docker, satisfy `System Requirements`_;
+   the first ``docker/run`` invocation builds the environment automatically.
+4. Verify Python and FINN: run ``./scripts/quicktest-local.sh`` natively or
+   ``./docker/run -- quicktest.sh`` with Docker. Warnings are normal; the
+   environment is ready when the tests pass.
+5. Add FPGA tools only when needed. Set ``FINN_XILINX_PATH`` and
+   ``FINN_XILINX_VERSION``, configure any `Vivado/Vitis license`_, and rerun
+   ``source scripts/activate.sh`` for a native installation. Then verify with
+   ``./scripts/quicktest-local.sh vivado`` or
+   ``./docker/run --fpga -- vivado -version``.
+6. Continue with `How do I use FINN?`_, or launch the notebook tutorials as
+   described under `Launch Jupyter notebooks`_.
 
 
 
