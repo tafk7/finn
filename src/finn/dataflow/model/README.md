@@ -347,6 +347,15 @@ belong to several projections and one constraint to several groups.
 A projection adds no engine declaration. It names paths the generic lowering
 already produced, so declaring one cannot change the compiled `DesignSpaceSpec`.
 
+`Occurrence.diagnostics` reads findings back in declaration vocabulary --
+occurrence chain, owning class member, projection name -- while retaining the
+raw `Finding` and its causal trace.
+
+A changed declared problem fact makes an occurrence stale. It is reconstructed,
+never refreshed: nothing is rebased, retained, or silently dropped, and
+`SpaceModel.start(problem, fingerprint=...)` refuses recorded state that belongs
+to a different problem.
+
 ## The production slice
 
 `DotProductDesign` composes `ReplayBufferKernel` and `DotpAxiKernel`. The Design

@@ -20,7 +20,7 @@ SpaceModel.start(problem)
 ```
 
 **One point, several views.**  Exactly one private runtime owns the compiled
-model, the engine, and the immutable point.
+model, the engine, the immutable point, the frozen problem and its fingerprint.
 A child occurrence stores that runtime, its own compiled namespace, and nothing
 else; it holds no nested Engine, no copy of the point, and no independently
 mutable state.  Assigning through a child returns *the same child view over the
@@ -44,8 +44,9 @@ one" is precisely the behaviour that breaks the day a second one appears.
 something outside the view's scope, assigning a derived property, selecting a
 case that does not exist -- is an :class:`AuthoringError`, because the caller's
 source is wrong.  A mistake about *state* -- a refused value, an uncommitted
-selector -- is a ``RequestError`` carrying findings, because the caller's source
-is fine and the point is not where they thought.
+selector, a fingerprint that belongs to another problem -- is a ``RequestError``
+carrying findings, because the caller's source is fine and the point is not
+where they thought.
 
 **Nothing here changes ``_engine``.**  Every query and commit goes through the
 public ``Engine`` operations; this module adds resolution, scope, a validated
@@ -56,7 +57,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from finn.dataflow._engine import (
     Absent,
@@ -67,6 +69,7 @@ from finn.dataflow._engine import (
     Finding,
     FindingKind,
     ItemOutcome,
+    PathMapping,
     QualifiedPath,
     ReadinessAssessment,
     RequestError,
@@ -105,6 +108,94 @@ S = TypeVar("S", bound=Space)
 
 #: Dispositions ``commit_assignments`` reports for a value that was accepted.
 _ACCEPTED = ("committed", "unchanged")
+
+
+# -- diagnostics --------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Owner:
+    """Which occurrence and which class member a compiled path belongs to."""
+
+    scope: tuple[str, ...]
+    space: str
+    member: str
+
+
+@dataclass(frozen=True, slots=True)
+class Diagnostic:
+    """One engine ``Finding`` read back in occurrence and declaration terms.
+
+    This is an interpretation service, not a second answer lattice.  The raw
+    ``finding`` -- its kind, code, path, values and causal trace -- is retained
+    whole, because an advanced tool still wants it and because paraphrasing a
+    diagnostic is how causal information gets lost.  What is added is the
+    context the engine has no way to know: which occurrence in the tree owns the
+    path, which class member the author actually wrote, and which projection was
+    being asked for when the finding surfaced.
+
+    ``space`` and ``member`` are ``None`` for a finding whose path is generated
+    rather than declared -- a projection's own synthesized blocker, for
+    instance.  That is reported honestly rather than guessed at.
+    """
+
+    finding: Finding
+    scope: tuple[str, ...]
+    space: str | None
+    member: str | None
+    projection: str | None
+
+    def render(self) -> str:
+        """A scoped, human-readable rendering in declaration vocabulary."""
+
+        lines = []
+        if self.projection is not None:
+            lines.append(f"projection {self.projection}")
+        if self.scope:
+            lines.append("occurrence " + " / ".join(self.scope))
+        if self.space is not None and self.member is not None:
+            lines.append(f"{self.space}.{self.member}")
+        lines.append(f"{self.finding.kind.value} {self.finding.code}: {self.finding.message}")
+        lines.append(f"path {self.finding.path}")
+        if self.finding.values:
+            details = ", ".join(f"{key}={value!r}" for key, value in self.finding.values)
+            lines.append(f"values {details}")
+        if self.finding.trace:
+            lines.append("trace " + " <- ".join(str(path) for path in self.finding.trace))
+        return "\n".join(lines)
+
+
+def _index_tree(
+    compiled: _CompiledSpace[Space],
+    scope: tuple[str, ...],
+    index: dict[QualifiedPath, _Owner],
+) -> None:
+    """Map every compiled path to the occurrence and member that declared it.
+
+    ``setdefault`` and parents before children, deliberately.  A child's
+    ``Input`` compiles to the *supplier's* path, so the first claim wins and the
+    supplier keeps ownership of the value it actually declares.  The inputs are
+    skipped explicitly as well, so the rule does not depend on traversal order
+    alone.
+    """
+
+    supplied = {name for name, _reference in compiled.inputs}
+    owner = compiled.owner.__name__
+    for name, reference in compiled.members:
+        if name in supplied:
+            continue
+        index.setdefault(reference.path, _Owner(scope, owner, name))
+    for name, path in compiled.constraint_members:
+        index.setdefault(path, _Owner(scope, owner, name))
+    for name, child in compiled.children:
+        _index_tree(child, (*scope, name), index)
+    for name, branch in compiled.branches:
+        if branch.selector is not None:
+            index.setdefault(branch.selector.path, _Owner(scope, owner, name))
+        for output_name, reference in branch.outputs:
+            index.setdefault(reference.path, _Owner(scope, owner, f"{name}.{output_name}"))
+        for case in branch.cases:
+            _index_tree(case.compiled, (*scope, name, case.case_id), index)
 
 
 # -- validated projections ----------------------------------------------------
@@ -250,19 +341,25 @@ class _Runtime:
     model: SpaceModel
     tree: _CompiledSpace[Space]
     point: DesignPoint
+    fingerprint: str
+    index: Mapping[QualifiedPath, _Owner]
 
     def successor(self, point: DesignPoint) -> _Runtime:
-        return _Runtime(self.model, self.tree, point)
+        return _Runtime(self.model, self.tree, point, self.fingerprint, self.index)
 
 
 def make_root_occurrence(
     model: SpaceModel,
     tree: _CompiledSpace[Space],
     point: DesignPoint,
+    fingerprint: str,
 ) -> Occurrence:
     """Bind one frozen point to its root occurrence; called only by ``SpaceModel``."""
 
-    return Occurrence(_Runtime(model, tree, point), tree, (tree.namespace,))
+    index: dict[QualifiedPath, _Owner] = {}
+    _index_tree(tree, (tree.namespace,), index)
+    runtime = _Runtime(model, tree, point, fingerprint, MappingProxyType(index))
+    return Occurrence(runtime, tree, (tree.namespace,))
 
 
 # -- the occurrence -----------------------------------------------------------
@@ -311,11 +408,27 @@ class Occurrence:
         return self._scope
 
     @property
+    def fingerprint(self) -> str:
+        """The identity of the frozen problem this occurrence was started from."""
+
+        return self._runtime.fingerprint
+
+    @property
     def root(self) -> Occurrence:
         """The root occurrence over the same point."""
 
         tree = self._runtime.tree
         return Occurrence(self._runtime, tree, (tree.namespace,))
+
+    def is_stale_for(self, problem: PathMapping) -> bool:
+        """Whether a declared problem fact has changed under this occurrence.
+
+        A stale occurrence is not repaired.  The answer to ``True`` is to start
+        a new root from the new problem and decide, explicitly, what of the old
+        state may be carried across; nothing is rebased or dropped here.
+        """
+
+        return self._runtime.model.fingerprint(problem) != self._runtime.fingerprint
 
     # -- queries --------------------------------------------------------------
 
@@ -369,6 +482,41 @@ class Occurrence:
         raise AuthoringError(
             "assess takes a Readiness, a ConstraintGroup, or a Projection declaration"
         )
+
+    def diagnostics(
+        self,
+        source: Answer[Any]
+        | ReadinessAssessment
+        | ConstraintAssessment
+        | ProjectionAssessment[Any],
+    ) -> tuple[Diagnostic, ...]:
+        """Interpret every finding a query produced, in occurrence vocabulary.
+
+        Order is the engine's own deterministic finding order within each part
+        of the source, and duplicates are collapsed: one constraint that both
+        refused the output and appears in the readiness profile is one problem,
+        not two.
+        """
+
+        projection: str | None = None
+        answers: list[Answer[object]] = []
+        if isinstance(source, ProjectionAssessment):
+            projection = source.name
+            if source.readiness is not None:
+                answers.extend(source.readiness.answers.values())
+            answers.append(source.output)
+            for assessment in source.constraints:
+                answers.extend(cast("Iterable[Answer[object]]", assessment.answers.values()))
+            answers.append(source.accepted_answer)
+        elif isinstance(source, (ReadinessAssessment, ConstraintAssessment)):
+            answers.extend(cast("Iterable[Answer[object]]", source.answers.values()))
+        else:
+            answers.append(source)
+        findings: dict[Finding, None] = {}
+        for answer in answers:
+            if isinstance(answer, (Absent, Unresolved)):
+                findings.update(dict.fromkeys(answer.findings))
+        return tuple(self._interpret(finding, projection) for finding in findings)
 
     # -- navigation -----------------------------------------------------------
 
@@ -547,6 +695,12 @@ class Occurrence:
             "never inferred from a Python class"
         )
 
+    def _interpret(self, finding: Finding, projection: str | None) -> Diagnostic:
+        owner = self._runtime.index.get(finding.path)
+        if owner is None:
+            return Diagnostic(finding, self._scope, None, None, projection)
+        return Diagnostic(finding, owner.scope, owner.space, owner.member, projection)
+
 
 def _refusal_findings(outcomes: tuple[ItemOutcome, ...]) -> tuple[Finding, ...]:
     """Explain a refused commit without inventing a reason it does not have."""
@@ -585,4 +739,4 @@ def _occurrences_of(
     return tuple(found)
 
 
-__all__ = ["Occurrence", "ProjectionAssessment", "make_root_occurrence"]
+__all__ = ["Diagnostic", "Occurrence", "ProjectionAssessment", "make_root_occurrence"]

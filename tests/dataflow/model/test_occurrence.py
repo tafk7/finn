@@ -17,6 +17,7 @@ child assignment ambiguity rejection              §ambiguity
 readiness True, projection still rejected         §validated projections
 one constraint in two projections                 Stage.fits in model and build
 partial then complete successor occurrence        §specialization
+stale source fingerprint                          §frozen context
 no raw runtime through public methods             §capability
 callback capability audit in a subprocess         §capability
 ```
@@ -27,6 +28,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -38,6 +41,7 @@ from finn.dataflow._engine import (
     DesignPoint,
     DesignSpace,
     Engine,
+    FindingKind,
     QualifiedPath,
     RequestError,
     Unresolved,
@@ -59,7 +63,7 @@ from finn.dataflow.model.declarations import (
     derived,
     reject,
 )
-from finn.dataflow.model.occurrence import Occurrence, ProjectionAssessment
+from finn.dataflow.model.occurrence import Diagnostic, Occurrence, ProjectionAssessment
 
 # -- synthetic spaces ---------------------------------------------------------
 
@@ -561,6 +565,199 @@ def test_the_declared_namespaces_of_the_existing_stack_are_unchanged() -> None:
     }
 
 
+# -- frozen context and stale detection ---------------------------------------
+
+
+def test_two_identical_problems_have_one_fingerprint() -> None:
+    compiled = model()
+    left = compiled.fingerprint({"problem.root.width": 4, "problem.root.supplied": True})
+    right = compiled.fingerprint({"problem.root.width": 4, "problem.root.supplied": True})
+    assert left == right
+
+
+def test_a_changed_declared_problem_fact_makes_the_occurrence_stale() -> None:
+    root = start(width=4)
+    assert root.is_stale_for({"problem.root.width": 8, "problem.root.supplied": True})
+    assert not root.is_stale_for({"problem.root.width": 4, "problem.root.supplied": True})
+
+
+def test_a_stale_occurrence_is_reconstructed_rather_than_refreshed() -> None:
+    """Strict reconstruction: nothing is rebased, retained, or silently dropped."""
+
+    old = first_stage(start(width=4)).assign(Stage.lanes, 2)
+    assert old.answer(Stage.throughput) == Decided(8)
+    fresh = start(width=8)
+    assert fresh.fingerprint != old.fingerprint
+    assert isinstance(first_stage(fresh).answer(Stage.lanes), Unresolved)
+    # The old occurrence is untouched by the existence of the new one.
+    assert old.answer(Stage.throughput) == Decided(8)
+
+
+def test_a_recorded_fingerprint_from_another_problem_is_refused() -> None:
+    compiled = model()
+    recorded = compiled.fingerprint({"problem.root.width": 4, "problem.root.supplied": True})
+    with pytest.raises(RequestError) as raised:
+        compiled.start(
+            {"problem.root.width": 9, "problem.root.supplied": True}, fingerprint=recorded
+        )
+    finding = raised.value.findings[0]
+    assert finding.code == "occurrence-problem-fingerprint-mismatch"
+    assert dict(finding.values)["expected"] == recorded
+
+
+def test_a_matching_recorded_fingerprint_hydrates_without_complaint() -> None:
+    compiled = model()
+    problem = {"problem.root.width": 4, "problem.root.supplied": True}
+    recorded = compiled.fingerprint(problem)
+    assert compiled.start(problem, fingerprint=recorded).fingerprint == recorded
+
+
+def test_a_mutation_of_the_caller_s_problem_mapping_does_not_reach_the_occurrence() -> None:
+    """The problem is projected once and frozen; queries never reread it."""
+
+    problem: dict[str, object] = {"problem.root.width": 4, "problem.root.supplied": True}
+    root = start_from(problem)
+    stage = first_stage(root).assign(Stage.lanes, 2)
+    problem["problem.root.width"] = 9
+    assert stage.answer(Stage.throughput) == Decided(8)
+    assert root.is_stale_for(problem)
+
+
+def start_from(problem: dict[str, object]) -> Occurrence:
+    return model().start(problem)
+
+
+def test_external_state_the_schema_does_not_declare_cannot_enter_the_problem() -> None:
+    """The frozen problem is closed, so irrelevant context cannot perturb it."""
+
+    compiled = model()
+    root = compiled.start({"problem.root.width": 4, "problem.root.supplied": True})
+    with pytest.raises(RequestError):
+        compiled.fingerprint(
+            {"problem.root.width": 4, "problem.root.supplied": True, "problem.root.mood": 1}
+        )
+    assert root.answer(Root.width) == Decided(4)
+
+
+def test_a_problem_value_without_canonical_text_is_refused_rather_than_hashed() -> None:
+    class Opaque:
+        pass
+
+    class Holder(Space):
+        thing = Problem(Opaque)
+
+        @derived(int, thing=thing)
+        def value(*, thing: object) -> int:
+            return 1
+
+    compiled = compile_space_model(Holder, "root", problem_namespace="problem.root")
+    with pytest.raises(AuthoringError, match="has no canonical text"):
+        compiled.start({"problem.root.thing": Opaque()})
+
+
+def test_a_space_model_compiled_without_its_tree_cannot_start() -> None:
+    compiled = model()
+    detached = SpaceModel(compiled.specification, compiled.branches)
+    with pytest.raises(AuthoringError, match="cannot start an occurrence"):
+        detached.start({"problem.root.width": 4, "problem.root.supplied": True})
+
+
+# -- diagnostics --------------------------------------------------------------
+
+
+def refusal(occurrence: Occurrence) -> tuple[Diagnostic, ...]:
+    assessment = occurrence.assess(Stage.model_view)
+    return occurrence.diagnostics(assessment)
+
+
+def test_a_diagnostic_names_the_occurrence_the_member_and_the_projection() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    diagnostics = refusal(stage)
+    assert len(diagnostics) == 1
+    only = diagnostics[0]
+    assert only.projection == "root.pair.first.model_view"
+    assert only.scope == ("root", "pair", "first")
+    assert only.space == "Stage"
+    assert only.member == "fits"
+
+
+def test_a_diagnostic_retains_the_raw_finding_and_its_trace() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    only = refusal(stage)[0]
+    assert only.finding.kind is FindingKind.REJECTION
+    assert only.finding.code == "stage-too-wide"
+    assert only.finding.path == QualifiedPath("constraint.root.pair.first.fits")
+    assert dict(only.finding.values)["got"] == 20
+
+
+def test_a_rendering_reads_in_declaration_vocabulary() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    rendered = refusal(stage)[0].render()
+    assert "projection root.pair.first.model_view" in rendered
+    assert "occurrence root / pair / first" in rendered
+    assert "Stage.fits" in rendered
+    assert "rejection stage-too-wide" in rendered
+
+
+def test_two_placements_of_one_class_produce_differently_scoped_diagnostics() -> None:
+    root = start(width=5)
+    left = first_stage(root).assign(Stage.lanes, 4)
+    right = left.root.child(Root.pair).child(Pair.second).assign(Stage.lanes, 4)
+    assert refusal(left)[0].scope == ("root", "pair", "first")
+    assert refusal(right)[0].scope == ("root", "pair", "second")
+
+
+def test_diagnostics_interpret_a_bare_answer_too() -> None:
+    stage = first_stage(start())
+    diagnostics = stage.diagnostics(stage.answer(Stage.throughput))
+    assert diagnostics
+    assert {item.projection for item in diagnostics} == {None}
+    assert {item.member for item in diagnostics} == {"lanes"}
+    assert {item.scope for item in diagnostics} == {("root", "pair", "first")}
+
+
+def test_a_flat_refusal_is_explained_even_though_it_carries_no_finding() -> None:
+    """``Decided(False)`` says no without saying why; the projection says where."""
+
+    class Blunt(Space):
+        width = Problem(int)
+
+        @derived(int, width=width)
+        def value(*, width: int) -> int:
+            return width
+
+        @constraint(width=width)
+        def never(*, width: int) -> object:
+            return False
+
+        checks = ConstraintGroup(never)
+        view = Projection(value, constraints=checks)
+
+    root = compile_space_model(Blunt, "root", problem_namespace="problem.root").start(
+        {"problem.root.width": 3}
+    )
+    answer = root.project(Blunt.view)
+    assert isinstance(answer, Absent)
+    assert codes(answer) == ("projection-constraint-refused",)
+    generated = [
+        item
+        for item in root.diagnostics(root.assess(Blunt.view))
+        if item.finding.code == "projection-constraint-refused"
+    ]
+    assert len(generated) == 1
+    # The path is the projection's own name, which no declaration owns; that is
+    # reported as unowned rather than attributed to whatever compiled nearby.
+    assert generated[0].space is None and generated[0].member is None
+    assert generated[0].finding.trace == (QualifiedPath("constraint.root.never"),)
+
+
+def test_a_finding_that_appears_twice_is_reported_once() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+    assessment = stage.assess(Stage.build_view)
+    findings = [item.finding for item in stage.diagnostics(assessment)]
+    assert len(findings) == len(set(findings))
+
+
 # -- capability boundary ------------------------------------------------------
 
 _FORBIDDEN = (Engine, DesignPoint, DesignSpace)
@@ -585,6 +782,9 @@ def test_the_occurrence_surface_is_exactly_the_supported_operations() -> None:
         "assign",
         "branch",
         "child",
+        "diagnostics",
+        "fingerprint",
+        "is_stale_for",
         "namespace",
         "project",
         "root",
@@ -603,6 +803,7 @@ def test_no_returned_value_carries_a_runtime_object() -> None:
         stage.assess(Stage.model_view),
         stage.project(Stage.model_view),
         stage.root.branch(Root.choice),
+        *stage.diagnostics(stage.assess(Stage.model_view)),
     ]
     for value in returned:
         for name in dir(value):
@@ -642,6 +843,7 @@ class Audited(Space):
 model = compile_space_model(Audited, "root", problem_namespace="problem.root")
 occurrence = model.start({"problem.root.width": 3})
 answer = occurrence.answer(Audited.value)
+occurrence.diagnostics(answer)
 
 
 def leaks(value, depth):
@@ -695,3 +897,75 @@ def test_a_contributor_callback_never_receives_a_runtime_object() -> None:
     assert report["answer"] == "Decided(value=6)"
     assert report["leaks"] == []
     assert report["model_leaks"] == []
+
+
+# -- concurrency floor --------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Read:
+    throughput: object
+    accepted: object
+
+
+def test_concurrent_reads_of_one_occurrence_are_safe_and_identical() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 4)
+
+    def read(_index: int) -> _Read:
+        return _Read(stage.answer(Stage.throughput), stage.project(Stage.model_view))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(read, range(64)))
+    assert len(set(results)) == 1
+    assert results[0].throughput == Decided(20)
+    assert isinstance(results[0].accepted, Absent)
+
+
+def test_concurrent_successor_creation_never_mutates_the_shared_occurrence() -> None:
+    stage = first_stage(start())
+
+    def commit(lanes: int) -> object:
+        return stage.assign(Stage.lanes, lanes).answer(Stage.throughput)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(commit, [1, 2, 4] * 12))
+    assert set(results) == {Decided(4), Decided(8), Decided(16)}
+    assert isinstance(stage.answer(Stage.lanes), Unresolved)
+
+
+def test_a_successor_point_never_contaminates_its_predecessor_s_answers() -> None:
+    stage = first_stage(start())
+    successors = [stage.assign(Stage.lanes, lanes) for lanes in (1, 2, 4)]
+    assert [item.answer(Stage.throughput) for item in successors] == [
+        Decided(4),
+        Decided(8),
+        Decided(16),
+    ]
+    assert isinstance(stage.answer(Stage.throughput), Unresolved)
+
+
+def test_concurrent_compilation_under_several_namespaces_agrees_with_serial() -> None:
+    namespaces = [f"root{index}" for index in range(16)]
+
+    def compile_one(namespace: str) -> tuple[str, ...]:
+        compiled = compile_space_model(Root, namespace, problem_namespace=f"problem.{namespace}")
+        return tuple(str(item.path) for item in compiled.specification.decisions)
+
+    serial = {namespace: compile_one(namespace) for namespace in namespaces}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        concurrent = dict(zip(namespaces, pool.map(compile_one, namespaces)))
+    assert concurrent == serial
+    assert all(paths[0].startswith(f"{namespace}.") for namespace, paths in serial.items())
+
+
+def test_findings_are_deterministic_across_threads() -> None:
+    stage = first_stage(start(width=5)).assign(Stage.lanes, 3)
+
+    def render(_index: int) -> str:
+        return "\n".join(
+            item.render() for item in stage.diagnostics(stage.assess(Stage.build_view))
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rendered = set(pool.map(render, range(32)))
+    assert len(rendered) == 1

@@ -175,6 +175,7 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "ConstraintGroup",
         "DataflowDesign",
         "Decision",
+        "Diagnostic",
         "DotProductDesign",
         "DotpAxiKernel",
         "DspBlock",

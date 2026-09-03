@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Set as AbstractSet
 from dataclasses import dataclass, field, replace
+from hashlib import sha256
 from inspect import signature
 from threading import RLock
 from types import MappingProxyType
@@ -1118,6 +1119,70 @@ def imported_decisions(
     return tuple(dict.fromkeys(found))
 
 
+def _encoded(value: object) -> str:
+    """One deterministic text encoding of a declared problem value.
+
+    A fingerprint is only as trustworthy as this function.  Falling back to
+    ``repr`` for an arbitrary object would silently fold ``object.__repr__``'s
+    address into the digest, so two identical problems in one process would
+    compare unequal and two different ones across a save/reload could compare
+    equal by accident.  Rather than guess, a type that defines neither ``__str__``
+    nor ``__repr__`` is refused with a message naming the field, because the
+    author is the only one who can say what its canonical text is.
+    """
+
+    if value is None or type(value) in (bool, int, str):
+        return f"{type(value).__name__}:{value!r}"
+    if type(value) is float:
+        return f"float:{value.hex()}"
+    if isinstance(value, bytes):
+        return f"bytes:{value.hex()}"
+    if isinstance(value, QualifiedPath):
+        return f"path:{value.value}"
+    if isinstance(value, (tuple, list)):
+        return "seq:(" + ",".join(_encoded(item) for item in value) + ")"
+    if isinstance(value, (set, frozenset)):
+        return "set:(" + ",".join(sorted(_encoded(item) for item in value)) + ")"
+    if isinstance(value, Mapping):
+        return (
+            "map:("
+            + ",".join(sorted(f"{_encoded(key)}={_encoded(item)}" for key, item in value.items()))
+            + ")"
+        )
+    kind = type(value)
+    if kind.__str__ is object.__str__ and kind.__repr__ is object.__repr__:
+        raise AuthoringError(
+            f"a problem value of type {kind.__qualname__} has no canonical text; give it a "
+            "__str__ or __repr__ that does not depend on its identity"
+        )
+    return f"{kind.__qualname__}:{value!s}"
+
+
+def _fingerprint(
+    namespace: str,
+    schema: ProblemSchema,
+    problem: Mapping[QualifiedPath, object],
+) -> str:
+    """Digest the frozen problem and the schema authority that interprets it.
+
+    Deliberately not a digest of the whole specification.  What makes an
+    occurrence stale is a changed *declared problem fact*, not a changed
+    decision or derived property elsewhere in the space; folding those in would
+    make every unrelated authoring edit invalidate persisted assignments that
+    are still perfectly valid.
+    """
+
+    parts = [f"namespace={namespace}"]
+    fields = {field.path: field for field in schema.fields}
+    for path in sorted(problem):
+        declared = fields.get(path)
+        semantics = "unknown" if declared is None else declared.value_semantics.name
+        parts.append(f"{path.value}:{semantics}={_encoded(problem[path])}")
+    for path in sorted(path for path in fields if path not in problem):
+        parts.append(f"{path.value}:{fields[path].value_semantics.name}=<absent>")
+    return sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 class _ModelSupport:
     """The runtime state one compiled model owns: an Engine and its memo.
 
@@ -1168,8 +1233,29 @@ class SpaceModel:
     _tree: _CompiledSpace[Space] | None = field(default=None, repr=False, compare=False)
     _support: _ModelSupport = field(default_factory=_ModelSupport, repr=False, compare=False)
 
-    def start(self, problem: PathMapping) -> Occurrence:
-        """Freeze one problem into a new root occurrence."""
+    def fingerprint(self, problem: PathMapping) -> str:
+        """The identity of one problem under this model's problem schema."""
+
+        return _fingerprint(
+            self._compiled_tree().namespace,
+            self.specification.problem_schema,
+            self._frozen_problem(problem),
+        )
+
+    def start(
+        self,
+        problem: PathMapping,
+        *,
+        fingerprint: str | None = None,
+    ) -> Occurrence:
+        """Freeze one problem into a new root occurrence.
+
+        ``fingerprint`` is the hydration check: a caller restoring recorded
+        state passes the fingerprint it recorded, and a mismatch is refused
+        here rather than being repaired.  Nothing is rebased, dropped, or
+        rewritten; the caller is told the recorded state belongs to a different
+        problem and must reconstruct.
+        """
 
         # Imported here rather than at module scope: the occurrence layer is
         # built on this compiler, so naming it at import time is a cycle.  This
@@ -1179,7 +1265,21 @@ class SpaceModel:
         )
 
         tree = self._compiled_tree()
-        return make_root_occurrence(self, tree, self._initial_point(problem))
+        point = self._initial_point(problem)
+        actual = _fingerprint(tree.namespace, self.specification.problem_schema, point.problem)
+        if fingerprint is not None and fingerprint != actual:
+            raise RequestError(
+                (
+                    Finding(
+                        FindingKind.REQUEST,
+                        "occurrence-problem-fingerprint-mismatch",
+                        QualifiedPath(tree.namespace),
+                        "recorded state belongs to a different problem; reconstruct it",
+                        (("expected", fingerprint), ("actual", actual)),
+                    ),
+                )
+            )
+        return make_root_occurrence(self, tree, point, actual)
 
     def _compiled_tree(self) -> _CompiledSpace[Space]:
         if self._tree is None:
@@ -1193,6 +1293,9 @@ class SpaceModel:
         design_space = self._support.design_space(self.specification)
         with self._support.lock:
             return self._support.engine.start(design_space, problem)
+
+    def _frozen_problem(self, problem: PathMapping) -> Mapping[QualifiedPath, object]:
+        return self._initial_point(problem).problem
 
 
 def compile_space_model(
