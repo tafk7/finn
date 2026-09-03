@@ -1085,3 +1085,148 @@ def test_private_reflection_is_outside_the_supported_guarantee() -> None:
     # *public* operation hands it over, which the scan above proves; adding weak
     # maps to hide it from reflection would buy complexity and no safety.
     assert isinstance(getattr(root, "_occurrence_state").runtime.lineage.engine, Engine)
+
+
+# -- C5: consolidated forcing and the concurrency contract ---------------------
+
+
+class _Placed(Space):
+    supplied = Input(int)
+    scale = Decision(int, values=(1, 2, 3))
+
+    @derived(int, supplied=supplied, scale=scale)
+    def scaled(*, supplied: int, scale: int) -> int:
+        return supplied * scale
+
+    exports = (scaled,)
+
+
+class _PlacedPair(Space):
+    supplied = Input(int)
+    first = Use(_Placed, supplied=supplied)
+    second = Use(_Placed, supplied=supplied)
+
+
+class _FivePlacements(Space):
+    size = Problem(int)
+    pair = Use(_PlacedPair, supplied=size)
+    solo = Use(_Placed, supplied=size)
+    pick = OneOf(
+        Case(_Placed, name="one", supplied=size),
+        Case(_Placed, name="two", supplied=size),
+        outputs=("scaled",),
+    )
+
+
+def test_five_placements_of_one_class_are_five_distinct_occurrences() -> None:
+    root = _FivePlacements.start({_FivePlacements.size: 2})
+    pair = root.child(_FivePlacements.pair)
+    views = (
+        pair.child(_PlacedPair.first),
+        pair.child(_PlacedPair.second),
+        root.child(_FivePlacements.solo),
+        root.branch(_FivePlacements.pick).case("one"),
+        root.branch(_FivePlacements.pick).case("two"),
+    )
+    assert all(type(view) is _Placed for view in views)
+    assert len({_occurrence_state(view).compiled.namespace for view in views}) == 5
+
+    # Assigning through one view moves that one and no other.
+    first = views[0].assign(_Placed.scale, 3)
+    assert first.answer(_Placed.scaled) == Decided(6)
+    assert isinstance(
+        first.root.child(_FivePlacements.pair).child(_PlacedPair.second).answer(_Placed.scaled),
+        Unresolved,
+    )
+
+
+def test_a_use_nested_inside_a_branch_case_is_reached_by_naming_both() -> None:
+    root = Root.start({Root.size: 3})
+    nested = root.branch(Root.choice).select("nested").case("nested")
+    assert type(nested) is Nested
+    leaf = nested.child(Nested.leaf)
+    assert type(leaf) is Leaf
+    assert _occurrence_state(leaf).compiled.namespace == "root.choice.nested.leaf"
+    assert leaf.assign(Leaf.factor, 4).root.answer(Root.selected_result) == Decided(12)
+
+
+def test_the_declared_namespaces_of_the_existing_stack_are_unchanged() -> None:
+    """U1 renames, reparents and removes no ``QualifiedPath``."""
+
+    specification = compile_space(Root, "root", problem_namespace="problem.root")
+    assert tuple(item.path.value for item in specification.decisions) == (
+        "root.mode",
+        "root.choice.case",
+        "root.left.factor",
+        "root.right.factor",
+        "root.choice.nested.leaf.factor",
+        "root.choice.direct.factor",
+    )
+    assert tuple(item.name for item in specification.readiness_profiles) == (
+        "root.left.ready",
+        "root.right.ready",
+        "root.choice.nested.leaf.ready",
+        "root.choice.direct.ready",
+    )
+    assert tuple(item.name for item in specification.constraint_sets) == (
+        "root.left.legal",
+        "root.right.legal",
+        "root.choice.nested.leaf.legal",
+        "root.choice.direct.legal",
+    )
+
+
+def test_no_evaluation_result_crosses_between_two_points() -> None:
+    root = Root.start({Root.size: 4})
+    partial = root.child(Root.left)
+    doubled = partial.assign(Leaf.factor, 2)
+    quadrupled = partial.assign(Leaf.factor, 4)
+
+    # Interleave deliberately: a cache keyed by anything but the point would
+    # hand the second reader the first one's answer.
+    for _round in range(4):
+        assert doubled.answer(Leaf.result) == Decided(8)
+        assert quadrupled.answer(Leaf.result) == Decided(16)
+        assert isinstance(partial.answer(Leaf.result), Unresolved)
+
+
+def test_diagnostics_are_identical_across_threads() -> None:
+    left = _DiagRoot.start({_DiagRoot.size: 9}).child(_DiagRoot.left)
+    assessment = left.project(_Watched.view)
+
+    def render(_index: int) -> tuple[str, ...]:
+        return tuple(
+            item.render() for item in left.diagnostics(assessment, projection=_Watched.view)
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rendered = set(pool.map(render, range(32)))
+    assert len(rendered) == 1
+
+
+def test_independent_roots_do_not_serialize_on_one_another() -> None:
+    """Two lineages, two locks: holding one must not block the other."""
+
+    first = Root.start({Root.size: 4})
+    second = Root.start({Root.size: 8})
+    with _lineage(first).lock:
+        # A different lineage answers while this one's lock is held.
+        assert second.answer(Root.size) == Decided(8)
+    assert _lineage(first).lock is not _lineage(second).lock
+
+
+def test_the_lineage_lock_is_reentrant_for_same_thread_callbacks() -> None:
+    """Evaluator callbacks run under the lineage lock; re-entry must be safe.
+
+    U1 serializes engine calls at the occurrence boundary because the engine's
+    own caches are unsynchronized.  A contributor callback that queries back into
+    the same occurrence on the same thread therefore re-enters, and the lock is
+    re-entrant so that it does not deadlock.  A callback that hands work to
+    another thread and waits for it *would* deadlock; that is the documented U7
+    limitation, not something this slice changes.
+    """
+
+    root = Root.start({Root.size: 4})
+    lineage = _lineage(root)
+    with lineage.lock, lineage.lock:
+        assert root.answer(Root.size) == Decided(4)

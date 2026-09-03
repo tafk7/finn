@@ -23,6 +23,7 @@ from finn.dataflow._engine import (
     Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
+from finn.dataflow.model.occurrence import is_attached_occurrence
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design.region import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
@@ -739,3 +740,20 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
     )
     with pytest.raises(EvaluationError):
         engine.query_property(point, "semantic.test.defective.region")
+
+
+def test_a_configured_kernel_resolves_through_the_retained_value_hook():
+    """The occurrence descriptor dispatcher must not change configured Kernels.
+
+    ``configure_kernel`` returns a *detached configured* instance, not an
+    attached occurrence.  Both are instances of the same authored class, so the
+    dispatcher asks "is this attached?" explicitly rather than letting whichever
+    subclass overrides ``_space_value`` decide.
+    """
+
+    configured = _configured(extent=8, lanes=2)
+    assert not is_attached_occurrence(configured)
+    assert configured.LANES == 2
+    assert configured.region_family == "test.copy"
+    with pytest.raises(AttributeError, match="not retained on the configured Kernel"):
+        _ = configured.extent

@@ -19,6 +19,7 @@ from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.design.region import POSITION_MAP_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
+from finn.dataflow.model.occurrence import is_attached_occurrence
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Case,
@@ -1207,3 +1208,14 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         "result",
         "source",
     )
+
+
+def test_a_configured_design_resolves_through_the_retained_value_hook():
+    """The occurrence descriptor dispatcher must not change configured Designs."""
+
+    answer = _configure(Chain)
+    assert isinstance(answer, Decided)
+    configured = answer.value
+    assert not is_attached_occurrence(configured)
+    assert configured.node_id("produce")
+    assert configured.region_family("produce")

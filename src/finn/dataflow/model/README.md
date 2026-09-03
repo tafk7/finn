@@ -92,23 +92,52 @@ assessment = left.project(Tile.schedule)
 assert assessment.accepted_answer.value == 4
 ```
 
-`ProjectionAssessment` always retains four separate facts: readiness, every
-constraint-group assessment, the raw output answer, and the accepted answer.
-A final false constraint can make readiness true while the accepted answer is a
-rejecting `Absent`. Missing commitments yield `Unresolved`; a finally
-inapplicable output yields non-rejecting `Absent`; only a final valid output is
-snapshotted into `Decided`.
+`ProjectionAssessment` retains its compiled name plus four separate facts:
+readiness, every constraint-group assessment, the raw output answer, and the
+accepted answer. The reduction order is the contract:
 
-Repeated uses of one child class are never inferred from the class alone:
+```text
+1. any required readiness, output or constraint dependency unresolved
+       -> Unresolved
+2. the distinguished output is finally inapplicable
+       -> the output's own non-rejecting Absent
+3. any projection constraint refuses
+       -> rejecting Absent
+4. otherwise
+       -> Decided(snapshot(output))
+```
+
+Absence precedes refusal deliberately. Reporting "a constraint refused this" for
+a value that simply does not arise is a different and misleading sentence. The
+two policies behind steps 2 and 4 -- propagate final inapplicability, snapshot
+through the output declaration's own `ValueSemantics` -- live in the compiled
+metadata and are not constructor arguments, because in U1 neither has a second
+legal value. Every `Projection` declares a `Readiness`; a projection with no
+further obligation declares an empty profile rather than omitting the concept.
+
+Navigation keys are exact declarations. A Python class names a family, not one
+of its occurrences:
 
 ```python
-root.child(Pair.left).assign(Tile.lanes, 2)  # exact occurrence
-root.child(Tile)  # rejected when ambiguous
+root.child(Pair.left).assign(Tile.lanes, 2)  # exact use site
+root.child(Tile)                             # refused: a class is not an occurrence
 ```
 
 `branch(OneOfDeclaration)` exposes case ids, selection, and exact case views
 without exposing its generated selector path. `answer`, `assign`, `assess`,
 `project`, `branch`, and `child` accept declarations, not path strings.
+
+Thirteen member names are reserved -- `start assign answer assess project
+diagnostics branch child root problem_snapshot problem_fingerprint is_stale
+reconstruct` -- because each is a lifecycle operation every authored class
+inherits. The check is on the Python member name only, so
+`choice = OneOf(..., name="branch")` keeps the compiled path `<ns>.branch`.
+
+Two error kinds and no third. A malformed or out-of-scope declaration, a
+malformed `Projection`, a reserved name or a Problem value with no canonical
+encoding is an `AuthoringError`. Refused Problem data, a rejected assignment, an
+unavailable value and an incompatible persisted fingerprint are the engine's own
+`RequestError` carrying findings.
 
 Problem values are snapshotted once. A callable problem projector makes an
 explicit staleness check possible without making ordinary queries reread live
@@ -128,11 +157,59 @@ fresh = root.reconstruct()  # strict: old assignments are not migrated
 ```
 
 `problem_fingerprint` guards future persisted assignment hydration;
-`expected_problem_fingerprint=` refuses an incompatible payload. Diagnostics
-translate findings into root-to-child scope and declaration names while keeping
-the original finding, path, and trace available for advanced tools. The root
-serializes access to the existing engine's evaluation caches with a re-entrant
-lock, so concurrent reads and successor creation are deterministic without
+`expected_problem_fingerprint=` refuses an incompatible payload. The digest
+carries the Space identity, the ordered Problem names and value semantics,
+explicit absence, and each field's canonical encoding. Encoding is owned by the
+declaration, not by a global registry and not by a magic method on a value class
+this project does not own:
+
+```python
+QONNX_DATATYPE = CanonicalValueCodec("qonnx.datatype", 1, lambda value: value.name)
+
+
+class Op(Space):
+    activation = Problem(DataType, canonical=QONNX_DATATYPE)
+```
+
+The default structural codec covers built-ins, containers, enums and dataclasses
+and refuses everything else by name; arbitrary `str()` or `repr()` never enters
+a fingerprint. The codec identity and version travel in the digest, so changing
+an encoding cannot be mistaken for a changed value.
+
+Diagnostics translate findings into root-to-child scope, authored class and
+member, branch case, and the projection asked for, while keeping the original
+finding, path, values and causal trace intact. Ownership comes from an index
+built once with the compiled model, parents before children, so a child `Input`
+is attributed to the supplier that declares it and a generated path that no
+declaration owns is reported as unattributed rather than guessed at.
+
+Compilation is reused: one immutable `SpaceModel` per authored class, namespace
+pair and declaration structure, holding the compiled tree, the validated
+`DesignSpace`, the branch catalog, the projection metadata and the diagnostic
+ownership index. `compile_space_model(...).start(problem)` is the
+compiler-service entry and returns the authored class, exactly as
+`Space.start(...)` does. What the model does *not* own is the runtime: every
+start mints a fresh `Engine`, point, frozen problem and lock, so two independent
+roots reuse compilation without sharing an evaluation cache or serializing on
+each other.
+
+Allocation goes through `Space._new_occurrence(OccurrenceContext)`. The default
+allocates without calling `__init__`; a subclass whose instances need external
+context -- a future `DataflowOp` around a `NodeProto` -- overrides it and
+initializes from the context, which carries identity and the root but never the
+Engine or the point.
+
+The supported capability guarantee is the public surface: no public operation
+returns an `Engine`, a `DesignPoint`, a `_Ref`, a compiled record or an
+unrestricted path lookup, and contributor callbacks receive resolved declared
+values only. `QualifiedPath` still appears inside every immutable `Finding`,
+which is where a diagnostic needs it. Underscore-private attributes remain
+inspectable by deliberately hostile code; this is normal Python privacy, not a
+sandbox, and is not claimed to be one.
+
+Each root lineage serializes access to its engine's evaluation caches with one
+re-entrant lock, so concurrent reads and successor creation are deterministic
+without
 changing `_engine` semantics.
 
 ## Reusable Space fragments
@@ -395,7 +472,13 @@ Occurrence namespaces and filesystem locations do not enter portable
 identity. Stores, packaging formats, tool requests, and synthesis stay outside
 the Kernel object.
 
-## Deliberate boundary of this experiment
+Evaluator callbacks currently run under that lineage lock. Re-entry from the
+same thread is safe because the lock is re-entrant; a callback that hands work
+to another thread and waits for it would deadlock. Moving synchronization into
+the engine's own cache operations is U7 work, and U1 deliberately changes no
+`_engine` semantics.
+
+## Deliberate boundary of this slice
 
 U1 does not migrate Kernel, DataflowDesign, or DataflowOp to occurrences. This
 package does not yet attach input supply, project ONNX graph context, compose
