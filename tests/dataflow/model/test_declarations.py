@@ -183,6 +183,7 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "Kernel",
         "Kernels",
         "OneOf",
+        "OccurrenceDiagnostic",
         "OccurrenceError",
         "Parameter",
         "Problem",

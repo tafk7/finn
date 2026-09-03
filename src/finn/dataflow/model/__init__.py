@@ -87,6 +87,7 @@ from finn.dataflow.model.declarations import (
 )
 from finn.dataflow.model.occurrence import (
     BranchView,
+    OccurrenceDiagnostic,
     OccurrenceError,
     ProjectionAssessment,
 )
@@ -169,6 +170,7 @@ __all__ = [
     "Decision",
     "Input",
     "OneOf",
+    "OccurrenceDiagnostic",
     "OccurrenceError",
     "Problem",
     "Projection",
