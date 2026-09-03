@@ -27,7 +27,13 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.model.declarations import AuthoringError, Problem, declared_members
+from finn.dataflow.model.declarations import (
+    AuthoringError,
+    ConstraintGroup,
+    Problem,
+    constraint,
+    declared_members,
+)
 from finn.dataflow.model.occurrence import ProjectionAssessment
 from finn.dataflow.ops.association import (
     BoundaryDestination,
@@ -1007,7 +1013,7 @@ def test_a_choice_the_model_no_longer_declares_is_a_refusal() -> None:
         if item.name == STATE_ATTRIBUTE:
             document = json.loads(item.s.decode("utf-8"))
             document["assignments"]["design.dot_product.renamed_away"] = {
-                "codec": "dataflow.structural@1",
+                "codec": "dataflow.int@1",
                 "value": 4,
             }
             item.s = json.dumps(document, sort_keys=True).encode("utf-8")
@@ -1022,7 +1028,7 @@ def test_a_changed_codec_is_a_refusal_not_a_reinterpretation() -> None:
     for item in node.attribute:
         if item.name == STATE_ATTRIBUTE:
             document = json.loads(item.s.decode("utf-8"))
-            document["assignments"]["design.dot_product.pe"]["codec"] = "dataflow.structural@99"
+            document["assignments"]["design.dot_product.pe"]["codec"] = "dataflow.int@99"
             item.s = json.dumps(document, sort_keys=True).encode("utf-8")
 
     with pytest.raises(DataflowOpError, match="changed encoding is not reinterpreted"):
@@ -1377,3 +1383,162 @@ def test_a_zero_extent_replay_activation_gives_a_finding() -> None:
 
     assert not isinstance(answer, Decided)
     assert {finding.code for finding in answer.findings} >= {"replay-degenerate-extent"}
+
+
+# -- the commit boundary: one build, and it is the frozen one ------------------
+
+
+def test_commit_needs_no_build_because_the_occurrence_already_froze_one() -> None:
+    """The effects were derived from the frozen facts; so is the rebinding."""
+
+    model = _mvau_model()
+    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+
+    committed = chosen.commit(model)
+
+    assert type(committed) is MvauDataflowOp
+    assert committed.problem_fingerprint == chosen.problem_fingerprint
+    assert dict(committed.recorded())["design.case"] == "dot_product"
+
+
+def test_a_mismatched_build_at_commit_leaves_the_graph_unchanged() -> None:
+    """Equivalence is proved before anything is written, not after.
+
+    The failure this forbids is specific: apply effects derived from build A,
+    then fail while rebinding under build B, and the graph is left holding
+    choices whose author has already been told the operation failed.
+    """
+
+    model = _mvau_model()
+    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    before = model.model.SerializeToString(deterministic=True)
+
+    with pytest.raises(DataflowOpError, match="clock_period_ns"):
+        chosen.commit(model, Build(synth_clk_period_ns=10.0))
+
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_an_equivalent_build_at_commit_is_accepted() -> None:
+    """A caller that passes the same configuration is not being punished."""
+
+    model = _mvau_model()
+    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+
+    committed = chosen.commit(model, Build())
+
+    assert dict(committed.recorded())["design.case"] == "dot_product"
+
+
+def test_changing_the_build_context_is_a_rebinding_not_a_commit() -> None:
+    """And it reads the graph rather than writing it."""
+
+    model = _mvau_model()
+    bound = _unbound(model, "mvau0").bind(model, Build())
+    before = model.model.SerializeToString(deterministic=True)
+
+    fresh = bound.rebind(model, Build(synth_clk_period_ns=10.0))
+
+    assert fresh.problem_fingerprint != bound.problem_fingerprint
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_rebinding_without_a_build_reuses_the_frozen_facts() -> None:
+    model = _mvau_model()
+    bound = _unbound(model, "mvau0").bind(model, Build())
+
+    assert bound.rebind(model).problem_fingerprint == bound.problem_fingerprint
+
+
+# -- constraint classification -------------------------------------------------
+
+
+def test_an_operation_constraint_must_be_classified() -> None:
+    """A constraint in no group is compiled, evaluated, and consulted by nothing."""
+
+    with pytest.raises(AuthoringError, match="outside source_accepts"):
+
+        class Unclassified(DataflowOp):
+            family = "test.unclassified"
+            activation = InputTensor(index=0)
+            result = OutputTensor(index=0)
+
+            @constraint(shape=activation.shape)
+            def rank_is_two(*, shape: tuple[int, ...]) -> object:
+                return len(shape) == 2
+
+
+def test_a_classified_operation_constraint_is_accepted() -> None:
+    class Classified(DataflowOp):
+        family = "test.classified"
+        activation = InputTensor(index=0)
+        result = OutputTensor(index=0)
+
+        @constraint(shape=activation.shape)
+        def rank_is_two(*, shape: tuple[int, ...]) -> object:
+            return len(shape) == 2
+
+        source_accepts = ConstraintGroup(rank_is_two)
+
+    assert Classified.source_accepts.constraints == (Classified.rank_is_two,)
+
+
+def test_source_accepts_must_be_a_constraint_group() -> None:
+    with pytest.raises(AuthoringError, match="names one ConstraintGroup"):
+
+        class Broken(DataflowOp):
+            family = "test.broken-group"
+            activation = InputTensor(index=0)
+            result = OutputTensor(index=0)
+            source_accepts = "everything"
+
+
+# -- rank ----------------------------------------------------------------------
+
+
+def _rank_one_mvau_model(*, matrix_width: int = 8, matrix_height: int = 4) -> ModelWrapper:
+    node = helper.make_node(
+        "MvauDataflowOp",
+        ["activation", "weight"],
+        ["output"],
+        domain=DATAFLOW_DOMAIN,
+        name="mvau0",
+    )
+    graph = helper.make_graph(
+        [node],
+        "mvau",
+        [_tensor("activation", (matrix_width,))],
+        [_tensor("output", (matrix_height,))],
+        value_info=[_tensor("weight", (matrix_width, matrix_height))],
+    )
+    model = ModelWrapper(
+        helper.make_model(
+            graph,
+            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+        )
+    )
+    for name in ("activation", "weight"):
+        model.set_tensor_datatype(name, DataType["INT8"])
+    model.set_tensor_datatype("output", DataType["INT32"])
+    model.set_initializer("weight", np.zeros((matrix_width, matrix_height), dtype=np.float32))
+    assign_dataflow_scope_ids(model, domain=DATAFLOW_DOMAIN)
+    return model
+
+
+def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() -> None:
+    """The docstring used to claim the opposite; nothing enforced it.
+
+    A restriction has to be argued from the mathematics or from a Design's
+    structure.  Neither argues for one here: a vector through a matrix is a
+    single repetition, and every Design builds it with no special case.
+    """
+
+    model = _rank_one_mvau_model()
+    bound = _unbound(model, "mvau0").bind(model, Build())
+
+    assert bound.answer(MvauDataflowOp.repetitions) == Decided(1)
+
+    _model, operation = _configured_mvau(model)
+    assert isinstance(operation.network, Decided)
+    assert operation.expected_outputs()["output"][0] == (4,)
+    assert operation.reconciliation() == ()

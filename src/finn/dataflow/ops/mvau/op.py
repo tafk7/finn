@@ -112,11 +112,18 @@ class MvauDataflowOp(DataflowOp):
         mathematically valid, and the previous ``NoInitializer`` was inherited
         rather than argued for.
 
-    rank
-        A rank-1 activation is a valid *problem*; what it has no applicable
-        composition for is a Design.  The rejection therefore lives on
-        ``WeightedDotProductDesign``, so such a node yields a valid occurrence
-        with no applicable Design rather than a refused source reading.
+    a rank-1 activation is one repetition
+        Accepted, and deliberately not restricted anywhere.  A shape ``(W,)``
+        whose extent matches the matrix width is a single vector through the
+        matrix -- ``repetitions`` evaluates to 1 by the same formula every
+        other rank uses, and the Designs need nothing special to build it.
+
+        This paragraph previously claimed the opposite: that a rank-1
+        activation had no applicable Design and that
+        ``WeightedDotProductDesign`` rejected it.  No such rejection existed,
+        and none was added to make the sentence true -- a restriction has to be
+        argued from the mathematics or from a Design's structure, and neither
+        argues for one here.
     """
 
     family: ClassVar[str] = "finn.dataflow.mvau"

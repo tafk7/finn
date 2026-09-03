@@ -71,6 +71,7 @@ from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 from finn.dataflow._engine import Answer, Decided, RequestError, Unresolved
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    Constraint as DeclaredConstraint,
     ConstraintGroup,
     OccurrenceContext,
     PersistentCodec,
@@ -101,7 +102,6 @@ from finn.dataflow.ops.source import SourceError, SourceNode, read_source_node
 from finn.dataflow.ops.state import (
     SELECTOR_CODEC,
     STATE_ATTRIBUTE,
-    STRUCTURAL_DECISION_CODEC,
     Assignment,
     DataflowState,
     DecisionCodec,
@@ -109,6 +109,7 @@ from finn.dataflow.ops.state import (
     decode_dataflow_state,
     encode_state,
     enum_codec,
+    structural_codec,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -203,17 +204,6 @@ class SourceBinding:
 AttributeCodec = DecisionCodec
 
 
-INT_CODEC: PersistentCodec[Any] = DecisionCodec(
-    "dataflow.int", 1, lambda value: int(value), lambda value: int(cast(int, value))
-)
-BOOL_CODEC: PersistentCodec[Any] = DecisionCodec(
-    "dataflow.bool", 1, lambda value: bool(value), lambda value: bool(value)
-)
-STRING_CODEC: PersistentCodec[Any] = DecisionCodec(
-    "dataflow.string", 1, lambda value: str(value), lambda value: str(value)
-)
-
-
 def source_declarations(
     operation_type: type[DataflowOp],
 ) -> tuple[tuple[str, SourceDeclaration], ...]:
@@ -266,6 +256,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             if isinstance(value, SOURCE_DECLARATION_TYPES)
         }
         _check_indices(cls, schema)
+        _check_constraints_are_classified(cls, declarations)
         for name, member in lower_source_schema(cls, schema).items():
             if name in declarations:
                 raise AuthoringError(
@@ -314,14 +305,19 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         with every persisted choice replayed onto it.
         """
 
-        binding = self.read_binding(model, build)
+        return self._bind_with(model, self.build_facts(build))
+
+    def _bind_with(self, model: Any, facts: BuildFacts) -> Any:
+        """Bind against build scalars that have already been extracted."""
+
+        binding = self._binding_with(model, facts)
         try:
             state = decode_dataflow_state(binding.materialize())
         except DecodeError as error:
             raise DataflowOpError(f"{binding.source.node_name}: {error}") from error
         return type(self)._start_bound(binding, state)
 
-    def rebind(self, model: Any, build: Any) -> Any:
+    def rebind(self, model: Any, build: Any = None) -> Any:
         """Locate the live node by scope id and read it again, deliberately.
 
         The explicit refresh, and it must go to the *live* node.  Calling
@@ -334,12 +330,22 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
         Identity does the locating, not the object: the node may have been
         renamed, and the wrapper may outlive the graph it came from.
+
+        ``build`` is optional, and its absence is not a default -- it is the
+        occurrence's *own* frozen :class:`BuildFacts`, reused exactly.  Reading
+        the graph again and reading the build configuration again are two
+        different intentions, and only one of them is what a refresh after a
+        commit means.  Passing a build is the explicit "and read the build
+        context again" form.
         """
 
         from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415 - see graph_effects
 
         node = find_node(model, self.binding.node_identity)
-        return type(self)(node, self.binding.opset_version).bind(model, build)
+        fresh = type(self)(node, self.binding.opset_version)
+        if build is None:
+            return fresh._bind_with(model, self.binding.build)
+        return fresh.bind(model, build)
 
     @classmethod
     def _start_bound(cls, binding: SourceBinding, recorded: DataflowState | None) -> Any:
@@ -393,18 +399,32 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         an occurrence describing neither.
         """
 
+        return self._binding_with(model, self.build_facts(build))
+
+    def build_facts(self, build: Any) -> BuildFacts:
+        """The scalars this operation extracts from one build configuration.
+
+        Separated from the reading of the node because the two are compared
+        independently: a commit checks that a caller-supplied build says the
+        same thing this occurrence already froze, and it must be able to do
+        that *before* it touches the graph.
+        """
+
         operation = type(self)
-        node = self._live_node(model)
-        build_values: dict[str, object] = {}
+        values: dict[str, object] = {}
         for member_name, declaration in source_declarations(operation):
             if isinstance(declaration, BuildFact):
-                build_values[member_name] = _build_value(operation, member_name, declaration, build)
+                values[member_name] = _build_value(operation, member_name, declaration, build)
+        return BuildFacts(MappingProxyType(values))
+
+    def _binding_with(self, model: Any, facts: BuildFacts) -> SourceBinding:
+        node = self._live_node(model)
         return SourceBinding(
             node.SerializeToString(deterministic=True),
             self.recorded_scope_id() or "",
             int(self.onnx_opset_version),
             self._read_source(model, node),
-            BuildFacts(MappingProxyType(build_values)),
+            facts,
         )
 
     def _read_source(self, model: Any, node: Any) -> SourceNode:
@@ -825,19 +845,48 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             ),
         )
 
-    def commit(self, model: Any, build: Any, *, require: Any = None) -> Any:
+    def commit(self, model: Any, build: Any = None, *, require: Any = None) -> Any:
         """Plan, apply, and return a bound occurrence of the post-commit graph.
 
         The lifecycle continues across the mutation boundary.  Returning the
         live ``NodeProto`` would end it there and force every caller to rebind
         by hand -- and a caller who forgot would carry on asking questions of an
         occurrence bound to the graph as it was *before* their own commit.
+
+        **The build is this occurrence's own.**  A bound occurrence already
+        froze its build scalars, and the effects being applied were derived
+        from *those*.  Rebinding under a different build would leave the graph
+        holding choices made against one configuration and hand back an
+        occurrence describing another -- and the failure would surface as a
+        successful commit, which is worse than an error.
+
+        So ``build`` is optional and, when given, is checked for equivalence
+        **before** anything is applied.  A mismatch raises with the graph
+        untouched.  Changing build context is ``rebind(model, new_build)``,
+        which is a separate intention and reads the graph rather than writing
+        it.
         """
 
         from finn.dataflow.ops.persistence import apply_graph_effects  # noqa: PLC0415
 
-        apply_graph_effects(model, self.graph_effects(require=require))
-        return self.rebind(model, build)
+        frozen = self.binding.build
+        if build is not None:
+            offered = self.build_facts(build)
+            if dict(offered.values) != dict(frozen.values):
+                differences = sorted(
+                    name
+                    for name in set(offered.values) | set(frozen.values)
+                    if offered.values.get(name) != frozen.values.get(name)
+                )
+                raise DataflowOpError(
+                    f"{self.source.node_name} is bound to build facts that differ from the "
+                    f"ones offered at commit ({', '.join(differences)}); the effects about "
+                    "to be applied were derived from the frozen ones.  Nothing was written; "
+                    "call rebind(model, build) first if the build context really changed"
+                )
+        effects = self.graph_effects(require=require)
+        apply_graph_effects(model, effects)
+        return self.rebind(model)
 
     def recorded(self) -> Mapping[str, object]:
         """The choices this object represents.
@@ -916,18 +965,14 @@ def _codec_for(operation: DataflowOp, choice: PersistableChoice) -> PersistentCo
     token = choice.reference.semantics.type_token
     if isinstance(token, type) and issubclass(token, Enum):
         return enum_codec(token)
-    if token in _STRUCTURAL_TOKENS:
-        return STRUCTURAL_DECISION_CODEC
+    structural = structural_codec(token)
+    if structural is not None:
+        return structural
     raise AuthoringError(
         f"{choice.owner}.{choice.member} is a committable Decision of "
-        f"{choice.reference.semantics.name}, which the structural codec does not cover; "
+        f"{choice.reference.semantics.name}, which no structural codec covers; "
         "give it canonical=PersistentCodec(...).  A persisted value is never a repr"
     )
-
-
-#: What the structural codec covers.  Everything else is a judgement call its
-#: author has to make.
-_STRUCTURAL_TOKENS = frozenset({bool, int, float, str})
 
 
 def _serialize_point(operation: DataflowOp) -> dict[str, Assignment]:
@@ -977,6 +1022,45 @@ def _check_indices(operation_type: type, schema: Mapping[str, Any]) -> None:
                 f"{operation_type.__name__} declares {what} indices {indices}; they must be "
                 "unique and contiguous from zero, because an ONNX operand list is positional"
             )
+
+
+def _check_constraints_are_classified(
+    operation_type: type[DataflowOp], declarations: Mapping[str, object]
+) -> None:
+    """Every authored operation Constraint gates the source semantics, explicitly.
+
+    The rule the Kernel and Design layers already state, for the reason that
+    applies identically here: an operation has exactly one group, and a
+    constraint outside it is compiled, evaluated, and consulted by nothing --
+    so an operation would silently stop refusing what its author wrote a
+    refusal for.  ``source_accepts`` is small enough that omitting a name from
+    it is easy and invisible, which is why it is checked rather than trusted.
+
+    An *output* observation deliberately has no place here: it is a
+    reconciliation difference, not a verdict, and a constraint is not how it is
+    reported.
+    """
+
+    group = declarations.get("source_accepts")
+    if group is not None and not isinstance(group, ConstraintGroup):
+        raise AuthoringError(
+            f"{operation_type.__name__}.source_accepts is a {type(group).__name__}; it names "
+            "one ConstraintGroup of the constraints that gate this operation's own semantics"
+        )
+    grouped = (
+        {id(item) for item in group.constraints} if isinstance(group, ConstraintGroup) else set()
+    )
+    ungrouped = sorted(
+        name
+        for name, declaration in declarations.items()
+        if isinstance(declaration, DeclaredConstraint) and id(declaration) not in grouped
+    )
+    if ungrouped:
+        raise AuthoringError(
+            f"{operation_type.__name__} declares Constraint {ungrouped[0]!r} outside "
+            "source_accepts; an operation says which projection each of its constraints "
+            "gates, because a constraint in no group refuses nothing"
+        )
 
 
 def _positional(declared: list[tuple[int, str]]) -> tuple[str, ...]:
@@ -1155,15 +1239,12 @@ def unresolved_reason(answer: Answer[Any]) -> str:
 
 
 __all__ = [
-    "BOOL_CODEC",
     "DATAFLOW_DOMAIN",
     "FAMILY_ATTRIBUTE",
     "FAMILY_VERSION_ATTRIBUTE",
     "FINGERPRINT_ATTRIBUTE",
-    "INT_CODEC",
     "RESERVED_ATTRIBUTES",
     "SCOPE_ID_ATTRIBUTE",
-    "STRING_CODEC",
     "AttributeCodec",
     "BuildFacts",
     "DataflowOp",

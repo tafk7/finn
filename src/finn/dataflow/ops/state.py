@@ -87,47 +87,94 @@ class DecodeError(ValueError):
 DecisionCodec = PersistentCodec
 
 
-def _encode_structural(value: object) -> CanonicalValue:
-    if value is None or type(value) in (bool, int, str):
-        return value  # type: ignore[return-value]
-    if type(value) is float:
-        from math import isfinite  # noqa: PLC0415
-
-        if not isfinite(value):
-            raise AuthoringError("a persisted float must be finite")
-        return {"float_hex": value.hex()}
-    raise AuthoringError(
-        f"a Decision value of type {type(value).__name__} has no canonical encoding; "
-        "give its Decision a canonical=DecisionCodec(...)"
-    )
+#: The JSON kinds a structural value may take, spelled as exact Python types.
+#: ``type(value) is`` throughout, never ``isinstance``: ``True`` is an instance
+#: of ``int``, and a codec that accepted it would decode ``{"value": true}``
+#: into ``1`` and call the round trip successful.
+_JSON_KIND = {bool: "a JSON bool", int: "a JSON integer", str: "a JSON string"}
 
 
-def _decode_structural(value: CanonicalValue) -> object:
-    """Read back what ``_encode_structural`` wrote, and nothing else.
+def _exact(kind: type, identity: str) -> PersistentCodec[Any]:
+    """One codec that accepts exactly one JSON kind, in both directions.
 
-    A float and an Enum are tagged on the way out precisely so they can be
-    recognized on the way in; an untagged mapping is not something this codec
-    produced, so it is refused rather than handed back as a dict.
+    Symmetry is the whole point.  A decoder looser than its encoder means two
+    different documents load as the same design, so a document a human edited
+    -- or an older writer produced under different rules -- is reinterpreted
+    instead of refused, and the difference surfaces as a build that does not
+    match what anybody saved.
     """
 
-    if isinstance(value, dict):
-        if set(value) == {"float_hex"}:
-            return float.fromhex(str(value["float_hex"]))
-        raise DecodeError(f"the structural codec did not write {value!r}")
-    return value
+    what = _JSON_KIND[kind]
+
+    def encode(value: object) -> CanonicalValue:
+        if type(value) is not kind:
+            raise AuthoringError(
+                f"the {identity} codec writes {kind.__name__}, not {type(value).__name__}"
+            )
+        return cast(CanonicalValue, value)
+
+    def decode(value: CanonicalValue) -> object:
+        if type(value) is not kind:
+            raise DecodeError(f"the {identity} codec wrote {what}, not {value!r}")
+        return value
+
+    return DecisionCodec(identity, 1, encode, decode)
 
 
-#: The structural default: the value kinds whose encoding is not a judgement
-#: call.  Anything else -- a tile shape, a scheduling record, a policy object --
-#: declares its own, because only its author knows what its identity is.
-STRUCTURAL_DECISION_CODEC: PersistentCodec[Any] = DecisionCodec(
-    "dataflow.structural", 1, _encode_structural, _decode_structural
+BOOL_CODEC: PersistentCodec[Any] = _exact(bool, "dataflow.bool")
+INT_CODEC: PersistentCodec[Any] = _exact(int, "dataflow.int")
+STRING_CODEC: PersistentCodec[Any] = _exact(str, "dataflow.string")
+
+
+def _encode_float(value: object) -> CanonicalValue:
+    from math import isfinite  # noqa: PLC0415
+
+    if type(value) is not float:
+        raise AuthoringError(f"the dataflow.float codec writes float, not {type(value).__name__}")
+    if not isfinite(value):
+        raise AuthoringError("a persisted float must be finite")
+    return {"float_hex": value.hex()}
+
+
+def _decode_float(value: CanonicalValue) -> object:
+    """Exactly the tagged form, because a bare JSON number is not exact.
+
+    ``1.1`` written as a decimal and read back is a different double on some
+    round trips, and ``2.0`` is indistinguishable from the integer ``2``.  The
+    hexadecimal form is both exact and unambiguous, so it is the only form this
+    codec accepts.
+    """
+
+    if not isinstance(value, dict) or set(value) != {"float_hex"}:
+        raise DecodeError(f"the dataflow.float codec wrote {{'float_hex': ...}}, not {value!r}")
+    text = value["float_hex"]
+    if not isinstance(text, str):
+        raise DecodeError("a dataflow.float value is a hexadecimal string")
+    return float.fromhex(text)
+
+
+FLOAT_CODEC: PersistentCodec[Any] = DecisionCodec("dataflow.float", 1, _encode_float, _decode_float)
+
+#: The value kinds whose encoding is not a judgement call.  Anything else -- a
+#: tile shape, a scheduling record, a policy object -- declares its own codec,
+#: because only its author knows what its identity is.
+STRUCTURAL_CODECS: Mapping[type, PersistentCodec[Any]] = MappingProxyType(
+    {bool: BOOL_CODEC, int: INT_CODEC, str: STRING_CODEC, float: FLOAT_CODEC}
 )
+
+
+def structural_codec(token: object) -> PersistentCodec[Any] | None:
+    """The codec for one structural type token, or ``None`` if it has none."""
+
+    if isinstance(token, type):
+        return STRUCTURAL_CODECS.get(token)
+    return None
+
 
 #: A Variant selector's alternative id.  Given its own codec even though the
 #: values are stable strings today, so that a future change to how a selection
 #: is written is a version bump rather than a silent reinterpretation.
-SELECTOR_CODEC: PersistentCodec[Any] = DecisionCodec("dataflow.selector", 1, str, str)
+SELECTOR_CODEC: PersistentCodec[Any] = _exact(str, "dataflow.selector")
 
 
 def enum_codec(enum_type: type[Enum]) -> PersistentCodec[Any]:
@@ -138,13 +185,35 @@ def enum_codec(enum_type: type[Enum]) -> PersistentCodec[Any]:
     different alternative.  Decoding goes back through the enum type, so a value
     the enum no longer has is a refusal rather than a bare string that fails the
     Decision's domain check much later.
+
+    The members' own value type is required to be single and structural, and it
+    is checked on the way in as strictly as any other codec checks: an enum over
+    strings must not accept ``0`` because ``Enum(0)`` happens to raise the same
+    class of error later, and one over ints must not accept ``True``.
     """
 
+    kinds = {type(member.value) for member in enum_type}
+    if len(kinds) != 1 or not (kinds <= {bool, int, str}):
+        named = sorted(kind.__name__ for kind in kinds)
+        raise AuthoringError(
+            f"{enum_type.__qualname__} has member values of {named}; an Enum-valued "
+            "Decision persists through one structural kind, or declares "
+            "canonical=PersistentCodec(...)"
+        )
+    (kind,) = kinds
+
+    def encode(value: object) -> CanonicalValue:
+        return cast(CanonicalValue, enum_type(value).value)
+
+    def decode(value: CanonicalValue) -> object:
+        if type(value) is not kind:
+            raise DecodeError(
+                f"{enum_type.__qualname__} persists as {_JSON_KIND[kind]}, not {value!r}"
+            )
+        return enum_type(value)
+
     return DecisionCodec(
-        f"dataflow.enum.{enum_type.__module__}.{enum_type.__qualname__}",
-        1,
-        lambda value: cast(CanonicalValue, enum_type(value).value),
-        lambda value: enum_type(value),
+        f"dataflow.enum.{enum_type.__module__}.{enum_type.__qualname__}", 1, encode, decode
     )
 
 
@@ -167,6 +236,23 @@ class Assignment:
 
     codec: str
     value: CanonicalValue
+
+
+def parse_codec_tag(tag: str) -> tuple[str, int]:
+    """Split ``identity@version``, refusing anything that is not one.
+
+    Checked on read rather than trusted, because the tag is the whole of the
+    reinterpretation guard: an empty identity or a non-numeric version would
+    compare unequal to every declared codec and turn a precise "this build
+    declares a different encoding" into an unexplained mismatch.
+    """
+
+    identity, separator, version = tag.rpartition("@")
+    if not separator or not identity:
+        raise DecodeError(f"{tag!r} is not a codec identity@version tag")
+    if not version.isdigit() or int(version) < 1:
+        raise DecodeError(f"the codec tag {tag!r} does not name a positive version")
+    return identity, int(version)
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,12 +342,14 @@ def decode_state(raw: str | bytes) -> DataflowState:
                 f"the assignment at {path!r} is not a {{codec, value}} pair; every persisted "
                 "value carries the identity and version of the codec that wrote it"
             )
-        if not isinstance(entry["codec"], str) or "@" not in entry["codec"]:
+        if not isinstance(entry["codec"], str):
             raise DecodeError(f"the assignment at {path!r} has no codec identity@version tag")
+        parse_codec_tag(entry["codec"])
         assignments[path] = Assignment(entry["codec"], entry["value"])
     for name in ("family", "family_version", "problem_fingerprint"):
-        if not isinstance(payload[name], str):
-            raise DecodeError(f"a dataflow state document's {name} is a string")
+        value = payload[name]
+        if not isinstance(value, str) or not value:
+            raise DecodeError(f"a dataflow state document's {name} is a non-empty string")
     return DataflowState(
         payload["family"],
         payload["family_version"],
@@ -307,19 +395,25 @@ def format_dataflow_state(node: Any) -> str:
 
 
 __all__ = [
+    "BOOL_CODEC",
     "ENVELOPE_MEMBERS",
+    "FLOAT_CODEC",
+    "INT_CODEC",
     "KNOWN_STAGES",
     "SELECTOR_CODEC",
-    "Assignment",
     "STATE_ATTRIBUTE",
     "STATE_SCHEMA",
-    "STRUCTURAL_DECISION_CODEC",
+    "STRING_CODEC",
+    "STRUCTURAL_CODECS",
+    "Assignment",
     "DataflowState",
     "DecisionCodec",
     "DecodeError",
     "decode_dataflow_state",
     "decode_state",
-    "enum_codec",
     "encode_state",
+    "enum_codec",
     "format_dataflow_state",
+    "parse_codec_tag",
+    "structural_codec",
 ]

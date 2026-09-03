@@ -67,6 +67,7 @@ from finn.dataflow.model.declarations import (
     Decision,
     Input,
     OccurrenceContext,
+    PersistentCodec,
     Problem,
     Projection,
     Readiness,
@@ -100,6 +101,8 @@ __all__ = [
     "CanonicalValueCodec",
     "OccurrenceContext",
     "OccurrenceDiagnostic",
+    # the contributor-facing half of Decision(..., canonical=...)
+    "PersistentCodec",
     "Problem",
     "Projection",
     "ProjectionAssessment",

@@ -179,6 +179,7 @@ def test_public_model_facade_exposes_only_generic_vocabulary() -> None:
         "Input",
         "OccurrenceContext",
         "OccurrenceDiagnostic",
+        "PersistentCodec",
         "Problem",
         "Projection",
         "ProjectionAssessment",
