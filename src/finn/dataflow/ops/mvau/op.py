@@ -44,7 +44,6 @@ from finn.dataflow.ops.association import (
 from finn.dataflow.ops.base import (
     BOOL_CODEC,
     INT_CODEC,
-    AttributeCodec,
     DataflowOp,
     DataflowOpError,
     DecisionAttribute,
@@ -57,7 +56,14 @@ from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
     SuppliedDotProductDesign,
     WeightSupply,
 )
-from finn.dataflow.ops.schema import Attribute, BuildFact, InputTensor, OutputTensor
+from finn.dataflow.ops.state import DecisionCodec
+from finn.dataflow.ops.schema import (
+    Attribute,
+    BuildFact,
+    DatatypeAttribute,
+    InputTensor,
+    OutputTensor,
+)
 
 
 def _decode_supply(value: object) -> WeightSupply:
@@ -65,10 +71,13 @@ def _decode_supply(value: object) -> WeightSupply:
     return WeightSupply(text)
 
 
-#: The weight-supply mode crosses the node boundary as its own stable string.
-#: Never the enum's ordinal: reordering the members would silently repoint every
-#: saved graph at a different mode.
-SUPPLY_CODEC = AttributeCodec(lambda value: WeightSupply(value).value, _decode_supply, kind="s")
+#: The weight-supply mode crosses the persistence boundary as its own stable
+#: string.  Never the enum's ordinal: reordering the members would silently
+#: repoint every saved graph at a different mode.  Versioned, so a future change
+#: to the spelling is a refusal rather than a reinterpretation.
+SUPPLY_CODEC = DecisionCodec(
+    "finn.dataflow.weight_supply", 1, lambda value: WeightSupply(value).value, _decode_supply
+)
 
 
 def _target_dsp(build: Any) -> DspBlock:
@@ -144,35 +153,72 @@ class MvauDataflowOp(DataflowOp):
 
     narrow_weights = Attribute(bool, default=False)
 
+    #: The accumulator width, and therefore the output's datatype.  A
+    #: source-semantic *attribute*, not a reading of the output annotation: the
+    #: value reaches Region construction and the physical realization, so it
+    #: must be part of the problem's identity.  Reading it back off the tensor
+    #: the operation itself writes would make a fact the design space depends on
+    #: something the design space is authoritative for -- and, kept out of the
+    #: fingerprint to make repair possible, would let recorded choices be
+    #: silently wrong.
+    accumulator_type = DatatypeAttribute(default="INT32")
+
     target_dsp = BuildFact(DspBlock, accessor=_target_dsp)
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
 
     # -- what the composition below reads -------------------------------------
 
-    @derived(int, shape=weight.shape)
+    @derived(tuple, shape=weight.shape)
+    def matrix(*, shape: tuple[int, ...]) -> object:
+        """The validated matrix shape every other derivation reads.
+
+        The one place the rank is checked, and everything downstream depends on
+        *this* rather than on the raw shape.  A ``Derived`` cannot rely on a
+        sibling constraint having run first -- the engine offers no such
+        ordering -- so ``shape[1]`` on a rank-1 weight would raise an
+        EvaluationError before the rank constraint ever produced its finding.
+        """
+
+        if len(shape) != 2:
+            return reject(
+                "mvau-weight-not-a-matrix",
+                f"matrix-vector multiplication needs a rank-2 matrix; this one is {shape}",
+                values={"shape": list(shape)},
+            )
+        return shape
+
+    @derived(int, shape=matrix)
     def matrix_width(*, shape: tuple[int, ...]) -> object:
         return shape[0]
 
-    @derived(int, shape=weight.shape)
+    @derived(int, shape=matrix)
     def matrix_height(*, shape: tuple[int, ...]) -> object:
         return shape[1]
 
     @derived(int, shape=activation.shape, width=matrix_width)
     def repetitions(*, shape: tuple[int, ...], width: int) -> object:
+        if not shape:
+            return reject(
+                "mvau-activation-rank",
+                "an activation with no dimensions has nothing to multiply",
+                values={"shape": []},
+            )
         total = 1
         for extent in shape:
             total *= extent
         return total // width
 
-    @constraint(shape=weight.shape)
+    @constraint(shape=matrix)
     def weight_is_a_matrix(*, shape: tuple[int, ...]) -> object:
-        if len(shape) == 2:
-            return True
-        return reject(
-            "mvau-weight-not-a-matrix",
-            f"matrix-vector multiplication needs a rank-2 matrix; this one is {shape}",
-            values={"shape": list(shape)},
-        )
+        """Restates the refusal ``matrix`` already made, as a *verdict*.
+
+        The derivation refuses so nothing downstream computes on a malformed
+        shape; the constraint exists so ``op.dataflow`` reports it as a
+        rejection rather than only as an unresolved Network.
+        """
+
+        del shape
+        return True
 
     @constraint(activation=activation.shape, width=matrix_width)
     def activation_matches_the_matrix(*, activation: tuple[int, ...], width: int) -> object:
@@ -185,23 +231,12 @@ class MvauDataflowOp(DataflowOp):
             values={"activation": list(activation), "width": width},
         )
 
-    @constraint(observed=output.shape, activation=activation.shape, height=matrix_height)
-    def output_shape_is_consistent(
-        *, observed: tuple[int, ...], activation: tuple[int, ...], height: int
-    ) -> object:
-        expected = (*activation[:-1], height)
-        if tuple(observed) == expected:
-            return True
-        return reject(
-            "mvau-output-shape-mismatch",
-            f"the graph annotates the output as {tuple(observed)}; this operation "
-            f"produces {expected}",
-            values={"observed": list(observed), "expected": list(expected)},
-        )
-
-    source_accepts = ConstraintGroup(
-        weight_is_a_matrix, activation_matches_the_matrix, output_shape_is_consistent
-    )
+    #: The output annotation is deliberately *not* here.  A stale annotation is
+    #: what ``graph_effects`` repairs, and a constraint that refused it would
+    #: refuse the very projection whose acceptance is required to commit the
+    #: repair -- so the node could never be fixed.  It is a reconciliation
+    #: difference; see ``expected_outputs``.
+    source_accepts = ConstraintGroup(weight_is_a_matrix, activation_matches_the_matrix)
 
     # -- the composition ------------------------------------------------------
 
@@ -214,11 +249,11 @@ class MvauDataflowOp(DataflowOp):
                 matrix_height=matrix_height,
                 activation_type=activation.datatype,
                 weight_type=weight.datatype,
-                # The accumulator is the output's own type: this core drives it
-                # straight out, and inventing a wider one here would be the
-                # design space deciding a numeric fact the graph already states.
-                accumulator_type=output.datatype,
-                output_type=output.datatype,
+                accumulator_type=accumulator_type,
+                # This core drives the accumulator straight out, so the output
+                # type *is* the accumulator type.  Derived onto the tensor, not
+                # read back off it.
+                output_type=accumulator_type,
                 narrow_weights=narrow_weights,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
@@ -230,8 +265,8 @@ class MvauDataflowOp(DataflowOp):
                 matrix_height=matrix_height,
                 activation_type=activation.datatype,
                 weight_type=weight.datatype,
-                accumulator_type=output.datatype,
-                output_type=output.datatype,
+                accumulator_type=accumulator_type,
+                output_type=accumulator_type,
                 narrow_weights=narrow_weights,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
@@ -260,9 +295,12 @@ class MvauDataflowOp(DataflowOp):
 
     # -- the projections ------------------------------------------------------
 
-    @property
-    def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
-        return _selected_design(self).dataflow
+    def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
+        view = _design_view(self)
+        chosen = view.selected()
+        if not isinstance(chosen, Decided):
+            return None
+        return cast(WeightedDotProductDesign, view.alternative(chosen.value)).dataflow
 
     @property
     def association(self) -> Answer[SourceAssociation]:
@@ -320,11 +358,51 @@ class MvauDataflowOp(DataflowOp):
 
     # -- what this operation is authoritative for -----------------------------
 
-    def graph_shapes(self) -> dict[str, tuple[int, ...]]:
+    def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
+        """What this operation produces, derived once and used everywhere.
+
+        The graph effects, the QONNX compatibility methods and the
+        reconciliation report all read this, so the formula has one home.
+        """
+
         activation = self.source.operand("activation")
         weight = self.source.operand("weight")
-        output = self.source.operand("output")
-        return {output.tensor: (*activation.shape[:-1], weight.shape[1])}
+        if len(weight.shape) != 2 or not activation.shape:
+            return {}
+        accumulator = self.answer(type(self).accumulator_type)
+        return {
+            "output": (
+                (*activation.shape[:-1], weight.shape[1]),
+                accumulator.value if isinstance(accumulator, Decided) else None,
+            )
+        }
+
+    def make_shape_compatible_op(self, model: Any) -> Any:
+        """A shape-compatible stand-in, from the same derivation, applying nothing."""
+
+        del model
+        from onnx import helper  # type: ignore[import-not-found] # noqa: PLC0415
+
+        expected = self.expected_outputs().get("output")
+        if expected is None or expected[0] is None:
+            raise DataflowOpError(
+                f"{self.source.node_name} cannot state a shape-compatible op: its operands "
+                "are not a matrix and a compatible activation"
+            )
+        return helper.make_node(
+            "RandomNormal",
+            [],
+            [self.onnx_node.output[0]],
+            shape=list(expected[0]),
+        )
+
+    def infer_node_datatype(self, model: Any) -> None:
+        """QONNX's in-place API, taking its value from the same derivation."""
+
+        expected = self.expected_outputs().get("output")
+        if expected is None or expected[1] is None:
+            return
+        model.set_tensor_datatype(self.onnx_node.output[0], expected[1])
 
 
 def _internal_destination(

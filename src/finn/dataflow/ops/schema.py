@@ -117,9 +117,33 @@ SOURCE_OPERAND_CODEC: CanonicalValueCodec[object] = CanonicalValueCodec(
 SOURCE_OPERAND_SEMANTICS = semantics_for(SourceOperand)
 
 
+class TensorDeclaration:
+    """Marker for the two kinds of operand declaration.
+
+    They are deliberately *not* the same kind of thing.  An input is a fact the
+    design space depends on, so it is a ``Problem`` and it is part of the
+    problem's identity.  An output is an annotation the operation is
+    authoritative for and merely observes, so it is not a Problem at all and
+    never reaches the point.
+    """
+
+    __slots__ = ()
+
+    index: int
+    output: bool
+    member_name: str
+
+
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class TensorDeclaration(Problem[Any]):
-    """One operand of the source node: a Problem, plus the facets over it."""
+class InputTensor(TensorDeclaration, Problem[Any]):
+    """One input operand: a Problem, plus the facets over it.
+
+    ``optional=True`` admits ONNX's empty-string spelling of "not supplied", so
+    a thresholded variant of an operation can make a whole operand conditional
+    without anyone inventing a placeholder tensor.  ``fingerprint=True`` folds a
+    digest of the operand's initializer into the problem identity, for an
+    operand whose *values* change what is built.
+    """
 
     # Defaulted only because ``Problem`` defaults every field it declares
     # above these; ``init=False`` means the real values always arrive through
@@ -131,14 +155,7 @@ class TensorDeclaration(Problem[Any]):
     facets: dict[str, Derived[Any]] = field(default_factory=dict)
     member_name: str = ""
 
-    def __init__(
-        self,
-        index: int,
-        *,
-        optional: bool = False,
-        fingerprint: bool = False,
-        output: bool = False,
-    ) -> None:
+    def __init__(self, index: int, *, optional: bool = False, fingerprint: bool = False) -> None:
         if not isinstance(index, int) or index < 0:
             raise AuthoringError("a tensor declaration needs a non-negative operand index")
         Problem.__init__(
@@ -146,13 +163,11 @@ class TensorDeclaration(Problem[Any]):
             SOURCE_OPERAND_SEMANTICS,
             required=not optional,
             canonical=SOURCE_OPERAND_CODEC,
-            # An output is observed, not depended on.  See OutputTensor.
-            fingerprint=not output,
         )
         object.__setattr__(self, "index", index)
         object.__setattr__(self, "optional", optional)
         object.__setattr__(self, "fingerprint_initializer", fingerprint)
-        object.__setattr__(self, "output", output)
+        object.__setattr__(self, "output", False)
         object.__setattr__(self, "member_name", "")
         object.__setattr__(self, "facets", _tensor_facets(self))
 
@@ -175,34 +190,31 @@ class TensorDeclaration(Problem[Any]):
         return self.member_name or f"operand #{self.index}"
 
 
-@dataclass(frozen=True, slots=True, eq=False, init=False)
-class InputTensor(TensorDeclaration):
-    """One input operand.
-
-    ``optional=True`` admits ONNX's empty-string spelling of "not supplied", so
-    a thresholded variant of an operation can make a whole operand conditional
-    without anyone inventing a placeholder tensor.  ``fingerprint=True`` folds a
-    digest of the operand's initializer into the problem identity, for an
-    operand whose *values* change what is built.
-    """
-
-
-@dataclass(frozen=True, slots=True, eq=False, init=False)
+@dataclass(frozen=True, slots=True, eq=False)
 class OutputTensor(TensorDeclaration):
     """One output operand, as the graph currently annotates it.
 
-    Read for reconciliation, never for identity.  The operation derives what its
-    output shape and datatype *should* be; the graph's current annotation is an
-    observation to be compared against that and repaired, so it is declared
-    ``fingerprint=False`` -- otherwise applying the repair would invalidate the
-    identity the repair was committed under.
+    **Not a Problem, and not in the point.**  The operation is authoritative for
+    what its output shape and datatype should be; the graph's annotation is an
+    observation to be compared against that and repaired.  A value that could
+    reach a Decision domain or a constraint while staying out of the problem
+    identity is a value whose recorded choices can be silently wrong -- so
+    rather than an escape hatch on ``Problem``, an observation simply is not
+    one.  It is read into the frozen ``SourceNode`` and reconciled there.
+
+    The consequence is deliberate: an operation cannot feed its own output
+    annotation into a Design.  If a datatype genuinely defines the operation's
+    mathematics -- an accumulator width, say -- it is declared as a
+    ``DatatypeAttribute`` and *derived onto* the output, not read back off it.
     """
 
-    def __init__(self, index: int) -> None:
-        # Named explicitly, not ``super()``: ``@dataclass(slots=True)`` builds a
-        # *new* class, so the zero-argument form's ``__class__`` cell points at
-        # the pre-slots one and the call fails at import time.
-        TensorDeclaration.__init__(self, index, output=True)
+    index: int
+    output: bool = True
+    member_name: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.index, int) or self.index < 0:
+            raise AuthoringError("a tensor declaration needs a non-negative operand index")
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -267,21 +279,22 @@ class BuildFact(Problem[Any]):
 
 #: Every class-body value the source-schema lowering recognizes.
 SOURCE_DECLARATION_TYPES: tuple[type, ...] = (
-    TensorDeclaration,
+    InputTensor,
+    OutputTensor,
     Attribute,
     DatatypeAttribute,
     BuildFact,
 )
 
 #: The union, for a caller that wants to name it.
-SourceDeclaration = TensorDeclaration | Attribute | DatatypeAttribute | BuildFact
+SourceDeclaration = InputTensor | OutputTensor | Attribute | DatatypeAttribute | BuildFact
 
 
 def facet_name(member_name: str, facet: str) -> str:
     return f"{member_name}__{facet}"
 
 
-def _tensor_facets(declaration: TensorDeclaration) -> dict[str, Derived[Any]]:
+def _tensor_facets(declaration: InputTensor) -> dict[str, Derived[Any]]:
     """Build one tensor's facet properties over its own operand record.
 
     An optional operand's facets tolerate its absence and say so: ``present``
@@ -352,7 +365,7 @@ def lower_source_schema(
     generated: dict[str, object] = {}
     for member_name, declaration in declarations.items():
         object.__setattr__(declaration, "member_name", member_name)
-        if not isinstance(declaration, TensorDeclaration):
+        if not isinstance(declaration, InputTensor):
             continue
         for facet, generated_declaration in declaration.facets.items():
             name = facet_name(member_name, facet)

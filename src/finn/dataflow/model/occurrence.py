@@ -41,6 +41,7 @@ from finn.dataflow._engine import (
     Answer,
     ConstraintAssessment,
     Decided,
+    DependencyKind,
     DesignPoint,
     Engine,
     Finding,
@@ -50,6 +51,8 @@ from finn.dataflow._engine import (
     ReadinessAssessment,
     RequestError,
     Unresolved,
+    ValueSemantics,
+    as_object_semantics,
 )
 from finn.dataflow._engine.requests import request_finding
 from finn.dataflow._engine.results import ordered_findings
@@ -414,11 +417,12 @@ def _problem_fingerprint(
     with the value, so changing how a type is encoded can never be mistaken for
     the value having changed.
 
-    A field declared ``fingerprint=False`` is skipped entirely: it is an
-    observation the Space is authoritative for and reconciles against, not a
-    fact it depends on.  Skipped rather than recorded as absent, so that marking
-    one field an observation does not move the digest of every problem that
-    never had one.
+    Every Problem is in.  A fact the Space merely *observes* -- an operation
+    reading its output tensor's current annotation so it can reconcile the
+    graph against what it derives -- is not a Problem at all and never reaches
+    the point, because a value that can influence a Decision domain or a
+    constraint and stay out of the identity is a value whose recorded choices
+    can be silently wrong.
     """
 
     payload = {
@@ -435,7 +439,6 @@ def _problem_fingerprint(
                 ),
             }
             for name, declaration in _problem_members(space_type)
-            if declaration.fingerprint
         ],
     }
     encoded = dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -928,6 +931,85 @@ def occurrence_project(instance: Space, declaration: Projection[T]) -> Projectio
         return evaluate_projection(lineage.engine, state.runtime.point, compiled)
 
 
+def _unselected(name: str, owner: QualifiedPath) -> Unresolved:
+    return Unresolved(
+        (
+            Finding(
+                FindingKind.BLOCKER,
+                "projection-alternative-unselected",
+                owner,
+                f"projection {name!r} has no selected alternative at this point",
+            ),
+        )
+    )
+
+
+def combine_assessments(
+    name: str,
+    constraints: tuple[ConstraintAssessment, ...],
+    inner: ProjectionAssessment[T] | None,
+) -> ProjectionAssessment[T]:
+    """One projection whose obligations are its own *and* a nested one's.
+
+    For a Space that owns semantics and delegates its output to a child.
+    Exporting the child's value is not enough: a value crosses the boundary and
+    a projection's readiness and constraint obligations do not, so a parent
+    that merely forwarded the value would answer ``Decided`` over a child that
+    had refused.
+
+    ``inner is None`` says the child is not selected yet.  That is a point
+    state, so it becomes an ordinary ``Unresolved`` output rather than an
+    exception -- which is the whole difference between "you have not chosen
+    yet" and "this is broken".
+
+    The reduction is :func:`_reduce_projection`, unchanged and not
+    reimplemented, so the normative ordering has exactly one definition.
+    """
+
+    owner = QualifiedPath(name)
+    readiness = (
+        inner.readiness
+        if inner is not None
+        else ReadinessAssessment(
+            name,
+            MappingProxyType({owner: _unselected(name, owner)}),
+            None,
+        )
+    )
+    output: Answer[object] = (
+        cast("Answer[object]", inner.output) if inner is not None else _unselected(name, owner)
+    )
+    compiled: _CompiledProjection[object] = _CompiledProjection(
+        name,
+        name,
+        _Ref(owner, DependencyKind.PROPERTY, as_object_semantics(_PASSTHROUGH)),
+        name,
+        (),
+    )
+    accepted = _reduce_projection(compiled, readiness, constraints, output)
+    return ProjectionAssessment(
+        name,
+        readiness,
+        constraints,
+        cast("Answer[T]", output),
+        cast("Answer[T]", accepted),
+    )
+
+
+#: Value semantics for a combined projection's output.  The child's declaration
+#: already froze and type-checked the value on its way out; re-snapshotting it
+#: here through a nominal token would be a second, weaker check of something
+#: already checked, and would reject any value the parent legitimately passes
+#: through unchanged.
+_PASSTHROUGH: ValueSemantics[object] = ValueSemantics(
+    type_token=object,
+    name="passthrough",
+    recognizes=lambda value: True,
+    equal=lambda left, right: bool(left == right),
+    snapshot=lambda value: value,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class LayerRuntime:
     """The seam a layer specialization implements its own projection through.
@@ -1179,6 +1261,7 @@ __all__ = [
     "ProblemSource",
     "ProjectionAssessment",
     "RootFactory",
+    "combine_assessments",
     "VariantView",
     "LayerRuntime",
     "evaluate_projection",

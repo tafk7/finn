@@ -31,7 +31,7 @@ dataflow projection Decided and the physical one refusing.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
@@ -40,13 +40,8 @@ from uuid import uuid4
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.model.occurrence import ProjectionAssessment
-from finn.dataflow.ops.base import (
-    FAMILY_ATTRIBUTE,
-    FAMILY_VERSION_ATTRIBUTE,
-    FINGERPRINT_ATTRIBUTE,
-    SCOPE_ID_ATTRIBUTE,
-    DataflowOpError,
-)
+from finn.dataflow.ops.base import SCOPE_ID_ATTRIBUTE, DataflowOpError
+from finn.dataflow.ops.state import STATE_ATTRIBUTE, decode_dataflow_state
 
 
 class CommitmentStage(Enum):
@@ -78,11 +73,16 @@ class GraphEffects:
     scope_id: str
     family: str
     family_version: str
-    validated_stage: CommitmentStage
+    #: Renamed from ``validated_stage``: a partial point may be saved, so
+    #: "validated" overstated the guarantee.  This means only that no required
+    #: projection at or below this stage was *finally rejected* when the state
+    #: was written.  It does not say every Decision was made.
+    commitment_stage: CommitmentStage
     #: What the plan assumed about the node it was made against.
     expected_source_fingerprint: str
     expected_node_digest: str
-    node_attributes: Mapping[str, int | str] = field(default_factory=dict)
+    #: The canonical design-state document, written whole.
+    state_document: str = ""
     tensor_datatypes: Mapping[str, Any] = field(default_factory=dict)
     tensor_shapes: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
     #: Downstream products this change invalidates, named for a caller that
@@ -127,35 +127,64 @@ def find_node(model: Any, scope_id: str) -> Any:
     return found[0]
 
 
-def assign_dataflow_scope_ids(model: Any, *, domain: str) -> tuple[str, ...]:
-    """Give every dataflow node in this graph a scope id, once.
+class AssignDataflowScopeIds:
+    """Normalize the addressing identity of every dataflow node in one graph.
 
-    The explicit upgrade transaction.  Identity belongs to whoever constructs
-    the node, and an imported graph that predates this layer has nodes with no
-    owner to have done it -- so the repair is an act a caller performs, not
-    something a query does behind their back on first read.
+    The explicit upgrade transaction, named because ``bind`` names it.
+    Identity belongs to whoever constructs the node; an imported graph that
+    predates this layer has nodes with no owner to have done it, so the repair
+    is an act a caller performs rather than something a query does behind their
+    back on first read.
 
-    Returns the scope ids of the nodes it had to repair.
+    **Duplicates matter as much as absences.**  Copying a ``NodeProto`` copies
+    its attributes, so the ordinary way to clone a node also clones its scope
+    id -- and two nodes sharing one identity is worse than a node having none:
+    a change addressed to that id would find two candidates, and a recorded
+    choice would be attributable to either.  The first occurrence in graph
+    order keeps the id and every later one is reallocated, so a clone gets a
+    fresh identity and the original is left alone.
+
+    Idempotent: running it twice changes nothing the first run settled.
     """
 
-    assigned: list[str] = []
-    for node in model.graph.node:
-        if node.domain != domain:
-            continue
-        existing = next(
-            (
-                _text(attribute.s)
-                for attribute in node.attribute
-                if attribute.name == SCOPE_ID_ATTRIBUTE
-            ),
-            "",
-        )
-        if existing:
-            continue
-        allocated = allocate_scope_id()
-        _write_string(node, SCOPE_ID_ATTRIBUTE, allocated)
-        assigned.append(allocated)
-    return tuple(assigned)
+    def __init__(self, domain: str) -> None:
+        self.domain = domain
+
+    def apply(self, model: Any) -> tuple[Any, bool]:
+        """The QONNX transformation protocol: the model, and whether to re-run."""
+
+        return model, bool(self.normalize(model))
+
+    def normalize(self, model: Any) -> tuple[str, ...]:
+        """Assign or reassign, returning every id this run had to allocate."""
+
+        seen: set[str] = set()
+        assigned: list[str] = []
+        for node in model.graph.node:
+            if node.domain != self.domain:
+                continue
+            existing = next(
+                (
+                    _text(attribute.s)
+                    for attribute in node.attribute
+                    if attribute.name == SCOPE_ID_ATTRIBUTE
+                ),
+                "",
+            )
+            if existing and existing not in seen:
+                seen.add(existing)
+                continue
+            allocated = allocate_scope_id()
+            _write_string(node, SCOPE_ID_ATTRIBUTE, allocated)
+            seen.add(allocated)
+            assigned.append(allocated)
+        return tuple(assigned)
+
+
+def assign_dataflow_scope_ids(model: Any, *, domain: str) -> tuple[str, ...]:
+    """Run :class:`AssignDataflowScopeIds` over one graph."""
+
+    return AssignDataflowScopeIds(domain).normalize(model)
 
 
 def check_commitment(
@@ -199,11 +228,22 @@ def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
     """
 
     node = find_node(model, effects.scope_id)
-    _check_precondition(node, FAMILY_ATTRIBUTE, effects.family, "family")
-    _check_precondition(node, FAMILY_VERSION_ATTRIBUTE, effects.family_version, "family version")
-    _check_precondition(
-        node, FINGERPRINT_ATTRIBUTE, effects.expected_source_fingerprint, "problem fingerprint"
-    )
+    recorded = decode_dataflow_state(node)
+    if recorded is not None:
+        for what, present, expected in (
+            ("family", recorded.family, effects.family),
+            ("family version", recorded.family_version, effects.family_version),
+            (
+                "problem fingerprint",
+                recorded.problem_fingerprint,
+                effects.expected_source_fingerprint,
+            ),
+        ):
+            if present and present != expected:
+                raise DataflowOpError(
+                    f"node {node.name!r} records {what} {present!r} and this change was "
+                    f"planned for {expected!r}; rebind and plan again"
+                )
     actual = node_digest(node)
     if actual != effects.expected_node_digest:
         raise DataflowOpError(
@@ -212,41 +252,26 @@ def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
             "rebind and plan again"
         )
 
-    snapshot = node.SerializeToString(deterministic=True)
+    # The *whole* model, not just the node.  Tensor datatypes live in graph
+    # annotations and shapes in value_info, so restoring only the NodeProto
+    # after a failed tensor write would leave the graph half-changed -- with
+    # the node looking untouched, which is worse than an obvious failure.
+    snapshot = model.model.SerializeToString(deterministic=True)
     try:
-        for name, value in effects.node_attributes.items():
-            if isinstance(value, str):
-                _write_string(node, name, value)
-            else:
-                _write_int(node, name, int(value))
+        # One attribute, written whole.  This is what makes switching a
+        # structural alternative safe: the document *replaces* the previous
+        # one, so a choice belonging to the alternative left behind cannot
+        # survive as a leftover attribute nobody rewrote.
+        _write_string(node, STATE_ATTRIBUTE, effects.state_document)
         _write_string(node, SCOPE_ID_ATTRIBUTE, effects.scope_id)
-        _write_string(node, FAMILY_ATTRIBUTE, effects.family)
-        _write_string(node, FAMILY_VERSION_ATTRIBUTE, effects.family_version)
-        _write_string(node, FINGERPRINT_ATTRIBUTE, effects.expected_source_fingerprint)
         for tensor, datatype in effects.tensor_datatypes.items():
             model.set_tensor_datatype(tensor, datatype)
         for tensor, shape in effects.tensor_shapes.items():
             model.set_tensor_shape(tensor, list(shape))
     except Exception:
-        restored = type(node)()
-        restored.ParseFromString(snapshot)
-        node.CopyFrom(restored)
+        model.model.ParseFromString(snapshot)
         raise
-    return node
-
-
-def _check_precondition(node: Any, attribute: str, expected: str, what: str) -> None:
-    """An empty recorded value means "never written", which any plan may fill."""
-
-    present = next(
-        (_text(item.s) for item in node.attribute if item.name == attribute),
-        "",
-    )
-    if present and present != expected:
-        raise DataflowOpError(
-            f"node {node.name!r} records {what} {present!r} and this change was planned "
-            f"for {expected!r}; rebind and plan again"
-        )
+    return find_node(model, effects.scope_id)
 
 
 def _text(value: object) -> str:
@@ -273,28 +298,14 @@ def _drop(node: Any, name: str) -> None:
     node.attribute.extend(kept)
 
 
-def drop_recorded_choices(model: Any, scope_id: str, names: Sequence[str]) -> None:
-    """Remove every recorded choice from one node, keeping its identity.
-
-    Through the same locate-by-scope-id path as every other write, so "clear"
-    is not the one operation that reaches a node differently.
-    """
-
-    node = find_node(model, scope_id)
-    dropped = set(names) | {FAMILY_ATTRIBUTE, FAMILY_VERSION_ATTRIBUTE, FINGERPRINT_ATTRIBUTE}
-    kept = [item for item in node.attribute if item.name not in dropped]
-    del node.attribute[:]
-    node.attribute.extend(kept)
-
-
 __all__ = [
+    "AssignDataflowScopeIds",
     "CommitmentStage",
     "GraphEffects",
     "allocate_scope_id",
     "apply_graph_effects",
     "assign_dataflow_scope_ids",
     "check_commitment",
-    "drop_recorded_choices",
     "find_node",
     "node_digest",
 ]

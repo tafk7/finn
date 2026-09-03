@@ -50,6 +50,7 @@ from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 from finn.dataflow._engine import Answer, Decided, RequestError, Unresolved
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    ConstraintGroup,
     Decision,
     OccurrenceContext,
     Problem,
@@ -64,10 +65,19 @@ from finn.dataflow.ops.schema import (
     BuildFact,
     DatatypeAttribute,
     SourceDeclaration,
-    TensorDeclaration,
+    InputTensor,
+    OutputTensor,
     lower_source_schema,
 )
 from finn.dataflow.ops.source import SourceError, SourceNode, read_source_node
+from finn.dataflow.ops.state import (
+    SELECTOR_CODEC,
+    STATE_ATTRIBUTE,
+    DecisionCodec,
+    DecodeError,
+    decode_dataflow_state,
+    encode_state,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from onnx import NodeProto  # type: ignore[import-not-found]
@@ -84,7 +94,13 @@ FAMILY_VERSION_ATTRIBUTE = "dataflow_family_version"
 FINGERPRINT_ATTRIBUTE = "dataflow_problem_fingerprint"
 
 RESERVED_ATTRIBUTES = frozenset(
-    {SCOPE_ID_ATTRIBUTE, FAMILY_ATTRIBUTE, FAMILY_VERSION_ATTRIBUTE, FINGERPRINT_ATTRIBUTE}
+    {
+        SCOPE_ID_ATTRIBUTE,
+        FAMILY_ATTRIBUTE,
+        FAMILY_VERSION_ATTRIBUTE,
+        FINGERPRINT_ATTRIBUTE,
+        STATE_ATTRIBUTE,
+    }
 )
 
 
@@ -135,33 +151,17 @@ class SourceBinding:
     build: BuildFacts
 
 
-@dataclass(frozen=True, slots=True)
-class AttributeCodec:
-    """How one persistent Decision's value crosses the ONNX attribute boundary.
-
-    Explicit in both directions, and never ``repr``/``eval``.  An attribute is
-    the only thing that survives a save, so a value that cannot be written and
-    read back to something the Decision's domain accepts must fail where it is
-    written, not where it is next read.
-
-    ``kind`` is the ONNX attribute type the encoded form occupies.  It lives on
-    the codec because the codec is what decides the encoded form; declaring it
-    separately in ``get_nodeattr_types`` is how an enum written as its own
-    stable name ends up in an integer field.
-    """
-
-    encode: Callable[[Any], int | str]
-    decode: Callable[[Any], object]
-    kind: str = "i"
+#: Kept as the layer's name for a Decision codec.  It is
+#: :class:`~finn.dataflow.ops.state.DecisionCodec`: one identity, one version,
+#: and an explicit pair of functions.  No ``repr``/``eval``, and no ONNX
+#: attribute *kind*, because a value no longer occupies an attribute of its own
+#: -- it is one entry in the canonical state document.
+AttributeCodec = DecisionCodec
 
 
-INT_CODEC = AttributeCodec(lambda value: int(value), lambda value: int(value))
-BOOL_CODEC = AttributeCodec(lambda value: int(bool(value)), lambda value: bool(int(value)))
-STRING_CODEC = AttributeCodec(
-    lambda value: str(value),
-    lambda value: value.decode("utf-8") if isinstance(value, bytes) else str(value),
-    kind="s",
-)
+INT_CODEC = DecisionCodec("dataflow.int", 1, int, int)
+BOOL_CODEC = DecisionCodec("dataflow.bool", 1, bool, bool)
+STRING_CODEC = DecisionCodec("dataflow.string", 1, str, str)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,10 +175,11 @@ class DecisionAttribute:
     an authored member a type error instead of a silently dead attribute.
     """
 
+    #: The path this choice occupies inside the state document.
     name: str
     navigate: Callable[[Space], Space]
     declaration: Decision[Any]
-    codec: AttributeCodec
+    codec: DecisionCodec
 
     def apply(self, root: Space, value: object) -> Space:
         owner = self.navigate(root)
@@ -255,6 +256,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     #: including one that meant to say no.
     wants_model: ClassVar[bool] = True
 
+    #: The constraints that gate this operation's *own* semantics, as distinct
+    #: from any Design's.  Empty by default and combined into ``dataflow`` by
+    #: the root projection, so a declared group is never compiled-but-unread.
+    source_accepts: ClassVar[Any] = ConstraintGroup()
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         declarations = dict(vars(cls))
         schema = {
@@ -308,7 +314,21 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         with every persisted choice replayed onto it.
         """
 
-        if self.recorded_scope_id() is None:
+        scope = self.recorded_scope_id()
+        if scope is not None:
+            duplicates = sum(
+                1
+                for node in getattr(getattr(model, "graph", None), "node", ())
+                if _string_attribute(node, SCOPE_ID_ATTRIBUTE) == scope
+            )
+            if duplicates > 1:
+                raise SourceError(
+                    f"{duplicates} nodes in this graph carry dataflow scope id {scope!r}; "
+                    "a change addressed to it would find more than one, and a recorded "
+                    "choice would be attributable to either.  Run AssignDataflowScopeIds "
+                    "over the graph first"
+                )
+        if scope is None:
             raise SourceError(
                 f"{self.onnx_node.name!r} has no dataflow scope id, so nothing can be "
                 "addressed to it and no recorded choice can be attributed to it; run "
@@ -320,14 +340,24 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return type(self)._start_bound(binding, self._recorded_on(self.onnx_node))
 
     def rebind(self, model: Any, build: Any) -> Any:
-        """Read the graph again, deliberately, and return a fresh bound occurrence.
+        """Locate the live node by scope id and read it again, deliberately.
 
-        The explicit refresh.  A bound occurrence never notices a graph edit on
-        its own -- that is the point of freezing -- so noticing one is an act
-        the caller performs and can be seen doing.
+        The explicit refresh, and it must go to the *live* node.  Calling
+        ``bind`` on ``self`` would re-read the frozen copy this occurrence
+        already holds: the tensor names, the node attributes, the operand list
+        and the node name would all be the ones captured at binding time, so a
+        refresh would faithfully reproduce the state it was supposed to notice
+        had changed.  Only the datatype of an unchanged tensor would move, which
+        is exactly the narrow case that hides the defect.
+
+        Identity does the locating, not the object: the node may have been
+        renamed, and the wrapper may outlive the graph it came from.
         """
 
-        return self.bind(model, build)
+        from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415 - see graph_effects
+
+        node = find_node(model, self.binding.node_identity)
+        return type(self)(node, self.binding.opset_version).bind(model, build)
 
     @classmethod
     def _start_bound(cls, binding: SourceBinding, recorded: Mapping[str, object]) -> Any:
@@ -352,7 +382,10 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         values: dict[Problem[Any], object] = {}
         for member_name, declaration in source_declarations(cls):
             problem = cast("Problem[Any]", declaration)
-            if isinstance(declaration, TensorDeclaration):
+            if isinstance(declaration, OutputTensor):
+                # An observation, never a Problem: it does not reach the point.
+                continue
+            if isinstance(declaration, InputTensor):
                 if not binding.source.has(member_name):
                     if not declaration.optional:
                         raise SourceError(
@@ -380,12 +413,13 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         attributes: dict[str, object] = {}
         build_values: dict[str, object] = {}
         for member_name, declaration in declarations:
-            if isinstance(declaration, TensorDeclaration):
+            if isinstance(declaration, (InputTensor, OutputTensor)):
                 (outputs if declaration.output else inputs).append((declaration.index, member_name))
-                if declaration.optional:
-                    optional.append(member_name)
-                if declaration.fingerprint:
-                    digested.append(member_name)
+                if isinstance(declaration, InputTensor):
+                    if declaration.optional:
+                        optional.append(member_name)
+                    if declaration.fingerprint_initializer:
+                        digested.append(member_name)
             elif isinstance(declaration, DatatypeAttribute):
                 attributes[member_name] = _datatype_attribute(self, member_name, declaration)
             elif isinstance(declaration, Attribute):
@@ -395,8 +429,8 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         source = read_source_node(
             model,
             self.onnx_node,
-            inputs=tuple(name for _index, name in sorted(inputs)),
-            outputs=tuple(name for _index, name in sorted(outputs)),
+            inputs=_positional(operation, inputs, "input"),
+            outputs=_positional(operation, outputs, "output"),
             optional_inputs=tuple(optional),
             digest_inputs=tuple(digested),
             attributes=attributes,
@@ -408,6 +442,66 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             source,
             BuildFacts(MappingProxyType(build_values)),
         )
+
+    def is_stale(self, problem: Any = None) -> bool:
+        """Whether this occurrence's frozen source still matches the graph.
+
+        Overridden because the inherited form re-reads a *problem source*, and
+        a bound operation's problem source is a frozen record that by
+        construction never changes.  Staleness here is a question about the
+        graph, so it takes the graph.
+        """
+
+        if problem is None:
+            raise DataflowOpError(
+                "a DataflowOp's staleness is relative to a model and a build; call "
+                "is_stale((model, build)) or compare rebind(...).problem_fingerprint"
+            )
+        model, build = problem
+        from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415
+
+        node = find_node(model, self.binding.node_identity)
+        fresh = type(self)(node, self.binding.opset_version)
+        # Deliberately not ``rebind``: hydration refuses a recorded fingerprint
+        # that no longer matches, and refusing is the very thing this method
+        # exists to let a caller ask about without triggering.
+        binding = fresh.read_binding(model, build)
+        started = type(self).start(
+            type(self)._problem_values(binding),
+            namespace=type(self).root_namespace,
+            root_factory=lambda context: type(self)._allocate_bound(context, binding),
+        )
+        return bool(started.problem_fingerprint != self.problem_fingerprint)
+
+    def reconstruct(self, problem: Any = None, **kwargs: Any) -> Any:
+        """Start again from this occurrence's own frozen source, with no choices.
+
+        The way a *structural* choice is changed.  An immutable point does not
+        rebase a committed selector, so switching from one Design alternative to
+        another means a point that never had the first one -- which is this, and
+        which keeps the same frozen binding and therefore the same problem
+        identity.
+
+        The inherited arbitrary-problem form is refused.  Combining a
+        caller-supplied problem mapping with this operation's root factory would
+        produce an occurrence whose Problem values and whose frozen
+        ``SourceBinding`` describe different nodes, and every answer downstream
+        would be drawn from whichever of the two happened to be consulted.
+        """
+
+        if problem is not None:
+            raise DataflowOpError(
+                "a DataflowOp reconstructs from the node it is bound to, not from an "
+                "arbitrary problem mapping; use rebind(model, build) to read a changed "
+                "graph, or reconstruct() to drop this occurrence's choices"
+            )
+        binding = self.binding
+        expected = kwargs.get("expected_problem_fingerprint")
+        if expected is not None and expected != self.problem_fingerprint:
+            raise DataflowOpError(
+                f"this operation's problem is {self.problem_fingerprint}, not {expected}"
+            )
+        return type(self)._start_bound(binding, {})
 
     # -- what a bound occurrence knows ----------------------------------------
 
@@ -450,9 +544,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     def get_nodeattr_types(self) -> Mapping[str, tuple[str, bool, object]]:
         declared: dict[str, tuple[str, bool, object]] = {
             SCOPE_ID_ATTRIBUTE: ("s", False, ""),
-            FAMILY_ATTRIBUTE: ("s", False, ""),
-            FAMILY_VERSION_ATTRIBUTE: ("s", False, ""),
-            FINGERPRINT_ATTRIBUTE: ("s", False, ""),
+            STATE_ATTRIBUTE: ("s", False, ""),
         }
         for member_name, declaration in source_declarations(type(self)):
             if isinstance(declaration, DatatypeAttribute):
@@ -460,9 +552,6 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             elif isinstance(declaration, Attribute):
                 kind = "s" if declaration.value_type is str else "i"
                 declared[member_name] = (kind, False, declaration.default)
-        for item in type(self).attributes:
-            kind = "s" if isinstance(item, SelectorAttribute) else item.codec.kind
-            declared[item.name] = (kind, False, "" if kind == "s" else 0)
         return declared
 
     def make_shape_compatible_op(self, model: Any) -> Any:
@@ -495,14 +584,27 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
     @property
     def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
-        """Readiness, constraint acceptance and the selected Network.
+        """The operation's own projection: source semantics *and* the Network.
 
-        A full assessment rather than a bare ``Answer``.  Collapsing readiness,
-        validity and availability into one value is what lets a rejected point
-        be handed on as though it were merely incomplete.
+        Exporting the selected Design's ``network`` is necessary and not
+        sufficient.  A value crosses the boundary; a projection's *obligations*
+        do not.  So this combines four things, and each is load-bearing:
+
+        - the operation's own ``source_accepts`` constraints, which would
+          otherwise be compiled and consulted by nothing;
+        - the selected Design's readiness, so an unresolved child is an
+          unresolved operation;
+        - the selected Design's constraints, so a Design that refuses this
+          point makes the operation refuse it;
+        - the Design's Network as the output.
+
+        An *unselected* Design is an ordinary ``Unresolved``, not an exception.
+        "Which alternative" is a Decision like any other, and a caller
+        inspecting a half-configured operation should get an answer describing
+        that, not a traceback.
         """
 
-        raise NotImplementedError(f"{type(self).__name__} does not project a Network")
+        return _root_projection(self)
 
     @property
     def network(self) -> Answer[DataflowNetwork]:
@@ -510,11 +612,63 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
         return self.dataflow.accepted_answer
 
+    def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
+        """The selected child Design's dataflow assessment, or ``None``.
+
+        ``None`` means "the structural choice is still open", which is a point
+        state and not an error.  Override to route; the combination with this
+        operation's own source semantics is done for you.
+        """
+
+        raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
+
     @property
     def association(self) -> Answer[SourceAssociation]:
         """Where each source operand's data crosses the selected Network."""
 
         raise NotImplementedError(f"{type(self).__name__} does not declare its association")
+
+    # -- reconciliation --------------------------------------------------------
+
+    def expected_outputs(self) -> Mapping[str, tuple[tuple[int, ...] | None, Any]]:
+        """What this operation says each output tensor's shape and datatype are.
+
+        Derived once, from source semantics, and used for three things: the
+        graph effects that repair an annotation, the QONNX compatibility
+        methods, and the reconciliation report.  Restating the formula in each
+        of those is how they come to disagree.
+
+        Keyed by operand id.  ``None`` in either position means "this operation
+        does not claim that", not "empty".
+        """
+
+        return {}
+
+    def reconciliation(self) -> tuple[str, ...]:
+        """Where the graph's annotations differ from what this operation derives.
+
+        A *difference*, not a rejection.  A stale output annotation is the thing
+        ``graph_effects`` exists to repair, so it must not also refuse the
+        projection whose acceptance is required to commit that repair --
+        otherwise the repair can never be applied and the node stays wrong.
+        """
+
+        differences: list[str] = []
+        for operand_id, (shape, datatype) in self.expected_outputs().items():
+            if not self.source.has(operand_id):
+                continue
+            observed = self.source.operand(operand_id)
+            if shape is not None and tuple(observed.shape) != tuple(shape):
+                differences.append(
+                    f"{operand_id}: the graph annotates shape {tuple(observed.shape)}, "
+                    f"this operation produces {tuple(shape)}"
+                )
+            if datatype is not None and observed.datatype != datatype:
+                differences.append(
+                    f"{operand_id}: the graph annotates datatype {observed.datatype.name}, "
+                    f"this operation produces {datatype.name}"
+                )
+        return tuple(differences)
 
     # -- persistence ----------------------------------------------------------
 
@@ -546,16 +700,13 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         stage = CommitmentStage.DATAFLOW if require is None else require
         check_commitment({CommitmentStage.DATAFLOW: self.dataflow}, stage)
 
-        encoded: dict[str, int | str] = {}
+        encoded: dict[str, object] = {}
         for item in type(self).attributes:
             value = _reachable_value(self, item)
             if value is _UNREACHABLE:
                 continue
-            encoded[item.name] = (
-                STRING_CODEC.encode(value)
-                if isinstance(item, SelectorAttribute)
-                else item.codec.encode(value)
-            )
+            codec = SELECTOR_CODEC if isinstance(item, SelectorAttribute) else item.codec
+            encoded[item.name] = codec.encode(value)
         return GraphEffects(
             binding.node_identity,
             type(self).family,
@@ -563,27 +714,42 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             stage,
             self.problem_fingerprint,
             node_digest(binding.node),
-            MappingProxyType(encoded),
-            MappingProxyType(dict(self.graph_datatypes())),
-            MappingProxyType(dict(self.graph_shapes())),
+            encode_state(
+                family=type(self).family,
+                family_version=type(self).family_version,
+                problem_fingerprint=self.problem_fingerprint,
+                commitment_stage=stage.value,
+                assignments=encoded,
+            ),
+            MappingProxyType(
+                {
+                    self.source.operand(operand_id).tensor: datatype
+                    for operand_id, (_shape, datatype) in self.expected_outputs().items()
+                    if datatype is not None and self.source.has(operand_id)
+                }
+            ),
+            MappingProxyType(
+                {
+                    self.source.operand(operand_id).tensor: tuple(shape)
+                    for operand_id, (shape, _datatype) in self.expected_outputs().items()
+                    if shape is not None and self.source.has(operand_id)
+                }
+            ),
         )
 
-    def graph_shapes(self) -> Mapping[str, tuple[int, ...]]:
-        """The output shapes this operation is authoritative for.  Override."""
+    def commit(self, model: Any, build: Any, *, require: Any = None) -> Any:
+        """Plan, apply, and return a bound occurrence of the post-commit graph.
 
-        return {}
-
-    def graph_datatypes(self) -> Mapping[str, Any]:
-        """The output datatypes this operation is authoritative for.  Override."""
-
-        return {}
-
-    def commit(self, model: Any, *, require: Any = None) -> Any:
-        """Plan and apply in one step, through exactly the path above."""
+        The lifecycle continues across the mutation boundary.  Returning the
+        live ``NodeProto`` would end it there and force every caller to rebind
+        by hand -- and a caller who forgot would carry on asking questions of an
+        occurrence bound to the graph as it was *before* their own commit.
+        """
 
         from finn.dataflow.ops.persistence import apply_graph_effects  # noqa: PLC0415
 
-        return apply_graph_effects(model, self.graph_effects(require=require))
+        apply_graph_effects(model, self.graph_effects(require=require))
+        return self.rebind(model, build)
 
     def recorded(self) -> Mapping[str, object]:
         """The choices this object represents.
@@ -608,18 +774,46 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
     @classmethod
     def _recorded_on(cls, node: Any) -> Mapping[str, object]:
+        try:
+            state = decode_dataflow_state(node)
+        except DecodeError as error:
+            raise DataflowOpError(f"{node.name}: {error}") from error
+        if state is None:
+            return MappingProxyType({})
         present: dict[str, object] = {}
         for item in cls.attributes:
-            attribute = _attribute(node, item.name)
-            if attribute is None:
+            if item.name not in state.assignments:
                 continue
-            raw = attribute.s if attribute.type == attribute.STRING else attribute.i
-            present[item.name] = (
-                STRING_CODEC.decode(raw)
-                if isinstance(item, SelectorAttribute)
-                else item.codec.decode(raw)
-            )
+            codec = SELECTOR_CODEC if isinstance(item, SelectorAttribute) else item.codec
+            present[item.name] = codec.decode(state.assignments[item.name])
         return MappingProxyType(present)
+
+
+def _root_projection(operation: DataflowOp) -> ProjectionAssessment[DataflowNetwork]:
+    """Combine the operation's own source semantics with its selected Design's.
+
+    The reduction is the engine's, not a second one: readiness and constraint
+    assessments are concatenated and handed to the same
+    ``_reduce_projection`` ordering every other projection uses, so
+    "Unresolved dominates, then absence, then refusal" cannot come to mean two
+    slightly different things in two places.
+    """
+
+    from finn.dataflow.model.occurrence import (  # noqa: PLC0415 - see graph_effects
+        combine_assessments,
+    )
+
+    source = operation.assess(type(operation).source_accepts)
+    selected = operation.selected_dataflow()
+    if selected is None:
+        return cast(
+            "ProjectionAssessment[DataflowNetwork]",
+            combine_assessments("dataflow", (source,), None),
+        )
+    return cast(
+        "ProjectionAssessment[DataflowNetwork]",
+        combine_assessments("dataflow", (source, *selected.constraints), selected),
+    )
 
 
 #: "This choice is not reachable at this point", distinguished from every real
@@ -643,6 +837,27 @@ def _reachable_value(operation: DataflowOp, item: PersistentAttribute) -> object
     if isinstance(answer, Decided):
         return answer.value
     return _UNREACHABLE
+
+
+def _positional(
+    operation_type: type[DataflowOp], declared: list[tuple[int, str]], what: str
+) -> tuple[str, ...]:
+    """Turn declared operand indices into a positional list, or refuse.
+
+    An index is an *index*, not a hint about ordering.  Sorting by it and
+    handing the names to a positional reader silently reinterprets
+    ``InputTensor(index=3)`` as "the next one", which is exactly wrong the
+    moment an operation declares a sparse or out-of-order schema -- and that is
+    what optional operands make ordinary.
+    """
+
+    indices = sorted(index for index, _name in declared)
+    if indices != list(range(len(indices))):
+        raise AuthoringError(
+            f"{operation_type.__name__} declares {what} indices {indices}; they must be "
+            "unique and contiguous from zero, because an ONNX operand list is positional"
+        )
+    return tuple(name for _index, name in sorted(declared))
 
 
 def _check_authoring(operation_type: type[DataflowOp]) -> None:
@@ -694,23 +909,26 @@ def _check_recorded_identity(
 ) -> None:
     node = binding.node
     name = getattr(node, "name", "<node>")
-    stored = _string_attribute(node, FINGERPRINT_ATTRIBUTE)
-    if stored and stored != root.problem_fingerprint:
+    try:
+        state = decode_dataflow_state(node)
+    except DecodeError as error:
+        raise DataflowOpError(f"{name}: {error}") from error
+    if state is None:
+        return
+    if state.family and state.family != operation_type.family:
+        raise DataflowOpError(
+            f"{name} stores choices for family {state.family!r}, not {operation_type.family!r}"
+        )
+    if state.family_version and state.family_version != operation_type.family_version:
+        raise DataflowOpError(
+            f"{name} stores choices for {state.family}@{state.family_version}, "
+            f"and this build offers {operation_type.family_version}"
+        )
+    if state.problem_fingerprint and state.problem_fingerprint != root.problem_fingerprint:
         raise DataflowOpError(
             f"{name} stores choices made against a different problem "
-            f"(recorded {stored}, current {root.problem_fingerprint}); "
+            f"(recorded {state.problem_fingerprint}, current {root.problem_fingerprint}); "
             "reconstruct explicitly rather than reinterpreting them"
-        )
-    family = _string_attribute(node, FAMILY_ATTRIBUTE)
-    if family and family != operation_type.family:
-        raise DataflowOpError(
-            f"{name} stores choices for family {family!r}, not {operation_type.family!r}"
-        )
-    version = _string_attribute(node, FAMILY_VERSION_ATTRIBUTE)
-    if version and version != operation_type.family_version:
-        raise DataflowOpError(
-            f"{name} stores choices for {family}@{version}, "
-            f"and this build offers {operation_type.family_version}"
         )
 
 

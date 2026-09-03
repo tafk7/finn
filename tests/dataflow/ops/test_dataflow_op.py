@@ -12,9 +12,10 @@ separately rather than pretending the difference away.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from finn.dataflow.ops.association import (
 from finn.dataflow.ops.base import (
     DATAFLOW_DOMAIN,
     FAMILY_ATTRIBUTE,
+    FAMILY_VERSION_ATTRIBUTE,
     FINGERPRINT_ATTRIBUTE,
     SCOPE_ID_ATTRIBUTE,
     DataflowOp,
@@ -50,14 +52,19 @@ from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import (
+    AssignDataflowScopeIds,
     CommitmentStage,
     apply_graph_effects,
     assign_dataflow_scope_ids,
-    drop_recorded_choices,
 )
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.schema import InputTensor, OutputTensor
+from finn.dataflow.ops.state import (
+    STATE_ATTRIBUTE,
+    decode_dataflow_state,
+    format_dataflow_state,
+)
 from finn.dataflow.ops.source import SourceError
 
 
@@ -173,9 +180,9 @@ def _configured_mvau(
     kernel = chosen.design.alternative(design).kernel("compute")
     assert isinstance(kernel, Decided)
     chosen = kernel.value.assign(DotpAxiKernel.compute_pumping, pumped).root
-    apply_graph_effects(model, chosen.graph_effects())
-    assert isinstance(chosen, MvauDataflowOp)
-    return model, chosen
+    committed = chosen.commit(model, Build())
+    assert isinstance(committed, MvauDataflowOp)
+    return model, committed
 
 
 def _configured_replay(
@@ -188,9 +195,9 @@ def _configured_replay(
         (ActivationReplayDesign.simd, simd),
     ):
         chosen = chosen.design.assign(declaration, value).root
-    apply_graph_effects(model, chosen.graph_effects())
-    assert isinstance(chosen, ActivationReplayOp)
-    return model, chosen
+    committed = chosen.commit(model, Build())
+    assert isinstance(committed, ActivationReplayOp)
+    return model, committed
 
 
 # -- U4a: the operation is the root Space --------------------------------------
@@ -326,6 +333,7 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
         "weight",
         "output",
         "narrow_weights",
+        "accumulator_type",
         "target_dsp",
         "clock_period_ns",
     ]
@@ -372,11 +380,21 @@ def test_an_optional_operand_gets_a_presence_facet_and_absent_facets_refuse() ->
     assert refusal.findings[0].code == "source-operand-absent"
 
 
-def test_an_output_observation_is_not_part_of_the_problem_identity() -> None:
-    """Otherwise applying a repair invalidates the identity it was committed under."""
+def test_an_output_observation_never_reaches_the_point() -> None:
+    """An observation is not a Problem at all.
 
-    assert OutputTensor(index=0).fingerprint is False
-    assert InputTensor(index=0).fingerprint is True
+    A value that could reach a Decision domain or a constraint while staying
+    out of the problem identity is a value whose recorded choices can be
+    silently wrong -- so rather than an escape hatch on Problem, an output
+    simply is not one.  MVAU therefore derives its output datatype from a
+    declared accumulator attribute instead of reading it back off the tensor it
+    writes.
+    """
+
+    assert isinstance(InputTensor(index=0), Problem)
+    assert not isinstance(OutputTensor(index=0), Problem)
+    assert "output" not in dict(declared_members(MvauDataflowOp))
+    assert isinstance(dict(declared_members(MvauDataflowOp))["accumulator_type"], Problem)
 
     model = _mvau_model()
     before = _unbound(model, "mvau0").bind(model, Build()).problem_fingerprint
@@ -454,12 +472,70 @@ def test_the_replay_source_projects_one_node_and_no_selector() -> None:
     assert {item.id for item in network.value.boundaries} == {"activation", "expanded"}
 
 
-def test_an_uncommitted_design_alternative_is_named_as_the_reason() -> None:
+def test_an_unselected_design_is_unresolved_and_not_an_exception() -> None:
+    """A structural choice not yet made is a point state, not a defect."""
+
     model = _mvau_model()
     bound = _unbound(model, "mvau0").bind(model, Build())
 
-    with pytest.raises(DataflowOpError, match="Design alternative is not chosen"):
-        _ = bound.dataflow
+    assessment = bound.dataflow
+
+    assert isinstance(assessment, ProjectionAssessment)
+    assert isinstance(assessment.accepted_answer, Unresolved)
+    assert assessment.readiness.ready is None
+    codes = {finding.code for finding in assessment.accepted_answer.findings}
+    assert "projection-alternative-unselected" in codes
+
+
+def test_the_operations_own_constraints_gate_its_projection() -> None:
+    """source_accepts must not be compiled and consulted by nothing."""
+
+    model = _mvau_model()
+    # A rank-1 matrix: mathematically not a matrix-vector multiplication.
+    model.set_tensor_shape("weight", [8])
+    model.set_initializer("weight", np.zeros((8,), dtype=np.float32))
+    bound = _unbound(model, "mvau0").bind(model, Build())
+
+    assessment = bound.dataflow
+
+    codes = {
+        finding.code
+        for answer in (assessment.accepted_answer,)
+        for finding in getattr(answer, "findings", ())
+    }
+    assert any(code.startswith("mvau-weight-not-a-matrix") for code in codes), codes
+
+
+def test_a_malformed_shape_gives_a_finding_not_a_crash() -> None:
+    """A Derived cannot assume a sibling constraint ran first."""
+
+    model = _mvau_model()
+    model.set_tensor_shape("weight", [8])
+    model.set_initializer("weight", np.zeros((8,), dtype=np.float32))
+    bound = _unbound(model, "mvau0").bind(model, Build())
+
+    answer = bound.answer(MvauDataflowOp.matrix_height)
+
+    assert not isinstance(answer, Decided)
+    assert {finding.code for finding in answer.findings} >= {"mvau-weight-not-a-matrix"}
+
+
+def test_a_repairable_output_annotation_is_a_difference_not_a_rejection() -> None:
+    """Otherwise the repair can never be committed and the node stays wrong."""
+
+    model = _mvau_model()
+    model.set_tensor_shape("output", [2, 99])
+    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = chosen.design.alternative("dot_product").assign(WeightedDotProductDesign.pe, 2).root
+    chosen = chosen.design.alternative("dot_product").assign(WeightedDotProductDesign.simd, 2).root
+
+    assert isinstance(chosen.dataflow.accepted_answer, Decided)
+    assert any("output" in item for item in chosen.reconciliation())
+
+    committed = chosen.commit(model, Build())
+
+    assert tuple(model.get_tensor_shape("output")) == (2, 4)
+    assert committed.reconciliation() == ()
 
 
 def test_an_uncommitted_folding_leaves_the_network_unresolved() -> None:
@@ -488,42 +564,44 @@ def test_choices_survive_a_save_and_reload_exactly(tmp_path: Path) -> None:
     assert after.value == before.value
 
 
-def test_only_the_reachable_point_is_recorded() -> None:
-    """A choice with nowhere to go is dropped, not written and then unreplayable.
+def test_a_structural_choice_can_be_changed_without_touching_the_node() -> None:
+    """bind, commit supplied+embedded, rebind, switch, commit, rebind -- no clearing.
 
-    The recorded state is a serialization of the *point*, not a patch built up
-    from what was written before.  Switching alternatives goes through a clear,
-    because an immutable point does not rebase a committed selector -- and the
-    node that results must carry nothing belonging to the alternative left
-    behind.
+    An immutable point does not rebase a committed selector, so switching
+    alternatives means a point that never had the first one.  ``reconstruct()``
+    is that point: the same frozen binding and therefore the same problem
+    identity, with no assignments.  Nothing reaches into the node.
     """
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("supplied").root
-    chosen = (
-        chosen.design.alternative("supplied")
+    bound = _unbound(model, "mvau0").bind(model, Build())
+    supplied = bound.design.select("supplied").root
+    supplied = (
+        supplied.design.alternative("supplied")
         .assign(SuppliedDotProductDesign.weight_supply, WeightSupply.EMBEDDED)
         .root
     )
-    apply_graph_effects(model, chosen.graph_effects())
-    assert "weight_supply" in dict(_unbound(model, "mvau0").recorded())
+    committed = supplied.commit(model, Build())
+    assert dict(committed.recorded())["weight_supply"] is WeightSupply.EMBEDDED
 
-    scope = chosen.binding.node_identity
-    drop_recorded_choices(model, scope, [item.name for item in MvauDataflowOp.attributes])
-    switched = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
-    apply_graph_effects(model, switched.graph_effects())
+    reloaded = _unbound(model, "mvau0").bind(model, Build())
+    switched = reloaded.reconstruct().design.select("dot_product").root
+    final = switched.commit(model, Build())
 
-    reloaded = _unbound(model, "mvau0")
-    assert "weight_supply" not in dict(reloaded.recorded())
-    assert reloaded.recorded()["dataflow_design"] == "dot_product"
-    # And it reloads: nothing left over refuses to replay.
-    assert reloaded.bind(model, Build()).recorded()["dataflow_design"] == "dot_product"
+    assert dict(final.recorded())["dataflow_design"] == "dot_product"
+    # Nothing belonging to the alternative left behind survived.
+    assert "weight_supply" not in dict(final.recorded())
+    assert "weight_supply" not in dict(_unbound(model, "mvau0").recorded())
+    # And it rebinds cleanly: nothing left over refuses to replay.
+    assert _unbound(model, "mvau0").bind(model, Build()).recorded()["dataflow_design"] == (
+        "dot_product"
+    )
 
 
 def test_a_partial_point_may_be_saved(tmp_path: Path) -> None:
     model = _mvau_model()
     chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
-    apply_graph_effects(model, chosen.graph_effects())
+    chosen.commit(model, Build())
 
     path = tmp_path / "partial.onnx"
     model.save(str(path))
@@ -565,52 +643,154 @@ def test_a_plan_addressed_to_another_graph_is_refused() -> None:
         apply_graph_effects(other, effects)
 
 
-def test_the_layer_owns_its_own_attribute_names() -> None:
-    model, _operation = _configured_mvau()
+def test_the_design_state_is_one_canonical_document() -> None:
+    """One authority, and no flat copy of any value that could disagree with it."""
+
+    model, operation = _configured_mvau(pe=2, simd=4)
     node = model.graph.node[0]
 
     names = {item.name for item in node.attribute}
+    assert {SCOPE_ID_ATTRIBUTE, STATE_ATTRIBUTE} <= names
+    # The source-semantic attributes stay their own thing; they define the
+    # mathematical operation, not the implementation chosen for it.
+    assert "narrow_weights" in names
+    # No flat copy of a Decision.
+    assert not ({"PE", "SIMD", "dataflow_design", "weight_supply"} & names)
+    # Family, version and fingerprint moved into the document, so they stop
+    # having two persisted homes.
+    assert not ({FAMILY_ATTRIBUTE, FAMILY_VERSION_ATTRIBUTE, FINGERPRINT_ATTRIBUTE} & names)
 
-    assert {SCOPE_ID_ATTRIBUTE, FAMILY_ATTRIBUTE, FINGERPRINT_ATTRIBUTE} <= names
-    family = next(item for item in node.attribute if item.name == FAMILY_ATTRIBUTE)
-    assert family.s.decode("utf-8") == "finn.dataflow.mvau"
+    state = decode_dataflow_state(node)
+    assert state is not None
+    assert state.family == "finn.dataflow.mvau"
+    assert state.problem_fingerprint == operation.problem_fingerprint
+    assert state.assignments["PE"] == 2
+    assert state.assignments["SIMD"] == 4
 
 
-def test_clearing_keeps_the_identity_and_drops_every_choice() -> None:
+def test_the_document_is_canonical_and_readable() -> None:
+    """Two equal points produce equal bytes, and a human can read them."""
+
+    left = _configured_mvau(pe=2, simd=4)[0]
+    right = _configured_mvau(_mvau_model(), pe=2, simd=4)[0]
+
+    def document(model: ModelWrapper) -> str:
+        return next(
+            item.s.decode("utf-8")
+            for item in model.graph.node[0].attribute
+            if item.name == STATE_ATTRIBUTE
+        )
+
+    assert document(left) == document(right)
+    assert '"schema":"finn.dataflow.state/1"' in document(left)
+
+    rendered = format_dataflow_state(left.graph.node[0])
+    assert "PE = 2" in rendered
+    assert "finn.dataflow.mvau" in rendered
+
+
+def test_a_state_document_this_build_does_not_know_is_refused() -> None:
+    """Not reinterpreted: an unknown schema is a refusal, not a best effort."""
+
+    model, _operation = _configured_mvau()
+    node = model.graph.node[0]
+    for item in node.attribute:
+        if item.name == STATE_ATTRIBUTE:
+            item.s = b'{"schema":"finn.dataflow.state/99","assignments":{}}'
+
+    with pytest.raises(DataflowOpError, match="this build writes"):
+        _unbound(model, "mvau0").bind(model, Build())
+
+
+def test_reconstruct_keeps_the_identity_and_drops_every_choice() -> None:
     model, operation = _configured_mvau()
     scope = operation.binding.node_identity
 
-    drop_recorded_choices(model, scope, [item.name for item in MvauDataflowOp.attributes])
+    fresh = operation.reconstruct()
 
-    reloaded = _unbound(model, "mvau0")
-    assert reloaded.recorded() == {}
-    assert reloaded.recorded_scope_id() == scope
+    assert fresh.recorded() == {}
+    assert fresh.binding.node_identity == scope
+    assert fresh.problem_fingerprint == operation.problem_fingerprint
+
+
+def test_reconstruct_refuses_an_arbitrary_problem() -> None:
+    """Its Problem values and its frozen binding would describe different nodes."""
+
+    _model, operation = _configured_mvau()
+
+    with pytest.raises(DataflowOpError, match="not from an arbitrary problem mapping"):
+        operation.reconstruct({})
 
 
 def test_a_changed_problem_makes_the_recorded_choices_stale() -> None:
-    model, _operation = _configured_mvau()
+    model, operation = _configured_mvau()
+    assert not operation.is_stale((model, Build()))
 
     model.set_tensor_datatype("activation", DataType["INT4"])
 
+    assert operation.is_stale((model, Build()))
     with pytest.raises(DataflowOpError, match="different problem"):
         _unbound(model, "mvau0").bind(model, Build())
 
 
 def test_a_saved_family_that_this_build_does_not_offer_is_refused() -> None:
     model, _operation = _configured_mvau()
-    _unbound(model, "mvau0").set_nodeattr(FAMILY_ATTRIBUTE, "finn.dataflow.something_else")
+    node = model.graph.node[0]
+    for item in node.attribute:
+        if item.name == STATE_ATTRIBUTE:
+            document = json.loads(item.s.decode("utf-8"))
+            document["family"] = "finn.dataflow.something_else"
+            item.s = json.dumps(document, sort_keys=True).encode("utf-8")
 
     with pytest.raises(DataflowOpError, match="stores choices for family"):
         _unbound(model, "mvau0").bind(model, Build())
 
 
+def test_a_partly_applied_transaction_restores_the_whole_model() -> None:
+    """Restoring the node alone would leave tensor metadata half-written."""
+
+    model, operation = _configured_mvau()
+    effects = operation.graph_effects()
+
+    class Exploding:
+        """A datatype whose write fails *after* the node has been rewritten."""
+
+        def __getattr__(self, name: str) -> Any:
+            raise RuntimeError("this tensor write fails")
+
+    broken = replace(effects, tensor_datatypes={"output": Exploding()})
+    before = model.model.SerializeToString(deterministic=True)
+
+    with pytest.raises(Exception):  # noqa: B017 - whatever the writer raises
+        apply_graph_effects(model, broken)
+
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_commit_returns_a_bound_operation_over_the_committed_graph() -> None:
+    """The lifecycle continues across the mutation boundary."""
+
+    model = _mvau_model()
+    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+
+    committed = chosen.commit(model, Build())
+
+    assert type(committed) is MvauDataflowOp
+    assert committed.is_bound
+    assert dict(committed.recorded())["dataflow_design"] == "dot_product"
+
+
 def test_the_commitment_stage_is_recorded_with_the_plan() -> None:
-    _model, operation = _configured_mvau()
+    model, operation = _configured_mvau()
 
     effects = operation.graph_effects(require=CommitmentStage.DATAFLOW)
 
-    assert effects.validated_stage is CommitmentStage.DATAFLOW
+    assert effects.commitment_stage is CommitmentStage.DATAFLOW
     assert effects.expected_source_fingerprint == operation.problem_fingerprint
+    # Recorded, and named for what it actually promises: no required projection
+    # was finally rejected.  Not that every Decision was made.
+    state = decode_dataflow_state(model.graph.node[0])
+    assert state is not None and state.commitment_stage == "dataflow"
 
 
 # -- U4e: source association ---------------------------------------------------
@@ -674,7 +854,7 @@ def test_a_decoupled_matrix_is_traffic_and_an_embedded_one_is_state() -> None:
 
 
 def test_a_physical_choice_does_not_change_the_association() -> None:
-    plain = _configured_mvau()[1].association
+    plain = _configured_mvau(simd=4)[1].association
     pumped = _configured_mvau(_mvau_model(), simd=4, pumped=True)[1].association
 
     assert isinstance(plain, Decided) and isinstance(pumped, Decided)
@@ -762,3 +942,131 @@ def test_every_refusal_survives_python_o() -> None:
         [sys.executable, "-O", "-c", script], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+# -- U4g: addressing identity --------------------------------------------------
+
+
+def test_normalization_assigns_a_missing_scope_id() -> None:
+    model = _mvau_model()
+    _strip_scope(model.graph.node[0])
+
+    assigned = AssignDataflowScopeIds(DATAFLOW_DOMAIN).normalize(model)
+
+    assert len(assigned) == 1
+    assert _unbound(model, "mvau0").recorded_scope_id() == assigned[0]
+
+
+def test_normalization_is_idempotent() -> None:
+    model = _mvau_model()
+    before = _unbound(model, "mvau0").recorded_scope_id()
+
+    assert AssignDataflowScopeIds(DATAFLOW_DOMAIN).normalize(model) == ()
+    assert _unbound(model, "mvau0").recorded_scope_id() == before
+
+
+def test_a_cloned_node_is_given_a_distinct_identity() -> None:
+    """Copying a NodeProto copies its scope attribute; two nodes must not share one.
+
+    Worse than a missing id: a change addressed to a shared id finds two
+    candidates, and a recorded choice is attributable to either.
+    """
+
+    model = _mvau_model()
+    original = model.graph.node[0]
+    clone = model.graph.node.add()
+    clone.CopyFrom(original)
+    clone.name = "mvau1"
+    shared = _unbound(model, "mvau0").recorded_scope_id()
+
+    assigned = AssignDataflowScopeIds(DATAFLOW_DOMAIN).normalize(model)
+
+    assert len(assigned) == 1
+    # The first in graph order keeps it; the clone is reallocated.
+    assert _unbound(model, "mvau0").recorded_scope_id() == shared
+    assert _unbound(model, "mvau1").recorded_scope_id() == assigned[0]
+    assert _unbound(model, "mvau1").recorded_scope_id() != shared
+
+
+def test_binding_refuses_a_graph_that_still_contains_duplicates() -> None:
+    model = _mvau_model()
+    clone = model.graph.node.add()
+    clone.CopyFrom(model.graph.node[0])
+    clone.name = "mvau1"
+
+    with pytest.raises(SourceError, match="carry dataflow scope id"):
+        _unbound(model, "mvau0").bind(model, Build())
+
+
+def test_a_rename_preserves_identity() -> None:
+    model = _mvau_model()
+    before = _unbound(model, "mvau0").recorded_scope_id()
+
+    model.graph.node[0].name = "renamed"
+
+    assert AssignDataflowScopeIds(DATAFLOW_DOMAIN).normalize(model) == ()
+    assert _unbound(model, "renamed").recorded_scope_id() == before
+
+
+def test_rebinding_reads_the_live_node_not_the_frozen_copy() -> None:
+    """The defect a datatype-only test cannot catch.
+
+    ``bind`` on ``self`` would re-read the frozen copy, so the tensor names,
+    the node attributes, the operand list and the node name would all be the
+    ones captured at binding time.
+    """
+
+    model = _mvau_model()
+    bound = _unbound(model, "mvau0").bind(model, Build())
+
+    model.graph.node[0].name = "renamed"
+    model.rename_tensor("activation", "a2")
+    _set_attribute(model.graph.node[0], "narrow_weights", 1)
+
+    fresh = bound.rebind(model, Build())
+
+    assert fresh.source.node_name == "renamed"
+    assert fresh.source.operand("activation").tensor == "a2"
+    assert fresh.source.attributes["narrow_weights"] is True
+    # The original is untouched: that is what freezing means.
+    assert bound.source.node_name == "mvau0"
+    assert bound.source.operand("activation").tensor == "activation"
+    assert bound.source.attributes["narrow_weights"] is False
+
+
+def test_rebinding_notices_a_changed_build_fact() -> None:
+    model = _mvau_model()
+    bound = _unbound(model, "mvau0").bind(model, Build())
+
+    fresh = bound.rebind(model, Build(synth_clk_period_ns=10.0))
+
+    assert fresh.problem_fingerprint != bound.problem_fingerprint
+
+
+def test_declared_operand_indices_must_be_contiguous() -> None:
+    """An index is an index, not a hint about ordering."""
+
+    with pytest.raises(AuthoringError, match="contiguous from zero"):
+
+        class Sparse(DataflowOp):
+            family = "test.sparse"
+            first = InputTensor(index=0)
+            third = InputTensor(index=2)
+            out = OutputTensor(index=0)
+
+        Sparse(helper.make_node("Sparse", [], [], domain=DATAFLOW_DOMAIN)).read_binding(
+            None, Build()
+        )
+
+
+def _strip_scope(node: Any) -> None:
+    kept = [item for item in node.attribute if item.name != SCOPE_ID_ATTRIBUTE]
+    del node.attribute[:]
+    node.attribute.extend(kept)
+
+
+def _set_attribute(node: Any, name: str, value: int) -> None:
+    kept = [item for item in node.attribute if item.name != name]
+    del node.attribute[:]
+    node.attribute.extend(kept)
+    node.attribute.append(helper.make_attribute(name, value))

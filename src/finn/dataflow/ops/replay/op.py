@@ -12,7 +12,7 @@ tensor -- and the layer between them does not change.
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import Answer, Decided
 from finn.dataflow.model.declarations import (
@@ -34,6 +34,7 @@ from finn.dataflow.ops.association import (
 from finn.dataflow.ops.base import (
     INT_CODEC,
     DataflowOp,
+    DataflowOpError,
     DecisionAttribute,
 )
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
@@ -55,11 +56,28 @@ class ActivationReplayOp(DataflowOp):
 
     neuron_folds = Attribute(int, default=1)
 
-    @derived(int, shape=activation.shape)
+    @derived(tuple, shape=activation.shape)
+    def matrix(*, shape: tuple[int, ...]) -> object:
+        """The validated activation shape every other derivation reads.
+
+        A ``Derived`` cannot assume a sibling constraint ran first, so the rank
+        requirement lives here rather than leaving ``shape[-1]`` to raise on an
+        empty shape.
+        """
+
+        if len(shape) < 2:
+            return reject(
+                "replay-activation-rank",
+                f"a replay buffer repeats rows of a matrix-shaped activation; got {shape}",
+                values={"shape": list(shape)},
+            )
+        return shape
+
+    @derived(int, shape=matrix)
     def matrix_width(*, shape: tuple[int, ...]) -> object:
         return shape[-1]
 
-    @derived(int, shape=activation.shape, width=matrix_width)
+    @derived(int, shape=matrix, width=matrix_width)
     def repetitions(*, shape: tuple[int, ...], width: int) -> object:
         total = 1
         for extent in shape:
@@ -82,31 +100,16 @@ class ActivationReplayOp(DataflowOp):
             values={"neuron_folds": folds},
         )
 
-    @constraint(observed=expanded.shape, shape=activation.shape, folds=neuron_folds)
-    def expanded_shape_is_consistent(
-        *, observed: tuple[int, ...], shape: tuple[int, ...], folds: int
-    ) -> object:
-        """The graph's annotation is checked against what this operation produces.
+    @constraint(shape=matrix)
+    def activation_is_a_matrix(*, shape: tuple[int, ...]) -> object:
+        """Restates the refusal ``matrix`` made, as a verdict on the projection."""
 
-        Read for reconciliation, never for identity: the observed output shape
-        is not part of the problem fingerprint, so repairing it does not
-        invalidate the choices that were recorded against the repaired node.
-        """
+        del shape
+        return True
 
-        leading = 1
-        for extent in shape[:-1]:
-            leading *= extent
-        expected = (leading * folds, shape[-1])
-        if tuple(observed) == expected:
-            return True
-        return reject(
-            "replay-output-shape-mismatch",
-            f"the graph annotates the output as {tuple(observed)}; replaying "
-            f"{shape} across {folds} folds produces {expected}",
-            values={"observed": list(observed), "expected": list(expected)},
-        )
-
-    source_accepts = ConstraintGroup(at_least_one_fold, expanded_shape_is_consistent)
+    #: The output annotation is a reconciliation difference, not a rejection:
+    #: see ``expected_outputs``.
+    source_accepts = ConstraintGroup(at_least_one_fold, activation_is_a_matrix)
 
     design = Subspace(
         ActivationReplayDesign,
@@ -121,8 +124,9 @@ class ActivationReplayOp(DataflowOp):
         DecisionAttribute("SIMD", _design, ActivationReplayDesign.simd, INT_CODEC),
     )
 
-    @property
-    def dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
+    def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
+        """A fixed Subspace, so the child is always selected."""
+
         return _design(self).dataflow
 
     @property
@@ -169,14 +173,35 @@ class ActivationReplayOp(DataflowOp):
             )
         )
 
-    def graph_shapes(self) -> dict[str, tuple[int, ...]]:
+    def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
         activation = self.source.operand("activation")
-        expanded = self.source.operand("expanded")
+        if len(activation.shape) < 2:
+            return {}
         leading = 1
         for extent in activation.shape[:-1]:
             leading *= extent
         folds = int(cast(int, self.source.attributes["neuron_folds"]))
-        return {expanded.tensor: (leading * folds, activation.shape[-1])}
+        return {"expanded": ((leading * folds, activation.shape[-1]), activation.datatype)}
+
+    def make_shape_compatible_op(self, model: Any) -> Any:
+        del model
+        from onnx import helper  # type: ignore[import-not-found] # noqa: PLC0415
+
+        expected = self.expected_outputs().get("expanded")
+        if expected is None or expected[0] is None:
+            raise DataflowOpError(
+                f"{self.source.node_name} cannot state a shape-compatible op: its activation "
+                "is not matrix-shaped"
+            )
+        return helper.make_node(
+            "RandomNormal", [], [self.onnx_node.output[0]], shape=list(expected[0])
+        )
+
+    def infer_node_datatype(self, model: Any) -> None:
+        expected = self.expected_outputs().get("expanded")
+        if expected is None or expected[1] is None:
+            return
+        model.set_tensor_datatype(self.onnx_node.output[0], expected[1])
 
 
 __all__ = ["ActivationReplayOp"]
