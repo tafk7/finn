@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import pytest
 
-from finn.dataflow._engine import Decided, Unresolved
+from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.model import (
     Case,
     ConstraintGroup,
@@ -14,6 +16,8 @@ from finn.dataflow.model import (
     OccurrenceError,
     OneOf,
     Problem,
+    Projection,
+    ProjectionAssessment,
     Readiness,
     Space,
     Use,
@@ -36,6 +40,8 @@ class Leaf(Space):
 
     legal = ConstraintGroup(below_limit)
     ready = Readiness(decisions=(factor,), properties=(result,), constraints=legal)
+    data = Projection(result, readiness=ready, constraints=(legal,))
+    report = Projection(result, readiness=ready, constraints=(legal,))
     exports = (result,)
 
 
@@ -140,3 +146,53 @@ def test_invalid_assignments_do_not_create_a_successor() -> None:
         root.assign(Root.mode, "medium")
     assert error.value.findings
     assert isinstance(root.answer(Root.mode), Unresolved)
+
+
+def test_projection_assessment_keeps_readiness_constraints_and_raw_output_separate() -> None:
+    root = Root.start({Root.size: 6})
+    partial = root.child(Root.left).project(Leaf.data)
+    assert isinstance(partial, ProjectionAssessment)
+    assert tuple(field.name for field in fields(partial)) == (
+        "readiness",
+        "constraints",
+        "output",
+        "accepted_answer",
+    )
+    assert partial.readiness.ready is None
+    assert partial.constraints[0].verdict is None
+    assert isinstance(partial.output, Unresolved)
+    assert isinstance(partial.accepted_answer, Unresolved)
+
+    valid = root.child(Root.left).assign(Leaf.factor, 2).project(Leaf.data)
+    assert valid.readiness.ready is True
+    assert valid.constraints[0].verdict is True
+    assert valid.output == Decided(12)
+    assert valid.accepted_answer == Decided(12)
+
+
+def test_a_false_but_final_constraint_is_ready_and_rejects_the_projection() -> None:
+    root = Root.start({Root.size: 6})
+    leaf = root.child(Root.left).assign(Leaf.factor, 4)
+    assessment = leaf.project(Leaf.data)
+    assert assessment.readiness.ready is True
+    assert assessment.constraints[0].verdict is False
+    assert assessment.output == Decided(24)
+    assert isinstance(assessment.accepted_answer, Absent)
+    assert assessment.accepted_answer.is_rejection
+
+
+def test_one_constraint_group_can_validate_several_projections() -> None:
+    leaf = Root.start({Root.size: 4}).child(Root.left).assign(Leaf.factor, 2)
+    assert leaf.project(Leaf.data).accepted_answer == Decided(8)
+    assert leaf.project(Leaf.report).accepted_answer == Decided(8)
+    assert leaf.data.accepted_answer == Decided(8)
+
+
+def test_a_finally_inapplicable_output_is_a_non_rejecting_absence() -> None:
+    selected = Root.start({Root.size: 4}).branch(Root.choice).select("nested")
+    direct = selected.case("direct")
+    assessment = direct.project(Leaf.data)
+    assert assessment.readiness.ready is True
+    assert isinstance(assessment.output, Absent)
+    assert isinstance(assessment.accepted_answer, Absent)
+    assert not assessment.accepted_answer.is_rejection
