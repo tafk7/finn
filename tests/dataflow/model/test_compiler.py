@@ -246,7 +246,7 @@ def test_nested_space_cannot_introduce_problem_fields() -> None:
         value = Problem(int)
 
     class Broken(Space):
-        nested = Use(ChildWithProblem)
+        nested = Use(ChildWithProblem, name="child")
 
     with pytest.raises(AuthoringError, match="inside a reusable child Space"):
         _compile_space(Broken, "broken", problem_namespace="problem.broken")

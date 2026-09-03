@@ -120,7 +120,7 @@ of its occurrences:
 
 ```python
 root.child(Pair.left).assign(Tile.lanes, 2)  # exact use site
-root.child(Tile)                             # refused: a class is not an occurrence
+root.child(Tile)  # refused: a class is not an occurrence
 ```
 
 `branch(OneOfDeclaration)` exposes case ids, selection, and exact case views
