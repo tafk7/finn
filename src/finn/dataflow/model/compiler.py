@@ -155,15 +155,28 @@ class _CompiledBranch:
 
 @dataclass(frozen=True)
 class _CompiledProjection(Generic[T_co]):
-    """Private bound metadata for one public Projection declaration."""
+    """Private bound metadata for one public Projection declaration.
+
+    ``readiness_profile`` and ``constraint_sets`` are the engine-facing *names*
+    the generic lowering already produced, not copies of the declarations, so a
+    Projection adds no engine declaration of its own: it is a stored question
+    over paths that already exist.
+
+    The two policies are recorded rather than passed.  They are real parts of
+    the contract, and writing them down is what makes it checkable that U1 has
+    exactly one behaviour for each; they are not constructor arguments because
+    there is no second value to choose.
+    """
 
     member_name: str
     name: str
     output: _Ref[T_co]
     readiness_profile: str
     constraint_sets: tuple[str, ...]
-    absence_policy: str
-    snapshot_policy: str
+    #: Final inapplicability of the output propagates as the output's own Absent.
+    absence_policy: str = "propagate"
+    #: The snapshot is the output declaration's own ``ValueSemantics``.
+    snapshot_policy: str = "declared"
 
 
 @dataclass(frozen=True)
@@ -181,6 +194,21 @@ class _CompiledSpace(Generic[S]):
     branches: tuple[tuple[str, _CompiledBranch], ...] = ()
     catalog: BranchCatalog = BranchCatalog()
     projections: tuple[tuple[str, _CompiledProjection[object]], ...] = ()
+    #: Constraint members by class-member name.  Kept beside ``members``, which
+    #: holds only value declarations, because a diagnostic that cannot name the
+    #: constraint that refused is the one nobody can act on.
+    constraint_members: tuple[tuple[str, QualifiedPath], ...] = ()
+    #: Readiness and ConstraintGroup members mapped to the engine names the
+    #: generic lowering gave them, so the occurrence layer names a declaration
+    #: and never rebuilds a profile name from a convention.
+    readiness_names: tuple[tuple[str, str], ...] = ()
+    constraint_set_names: tuple[tuple[str, str], ...] = ()
+
+    def engine_name(self, table: tuple[tuple[str, str], ...], name: str, what: str) -> str:
+        try:
+            return dict(table)[name]
+        except KeyError:
+            raise AuthoringError(f"{self.owner.__name__} has no {what} member {name!r}") from None
 
     def branch(self, name: str) -> _CompiledBranch:
         try:
@@ -360,6 +388,21 @@ class _Compilation:
             branches,
             self._catalog(),
             projections,
+            tuple(
+                (name, self.constraints[id(declaration)])
+                for name, declaration in self.declarations
+                if isinstance(declaration, Constraint)
+            ),
+            tuple(
+                (name, self._group_name(name, declaration))
+                for name, declaration in self.declarations
+                if isinstance(declaration, Readiness)
+            ),
+            tuple(
+                (name, self._group_name(name, declaration))
+                for name, declaration in self.declarations
+                if isinstance(declaration, ConstraintGroup)
+            ),
         )
         finalized = self.space_type._finalize_compilation(compiled)
         if not isinstance(finalized, _CompiledSpace):
@@ -590,7 +633,7 @@ class _Compilation:
             elif isinstance(declaration, ConstraintGroup):
                 groups.append(
                     ConstraintSet(
-                        f"{self.namespace}.{_local_name(member_name, declaration)}",
+                        self._group_name(member_name, declaration),
                         tuple(self._constraint_path(item) for item in declaration.constraints),
                     )
                 )
@@ -602,7 +645,7 @@ class _Compilation:
             elif isinstance(declaration, Readiness):
                 readiness.append(
                     ReadinessProfile(
-                        f"{self.namespace}.{_local_name(member_name, declaration)}",
+                        self._group_name(member_name, declaration),
                         tuple(self._source_ref(item).path for item in declaration.decisions),
                         tuple(self._source_ref(item).path for item in declaration.properties),
                         tuple(self._constraint_path(item) for item in declaration.constraints),
@@ -617,17 +660,37 @@ class _Compilation:
             tuple(readiness),
         )
 
+    def _group_name(self, member_name: str, declaration: object) -> str:
+        """The one engine name a ConstraintGroup or Readiness member is given.
+
+        Stated once and read by both the spec lowering and the projection
+        lowering.  Two copies of this rule is precisely how a projection ends up
+        naming a profile the engine does not have -- and how occurrence runtime
+        code ends up rebuilding a path the compiler already knew.
+        """
+
+        return f"{self.namespace}.{_local_name(member_name, declaration)}"
+
     def _owned_declaration(
         self,
         declaration: object,
         expected: type,
+        what: str,
         role: str,
     ) -> tuple[str, object]:
+        """Resolve one declaration a Projection names, or say where it is not.
+
+        Ownership is checked at compile time because the alternative is a
+        projection that looks fine until the first query, then names an engine
+        profile nobody declared.
+        """
+
         member_name = self.alias_names.get(id(declaration))
         effective = dict(self.declarations).get(member_name or "")
         if member_name is None or not isinstance(effective, expected):
             raise AuthoringError(
-                f"{self.space_type.__name__} Projection {role} belongs outside the class"
+                f"{self.space_type.__name__} {what} names a {role} that "
+                f"{self.space_type.__name__} does not declare"
             )
         return member_name, effective
 
@@ -636,24 +699,34 @@ class _Compilation:
         member_name: str,
         declaration: Projection[object],
     ) -> _CompiledProjection[object]:
+        what = f"Projection {_local_name(member_name, declaration)!r}"
         readiness_name, readiness = self._owned_declaration(
-            declaration.readiness, Readiness, "readiness"
+            declaration.readiness, Readiness, what, "Readiness declaration"
         )
         groups: list[str] = []
         for group in declaration.constraints:
             group_name, effective = self._owned_declaration(
-                group, ConstraintGroup, "constraint group"
+                group, ConstraintGroup, what, "ConstraintGroup"
             )
-            groups.append(f"{self.namespace}.{_local_name(group_name, effective)}")
-        local_name = _local_name(member_name, declaration)
+            engine_name = self._group_name(group_name, effective)
+            if engine_name in groups:
+                raise AuthoringError(
+                    f"{self.space_type.__name__} {what} names constraint group {group_name!r} twice"
+                )
+            groups.append(engine_name)
+        try:
+            output = self._source_ref(declaration.output)
+        except AuthoringError:
+            raise AuthoringError(
+                f"{self.space_type.__name__} {what} names an output that "
+                f"{self.space_type.__name__} cannot resolve"
+            ) from None
         return _CompiledProjection(
             member_name,
-            f"{self.namespace}.{local_name}",
-            self._source_ref(declaration.output),
-            f"{self.namespace}.{_local_name(readiness_name, readiness)}",
+            self._group_name(member_name, declaration),
+            output,
+            self._group_name(readiness_name, readiness),
             tuple(groups),
-            declaration.absence_policy,
-            declaration.snapshot_policy,
         )
 
     def _when_gate(

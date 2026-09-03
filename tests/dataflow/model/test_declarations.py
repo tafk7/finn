@@ -186,7 +186,7 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "OneOf",
         "OccurrenceContext",
         "OccurrenceDiagnostic",
-        "OccurrenceError",
+        "CanonicalValueCodec",
         "Parameter",
         "Problem",
         "Projection",

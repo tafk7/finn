@@ -68,6 +68,7 @@ from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_spac
 from finn.dataflow.model.declarations import (
     RESERVED_LIFECYCLE_NAMES,
     AuthoringError,
+    CanonicalValueCodec,
     Case,
     ConstraintGroup,
     Decision,
@@ -90,7 +91,6 @@ from finn.dataflow.model.declarations import (
 from finn.dataflow.model.occurrence import (
     BranchView,
     OccurrenceDiagnostic,
-    OccurrenceError,
     ProjectionAssessment,
 )
 
@@ -173,9 +173,9 @@ __all__ = [
     "Decision",
     "Input",
     "OneOf",
+    "CanonicalValueCodec",
     "OccurrenceContext",
     "OccurrenceDiagnostic",
-    "OccurrenceError",
     "Problem",
     "Projection",
     "ProjectionAssessment",

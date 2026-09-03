@@ -8,16 +8,30 @@ declaration and the public type of each occurrence.  The objects constructed
 here deliberately contain no public Engine, point, reference, or path access.
 One root owns those capabilities privately; children are exact namespace-bound
 views that can only name declarations in their own authored scope.
+
+**Two error kinds, one rule.**  A mistake about *declarations* -- naming
+something outside the view's scope, a malformed Projection, a Problem value with
+no canonical encoding -- is an :class:`AuthoringError`, because the caller's
+source is wrong.  A mistake about *state* -- refused Problem data, a rejected
+assignment, an unselected branch, a fingerprint belonging to another problem --
+is the engine's existing ``RequestError`` carrying findings, because the
+caller's source is fine and the point is not where they thought.  There is no
+third public spelling of those two ideas.
+
+**The capability guarantee is the public surface, not Python reflection.**  No
+public method or property returns an ``Engine``, a ``DesignPoint``, a ``_Ref``,
+a compiled record, or an unrestricted path lookup, and contributor callbacks
+receive resolved declared values only.  Underscore-private attributes remain
+inspectable by deliberately hostile code; this is a normal Python privacy
+boundary, not a sandbox, and is not claimed to be one.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields, is_dataclass
-from enum import Enum
+from dataclasses import dataclass
 from hashlib import sha256
-from math import isfinite
+from json import dumps
 from threading import RLock
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar, cast
@@ -37,6 +51,7 @@ from finn.dataflow._engine import (
     RequestError,
     Unresolved,
 )
+from finn.dataflow._engine.requests import request_finding
 from finn.dataflow._engine.results import ordered_findings
 from finn.dataflow.model.compiler import (
     SpaceModel,
@@ -50,6 +65,7 @@ from finn.dataflow.model.compiler import (
     resolve_value_source,
 )
 from finn.dataflow.model.declarations import (
+    DECLARATION_TYPES,
     AuthoringError,
     Case,
     Constraint,
@@ -72,18 +88,41 @@ T = TypeVar("T")
 ProblemSource = Mapping[Any, object] | Callable[[], Mapping[Any, object]]
 
 
-class OccurrenceError(ValueError):
-    """A declaration cannot be used through this occurrence capability."""
+class _NotAttached(RuntimeError):
+    """A lifecycle operation reached an instance with no occurrence runtime.
 
-    def __init__(self, message: str, findings: tuple[Finding, ...] = ()) -> None:
-        super().__init__(message)
-        self.findings = findings
+    Deliberately private and deliberately neither of the two public categories:
+    it is not a malformed declaration and it is not a refused request, it is a
+    caller holding an object that was never started.  Keeping it unexported
+    stops it becoming a third public spelling of authoring-versus-request.
+    """
+
+
+def _request_error(code: str, message: str, path: QualifiedPath) -> RequestError:
+    return RequestError((request_finding(code, message, path),))
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectionAssessment(Generic[T]):
-    """Readiness, validation, raw output, and accepted projection answer."""
+    """Readiness, constraint acceptance, and output availability, kept apart.
 
+    ``accepted_answer`` is the reduction a caller normally wants.  The other
+    three are why it must not be the only thing exposed: an occurrence can be
+    perfectly *ready* -- every obligation final, nothing left to decide -- and
+    still be refused, because a constraint answered a final ``False``.
+    Collapsing them into one Boolean is exactly what lets a rejected point be
+    handed on as though it were merely incomplete.
+
+    ``output`` is the raw answer before any constraint had a say, so a
+    diagnostic can distinguish "the Region resolved and the width constraint
+    refused it" from "the Region did not resolve".
+
+    ``projection`` is the compiled authored name.  It is diagnostic metadata,
+    not a path capability: it exists so an assessment can say which projection
+    it is instead of forcing every caller to thread that string alongside it.
+    """
+
+    projection: str
     readiness: ReadinessAssessment
     constraints: tuple[ConstraintAssessment, ...]
     output: Answer[T]
@@ -165,7 +204,10 @@ def is_attached_occurrence(instance: object) -> bool:
 def _occurrence_state(instance: Space) -> _State:
     state = getattr(instance, _STATE_ATTRIBUTE, None)
     if not isinstance(state, _State):
-        raise OccurrenceError(f"{type(instance).__name__} is not an attached Space occurrence")
+        raise _NotAttached(
+            f"{type(instance).__name__} is not an attached Space occurrence; start one with "
+            f"{type(instance).__name__}.start(...)"
+        )
     return state
 
 
@@ -214,95 +256,67 @@ def _problem_members(space_type: type[Space]) -> tuple[tuple[str, Problem[object
 def _read_problem_source(source: ProblemSource) -> Mapping[Any, object]:
     values = source() if callable(source) else source
     if not isinstance(values, Mapping):
-        raise OccurrenceError("a Space problem source must produce a mapping")
+        raise AuthoringError("a Space problem source must produce a mapping")
     return values
 
 
 def _prepare_problem(
     compiled: _CompiledSpace[Space], source: ProblemSource
-) -> tuple[dict[QualifiedPath, object], dict[Problem[object], object]]:
+) -> dict[QualifiedPath, object]:
+    """Key the caller's mapping by declaration and lower it onto problem paths.
+
+    Declaration keys, never path strings.  A contributor writes the very objects
+    they declared in the class body; reconstructing a ``QualifiedPath`` is not
+    something the authoring surface asks anyone to do.
+    """
+
     raw = _read_problem_source(source)
     members = _problem_members(compiled.owner)
     expected = {declaration for _name, declaration in members}
     unknown = tuple(key for key in raw if key not in expected)
     if unknown:
-        raise OccurrenceError(
-            "a Space problem mapping must use only Problem declarations from the root class"
+        raise AuthoringError(
+            f"a {compiled.owner.__name__} problem mapping is keyed by that class's own "
+            f"Problem declarations; {len(unknown)} key(s) belong to no such declaration"
         )
 
     by_path: dict[QualifiedPath, object] = {}
-    by_declaration: dict[Problem[object], object] = {}
     for name, declaration in members:
         if declaration not in raw:
             if declaration.required:
-                raise OccurrenceError(
-                    f"required Problem {compiled.owner.__name__}.{name} is absent"
+                raise _request_error(
+                    "occurrence-problem-incomplete",
+                    f"required Problem {compiled.owner.__name__}.{name} is absent",
+                    compiled.member(name).path,
                 )
             continue
-        reference = compiled.member(name)
-        by_path[reference.path] = raw[declaration]
-        by_declaration[declaration] = raw[declaration]
-    return by_path, by_declaration
-
-
-def _type_token(kind: type[object]) -> str:
-    token = getattr(kind, "__dataflow_identity_token__", f"{kind.__module__}.{kind.__qualname__}")
-    if not isinstance(token, str) or not token:
-        raise OccurrenceError(f"{kind.__name__} has no stable dataflow identity token")
-    return token
-
-
-def _canonical_problem_value(value: object) -> object:
-    if value is None or type(value) in {bool, int, str}:
-        return value
-    if type(value) is float:
-        if not isfinite(value):
-            raise OccurrenceError("problem fingerprints require finite floats")
-        return {"float_hex": value.hex()}
-    if isinstance(value, bytes):
-        return {"bytes_hex": value.hex()}
-    if isinstance(value, QualifiedPath):
-        return {"qualified_path": value.value}
-    if isinstance(value, Enum):
-        return {
-            "enum_type": _type_token(type(value)),
-            "value": _canonical_problem_value(value.value),
-        }
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            "dataclass_type": _type_token(type(value)),
-            "fields": [
-                [field.name, _canonical_problem_value(getattr(value, field.name))]
-                for field in fields(value)
-            ],
-        }
-    if isinstance(value, Mapping):
-        pairs = [
-            [_canonical_problem_value(key), _canonical_problem_value(item)]
-            for key, item in value.items()
-        ]
-        return {"mapping": sorted(pairs, key=lambda pair: json.dumps(pair[0], sort_keys=True))}
-    if isinstance(value, (tuple, list)):
-        return {"sequence": [_canonical_problem_value(item) for item in value]}
-    if isinstance(value, (set, frozenset)):
-        members = [_canonical_problem_value(item) for item in value]
-        return {"set": sorted(members, key=lambda item: json.dumps(item, sort_keys=True))}
-    raise OccurrenceError(
-        f"unsupported problem fingerprint value {type(value).__module__}.{type(value).__qualname__}"
-    )
+        by_path[compiled.member(name).path] = raw[declaration]
+    return by_path
 
 
 def _problem_fingerprint(
     space_type: type[Space], snapshot: Mapping[Problem[object], object]
 ) -> str:
+    """Digest the frozen problem together with the schema authority reading it.
+
+    Every part of the payload earns its place.  The Space token stops two
+    families that happen to share a problem shape from colliding.  The ordered
+    member names and value semantics make a renamed or retyped field a different
+    problem.  Explicit absence distinguishes "not supplied" from "supplied as
+    something that encodes like nothing".  The codec identity and version travel
+    with the value, so changing how a type is encoded can never be mistaken for
+    the value having changed.
+    """
+
     payload = {
-        "space": _type_token(space_type),
+        "space": f"{space_type.__module__}.{space_type.__qualname__}",
         "problem": [
             {
                 "name": declaration.stable_name or name,
                 "semantics": declaration.value_semantics.name,
+                "codec": f"{declaration.canonical.identity}@{declaration.canonical.version}",
                 "value": (
-                    _canonical_problem_value(snapshot[declaration])
+                    {"present": declaration.canonical.encode(snapshot[declaration])}
                     if declaration in snapshot
                     else {"absent": True}
                 ),
@@ -310,7 +324,7 @@ def _problem_fingerprint(
             for name, declaration in _problem_members(space_type)
         ],
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return sha256(encoded).hexdigest()
 
 
@@ -330,16 +344,22 @@ def start_from_model(
 
     tree = model._compiled_tree()
     engine = Engine()
-    problem_paths, _by_declaration = _prepare_problem(tree, problem)
-    try:
-        point = engine.start(model._design_space(), problem_paths)
-    except RequestError as error:
-        raise OccurrenceError("the Space problem was rejected", error.findings) from error
+    problem_paths = _prepare_problem(tree, problem)
+    # A refused problem is already a RequestError with findings; re-labelling it
+    # would only lose the engine's own account of why.
+    point = engine.start(model._design_space(), problem_paths)
     frozen = _freeze_problem(tree, point)
     fingerprint = _problem_fingerprint(tree.owner, frozen)
     if expected_problem_fingerprint is not None and fingerprint != expected_problem_fingerprint:
-        raise OccurrenceError(
-            "persisted assignments were recorded for an incompatible problem fingerprint"
+        raise RequestError(
+            (
+                request_finding(
+                    "occurrence-problem-fingerprint-mismatch",
+                    "recorded state belongs to a different problem and must be reconstructed; "
+                    f"expected {expected_problem_fingerprint}, got {fingerprint}",
+                    QualifiedPath(tree.namespace),
+                ),
+            )
         )
     lineage = _Lineage(model, tree, engine, problem, frozen, fingerprint, RLock())
     return _make_occurrence(_Runtime(lineage, point), tree, (tree.namespace,))
@@ -402,12 +422,9 @@ def occurrence_problem_fingerprint(instance: Space) -> str:
 def _project_problem(lineage: _Lineage, source: ProblemSource) -> str:
     """Read the source again and fingerprint it, without disturbing this point."""
 
-    problem_paths, _raw = _prepare_problem(lineage.tree, source)
+    problem_paths = _prepare_problem(lineage.tree, source)
     with lineage.lock:
-        try:
-            point = lineage.engine.start(lineage.model._design_space(), problem_paths)
-        except RequestError as error:
-            raise OccurrenceError("the Space problem was rejected", error.findings) from error
+        point = lineage.engine.start(lineage.model._design_space(), problem_paths)
     return _problem_fingerprint(lineage.tree.owner, _freeze_problem(lineage.tree, point))
 
 
@@ -459,16 +476,52 @@ def _member_name(
     return _members_of(space_type, expected).get(id(declaration))
 
 
-def _decision_reference(
-    compiled: _CompiledSpace[Space], declaration: Decision[object]
-) -> _Ref[object]:
-    name = _member_name(compiled.owner, declaration, (Decision,))
-    if name is None:
-        raise OccurrenceError(
-            f"{compiled.owner.__name__} does not own that Decision; "
-            "assign it through the exact child occurrence"
+def _occurrences_of(
+    compiled: _CompiledSpace[Space], declaration: object
+) -> tuple[tuple[str, str], ...]:
+    """Every (class, namespace) in the tree whose class declares this object."""
+
+    found: list[tuple[str, str]] = []
+    if id(declaration) in _members_of(compiled.owner, DECLARATION_TYPES):
+        found.append((compiled.owner.__name__, compiled.namespace))
+    for _name, child in _direct_children(compiled):
+        found.extend(_occurrences_of(child, declaration))
+    return tuple(found)
+
+
+def _out_of_scope(state: _State, declaration: object, what: str) -> AuthoringError:
+    """Refuse a declaration this view does not own, and say where it does live.
+
+    The message is the point.  ``root.assign(SomeKernel.pumping, 2)`` is a
+    natural thing to write and a wrong thing to mean the moment that Kernel is
+    placed twice, so the refusal names every placement and sends the caller
+    through the view for the one they meant.  An occurrence is never inferred
+    from a Python class.
+    """
+
+    here = f"{state.compiled.owner.__name__} at {state.compiled.namespace}"
+    placements = _occurrences_of(state.runtime.lineage.tree, declaration)
+    if not placements:
+        return AuthoringError(
+            f"this {what} declaration is declared by no Space in this model; "
+            f"the occurrence asked was {here}"
         )
-    return compiled.member(name)
+    where = ", ".join(f"{space} at {namespace}" for space, namespace in placements)
+    return AuthoringError(
+        f"this {what} declaration is not owned by {here}; it is declared by {where}. "
+        "Reach that occurrence with child() and use its own view"
+    )
+
+
+def _owned_member(state: _State, declaration: object, kinds: tuple[type, ...], what: str) -> str:
+    name = _member_name(state.compiled.owner, declaration, kinds)
+    if name is None:
+        raise _out_of_scope(state, declaration, what)
+    return name
+
+
+def _decision_reference(state: _State, declaration: Decision[object]) -> _Ref[object]:
+    return state.compiled.member(_owned_member(state, declaration, (Decision,), "Decision"))
 
 
 def _raise_failed_assignment(outcomes: tuple[ItemOutcome, ...]) -> None:
@@ -477,9 +530,17 @@ def _raise_failed_assignment(outcomes: tuple[ItemOutcome, ...]) -> None:
     )
     if not failures:
         return
-    findings = tuple(finding for item in failures for finding in item.findings)
-    disposition = ", ".join(item.disposition for item in failures)
-    raise OccurrenceError(f"assignment was not accepted ({disposition})", findings)
+    findings = [finding for item in failures for finding in item.findings]
+    for item in failures:
+        if not item.findings:
+            findings.append(
+                request_finding(
+                    "occurrence-assignment-refused",
+                    f"this value was {item.disposition} by the {item.source} check",
+                    item.path,
+                )
+            )
+    raise RequestError(findings)
 
 
 def _successor_root(runtime: _Runtime) -> Space:
@@ -493,12 +554,9 @@ def occurrence_assign(instance: S, declaration: Decision[T], value: T) -> S:
     state = _occurrence_state(instance)
     runtime = state.runtime
     lineage = runtime.lineage
-    reference = _decision_reference(state.compiled, cast("Decision[object]", declaration))
+    reference = _decision_reference(state, cast("Decision[object]", declaration))
     with lineage.lock:
-        try:
-            committed = lineage.engine.commit_assignments(runtime.point, {reference.path: value})
-        except RequestError as error:
-            raise OccurrenceError("the assignment request was rejected", error.findings) from error
+        committed = lineage.engine.commit_assignments(runtime.point, {reference.path: value})
     _raise_failed_assignment(committed.outcomes)
     successor = runtime.successor(committed.point)
     successor_root = _successor_root(successor)
@@ -522,8 +580,8 @@ def occurrence_answer(instance: Space, declaration: ValueSource[T]) -> Answer[T]
             cast("ValueSource[object]", declaration),
             "occurrence query",
         )
-    except ValueError as error:
-        raise OccurrenceError(str(error)) from error
+    except AuthoringError:
+        raise _out_of_scope(state, declaration, "query") from None
     lineage = state.runtime.lineage
     with lineage.lock:
         answer = answer_for(lineage.engine, state.runtime.point, reference)
@@ -536,9 +594,15 @@ def occurrence_value(instance: Space, declaration: ValueSource[T]) -> T:
     answer = occurrence_answer(instance, declaration)
     if isinstance(answer, Decided):
         return answer.value
-    if isinstance(answer, Absent):
-        raise OccurrenceError("the declaration is not applicable", answer.findings)
-    raise OccurrenceError("the declaration is unresolved", answer.findings)
+    raise RequestError(
+        answer.findings
+        or (
+            request_finding(
+                "occurrence-value-unavailable",
+                "this declaration has no decided value at this point",
+            ),
+        )
+    )
 
 
 def occurrence_assess(
@@ -550,39 +614,33 @@ def occurrence_assess(
     state = _occurrence_state(instance)
     compiled = state.compiled
     lineage = state.runtime.lineage
+    # Every name below comes from the compiler's own tables.  Rebuilding
+    # ``f"{namespace}.{local}"`` here was a second copy of a convention only the
+    # compiler is entitled to state, and a second copy is how a query ends up
+    # naming a profile the engine does not have.
     if isinstance(declaration, Readiness):
-        name = _member_name(compiled.owner, declaration, (Readiness,))
-        if name is None:
-            raise OccurrenceError(
-                f"{compiled.owner.__name__} does not own that Readiness declaration"
-            )
-        profile = f"{compiled.namespace}.{declaration.stable_name or name}"
+        name = _owned_member(state, declaration, (Readiness,), "Readiness declaration")
+        profile = compiled.engine_name(compiled.readiness_names, name, "Readiness")
         with lineage.lock:
             return lineage.engine.check_readiness(state.runtime.point, profile)
     if isinstance(declaration, ConstraintGroup):
-        name = _member_name(compiled.owner, declaration, (ConstraintGroup,))
-        if name is None:
-            raise OccurrenceError(f"{compiled.owner.__name__} does not own that ConstraintGroup")
-        group = f"{compiled.namespace}.{declaration.stable_name or name}"
+        name = _owned_member(state, declaration, (ConstraintGroup,), "ConstraintGroup")
+        group = compiled.engine_name(compiled.constraint_set_names, name, "ConstraintGroup")
         with lineage.lock:
             return lineage.engine.evaluate_constraint_set(state.runtime.point, group)
     if isinstance(declaration, Constraint):
-        name = _member_name(compiled.owner, declaration, (Constraint,))
-        if name is None:
-            raise OccurrenceError(f"{compiled.owner.__name__} does not own that Constraint")
-        path = f"constraint.{compiled.namespace}.{declaration.stable_name or name}"
+        name = _owned_member(state, declaration, (Constraint,), "Constraint")
+        path = dict(compiled.constraint_members)[name]
         with lineage.lock:
             return lineage.engine.evaluate_constraints(state.runtime.point, (path,))
-    raise TypeError("assess() requires a Readiness, ConstraintGroup, or Constraint declaration")
+    raise AuthoringError("assess() takes a Readiness, ConstraintGroup, or Constraint declaration")
 
 
 def _projection_for_declaration(
-    compiled: _CompiledSpace[Space], declaration: Projection[object]
+    state: _State, declaration: Projection[object]
 ) -> _CompiledProjection[object]:
-    name = _member_name(compiled.owner, declaration, (Projection,))
-    if name is None:
-        raise OccurrenceError(f"{compiled.owner.__name__} does not own that Projection")
-    return compiled.projection(name)
+    name = _owned_member(state, declaration, (Projection,), "Projection")
+    return state.compiled.projection(name)
 
 
 def _assessment_findings(
@@ -610,45 +668,85 @@ def _reduce_projection(
     constraints: tuple[ConstraintAssessment, ...],
     output: Answer[object],
 ) -> Answer[object]:
-    findings = _assessment_findings(readiness, constraints, output)
-    any_unresolved = (
+    """The normative projection reduction.
+
+    The order is the contract, not an implementation detail.  *Unresolved*
+    dominates, because an obligation not yet met is evidence of nothing.  A
+    final *inapplicability* comes next and is returned as the output's own
+    ``Absent``, so a projection that legitimately does not arise keeps saying so
+    in the engine's own vocabulary with the output's own findings -- not with
+    every finding the readiness profile happened to collect.  Only then does a
+    constraint refusal turn an available value into a rejecting ``Absent``.
+    ``Decided`` is exposed last, and only when every obligation is final and
+    every constraint accepted.
+
+    Putting refusal before absence would report "something refused this" for a
+    point where the value simply does not exist, which is a different and
+    misleading sentence.
+    """
+
+    owner = QualifiedPath(compiled.name)
+    if (
         readiness.ready is None
         or isinstance(output, Unresolved)
         or any(assessment.verdict is None for assessment in constraints)
-    )
-    if any_unresolved:
+    ):
+        blocked = _assessment_findings(readiness, constraints, output)
         return Unresolved(
-            findings
+            blocked
             or (
                 Finding(
                     FindingKind.BLOCKER,
                     "projection-not-ready",
-                    compiled.output.path,
-                    f"projection {compiled.name!r} is not ready",
+                    owner,
+                    f"projection {compiled.name!r} is not ready at this point",
                 ),
             )
         )
-
-    refused: list[Finding] = [
-        finding for finding in findings if finding.kind is FindingKind.REJECTION
-    ]
-    for assessment in constraints:
-        for path, answer in assessment.answers.items():
-            if isinstance(answer, Decided) and answer.value is False:
-                refused.append(
-                    Finding(
-                        FindingKind.REJECTION,
-                        "projection-constraint-rejected",
-                        path,
-                        f"constraint rejected projection {compiled.name!r}",
-                    )
-                )
-    if any(assessment.verdict is False for assessment in constraints):
-        return Absent(ordered_findings(refused))
     if isinstance(output, Absent):
-        return Absent(findings)
+        # The absence policy, applied: propagate final inapplicability exactly
+        # as the output declared it.
+        return output
+    refusals: list[Finding] = []
+    for assessment in constraints:
+        if assessment.verdict is not False:
+            continue
+        refusals.extend(_rejection_findings(assessment, owner))
+    if refusals:
+        return Absent(ordered_findings(refusals))
     assert isinstance(output, Decided)
+    # The snapshot policy, applied: the output declaration's own value
+    # semantics, which additionally re-check the nominal type on the way out.
     return Decided(compiled.output.semantics.freeze(output.value))
+
+
+def _rejection_findings(
+    assessment: ConstraintAssessment, owner: QualifiedPath
+) -> tuple[Finding, ...]:
+    """Every reason one constraint set said no, in both of its spellings.
+
+    A ``reject(...)`` carries its own reason.  A bare ``Decided(False)`` carries
+    none, so one is synthesized whose trace names the constraint path -- a flat
+    refusal must still be attributable to the constraint that made it.
+    """
+
+    findings: list[Finding] = []
+    for path in assessment.refused:
+        answer = assessment.answers[path]
+        if isinstance(answer, Absent) and answer.findings:
+            findings.extend(answer.findings)
+            continue
+        findings.append(
+            Finding(
+                FindingKind.REJECTION,
+                "projection-constraint-refused",
+                owner,
+                "a projection constraint refused this point",
+                (("constraint", path),),
+                (path,),
+            )
+        )
+    return tuple(findings)
 
 
 def occurrence_project(instance: Space, declaration: Projection[T]) -> ProjectionAssessment[T]:
@@ -657,7 +755,7 @@ def occurrence_project(instance: Space, declaration: Projection[T]) -> Projectio
     state = _occurrence_state(instance)
     lineage = state.runtime.lineage
     point = state.runtime.point
-    compiled = _projection_for_declaration(state.compiled, cast("Projection[object]", declaration))
+    compiled = _projection_for_declaration(state, cast("Projection[object]", declaration))
     with lineage.lock:
         readiness = lineage.engine.check_readiness(point, compiled.readiness_profile)
         output = answer_for(lineage.engine, point, compiled.output)
@@ -666,6 +764,7 @@ def occurrence_project(instance: Space, declaration: Projection[T]) -> Projectio
         )
         accepted = _reduce_projection(compiled, readiness, constraints, output)
     return ProjectionAssessment(
+        compiled.name,
         readiness,
         constraints,
         cast("Answer[T]", output),
@@ -744,7 +843,7 @@ def _declaration_for_finding(compiled: _CompiledSpace[Space], finding: Finding) 
 
 
 def _subject_findings(subject: object) -> tuple[Finding, ...]:
-    if isinstance(subject, OccurrenceError):
+    if isinstance(subject, RequestError):
         return ordered_findings(list(subject.findings))
     if isinstance(subject, (Absent, Unresolved)):
         return subject.findings
@@ -761,7 +860,7 @@ def _subject_findings(subject: object) -> tuple[Finding, ...]:
             answers.extend(assessment.answers.values())
         answers.extend((subject.output, subject.accepted_answer))
     else:
-        raise TypeError("diagnostics() requires an Answer, assessment, or OccurrenceError")
+        raise AuthoringError("diagnostics() takes an Answer, an assessment, or a RequestError")
     unique = {
         finding: None
         for answer in answers
@@ -782,7 +881,7 @@ def occurrence_diagnostics(
     state = _occurrence_state(instance)
     projection_name: str | None = None
     if projection is not None:
-        projection_name = _projection_for_declaration(state.compiled, projection).member_name
+        projection_name = _projection_for_declaration(state, projection).member_name
     interpreted: list[OccurrenceDiagnostic] = []
     for finding in _subject_findings(subject):
         owner, chain = _scope_for_finding(state.runtime.lineage.tree, finding)
@@ -811,61 +910,47 @@ def _direct_children(
 
 
 def _child_for_declaration(
-    compiled: _CompiledSpace[Space], declaration: Use[Space] | Case
+    state: _State, declaration: Use[Space] | Case
 ) -> tuple[tuple[str, ...], _CompiledSpace[Space]]:
     """The compiled child a use site names, and the scope segment it adds."""
 
     if isinstance(declaration, Use):
-        name = _member_name(compiled.owner, declaration, (Use,))
-        if name is None:
-            raise OccurrenceError(f"{compiled.owner.__name__} does not own that Use")
-        return (name,), compiled.child(name)
+        name = _owned_member(state, declaration, (Use,), "Use")
+        return (name,), state.compiled.child(name)
 
     found = tuple(
         ((authored_branch_name, candidate.case_id), candidate.compiled)
-        for authored_branch_name, authored_branch in declared_members(compiled.owner)
+        for authored_branch_name, authored_branch in declared_members(state.compiled.owner)
         if isinstance(authored_branch, OneOf)
         for authored_case, candidate in zip(
             authored_branch.cases,
-            compiled.branch(authored_branch_name).cases,
+            state.compiled.branch(authored_branch_name).cases,
         )
         if authored_case is declaration
     )
     if len(found) != 1:
-        raise OccurrenceError(f"{compiled.owner.__name__} does not own that Case")
+        raise _out_of_scope(state, declaration, "Case")
     return found[0]
 
 
-def occurrence_child(
-    instance: Space,
-    declaration: Use[S] | Case | type[S],
-) -> S:
-    """Return the exact direct child occurrence selected by a use site or case."""
+def occurrence_child(instance: Space, declaration: Use[S] | Case) -> S:
+    """Return the exact direct child occurrence one use site names.
+
+    A Python class is not an occurrence identity.  One Kernel class may be
+    placed at several roles, and "you probably meant the only one" is precisely
+    the behaviour that breaks the day a second placement appears -- silently,
+    and in whichever call site happened to be written first.  So the key is
+    always an exact declaration: a ``Use``, a ``Case``, or a case id through the
+    branch view.
+    """
 
     state = _occurrence_state(instance)
-    compiled = state.compiled
-    if isinstance(declaration, type) and issubclass(declaration, Space):
-        matches = tuple(
-            (name, child)
-            for name, child in _direct_children(compiled)
-            if child.owner is declaration
+    if not isinstance(declaration, (Use, Case)):
+        raise AuthoringError(
+            "child() takes an exact Use or Case declaration; a Space class names a family, "
+            "not one of its occurrences"
         )
-        if not matches:
-            raise OccurrenceError(
-                f"{compiled.owner.__name__} has no direct child of class {declaration.__name__}"
-            )
-        if len(matches) != 1:
-            raise OccurrenceError(
-                f"{compiled.owner.__name__} has {len(matches)} direct occurrences of "
-                f"{declaration.__name__}; name the exact Use or Case"
-            )
-        segment: tuple[str, ...] = (matches[0][0],)
-        child = matches[0][1]
-    elif isinstance(declaration, (Use, Case)):
-        segment, child = _child_for_declaration(compiled, cast("Use[Space] | Case", declaration))
-
-    else:
-        raise TypeError("child() requires a Use, Case, or Space subclass")
+    segment, child = _child_for_declaration(state, cast("Use[Space] | Case", declaration))
     return _make_occurrence(
         state.runtime,
         cast("_CompiledSpace[S]", child),
@@ -874,11 +959,8 @@ def occurrence_child(
     )
 
 
-def _branch_for_declaration(compiled: _CompiledSpace[Space], declaration: OneOf) -> _CompiledBranch:
-    name = _member_name(compiled.owner, declaration, (OneOf,))
-    if name is None:
-        raise OccurrenceError(f"{compiled.owner.__name__} does not own that OneOf")
-    return compiled.branch(name)
+def _branch_for_declaration(state: _State, declaration: OneOf) -> _CompiledBranch:
+    return state.compiled.branch(_owned_member(state, declaration, (OneOf,), "OneOf"))
 
 
 class BranchView:
@@ -921,10 +1003,7 @@ class BranchView:
         return cast("Answer[str]", answer)
 
     def case(self, case_id: str) -> Space:
-        try:
-            child = self.__branch.case(case_id).compiled
-        except ValueError as error:
-            raise OccurrenceError(str(error)) from error
+        child = self.__branch.case(case_id).compiled
         state = _occurrence_state(self.__owner)
         return _make_occurrence(
             state.runtime,
@@ -935,7 +1014,7 @@ class BranchView:
 
     def select(self, case_id: str) -> BranchView:
         if case_id not in self.cases:
-            raise OccurrenceError(
+            raise AuthoringError(
                 f"branch {self.name!r} has no case {case_id!r}; expected one of {self.cases}"
             )
         if self.__branch.selector is None:
@@ -943,14 +1022,9 @@ class BranchView:
         state = _occurrence_state(self.__owner)
         lineage = state.runtime.lineage
         with lineage.lock:
-            try:
-                committed = lineage.engine.commit_assignments(
-                    state.runtime.point, {self.__branch.selector.path: case_id}
-                )
-            except RequestError as error:
-                raise OccurrenceError(
-                    "the branch selection request was rejected", error.findings
-                ) from error
+            committed = lineage.engine.commit_assignments(
+                state.runtime.point, {self.__branch.selector.path: case_id}
+            )
         _raise_failed_assignment(committed.outcomes)
         successor = state.runtime.successor(committed.point)
         successor_root = _successor_root(successor)
@@ -966,13 +1040,12 @@ def occurrence_branch(instance: Space, declaration: OneOf) -> BranchView:
     """Bind one authored branch to this exact occurrence namespace."""
 
     state = _occurrence_state(instance)
-    return BranchView(instance, _branch_for_declaration(state.compiled, declaration))
+    return BranchView(instance, _branch_for_declaration(state, declaration))
 
 
 __all__ = [
     "BranchView",
     "OccurrenceDiagnostic",
-    "OccurrenceError",
     "ProblemSource",
     "ProjectionAssessment",
     "is_attached_occurrence",

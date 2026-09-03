@@ -12,10 +12,12 @@ They never acquire a namespace or a bound engine handle in place.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum
+from json import dumps
+from math import isfinite
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, Union, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, Union, cast, overload
 
 from typing_extensions import Self
 
@@ -29,6 +31,7 @@ from finn.dataflow._engine import (
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
 S = TypeVar("S", bound="Space")
 E = TypeVar("E", bound=Enum)
 
@@ -92,6 +95,83 @@ def check_reserved_names(
                 f"Rename the class member and pass name={member_name!r} to keep the "
                 "compiled path unchanged"
             )
+
+
+#: The JSON-shaped result every canonical encoding produces.  Deliberately not
+#: "any object with a repr": a fingerprint is only as trustworthy as this type.
+CanonicalValue = Union[None, bool, int, str, list[object], dict[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalValueCodec(Generic[T_contra]):
+    """How one declaration's values are encoded into a persistent fingerprint.
+
+    Owned by the ``Problem`` declaration rather than by a process-global
+    registry or a magic method on the value's class, because this defines
+    *persisted problem identity* -- not engine equality and not evaluation
+    semantics.  A QONNX ``DataType`` is a class this project does not own and
+    must not monkey-patch; the declaration that admits one says how it is
+    encoded, and the ``identity``/``version`` pair goes into the digest so a
+    changed encoding cannot be mistaken for a changed value.
+    """
+
+    identity: str
+    version: int
+    encode: Callable[[T_contra], CanonicalValue]
+
+
+def _type_token(kind: type[object]) -> str:
+    return f"{kind.__module__}.{kind.__qualname__}"
+
+
+def _structural(value: object) -> CanonicalValue:
+    """The default strict encoding: built-ins, containers, enums, dataclasses.
+
+    Everything else is refused rather than guessed at.  Folding
+    ``object.__repr__``'s address into a digest produces a fingerprint that is
+    worse than none, because it would be trusted: two identical problems would
+    compare unequal in one process, and two different ones could compare equal
+    across a reload.  The author of the declaration is the only one who can say
+    what an external type's canonical form is, so they are asked.
+    """
+
+    if value is None or type(value) in (bool, int, str):
+        return cast(CanonicalValue, value)
+    if type(value) is float:
+        if not isfinite(value):
+            raise AuthoringError("a Problem fingerprint requires finite float values")
+        return {"float_hex": value.hex()}
+    if isinstance(value, bytes):
+        return {"bytes_hex": value.hex()}
+    if isinstance(value, QualifiedPath):
+        return {"qualified_path": value.value}
+    if isinstance(value, Enum):
+        return {"enum": _type_token(type(value)), "value": _structural(value.value)}
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            "dataclass": _type_token(type(value)),
+            "fields": [
+                [item.name, _structural(getattr(value, item.name))] for item in fields(value)
+            ],
+        }
+    if isinstance(value, Mapping):
+        pairs = [[_structural(key), _structural(item)] for key, item in value.items()]
+        return {"mapping": sorted(pairs, key=lambda pair: dumps(pair[0], sort_keys=True))}
+    if isinstance(value, (tuple, list)):
+        return {"sequence": [_structural(item) for item in value]}
+    if isinstance(value, (set, frozenset)):
+        members = [_structural(item) for item in value]
+        return {"set": sorted(members, key=lambda item: dumps(item, sort_keys=True))}
+    raise AuthoringError(
+        f"a Problem value of type {_type_token(type(value))} has no canonical encoding; "
+        "give its Problem declaration a canonical=CanonicalValueCodec(...)"
+    )
+
+
+#: The codec a ``Problem`` uses when its author declares none.
+STRUCTURAL_CODEC: CanonicalValueCodec[object] = CanonicalValueCodec(
+    "dataflow.structural", 1, _structural
+)
 
 
 _OCCURRENCE_API: ModuleType | None = None
@@ -346,13 +426,15 @@ class Space:
     def child(self, declaration: Use[S]) -> S: ...
 
     @overload
-    def child(self, declaration: type[S]) -> S: ...
-
-    @overload
     def child(self, declaration: Case) -> Space: ...
 
-    def child(self, declaration: Use[S] | Case | type[S]) -> Space:
-        """Return one exact direct child occurrence of this scope."""
+    def child(self, declaration: Use[S] | Case) -> Space:
+        """Return one exact direct child occurrence named by a use site.
+
+        A Python class is not accepted.  One class may be placed at several
+        roles, and inferring "the only one" is what breaks the day a second
+        placement appears.
+        """
 
         api = _occurrence_api()
         return cast("Space", api.occurrence_child(self, declaration))
@@ -457,6 +539,10 @@ class Problem(ValueSource[T_co]):
     required: bool = True
     validate: Callable[[object], bool] | None = None
     description: str = ""
+    #: How this field's values are canonically encoded for the problem
+    #: fingerprint.  Declared here because it defines persisted identity, which
+    #: is this declaration's business and not the value class's.
+    canonical: CanonicalValueCodec[Any] = STRUCTURAL_CODEC
 
     def __init__(
         self,
@@ -466,12 +552,16 @@ class Problem(ValueSource[T_co]):
         validate: Callable[[object], bool] | None = None,
         description: str = "",
         name: str | None = None,
+        canonical: CanonicalValueCodec[Any] | None = None,
     ) -> None:
+        if canonical is not None and not isinstance(canonical, CanonicalValueCodec):
+            raise AuthoringError("a Problem canonical= is one CanonicalValueCodec")
         object.__setattr__(self, "value_semantics", semantics_for(value_type))
         object.__setattr__(self, "stable_name", name)
         object.__setattr__(self, "required", required)
         object.__setattr__(self, "validate", validate)
         object.__setattr__(self, "description", description)
+        object.__setattr__(self, "canonical", canonical or STRUCTURAL_CODEC)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -629,10 +719,19 @@ class ConstraintGroup:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Readiness:
-    """A named readiness profile over declarations in this Space."""
+    """A named readiness profile over declarations in this Space.
+
+    ``properties`` accepts any value declaration, not only a locally declared
+    ``Derived``.  A profile's job is to name the values that must be final
+    before a question can be asked, and the interesting one is routinely a
+    child's export or a branch's selected output -- handles on a declaration
+    elsewhere rather than declarations of this class.  The compiler resolves all
+    three the same way, so narrowing this would only force an author to launder
+    the value through a forwarding property.
+    """
 
     decisions: tuple[Decision[object], ...] = ()
-    properties: tuple[Derived[object], ...] = ()
+    properties: tuple[ValueSource[object], ...] = ()
     constraints: tuple[Constraint, ...] = ()
     stable_name: str | None = None
 
@@ -640,7 +739,7 @@ class Readiness:
         self,
         *,
         decisions: Sequence[Decision[object]] = (),
-        properties: Sequence[Derived[object]] = (),
+        properties: Sequence[ValueSource[object]] = (),
         constraints: Sequence[Constraint] | ConstraintGroup = (),
         name: str | None = None,
     ) -> None:
@@ -655,13 +754,38 @@ class Readiness:
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
 class Projection(Generic[T_co]):
-    """One output plus the readiness and constraint groups that validate it."""
+    """One named question a Space promises to answer about its own point.
+
+    A projection binds three things a caller would otherwise re-supply at every
+    call site -- *which* value is the answer, *when* the point is final enough
+    to be inspected, and *which* constraint groups must accept before that value
+    may be exposed.  Keeping them in one declaration is what lets readiness,
+    validity and availability stay three separate questions at the answer
+    boundary instead of collapsing into one Boolean.
+
+    ``readiness`` is required.  A projection with no further obligation declares
+    an empty profile; expressing "no readiness" by omitting the concept is how
+    two questions silently become one.
+
+    ``constraints`` is a tuple because membership is many-to-many in both
+    directions: one projection may own several groups, and one group may serve
+    several projections when each legitimately depends on it.  A group is named,
+    never inferred from what its constraints happen to read -- a physical
+    feasibility constraint can depend on exactly the same folding decisions as a
+    model constraint and still say something entirely different.  A bare
+    ``Constraint`` is refused for the same reason: only a named group can be
+    shared and pointed at in a diagnostic.
+
+    There are no absence- or snapshot-policy arguments.  Both policies are real
+    and both are recorded in the compiled metadata, but each has exactly one
+    legal value in U1 -- propagate final inapplicability, and snapshot through
+    the output declaration's own ``ValueSemantics`` -- so advertising them as
+    constructor knobs would offer a choice that does not exist.
+    """
 
     output: ValueSource[T_co]
     readiness: Readiness
     constraints: tuple[ConstraintGroup, ...]
-    absence_policy: Literal["propagate"]
-    snapshot_policy: Literal["declared"]
     stable_name: str | None
 
     def __init__(
@@ -669,26 +793,27 @@ class Projection(Generic[T_co]):
         output: ValueSource[T_co],
         *,
         readiness: Readiness,
-        constraints: Sequence[ConstraintGroup] = (),
-        absence_policy: Literal["propagate"] = "propagate",
-        snapshot_policy: Literal["declared"] = "declared",
+        constraints: ConstraintGroup | Sequence[ConstraintGroup] = (),
         name: str | None = None,
     ) -> None:
         if not isinstance(output, ValueSource):
-            raise AuthoringError("a Projection output must be a declared value")
+            raise AuthoringError("a Projection names one value declaration as its output")
         if not isinstance(readiness, Readiness):
-            raise AuthoringError("a Projection readiness must be a Readiness declaration")
-        if any(not isinstance(group, ConstraintGroup) for group in constraints):
-            raise AuthoringError("Projection constraints must be ConstraintGroup declarations")
-        if absence_policy != "propagate":
-            raise AuthoringError("the only U1 Projection absence policy is 'propagate'")
-        if snapshot_policy != "declared":
-            raise AuthoringError("the only U1 Projection snapshot policy is 'declared'")
+            raise AuthoringError(
+                "a Projection's readiness= is one Readiness declaration; declare an empty "
+                "profile rather than omitting the obligation"
+            )
+        groups = (constraints,) if isinstance(constraints, ConstraintGroup) else tuple(constraints)
+        if any(not isinstance(group, ConstraintGroup) for group in groups):
+            raise AuthoringError(
+                "a Projection's constraints= are ConstraintGroup declarations; a bare "
+                "Constraint belongs to a group, so that the group can be named and shared"
+            )
+        if name is not None and not name:
+            raise AuthoringError("a Projection name must be non-empty")
         object.__setattr__(self, "output", output)
         object.__setattr__(self, "readiness", readiness)
-        object.__setattr__(self, "constraints", tuple(constraints))
-        object.__setattr__(self, "absence_policy", absence_policy)
-        object.__setattr__(self, "snapshot_policy", snapshot_policy)
+        object.__setattr__(self, "constraints", groups)
         object.__setattr__(self, "stable_name", name)
 
     @overload
@@ -997,6 +1122,8 @@ __all__ = [
     "RESERVED_LIFECYCLE_NAMES",
     "AuthoringError",
     "BranchOutput",
+    "CanonicalValue",
+    "CanonicalValueCodec",
     "Case",
     "ChildValue",
     "Constraint",
@@ -1012,6 +1139,7 @@ __all__ = [
     "Projection",
     "Readiness",
     "Rejected",
+    "STRUCTURAL_CODEC",
     "Space",
     "Unresolvable",
     "Use",

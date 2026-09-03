@@ -6,21 +6,23 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import fields
+from dataclasses import dataclass, fields
+from enum import Enum
 from pathlib import Path
 
 import pytest
 
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.dataflow._engine import Absent, Decided, QualifiedPath, RequestError, Unresolved
 from finn.dataflow.model import (
     AuthoringError,
+    CanonicalValueCodec,
     Case,
     ConstraintGroup,
     Decision,
     Input,
     OccurrenceContext,
-    OccurrenceError,
     OneOf,
     Problem,
     Projection,
@@ -31,7 +33,9 @@ from finn.dataflow.model import (
     RESERVED_LIFECYCLE_NAMES,
     constraint,
     derived,
+    reject,
 )
+from finn.dataflow.model.declarations import enum_semantics
 from finn.dataflow.model.compiler import compile_space, compile_space_model, compiled_model_for
 from finn.dataflow.model.occurrence import _Lineage, _occurrence_state, is_attached_occurrence
 
@@ -120,10 +124,14 @@ def test_assignment_returns_immutable_successors_of_the_same_authored_class() ->
 
 def test_repeated_child_classes_require_an_exact_use_site() -> None:
     root = Root.start({Root.size: 4})
-    with pytest.raises(OccurrenceError, match="3 direct occurrences of Leaf"):
-        root.child(Leaf)
-    with pytest.raises(OccurrenceError, match="assign it through the exact child occurrence"):
+    with pytest.raises(AuthoringError, match="a Space class names a family"):
+        root.child(Leaf)  # type: ignore[call-overload]
+    with pytest.raises(AuthoringError) as refusal:
         root.assign(Leaf.factor, 2)
+    # The refusal names every placement, so the caller can reach the one meant.
+    assert "root.left" in str(refusal.value)
+    assert "root.right" in str(refusal.value)
+    assert "root.choice.direct" in str(refusal.value)
 
     left = root.child(Root.left).assign(Leaf.factor, 2)
     right = left.root.child(Root.right)
@@ -152,13 +160,13 @@ def test_assessment_is_declaration_oriented_and_scope_checked() -> None:
     left = root.child(Root.left)
     assert left.assess(Leaf.ready).ready is None
     assert left.assign(Leaf.factor, 2).assess(Leaf.ready).ready is True
-    with pytest.raises(OccurrenceError, match="does not own that Readiness"):
+    with pytest.raises(AuthoringError, match="not owned by Root at root"):
         root.assess(Leaf.ready)
 
 
 def test_invalid_assignments_do_not_create_a_successor() -> None:
     root = Root.start({Root.size: 4})
-    with pytest.raises(OccurrenceError, match="not accepted") as error:
+    with pytest.raises(RequestError) as error:
         root.assign(Root.mode, "medium")
     assert error.value.findings
     assert isinstance(root.answer(Root.mode), Unresolved)
@@ -168,7 +176,9 @@ def test_projection_assessment_keeps_readiness_constraints_and_raw_output_separa
     root = Root.start({Root.size: 6})
     partial = root.child(Root.left).project(Leaf.data)
     assert isinstance(partial, ProjectionAssessment)
+    assert partial.projection == "root.left.data"
     assert tuple(field.name for field in fields(partial)) == (
+        "projection",
         "readiness",
         "constraints",
         "output",
@@ -245,7 +255,7 @@ def test_problem_context_is_frozen_and_staleness_is_explicit() -> None:
 
 def test_an_incompatible_persisted_problem_fingerprint_is_rejected() -> None:
     original = Root.start({Root.size: 4})
-    with pytest.raises(OccurrenceError, match="incompatible problem fingerprint"):
+    with pytest.raises(RequestError, match="engine request failed"):
         Root.start(
             {Root.size: 5},
             expected_problem_fingerprint=original.problem_fingerprint,
@@ -268,15 +278,12 @@ def test_diagnostics_retain_raw_findings_but_render_occurrence_vocabulary() -> N
     diagnostics = leaf.diagnostics(assessment, projection=Leaf.data)
     assert len(diagnostics) == 1
     diagnostic = diagnostics[0]
-    assert diagnostic.finding.path.value == "constraint.root.left.below_limit"
+    # A bare ``Decided(False)`` carries no reason of its own, so the reduction
+    # synthesizes one whose trace still names the constraint that refused.
+    assert diagnostic.finding.code == "projection-constraint-refused"
+    assert diagnostic.finding.trace == (QualifiedPath("constraint.root.left.below_limit"),)
     assert diagnostic.scope == ("Root root", "left: Leaf")
-    assert diagnostic.declaration == "Leaf.below_limit"
     assert diagnostic.projection == "data"
-    assert diagnostic.render() == (
-        "Root root / left: Leaf / Leaf.below_limit [data]: "
-        "constraint rejected projection 'root.left.data' "
-        "(projection-constraint-rejected)"
-    )
     assert leaf.diagnostics(assessment, projection=Leaf.data) == diagnostics
 
 
@@ -534,3 +541,328 @@ def test_an_instance_that_is_neither_attached_nor_configured_has_no_values() -> 
 
     with pytest.raises(AttributeError, match="configured instances"):
         _ = Plain().size
+
+
+# -- C3: projection, navigation, errors, fingerprints -------------------------
+
+
+class _Payload(Space):
+    size = Input(int)
+
+    @derived(int, size=size)
+    def value(*, size: int) -> int:
+        return size
+
+    exports = (value,)
+
+
+class _Refusing(Space):
+    """A Space whose output can be absent, refused, or both, on demand."""
+
+    size = Input(int)
+    present = Decision(bool, values=(False, True))
+    inner = Use(_Payload, size=size, when=present)
+    payload = inner.value
+
+    @constraint(size=size)
+    def small_enough(*, size: int) -> object:
+        return True if size <= 10 else reject("too-large", "this size is refused")
+
+    limits = ConstraintGroup(small_enough)
+    ready = Readiness(decisions=(present,), properties=(payload,))
+    view = Projection(payload, readiness=ready, constraints=limits)
+
+
+class _RefusingRoot(Space):
+    size = Problem(int)
+    inner = Use(_Refusing, size=size)
+
+
+def test_unresolved_dominates_every_other_verdict() -> None:
+    root = _RefusingRoot.start({_RefusingRoot.size: 50})
+    assessment = root.child(_RefusingRoot.inner).project(_Refusing.view)
+    # The constraint has already refused, but the presence decision is
+    # uncommitted, so the honest answer is "not yet", not "no".
+    assert assessment.constraints[0].verdict is False
+    assert isinstance(assessment.accepted_answer, Unresolved)
+
+
+def test_final_absence_precedes_constraint_refusal() -> None:
+    root = _RefusingRoot.start({_RefusingRoot.size: 50})
+    inner = root.child(_RefusingRoot.inner).assign(_Refusing.present, False)
+    assessment = inner.project(_Refusing.view)
+
+    assert assessment.readiness.ready is True
+    assert assessment.constraints[0].verdict is False
+    assert isinstance(assessment.output, Absent)
+    accepted = assessment.accepted_answer
+    # The value does not arise here.  Saying "a constraint refused it" would be
+    # a different and misleading sentence, so absence propagates unchanged and
+    # carries the output's own findings rather than the refusal's.
+    assert isinstance(accepted, Absent)
+    assert accepted is assessment.output
+    assert all(finding.code != "projection-constraint-refused" for finding in accepted.findings)
+
+
+def test_constraint_refusal_governs_an_available_output() -> None:
+    root = _RefusingRoot.start({_RefusingRoot.size: 50})
+    inner = root.child(_RefusingRoot.inner).assign(_Refusing.present, True)
+    assessment = inner.project(_Refusing.view)
+
+    assert assessment.readiness.ready is True
+    assert assessment.output == Decided(50)
+    assert isinstance(assessment.accepted_answer, Absent)
+    # The raw output stays visible even though validation rejected it.
+    assert any(finding.code == "too-large" for finding in assessment.accepted_answer.findings)
+
+
+def test_a_projection_requires_an_explicit_readiness_declaration() -> None:
+    with pytest.raises(TypeError, match="readiness"):
+        Projection(Leaf.result)  # type: ignore[call-arg]
+    with pytest.raises(AuthoringError, match="declare an empty profile"):
+        Projection(Leaf.result, readiness=None)  # type: ignore[arg-type]
+
+
+def test_a_projection_refuses_a_bare_constraint_where_a_group_belongs() -> None:
+    with pytest.raises(AuthoringError, match="belongs to a group"):
+        Projection(Leaf.result, readiness=Leaf.ready, constraints=(Leaf.below_limit,))  # type: ignore[arg-type]
+
+
+def test_a_projection_may_not_name_the_same_group_twice() -> None:
+    class Duplicated(Space):
+        size = Problem(int)
+
+        @constraint(size=size)
+        def positive(*, size: int) -> bool:
+            return size > 0
+
+        checks = ConstraintGroup(positive)
+        ready = Readiness(constraints=checks)
+        view = Projection(size, readiness=ready, constraints=(checks, checks))
+
+    with pytest.raises(AuthoringError, match="names constraint group 'checks' twice"):
+        compile_space(Duplicated, "root", problem_namespace="problem.root")
+
+
+def test_a_projection_may_not_name_a_group_another_class_declares() -> None:
+    class Borrowed(Space):
+        size = Problem(int)
+        ready = Readiness()
+        view = Projection(size, readiness=ready, constraints=(Leaf.legal,))
+
+    with pytest.raises(AuthoringError, match="does not declare"):
+        compile_space(Borrowed, "root", problem_namespace="problem.root")
+
+
+def test_a_projection_may_not_borrow_another_class_readiness() -> None:
+    class Borrowed(Space):
+        size = Problem(int)
+        view = Projection(size, readiness=Leaf.ready)
+
+    with pytest.raises(AuthoringError, match="Readiness declaration"):
+        compile_space(Borrowed, "root", problem_namespace="problem.root")
+
+
+def test_one_constraint_group_serves_several_projections() -> None:
+    left = Root.start({Root.size: 4}).child(Root.left).assign(Leaf.factor, 2)
+    data = left.project(Leaf.data)
+    report = left.project(Leaf.report)
+    assert data.projection == "root.left.data"
+    assert report.projection == "root.left.report"
+    assert data.constraints[0].verdict is True
+    assert report.constraints[0].verdict is True
+    assert data.accepted_answer == report.accepted_answer == Decided(8)
+
+
+def test_adding_a_projection_changes_no_engine_declaration() -> None:
+    """A Projection is a stored question over paths the lowering already made."""
+
+    def build(with_projection: bool) -> object:
+        body: dict[str, object] = {
+            "size": Problem(int),
+            "lanes": Decision(int, values=(1, 2)),
+        }
+        body["ready"] = Readiness(decisions=(body["lanes"],))  # type: ignore[arg-type]
+        if with_projection:
+            body["view"] = Projection(
+                body["lanes"],  # type: ignore[arg-type]
+                readiness=body["ready"],  # type: ignore[arg-type]
+            )
+        return compile_space(type("Twin", (Space,), body), "root", problem_namespace="problem.root")
+
+    plain = build(False)
+    projected = build(True)
+    for attribute in (
+        "decisions",
+        "properties",
+        "constraints",
+        "constraint_sets",
+        "readiness_profiles",
+    ):
+        assert [
+            item.path if hasattr(item, "path") else item.name for item in getattr(plain, attribute)
+        ] == [
+            item.path if hasattr(item, "path") else item.name
+            for item in getattr(projected, attribute)
+        ]
+
+
+def test_a_query_never_commits_anything() -> None:
+    root = Root.start({Root.size: 4})
+    left = root.child(Root.left)
+    for _index in range(3):
+        left.project(Leaf.data)
+        left.assess(Leaf.ready)
+        left.answer(Leaf.result)
+        root.branch(Root.choice).selected()
+    assert isinstance(left.answer(Leaf.factor), Unresolved)
+    assert isinstance(root.branch(Root.choice).selected(), Unresolved)
+
+
+def test_a_singleton_branch_is_selected_without_a_committed_decision() -> None:
+    class Only(Space):
+        size = Problem(int)
+        pick = OneOf(Case(Leaf, name="one", supplied=size), outputs=("result",))
+
+    root = Only.start({Only.size: 2})
+    branch = root.branch(Only.pick)
+    assert branch.cases == ("one",)
+    assert branch.selected() == Decided("one")
+    assert type(branch.case("one")) is Leaf
+
+
+def test_an_unknown_branch_case_is_an_authoring_error() -> None:
+    root = Root.start({Root.size: 2})
+    with pytest.raises(AuthoringError, match="has no case 'missing'"):
+        root.branch(Root.choice).select("missing")
+    with pytest.raises(AuthoringError, match="has no case 'missing'"):
+        root.branch(Root.choice).case("missing")
+
+
+def test_the_occurrence_surface_never_accepts_a_path() -> None:
+    root = Root.start({Root.size: 4})
+    calls: tuple[Callable[[], object], ...] = (
+        lambda: root.answer("semantic.root.left.result"),  # type: ignore[arg-type]
+        lambda: root.child("root.left"),  # type: ignore[call-overload]
+        lambda: root.assess("root.left.ready"),  # type: ignore[call-overload]
+    )
+    for call in calls:
+        with pytest.raises((AuthoringError, TypeError, AttributeError)):
+            call()
+
+
+# -- fingerprints --------------------------------------------------------------
+
+
+class _Colour(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+@dataclass(frozen=True)
+class _Shape:
+    rows: int
+    cols: int
+
+
+class _Opaque:
+    """A value with no canonical encoding of its own, like a QONNX datatype."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+_OPAQUE_CODEC: CanonicalValueCodec[_Opaque] = CanonicalValueCodec(
+    "test.opaque", 1, lambda value: value.name
+)
+
+
+class _Fingerprinted(Space):
+    count = Problem(int)
+    ratio = Problem(float)
+    colour = Problem(enum_semantics(_Colour))
+    shape = Problem(_Shape)
+    tags = Problem(tuple, required=False)
+    opaque = Problem(_Opaque, canonical=_OPAQUE_CODEC)
+
+
+def _fingerprint(**values: object) -> str:
+    supplied = {getattr(_Fingerprinted, name): value for name, value in values.items()}
+    return _Fingerprinted.start(supplied).problem_fingerprint
+
+
+_BASE: dict[str, object] = {
+    "count": 4,
+    "ratio": 0.5,
+    "colour": _Colour.RED,
+    "shape": _Shape(2, 3),
+    "tags": ("a", "b"),
+    "opaque": _Opaque("INT8"),
+}
+
+
+def test_identical_problems_fingerprint_identically() -> None:
+    assert _fingerprint(**_BASE) == _fingerprint(**{**_BASE, "opaque": _Opaque("INT8")})
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"count": 5},
+        {"ratio": 0.5000001},
+        {"colour": _Colour.BLUE},
+        {"shape": _Shape(3, 2)},
+        {"tags": ("b", "a")},
+        {"opaque": _Opaque("INT16")},
+    ],
+)
+def test_any_changed_declared_fact_changes_the_fingerprint(changed: dict[str, object]) -> None:
+    assert _fingerprint(**{**_BASE, **changed}) != _fingerprint(**_BASE)
+
+
+def test_explicit_absence_is_distinguished_from_any_value() -> None:
+    without = {name: value for name, value in _BASE.items() if name != "tags"}
+    assert _fingerprint(**without) != _fingerprint(**_BASE)
+    assert _fingerprint(**without) != _fingerprint(**{**_BASE, "tags": ()})
+
+
+def test_two_space_families_sharing_a_problem_shape_do_not_collide() -> None:
+    class First(Space):
+        size = Problem(int)
+
+    class Second(Space):
+        size = Problem(int)
+
+    assert (
+        First.start({First.size: 4}).problem_fingerprint
+        != Second.start({Second.size: 4}).problem_fingerprint
+    )
+
+
+def test_a_value_with_no_canonical_encoding_is_refused_rather_than_guessed() -> None:
+    class Unencodable(Space):
+        thing = Problem(_Opaque)
+
+    with pytest.raises(AuthoringError, match="has no canonical encoding"):
+        Unencodable.start({Unencodable.thing: _Opaque("INT8")}).problem_fingerprint
+
+
+def test_a_declared_codec_identity_travels_with_the_value() -> None:
+    """Re-encoding the same value under a new codec version is a new problem."""
+
+    def family(codec: CanonicalValueCodec[_Opaque]) -> str:
+        thing: Problem[_Opaque] = Problem(_Opaque, canonical=codec)
+        space: type[Space] = type("Coded", (Space,), {"thing": thing})
+        return space.start({thing: _Opaque("INT8")}).problem_fingerprint
+
+    first = family(CanonicalValueCodec("test.opaque", 1, lambda value: value.name))
+    second = family(CanonicalValueCodec("test.opaque", 2, lambda value: value.name))
+    assert first != second
+
+
+def test_a_non_finite_float_is_refused() -> None:
+    class Floaty(Space):
+        ratio = Problem(float)
+
+    with pytest.raises(AuthoringError, match="finite float"):
+        Floaty.start({Floaty.ratio: float("inf")}).problem_fingerprint
