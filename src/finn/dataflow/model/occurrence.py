@@ -54,6 +54,7 @@ from finn.dataflow._engine import (
 from finn.dataflow._engine.requests import request_finding
 from finn.dataflow._engine.results import ordered_findings
 from finn.dataflow.model.compiler import (
+    DeclarationOwner,
     SpaceModel,
     _CompiledBranch,
     _CompiledProjection,
@@ -131,17 +132,51 @@ class ProjectionAssessment(Generic[T]):
 
 @dataclass(frozen=True, slots=True)
 class OccurrenceDiagnostic:
-    """One engine finding interpreted in declaration and occurrence vocabulary."""
+    """One engine ``Finding`` read back in occurrence and declaration terms.
+
+    An interpretation service, not a second answer lattice.  The raw ``finding``
+    -- kind, code, path, values and causal trace -- is retained whole, because
+    an advanced tool still wants it and because paraphrasing a diagnostic is how
+    causal information gets lost.  What is added is the context the engine has
+    no way to know: which occurrence in the tree owns the path, which authored
+    member the contributor actually wrote, which branch case it sits in, and
+    which projection was being asked for when the finding surfaced.
+
+    ``space`` and ``member`` are ``None`` when the path is generated rather than
+    declared -- a projection's own synthesized blocker, for instance.  That is
+    reported honestly; the alternative, fabricating a member name from the last
+    path segment, names an identifier that may not exist.
+    """
 
     finding: Finding
     scope: tuple[str, ...]
-    declaration: str
-    projection: str | None = None
+    space: str | None
+    member: str | None
+    case: str | None
+    projection: str | None
 
     def render(self) -> str:
-        location = " / ".join((*self.scope, self.declaration))
-        requested = "" if self.projection is None else f" [{self.projection}]"
-        return f"{location}{requested}: {self.finding.message} ({self.finding.code})"
+        """A scoped, human-readable rendering in declaration vocabulary."""
+
+        lines = []
+        if self.projection is not None:
+            lines.append(f"projection {self.projection}")
+        lines.append("occurrence " + " / ".join(self.scope))
+        if self.case is not None:
+            lines.append(f"case {self.case}")
+        if self.space is not None and self.member is not None:
+            lines.append(f"{self.space}.{self.member}")
+        else:
+            lines.append("declaration <generated>")
+        lines.append(f"{self.finding.kind.value} {self.finding.code}: {self.finding.message}")
+        lines.append(f"path {self.finding.path}")
+        if self.finding.values:
+            lines.append(
+                "values " + ", ".join(f"{key}={value!r}" for key, value in self.finding.values)
+            )
+        if self.finding.trace:
+            lines.append("trace " + " <- ".join(str(path) for path in self.finding.trace))
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,76 +807,6 @@ def occurrence_project(instance: Space, declaration: Projection[T]) -> Projectio
     )
 
 
-def _scope_entries(
-    compiled: _CompiledSpace[Space],
-    chain: tuple[str, ...] | None = None,
-) -> tuple[tuple[_CompiledSpace[Space], tuple[str, ...]], ...]:
-    here = chain or (f"{compiled.owner.__name__} {compiled.namespace}",)
-    entries: list[tuple[_CompiledSpace[Space], tuple[str, ...]]] = [(compiled, here)]
-    for member_name, child in compiled.children:
-        entries.extend(_scope_entries(child, (*here, f"{member_name}: {child.owner.__name__}")))
-    for _member_name, branch in compiled.branches:
-        for case in branch.cases:
-            entries.extend(
-                _scope_entries(
-                    case.compiled,
-                    (
-                        *here,
-                        f"{branch.member_name}[{case.case_id}]: {case.compiled.owner.__name__}",
-                    ),
-                )
-            )
-    return tuple(entries)
-
-
-def _semantic_path(path: QualifiedPath) -> str:
-    for prefix in ("semantic.", "constraint.", "problem."):
-        if path.value.startswith(prefix):
-            return path.value[len(prefix) :]
-    return path.value
-
-
-def _scope_for_finding(
-    root: _CompiledSpace[Space], finding: Finding
-) -> tuple[_CompiledSpace[Space], tuple[str, ...]]:
-    semantic = _semantic_path(finding.path)
-    candidates = tuple(
-        item
-        for item in _scope_entries(root)
-        if semantic == item[0].namespace or semantic.startswith(f"{item[0].namespace}.")
-    )
-    return (
-        max(candidates, key=lambda item: len(item[0].namespace))
-        if candidates
-        else (
-            root,
-            (f"{root.owner.__name__} {root.namespace}",),
-        )
-    )
-
-
-def _declaration_for_finding(compiled: _CompiledSpace[Space], finding: Finding) -> str:
-    for name, declaration in declared_members(compiled.owner):
-        if isinstance(declaration, ValueSource):
-            try:
-                if resolve_value_source(compiled, declaration, "diagnostic").path == finding.path:
-                    return f"{compiled.owner.__name__}.{name}"
-            except ValueError:
-                continue
-        if isinstance(declaration, Constraint):
-            local = declaration.stable_name or name
-            if finding.path.value == f"constraint.{compiled.namespace}.{local}":
-                return f"{compiled.owner.__name__}.{name}"
-        if isinstance(declaration, OneOf):
-            branch = compiled.branch(name)
-            if branch.selector is not None and branch.selector.path == finding.path:
-                return f"{compiled.owner.__name__}.{name}"
-            for output_name, output in branch.outputs:
-                if output.path == finding.path:
-                    return f"{compiled.owner.__name__}.{name}.{output_name}"
-    return f"{compiled.owner.__name__}.{finding.path.value.rsplit('.', 1)[-1]}"
-
-
 def _subject_findings(subject: object) -> tuple[Finding, ...]:
     if isinstance(subject, RequestError):
         return ordered_findings(list(subject.findings))
@@ -882,18 +847,24 @@ def occurrence_diagnostics(
     projection_name: str | None = None
     if projection is not None:
         projection_name = _projection_for_declaration(state, projection).member_name
-    interpreted: list[OccurrenceDiagnostic] = []
-    for finding in _subject_findings(subject):
-        owner, chain = _scope_for_finding(state.runtime.lineage.tree, finding)
-        interpreted.append(
-            OccurrenceDiagnostic(
-                finding,
-                chain,
-                _declaration_for_finding(owner, finding),
-                projection_name,
-            )
-        )
-    return tuple(interpreted)
+    owners = state.runtime.lineage.model._owner_index()
+    return tuple(
+        _interpret(state, owners.get(finding.path), finding, projection_name)
+        for finding in _subject_findings(subject)
+    )
+
+
+def _interpret(
+    state: _State,
+    owner: DeclarationOwner | None,
+    finding: Finding,
+    projection: str | None,
+) -> OccurrenceDiagnostic:
+    if owner is None:
+        return OccurrenceDiagnostic(finding, state.scope, None, None, None, projection)
+    return OccurrenceDiagnostic(
+        finding, owner.scope, owner.space, owner.member, owner.case, projection
+    )
 
 
 def _direct_children(

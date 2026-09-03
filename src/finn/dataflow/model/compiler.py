@@ -1215,6 +1215,67 @@ class SpaceModel:
 
         return self._shared.design_space(self.specification)
 
+    def _owner_index(self) -> Mapping[QualifiedPath, DeclarationOwner]:
+        """The diagnostic ownership index, built once with this compiled model."""
+
+        return self._shared.owners(self._compiled_tree())
+
+
+@dataclass(frozen=True, slots=True)
+class DeclarationOwner:
+    """Which occurrence and which authored member a compiled path belongs to."""
+
+    #: The root-to-here occurrence chain, in declaration vocabulary.
+    scope: tuple[str, ...]
+    space: str
+    member: str
+    #: The branch case this owner sits inside, when it sits inside one.
+    case: str | None
+
+
+def _index_owners(
+    compiled: _CompiledSpace[Space],
+    scope: tuple[str, ...],
+    case: str | None,
+    index: dict[QualifiedPath, DeclarationOwner],
+) -> None:
+    """Map every compiled path to the occurrence and member that declared it.
+
+    ``setdefault``, parents before children, and inputs skipped outright --
+    three spellings of one rule.  A child's ``Input`` compiles to the
+    *supplier's* path, so the supplier keeps ownership of the value it actually
+    declares; attributing it to the consumer would name a member that only
+    reads it.  Built once with the compiled model, because re-walking the tree
+    per finding is both slow and, worse, an invitation to guess when the walk
+    finds nothing.
+    """
+
+    supplied = {name for name, _reference in compiled.inputs}
+    owner = compiled.owner.__name__
+    for name, reference in compiled.members:
+        if name in supplied:
+            continue
+        index.setdefault(reference.path, DeclarationOwner(scope, owner, name, case))
+    for name, path in compiled.constraint_members:
+        index.setdefault(path, DeclarationOwner(scope, owner, name, case))
+    for name, child in compiled.children:
+        _index_owners(child, (*scope, name), case, index)
+    for name, branch in compiled.branches:
+        if branch.selector is not None:
+            index.setdefault(branch.selector.path, DeclarationOwner(scope, owner, name, case))
+        for output_name, reference in branch.outputs:
+            index.setdefault(
+                reference.path,
+                DeclarationOwner(scope, owner, f"{name}.{output_name}", case),
+            )
+        for branch_case in branch.cases:
+            _index_owners(
+                branch_case.compiled,
+                (*scope, name, branch_case.case_id),
+                branch_case.case_id,
+                index,
+            )
+
 
 class _SharedCompilation:
     """The immutable-by-contract results one compiled model memoizes.
@@ -1227,11 +1288,12 @@ class _SharedCompilation:
     under it.
     """
 
-    __slots__ = ("_lock", "_space")
+    __slots__ = ("_lock", "_owners", "_space")
 
     def __init__(self) -> None:
         self._lock = RLock()
         self._space: DesignSpace | None = None
+        self._owners: Mapping[QualifiedPath, DeclarationOwner] | None = None
 
     def design_space(self, specification: DesignSpaceSpec) -> DesignSpace:
         with self._lock:
@@ -1243,6 +1305,14 @@ class _SharedCompilation:
                 # is not allowed to widen that surface.
                 self._space = Engine().validate(specification)
             return self._space
+
+    def owners(self, tree: _CompiledSpace[Space]) -> Mapping[QualifiedPath, DeclarationOwner]:
+        with self._lock:
+            if self._owners is None:
+                index: dict[QualifiedPath, DeclarationOwner] = {}
+                _index_owners(tree, (tree.namespace,), None, index)
+                self._owners = MappingProxyType(index)
+            return self._owners
 
 
 def _occurrence_api() -> Any:
@@ -1347,6 +1417,7 @@ def compile_space(
 
 
 __all__ = [
+    "DeclarationOwner",
     "SpaceModel",
     "answer_for",
     "resolve_value_source",

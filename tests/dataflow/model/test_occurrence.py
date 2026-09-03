@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields
 from enum import Enum
@@ -14,7 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from finn.dataflow._engine import Absent, Decided, QualifiedPath, RequestError, Unresolved
+from finn.dataflow._engine import (
+    Absent,
+    Decided,
+    DesignPoint,
+    DesignSpace,
+    Engine,
+    QualifiedPath,
+    RequestError,
+    Unresolved,
+)
 from finn.dataflow.model import (
     AuthoringError,
     CanonicalValueCodec,
@@ -36,8 +45,22 @@ from finn.dataflow.model import (
     reject,
 )
 from finn.dataflow.model.declarations import enum_semantics
-from finn.dataflow.model.compiler import compile_space, compile_space_model, compiled_model_for
-from finn.dataflow.model.occurrence import _Lineage, _occurrence_state, is_attached_occurrence
+from finn.dataflow.model.compiler import (
+    SpaceModel,
+    _CompiledSpace,
+    _Ref,
+    compile_space,
+    compile_space_model,
+    compiled_model_for,
+)
+from finn.dataflow.model.declarations import declared_members
+from finn.dataflow.model.occurrence import (
+    _Lineage,
+    _occurrence_state,
+    _Runtime,
+    _State,
+    is_attached_occurrence,
+)
 
 
 def _lineage(instance: Space) -> _Lineage:
@@ -272,19 +295,110 @@ def test_a_child_reconstructs_as_the_same_authored_class_in_a_fresh_lineage() ->
     assert isinstance(fresh.answer(Leaf.factor), Unresolved)
 
 
-def test_diagnostics_retain_raw_findings_but_render_occurrence_vocabulary() -> None:
+class _Watched(Space):
+    """A Space whose one constraint refuses with a reason of its own."""
+
+    supplied = Input(int)
+
+    @constraint(supplied=supplied)
+    def within_range(*, supplied: int) -> object:
+        return True if supplied <= 4 else reject("out-of-range", "supplied is too large")
+
+    checks = ConstraintGroup(within_range)
+    ready = Readiness(constraints=checks)
+    view = Projection(supplied, readiness=ready, constraints=checks)
+
+
+class _WatchedNest(Space):
+    supplied = Input(int)
+    inner = Use(_Watched, supplied=supplied)
+
+
+class _DiagRoot(Space):
+    size = Problem(int)
+    left = Use(_Watched, supplied=size)
+    right = Use(_Watched, supplied=size)
+    pick = OneOf(
+        Case(_WatchedNest, name="nested", supplied=size),
+        Case(_Watched, name="direct", supplied=size),
+    )
+
+
+def test_a_declared_finding_is_attributed_to_the_member_that_declared_it() -> None:
+    left = _DiagRoot.start({_DiagRoot.size: 9}).child(_DiagRoot.left)
+    diagnostics = left.diagnostics(left.assess(_Watched.checks), projection=_Watched.view)
+    assert [(item.space, item.member) for item in diagnostics] == [("_Watched", "within_range")]
+    diagnostic = diagnostics[0]
+    assert diagnostic.scope == ("root", "left")
+    assert diagnostic.case is None
+    assert diagnostic.projection == "view"
+    # The raw finding survives whole -- kind, code, path, values and trace.
+    assert diagnostic.finding.path == QualifiedPath("constraint.root.left.within_range")
+    assert diagnostic.finding.code == "out-of-range"
+    assert diagnostic.finding.message == "supplied is too large"
+    raw = left.assess(_Watched.checks).answers[QualifiedPath("constraint.root.left.within_range")]
+    assert isinstance(raw, Absent)
+    assert diagnostic.finding is raw.findings[0]
+    assert "_Watched.within_range" in diagnostic.render()
+
+
+def test_a_generated_path_is_left_unattributed_rather_than_guessed_at() -> None:
     leaf = Root.start({Root.size: 6}).child(Root.left).assign(Leaf.factor, 4)
     assessment = leaf.project(Leaf.data)
     diagnostics = leaf.diagnostics(assessment, projection=Leaf.data)
     assert len(diagnostics) == 1
     diagnostic = diagnostics[0]
-    # A bare ``Decided(False)`` carries no reason of its own, so the reduction
-    # synthesizes one whose trace still names the constraint that refused.
+    # The reduction synthesized this finding against the projection's own path,
+    # which no declaration owns.  Naming ``Leaf.data`` from the last path
+    # segment would be an identifier nobody wrote.
     assert diagnostic.finding.code == "projection-constraint-refused"
     assert diagnostic.finding.trace == (QualifiedPath("constraint.root.left.below_limit"),)
-    assert diagnostic.scope == ("Root root", "left: Leaf")
-    assert diagnostic.projection == "data"
+    assert (diagnostic.space, diagnostic.member) == (None, None)
+    assert diagnostic.scope == ("root", "left")
+    assert "declaration <generated>" in diagnostic.render()
     assert leaf.diagnostics(assessment, projection=Leaf.data) == diagnostics
+
+
+def test_two_placements_of_one_class_receive_distinct_scopes() -> None:
+    root = _DiagRoot.start({_DiagRoot.size: 9})
+    scopes = {
+        view.diagnostics(view.assess(_Watched.checks))[0].scope
+        for view in (root.child(_DiagRoot.left), root.child(_DiagRoot.right))
+    }
+    assert scopes == {("root", "left"), ("root", "right")}
+
+
+def test_a_finding_inside_a_branch_case_names_that_case() -> None:
+    root = _DiagRoot.start({_DiagRoot.size: 9})
+    nested = root.branch(_DiagRoot.pick).select("nested").case("nested")
+    inner = nested.child(_WatchedNest.inner)
+    diagnostics = inner.diagnostics(inner.assess(_Watched.checks))
+    assert len(diagnostics) == 1
+    assert diagnostics[0].case == "nested"
+    assert diagnostics[0].scope == ("root", "pick", "nested", "inner")
+    assert (diagnostics[0].space, diagnostics[0].member) == ("_Watched", "within_range")
+    assert "case nested" in diagnostics[0].render()
+
+
+def test_a_supplied_input_is_attributed_to_its_supplier() -> None:
+    """A child ``Input`` compiles to the supplier's path; the supplier owns it."""
+
+    root = _DiagRoot.start({_DiagRoot.size: 9})
+    owners = _lineage(root).model._owner_index()
+    supplier = owners[QualifiedPath("problem.root.size")]
+    assert (supplier.space, supplier.member) == ("_DiagRoot", "size")
+    # ``_Watched.supplied`` is bound to it and never claims it.
+    assert all(owner.member != "supplied" for owner in owners.values())
+
+
+def test_identical_findings_are_reported_once_and_deterministically() -> None:
+    left = _DiagRoot.start({_DiagRoot.size: 9}).child(_DiagRoot.left)
+    assessment = left.project(_Watched.view)
+    diagnostics = left.diagnostics(assessment)
+    # ``within_range`` reaches the assessment through the readiness profile and
+    # again through the projection's constraint group; that is one problem.
+    assert len(diagnostics) == len({item.finding for item in diagnostics})
+    assert diagnostics == left.diagnostics(assessment)
 
 
 def test_concurrent_reads_and_successors_are_deterministic_and_point_isolated() -> None:
@@ -866,3 +980,108 @@ def test_a_non_finite_float_is_refused() -> None:
 
     with pytest.raises(AuthoringError, match="finite float"):
         Floaty.start({Floaty.ratio: float("inf")}).problem_fingerprint
+
+
+# -- C4: the public capability boundary ---------------------------------------
+
+#: What no public return value may be, or transitively reach.
+#:
+#: ``QualifiedPath`` is deliberately absent.  It remains the engine's stable
+#: identity and appears inside every immutable ``Finding``, which is exactly
+#: where a diagnostic needs it; what is withheld is the ability to *construct*
+#: one and reach a declaration nobody offered, and that is pinned separately by
+#: ``test_the_occurrence_surface_never_accepts_a_path``.
+_FORBIDDEN: tuple[type, ...] = (
+    Engine,
+    DesignPoint,
+    DesignSpace,
+    _Ref,
+    _CompiledSpace,
+    SpaceModel,
+    _Lineage,
+    _Runtime,
+    _State,
+)
+
+
+def _reachable(value: object, depth: int = 3) -> list[str]:
+    """Every forbidden object reachable from a public attribute, to ``depth``."""
+
+    if depth < 0:
+        return []
+    leaks: list[str] = []
+    if isinstance(value, _FORBIDDEN):
+        return [type(value).__name__]
+    if isinstance(value, (str, bytes, int, float, bool, type(None), type)):
+        return []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            leaks.extend(_reachable(key, depth - 1))
+            leaks.extend(_reachable(item, depth - 1))
+        return leaks
+    if isinstance(value, (tuple, list, set, frozenset)):
+        for item in value:
+            leaks.extend(_reachable(item, depth - 1))
+        return leaks
+    for name in dir(value):
+        if name.startswith("_"):
+            continue
+        try:
+            attribute = getattr(value, name)
+        except Exception:  # noqa: BLE001 - an unreadable attribute leaks nothing
+            continue
+        if callable(attribute):
+            continue
+        leaks.extend(f"{name}.{leak}" for leak in _reachable(attribute, depth - 1))
+    return leaks
+
+
+def test_no_public_return_value_reaches_the_runtime() -> None:
+    root = _DiagRoot.start({_DiagRoot.size: 9})
+    left = root.child(_DiagRoot.left)
+    branch = root.branch(_DiagRoot.pick)
+    assessment = left.project(_Watched.view)
+    returns: tuple[object, ...] = (
+        root,
+        left,
+        left.root,
+        root.problem_snapshot,
+        root.problem_fingerprint,
+        branch,
+        branch.cases,
+        branch.selected(),
+        branch.case("direct"),
+        assessment,
+        left.assess(_Watched.checks),
+        left.assess(_Watched.ready),
+        left.answer(_Watched.supplied),
+        left.diagnostics(assessment, projection=_Watched.view),
+    )
+    assert [leak for value in returns for leak in _reachable(value)] == []
+    # Paths do survive inside findings, and that is the intent, not a leak.
+    assert any(
+        isinstance(item.finding.path, QualifiedPath)
+        for item in left.diagnostics(assessment, projection=_Watched.view)
+    )
+
+
+def test_the_public_occurrence_surface_is_exactly_the_lifecycle() -> None:
+    root = Root.start({Root.size: 4})
+    declared = {name for name, _declaration in declared_members(Root)}
+    public = {
+        name
+        for name in dir(root)
+        if not name.startswith("_") and name not in declared and name != "exports"
+    }
+    assert public == set(RESERVED_LIFECYCLE_NAMES)
+
+
+def test_private_reflection_is_outside_the_supported_guarantee() -> None:
+    """Stated rather than pretended: this is Python privacy, not a sandbox."""
+
+    root = Root.start({Root.size: 4})
+    assert isinstance(_occurrence_state(root), _State)
+    # Deliberately hostile code reaches it.  The supported guarantee is that no
+    # *public* operation hands it over, which the scan above proves; adding weak
+    # maps to hide it from reflection would buy complexity and no safety.
+    assert isinstance(getattr(root, "_occurrence_state").runtime.lineage.engine, Engine)
