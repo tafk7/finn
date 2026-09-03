@@ -120,10 +120,10 @@ family, not one of its occurrences, so there is no class-keyed navigation verb
 at all:
 
 ```python
-root.left.assign(Tile.lanes, 2)   # the exact member that places the child
-variant = root.implementation     # the bound VariantView
-variant.alternatives              # ("fast", "small")
-variant.selected()                # Answer[str]
+root.left.assign(Tile.lanes, 2)  # the exact member that places the child
+variant = root.implementation  # the bound VariantView
+variant.alternatives  # ("fast", "small")
+variant.selected()  # Answer[str]
 variant = variant.select("fast")  # ordinary selector assignment
 fast = variant.alternative("fast")
 ```
