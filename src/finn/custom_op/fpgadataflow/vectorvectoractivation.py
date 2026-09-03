@@ -485,9 +485,7 @@ class VVAU(HWCustomOp):
         pe = self.get_nodeattr("PE")
         tmem = self.calc_tmem()
         assert ch % pe == 0, "Requirement Channels divisable by PE is violated."
-        assert (
-            orig_thres_matrix.ndim == 2
-        ), """Threshold matrix dimension is
+        assert orig_thres_matrix.ndim == 2, """Threshold matrix dimension is
         not as expected (2)."""
         n_thres_steps = orig_thres_matrix.shape[1]
         inp_is_bipolar = self.get_input_datatype(0) == DataType["BIPOLAR"]
@@ -510,17 +508,11 @@ class VVAU(HWCustomOp):
         assert ret.shape[0] == ch, "Channels of threshold matrix are not as expected (ch)"
         # distribute rows between PEs
         ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
-        assert (
-            ret.shape[0] == pe
-        ), """First dimension after distribution of the
+        assert ret.shape[0] == pe, """First dimension after distribution of the
         rows between PEs is not as expected (pe)"""
-        assert (
-            ret.shape[1] == tmem
-        ), """Second dimension after distribution of the
+        assert ret.shape[1] == tmem, """Second dimension after distribution of the
         rows between PEs is not as expected (tmem)"""
-        assert (
-            ret.shape[2] == n_thres_steps
-        ), """Third dimension after distribution of the
+        assert ret.shape[2] == n_thres_steps, """Third dimension after distribution of the
         rows between PEs is not as expected (n_thres_steps)"""
         return ret.reshape(1, pe, tmem, n_thres_steps)
 
@@ -707,11 +699,12 @@ class VVAU(HWCustomOp):
                 # get computed threshold datatype from tensor
                 tdt = model.get_tensor_datatype(self.onnx_node.input[2])
 
-                assert np.vectorize(tdt.allowed)(
-                    threshold_tensor
-                ).all(), "Thresholds in %s can't be expressed with type %s" % (
-                    self.onnx_node.name,
-                    str(tdt),
+                assert np.vectorize(tdt.allowed)(threshold_tensor).all(), (
+                    "Thresholds in %s can't be expressed with type %s"
+                    % (
+                        self.onnx_node.name,
+                        str(tdt),
+                    )
                 )
                 thresholds_hls_code = numpy_to_hls_code(
                     threshold_tensor, tdt, "thresholds", False, True

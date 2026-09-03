@@ -1,0 +1,172 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Reading one ONNX node as source facts, once, and freezing the result.
+
+Every fact a DataflowOp's design space is allowed to depend on comes through
+here: operand tensors, their shapes and QONNX datatypes, whether each carries an
+initializer, and the node attributes the operation declares.  Reading them in
+one place and freezing the result is what makes "an ordinary query does not
+reread the live graph" a property of the layer rather than a habit each
+operation has to keep.
+
+Nothing here is MVAU-shaped.  An operation names its operands and its attribute
+types; the extraction, the refusals and the frozen record are the same for all
+of them.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
+
+from finn.dataflow.datatypes import QONNXDataType, canonical_qonnx_datatype
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from onnx import NodeProto  # type: ignore[import-not-found]
+
+
+class SourceError(ValueError):
+    """One source node cannot be read as this operation's facts.
+
+    A refusal about the *graph*, not about the design space: a missing operand,
+    an unset shape, a datatype the model never annotated.  Kept distinct from
+    ``AuthoringError`` because the caller's declarations are fine and their
+    model is not, and from the engine's ``RequestError`` because nothing has
+    reached an engine yet.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class SourceOperand:
+    """One tensor an operation reads or writes, as the graph presents it.
+
+    ``initializer`` records presence only.  The values themselves are the
+    artifact layer's business, and an operation that folded them into its
+    design space would make every query depend on megabytes of weights.
+    """
+
+    id: str
+    tensor: str
+    shape: tuple[int, ...]
+    datatype: QONNXDataType
+    initializer: bool = False
+
+    @property
+    def elements(self) -> int:
+        total = 1
+        for extent in self.shape:
+            total *= extent
+        return total
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNode:
+    """The frozen reading of one source node.
+
+    Immutable and complete: once an operation holds one of these, the live
+    ``ModelWrapper`` is not consulted again for anything the design space reads.
+    A later graph edit therefore cannot change an answer under a caller; it can
+    only make the occurrence stale, which is a different and detectable thing.
+    """
+
+    node_name: str
+    op_type: str
+    domain: str
+    inputs: tuple[SourceOperand, ...]
+    outputs: tuple[SourceOperand, ...]
+    attributes: Mapping[str, object]
+
+    def operand(self, operand_id: str) -> SourceOperand:
+        for item in (*self.inputs, *self.outputs):
+            if item.id == operand_id:
+                return item
+        raise SourceError(f"{self.node_name} has no operand {operand_id!r}")
+
+    def has(self, operand_id: str) -> bool:
+        return any(item.id == operand_id for item in (*self.inputs, *self.outputs))
+
+
+def _tensor_facts(
+    model: Any, tensor: str, operand_id: str, node_name: str
+) -> tuple[tuple[int, ...], QONNXDataType, bool]:
+    shape = model.get_tensor_shape(tensor)
+    if shape is None:
+        raise SourceError(
+            f"{node_name} operand {operand_id!r} has no shape; the graph must be "
+            "shape-inferred before a dataflow operation reads it"
+        )
+    datatype = model.get_tensor_datatype(tensor)
+    if datatype is None:
+        raise SourceError(f"{node_name} operand {operand_id!r} has no annotated datatype")
+    return (
+        tuple(int(extent) for extent in shape),
+        canonical_qonnx_datatype(datatype),
+        model.get_initializer(tensor) is not None,
+    )
+
+
+def read_source_node(
+    model: Any,
+    node: NodeProto,
+    *,
+    inputs: Sequence[str],
+    outputs: Sequence[str],
+    optional_inputs: Sequence[str] = (),
+    attributes: Mapping[str, object] | None = None,
+) -> SourceNode:
+    """Read one node's operands and attributes into a frozen record.
+
+    ``inputs`` and ``outputs`` are the operation's own operand names, in ONNX
+    positional order.  An operand named in ``optional_inputs`` may be absent or
+    empty -- ONNX spells "not supplied" as an empty string -- and is simply not
+    present in the result, which is what lets applicability depend on it
+    without anyone inventing a placeholder tensor.
+    """
+
+    optional = set(optional_inputs)
+    if len(node.input) > len(inputs):
+        raise SourceError(
+            f"{node.name} has {len(node.input)} inputs; {node.op_type} declares {len(inputs)}"
+        )
+    if len(node.output) != len(outputs):
+        raise SourceError(
+            f"{node.name} has {len(node.output)} outputs; {node.op_type} declares {len(outputs)}"
+        )
+
+    read_inputs: list[SourceOperand] = []
+    for index, operand_id in enumerate(inputs):
+        tensor = node.input[index] if index < len(node.input) else ""
+        if not tensor:
+            if operand_id in optional:
+                continue
+            raise SourceError(f"{node.name} requires operand {operand_id!r}")
+        shape, datatype, initializer = _tensor_facts(model, tensor, operand_id, node.name)
+        read_inputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer))
+
+    read_outputs: list[SourceOperand] = []
+    for index, operand_id in enumerate(outputs):
+        tensor = node.output[index]
+        if not tensor:
+            raise SourceError(f"{node.name} requires output operand {operand_id!r}")
+        shape, datatype, initializer = _tensor_facts(model, tensor, operand_id, node.name)
+        read_outputs.append(SourceOperand(operand_id, tensor, shape, datatype, initializer))
+
+    return SourceNode(
+        node.name,
+        node.op_type,
+        node.domain,
+        tuple(read_inputs),
+        tuple(read_outputs),
+        MappingProxyType(dict(attributes or {})),
+    )
+
+
+__all__ = [
+    "SourceError",
+    "SourceNode",
+    "SourceOperand",
+    "read_source_node",
+]

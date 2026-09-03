@@ -47,9 +47,7 @@ class HWSoftmax_rtl(HWSoftmax, RTLBackend):
         simd = self.get_nodeattr("SIMD")
         topname = self.get_verilog_top_module_name()
         n = self.get_normal_input_shape()[-1]
-        assert (
-            n % simd == 0
-        ), """Requirement N (last dim) divisable by SIMD is violated.
+        assert n % simd == 0, """Requirement N (last dim) divisable by SIMD is violated.
             Please set SIMD to a different value"""
 
         idt = self.get_input_datatype()

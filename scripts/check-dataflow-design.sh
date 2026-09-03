@@ -45,6 +45,7 @@ PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_
 
 DATAFLOW_SOURCES=(
     src/finn/analysis/verify_custom_nodes.py
+    src/finn/custom_op/dataflow
     src/finn/dataflow
     tests/dataflow
     tests/fpgadataflow/test_mvau_cycle_estimate.py
@@ -60,7 +61,8 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental \
     --strict \
     --explicit-package-bases \
-    -p finn.dataflow
+    -p finn.dataflow \
+    -p finn.custom_op.dataflow
 
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental \

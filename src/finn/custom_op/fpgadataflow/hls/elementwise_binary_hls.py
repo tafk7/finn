@@ -551,9 +551,7 @@ class ElementwiseBinaryOperation_hls(
             for(std::size_t pe = 0; pe < {self.pe}; ++pe) {{
             #pragma HLS unroll
             #pragma HLS INLINE recursive
-                out[pe] = {self.cpp_op.format(
-                    f"lhs{lhs_index}[pe]", f"rhs{rhs_index}[pe]"
-                )};
+                out[pe] = {self.cpp_op.format(f"lhs{lhs_index}[pe]", f"rhs{rhs_index}[pe]")};
             }}
             """,
             # Write the PE group into the output stream
@@ -561,7 +559,7 @@ class ElementwiseBinaryOperation_hls(
             out0_V.write(flatten(out));
             """,
             # Close all for-loop bodies of the generated nest
-            *["}" for _ in enumerate(out_shape)]
+            *["}" for _ in enumerate(out_shape)],
             # @formatter:on  End of code generation
         ]
 
@@ -581,9 +579,7 @@ class ElementwiseBinaryOperation_hls(
         # Note: Valid formatting relies on correct placement of curly braces
         # and line breaks: Open/close all three braces on the same line of code
         # to avoid '\n' to be inserted into the string
-        shape = f"""{{{
-        ','.join((str(i) for i in self.get_folded_output_shape(ind=0)))
-        }}}"""
+        shape = f"""{{{",".join((str(i) for i in self.get_folded_output_shape(ind=0)))}}}"""
         # Generate function call for reading from the output stream into the
         # output file
         npy_type = "half" if self.out_dtype.get_hls_datatype_str() == "half" else "float"
@@ -830,12 +826,12 @@ class ElementwiseBinaryOperation_hls(
             lhs = context[node.input[0]]
             rhs = context[node.input[1]]
             # Validate the shape of the inputs
-            assert list(lhs.shape) == self.get_normal_input_shape(
-                ind=0
-            ), f"Input shape mismatch for {node.input[0]}"
-            assert list(rhs.shape) == self.get_normal_input_shape(
-                ind=1
-            ), f"Input shape mismatch for {node.input[1]} {rhs.shape=}"
+            assert list(lhs.shape) == self.get_normal_input_shape(ind=0), (
+                f"Input shape mismatch for {node.input[0]}"
+            )
+            assert list(rhs.shape) == self.get_normal_input_shape(ind=1), (
+                f"Input shape mismatch for {node.input[1]} {rhs.shape=}"
+            )
             # Reshape the inputs into folded form
             lhs = lhs.reshape(self.get_folded_input_shape(ind=0))
             rhs = rhs.reshape(self.get_folded_input_shape(ind=1))
@@ -893,9 +889,7 @@ class ElementwiseBinaryOperation_hls(
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
 
 

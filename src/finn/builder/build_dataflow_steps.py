@@ -1183,9 +1183,9 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
     """
 
     if DataflowOutputType.RTLSIM_PERFORMANCE in cfg.generate_outputs and not is_mlo(model):
-        assert (
-            DataflowOutputType.STITCHED_IP in cfg.generate_outputs
-        ), "rtlsim_perf needs stitched IP"
+        assert DataflowOutputType.STITCHED_IP in cfg.generate_outputs, (
+            "rtlsim_perf needs stitched IP"
+        )
         report_dir = cfg.output_dir + "/report"
         os.makedirs(report_dir, exist_ok=True)
         rtlsim_bs = int(cfg.rtlsim_batch_size)

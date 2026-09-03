@@ -25,39 +25,42 @@ from finn.dataflow.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.declarations import Decision, Input, Subspace, divisors_of
+from finn.dataflow.model.declarations import Subspace
 from finn.dataflow.designs.design import (
     Boundary,
     Connection,
-    DataflowDesign,
     Kernels,
     Sink,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
 
 
-class DotProductDesign(DataflowDesign):
-    """Matrix-vector arithmetic decomposed into replay and dot product."""
+class DotProductDesign(WeightedDotProductDesign):
+    """Matrix-vector arithmetic decomposed into replay and dot product.
+
+    The matrix arrives from outside, always.  ``SuppliedDotProductDesign`` is
+    the same composition with the weight path as a declared choice; this one is
+    the simplest thing that works and stays the reference the composed hardware
+    evidence is written against.
+    """
 
     id = "dot_product"
     version = "1"
 
-    repetitions = Input(int)
-    matrix_width = Input(int)
-    matrix_height = Input(int)
-    activation_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weight_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    accumulator_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    output_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    narrow_weights = Input(bool)
-    target_dsp = Input(DspBlock)
-    clock_period_ns = Input(float)
-
-    #: Owned here because each of them changes both Regions and their edge.
-    pe = Decision(int, domain=divisors_of(matrix_height))
-    simd = Decision(int, domain=divisors_of(matrix_width))
+    repetitions = WeightedDotProductDesign.repetitions
+    matrix_width = WeightedDotProductDesign.matrix_width
+    matrix_height = WeightedDotProductDesign.matrix_height
+    activation_type = WeightedDotProductDesign.activation_type
+    weight_type = WeightedDotProductDesign.weight_type
+    accumulator_type = WeightedDotProductDesign.accumulator_type
+    output_type = WeightedDotProductDesign.output_type
+    narrow_weights = WeightedDotProductDesign.narrow_weights
+    target_dsp = WeightedDotProductDesign.target_dsp
+    clock_period_ns = WeightedDotProductDesign.clock_period_ns
+    pe = WeightedDotProductDesign.pe
+    simd = WeightedDotProductDesign.simd
 
     replay = Kernels(
         Subspace(
@@ -102,17 +105,6 @@ class DotProductDesign(DataflowDesign):
 
 
 #: Every Input the Design consumes, for a caller assembling the bindings.
-DESIGN_INPUTS = (
-    "repetitions",
-    "matrix_width",
-    "matrix_height",
-    "activation_type",
-    "weight_type",
-    "accumulator_type",
-    "output_type",
-    "narrow_weights",
-    "target_dsp",
-    "clock_period_ns",
-)
+DESIGN_INPUTS = SHARED_INPUTS
 
 __all__ = ["DESIGN_INPUTS", "DotProductDesign"]

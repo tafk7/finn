@@ -192,9 +192,9 @@ def warn_hls_rtl_dsp_conflict(model, verification_type, output_dir=None):
 
     if has_conflict:
         warning_msg = (
-            f"\n{'='*70}\n"
+            f"\n{'=' * 70}\n"
             f"HLS+RTL DSP CONFLICT DETECTED - SKIPPING {verification_type.upper()}\n"
-            f"{'='*70}\n"
+            f"{'=' * 70}\n"
             f"The model contains both HLS floating-point ops and RTL LayerNorm.\n"
             f"This causes INCORRECT simulation results in xsim (Vivado version <= 2025.2).\n"
             f"\n"
@@ -203,7 +203,7 @@ def warn_hls_rtl_dsp_conflict(model, verification_type, output_dir=None):
             f"\n"
             f"The HARDWARE implementation is CORRECT - only xsim is currently affected.\n"
             f"Skipping {verification_type} verification.\n"
-            f"{'='*70}\n"
+            f"{'=' * 70}\n"
         )
 
         warnings.warn(warning_msg, UserWarning)

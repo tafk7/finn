@@ -43,11 +43,10 @@ from finn.dataflow.computation import (
 from finn.dataflow.designs.design import (
     Boundary,
     Connection,
-    DataflowDesign,
     Kernels,
     Sink,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock, EmbeddedDotpAxiKernel
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
 from finn.dataflow.kernels.memstream import CYCLIC_PARAMETER_DELIVERY, MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.model.declarations import (
@@ -57,10 +56,9 @@ from finn.dataflow.model.declarations import (
     Subspace,
     constraint,
     derived,
-    divisors_of,
     reject,
 )
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
 
 
 class WeightSupply(str, Enum):
@@ -71,28 +69,27 @@ class WeightSupply(str, Enum):
     DECOUPLED = "decoupled"
 
 
-class SuppliedDotProductDesign(DataflowDesign):
+class SuppliedDotProductDesign(WeightedDotProductDesign):
     """Replay and dot product, with the weight path as a declared choice."""
 
     id = "supplied_dot_product"
     version = "1"
 
-    repetitions = Input(int)
-    matrix_width = Input(int)
-    matrix_height = Input(int)
-    activation_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weight_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    accumulator_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    output_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    narrow_weights = Input(bool)
-    target_dsp = Input(DspBlock)
-    clock_period_ns = Input(float)
+    repetitions = WeightedDotProductDesign.repetitions
+    matrix_width = WeightedDotProductDesign.matrix_width
+    matrix_height = WeightedDotProductDesign.matrix_height
+    activation_type = WeightedDotProductDesign.activation_type
+    weight_type = WeightedDotProductDesign.weight_type
+    accumulator_type = WeightedDotProductDesign.accumulator_type
+    output_type = WeightedDotProductDesign.output_type
+    narrow_weights = WeightedDotProductDesign.narrow_weights
+    target_dsp = WeightedDotProductDesign.target_dsp
+    clock_period_ns = WeightedDotProductDesign.clock_period_ns
+    pe = WeightedDotProductDesign.pe
+    simd = WeightedDotProductDesign.simd
 
     #: A fact about the source graph, never a choice.  See the module docstring.
     initializer_present = Input(bool)
-
-    pe = Decision(int, domain=divisors_of(matrix_height))
-    simd = Decision(int, domain=divisors_of(matrix_width))
 
     #: The one dial.  Every conditional segment, edge and boundary below reads
     #: a derived boolean off it, so there is exactly one place the mode is set
@@ -233,18 +230,6 @@ class SuppliedDotProductDesign(DataflowDesign):
 
 
 #: Every Input the Design consumes, for a caller assembling the bindings.
-DESIGN_INPUTS = (
-    "repetitions",
-    "matrix_width",
-    "matrix_height",
-    "activation_type",
-    "weight_type",
-    "accumulator_type",
-    "output_type",
-    "narrow_weights",
-    "target_dsp",
-    "clock_period_ns",
-    "initializer_present",
-)
+DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present")
 
 __all__ = ["DESIGN_INPUTS", "SuppliedDotProductDesign", "WeightSupply"]

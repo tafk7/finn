@@ -26,8 +26,14 @@ DATAFLOW = SOURCE / "dataflow"
 
 #: Every module path the reset retired.  A retired name must not be importable
 #: and must not appear in an import statement anywhere in the tree.
+#:
+#: Two names the reset removed have since been *reused*, not restored:
+#: ``finn.custom_op.dataflow`` and ``finn.dataflow.ops.mvau.op`` are U4's own
+#: registration and operation, written against the occurrence lifecycle and
+#: sharing nothing with what stood there before.  They are checked below for
+#: what they now contain rather than for absence, because "this name exists
+#: again" and "the old implementation came back" are different claims.
 RETIRED_MODULES = (
-    "finn.custom_op.dataflow",
     "finn.dataflow.authoring",
     "finn.dataflow.design",
     "finn.dataflow.op",
@@ -36,7 +42,6 @@ RETIRED_MODULES = (
     "finn.dataflow.ops.mvau.binding",
     "finn.dataflow.ops.mvau.elaboration",
     "finn.dataflow.ops.mvau.inventory",
-    "finn.dataflow.ops.mvau.op",
     "finn.dataflow.ops.mvau.problem",
     "finn.dataflow.ops.mvau.semantics",
     "finn.dataflow.ops.mvau.source",
@@ -198,6 +203,20 @@ def test_the_private_engine_imports_no_finn_module() -> None:
             name for name in _imported_modules(path) if name == "finn" or name.startswith("finn.")
         )
     assert forbidden == set()
+
+
+def test_the_reused_names_hold_u4s_implementation_and_not_the_retired_one() -> None:
+    domain = import_module("finn.custom_op.dataflow")
+    assert set(domain.custom_op) == {"MvauDataflowOp", "ActivationReplayOp"}
+    operation = import_module("finn.dataflow.ops.mvau.op")
+    base = import_module("finn.dataflow.ops.base")
+    assert issubclass(domain.custom_op["MvauDataflowOp"], base.DataflowOp)
+    assert operation.MvauDataflowOp is domain.custom_op["MvauDataflowOp"]
+    # The retired stack's entry points are not what came back.
+    assert not hasattr(operation, "MVAUDataflowBuildContext")
+    assert not hasattr(operation, "MvauDataflowOp") or not hasattr(
+        operation.MvauDataflowOp, "resolve_dataflow"
+    )
 
 
 def test_the_traditional_custom_op_oracle_survived_the_reset() -> None:

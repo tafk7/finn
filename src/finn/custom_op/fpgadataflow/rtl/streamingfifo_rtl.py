@@ -215,8 +215,7 @@ class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
 
     def prepare_rtlsim(self, behav=False):
         assert self.get_nodeattr("impl_style") != "vivado", (
-            "StreamingFIFO impl_style "
-            "cannot be vivado for rtlsim. Only impl_style=rtl supported."
+            "StreamingFIFO impl_style cannot be vivado for rtlsim. Only impl_style=rtl supported."
         )
         return super().prepare_rtlsim(behav)
 

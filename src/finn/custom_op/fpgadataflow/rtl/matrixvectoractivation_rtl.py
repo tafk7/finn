@@ -85,15 +85,11 @@ class MVAU_rtl(MVAU, RTLBackend):
             for in_ind, inputs in enumerate(node.input):
                 # it is assumed that the first input of the node is the data input
                 # the second input are the weights
-                assert (
-                    str(context[inputs].dtype) == "float32"
-                ), """Input datatype is
+                assert str(context[inputs].dtype) == "float32", """Input datatype is
                 not float32 as expected."""
 
                 if in_ind == 0:
-                    assert (
-                        str(context[inputs].dtype) == "float32"
-                    ), """Input datatype is
+                    assert str(context[inputs].dtype) == "float32", """Input datatype is
                     not float32 as expected."""
                     expected_inp_shape = self.get_folded_input_shape(in_ind)
                     reshaped_input = context[inputs].reshape(expected_inp_shape)
@@ -152,9 +148,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
-                    mode
-                )
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
             )
 
     def lut_estimation(self):
@@ -269,12 +263,8 @@ class MVAU_rtl(MVAU, RTLBackend):
             ref_clk = clk
             simd_factor = 3
 
-        assert (
-            ref_clk > 0.741
-        ), """Infeasible clk target of {} ns has been set,
-        consider lowering the targeted clock frequency!""".format(
-            ref_clk
-        )
+        assert ref_clk > 0.741, """Infeasible clk target of {} ns has been set,
+        consider lowering the targeted clock frequency!""".format(ref_clk)
         critical_path_dsps = np.floor((ref_clk - 0.741) / 0.605 + 1)
         max_chain_len = np.ceil(self.get_nodeattr("SIMD") / simd_factor)
         dsp_chain_len = critical_path_dsps if critical_path_dsps < max_chain_len else max_chain_len
