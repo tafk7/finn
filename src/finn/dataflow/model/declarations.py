@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from importlib import import_module
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union, cast
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union, cast, overload
 
 from typing_extensions import Self
 
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from finn.dataflow._engine import Answer, ConstraintAssessment, ReadinessAssessment
     from finn.dataflow.model.occurrence import (
         BranchView,
+        OccurrenceDiagnostic,
         ProblemSource,
         ProjectionAssessment,
     )
@@ -147,11 +148,20 @@ class Space:
         problem: ProblemSource,
         *,
         namespace: str = "root",
+        expected_problem_fingerprint: str | None = None,
     ) -> S:
         """Start one class-centered root occurrence over a frozen problem."""
 
         api = import_module("finn.dataflow.model.occurrence")
-        return cast("S", api.start_occurrence(cls, problem, namespace=namespace))
+        return cast(
+            "S",
+            api.start_occurrence(
+                cls,
+                problem,
+                namespace=namespace,
+                expected_problem_fingerprint=expected_problem_fingerprint,
+            ),
+        )
 
     def assign(self, declaration: Decision[T], value: T) -> Self:
         """Return the same authored occurrence class over a successor point."""
@@ -164,6 +174,12 @@ class Space:
 
         api = import_module("finn.dataflow.model.occurrence")
         return cast("Answer[T]", api.occurrence_answer(self, declaration))
+
+    @overload
+    def assess(self, declaration: Readiness) -> ReadinessAssessment: ...
+
+    @overload
+    def assess(self, declaration: ConstraintGroup | Constraint) -> ConstraintAssessment: ...
 
     def assess(
         self, declaration: Readiness | ConstraintGroup | Constraint
@@ -182,17 +198,40 @@ class Space:
         api = import_module("finn.dataflow.model.occurrence")
         return cast("ProjectionAssessment[T]", api.occurrence_project(self, declaration))
 
+    def diagnostics(
+        self,
+        subject: object,
+        *,
+        projection: Projection[object] | None = None,
+    ) -> tuple[OccurrenceDiagnostic, ...]:
+        """Interpret findings in this root's occurrence vocabulary."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast(
+            "tuple[OccurrenceDiagnostic, ...]",
+            api.occurrence_diagnostics(self, subject, projection=projection),
+        )
+
     def branch(self, declaration: OneOf) -> BranchView:
         """Return a capability-limited view of one branch in this scope."""
 
         api = import_module("finn.dataflow.model.occurrence")
         return cast("BranchView", api.occurrence_branch(self, declaration))
 
-    def child(self, declaration: Use[S] | Case | type[S]) -> S:
+    @overload
+    def child(self, declaration: Use[S]) -> S: ...
+
+    @overload
+    def child(self, declaration: type[S]) -> S: ...
+
+    @overload
+    def child(self, declaration: Case) -> Space: ...
+
+    def child(self, declaration: Use[S] | Case | type[S]) -> Space:
         """Return one exact direct child occurrence of this scope."""
 
         api = import_module("finn.dataflow.model.occurrence")
-        return cast("S", api.occurrence_child(self, declaration))
+        return cast("Space", api.occurrence_child(self, declaration))
 
     @property
     def root(self) -> Space:
@@ -200,6 +239,47 @@ class Space:
 
         api = import_module("finn.dataflow.model.occurrence")
         return cast("Space", api.occurrence_root(self))
+
+    @property
+    def problem_snapshot(self) -> Mapping[Problem[object], object]:
+        """The immutable Problem values captured when the root was started."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast(
+            "Mapping[Problem[object], object]",
+            api.occurrence_problem_snapshot(self),
+        )
+
+    @property
+    def problem_fingerprint(self) -> str:
+        """Stable identity of the root's declared Problem snapshot."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast(str, api.occurrence_problem_fingerprint(self))
+
+    def is_stale(self, problem: ProblemSource | None = None) -> bool:
+        """Explicitly compare current declared Problem facts with the snapshot."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast(bool, api.occurrence_is_stale(self, problem))
+
+    def reconstruct(
+        self,
+        problem: ProblemSource | None = None,
+        *,
+        expected_problem_fingerprint: str | None = None,
+    ) -> Self:
+        """Create a fresh strict lineage, retaining no assignments."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast(
+            "Self",
+            api.occurrence_reconstruct(
+                self,
+                problem,
+                expected_problem_fingerprint=expected_problem_fingerprint,
+            ),
+        )
 
     def _space_value(self, declaration: ValueSource[object]) -> object:
         """Resolve descriptors on generic occurrence instances."""
@@ -215,13 +295,19 @@ class ValueSource(Generic[T_co]):
     value_semantics: ValueSemantics[object]
     stable_name: str | None = None
 
-    def __get__(self, instance: object | None, owner: type[object]) -> object:
+    @overload
+    def __get__(self, instance: None, owner: type[object]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: object, owner: type[object]) -> T_co: ...
+
+    def __get__(self, instance: object | None, owner: type[object]) -> Self | T_co:
         if instance is None:
             return self
         resolver = getattr(instance, "_space_value", None)
         if resolver is None:
             raise AttributeError("declarative values exist only on configured instances")
-        return resolver(self)
+        return cast("T_co", resolver(self))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -465,7 +551,15 @@ class Projection(Generic[T_co]):
         object.__setattr__(self, "snapshot_policy", snapshot_policy)
         object.__setattr__(self, "stable_name", name)
 
-    def __get__(self, instance: Space | None, owner: type[Space]) -> object:
+    @overload
+    def __get__(self, instance: None, owner: type[Space]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Space, owner: type[Space]) -> ProjectionAssessment[T_co]: ...
+
+    def __get__(
+        self, instance: Space | None, owner: type[Space]
+    ) -> Self | ProjectionAssessment[T_co]:
         if instance is None:
             return self
         return instance.project(self)

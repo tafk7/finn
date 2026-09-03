@@ -22,8 +22,9 @@ DataflowDesign(Space)  semantic Decisions, Kernels segments,
 ```
 
 `DesignSpaceSpec`, `Engine`, and `DesignPoint` remain the normalized IR and
-runtime. The model package is a source-language frontend, not another design
-space evaluator.
+runtime. They are private implementation details of the occurrence API for
+ordinary contributors; the model package remains a source-language frontend,
+not another design-space evaluator.
 
 ## A closed Space
 
@@ -56,6 +57,83 @@ still the authority that validates those records.
 
 A constraint-free `Space` is valid. `ConstraintGroup` and `Readiness` are
 available only when a caller needs named aggregate checks.
+
+## Class-centered occurrences and projections
+
+Starting a root returns an instance of the authored class. Child navigation
+returns instances of the authored child classes, all backed by the root's one
+private immutable point:
+
+```python
+from finn.dataflow.model import ConstraintGroup, Projection, Readiness, constraint
+
+
+class Tile(Space):
+    # declarations as above
+    @constraint(lanes=lanes)
+    def positive(*, lanes: int) -> bool:
+        return lanes > 0
+
+    legal = ConstraintGroup(positive)
+    ready = Readiness(decisions=(lanes,), properties=(cycles,), constraints=legal)
+    schedule = Projection(cycles, readiness=ready, constraints=(legal,))
+
+
+root = Pair.start({Pair.extent: 16})
+left = root.child(Pair.left)
+left = left.assign(Tile.lanes, 4)
+
+assert type(root) is Pair
+assert type(left) is Tile
+assert left.root is not root  # immutable successor root
+assert left.cycles == 4  # descriptor shorthand for a decided answer
+
+assessment = left.project(Tile.schedule)
+assert assessment.accepted_answer.value == 4
+```
+
+`ProjectionAssessment` always retains four separate facts: readiness, every
+constraint-group assessment, the raw output answer, and the accepted answer.
+A final false constraint can make readiness true while the accepted answer is a
+rejecting `Absent`. Missing commitments yield `Unresolved`; a finally
+inapplicable output yields non-rejecting `Absent`; only a final valid output is
+snapshotted into `Decided`.
+
+Repeated uses of one child class are never inferred from the class alone:
+
+```python
+root.child(Pair.left).assign(Tile.lanes, 2)  # exact occurrence
+root.child(Tile)  # rejected when ambiguous
+```
+
+`branch(OneOfDeclaration)` exposes case ids, selection, and exact case views
+without exposing its generated selector path. `answer`, `assign`, `assess`,
+`project`, `branch`, and `child` accept declarations, not path strings.
+
+Problem values are snapshotted once. A callable problem projector makes an
+explicit staleness check possible without making ordinary queries reread live
+state:
+
+```python
+source = {"extent": 16, "unrelated": "a"}
+root = Pair.start(lambda: {Pair.extent: source["extent"]})
+
+source["unrelated"] = "b"
+assert not root.is_stale()
+
+source["extent"] = 32
+assert root.is_stale()
+assert root.extent == 16  # the old snapshot is unchanged
+fresh = root.reconstruct()  # strict: old assignments are not migrated
+```
+
+`problem_fingerprint` guards future persisted assignment hydration;
+`expected_problem_fingerprint=` refuses an incompatible payload. Diagnostics
+translate findings into root-to-child scope and declaration names while keeping
+the original finding, path, and trace available for advanced tools. The root
+serializes access to the existing engine's evaluation caches with a re-entrant
+lock, so concurrent reads and successor creation are deterministic without
+changing `_engine` semantics.
 
 ## Reusable Space fragments
 
@@ -319,9 +397,10 @@ the Kernel object.
 
 ## Deliberate boundary of this experiment
 
-This package does not define DataflowOp. It does not attach input supply,
-project ONNX graph context, compose artifacts across Kernels, or persist a
-selection. `Region.family`/`version` and the configured Design's role-to-node
-metadata preserve the seam a future annotated-ONNX carrier would need; no ONNX
-object exists in the stack. Existing upper-stack collection failures caused by
-retired artifact interfaces are non-gating here.
+U1 does not migrate Kernel, DataflowDesign, or DataflowOp to occurrences. This
+package does not yet attach input supply, project ONNX graph context, compose
+artifacts across Kernels, or persist a selection. `Region.family`/`version` and
+the configured Design's role-to-node metadata preserve the seam a future
+annotated-ONNX carrier would need; no ONNX object exists in the stack. Existing
+upper-stack collection failures caused by retired artifact interfaces are
+non-gating here.
