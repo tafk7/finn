@@ -31,7 +31,7 @@ from finn.dataflow.ops.association import (
     OperandAssociation,
     SourceAssociation,
 )
-from finn.dataflow.ops.base import DataflowOp
+from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
 from finn.dataflow.ops.schema import Attribute, InputTensor, OutputTensor
@@ -169,6 +169,39 @@ class ActivationReplayOp(DataflowOp):
                 tuple(operands),
             )
         )
+
+    def execute_node(self, context: Any, graph: Any) -> None:
+        """Repeat each activation row once per neuron fold.
+
+        Consecutively, not tiled: fold *f* of row *r* is what the buffer
+        replays before moving to row *r+1*, and a consumer that folded the
+        output back would otherwise reassemble the rows in the wrong order.
+        """
+
+        del graph
+        import numpy  # type: ignore[import-not-found]  # noqa: PLC0415 - heavy import
+
+        source = self.attached_source()
+        node = self.onnx_node
+        activation = numpy.asarray(context[node.input[0]])
+        folds = int(cast(int, source.attributes["neuron_folds"]))
+        expected = self.expected_for(source).get("expanded", (None, None))[0]
+        if expected is None:
+            raise DataflowOpError(f"{node.name} cannot state the shape of its own output")
+        rows = activation.reshape(-1, activation.shape[-1])
+        context[node.output[0]] = numpy.repeat(rows, folds, axis=0).reshape(expected)
+
+    def verify_node(self) -> list[str]:
+        """The same constraints the projection uses, as QONNX expects them."""
+
+        assessment = self.assess(type(self).source_accepts)
+        if assessment.verdict is True:
+            return []
+        return [
+            finding.message
+            for answer in assessment.answers.values()
+            for finding in getattr(answer, "findings", ())
+        ]
 
     def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
         activation = source.operand("activation")

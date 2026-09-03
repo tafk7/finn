@@ -15,8 +15,16 @@ from __future__ import annotations
 
 from finn.dataflow.designs.design import DataflowDesign
 from finn.dataflow.kernels.dotp_axi import DspBlock
-from finn.dataflow.model.declarations import Decision, Input, divisors_of
+from finn.dataflow.model.declarations import (
+    ConstraintGroup,
+    Decision,
+    Input,
+    constraint,
+    divisors_of,
+    reject,
+)
 from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.ops.mvau.computation import MvauComputationProfile
 
 
 class WeightedDotProductDesign(DataflowDesign):
@@ -32,10 +40,39 @@ class WeightedDotProductDesign(DataflowDesign):
     narrow_weights = Input(bool)
     target_dsp = Input(DspBlock)
     clock_period_ns = Input(float)
+    computation_profile = Input(MvauComputationProfile)
 
     #: Owned here because each of them changes both Regions and their edge.
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
+
+    @constraint(profile=computation_profile)
+    def computes_a_bare_accumulator(*, profile: MvauComputationProfile) -> object:
+        """These Designs build a dot product and stop; they fuse no activation.
+
+        A Design limitation, argued from the Design's own structure rather than
+        from the mathematics: every alternative below this class declares a
+        Network with activation, weight and output boundaries and a compute
+        Region that produces the accumulator directly.  There is no threshold
+        boundary for the fourth operand to cross and no stage to apply it in,
+        so a fused-threshold node has no *composition* here -- while remaining
+        a perfectly valid problem that a later Design may build.
+
+        Refusing it here rather than in the operation is what keeps that true:
+        the node still binds, still projects its source facts, and reports an
+        inapplicable Design instead of an unreadable node.
+        """
+
+        if profile is not MvauComputationProfile.FUSED_THRESHOLD:
+            return True
+        return reject(
+            "mvau-design-fuses-no-activation",
+            f"this Design computes {MvauComputationProfile.ACCUMULATOR_INTEGER.value} and "
+            f"has no stage for a fused threshold; this node is {profile.value}",
+            values={"computation_profile": profile.value},
+        )
+
+    dataflow_support = ConstraintGroup(computes_a_bare_accumulator)
 
 
 #: Every Input the shared base consumes, for a caller assembling bindings.
@@ -50,6 +87,7 @@ SHARED_INPUTS = (
     "narrow_weights",
     "target_dsp",
     "clock_period_ns",
+    "computation_profile",
 )
 
 __all__ = ["SHARED_INPUTS", "WeightedDotProductDesign"]

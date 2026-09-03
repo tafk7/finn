@@ -404,9 +404,13 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
     assert [name for name, _ in source_declarations(type(mvau))] == [
         "activation",
         "weight",
+        "threshold",
         "output",
-        "narrow_weights",
+        "no_activation",
+        "binary_xnor",
+        "activation_bias",
         "accumulator_type",
+        "weight_excludes_minimum",
         "target_dsp",
         "clock_period_ns",
     ]
@@ -1181,17 +1185,17 @@ def test_rebinding_reads_the_live_node_not_the_frozen_copy() -> None:
 
     model.graph.node[0].name = "renamed"
     model.rename_tensor("activation", "a2")
-    _set_attribute(model.graph.node[0], "narrow_weights", 1)
+    _set_attribute(model.graph.node[0], "binaryXnorMode", 1)
 
     fresh = bound.rebind(model, Build())
 
     assert fresh.source.node_name == "renamed"
     assert fresh.source.operand("activation").tensor == "a2"
-    assert fresh.source.attributes["narrow_weights"] is True
+    assert fresh.source.attributes["binary_xnor"] is True
     # The original is untouched: that is what freezing means.
     assert bound.source.node_name == "mvau0"
     assert bound.source.operand("activation").tensor == "activation"
-    assert bound.source.attributes["narrow_weights"] is False
+    assert bound.source.attributes["binary_xnor"] is False
 
 
 def test_rebinding_notices_a_changed_build_fact() -> None:
@@ -1302,11 +1306,11 @@ def test_a_bound_occurrence_refuses_node_mutation() -> None:
     bound = _unbound(model, "mvau0").bind(model, Build())
 
     with pytest.raises(DataflowOpError, match="frozen snapshot"):
-        bound.set_nodeattr("narrow_weights", 1)
+        bound.set_nodeattr("binaryXnorMode", 1)
 
     # The unbound wrapper is an ordinary CustomOp and still writes.
-    _unbound(model, "mvau0").set_nodeattr("narrow_weights", 1)
-    assert bound.source.attributes["narrow_weights"] is False
+    _unbound(model, "mvau0").set_nodeattr("binaryXnorMode", 1)
+    assert bound.source.attributes["binary_xnor"] is False
 
 
 def test_binding_resolves_the_node_from_the_supplied_model() -> None:

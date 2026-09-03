@@ -222,7 +222,12 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
         del present
         return supply is WeightSupply.EXTERNAL or True
 
+    #: The base class's constraints are carried forward explicitly.  Overriding
+    #: the group rather than adding to it would silently drop them, so the
+    #: classification check refuses an override that does not name them -- and
+    #: naming them here is the acknowledgement that they still apply.
     dataflow_support = ConstraintGroup(
+        *WeightedDotProductDesign.dataflow_support.constraints,
         local_weights_need_an_initializer,
         external_supply_ignores_the_initializer,
         name="supply_available",

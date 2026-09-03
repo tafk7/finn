@@ -219,17 +219,28 @@ class OutputTensor(TensorDeclaration):
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
 class Attribute(Problem[Any]):
-    """One ONNX node attribute this operation reads as a source fact."""
+    """One ONNX node attribute this operation reads as a source fact.
+
+    ``onnx=`` names the attribute *in the graph* when it differs from the
+    member name.  The two are genuinely separate concerns: ``noActivation`` is
+    a spelling FINN's graphs already carry and cannot be renamed without
+    breaking every model on disk, while ``no_activation`` is what the design
+    space reads.  Folding them together would force one of the two to be
+    wrong, and a silent default is what a mismatched name produces -- an
+    attribute nobody wrote, read as its default, with no diagnostic at all.
+    """
 
     value_type: type[Any] = object
     default: Any = None
     member_name: str = ""
+    onnx: str = ""
 
-    def __init__(self, value_type: type[T], *, default: T) -> None:
+    def __init__(self, value_type: type[T], *, default: T, onnx: str = "") -> None:
         Problem.__init__(self, value_type)
         object.__setattr__(self, "value_type", value_type)
         object.__setattr__(self, "default", default)
         object.__setattr__(self, "member_name", "")
+        object.__setattr__(self, "onnx", onnx)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -238,11 +249,13 @@ class DatatypeAttribute(Problem[Any]):
 
     default: str = ""
     member_name: str = ""
+    onnx: str = ""
 
-    def __init__(self, *, default: str) -> None:
+    def __init__(self, *, default: str, onnx: str = "") -> None:
         Problem.__init__(self, QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
         object.__setattr__(self, "default", default)
         object.__setattr__(self, "member_name", "")
+        object.__setattr__(self, "onnx", onnx)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -277,6 +290,51 @@ class BuildFact(Problem[Any]):
         object.__setattr__(self, "member_name", "")
 
 
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class InitializerAnalysis(Problem[Any]):
+    """One scalar an operation computes *from* an operand's initializer values.
+
+    The narrow, deliberate exception to "no array enters the design space".
+    Some facts genuinely depend on the weights themselves -- whether they use
+    the minimum representable value, whether they are all zero -- and the
+    alternative to computing them is either carrying the array into the point
+    (which makes every query depend on megabytes and every fingerprint
+    expensive) or reading the graph again later (which is the unfrozen
+    occurrence this layer exists to prevent).
+
+    So the array is read once, at binding time, and only the author's scalar
+    survives.  The function takes the values and the operand's datatype and
+    returns a value or ``None``; ``None``, and an absent or uninitialized
+    operand, all mean "this analysis has no answer here", which reaches the
+    design space as an ordinary absent Problem rather than a fabricated
+    default.
+    """
+
+    operand: Any = None
+    evaluate: Callable[[Any, Any], object] = field(
+        default=cast("Callable[[Any, Any], object]", bool), repr=False
+    )
+    value_type: type[Any] = object
+    member_name: str = ""
+
+    def __init__(
+        self,
+        operand: InputTensor,
+        value_type: type[T],
+        *,
+        evaluate: Callable[[Any, Any], T | None],
+    ) -> None:
+        if not isinstance(operand, InputTensor):
+            raise AuthoringError("an InitializerAnalysis analyses one declared InputTensor")
+        if not callable(evaluate):
+            raise AuthoringError("an InitializerAnalysis needs a callable evaluate")
+        Problem.__init__(self, value_type, required=False)
+        object.__setattr__(self, "operand", operand)
+        object.__setattr__(self, "evaluate", evaluate)
+        object.__setattr__(self, "value_type", value_type)
+        object.__setattr__(self, "member_name", "")
+
+
 #: Every class-body value the source-schema lowering recognizes.
 SOURCE_DECLARATION_TYPES: tuple[type, ...] = (
     InputTensor,
@@ -284,10 +342,19 @@ SOURCE_DECLARATION_TYPES: tuple[type, ...] = (
     Attribute,
     DatatypeAttribute,
     BuildFact,
+    InitializerAnalysis,
 )
 
 #: The union, for a caller that wants to name it.
-SourceDeclaration = InputTensor | OutputTensor | Attribute | DatatypeAttribute | BuildFact
+SourceDeclaration = (
+    InputTensor | OutputTensor | Attribute | DatatypeAttribute | BuildFact | InitializerAnalysis
+)
+
+
+def attribute_name(member_name: str, declaration: Attribute | DatatypeAttribute) -> str:
+    """The name this attribute has *in the graph*."""
+
+    return declaration.onnx or member_name
 
 
 def facet_name(member_name: str, facet: str) -> str:
@@ -386,10 +453,12 @@ __all__ = [
     "Attribute",
     "BuildFact",
     "DatatypeAttribute",
+    "InitializerAnalysis",
     "InputTensor",
     "OutputTensor",
     "SourceDeclaration",
     "TensorDeclaration",
+    "attribute_name",
     "facet_name",
     "lower_source_schema",
 ]

@@ -17,7 +17,7 @@ of them.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from types import MappingProxyType
@@ -93,6 +93,11 @@ class SourceNode:
     inputs: tuple[SourceOperand, ...]
     outputs: tuple[SourceOperand, ...]
     attributes: Mapping[str, object]
+    #: The scalars computed *from* initializer values at read time, by member
+    #: name.  A name absent from this mapping has no answer here -- the operand
+    #: was not supplied, carried no initializer, or the analysis declined --
+    #: and reaches the design space as an absent Problem rather than a default.
+    analyses: Mapping[str, object] = MappingProxyType({})
 
     def operand(self, operand_id: str) -> SourceOperand:
         for item in (*self.inputs, *self.outputs):
@@ -160,6 +165,7 @@ def read_source_node(
     optional_inputs: Sequence[str] = (),
     digest_inputs: Sequence[str] = (),
     attributes: Mapping[str, object] | None = None,
+    analyses: Mapping[str, tuple[str, Callable[[Any, QONNXDataType], object]]] | None = None,
 ) -> SourceNode:
     """Read one node's operands and attributes into a frozen record.
 
@@ -217,7 +223,36 @@ def read_source_node(
         tuple(read_inputs),
         tuple(read_outputs),
         MappingProxyType(dict(attributes or {})),
+        MappingProxyType(_run_analyses(model, read_inputs, analyses or {})),
     )
+
+
+def _run_analyses(
+    model: Any,
+    operands: Sequence[SourceOperand],
+    analyses: Mapping[str, tuple[str, Callable[[Any, QONNXDataType], object]]],
+) -> dict[str, object]:
+    """Compute each declared initializer analysis, once, and keep only its result.
+
+    The array is fetched here and dropped here.  An operand that is absent or
+    carries no initializer, and an analysis that returns ``None``, are all the
+    same outcome: no entry, and therefore an absent Problem -- never a zero or
+    a ``False`` that a reader would happily compute with.
+    """
+
+    by_id = {operand.id: operand for operand in operands}
+    results: dict[str, object] = {}
+    for member_name, (operand_id, evaluate) in analyses.items():
+        operand = by_id.get(operand_id)
+        if operand is None or not operand.initializer:
+            continue
+        values = model.get_initializer(operand.tensor)
+        if values is None:
+            continue
+        result = evaluate(values, operand.datatype)
+        if result is not None:
+            results[member_name] = result
+    return results
 
 
 __all__ = [

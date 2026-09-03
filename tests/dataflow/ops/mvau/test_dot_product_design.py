@@ -47,6 +47,7 @@ from finn.dataflow.ops.mvau.regions import (
     construct_dot_product_region as baseline_dot_product,
 )
 from finn.dataflow.ops.mvau.networks import construct_decomposed_mvau_network
+from finn.dataflow.ops.mvau.computation import MvauComputationProfile
 from finn.dataflow.model.spec_algebra import assemble_specs
 
 CLOCK_PERIOD_NS = 4.0
@@ -65,6 +66,7 @@ class Problem_(Space):
     narrow_weights = Problem(bool)
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
+    computation_profile = Problem(MvauComputationProfile)
 
 
 class Placed(Problem_):
@@ -120,6 +122,7 @@ def _occurrence(
             Placed.accumulator_type: DataType[accumulator],
             Placed.output_type: DataType[accumulator],
             Placed.narrow_weights: narrow,
+            Placed.computation_profile: MvauComputationProfile.ACCUMULATOR_INTEGER,
             Placed.target_dsp: target,
             Placed.clock_period_ns: CLOCK_PERIOD_NS,
         },
@@ -326,6 +329,7 @@ def test_an_incomplete_or_infeasible_point_refuses() -> None:
             "problem.mvau.accumulator_type": DataType["INT32"],
             "problem.mvau.output_type": DataType["INT32"],
             "problem.mvau.narrow_weights": False,
+            "problem.mvau.computation_profile": MvauComputationProfile.ACCUMULATOR_INTEGER,
             "problem.mvau.target_dsp": DspBlock.DSP58,
             "problem.mvau.clock_period_ns": CLOCK_PERIOD_NS,
         },
@@ -367,6 +371,7 @@ def test_two_occurrences_of_the_design_stay_independent() -> None:
             "problem.mvau.accumulator_type": DataType["INT32"],
             "problem.mvau.output_type": DataType["INT32"],
             "problem.mvau.narrow_weights": False,
+            "problem.mvau.computation_profile": MvauComputationProfile.ACCUMULATOR_INTEGER,
             "problem.mvau.target_dsp": DspBlock.DSP58,
             "problem.mvau.clock_period_ns": CLOCK_PERIOD_NS,
         },

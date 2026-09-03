@@ -20,13 +20,14 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, cast
 
-from finn.dataflow._engine import Answer, Decided
+from finn.dataflow._engine import ABSENT, Answer, Decided
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.model.declarations import (
     ConstraintGroup,
     Space,
     Subspace,
     Variant,
+    allow_absent,
     constraint,
     derived,
     reject,
@@ -42,7 +43,13 @@ from finn.dataflow.ops.association import (
     StreamDestination,
 )
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError, unresolved_reason
-from finn.dataflow.ops.source import SourceNode
+from finn.dataflow.ops.mvau.computation import (
+    MvauComputationProfile,
+    computation_profile,
+    execute_mvau,
+    initializer_excludes_minimum,
+)
+from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
@@ -52,6 +59,7 @@ from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
     DatatypeAttribute,
+    InitializerAnalysis,
     InputTensor,
     OutputTensor,
 )
@@ -133,19 +141,40 @@ class MvauDataflowOp(DataflowOp):
 
     activation = InputTensor(index=0)
     weight = InputTensor(index=1, fingerprint=True)
+    #: Present exactly when the node fuses an activation.  Optional rather than
+    #: conditional-by-declaration: presence is *emergent* -- it is read from the
+    #: graph -- and the agreement between it and ``no_activation`` is a
+    #: constraint that can be reported, not a schema rule that makes the node
+    #: unreadable.
+    threshold = InputTensor(index=2, optional=True, fingerprint=True)
     output = OutputTensor(index=0)
 
-    narrow_weights = Attribute(bool, default=False)
+    #: The three attributes FINN's graphs already carry, under the names they
+    #: already have.  ``no_activation`` defaults to ``True`` because a plain
+    #: matrix-vector node is the common case and because that is what every
+    #: existing graph means by omitting it.
+    no_activation = Attribute(bool, default=True, onnx="noActivation")
+    binary_xnor = Attribute(bool, default=False, onnx="binaryXnorMode")
+    activation_bias = Attribute(int, default=0, onnx="ActVal")
 
-    #: The accumulator width, and therefore the output's datatype.  A
-    #: source-semantic *attribute*, not a reading of the output annotation: the
-    #: value reaches Region construction and the physical realization, so it
-    #: must be part of the problem's identity.  Reading it back off the tensor
-    #: the operation itself writes would make a fact the design space depends on
-    #: something the design space is authoritative for -- and, kept out of the
-    #: fingerprint to make repair possible, would let recorded choices be
-    #: silently wrong.
-    accumulator_type = DatatypeAttribute(default="INT32")
+    #: The accumulator width, and therefore the output's datatype when nothing
+    #: is fused.  A source-semantic *attribute*, not a reading of the output
+    #: annotation: the value reaches Region construction and the physical
+    #: realization, so it must be part of the problem's identity.  Reading it
+    #: back off the tensor the operation itself writes would make a fact the
+    #: design space depends on something the design space is authoritative for
+    #: -- and, kept out of the fingerprint to make repair possible, would let
+    #: recorded choices be silently wrong.
+    accumulator_type = DatatypeAttribute(default="INT32", onnx="accDataType")
+
+    #: Narrowness is *derived from the weights*, never asserted about them.  An
+    #: attribute saying "these weights are narrow" is a claim a caller can get
+    #: wrong and nothing can check; whether the matrix uses the most negative
+    #: value its datatype allows is a property of the matrix, read once at
+    #: binding time and reduced to one boolean before anything enters the point.
+    weight_excludes_minimum = InitializerAnalysis(
+        weight, bool, evaluate=initializer_excludes_minimum
+    )
 
     target_dsp = BuildFact(DspBlock, accessor=_target_dsp)
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
@@ -201,6 +230,30 @@ class MvauDataflowOp(DataflowOp):
             total *= extent
         return total // width
 
+    @derived(MvauComputationProfile, activated=no_activation, xnor=binary_xnor)
+    def profile(*, activated: bool, xnor: bool) -> object:
+        """Which of the three MVAU computations this node describes.
+
+        Derived once and read by everything -- the execution, the output
+        datatype, and the Designs' applicability -- so a consumer that asked
+        ``noActivation`` directly could not come to disagree with it.
+        """
+
+        return computation_profile(no_activation=activated, binary_xnor=xnor)
+
+    @derived(bool, excludes_minimum=allow_absent(weight_excludes_minimum))
+    def effective_narrow_weights(*, excludes_minimum: object) -> object:
+        """Whether the weights can be stored one bit narrower.
+
+        Absent -- an operand with no initializer, or values the analysis could
+        not judge -- is ``False``: a supplied matrix whose contents are not
+        known at build time cannot be promised to avoid its minimum, and
+        assuming otherwise would build hardware that cannot represent a weight
+        the graph is entitled to deliver later.
+        """
+
+        return excludes_minimum is not ABSENT and bool(excludes_minimum)
+
     @constraint(shape=matrix)
     def weight_is_a_matrix(*, shape: tuple[int, ...]) -> object:
         """Restates the refusal ``matrix`` already made, as a *verdict*.
@@ -229,7 +282,54 @@ class MvauDataflowOp(DataflowOp):
     #: refuse the very projection whose acceptance is required to commit the
     #: repair -- so the node could never be fixed.  It is a reconciliation
     #: difference; see ``expected_outputs``.
-    source_accepts = ConstraintGroup(weight_is_a_matrix, activation_matches_the_matrix)
+    @constraint(present=threshold.present, activated=no_activation)
+    def threshold_present_iff_activated(*, present: bool, activated: bool) -> object:
+        """The operand list and the attribute must agree about what this node is.
+
+        Either disagreement is a real fault and neither is repairable here: a
+        node that says it fuses an activation and supplies no thresholds cannot
+        be executed, and one that supplies thresholds while claiming it does
+        not fuse would silently ignore them.  The check is on the operation
+        because it is the operation's own mathematics -- no Design has an
+        opinion about it.
+        """
+
+        if present is not activated:
+            return True
+        return reject(
+            "mvau-threshold-presence-mismatch",
+            "a fused-activation MVAU needs a threshold operand and a plain one must not "
+            f"have it; noActivation={activated} with threshold present={present}",
+            values={"no_activation": activated, "threshold_present": present},
+        )
+
+    @constraint(operand=allow_absent(threshold), height=matrix_height)
+    def threshold_shape_supported(*, operand: object, height: int) -> object:
+        """One threshold row per output channel, when there are thresholds at all.
+
+        Absence-tolerant rather than conditional: a plain MVAU has nothing to
+        check here, and that is an ordinary "yes" rather than a constraint that
+        does not exist.
+        """
+
+        if operand is ABSENT:
+            return True
+        shape = tuple(cast(SourceOperand, operand).shape)
+        if len(shape) == 2 and shape[0] == height:
+            return True
+        return reject(
+            "mvau-threshold-shape",
+            f"a threshold operand is one row per output channel: expected {height} rows in a "
+            f"rank-2 tensor, got {shape}",
+            values={"shape": list(shape), "matrix_height": height},
+        )
+
+    source_accepts = ConstraintGroup(
+        weight_is_a_matrix,
+        activation_matches_the_matrix,
+        threshold_present_iff_activated,
+        threshold_shape_supported,
+    )
 
     # -- the composition ------------------------------------------------------
 
@@ -247,7 +347,8 @@ class MvauDataflowOp(DataflowOp):
                 # type *is* the accumulator type.  Derived onto the tensor, not
                 # read back off it.
                 output_type=accumulator_type,
-                narrow_weights=narrow_weights,
+                narrow_weights=effective_narrow_weights,
+                computation_profile=profile,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
             ),
@@ -260,7 +361,8 @@ class MvauDataflowOp(DataflowOp):
                 weight_type=weight.datatype,
                 accumulator_type=accumulator_type,
                 output_type=accumulator_type,
-                narrow_weights=narrow_weights,
+                narrow_weights=effective_narrow_weights,
+                computation_profile=profile,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
@@ -345,12 +447,65 @@ class MvauDataflowOp(DataflowOp):
         weight = source.operand("weight")
         if len(weight.shape) != 2 or not activation.shape:
             return {}
+        fused = not bool(source.attributes["no_activation"])
         return {
             "output": (
                 (*activation.shape[:-1], weight.shape[1]),
-                cast(Any, source.attributes["accumulator_type"]),
+                # A fused threshold's output type is chosen by whoever wrote
+                # the thresholds, and this operation is not authoritative for
+                # it.  ``None`` says exactly that: the graph's annotation
+                # stands, and nothing here repairs or contradicts it.
+                None if fused else cast(Any, source.attributes["accumulator_type"]),
             )
         }
+
+    # -- executing the source semantics ----------------------------------------
+
+    def execute_node(self, context: Any, graph: Any) -> None:
+        """Compute this node in ONNX, for the three profiles it can describe."""
+
+        del graph
+        source = self.attached_source()
+        node = self.onnx_node
+        thresholds = (
+            context[node.input[2]] if source.has("threshold") and len(node.input) > 2 else None
+        )
+        result = execute_mvau(
+            activation=context[node.input[0]],
+            weight=context[node.input[1]],
+            thresholds=thresholds,
+            profile=computation_profile(
+                no_activation=bool(source.attributes["no_activation"]),
+                binary_xnor=bool(source.attributes["binary_xnor"]),
+            ),
+            activation_type=source.operand("activation").datatype,
+            weight_type=source.operand("weight").datatype,
+            output_type=source.operand("output").datatype,
+            activation_bias=int(cast(int, source.attributes["activation_bias"])),
+        )
+        expected = self.expected_for(source)["output"][0]
+        if expected is None:
+            raise DataflowOpError(f"{node.name} cannot state the shape of its own output")
+        context[node.output[0]] = result.reshape(expected)
+
+    def verify_node(self) -> list[str]:
+        """Every way this node's own semantics are inconsistent, as messages.
+
+        The same constraints the projection uses, reported the way QONNX's
+        verification expects.  Written as a reading of ``source_accepts``
+        rather than as a second set of checks, so a node cannot pass
+        verification and then be refused by the design space for a reason
+        verification never mentioned.
+        """
+
+        assessment = self.assess(type(self).source_accepts)
+        if assessment.verdict is True:
+            return []
+        return [
+            finding.message
+            for answer in assessment.answers.values()
+            for finding in getattr(answer, "findings", ())
+        ]
 
 
 def _internal_destination(

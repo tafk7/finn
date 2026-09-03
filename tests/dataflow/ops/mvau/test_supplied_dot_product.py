@@ -20,6 +20,7 @@ from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.model.declarations import Problem, Space, Subspace
+from finn.dataflow.ops.mvau.computation import MvauComputationProfile
 from finn.dataflow.model.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -43,6 +44,7 @@ class Source(Space):
     accumulator_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
     output_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
     narrow_weights = Problem(bool)
+    computation_profile = Problem(MvauComputationProfile)
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
     initializer_present = Problem(bool)
@@ -58,6 +60,7 @@ class Source(Space):
         accumulator_type=accumulator_type,
         output_type=output_type,
         narrow_weights=narrow_weights,
+        computation_profile=computation_profile,
         target_dsp=target_dsp,
         clock_period_ns=clock_period_ns,
         initializer_present=initializer_present,
@@ -88,6 +91,7 @@ def _occurrence(
             Source.accumulator_type: DataType["INT32"],
             Source.output_type: DataType["INT32"],
             Source.narrow_weights: False,
+            Source.computation_profile: MvauComputationProfile.ACCUMULATOR_INTEGER,
             Source.target_dsp: DspBlock.DSP58,
             Source.clock_period_ns: CLOCK_PERIOD_NS,
             Source.initializer_present: initializer,
@@ -229,6 +233,7 @@ def test_the_mode_is_uncommitted_until_it_is_chosen() -> None:
             Source.accumulator_type: DataType["INT32"],
             Source.output_type: DataType["INT32"],
             Source.narrow_weights: False,
+            Source.computation_profile: MvauComputationProfile.ACCUMULATOR_INTEGER,
             Source.target_dsp: DspBlock.DSP58,
             Source.clock_period_ns: CLOCK_PERIOD_NS,
             Source.initializer_present: True,

@@ -93,9 +93,11 @@ from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
     DatatypeAttribute,
+    InitializerAnalysis,
     SourceDeclaration,
     InputTensor,
     OutputTensor,
+    attribute_name,
     lower_source_schema,
 )
 from finn.dataflow.ops.source import SourceError, SourceNode, read_source_node
@@ -257,6 +259,9 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         }
         _check_indices(cls, schema)
         _check_constraints_are_classified(cls, declarations)
+        # The graph names are a declaration-time fact, so they are checked when
+        # the class is written rather than when one is first constructed.
+        _check_attribute_names(cls)
         for name, member in lower_source_schema(cls, schema).items():
             if name in declarations:
                 raise AuthoringError(
@@ -386,6 +391,14 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 if member_name in binding.build.values:
                     values[problem] = binding.build[member_name]
                 continue
+            if isinstance(declaration, InitializerAnalysis):
+                # No entry means the analysis has no answer for this node.  It
+                # is left out of the mapping entirely, so it reaches the design
+                # space as an absent Problem and a reader has to say what it
+                # does about that.
+                if member_name in binding.source.analyses:
+                    values[problem] = binding.source.analyses[member_name]
+                continue
             values[problem] = binding.source.attributes[member_name]
         return values
 
@@ -441,6 +454,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         optional: list[str] = []
         digested: list[str] = []
         attributes: dict[str, object] = {}
+        analyses: dict[str, tuple[str, Any]] = {}
         for member_name, declaration in source_declarations(operation):
             if isinstance(declaration, (InputTensor, OutputTensor)):
                 (outputs if declaration.output else inputs).append((declaration.index, member_name))
@@ -453,6 +467,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 attributes[member_name] = _datatype_attribute(node, member_name, declaration)
             elif isinstance(declaration, Attribute):
                 attributes[member_name] = _plain_attribute(node, member_name, declaration)
+            elif isinstance(declaration, InitializerAnalysis):
+                analyses[member_name] = (
+                    declaration.operand.member_name,
+                    declaration.evaluate,
+                )
         return read_source_node(
             model,
             node,
@@ -461,6 +480,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             optional_inputs=tuple(optional),
             digest_inputs=tuple(digested),
             attributes=attributes,
+            analyses=analyses,
         )
 
     def is_stale(self, problem: Any = None) -> bool:
@@ -604,10 +624,18 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         }
         for member_name, declaration in source_declarations(type(self)):
             if isinstance(declaration, DatatypeAttribute):
-                declared[member_name] = ("s", False, declaration.default)
+                declared[attribute_name(member_name, declaration)] = (
+                    "s",
+                    False,
+                    declaration.default,
+                )
             elif isinstance(declaration, Attribute):
                 kind = "s" if declaration.value_type is str else "i"
-                declared[member_name] = (kind, False, declaration.default)
+                declared[attribute_name(member_name, declaration)] = (
+                    kind,
+                    False,
+                    declaration.default,
+                )
         return declared
 
     def source_snapshot(self, model: Any) -> SourceNode:
@@ -667,6 +695,26 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         """Read the live node into a frozen record, without any build context."""
 
         return self._read_source(model, self._live_node(model))
+
+    def attached_source(self) -> SourceNode:
+        """The source reading for a QONNX call that carries no model argument.
+
+        ``execute_node`` is handed a value context and a graph, not a model,
+        and it needs the operand datatypes -- so a bound occurrence answers
+        from its frozen reading and an unbound one from the model QONNX
+        attached before calling.  Refusing when neither is available is the
+        honest outcome: silently guessing a datatype changes what the node
+        computes.
+        """
+
+        if self._binding is not None:
+            return self._binding.source
+        if self._model is None:
+            raise DataflowOpError(
+                f"{type(self).__name__} has no model attached, so it cannot read the operand "
+                "datatypes its execution depends on; QONNX attaches one through attach_model"
+            )
+        return self.read_source(self._model)
 
     def execute_node(self, context: Any, graph: Any) -> None:
         raise NotImplementedError(f"{type(self).__name__} does not execute its source semantics")
@@ -1070,14 +1118,35 @@ def _positional(declared: list[tuple[int, str]]) -> tuple[str, ...]:
 def _check_authoring(operation_type: type[DataflowOp]) -> None:
     if not operation_type.family:
         raise AuthoringError(f"{operation_type.__name__} must declare a non-empty family")
-    clashes = sorted(
-        {name for name, _ in source_declarations(operation_type)} & RESERVED_ATTRIBUTES
-    )
-    if clashes:
-        raise AuthoringError(
-            f"{operation_type.__name__} declares source attribute {clashes[0]!r}, which the "
-            "dataflow layer owns"
-        )
+    _check_attribute_names(operation_type)
+
+
+def _check_attribute_names(operation_type: type[DataflowOp]) -> None:
+    """Refuse two members reading one node attribute, and any the layer owns.
+
+    Checked on the *graph* name, which is the one that can collide: two members
+    cannot share a Python name, but two members can name one ONNX attribute --
+    which is newly possible now that ``onnx=`` separates the two -- and one of
+    them would silently win.
+    """
+
+    graph_names: dict[str, str] = {}
+    for member_name, declaration in source_declarations(operation_type):
+        if not isinstance(declaration, (Attribute, DatatypeAttribute)):
+            continue
+        name = attribute_name(member_name, declaration)
+        if name in RESERVED_ATTRIBUTES:
+            raise AuthoringError(
+                f"{operation_type.__name__} declares source attribute {name!r}, which the "
+                "dataflow layer owns"
+            )
+        if name in graph_names:
+            raise AuthoringError(
+                f"{operation_type.__name__}.{member_name} and "
+                f"{operation_type.__name__}.{graph_names[name]} both read the node attribute "
+                f"{name!r}; one graph attribute is one source fact"
+            )
+        graph_names[name] = member_name
 
 
 def _raw_attribute(node: Any, name: str) -> Any | None:
@@ -1091,14 +1160,14 @@ def _datatype_attribute(node: Any, member_name: str, declaration: DatatypeAttrib
     from finn.dataflow.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
     from qonnx.core.datatype import DataType  # type: ignore[import-not-found] # noqa: PLC0415
 
-    raw = _raw_attribute(node, member_name)
+    raw = _raw_attribute(node, attribute_name(member_name, declaration))
     name = declaration.default if raw is None else raw
     text = name.decode("utf-8") if isinstance(name, bytes) else str(name)
     return canonical_qonnx_datatype(DataType[text])
 
 
 def _plain_attribute(node: Any, member_name: str, declaration: Attribute) -> object:
-    raw = _raw_attribute(node, member_name)
+    raw = _raw_attribute(node, attribute_name(member_name, declaration))
     if raw is None:
         return declaration.default
     if declaration.value_type is str:
