@@ -33,7 +33,7 @@ from finn.dataflow.model.declarations import (
     Input,
     Problem,
     Space,
-    Use,
+    Subspace,
     constraint,
     derived,
     divisors_of,
@@ -268,7 +268,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
     class NestedRegion(Kernel):
         id = "nested"
         computation = COMPUTATION
-        fragment = Use(RegionFragment)
+        fragment = Subspace(RegionFragment)
         region = Region(family="test.copy", version="1", construct=_degenerate)
 
         @classmethod
@@ -463,7 +463,7 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
         id = "nested_dependence"
         computation = COMPUTATION
         extent = Input(int)
-        folding = Use(Folding)
+        folding = Subspace(Folding)
         region = Region(
             family="test.copy",
             version="1",
@@ -568,7 +568,7 @@ def test_kernel_region_is_implicitly_exported() -> None:
     class Root(Space):
         extent = Problem(int)
         lanes = Decision(int, domain=divisors_of(extent))
-        nested = Use(ToyKernel, extent=extent, lanes=lanes, name="child")
+        nested = Subspace(ToyKernel, extent=extent, lanes=lanes, name="child")
 
         @derived(DATAFLOW_REGION_SEMANTICS, child=nested.region)
         def observed(*, child: DataflowRegion) -> DataflowRegion:
@@ -587,7 +587,7 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
     class CompositeKernel(Kernel):
         id = "composite"
         computation = COMPUTATION
-        pipeline = Use(Pipeline)
+        pipeline = Subspace(Pipeline)
         region = Region(family="test.copy", version="1", construct=_degenerate)
 
         STAGES = Parameter(pipeline.stages)
@@ -631,7 +631,7 @@ def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
         extent = Input(int)
         lanes = Input(int)
         enabled = Decision(bool, values=(False, True))
-        folding = Use(Folding, supplied=lanes, when=enabled)
+        folding = Subspace(Folding, supplied=lanes, when=enabled)
         region = Region(
             family="test.copy",
             version="1",
@@ -685,7 +685,7 @@ def test_an_outer_gate_over_the_region_stays_legal() -> None:
         extent = Problem(int)
         lanes = Decision(int, domain=divisors_of(extent))
         present = Decision(bool, values=(False, True))
-        nested = Use(ToyKernel, extent=extent, lanes=lanes, when=present, name="child")
+        nested = Subspace(ToyKernel, extent=extent, lanes=lanes, when=present, name="child")
 
     compiled = _compile_space(Conditional, "outer", problem_namespace="problem.outer")
     assert compiled.child("nested").exported("region").kind is DependencyKind.PROPERTY

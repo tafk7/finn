@@ -22,7 +22,7 @@ from finn.dataflow.model.declarations import (
     Problem,
     Readiness,
     Space,
-    Use,
+    Subspace,
     constraint,
     declared_members,
     derived,
@@ -56,8 +56,8 @@ class Child(Space):
 
 class Parent(Space):
     extent = Problem(int)
-    first = Use(Child, extent=extent)
-    second = Use(Child, extent=extent)
+    first = Subspace(Child, extent=extent)
+    second = Subspace(Child, extent=extent)
 
 
 def test_declaration_members_are_direct_class_values() -> None:
@@ -85,10 +85,10 @@ def test_use_exposes_only_explicit_exports() -> None:
         _ = Parent.first.positive
 
 
-def test_two_uses_are_distinct_immutable_templates() -> None:
+def test_two_subspaces_are_distinct_immutable_templates() -> None:
     assert Parent.first is not Parent.second
-    assert Parent.first.tile.use is Parent.first
-    assert Parent.second.tile.use is Parent.second
+    assert Parent.first.tile.subspace is Parent.first
+    assert Parent.second.tile.subspace is Parent.second
     with pytest.raises(FrozenInstanceError):
         Parent.first.stable_name = "moved"  # type: ignore[misc]
 
@@ -166,12 +166,11 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
     assert set(model.__all__) == {
         "AuthoringError",
         "RESERVED_LIFECYCLE_NAMES",
+        "RESERVED_PROTOCOL_NAMES",
         "Boundary",
         "BranchCatalog",
         "BranchInfo",
         "BranchOutputInfo",
-        "BranchView",
-        "Case",
         "CaseInfo",
         "Connection",
         "ConstraintGroup",
@@ -183,7 +182,6 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "Input",
         "Kernel",
         "Kernels",
-        "OneOf",
         "OccurrenceContext",
         "OccurrenceDiagnostic",
         "CanonicalValueCodec",
@@ -197,8 +195,10 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "ReplayBufferKernel",
         "Sink",
         "Space",
+        "Subspace",
         "SpaceModel",
-        "Use",
+        "Variant",
+        "VariantView",
         "compile_space",
         "compile_space_model",
         "configure_design",

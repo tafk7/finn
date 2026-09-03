@@ -51,7 +51,6 @@ from finn.dataflow.model.declarations import (
     DECLARATION_TYPES,
     AuthoringError,
     BranchOutput,
-    Case,
     ChildValue,
     Constraint,
     ConstraintGroup,
@@ -59,16 +58,16 @@ from finn.dataflow.model.declarations import (
     Derived,
     Domain,
     Input,
-    OneOf,
     PendingFinding,
     Problem,
     Projection,
     Readiness,
     Rejected,
     Space,
+    Subspace,
     Unresolvable,
-    Use,
     ValueSource,
+    Variant,
     check_reserved_names,
     declared_members,
     exported_members,
@@ -234,7 +233,7 @@ class _CompiledSpace(Generic[S]):
         try:
             return dict(self.children)[name]
         except KeyError:
-            raise AuthoringError(f"{self.owner.__name__} has no child Use {name!r}") from None
+            raise AuthoringError(f"{self.owner.__name__} has no child Subspace {name!r}") from None
 
     def projection(self, name: str) -> _CompiledProjection[object]:
         try:
@@ -319,12 +318,12 @@ class _Compilation:
         self.constraints: dict[int, QualifiedPath] = {}
         self.uses: dict[int, _CompiledSpace[Space]] = {}
         self.use_names = {
-            id(value): name for name, value in self.declarations if isinstance(value, Use)
+            id(value): name for name, value in self.declarations if isinstance(value, Subspace)
         }
         self.compiling_uses: set[int] = set()
         self.branches: dict[int, _CompiledBranch] = {}
         self.branch_names = {
-            id(value): name for name, value in self.declarations if isinstance(value, OneOf)
+            id(value): name for name, value in self.declarations if isinstance(value, Variant)
         }
         self.compiling_branches: set[int] = set()
         self.branch_decisions: dict[int, EngineDecision] = {}
@@ -334,16 +333,16 @@ class _Compilation:
         self._validate_inputs()
         self._allocate_local_refs()
         for name, declaration in self.declarations:
-            if isinstance(declaration, Use):
+            if isinstance(declaration, Subspace):
                 self._compile_use(name, declaration)
-            elif isinstance(declaration, OneOf):
+            elif isinstance(declaration, Variant):
                 self._compile_branch(name, declaration)
         local = self._local_spec()
         children: list[DesignSpaceSpec] = []
         for _name, declaration in self.declarations:
-            if isinstance(declaration, Use):
+            if isinstance(declaration, Subspace):
                 children.append(self.uses[id(declaration)].spec)
-            elif isinstance(declaration, OneOf):
+            elif isinstance(declaration, Variant):
                 children.extend(case.compiled.spec for case in self.branches[id(declaration)].cases)
         specification = assemble_specs((local, *children))
         if self.applies_if is not None:
@@ -365,7 +364,7 @@ class _Compilation:
         branches = tuple(
             (name, self.branches[id(declaration)])
             for name, declaration in self.declarations
-            if isinstance(declaration, OneOf)
+            if isinstance(declaration, Variant)
         )
         projections = tuple(
             (name, self._compile_projection(name, declaration))
@@ -382,7 +381,7 @@ class _Compilation:
             tuple(
                 (name, self.uses[id(declaration)])
                 for name, declaration in self.declarations
-                if isinstance(declaration, Use)
+                if isinstance(declaration, Subspace)
             ),
             None,
             branches,
@@ -475,9 +474,9 @@ class _Compilation:
 
         collected: list[BranchInfo] = []
         for _name, declaration in self.declarations:
-            if isinstance(declaration, Use):
+            if isinstance(declaration, Subspace):
                 collected.extend(self.uses[id(declaration)].catalog.branches)
-            elif isinstance(declaration, OneOf):
+            elif isinstance(declaration, Variant):
                 record = self.branches[id(declaration)]
                 collected.append(record.info)
                 for case in record.cases:
@@ -486,16 +485,16 @@ class _Compilation:
 
     def _source_ref(self, source: ValueSource[object]) -> _Ref[object]:
         if isinstance(source, BranchOutput):
-            branch = source.branch
+            branch = source.variant
             branch_name = self.branch_names.get(id(branch))
             if branch_name is None:
-                raise AuthoringError("a selected output belongs to a branch outside this Space")
+                raise AuthoringError("a selected output belongs to a Variant outside this Space")
             return self._compile_branch(branch_name, branch).output(source.output_name)
         if isinstance(source, ChildValue):
-            use = source.use
+            use = source.subspace
             use_name = self.use_names.get(id(use))
             if use_name is None:
-                raise AuthoringError("a child export belongs to a Use outside this Space")
+                raise AuthoringError("a child export belongs to a Subspace outside this Space")
             return self._compile_use(use_name, use).exported(source.member_name)
         try:
             return self.refs[id(source)]
@@ -637,7 +636,7 @@ class _Compilation:
                         tuple(self._constraint_path(item) for item in declaration.constraints),
                     )
                 )
-            elif isinstance(declaration, OneOf):
+            elif isinstance(declaration, Variant):
                 selector = self.branch_decisions.get(id(declaration))
                 if selector is not None:
                     decisions.append(selector)
@@ -754,12 +753,12 @@ class _Compilation:
 
         return EvaluatorSpec((condition.dependency(name),), applies)
 
-    def _compile_branch(self, member_name: str, declaration: OneOf) -> _CompiledBranch:
+    def _compile_branch(self, member_name: str, declaration: Variant) -> _CompiledBranch:
         key = id(declaration)
         if key in self.branches:
             return self.branches[key]
         if key in self.compiling_branches:
-            raise AuthoringError(f"{self.space_type.__name__}.{member_name} forms a branch cycle")
+            raise AuthoringError(f"{self.space_type.__name__}.{member_name} forms a Variant cycle")
         self.compiling_branches.add(key)
         try:
             record = self._build_branch(member_name, declaration)
@@ -768,28 +767,19 @@ class _Compilation:
         finally:
             self.compiling_branches.discard(key)
 
-    def _case_ids(self, member_name: str, declaration: OneOf) -> tuple[str, ...]:
+    def _case_ids(self, member_name: str, declaration: Variant) -> tuple[str, ...]:
         ids: list[str] = []
-        for case in declaration.cases:
-            case_id = declaration.case_id(case)
-            if case_id is None:
-                raise AuthoringError(
-                    f"{self.space_type.__name__}.{member_name} needs an explicit name= on the "
-                    f"{case.space_type.__name__} case"
-                )
-            if not case_id:
-                raise AuthoringError(
-                    f"{self.space_type.__name__}.{member_name} has an empty case id"
-                )
+        for case_id, subspace in declaration.alternatives:
             if "." in case_id:
                 raise AuthoringError(
-                    f"{self.space_type.__name__}.{member_name} case id {case_id!r} contains a "
-                    "dot; a case id is one path segment of its namespace"
+                    f"{self.space_type.__name__}.{member_name} alternative id {case_id!r} "
+                    "contains a dot; an alternative id is one path segment of its namespace"
                 )
-            declaration.check_case(self.space_type.__name__, member_name, case)
+            declaration.check_alternative(self.space_type.__name__, member_name, subspace)
             if case_id in ids:
                 raise AuthoringError(
-                    f"{self.space_type.__name__}.{member_name} declares case id {case_id!r} twice"
+                    f"{self.space_type.__name__}.{member_name} declares alternative id "
+                    f"{case_id!r} twice"
                 )
             ids.append(case_id)
         return tuple(ids)
@@ -843,7 +833,7 @@ class _Compilation:
 
         return DerivedProperty(path, semantics, EvaluatorSpec(dependencies, forward))
 
-    def _build_branch(self, member_name: str, declaration: OneOf) -> _CompiledBranch:
+    def _build_branch(self, member_name: str, declaration: Variant) -> _CompiledBranch:
         branch_name = _local_name(member_name, declaration)
         namespace = f"{self.namespace}.{branch_name}"
         case_ids = self._case_ids(member_name, declaration)
@@ -866,11 +856,11 @@ class _Compilation:
             )
 
         compiled_cases: list[_CompiledCase] = []
-        for case_id, case in zip(case_ids, declaration.cases):
+        for case_id, subspace in declaration.alternatives:
             compiled_cases.append(
                 _CompiledCase(
                     case_id,
-                    self._compile_case(namespace, case_id, case, selector, branch_gate),
+                    self._compile_case(namespace, case_id, subspace, selector, branch_gate),
                 )
             )
 
@@ -941,11 +931,11 @@ class _Compilation:
         self,
         namespace: str,
         case_id: str,
-        case: Case,
+        subspace: Subspace[Space],
         selector: _Ref[object] | None,
         branch_gate: EvaluatorSpec[Answer[bool]] | None,
     ) -> _CompiledSpace[Space]:
-        bound = {name: self._source_ref(source) for name, source in case.bindings}
+        bound = {name: self._source_ref(source) for name, source in subspace.bindings}
         case_namespace = f"{namespace}.{case_id}"
         gate = branch_gate
         if selector is not None:
@@ -959,7 +949,7 @@ class _Compilation:
                 selection if branch_gate is None else combine_applicability(branch_gate, selection)
             )
         return _compile_space(
-            case.space_type,
+            subspace.space_type,
             case_namespace,
             bound,
             applies_if=gate,
@@ -967,12 +957,12 @@ class _Compilation:
             _ancestors=(*self.ancestors, self.space_type),
         )
 
-    def _compile_use(self, member_name: str, declaration: Use[Space]) -> _CompiledSpace[Space]:
+    def _compile_use(self, member_name: str, declaration: Subspace[Space]) -> _CompiledSpace[Space]:
         key = id(declaration)
         if key in self.uses:
             return self.uses[key]
         if key in self.compiling_uses:
-            raise AuthoringError(f"{self.space_type.__name__}.{member_name} forms a Use cycle")
+            raise AuthoringError(f"{self.space_type.__name__}.{member_name} forms a Subspace cycle")
         self.compiling_uses.add(key)
         try:
             bound = {name: self._source_ref(source) for name, source in declaration.bindings}
@@ -1008,7 +998,7 @@ def _compile_space(
         raise AuthoringError("only a Space subclass can be compiled")
     if space_type in _ancestors:
         cycle = " -> ".join(item.__name__ for item in (*_ancestors, space_type))
-        raise AuthoringError(f"Use cycle: {cycle}")
+        raise AuthoringError(f"Subspace cycle: {cycle}")
     compiled = _Compilation(
         space_type,
         namespace,
@@ -1082,20 +1072,20 @@ def resolve_value_source(
     them here rather than reimplementing the walk.  Each partial copy of this
     was a place where one kind of source silently stopped composing: both
     handled ``ChildValue`` and neither handled ``BranchOutput``, so a value
-    selected by a ``OneOf`` could not reach a Parameter or a topology condition
+    selected by a ``Variant`` could not reach a Parameter or a topology condition
     even though the generic compiler understood it perfectly well.
     """
 
     owner = compiled.owner
     if isinstance(source, BranchOutput):
-        branches = _members_of(owner, (OneOf,))
-        name = branches.get(id(source.branch))
+        branches = _members_of(owner, (Variant,))
+        name = branches.get(id(source.variant))
         if name is None:
-            raise AuthoringError(f"{owner.__name__} {what} names a branch outside the class")
+            raise AuthoringError(f"{owner.__name__} {what} names a Variant outside the class")
         return compiled.branch(name).output(source.output_name)
     if isinstance(source, ChildValue):
-        children = _members_of(owner, (Use,))
-        name = children.get(id(source.use))
+        children = _members_of(owner, (Subspace,))
+        name = children.get(id(source.subspace))
         if name is None:
             raise AuthoringError(f"{owner.__name__} {what} names a child outside the class")
         return compiled.child(name).exported(source.member_name)
@@ -1148,7 +1138,7 @@ def imported_decisions(
 
 
 @dataclass(frozen=True, slots=True)
-class SpaceModel:
+class SpaceModel(Generic[S]):
     """One compiled Space: the ordinary flat spec plus its branch catalog.
 
     The two public fields are deliberately separate values.  ``specification``
@@ -1161,22 +1151,29 @@ class SpaceModel:
     tree it needs is held privately, because that is exactly the record which
     would let a contributor reconstruct paths.
 
+    The model is generic in that authored class, so a compiler pipeline keeps
+    its type through the service: ``compile_space_model(Pipeline, ...)`` is a
+    ``SpaceModel[Pipeline]`` and its ``start`` returns a ``Pipeline``.
+
     What the model owns is *immutable and reusable*: the tree, the validated
-    ``DesignSpace``, the branch catalog and the projection metadata.  What it
-    does **not** own is the Engine, the point or the lock -- every ``start``
-    mints those fresh, so two roots from one model never share an evaluation
-    cache and never serialize on each other.
+    ``DesignSpace``, the branch catalog and the projection metadata.  Holding
+    the model **is** the reuse mechanism -- there is deliberately no hidden
+    cache behind ``Space.start``, because a Space class body is ordinary mutable
+    Python and no invalidation rule can be honest until class immutability is a
+    real contract.  What the model does not own is the Engine, the point or the
+    lock: every ``start`` mints those fresh, so two roots from one model never
+    share an evaluation cache and never serialize on each other.
     """
 
     specification: DesignSpaceSpec
     branches: BranchCatalog
-    _tree: _CompiledSpace[Space] | None = field(default=None, repr=False, compare=False)
+    _tree: _CompiledSpace[S] | None = field(default=None, repr=False, compare=False)
     _shared: _SharedCompilation = field(
         default_factory=lambda: _SharedCompilation(), repr=False, compare=False
     )
 
     @property
-    def space_type(self) -> type[Space]:
+    def space_type(self) -> type[S]:
         """The authored root class this model was compiled from."""
 
         return self._compiled_tree().owner
@@ -1186,13 +1183,13 @@ class SpaceModel:
         problem: object,
         *,
         expected_problem_fingerprint: str | None = None,
-    ) -> Space:
+    ) -> S:
         """Freeze one problem into a new root occurrence of the authored class.
 
-        The compiler-service entry point.  A pipeline that processes many
-        occurrences of one family holds the model and calls this repeatedly;
-        ``Space.start`` is the ordinary authoring spelling of the same thing and
-        goes through here.
+        The compiler-service entry point, and the explicit reuse path.  A
+        pipeline that processes many occurrences of one family holds the model
+        and calls this repeatedly; ``Space.start`` is the ergonomic one-shot
+        spelling, compiles a fresh model, and ends up here.
         """
 
         started = _occurrence_api().start_from_model(
@@ -1200,9 +1197,9 @@ class SpaceModel:
             problem,
             expected_problem_fingerprint=expected_problem_fingerprint,
         )
-        return cast("Space", started)
+        return cast("S", started)
 
-    def _compiled_tree(self) -> _CompiledSpace[Space]:
+    def _compiled_tree(self) -> _CompiledSpace[S]:
         if self._tree is None:
             raise AuthoringError(
                 "this SpaceModel was built without its compiled declarations and cannot "
@@ -1218,7 +1215,7 @@ class SpaceModel:
     def _owner_index(self) -> Mapping[QualifiedPath, DeclarationOwner]:
         """The diagnostic ownership index, built once with this compiled model."""
 
-        return self._shared.owners(self._compiled_tree())
+        return self._shared.owners(cast("_CompiledSpace[Space]", self._compiled_tree()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1323,82 +1320,32 @@ def _occurrence_api() -> Any:
     return resolve()
 
 
-def _structural_signature(
-    space_type: type[Space],
-    seen: frozenset[type[Space]] = frozenset(),
-) -> tuple[object, ...]:
-    """A hashable witness of everything compilation reads from a class tree.
-
-    Caching a compiled model on class identity alone is wrong: a class body is
-    ordinary mutable Python, and a test or a plugin that rebinds one member
-    would silently keep answering with stale compiled metadata.  The signature
-    therefore carries the declaration *objects* themselves -- they hash by
-    identity and, being held by the cache key, cannot have their ids recycled --
-    together with the member names and the classes referenced by every ``Use``
-    and ``Case``.  Rebinding, adding, removing or reordering a declaration
-    anywhere in the tree changes the key, so the next request recompiles instead
-    of reusing.
-    """
-
-    if space_type in seen:
-        return (space_type, "<recursive>")
-    members = declared_members(space_type)
-    parts: list[object] = [space_type, tuple((name, declaration) for name, declaration in members)]
-    nested = seen | {space_type}
-    for _name, declaration in members:
-        if isinstance(declaration, Use):
-            parts.append(_structural_signature(declaration.space_type, nested))
-        elif isinstance(declaration, OneOf):
-            for case in declaration.cases:
-                parts.append(_structural_signature(case.space_type, nested))
-    return tuple(parts)
-
-
-def compiled_model_for(
-    space_type: type[Space],
+def compile_space_model(
+    space_type: type[S],
     namespace: str,
     *,
     problem_namespace: str | None = None,
-) -> SpaceModel:
-    """One compiled model per (class, namespaces, declaration structure).
+) -> SpaceModel[S]:
+    """Compile a closed root Space into its spec, catalog, and occurrence service.
 
-    The cache lives on the authored class rather than in a module-level table so
-    that it dies with the class -- a process that builds Spaces dynamically must
-    not accumulate compiled models forever.  ``__dict__`` rather than attribute
-    lookup, so a subclass never reuses its parent's entries.
+    Compilation is explicit and unmemoized.  An implicit class-level cache
+    looked cheap and was not: it keyed on the declarations it happened to know
+    about and missed ``exports``, ``_implicit_exports`` and specialization
+    metadata, so an export-only edit kept answering from a stale model; it was
+    unsynchronized when two threads asked for one key at once; and it retained
+    one model per historical structure for the life of the class.  Reuse is
+    therefore something a caller *holds* -- one ``SpaceModel``, started as often
+    as it likes -- and not something the class does behind their back.  Hidden
+    caching can come back when Space-class immutability is a real contract with
+    a real invalidation rule.
     """
 
-    key = (namespace, problem_namespace, _structural_signature(space_type))
-    cache = space_type.__dict__.get("_space_compiled_models")
-    if not isinstance(cache, dict):
-        cache = {}
-        setattr(space_type, "_space_compiled_models", cache)
-    cached = cache.get(key)
-    if cached is not None:
-        return cast(SpaceModel, cached)
     compiled = _compile_space(
         space_type,
         namespace,
         problem_namespace=problem_namespace,
     )
-    model = SpaceModel(compiled.spec, compiled.catalog, compiled)
-    cache[key] = model
-    return model
-
-
-def compile_space_model(
-    space_type: type[Space],
-    namespace: str,
-    *,
-    problem_namespace: str | None = None,
-) -> SpaceModel:
-    """Compile a closed root Space into its spec and its branch catalog."""
-
-    return compiled_model_for(
-        space_type,
-        namespace,
-        problem_namespace=problem_namespace,
-    )
+    return SpaceModel(compiled.spec, compiled.catalog, compiled)
 
 
 def compile_space(
@@ -1423,6 +1370,5 @@ __all__ = [
     "resolve_value_source",
     "compile_space",
     "compile_space_model",
-    "compiled_model_for",
     "imported_decisions",
 ]

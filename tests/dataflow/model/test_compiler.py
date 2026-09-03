@@ -39,7 +39,7 @@ from finn.dataflow.model.declarations import (
     Problem,
     Readiness,
     Space,
-    Use,
+    Subspace,
     constraint,
     derived,
     divisors_of,
@@ -84,9 +84,9 @@ class ThreeSources(Space):
     def copied(*, extent: int) -> int:
         return extent
 
-    from_problem = Use(Tiled, extent=extent)
-    from_decision = Use(Tiled, extent=choice)
-    from_property = Use(Tiled, extent=copied)
+    from_problem = Subspace(Tiled, extent=extent)
+    from_decision = Subspace(Tiled, extent=choice)
+    from_property = Subspace(Tiled, extent=copied)
 
     @derived(
         int,
@@ -246,30 +246,30 @@ def test_nested_space_cannot_introduce_problem_fields() -> None:
         value = Problem(int)
 
     class Broken(Space):
-        nested = Use(ChildWithProblem, name="child")
+        nested = Subspace(ChildWithProblem, name="child")
 
     with pytest.raises(AuthoringError, match="inside a reusable child Space"):
         _compile_space(Broken, "broken", problem_namespace="problem.broken")
 
 
-def test_recursive_use_cycle_is_an_authoring_error() -> None:
+def test_recursive_subspace_cycle_is_an_authoring_error() -> None:
     class Left(Space):
         pass
 
     class Right(Space):
-        left = Use(Left)
+        left = Subspace(Left)
 
-    Left.right = Use(Right)
+    Left.right = Subspace(Right)
 
-    with pytest.raises(AuthoringError, match=r"Use cycle: Left -> Right -> Left"):
+    with pytest.raises(AuthoringError, match=r"Subspace cycle: Left -> Right -> Left"):
         _compile_space(Left, "left")
 
 
 def test_repeated_uses_are_rebased_without_mutating_templates() -> None:
     class Root(Space):
         extent = Problem(int)
-        left = Use(Tiled, extent=extent)
-        right = Use(Tiled, extent=extent)
+        left = Subspace(Tiled, extent=extent)
+        right = Subspace(Tiled, extent=extent)
 
     before = (Tiled.tile.stable_name, Tiled.tiles.stable_name)
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
@@ -288,7 +288,7 @@ def test_gated_use_uses_existing_engine_applicability() -> None:
     class Root(Space):
         extent = Problem(int)
         enabled = Problem(bool)
-        nested = Use(Tiled, extent=extent, when=enabled, name="child")
+        nested = Subspace(Tiled, extent=extent, when=enabled, name="child")
 
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
     engine = Engine()

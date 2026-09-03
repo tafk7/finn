@@ -26,7 +26,7 @@ from finn.dataflow.computation import (
     DOT_PRODUCT_COMPUTATION,
 )
 from finn.dataflow.design.region import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.declarations import Case, Decision, Input, divisors_of
+from finn.dataflow.model.declarations import Decision, Input, Subspace, divisors_of
 from finn.dataflow.model.design import (
     Boundary,
     Connection,
@@ -60,7 +60,7 @@ class DotProductDesign(DataflowDesign):
     simd = Decision(int, domain=divisors_of(matrix_width))
 
     replay = Kernels(
-        Case(
+        Subspace(
             ReplayBufferKernel,
             repetitions=repetitions,
             matrix_width=matrix_width,
@@ -73,7 +73,7 @@ class DotProductDesign(DataflowDesign):
     )
 
     compute = Kernels(
-        Case(
+        Subspace(
             DotpAxiKernel,
             repetitions=repetitions,
             matrix_width=matrix_width,

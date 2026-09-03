@@ -55,16 +55,17 @@ from finn.dataflow.model.compiler import (
 )
 from finn.dataflow.model.declarations import (
     AuthoringError,
-    Case,
     Decision,
-    OneOf,
     Problem,
     Space,
+    Subspace,
     ValueSource,
+    Variant,
     declared_members,
     semantics_for,
 )
 from finn.dataflow.model.kernel import Kernel, _KernelCompilation, configure_kernel
+from finn.dataflow.model.occurrence import is_attached_occurrence
 from finn.dataflow.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -157,14 +158,21 @@ def _atomic(what: str, value: str | None) -> None:
         raise AuthoringError(f"{what} must be one path segment; {value!r} contains a dot")
 
 
-class Kernels(OneOf):
+class Kernels(Variant):
     """One stable Design segment holding exactly one selected Kernel.
 
-    A thin ``OneOf`` specialization.  Selector creation, case gating, stable
-    namespaces, case inspection, and selected-output forwarding all stay in the
-    generic branch machinery; what a Kernel segment adds is the required
-    computation, the default case id, the implicit selected Region, and the
-    stable Design role and Network node identity.
+    A thin ``Variant`` specialization.  Selector creation, alternative gating,
+    stable namespaces, inspection, and selected-output forwarding all stay in
+    the generic machinery; what a Kernel segment adds is the required
+    computation, the implicit selected Region, and the stable Design role and
+    Network node identity.
+
+    Its alternatives are written positionally rather than as a mapping because a
+    Kernel already carries its own stable ``id``, and that id *is* the
+    alternative id.  Restating it as a mapping key would be the one duplication
+    a Variant's mapping exists to avoid, in the one place where the id is not
+    the author's to choose.  ``Subspace(..., name=...)`` still aliases it, which
+    is precisely what lets one Kernel class fill two candidate slots.
     """
 
     computation: ComputationContract
@@ -177,7 +185,7 @@ class Kernels(OneOf):
 
     def __init__(
         self,
-        *cases: Case,
+        *alternatives: Subspace[Kernel],
         computation: ComputationContract,
         role: str | None = None,
         node_id: str | None = None,
@@ -185,33 +193,48 @@ class Kernels(OneOf):
     ) -> None:
         if not isinstance(computation, ComputationContract):
             raise AuthoringError("a Kernel segment declares one ComputationContract")
+        if any(not isinstance(item, Subspace) for item in alternatives):
+            raise AuthoringError("a Kernel segment takes Subspace declarations")
         _atomic("a Kernel segment role", role)
         _atomic("a Kernel segment node id", node_id)
-        # The role *is* the namespace segment, so it travels as the branch's
-        # stable name rather than as a second parallel identity.
-        self._initialize(cases, ("region",), when, role)
         object.__setattr__(self, "computation", computation)
         object.__setattr__(self, "node_id", node_id)
+        named = tuple(
+            (self._alternative_id(item), cast("Subspace[Space]", item)) for item in alternatives
+        )
+        # The role *is* the namespace segment, so it travels as the Variant's
+        # stable name rather than as a second parallel identity.
+        self._initialize(named, ("region",), when, role)
 
-    def case_id(self, case: Case) -> str | None:
-        """A Kernel case is named by its Kernel id unless the author overrides it."""
+    def _alternative_id(self, subspace: Subspace[Kernel]) -> str:
+        """A Kernel candidate is named by its Kernel id unless the author aliases it."""
 
-        if case.stable_name is not None:
-            return case.stable_name
-        return cast(str, getattr(case.space_type, "id", "")) or None
+        if subspace.stable_name is not None:
+            _atomic("a Kernel candidate id", subspace.stable_name)
+            return subspace.stable_name
+        candidate = cast(str, getattr(subspace.space_type, "id", "")) or ""
+        if not candidate:
+            raise AuthoringError(
+                f"a Kernel segment candidate needs a stable id; "
+                f"{subspace.space_type.__name__} declares none, so pass name= on its Subspace"
+            )
+        _atomic("a Kernel candidate id", candidate)
+        return candidate
 
-    def check_case(self, owner_name: str, member_name: str, case: Case) -> None:
-        if not issubclass(case.space_type, Kernel):
+    def check_alternative(
+        self, owner_name: str, member_name: str, subspace: Subspace[Space]
+    ) -> None:
+        if not issubclass(subspace.space_type, Kernel):
             raise AuthoringError(
                 f"{owner_name}.{member_name} is a Kernel segment, but "
-                f"{case.space_type.__name__} is not a Kernel"
+                f"{subspace.space_type.__name__} is not a Kernel"
             )
-        offered = getattr(case.space_type, "computation", None)
+        offered = getattr(subspace.space_type, "computation", None)
         if offered != self.computation:
             raise AuthoringError(
                 f"{owner_name}.{member_name} requires computation "
                 f"{self.computation.id}:{self.computation.version}, but "
-                f"{case.space_type.__name__} declares "
+                f"{subspace.space_type.__name__} declares "
                 f"{getattr(offered, 'id', offered)!r}"
             )
 
@@ -221,9 +244,19 @@ class Kernels(OneOf):
 
         return self.__getattr__("region")
 
-    def __get__(self, instance: object | None, owner: type[object]) -> object:
+    def __get__(  # type: ignore[override]  # widened for configured Designs
+        self, instance: object | None, owner: type[object]
+    ) -> object:
         if instance is None:
             return self
+        # Two protocols meet here, which is why the override is deliberately
+        # wider than ``Variant.__get__``.  An attached occurrence gets the
+        # generic bound Variant view; a *configured* Design -- the retained
+        # pre-migration object, whose protocol U2 removes -- keeps returning its
+        # already-selected Kernel.  Asked in that order and explicitly, so the
+        # MRO never decides which one an instance is speaking.
+        if isinstance(instance, Space) and is_attached_occurrence(instance):
+            return super().__get__(instance, owner)
         resolver = getattr(instance, "_design_kernel", None)
         if resolver is None:
             raise AttributeError("a selected Kernel exists only on a configured Design")

@@ -22,13 +22,12 @@ from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.occurrence import is_attached_occurrence
 from finn.dataflow.model.declarations import (
     AuthoringError,
-    Case,
     Decision,
     Input,
-    OneOf,
+    Variant,
     Problem,
     Space,
-    Use,
+    Subspace,
     derived,
     divisors_of,
 )
@@ -177,8 +176,8 @@ class Chain(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-    consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+    produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+    consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
 
     stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
 
@@ -306,8 +305,8 @@ def test_an_explicit_position_map_is_used_verbatim() -> None:
         def reversed_map(*, extent: int) -> PositionMap:
             return PositionMap(((index,), (extent - 1 - index,)) for index in range(extent))
 
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(
             produce.output("stream"),
             Sink(consume.input("stream"), position_map=reversed_map),
@@ -330,12 +329,12 @@ def test_a_fan_out_edge_carries_one_contract_per_sink() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         left = Kernels(
-            Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="left"
+            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="left"
         )
         right = Kernels(
-            Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="right"
+            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="right"
         )
         stream = Connection(
             produce.output("stream"),
@@ -369,11 +368,11 @@ def test_complementary_conditions_swap_an_edge_for_a_boundary() -> None:
             return not supplied
 
         produce = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes),
+            Subspace(ProducerKernel, extent=extent, lanes=lanes),
             computation=PRODUCE,
             when=supplied,
         )
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")), when=supplied)
         source = Boundary(produce.input("source"), when=supplied)
         supplied_stream = Boundary(consume.input("stream"), when=external)
@@ -409,8 +408,8 @@ def test_an_unknown_port_is_refused_by_canonical_validation() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("absent"), Sink(consume.input("stream")))
         source = Boundary(produce.input("source"))
         result = Boundary(consume.output("result"))
@@ -424,8 +423,8 @@ def test_a_reversed_direction_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("source"), Sink(consume.input("stream")))
         result = Boundary(consume.output("result"))
         produced = Boundary(produce.output("stream"))
@@ -439,8 +438,8 @@ def test_an_unaccounted_endpoint_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         result = Boundary(consume.output("result"))
 
@@ -454,12 +453,12 @@ def test_implicit_fan_in_is_refused() -> None:
         extent = Input(int)
         lanes = Input(int)
         left = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE, role="left"
+            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE, role="left"
         )
         right = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE, role="right"
+            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE, role="right"
         )
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         from_left = Connection(left.output("stream"), Sink(consume.input("stream")))
         from_right = Connection(right.output("stream"), Sink(consume.input("stream")))
         left_source = Boundary(left.input("source"))
@@ -475,8 +474,8 @@ def test_an_endpoint_used_by_both_an_edge_and_a_boundary_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         also_external = Boundary(consume.input("stream"))
         source = Boundary(produce.input("source"))
@@ -491,8 +490,8 @@ def test_a_cyclic_topology_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         forward = Connection(produce.output("stream"), Sink(consume.input("stream")))
         backward = Connection(consume.output("result"), Sink(produce.input("source")))
 
@@ -507,11 +506,11 @@ def test_active_topology_over_an_inactive_segment_is_refused() -> None:
         lanes = Input(int)
         present = Decision(bool, values=(False, True))
         produce = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes),
+            Subspace(ProducerKernel, extent=extent, lanes=lanes),
             computation=PRODUCE,
             when=present,
         )
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         source = Boundary(produce.input("source"), when=present)
         result = Boundary(consume.output("result"))
@@ -529,7 +528,7 @@ def test_a_point_with_no_active_segment_is_refused() -> None:
         lanes = Input(int)
         present = Decision(bool, values=(False, True))
         produce = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes),
+            Subspace(ProducerKernel, extent=extent, lanes=lanes),
             computation=PRODUCE,
             when=present,
         )
@@ -548,8 +547,8 @@ def test_duplicate_edge_and_boundary_ids_are_authoring_errors() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         other = Connection(produce.output("stream"), Sink(consume.input("stream")), name="stream")
 
@@ -561,7 +560,7 @@ def test_duplicate_edge_and_boundary_ids_are_authoring_errors() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         source = Boundary(produce.input("source"))
         again = Boundary(produce.output("stream"), name="source")
 
@@ -575,7 +574,7 @@ def test_endpoint_direction_is_checked_where_it_is_declared() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
 
     with pytest.raises(AuthoringError, match="Connection source must name an output port"):
         Connection(Segment.produce.input("source"), Sink(Segment.produce.input("source")))
@@ -591,14 +590,14 @@ def test_an_endpoint_from_another_design_is_rejected() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
 
     class Borrower(DataflowDesign):
         id = "borrower"
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(Other.produce.output("stream"), Sink(consume.input("stream")))
 
     with pytest.raises(AuthoringError, match="Kernel segment outside the class"):
@@ -611,8 +610,8 @@ def test_a_repeated_sink_on_one_edge_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(
             produce.output("stream"),
             Sink(consume.input("stream")),
@@ -635,8 +634,8 @@ def test_a_non_bijective_position_map_is_refused() -> None:
         def collapsed(*, extent: int) -> PositionMap:
             return PositionMap(((index,), (0,)) for index in range(extent))
 
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(
             produce.output("stream"), Sink(consume.input("stream"), position_map=collapsed)
         )
@@ -676,8 +675,10 @@ def test_a_beat_count_mismatch_across_an_edge_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(MisfoldedKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(
+            Subspace(MisfoldedKernel, extent=extent, lanes=lanes), computation=CONSUME
+        )
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         source = Boundary(produce.input("source"))
         result = Boundary(consume.output("result"))
@@ -693,12 +694,12 @@ def test_a_multiply_authored_fan_out_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         left = Kernels(
-            Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="left"
+            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="left"
         )
         right = Kernels(
-            Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="right"
+            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="right"
         )
         to_left = Connection(produce.output("stream"), Sink(left.input("stream")))
         to_right = Connection(produce.output("stream"), Sink(right.input("stream")))
@@ -716,8 +717,8 @@ def test_a_both_active_conditional_edge_and_boundary_is_refused() -> None:
         extent = Input(int)
         lanes = Input(int)
         supplied = Decision(bool, values=(False, True))
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")), when=supplied)
         # Deliberately the *same* condition rather than its complement.
         external = Boundary(consume.input("stream"), when=supplied)
@@ -751,10 +752,10 @@ class Selectable(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+    produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
     consume = Kernels(
-        Case(ConsumerKernel, extent=extent, lanes=lanes),
-        Case(PipelinedConsumerKernel, extent=extent, lanes=lanes),
+        Subspace(ConsumerKernel, extent=extent, lanes=lanes),
+        Subspace(PipelinedConsumerKernel, extent=extent, lanes=lanes),
         computation=CONSUME,
     )
 
@@ -861,7 +862,7 @@ def test_an_incomplete_design_decision_refuses_configuration() -> None:
         extent = Input(int)
         lanes = Input(int)
         spare = Decision(int, values=(1, 2))
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         source = Boundary(produce.input("source"))
         stream = Boundary(produce.output("stream"))
 
@@ -905,11 +906,11 @@ def test_an_inactive_segment_contributes_no_configured_kernel() -> None:
             return not present
 
         produce = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes),
+            Subspace(ProducerKernel, extent=extent, lanes=lanes),
             computation=PRODUCE,
             when=present,
         )
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")), when=present)
         source = Boundary(produce.input("source"), when=present)
         supplied = Boundary(consume.input("stream"), when=external)
@@ -946,8 +947,8 @@ def test_an_infeasible_point_refuses_configuration() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         result = Boundary(consume.output("result"))
 
@@ -997,11 +998,13 @@ class NestedOwnership(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    fold = Use(Folding, extent=extent)
+    fold = Subspace(Folding, extent=extent)
 
-    produce = Kernels(Case(ProducerKernel, extent=extent, lanes=fold.lanes), computation=PRODUCE)
+    produce = Kernels(
+        Subspace(ProducerKernel, extent=extent, lanes=fold.lanes), computation=PRODUCE
+    )
     consume = Kernels(
-        Case(PipelinedConsumerKernel, extent=extent, lanes=fold.lanes), computation=CONSUME
+        Subspace(PipelinedConsumerKernel, extent=extent, lanes=fold.lanes), computation=CONSUME
     )
 
     stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
@@ -1092,11 +1095,11 @@ def test_an_inactive_connection_does_not_demand_its_position_map() -> None:
             return PositionMap(((index,), (index,)) for index in range(extent))
 
         produce = Kernels(
-            Case(ProducerKernel, extent=extent, lanes=lanes),
+            Subspace(ProducerKernel, extent=extent, lanes=lanes),
             computation=PRODUCE,
             when=supplied,
         )
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(
             produce.output("stream"),
             Sink(consume.input("stream"), position_map=chosen_map),
@@ -1133,8 +1136,8 @@ def test_a_declared_position_map_is_forwarded_through_its_own_property() -> None
         def identity_map(*, extent: int) -> PositionMap:
             return PositionMap(((index,), (index,)) for index in range(extent))
 
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(
             produce.output("stream"), Sink(consume.input("stream"), position_map=identity_map)
         )
@@ -1175,7 +1178,7 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         computation = CONSUME
         extent = Input(int)
         lanes = Input(int)
-        choice = OneOf(Case(Chooser, name="only", extent=extent), outputs=("depth",))
+        choice = Variant({"only": Subspace(Chooser, extent=extent)}, outputs=("depth",))
         region = Region(
             family="test.consume",
             version="1",
@@ -1194,9 +1197,9 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        policy = OneOf(Case(Always, name="always", extent=extent), outputs=("flag",))
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(Case(Parameterized, extent=extent, lanes=lanes), computation=CONSUME)
+        policy = Variant({"always": Subspace(Always, extent=extent)}, outputs=("flag",))
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        consume = Kernels(Subspace(Parameterized, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
         source = Boundary(produce.input("source"))
         result = Boundary(consume.output("result"), when=policy.flag)

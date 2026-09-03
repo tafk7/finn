@@ -38,10 +38,10 @@ E = TypeVar("E", bound=Enum)
 if TYPE_CHECKING:
     from finn.dataflow._engine import Answer, ConstraintAssessment, ReadinessAssessment
     from finn.dataflow.model.occurrence import (
-        BranchView,
         OccurrenceDiagnostic,
         ProblemSource,
         ProjectionAssessment,
+        VariantView,
     )
 
 
@@ -52,8 +52,13 @@ class AuthoringError(ValueError):
 #: Class-member names an authored Space may not use for a declaration, because
 #: each one is an occurrence lifecycle operation every authored class inherits.
 #: The check is on the *Python member name*, never on a declaration's stable
-#: compiled name: ``choice = OneOf(..., name="branch")`` keeps the engine path
-#: ``<ns>.branch`` without shadowing :meth:`Space.branch`.
+#: compiled name: ``choice = Variant(..., name="branch")`` keeps the engine path
+#: ``<ns>.branch`` while leaving the Python member free.
+#:
+#: Eleven names, not thirteen: navigation is descriptor-based, so there is no
+#: ``Space.child`` or ``Space.branch`` for a declaration to shadow.  Any future
+#: public lifecycle method spends one more member name and needs an explicit
+#: authoring-compatibility review before it is added here.
 RESERVED_LIFECYCLE_NAMES: frozenset[str] = frozenset(
     {
         "start",
@@ -62,8 +67,6 @@ RESERVED_LIFECYCLE_NAMES: frozenset[str] = frozenset(
         "assess",
         "project",
         "diagnostics",
-        "branch",
-        "child",
         "root",
         "problem_snapshot",
         "problem_fingerprint",
@@ -72,12 +75,32 @@ RESERVED_LIFECYCLE_NAMES: frozenset[str] = frozenset(
     }
 )
 
+#: Names that are not public API but are how the layers below talk to an
+#: authored class.  A declaration bound to one of these does not merely shadow a
+#: convenience: it replaces the construction hook, the specialization hook, the
+#: attached-state slot, the configured-value protocol, or the export metadata,
+#: and the resulting failure surfaces far from the class body that caused it.
+#:
+#: This prohibits a *declaration* under the name.  Overriding the method or the
+#: metadata itself -- which is what ``_finalize_compilation``, ``_new_occurrence``
+#: and ``exports`` exist for -- stays entirely legal.
+RESERVED_PROTOCOL_NAMES: frozenset[str] = frozenset(
+    {
+        "_new_occurrence",
+        "_finalize_compilation",
+        "_occurrence_state",
+        "_space_value",
+        "_implicit_exports",
+        "exports",
+    }
+)
+
 
 def check_reserved_names(
     space_type: type[object],
     members: Iterable[tuple[str, object]],
 ) -> None:
-    """Refuse a declaration that shadows an occurrence lifecycle operation.
+    """Refuse a declaration that shadows a lifecycle or private protocol name.
 
     Hiding the lifecycle behind a ``.occurrence`` accessor would recreate the
     very wrapper the class-centered design removes, so the names are reserved
@@ -92,6 +115,14 @@ def check_reserved_names(
                 f"{space_type.__name__}.{member_name} declares a "
                 f"{type(declaration).__name__} under a reserved name; "
                 f"{member_name!r} is the occurrence operation Space.{member_name}. "
+                f"Rename the class member and pass name={member_name!r} to keep the "
+                "compiled path unchanged"
+            )
+        if member_name in RESERVED_PROTOCOL_NAMES:
+            raise AuthoringError(
+                f"{space_type.__name__}.{member_name} declares a "
+                f"{type(declaration).__name__} under a reserved name; "
+                f"{member_name!r} is a private Space protocol member. "
                 f"Rename the class member and pass name={member_name!r} to keep the "
                 "compiled path unchanged"
             )
@@ -118,6 +149,49 @@ class CanonicalValueCodec(Generic[T_contra]):
     identity: str
     version: int
     encode: Callable[[T_contra], CanonicalValue]
+
+    def __post_init__(self) -> None:
+        # Checked where the codec is written, not where a fingerprint is first
+        # persisted.  An empty identity or a bumped-but-not-integer version is a
+        # silent collision between two encodings, and the place it would
+        # otherwise surface is a stale-state comparison months later.
+        if not isinstance(self.identity, str) or not self.identity:
+            raise AuthoringError("a CanonicalValueCodec identity is a non-empty stable string")
+        if type(self.version) is not int or self.version < 1:
+            raise AuthoringError(
+                f"CanonicalValueCodec {self.identity!r} needs a positive integer version"
+            )
+        if not callable(self.encode):
+            raise AuthoringError(f"CanonicalValueCodec {self.identity!r} needs a callable encode")
+
+
+def check_canonical(value: object, what: str) -> CanonicalValue:
+    """Validate and normalize one codec's output, or say which codec is wrong.
+
+    A codec is contributor code, so its result is checked rather than trusted.
+    Letting an unencodable object through would surface as a bare ``TypeError``
+    from ``json.dumps`` naming neither the Problem nor the codec, and a
+    non-finite float would serialize as ``NaN`` -- valid for Python's encoder,
+    not valid JSON, and never equal to itself on the way back.
+    """
+
+    if value is None or type(value) in (bool, int, str):
+        return cast(CanonicalValue, value)
+    if type(value) is float:
+        if not isfinite(value):
+            raise AuthoringError(f"{what} encoded a non-finite float")
+        return cast(CanonicalValue, value)
+    if isinstance(value, (tuple, list)):
+        return [check_canonical(item, what) for item in value]
+    if isinstance(value, Mapping):
+        for key in value:
+            if not isinstance(key, str):
+                raise AuthoringError(f"{what} encoded a mapping with a non-string key")
+        return {key: check_canonical(item, what) for key, item in value.items()}
+    raise AuthoringError(
+        f"{what} encoded a {_type_token(type(value))}, which is not a canonical value; "
+        "a codec produces None, bool, int, str, finite float, list, or str-keyed dict"
+    )
 
 
 def _type_token(kind: type[object]) -> str:
@@ -383,12 +457,19 @@ class Space:
     def assess(self, declaration: Readiness) -> ReadinessAssessment: ...
 
     @overload
-    def assess(self, declaration: ConstraintGroup | Constraint) -> ConstraintAssessment: ...
+    def assess(self, declaration: ConstraintGroup) -> ConstraintAssessment: ...
 
     def assess(
-        self, declaration: Readiness | ConstraintGroup | Constraint
+        self, declaration: Readiness | ConstraintGroup
     ) -> ReadinessAssessment | ConstraintAssessment:
-        """Assess one readiness or constraint declaration in this scope."""
+        """Assess one Readiness profile or one named ConstraintGroup in this scope.
+
+        A bare ``Constraint`` is not accepted.  An individual constraint is an
+        engine and compiler unit; the *named group* is the authoring unit that
+        can be shared between projections, pointed at in a diagnostic, and
+        renamed without every call site following.  Admitting both would widen
+        the public surface to say the same thing twice.
+        """
 
         api = _occurrence_api()
         return cast(
@@ -415,29 +496,6 @@ class Space:
             "tuple[OccurrenceDiagnostic, ...]",
             api.occurrence_diagnostics(self, subject, projection=projection),
         )
-
-    def branch(self, declaration: OneOf) -> BranchView:
-        """Return a capability-limited view of one branch in this scope."""
-
-        api = _occurrence_api()
-        return cast("BranchView", api.occurrence_branch(self, declaration))
-
-    @overload
-    def child(self, declaration: Use[S]) -> S: ...
-
-    @overload
-    def child(self, declaration: Case) -> Space: ...
-
-    def child(self, declaration: Use[S] | Case) -> Space:
-        """Return one exact direct child occurrence named by a use site.
-
-        A Python class is not accepted.  One class may be placed at several
-        roles, and inferring "the only one" is what breaks the day a second
-        placement appears.
-        """
-
-        api = _occurrence_api()
-        return cast("Space", api.occurrence_child(self, declaration))
 
     @property
     def root(self) -> Space:
@@ -832,26 +890,41 @@ class Projection(Generic[T_co]):
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
 class ChildValue(ValueSource[T_co]):
-    """One exported value of a recursively used child Space."""
+    """One exported value of an embedded child Space."""
 
-    use: Use[Space]
+    subspace: Subspace[Space]
     member_name: str
 
     def __init__(
         self,
         value_semantics: ValueSemantics[object],
-        use: Use[Space],
+        subspace: Subspace[Space],
         member_name: str,
     ) -> None:
         object.__setattr__(self, "value_semantics", value_semantics)
         object.__setattr__(self, "stable_name", None)
-        object.__setattr__(self, "use", use)
+        object.__setattr__(self, "subspace", subspace)
         object.__setattr__(self, "member_name", member_name)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class Use(Generic[S]):
-    """Compile-time placement of one reusable child Space."""
+class Subspace(Generic[S]):
+    """One embedded child Space, and the descriptor that reaches its occurrence.
+
+    A ``Subspace`` is the *only* nested-space declaration.  Used directly as a
+    class member it denotes one fixed child occurrence; used as a value inside a
+    :class:`Variant` it denotes one alternative, and the mapping key -- not a
+    ``name=`` -- is that alternative's stable id.  There is no second
+    ``Case``-shaped spelling for the second position, because the exclusivity,
+    the selector and the selected outputs all belong to the container.
+
+    Class access returns the declaration; instance access on an attached
+    occurrence returns the exact bound child, so navigation is an ordinary
+    attribute and never a class-keyed lookup::
+
+        pipeline.fixed          # -> FixedImplementation occurrence
+        Pipeline.fixed          # -> this Subspace declaration
+    """
 
     space_type: type[S]
     bindings: tuple[tuple[str, ValueSource[object]], ...]
@@ -867,8 +940,10 @@ class Use(Generic[S]):
         name: str | None = None,
         **bindings: ValueSource[object],
     ) -> None:
-        if not issubclass(space_type, Space):
-            raise AuthoringError("Use requires a Space subclass")
+        if not isinstance(space_type, type) or not issubclass(space_type, Space):
+            raise AuthoringError("Subspace requires a Space subclass")
+        if name is not None and not name:
+            raise AuthoringError("a Subspace name must be non-empty")
         object.__setattr__(self, "space_type", space_type)
         object.__setattr__(self, "bindings", tuple(bindings.items()))
         object.__setattr__(self, "when", when)
@@ -882,76 +957,74 @@ class Use(Generic[S]):
             raise AttributeError(
                 f"{self.space_type.__name__} does not export {member_name!r}"
             ) from None
-        return ChildValue(declaration.value_semantics, cast("Use[Space]", self), member_name)
+        return ChildValue(declaration.value_semantics, cast("Subspace[Space]", self), member_name)
 
+    @overload
+    def __get__(self, instance: None, owner: type[object]) -> Self: ...
 
-@dataclass(frozen=True, slots=True, eq=False, init=False)
-class Case:
-    """One named alternative child Space inside an exclusive branch.
+    @overload
+    def __get__(self, instance: Space, owner: type[object]) -> S: ...
 
-    A ``Case`` is a declaration record, not a runtime level.  It owns the exact
-    Input bindings of its own child Space, so alternatives with unrelated Input
-    vocabularies stay legible without a parallel case-to-binding map.
-
-    Deliberately not generic in its Space type: a branch's whole point is to
-    hold unrelated classes side by side, and an invariant ``Case[S]`` makes
-    ``OneOf(Case(A, ...), Case(B, ...))`` uninferrable at every call site.  A
-    specialization such as ``Kernels`` states its own requirement as a compile
-    check with a message, which is what an author needs anyway.
-    """
-
-    space_type: type[Space]
-    bindings: tuple[tuple[str, ValueSource[object]], ...]
-    stable_name: str | None
-
-    def __init__(
-        self,
-        space_type: type[Space],
-        /,
-        *,
-        name: str | None = None,
-        **bindings: ValueSource[object],
-    ) -> None:
-        if not isinstance(space_type, type) or not issubclass(space_type, Space):
-            raise AuthoringError("Case requires a Space subclass")
-        if name is not None and not name:
-            raise AuthoringError("a Case name must be non-empty")
-        object.__setattr__(self, "space_type", space_type)
-        object.__setattr__(self, "bindings", tuple(bindings.items()))
-        object.__setattr__(self, "stable_name", name)
+    def __get__(self, instance: Space | None, owner: type[object]) -> Self | S:
+        if instance is None:
+            return self
+        api = _occurrence_api()
+        if not api.is_attached_occurrence(instance):
+            raise AttributeError(
+                "a child occurrence exists only on an attached Space occurrence; "
+                f"start one with {type(instance).__name__}.start(...)"
+            )
+        return cast("S", api.occurrence_child(instance, self))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
 class BranchOutput(ValueSource[T_co]):
-    """One selected output of an exclusive branch, forwarded from the live case."""
+    """One selected output of a Variant, forwarded from the live alternative."""
 
-    branch: OneOf
+    variant: Variant
     output_name: str
 
     def __init__(
         self,
         value_semantics: ValueSemantics[object],
-        branch: OneOf,
+        variant: Variant,
         output_name: str,
     ) -> None:
         object.__setattr__(self, "value_semantics", value_semantics)
         object.__setattr__(self, "stable_name", None)
-        object.__setattr__(self, "branch", branch)
+        object.__setattr__(self, "variant", variant)
         object.__setattr__(self, "output_name", output_name)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class OneOf:
-    """Compile-time placement of exactly one of several child Spaces.
+class Variant:
+    """One structural choice: exactly one of several named alternative Subspaces.
 
-    ``OneOf`` is declaration, never policy.  It says which cases exist, lowers
-    them beneath stable disjoint namespaces, and -- when there is more than one
-    -- adds one ordinary selector ``Decision``.  It stores no search callback:
-    an external specialization algorithm discovers the selector through the
-    compiled branch catalog and commits it like any other decision.
+    ``Variant`` is declaration, never policy.  It says which alternatives exist,
+    lowers them beneath stable disjoint namespaces, and -- when there is more
+    than one -- adds one ordinary selector ``Decision``.  It stores no search
+    callback: an external specialization algorithm discovers the selector
+    through the compiled branch catalog and commits it like any other decision.
+
+    The name states what the parent owns.  A parent does not own "a one-of"; it
+    owns a structural variation point, selected from alternatives it names::
+
+        implementation = Variant(
+            {
+                "fast": Subspace(FastImplementation, size=size),
+                "small": Subspace(SmallImplementation, size=size),
+            },
+            outputs=("result",),
+        )
+
+    The mapping key is the alternative's stable id, so nothing repeats it.  A
+    per-alternative ``when=`` is refused: the Variant owns the outer condition
+    and the selection, and candidate-specific applicability is a separate
+    question that has not yet been forced.  Instance access returns the bound
+    :class:`VariantView`, never the declaration.
     """
 
-    cases: tuple[Case, ...]
+    alternatives: tuple[tuple[str, Subspace[Space]], ...]
     outputs: tuple[str, ...]
     when: ValueSource[bool] | None
     stable_name: str | None
@@ -961,62 +1034,100 @@ class OneOf:
 
     def __init__(
         self,
-        *cases: Case,
+        alternatives: Mapping[str, Subspace[Space]],
+        *,
         outputs: Sequence[str] = (),
         when: ValueSource[bool] | None = None,
         name: str | None = None,
     ) -> None:
-        self._initialize(cases, outputs, when, name)
+        if not isinstance(alternatives, Mapping):
+            raise AuthoringError("a Variant takes an ordered mapping of alternative id to Subspace")
+        ordered: list[tuple[str, Subspace[Space]]] = []
+        for alternative_id, subspace in alternatives.items():
+            if not isinstance(alternative_id, str) or not alternative_id:
+                raise AuthoringError("a Variant alternative id is a non-empty string")
+            if not isinstance(subspace, Subspace):
+                raise AuthoringError(
+                    f"Variant alternative {alternative_id!r} is a "
+                    f"{type(subspace).__name__}, not a Subspace"
+                )
+            if subspace.stable_name is not None:
+                raise AuthoringError(
+                    f"Variant alternative {alternative_id!r} also carries name="
+                    f"{subspace.stable_name!r}; the mapping key is the alternative id"
+                )
+            ordered.append((alternative_id, subspace))
+        self._initialize(tuple(ordered), outputs, when, name)
 
     def _initialize(
         self,
-        cases: Sequence[Case],
+        alternatives: Sequence[tuple[str, Subspace[Space]]],
         outputs: Sequence[str],
         when: ValueSource[bool] | None,
         name: str | None,
     ) -> None:
-        if not cases:
-            raise AuthoringError("a branch needs at least one Case")
-        if any(not isinstance(case, Case) for case in cases):
-            raise AuthoringError("a branch takes Case declarations as positional arguments")
+        if not alternatives:
+            raise AuthoringError("a Variant needs at least one alternative Subspace")
+        for alternative_id, subspace in alternatives:
+            if subspace.when is not None:
+                raise AuthoringError(
+                    f"Variant alternative {alternative_id!r} declares when=; a Variant owns "
+                    "the outer condition and the selection between its alternatives"
+                )
         ordered = tuple(outputs)
         if len(set(ordered)) != len(ordered):
-            raise AuthoringError("a branch names one selected output twice")
-        object.__setattr__(self, "cases", tuple(cases))
+            raise AuthoringError("a Variant names one selected output twice")
+        object.__setattr__(self, "alternatives", tuple(alternatives))
         object.__setattr__(self, "outputs", ordered)
         object.__setattr__(self, "when", when)
         object.__setattr__(self, "stable_name", name)
 
-    def case_id(self, case: Case) -> str | None:
-        """The stable case id, or ``None`` when the author must supply one."""
+    def check_alternative(
+        self, owner_name: str, member_name: str, subspace: Subspace[Space]
+    ) -> None:
+        """A specialization's own admission rule; a generic Variant has none."""
 
-        return case.stable_name
-
-    def check_case(self, owner_name: str, member_name: str, case: Case) -> None:
-        """A specialization's own admission rule for one case; generic branches have none."""
-
-        del owner_name, member_name, case
+        del owner_name, member_name, subspace
 
     def __getattr__(self, member_name: str) -> BranchOutput[object]:
         if member_name.startswith("_"):
             raise AttributeError(member_name)
         if member_name not in self.outputs:
-            raise AttributeError(f"this branch does not select an output named {member_name!r}")
+            raise AttributeError(f"this Variant does not select an output named {member_name!r}")
         semantics = self._output_semantics(member_name)
         return BranchOutput(semantics, self, member_name)
 
+    @overload
+    def __get__(self, instance: None, owner: type[object]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Space, owner: type[object]) -> VariantView: ...
+
+    def __get__(self, instance: Space | None, owner: type[object]) -> Self | VariantView:
+        if instance is None:
+            return self
+        api = _occurrence_api()
+        if not api.is_attached_occurrence(instance):
+            raise AttributeError(
+                "a Variant view exists only on an attached Space occurrence; "
+                f"start one with {type(instance).__name__}.start(...)"
+            )
+        return cast("VariantView", api.occurrence_variant(instance, self))
+
     def _output_semantics(self, output_name: str) -> ValueSemantics[object]:
         first: ValueSemantics[object] | None = None
-        for case in self.cases:
-            exported = exported_members(case.space_type)
+        for _alternative_id, subspace in self.alternatives:
+            exported = exported_members(subspace.space_type)
             declaration = exported.get(output_name)
             if declaration is None:
-                raise AuthoringError(f"{case.space_type.__name__} does not export {output_name!r}")
+                raise AuthoringError(
+                    f"{subspace.space_type.__name__} does not export {output_name!r}"
+                )
             if first is None:
                 first = declaration.value_semantics
             elif not first.is_compatible_with(declaration.value_semantics):
                 raise AuthoringError(
-                    f"branch output {output_name!r} changes value semantics from "
+                    f"Variant output {output_name!r} changes value semantics from "
                     f"{first.name} to {declaration.value_semantics.name}"
                 )
         assert first is not None
@@ -1032,8 +1143,8 @@ Declaration = Union[
     ConstraintGroup,
     Readiness,
     Projection[object],
-    Use[Space],
-    OneOf,
+    Subspace[Space],
+    Variant,
 ]
 
 #: Every class-body value the declarative compiler recognizes as a declaration.
@@ -1046,8 +1157,8 @@ DECLARATION_TYPES: tuple[type, ...] = (
     ConstraintGroup,
     Readiness,
     Projection,
-    Use,
-    OneOf,
+    Subspace,
+    Variant,
 )
 
 
@@ -1120,11 +1231,11 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
 __all__ = [
     "DECLARATION_TYPES",
     "RESERVED_LIFECYCLE_NAMES",
+    "RESERVED_PROTOCOL_NAMES",
     "AuthoringError",
     "BranchOutput",
     "CanonicalValue",
     "CanonicalValueCodec",
-    "Case",
     "ChildValue",
     "Constraint",
     "ConstraintGroup",
@@ -1133,7 +1244,6 @@ __all__ = [
     "Domain",
     "Input",
     "OccurrenceContext",
-    "OneOf",
     "PendingFinding",
     "Problem",
     "Projection",
@@ -1141,9 +1251,11 @@ __all__ = [
     "Rejected",
     "STRUCTURAL_CODEC",
     "Space",
+    "Subspace",
     "Unresolvable",
-    "Use",
     "ValueSource",
+    "Variant",
+    "check_canonical",
     "check_reserved_names",
     "constraint",
     "declared_members",

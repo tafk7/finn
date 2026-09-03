@@ -29,13 +29,13 @@ from finn.dataflow._engine import (
 from finn.dataflow.model.branching import BranchCatalog, BranchInfo, CaseInfo
 from finn.dataflow.model.compiler import compile_space_model
 from finn.dataflow.model.declarations import (
-    Case,
     Decision,
     Input,
-    OneOf,
     Problem,
     Readiness,
     Space,
+    Subspace,
+    Variant,
     constraint,
     derived,
     reject,
@@ -82,9 +82,8 @@ class Costly(Space):
 
 class Inner(Space):
     size = Input(int)
-    nested = OneOf(
-        Case(Cheap, name="cheap", size=size),
-        Case(Costly, name="costly", size=size),
+    nested = Variant(
+        {"cheap": Subspace(Cheap, size=size), "costly": Subspace(Costly, size=size)},
         outputs=("result", "cost"),
     )
     result = nested.result
@@ -94,16 +93,15 @@ class Inner(Space):
 
 class Root(Space):
     size = Problem(int)
-    top = OneOf(
-        Case(Inner, name="inner", size=size),
-        Case(Costly, name="costly", size=size),
+    top = Variant(
+        {"inner": Subspace(Inner, size=size), "costly": Subspace(Costly, size=size)},
         outputs=("result", "cost"),
     )
 
 
 class Only(Space):
     size = Problem(int)
-    solo = OneOf(Case(Costly, name="costly", size=size), outputs=("result",))
+    solo = Variant({"costly": Subspace(Costly, size=size)}, outputs=("result",))
 
 
 def _model(
@@ -315,13 +313,13 @@ def test_an_ambiguous_case_property_name_is_refused() -> None:
 
     class TwoPrices(Space):
         size = Input(int)
-        left = OneOf(Case(Priced, name="only", size=size), outputs=("cost",))
-        right = OneOf(Case(Priced, name="only", size=size), outputs=("cost",))
+        left = Variant({"only": Subspace(Priced, size=size)}, outputs=("cost",))
+        right = Variant({"only": Subspace(Priced, size=size)}, outputs=("cost",))
         exports = ()
 
     class Root_(Space):
         size = Problem(int)
-        choice = OneOf(Case(TwoPrices, name="both", size=size), name="branch")
+        choice = Variant({"both": Subspace(TwoPrices, size=size)}, name="branch")
 
     catalog = compile_space_model(Root_, "root", problem_namespace="problem.root").branches
     case = catalog.branch("root.branch").case("both")

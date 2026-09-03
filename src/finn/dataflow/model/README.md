@@ -7,8 +7,8 @@ ordinary Python classes. It does not wrap or preserve the existing
 Three layers share one frontend and lower to one flat spec:
 
 ```text
-Space                  ordinary declarations, direct child composition,
-                       and OneOf(Case(...), ...) exclusive branching
+Space                  ordinary declarations, direct Subspace composition,
+                       and Variant structural choice
    |
 Kernel(Space)          semantic Inputs, physical-only Decisions,
                        one Region(family, version, construct, **deps)
@@ -80,7 +80,7 @@ class Tile(Space):
 
 
 root = Pair.start({Pair.extent: 16})
-left = root.child(Pair.left)
+left = root.left
 left = left.assign(Tile.lanes, 4)
 
 assert type(root) is Pair
@@ -115,23 +115,36 @@ metadata and are not constructor arguments, because in U1 neither has a second
 legal value. Every `Projection` declares a `Readiness`; a projection with no
 further obligation declares an empty profile rather than omitting the concept.
 
-Navigation keys are exact declarations. A Python class names a family, not one
-of its occurrences:
+Navigation is descriptor-based and therefore exact. A Python class names a
+family, not one of its occurrences, so there is no class-keyed navigation verb
+at all:
 
 ```python
-root.child(Pair.left).assign(Tile.lanes, 2)  # exact use site
-root.child(Tile)  # refused: a class is not an occurrence
+root.left.assign(Tile.lanes, 2)   # the exact member that places the child
+variant = root.implementation     # the bound VariantView
+variant.alternatives              # ("fast", "small")
+variant.selected()                # Answer[str]
+variant = variant.select("fast")  # ordinary selector assignment
+fast = variant.alternative("fast")
 ```
 
-`branch(OneOfDeclaration)` exposes case ids, selection, and exact case views
-without exposing its generated selector path. `answer`, `assign`, `assess`,
-`project`, `branch`, and `child` accept declarations, not path strings.
+A `VariantView` exposes alternative ids, selection, and exact alternative views
+without exposing its generated selector path. `answer`, `assign`, `assess` and
+`project` accept declarations, never path strings.
 
-Thirteen member names are reserved -- `start assign answer assess project
-diagnostics branch child root problem_snapshot problem_fingerprint is_stale
-reconstruct` -- because each is a lifecycle operation every authored class
-inherits. The check is on the Python member name only, so
-`choice = OneOf(..., name="branch")` keeps the compiled path `<ns>.branch`.
+`assess` takes a `Readiness` profile or a named `ConstraintGroup`. A bare
+`Constraint` is an engine and compiler unit; only the named group can be shared
+between projections, renamed independently of its call sites, and pointed at in
+a diagnostic.
+
+Eleven member names are reserved -- `start assign answer assess project
+diagnostics root problem_snapshot problem_fingerprint is_stale reconstruct` --
+because each is a lifecycle operation every authored class inherits. Six private
+protocol names are reserved the same way -- `_new_occurrence`
+`_finalize_compilation` `_occurrence_state` `_space_value` `_implicit_exports`
+`exports` -- against a *declaration* bound to them, never against overriding the
+method or metadata itself. Both checks are on the Python member name only, so
+`choice = Variant(..., name="branch")` keeps the compiled path `<ns>.branch`.
 
 Two error kinds and no third. A malformed or out-of-scope declaration, a
 malformed `Projection`, a reserved name or a Problem value with no canonical
@@ -183,21 +196,28 @@ built once with the compiled model, parents before children, so a child `Input`
 is attributed to the supplier that declares it and a generated path that no
 declaration owns is reported as unattributed rather than guessed at.
 
-Compilation is reused: one immutable `SpaceModel` per authored class, namespace
-pair and declaration structure, holding the compiled tree, the validated
-`DesignSpace`, the branch catalog, the projection metadata and the diagnostic
-ownership index. `compile_space_model(...).start(problem)` is the
-compiler-service entry and returns the authored class, exactly as
-`Space.start(...)` does. What the model does *not* own is the runtime: every
-start mints a fresh `Engine`, point, frozen problem and lock, so two independent
-roots reuse compilation without sharing an evaluation cache or serializing on
-each other.
+Compilation is reused by holding it, not by hiding it.
+`compile_space_model(Pipeline, ...)` returns a `SpaceModel[Pipeline]` -- the
+compiled tree, the validated `DesignSpace`, the branch catalog, the projection
+metadata and the diagnostic ownership index -- and `model.start(problem)` is the
+compiler-service entry, returning a `Pipeline` exactly as `Pipeline.start(...)`
+does. `Space.start(...)` is the ergonomic one-shot spelling and compiles a fresh
+model each time. There is deliberately no implicit class-level cache: a class
+body is ordinary mutable Python, and no key can honestly cover `exports`,
+`_implicit_exports` and specialization metadata until class immutability is a
+real contract. What the model does *not* own is the runtime: every start mints a
+fresh `Engine`, point, frozen problem and lock, so two independent roots reuse
+compilation without sharing an evaluation cache or serializing on each other.
 
 Allocation goes through `Space._new_occurrence(OccurrenceContext)`. The default
 allocates without calling `__init__`; a subclass whose instances need external
 context -- a future `DataflowOp` around a `NodeProto` -- overrides it and
 initializes from the context, which carries identity and the root but never the
-Engine or the point.
+Engine or the point. Every root, child and successor must be a *fresh* instance:
+a hook that returns something it made earlier is refused before any state is
+written, because overwriting an attached occurrence would silently mutate the
+old one into the new. The concrete `DataflowOp` attachment channel is
+intentionally deferred to U4; U1 proves the seam, not the payload.
 
 The supported capability guarantee is the public surface: no public operation
 returns an `Engine`, a `DesignPoint`, a `_Ref`, a compiled record or an
@@ -214,11 +234,11 @@ changing `_engine` semantics.
 
 ## Reusable Space fragments
 
-Reusable spaces use `Input`, not `Problem`. `Use` binds each child input to a
-typed value in the parent and flattens the child beneath a fresh namespace.
+Reusable spaces use `Input`, not `Problem`. `Subspace` binds each child input
+to a typed value in the parent and flattens the child beneath a fresh namespace.
 
 ```python
-from finn.dataflow.model import Decision, Input, Problem, Space, Use, derived
+from finn.dataflow.model import Decision, Input, Problem, Space, Subspace, derived
 
 
 class Tile(Space):
@@ -234,8 +254,8 @@ class Tile(Space):
 
 class Pair(Space):
     extent = Problem(int)
-    left = Use(Tile, extent=extent)
-    right = Use(Tile, extent=extent)
+    left = Subspace(Tile, extent=extent)
+    right = Subspace(Tile, extent=extent)
 
     @derived(int, left=left.cycles, right=right.cycles)
     def total(*, left: int, right: int) -> int:
@@ -248,8 +268,10 @@ not introduce a `Problem`, every `Input` must be bound exactly once, and only
 the values named in `exports` are visible to its parent. Reusing the same class
 twice creates independently rebased declarations without mutating the class.
 
-`Use(..., when=condition)` applies the existing engine applicability semantics
-to the entire child fragment.
+`Subspace(..., when=condition)` applies the existing engine applicability
+semantics to the entire child fragment. Class access returns the declaration and
+instance access returns the bound child occurrence, so `Pair.left` is a
+`Subspace` and `pair.left` is a `Tile`.
 
 ## Inheritance
 
@@ -359,14 +381,34 @@ The Kernel-to-Design interface has exactly one automatic value, the Region. A
 concrete Kernel may not add public `exports`; a value a peer needs is a
 Design-owned fact.
 
-## Exclusive branching
+## Structural variation
 
-`OneOf(Case(A, ...), Case(B, ...), outputs=(...))` embeds exactly one of several
-child Spaces. Several cases generate one ordinary selector `Decision` over
-stable case ids and gate every case fragment through it; a singleton generates
-no selector but keeps the same selected-output paths, so adding an alternative
-later renames nothing that already existed. Each `Case` owns its own exact
-`Input` bindings, so alternatives may have unrelated Input vocabularies.
+A `Variant` owns an ordered mapping from stable alternative id to `Subspace`:
+
+```python
+implementation = Variant(
+    {
+        "fast": Subspace(FastImplementation, extent=extent),
+        "small": Subspace(SmallImplementation, extent=extent),
+    },
+    outputs=("cycles",),
+)
+```
+
+Several alternatives generate one ordinary selector `Decision` over those ids
+and gate every alternative fragment through it; a singleton generates no
+selector but keeps the same selected-output paths, so adding an alternative
+later renames nothing that already existed. Each alternative `Subspace` owns its
+own exact `Input` bindings, so alternatives may have unrelated Input
+vocabularies and unrelated Space classes.
+
+There is one nested-space declaration, not two. The mapping key *is* the
+alternative id, so nothing restates it; the exclusivity, the selector and the
+selected outputs all belong to the container. A per-alternative `when=` is
+refused during this phase: the Variant owns the outer condition, and
+candidate-specific applicability is a separate question no case has yet forced.
+Internal compiler vocabulary -- `BranchCatalog`, `BranchInfo`, `CaseInfo` --
+still describes the lowered branch IR and is not the authoring vocabulary.
 
 The declaration stores no selection algorithm. `compile_space_model()` returns
 the ordinary spec plus a `BranchCatalog` of namespaces, selector paths, case ids,
@@ -382,13 +424,13 @@ they form. It consumes external facts only through `Input`, never `Problem`.
 ```python
 from finn.dataflow.model import (
     Boundary,
-    Case,
     Connection,
     DataflowDesign,
     Decision,
     Input,
     Kernels,
     Sink,
+    Subspace,
     configure_design,
     divisors_of,
 )
@@ -402,12 +444,12 @@ class ExampleDesign(DataflowDesign):
     lanes = Decision(int, domain=divisors_of(extent))
 
     produce = Kernels(
-        Case(ProducerKernel, extent=extent, lanes=lanes),
+        Subspace(ProducerKernel, extent=extent, lanes=lanes),
         computation=PRODUCE,
     )
     consume = Kernels(
-        Case(ExampleKernel, extent=extent, lanes=lanes),
-        Case(AlternativeKernel, width=extent, parallel_lanes=lanes),
+        Subspace(ExampleKernel, extent=extent, lanes=lanes),
+        Subspace(AlternativeKernel, width=extent, parallel_lanes=lanes),
         computation=CONSUME,
     )
 
@@ -416,10 +458,13 @@ class ExampleDesign(DataflowDesign):
     result = Boundary(consume.output("output"))
 ```
 
-`Kernels` is a thin `OneOf` specialization. It adds the required
-`ComputationContract` that every candidate must declare, a default case id taken
-from `Kernel.id`, the implicit selected Region output, and the stable Design role
-and Network node id. Roles, node ids, and case ids are single path segments.
+`Kernels` is a thin `Variant` specialization. It adds the required
+`ComputationContract` that every candidate must declare, the implicit selected
+Region output, and the stable Design role and Network node id. Its alternatives
+are positional rather than a mapping because a Kernel already carries its own
+stable `id`, and that id *is* the alternative id; `Subspace(..., name=...)`
+aliases it, which is what lets one Kernel class fill two candidate slots. Roles,
+node ids, and candidate ids are single path segments.
 
 `Connection` and `Boundary` generate one ordinary property,
 `semantic.<design>.network`, from the exact selected Regions. A `Sink` owns its

@@ -26,12 +26,11 @@ from finn.dataflow.model.branching import BranchCatalog
 from finn.dataflow.model.compiler import _Ref, _compile_space, compile_space_model
 from finn.dataflow.model.declarations import (
     AuthoringError,
-    Case,
     Decision,
     Input,
     Problem,
     Space,
-    Use,
+    Subspace,
     derived,
     divisors_of,
 )
@@ -226,11 +225,11 @@ class Alternatives(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+    produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
     consume = Kernels(
-        Case(ConsumerKernel, extent=extent, lanes=lanes),
-        Case(BufferedConsumerKernel, width=extent, parallel_lanes=lanes),
-        Case(MisportedConsumerKernel, extent=extent, lanes=lanes),
+        Subspace(ConsumerKernel, extent=extent, lanes=lanes),
+        Subspace(BufferedConsumerKernel, width=extent, parallel_lanes=lanes),
+        Subspace(MisportedConsumerKernel, extent=extent, lanes=lanes),
         computation=CONSUME,
     )
 
@@ -247,7 +246,7 @@ class ClosedRoot(Space):
 
     extent = Problem(int)
     lanes = Decision(int, domain=divisors_of(extent))
-    design = Use(Alternatives, extent=extent, lanes=lanes)
+    design = Subspace(Alternatives, extent=extent, lanes=lanes)
 
 
 def _catalog(root_type: type[Space] = ClosedRoot) -> BranchCatalog:
@@ -321,10 +320,10 @@ def test_an_incompatible_computation_is_refused_at_authoring() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         consume = Kernels(
-            Case(ConsumerKernel, extent=extent, lanes=lanes),
-            Case(ProducingKernel, extent=extent, lanes=lanes),
+            Subspace(ConsumerKernel, extent=extent, lanes=lanes),
+            Subspace(ProducingKernel, extent=extent, lanes=lanes),
             computation=CONSUME,
         )
 
@@ -374,10 +373,10 @@ def test_a_design_wide_feasibility_algorithm_rejects_the_misported_candidate() -
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Case(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
+        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         consume = Kernels(
-            Case(MisportedConsumerKernel, extent=extent, lanes=lanes),
-            Case(ConsumerKernel, extent=extent, lanes=lanes),
+            Subspace(MisportedConsumerKernel, extent=extent, lanes=lanes),
+            Subspace(ConsumerKernel, extent=extent, lanes=lanes),
             computation=CONSUME,
         )
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
@@ -387,7 +386,7 @@ def test_a_design_wide_feasibility_algorithm_rejects_the_misported_candidate() -
     class MisportedRoot(Space):
         extent = Problem(int)
         lanes = Decision(int, domain=divisors_of(extent))
-        design = Use(MisportedFirst, extent=extent, lanes=lanes)
+        design = Subspace(MisportedFirst, extent=extent, lanes=lanes)
 
     engine, point, design = _started(MisportedFirst)
     branch = _catalog(MisportedRoot).branch("root.design.consume")

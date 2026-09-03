@@ -62,24 +62,23 @@ from finn.dataflow.model.compiler import (
     _members_of,
     _Ref,
     answer_for,
-    compiled_model_for,
+    compile_space_model,
     resolve_value_source,
 )
 from finn.dataflow.model.declarations import (
     DECLARATION_TYPES,
     AuthoringError,
-    Case,
-    Constraint,
     ConstraintGroup,
     Decision,
     OccurrenceContext,
-    OneOf,
     Problem,
     Projection,
     Readiness,
     Space,
-    Use,
+    Subspace,
     ValueSource,
+    Variant,
+    check_canonical,
     declared_members,
 )
 
@@ -194,7 +193,7 @@ class _Lineage:
     reading each other's caches.
     """
 
-    model: SpaceModel
+    model: SpaceModel[Space]
     tree: _CompiledSpace[Space]
     engine: Engine
     problem_source: ProblemSource
@@ -271,11 +270,33 @@ def _make_occurrence(
             f"{owner.__name__}._new_occurrence returned "
             f"{type(instance).__name__}, which is not an instance of {owner.__name__}"
         )
+    # A hook that hands back something it made earlier -- a cached singleton, a
+    # pooled instance, the parent it was given -- would have its state
+    # overwritten here, and the *old* occurrence would silently become the new
+    # one.  Every root, child and successor must be a fresh object, so an
+    # already-attached result is refused before anything is written to it.
+    if is_attached_occurrence(instance):
+        raise AuthoringError(
+            f"{owner.__name__}._new_occurrence returned an occurrence that is already "
+            "attached; each root, child, and successor needs a fresh instance"
+        )
+    if root is not None and instance is root:
+        raise AuthoringError(
+            f"{owner.__name__}._new_occurrence returned its own root as a child occurrence"
+        )
     typed = instance
     object.__setattr__(
         typed,
         _STATE_ATTRIBUTE,
-        _State(runtime, cast("_CompiledSpace[Space]", compiled), scope, root or typed),
+        # ``typed if root is None`` and never ``root or typed``: a root whose
+        # class defines ``__bool__`` or ``__len__`` is perfectly ordinary, and
+        # truthiness would silently make every one of its children its own root.
+        _State(
+            runtime,
+            cast("_CompiledSpace[Space]", compiled),
+            scope,
+            typed if root is None else root,
+        ),
     )
     return typed
 
@@ -329,6 +350,28 @@ def _prepare_problem(
     return by_path
 
 
+def _canonical_value(
+    space_type: type[Space],
+    name: str,
+    declaration: Problem[object],
+    snapshot: Mapping[Problem[object], object],
+) -> object:
+    """Run one declaration's codec and check what it produced.
+
+    A codec is contributor code and its output goes straight into a persisted
+    digest, so it is validated rather than trusted.  Without this the failure
+    for a codec returning ``object()`` is a ``TypeError`` from ``json.dumps``
+    that names neither the Problem nor the codec that produced it.
+    """
+
+    codec = declaration.canonical
+    what = (
+        f"the canonical codec {codec.identity!r} for "
+        f"{space_type.__name__}.{name} (Problem fingerprint)"
+    )
+    return check_canonical(codec.encode(snapshot[declaration]), what)
+
+
 def _problem_fingerprint(
     space_type: type[Space], snapshot: Mapping[Problem[object], object]
 ) -> str:
@@ -351,7 +394,7 @@ def _problem_fingerprint(
                 "semantics": declaration.value_semantics.name,
                 "codec": f"{declaration.canonical.identity}@{declaration.canonical.version}",
                 "value": (
-                    {"present": declaration.canonical.encode(snapshot[declaration])}
+                    {"present": _canonical_value(space_type, name, declaration, snapshot)}
                     if declaration in snapshot
                     else {"absent": True}
                 ),
@@ -364,11 +407,11 @@ def _problem_fingerprint(
 
 
 def start_from_model(
-    model: SpaceModel,
+    model: SpaceModel[S],
     problem: ProblemSource,
     *,
     expected_problem_fingerprint: str | None = None,
-) -> Space:
+) -> S:
     """Freeze one problem into a new root occurrence over a reusable model.
 
     The compiled model is shared; everything minted here is not.  A fresh
@@ -377,7 +420,11 @@ def start_from_model(
     can be a cache and concurrency still be per-lineage.
     """
 
-    tree = model._compiled_tree()
+    typed_tree = model._compiled_tree()
+    # The compiled record is invariant in its authored class, and every use below
+    # is a read; erasing to ``Space`` here keeps one code path instead of making
+    # the whole private runtime generic for no behavioural gain.
+    tree = cast("_CompiledSpace[Space]", typed_tree)
     engine = Engine()
     problem_paths = _prepare_problem(tree, problem)
     # A refused problem is already a RequestError with findings; re-labelling it
@@ -396,8 +443,10 @@ def start_from_model(
                 ),
             )
         )
-    lineage = _Lineage(model, tree, engine, problem, frozen, fingerprint, RLock())
-    return _make_occurrence(_Runtime(lineage, point), tree, (tree.namespace,))
+    lineage = _Lineage(
+        cast("SpaceModel[Space]", model), tree, engine, problem, frozen, fingerprint, RLock()
+    )
+    return _make_occurrence(_Runtime(lineage, point), typed_tree, (typed_tree.namespace,))
 
 
 def _freeze_problem(
@@ -419,20 +468,23 @@ def start_occurrence(
     namespace: str = "root",
     expected_problem_fingerprint: str | None = None,
 ) -> S:
-    """Start one root occurrence of the authored class through the model service."""
+    """Start one root occurrence of the authored class through the model service.
 
-    model = compiled_model_for(
+    The ergonomic one-shot entry: it compiles, starts once, and drops the model.
+    A caller that starts the same family repeatedly holds a ``SpaceModel``
+    instead -- that is the explicit reuse path, and the only one, because a
+    hidden cache here could not tell a rebound class body from an unchanged one.
+    """
+
+    model = compile_space_model(
         space_type,
         namespace,
         problem_namespace=f"problem.{namespace}",
     )
-    return cast(
-        S,
-        start_from_model(
-            model,
-            problem,
-            expected_problem_fingerprint=expected_problem_fingerprint,
-        ),
+    return start_from_model(
+        model,
+        problem,
+        expected_problem_fingerprint=expected_problem_fingerprint,
     )
 
 
@@ -544,7 +596,7 @@ def _out_of_scope(state: _State, declaration: object, what: str) -> AuthoringErr
     where = ", ".join(f"{space} at {namespace}" for space, namespace in placements)
     return AuthoringError(
         f"this {what} declaration is not owned by {here}; it is declared by {where}. "
-        "Reach that occurrence with child() and use its own view"
+        "Reach that occurrence through its own parent attribute and use its view"
     )
 
 
@@ -642,9 +694,9 @@ def occurrence_value(instance: Space, declaration: ValueSource[T]) -> T:
 
 def occurrence_assess(
     instance: Space,
-    declaration: Readiness | ConstraintGroup | Constraint,
+    declaration: Readiness | ConstraintGroup,
 ) -> ReadinessAssessment | ConstraintAssessment:
-    """Assess one readiness or constraint declaration owned by this view."""
+    """Assess one Readiness profile or one named ConstraintGroup owned by this view."""
 
     state = _occurrence_state(instance)
     compiled = state.compiled
@@ -663,12 +715,11 @@ def occurrence_assess(
         group = compiled.engine_name(compiled.constraint_set_names, name, "ConstraintGroup")
         with lineage.lock:
             return lineage.engine.evaluate_constraint_set(state.runtime.point, group)
-    if isinstance(declaration, Constraint):
-        name = _owned_member(state, declaration, (Constraint,), "Constraint")
-        path = dict(compiled.constraint_members)[name]
-        with lineage.lock:
-            return lineage.engine.evaluate_constraints(state.runtime.point, (path,))
-    raise AuthoringError("assess() takes a Readiness, ConstraintGroup, or Constraint declaration")
+    raise AuthoringError(
+        "assess() takes a Readiness profile or a named ConstraintGroup; an individual "
+        "Constraint is an engine unit, and only a named group can be shared between "
+        "projections and pointed at in a diagnostic"
+    )
 
 
 def _projection_for_declaration(
@@ -841,12 +892,26 @@ def occurrence_diagnostics(
     *,
     projection: Projection[object] | None = None,
 ) -> tuple[OccurrenceDiagnostic, ...]:
-    """Interpret findings without losing their original paths or causal traces."""
+    """Interpret findings without losing their original paths or causal traces.
+
+    A ``ProjectionAssessment`` already carries the projection it came from, so
+    the identity is taken from it rather than demanded again.  Passing
+    ``projection=`` as well is allowed but must agree: two identities on one
+    call is a question with no correct answer, and quietly preferring one would
+    label the findings with a projection that did not produce them.
+    """
 
     state = _occurrence_state(instance)
     projection_name: str | None = None
     if projection is not None:
-        projection_name = _projection_for_declaration(state, projection).member_name
+        projection_name = _projection_for_declaration(state, projection).name
+    if isinstance(subject, ProjectionAssessment):
+        if projection_name is not None and projection_name != subject.projection:
+            raise AuthoringError(
+                f"diagnostics() was given projection {projection_name!r} for an assessment "
+                f"of {subject.projection!r}"
+            )
+        projection_name = subject.projection
     owners = state.runtime.lineage.model._owner_index()
     return tuple(
         _interpret(state, owners.get(finding.path), finding, projection_name)
@@ -880,62 +945,43 @@ def _direct_children(
     )
 
 
-def _child_for_declaration(
-    state: _State, declaration: Use[Space] | Case
-) -> tuple[tuple[str, ...], _CompiledSpace[Space]]:
-    """The compiled child a use site names, and the scope segment it adds."""
+def occurrence_child(instance: Space, declaration: Subspace[S]) -> S:
+    """Return the exact direct child occurrence one Subspace member names.
 
-    if isinstance(declaration, Use):
-        name = _owned_member(state, declaration, (Use,), "Use")
-        return (name,), state.compiled.child(name)
-
-    found = tuple(
-        ((authored_branch_name, candidate.case_id), candidate.compiled)
-        for authored_branch_name, authored_branch in declared_members(state.compiled.owner)
-        if isinstance(authored_branch, OneOf)
-        for authored_case, candidate in zip(
-            authored_branch.cases,
-            state.compiled.branch(authored_branch_name).cases,
-        )
-        if authored_case is declaration
-    )
-    if len(found) != 1:
-        raise _out_of_scope(state, declaration, "Case")
-    return found[0]
-
-
-def occurrence_child(instance: Space, declaration: Use[S] | Case) -> S:
-    """Return the exact direct child occurrence one use site names.
-
-    A Python class is not an occurrence identity.  One Kernel class may be
-    placed at several roles, and "you probably meant the only one" is precisely
-    the behaviour that breaks the day a second placement appears -- silently,
-    and in whichever call site happened to be written first.  So the key is
-    always an exact declaration: a ``Use``, a ``Case``, or a case id through the
-    branch view.
+    Reached through the descriptor, so the key is always the exact class member
+    the author wrote.  A Python *class* is never an occurrence identity: one
+    Kernel class may be placed at several roles, and "you probably meant the
+    only one" is precisely the behaviour that breaks the day a second placement
+    appears -- silently, and in whichever call site happened to be written
+    first.  A Variant's alternatives are reached through its view instead, since
+    an alternative is identified by its id within its container.
     """
 
     state = _occurrence_state(instance)
-    if not isinstance(declaration, (Use, Case)):
+    if not isinstance(declaration, Subspace):
         raise AuthoringError(
-            "child() takes an exact Use or Case declaration; a Space class names a family, "
-            "not one of its occurrences"
+            "a child occurrence is named by an exact Subspace member of this Space"
         )
-    segment, child = _child_for_declaration(state, cast("Use[Space] | Case", declaration))
+    name = _owned_member(state, declaration, (Subspace,), "Subspace")
     return _make_occurrence(
         state.runtime,
-        cast("_CompiledSpace[S]", child),
-        (*state.scope, *segment),
+        cast("_CompiledSpace[S]", state.compiled.child(name)),
+        (*state.scope, name),
         state.root,
     )
 
 
-def _branch_for_declaration(state: _State, declaration: OneOf) -> _CompiledBranch:
-    return state.compiled.branch(_owned_member(state, declaration, (OneOf,), "OneOf"))
+def _branch_for_declaration(state: _State, declaration: Variant) -> _CompiledBranch:
+    return state.compiled.branch(_owned_member(state, declaration, (Variant,), "Variant"))
 
 
-class BranchView:
-    """Capability-limited inspection and selection for one exact ``OneOf``."""
+class VariantView:
+    """Capability-limited inspection and selection for one exact ``Variant``.
+
+    A use-site capability over the root's point, not another Engine and not a
+    nested Space: it owns no runtime of its own and reaches everything through
+    the occurrence it was bound to.
+    """
 
     __slots__ = ("__branch", "__owner")
 
@@ -948,7 +994,9 @@ class BranchView:
         return self.__branch.member_name
 
     @property
-    def cases(self) -> tuple[str, ...]:
+    def alternatives(self) -> tuple[str, ...]:
+        """The stable ids of every alternative this Variant declares."""
+
         return tuple(item.case_id for item in self.__branch.cases)
 
     @property
@@ -973,20 +1021,28 @@ class BranchView:
             answer = answer_for(lineage.engine, point, self.__branch.selector)
         return cast("Answer[str]", answer)
 
-    def case(self, case_id: str) -> Space:
-        child = self.__branch.case(case_id).compiled
+    def alternative(self, alternative_id: str) -> Space:
+        """The child occurrence of one named alternative, selected or not."""
+
+        if alternative_id not in self.alternatives:
+            raise AuthoringError(
+                f"Variant {self.name!r} has no alternative {alternative_id!r}; "
+                f"expected one of {self.alternatives}"
+            )
+        child = self.__branch.case(alternative_id).compiled
         state = _occurrence_state(self.__owner)
         return _make_occurrence(
             state.runtime,
             child,
-            (*state.scope, self.name, case_id),
+            (*state.scope, self.name, alternative_id),
             state.root,
         )
 
-    def select(self, case_id: str) -> BranchView:
-        if case_id not in self.cases:
+    def select(self, alternative_id: str) -> VariantView:
+        if alternative_id not in self.alternatives:
             raise AuthoringError(
-                f"branch {self.name!r} has no case {case_id!r}; expected one of {self.cases}"
+                f"Variant {self.name!r} has no alternative {alternative_id!r}; "
+                f"expected one of {self.alternatives}"
             )
         if self.__branch.selector is None:
             return self
@@ -994,7 +1050,7 @@ class BranchView:
         lineage = state.runtime.lineage
         with lineage.lock:
             committed = lineage.engine.commit_assignments(
-                state.runtime.point, {self.__branch.selector.path: case_id}
+                state.runtime.point, {self.__branch.selector.path: alternative_id}
             )
         _raise_failed_assignment(committed.outcomes)
         successor = state.runtime.successor(committed.point)
@@ -1004,21 +1060,21 @@ class BranchView:
             if state.compiled is lineage.tree
             else _make_occurrence(successor, state.compiled, state.scope, successor_root)
         )
-        return BranchView(successor_owner, self.__branch)
+        return VariantView(successor_owner, self.__branch)
 
 
-def occurrence_branch(instance: Space, declaration: OneOf) -> BranchView:
-    """Bind one authored branch to this exact occurrence namespace."""
+def occurrence_variant(instance: Space, declaration: Variant) -> VariantView:
+    """Bind one authored Variant to this exact occurrence namespace."""
 
     state = _occurrence_state(instance)
-    return BranchView(instance, _branch_for_declaration(state, declaration))
+    return VariantView(instance, _branch_for_declaration(state, declaration))
 
 
 __all__ = [
-    "BranchView",
     "OccurrenceDiagnostic",
     "ProblemSource",
     "ProjectionAssessment",
+    "VariantView",
     "is_attached_occurrence",
     "start_from_model",
     "start_occurrence",

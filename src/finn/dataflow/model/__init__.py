@@ -6,8 +6,8 @@
 Three layers share one frontend and lower to one flat ``DesignSpaceSpec``:
 
 ```text
-Space                 ordinary declarations, direct child composition,
-                      and OneOf(Case(...), ...) exclusive branching
+Space                 ordinary declarations, direct Subspace composition,
+                      and Variant structural choice
    |
 Kernel(Space)         semantic Inputs, physical-only Decisions,
                       one Region(family, version, construct, **deps)
@@ -21,14 +21,17 @@ DataflowDesign(Space) semantic Decisions, Kernels segments,
 readiness, and constraint runtime.  Nothing here introduces a nested Engine, a
 nested DesignPoint, or a second answer lattice.
 
-**Direct child composition versus `OneOf`.**  `Use(Child, ...)` places one child
-Space unconditionally; `OneOf(Case(A, ...), Case(B, ...))` places exactly one of
-several.  Several cases add one ordinary selector `Decision` over stable case
-ids and gate every case fragment through it.  A singleton adds no selector but
-keeps the same selected-output paths, so adding an alternative later renames
-nothing that already existed.
+**Fixed child versus structural choice.**  `Subspace(Child, ...)` used directly
+as a class member places one child Space; the same declaration used inside
+`Variant({"a": Subspace(A, ...), "b": Subspace(B, ...)})` places exactly one of
+several, keyed by the alternative id the mapping already gives it.  Several
+alternatives add one ordinary selector `Decision` over those ids and gate every
+alternative fragment through it.  A singleton adds no selector but keeps the
+same selected-output paths, so adding an alternative later renames nothing that
+already existed.  Both are descriptors: `pipeline.fixed` is the child
+occurrence and `pipeline.implementation` is its bound `VariantView`.
 
-**Selection policy is not here.**  A branch declaration stores no search
+**Selection policy is not here.**  A Variant declaration stores no search
 callback.  The compiler publishes a `BranchCatalog` of paths and case structure;
 an external algorithm reads it, trials immutable successor points, and commits
 the ordinary selector.  `BranchInfo` carries no evaluator, point, cost, or
@@ -67,19 +70,19 @@ from finn.dataflow.model.branching import (
 from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_space_model
 from finn.dataflow.model.declarations import (
     RESERVED_LIFECYCLE_NAMES,
+    RESERVED_PROTOCOL_NAMES,
     AuthoringError,
     CanonicalValueCodec,
-    Case,
     ConstraintGroup,
     Decision,
     Input,
     OccurrenceContext,
-    OneOf,
     Problem,
     Projection,
     Readiness,
     Space,
-    Use,
+    Subspace,
+    Variant,
     constraint,
     derived,
     divisors_of,
@@ -89,9 +92,9 @@ from finn.dataflow.model.declarations import (
     unresolved,
 )
 from finn.dataflow.model.occurrence import (
-    BranchView,
     OccurrenceDiagnostic,
     ProjectionAssessment,
+    VariantView,
 )
 
 if TYPE_CHECKING:
@@ -166,13 +169,11 @@ def __getattr__(name: str) -> object:
 __all__ = [
     # authoring vocabulary shared by every layer
     "RESERVED_LIFECYCLE_NAMES",
+    "RESERVED_PROTOCOL_NAMES",
     "AuthoringError",
-    "BranchView",
-    "Case",
     "ConstraintGroup",
     "Decision",
     "Input",
-    "OneOf",
     "CanonicalValueCodec",
     "OccurrenceContext",
     "OccurrenceDiagnostic",
@@ -181,7 +182,9 @@ __all__ = [
     "ProjectionAssessment",
     "Readiness",
     "Space",
-    "Use",
+    "Subspace",
+    "Variant",
+    "VariantView",
     "constraint",
     "derived",
     "divisors_of",
