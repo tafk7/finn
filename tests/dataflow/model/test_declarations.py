@@ -220,7 +220,7 @@ def test_every_layer_names_its_own_specialization() -> None:
     assert kernels.Region is kernel.Region
     assert kernels.RegionRefused is kernel.RegionRefused
     assert issubclass(kernels.RegionRefused, ValueError)
-    for name in ("Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel"):
+    for name in ("Kernel", "Parameter", "Region", "RegionRefused", "kernel_physical"):
         assert name in kernels.__all__
     for name in ("Boundary", "Connection", "DataflowDesign", "Kernels", "Sink"):
         assert name in designs.__all__

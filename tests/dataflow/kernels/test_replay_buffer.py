@@ -20,7 +20,7 @@ from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
-from finn.dataflow.kernels.kernel import configure_kernel
+from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
@@ -92,7 +92,7 @@ def _configure(
         },
     )
     point = engine.commit_assignments(point, {"replay_test.pe": pe, "replay_test.simd": simd}).point
-    answer = configure_kernel(engine, kernel, point)  # type: ignore[arg-type]
+    answer = kernel_physical(engine, kernel, point).accepted_answer  # type: ignore[arg-type]
     assert isinstance(answer, Decided), answer
     return cast(ReplayBufferKernel, answer.value)
 
@@ -142,11 +142,11 @@ def test_replay_region_matches_the_previous_authority(
     expected = baseline_region(
         repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
     )
-    assert configured.resolved_region == expected
-    assert configured.resolved_region == construct_activation_replay_region(
+    assert configured.region == expected
+    assert configured.region == construct_activation_replay_region(
         repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
     )
-    assert not validate_region(configured.resolved_region).issues
+    assert not validate_region(configured.region).issues
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_replay_declares_one_region_family() -> None:
 
 def test_replay_is_an_identity_at_one_neuron_fold_and_still_a_region() -> None:
     configured = _configure(matrix_height=4, pe=4)
-    region = configured.resolved_region
+    region = configured.region
     inside = region.input_interface("activation_in").port.beat_sequence
     outside = region.output_interface("activation_out").port.beat_sequence
     assert inside == outside
@@ -206,7 +206,7 @@ def test_replay_is_an_identity_at_one_neuron_fold_and_still_a_region() -> None:
 
 def test_several_neuron_folds_multiply_the_output_beats() -> None:
     configured = _configure(repetitions=2, matrix_width=8, matrix_height=6, pe=2, simd=2)
-    region = configured.resolved_region
+    region = configured.region
     compact = region.input_interface("activation_in").port.beat_sequence
     expanded = region.output_interface("activation_out").port.beat_sequence
     assert compact.beat_count == 2 * 4
@@ -216,8 +216,8 @@ def test_several_neuron_folds_multiply_the_output_beats() -> None:
 
 def test_replay_sources_and_abi_are_exact() -> None:
     configured = _configure(simd=2, activation="INT8")
-    assert {source.root for source in configured.source_contributions} == {FINNLIB_ROOT}
-    assert tuple(source.path for source in configured.source_contributions) == FINNLIB_SOURCES
+    assert {source.root for source in configured.contributions} == {FINNLIB_ROOT}
+    assert tuple(source.path for source in configured.contributions) == FINNLIB_SOURCES
     assert configured.abi.entry_point == "replay_buffer"
     assert set(configured.abi.physical_names()) == {
         "clk",
@@ -285,7 +285,7 @@ def test_replay_refuses_folding_it_cannot_realize() -> None:
         },
     )
     point = engine.commit_assignments(point, {"loose.pe": 3, "loose.simd": 3}).point
-    answer = configure_kernel(engine, kernel, point)
+    answer = kernel_physical(engine, kernel, point).accepted_answer
     assert not isinstance(answer, Decided)
     assert "kernel-region-refused" in {finding.code for finding in answer.findings}
     assert QualifiedPath("semantic.loose.kernel.region") in {

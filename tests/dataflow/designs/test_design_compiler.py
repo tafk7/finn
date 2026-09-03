@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import subprocess
 import sys
 from typing import cast
 
-from typing_extensions import Self
 
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -132,7 +133,7 @@ class ProducerKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI("producer", ())
 
 
@@ -146,7 +147,7 @@ class ConsumerKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI("consumer", ())
 
 
@@ -163,7 +164,7 @@ class PipelinedConsumerKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI("pipelined_consumer", ())
 
 
@@ -667,7 +668,7 @@ def test_a_beat_count_mismatch_across_an_edge_is_refused() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
             return ComponentABI("misfolded", ())
 
     class Misfolded(DataflowDesign):
@@ -784,7 +785,7 @@ def test_configuration_returns_an_instance_of_the_authored_class() -> None:
     assert isinstance(configured, Chain)
     assert type(configured).id == "chain"
     assert set(configured.kernels) == {"produce", "consume"}
-    assert isinstance(configured.kernels["produce"], ProducerKernel)
+    assert configured.kernels["produce"].kernel_id == "producer"
     assert configured.produce is configured.kernels["produce"]
     assert configured.consume is configured.kernels["consume"]
     assert configured.selected_candidates == {"produce": "producer", "consume": "consumer"}
@@ -797,7 +798,7 @@ def test_the_configured_kernel_region_is_the_exact_network_node_region() -> None
     configured = answer.value
     for role, kernel in configured.kernels.items():
         node = configured.resolved_network.node(configured.node_id(role))
-        assert kernel.resolved_region is node.region or kernel.resolved_region == node.region
+        assert kernel.region is node.region or kernel.region == node.region
 
 
 def test_the_configured_design_retains_only_approved_state() -> None:
@@ -890,7 +891,7 @@ def test_an_incomplete_kernel_physical_decision_refuses_configuration() -> None:
 def test_an_inactive_case_is_never_configured() -> None:
     answer = _configure(Selectable, **{"root.design.consume.kernel": "consumer"})
     assert isinstance(answer, Decided)
-    assert type(answer.value.kernels["consume"]) is ConsumerKernel
+    assert answer.value.kernels["consume"].kernel_id == "consumer"
 
 
 def test_an_inactive_segment_contributes_no_configured_kernel() -> None:
@@ -1040,7 +1041,7 @@ def test_a_contained_kernels_decision_is_neither_retained_nor_imported() -> None
     assert stages not in configured.assignments
     assert stages not in configured.imported_decisions
     # It belongs to the Kernel that owns it, and is retained there.
-    assert dict(configured.consume.assignments) == {stages: 2}
+    assert dict(configured.consume.assignments) == {"stages": 2}
 
 
 def test_a_selector_is_a_design_assignment_not_imported_provenance() -> None:
@@ -1189,8 +1190,8 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         DEPTH = Parameter(choice.depth)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
-            return ComponentABI("parameterized", (), (("DEPTH", str(configured.DEPTH)),))
+        def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
+            return ComponentABI("parameterized", (), (("DEPTH", str(parameters["DEPTH"])),))
 
     class Gated(DataflowDesign):
         id = "gated_boundary"

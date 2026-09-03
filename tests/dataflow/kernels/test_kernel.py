@@ -5,10 +5,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import cast
 
-from typing_extensions import Self
 
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -29,6 +28,7 @@ from finn.dataflow.model.semantics import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    ConstraintGroup,
     Decision,
     Input,
     Problem,
@@ -41,10 +41,13 @@ from finn.dataflow.model.declarations import (
 )
 from finn.dataflow.kernels.kernel import (
     Kernel,
+    KernelPhysicalResult,
     Parameter,
+    PhysicallyUnsupported,
     Region,
     RegionRefused,
-    configure_kernel,
+    kernel_dataflow,
+    kernel_physical,
 )
 from finn.dataflow.region import (
     BeatSequence,
@@ -59,6 +62,9 @@ from finn.dataflow.region import (
     ScheduleLevel,
 )
 from finn.dataflow.model.spec_algebra import assemble_specs
+
+#: What ``component_abi`` is handed: the resolved physical parameter table.
+Scalars = Mapping[str, bool | int | float | str]
 
 COMPUTATION = ComputationContract("test.copy")
 
@@ -120,10 +126,12 @@ class ToyKernel(Kernel):
     WIDTH = Parameter(width)
     FLAG = Parameter.constant(1, why="the test RTL fixes this mode")
 
+    physical_support = ConstraintGroup(width_supported, name="realizable")
+
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
         return ComponentABI(
-            "toy", (), tuple((name, str(value)) for name, value in configured.parameters.items())
+            "toy", (), tuple((name, str(value)) for name, value in parameters.items())
         )
 
 
@@ -148,7 +156,7 @@ def _compiled():
     )
 
 
-def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> ToyKernel:
+def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> KernelPhysicalResult:
     harness, kernel = _compiled()
     engine = Engine()
     point = engine.start(
@@ -159,25 +167,23 @@ def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> Toy
         point,
         {"test.lanes": lanes, "test.toy.pumped": pumped},
     ).point
-    answer = configure_kernel(engine, kernel, point)
-    assert isinstance(answer, Decided)
-    assert isinstance(answer.value, ToyKernel)
+    answer = kernel_physical(engine, kernel, point).accepted_answer
+    assert isinstance(answer, Decided), answer
     return answer.value
 
 
 def test_kernel_configures_its_own_region_and_parameters() -> None:
     configured = _configured()
-    assert configured.resolved_region == _region(8, 2)
-    assert configured.region == configured.resolved_region
+    assert configured.region == _region(8, 2)
     assert configured.region_family == "test.copy"
     assert configured.region_version == "1"
     assert configured.computation == COMPUTATION
-    assert configured.pumped is False
-    assert configured.LANES == 2
-    assert configured.WIDTH == 16
-    assert configured.FLAG == 1
+    assert dict(configured.assignments) == {"pumped": False}
     assert dict(configured.parameters) == {"LANES": 2, "WIDTH": 16, "FLAG": 1}
     assert configured.abi.entry_point == "toy"
+    assert configured.build_unit == "toy"
+    assert configured.kernel_id == "toy"
+    assert configured.kernel_version == "1"
 
 
 def test_region_dependency_closure_distinguishes_semantic_and_physical_decisions() -> None:
@@ -189,7 +195,7 @@ def test_region_dependency_closure_distinguishes_semantic_and_physical_decisions
 
 
 def test_two_configurations_may_resolve_different_regions() -> None:
-    assert _configured(lanes=1).resolved_region != _configured(lanes=2).resolved_region
+    assert _configured(lanes=1).region != _configured(lanes=2).region
 
 
 def test_kernel_feasibility_is_automatic() -> None:
@@ -203,16 +209,22 @@ def test_kernel_feasibility_is_automatic() -> None:
         point,
         {"test.lanes": 8, "test.toy.pumped": False},
     ).point
-    answer = configure_kernel(engine, kernel, point)
-    assert isinstance(answer, Unresolved)
-    assert any(finding.code == "kernel-infeasible" for finding in answer.findings)
+    assessment = kernel_physical(engine, kernel, point)
+    # Refused, not incomplete: everything is decided and a constraint said no.
+    assert assessment.readiness.ready is True
+    assert isinstance(assessment.accepted_answer, Absent)
+    assert any(
+        finding.code == "projection-constraint-refused"
+        for finding in assessment.accepted_answer.findings
+    )
 
 
-def test_configured_kernel_retains_no_engine_point_or_network() -> None:
+def test_the_detached_physical_result_retains_no_engine_point_or_network() -> None:
     configured = _configured()
-    values = vars(configured)
+    values = {name: getattr(configured, name) for name in KernelPhysicalResult.__slots__}
     assert not any(isinstance(value, Engine) for value in values.values())
     assert not any(hasattr(value, "design_space") for value in values.values())
+    assert not any(isinstance(value, Space) for value in values.values())
     assert "network" not in values
 
 
@@ -226,7 +238,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         computation = COMPUTATION
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("none", ())
 
     with pytest.raises(AuthoringError, match="Region member named 'region'"):
@@ -241,7 +253,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
             return _degenerate()
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("generic", ())
 
     with pytest.raises(AuthoringError, match="Region member named 'region'"):
@@ -254,7 +266,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         another = Region(family="test.other", version="1", construct=_degenerate)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("two", ())
 
     with pytest.raises(AuthoringError, match="exactly one DataflowRegion"):
@@ -272,7 +284,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         region = Region(family="test.copy", version="1", construct=_degenerate)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("nested", ())
 
     with pytest.raises(AuthoringError, match="exactly one DataflowRegion"):
@@ -283,7 +295,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         region = Region(family="test.copy", version="1", construct=_degenerate)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("no_computation", ())
 
     with pytest.raises(AuthoringError, match="ComputationContract"):
@@ -310,7 +322,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("owns_problem", ())
 
     with pytest.raises(AuthoringError, match="external facts through Input"):
@@ -365,8 +377,8 @@ def test_a_refusing_region_constructor_is_a_refusal_not_a_crash() -> None:
         {"problem.test.extent": 8},
     )
     point = engine.commit_assignments(point, {"test.lanes": 8, "test.toy.pumped": False}).point
-    answer = configure_kernel(engine, kernel, point)
-    assert isinstance(answer, Unresolved)
+    answer = kernel_physical(engine, kernel, point).accepted_answer
+    assert isinstance(answer, Absent)
 
 
 def test_a_region_constructor_returning_the_wrong_type_is_rejected() -> None:
@@ -380,7 +392,7 @@ def test_a_region_constructor_returning_the_wrong_type_is_rejected() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("wrong_result", ())
 
     compiled = _compile_space(WrongResult, "wrong_result", {}, _allow_problem=False)
@@ -408,7 +420,7 @@ def test_a_kernel_local_decision_may_not_reach_its_region() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("direct", ())
 
     harness, _kernel = _compiled()
@@ -441,7 +453,7 @@ def test_a_transitive_kernel_local_decision_may_not_reach_its_region() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("transitive", ())
 
     harness, _kernel = _compiled()
@@ -473,7 +485,7 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("nested_dependence", ())
 
     harness, _kernel = _compiled()
@@ -488,7 +500,7 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
 
 def test_a_supplied_decision_reaching_the_region_stays_valid() -> None:
     configured = _configured(lanes=2)
-    assert configured.resolved_region == _region(8, 2)
+    assert configured.region == _region(8, 2)
     assert configured.imported_decisions == (QualifiedPath("test.lanes"),)
 
 
@@ -508,7 +520,7 @@ def test_a_kernel_may_not_publish_exports_besides_its_region() -> None:
         exports = (pumped,)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("publishes", ())
 
     harness, _kernel = _compiled()
@@ -529,7 +541,7 @@ def test_kernel_abi_must_expose_every_resolved_physical_parameter() -> None:
         id = "incomplete_abi"
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
             return ComponentABI("toy", ())
 
     harness, _kernel = _compiled()
@@ -548,8 +560,10 @@ def test_kernel_abi_must_expose_every_resolved_physical_parameter() -> None:
         point,
         {"test.lanes": 2, "test.incomplete.pumped": False},
     ).point
-    with pytest.raises(AuthoringError, match="exact resolved physical parameter table"):
-        configure_kernel(engine, compiled, point)
+    # A malformed ABI is a defect in contributor code, not an infeasible point,
+    # so it stays an EvaluationError rather than becoming a rejecting absence.
+    with pytest.raises(EvaluationError, match="physical_result"):
+        kernel_physical(engine, compiled, point)
 
 
 def test_parameter_source_must_belong_to_the_kernel_class() -> None:
@@ -560,7 +574,7 @@ def test_parameter_source_must_belong_to_the_kernel_class() -> None:
         OTHER = Parameter(outside)
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="names a value outside the class"):
+    with pytest.raises(AuthoringError, match="references a value outside its declarations"):
         _compile_space(Broken, "test.broken", _bindings(harness), _allow_problem=False)
 
 
@@ -593,23 +607,25 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
         STAGES = Parameter(pipeline.stages)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI(
                 "composite",
                 (),
-                (("STAGES", str(configured.STAGES)),),
+                (("STAGES", str(parameters["STAGES"])),),
             )
 
     compiled = _compile_space(CompositeKernel, "composite", {}, _allow_problem=False)
     engine = Engine()
     point = engine.start(engine.validate(compiled.spec), {})
-    pending = configure_kernel(engine, compiled, point)
+    pending = kernel_physical(engine, compiled, point).accepted_answer
     assert isinstance(pending, Unresolved)
     point = engine.commit_assignments(point, {"composite.pipeline.stages": 2}).point
-    configured = configure_kernel(engine, compiled, point)
+    configured = kernel_physical(engine, compiled, point).accepted_answer
     assert isinstance(configured, Decided)
-    assert configured.value.STAGES == 2
-    assert dict(configured.value.assignments) == {QualifiedPath("composite.pipeline.stages"): 2}
+    assert configured.value.parameters["STAGES"] == 2
+    # A Decision inside a helper Space the Kernel owns is the Kernel's, so it is
+    # an assignment it carries and not an import it depends on.
+    assert dict(configured.value.assignments) == {}
     assert configured.value.imported_decisions == ()
 
 
@@ -641,7 +657,7 @@ def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("gated_helper", ())
 
     harness, _kernel = _compiled()
@@ -670,7 +686,7 @@ def test_a_local_decision_may_not_gate_the_region_property_itself() -> None:
         )
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("gated_region", ())
 
     harness, _kernel = _compiled()
@@ -707,7 +723,7 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
         region = Region(family="test.copy", version="1", construct=refusing, extent=extent)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("refusing", ())
 
     class Defective(Kernel):
@@ -717,7 +733,7 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
         region = Region(family="test.copy", version="1", construct=defective, extent=extent)
 
         @classmethod
-        def component_abi(cls, configured: Self) -> ComponentABI:
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("defective", ())
 
     harness = _compile_space(Harness, "test", problem_namespace="problem.test")
@@ -742,18 +758,79 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
         engine.query_property(point, "semantic.test.defective.region")
 
 
-def test_a_configured_kernel_resolves_through_the_retained_value_hook():
-    """The occurrence descriptor dispatcher must not change configured Kernels.
+def test_the_two_projections_ask_two_different_questions() -> None:
+    """A Region resolves before any physical choice, and the two say so apart."""
 
-    ``configure_kernel`` returns a *detached configured* instance, not an
-    attached occurrence.  Both are instances of the same authored class, so the
-    dispatcher asks "is this attached?" explicitly rather than letting whichever
-    subclass overrides ``_space_value`` decide.
-    """
+    harness, kernel = _compiled()
+    engine = Engine()
+    point = engine.start(
+        engine.validate(assemble_specs((harness.spec, kernel.spec))),
+        {"problem.test.extent": 8},
+    )
+    point = engine.commit_assignments(point, {"test.lanes": 2}).point
 
-    configured = _configured(extent=8, lanes=2)
-    assert not is_attached_occurrence(configured)
-    assert configured.LANES == 2
-    assert configured.region_family == "test.copy"
-    with pytest.raises(AttributeError, match="not retained on the configured Kernel"):
-        _ = configured.extent
+    # `pumped` is uncommitted, so there is no build unit yet ...
+    physical = kernel_physical(engine, kernel, point)
+    assert isinstance(physical.accepted_answer, Unresolved)
+
+    # ... and the Region is nevertheless entirely decided.
+    dataflow = kernel_dataflow(engine, kernel, point)
+    assert dataflow.readiness.ready is True
+    assert dataflow.accepted_answer == Decided(_region(8, 2))
+
+
+def test_a_valid_region_does_not_oblige_a_realizable_kernel() -> None:
+    """An implementation with no wiring for this point still has its Region."""
+
+    class Unbuildable(ToyKernel):
+        id = "unbuildable"
+
+        @classmethod
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
+            raise PhysicallyUnsupported("no wiring for this parameter table")
+
+    harness, _kernel = _compiled()
+    compiled = _compile_space(
+        Unbuildable, "test.unbuildable", _bindings(harness), _allow_problem=False
+    )
+    engine = Engine()
+    point = engine.start(
+        engine.validate(assemble_specs((harness.spec, compiled.spec))),
+        {"problem.test.extent": 8},
+    )
+    point = engine.commit_assignments(
+        point, {"test.lanes": 2, "test.unbuildable.pumped": False}
+    ).point
+
+    assert kernel_dataflow(engine, compiled, point).accepted_answer == Decided(_region(8, 2))
+    physical = kernel_physical(engine, compiled, point).accepted_answer
+    assert isinstance(physical, Absent)
+    assert any(finding.code == "kernel-physically-unsupported" for finding in physical.findings)
+
+
+def test_the_physical_result_carries_its_import_provenance() -> None:
+    configured = _configured()
+    assert QualifiedPath("test.lanes") in configured.imported_decisions
+    assert QualifiedPath("test.toy.pumped") not in configured.imported_decisions
+
+
+def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
+    """The Kernel is an ordinary Space: started, it resolves through the runtime."""
+
+    class Placed(Space):
+        extent = Problem(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        toy = Subspace(ToyKernel, extent=extent, lanes=lanes)
+
+    root = Placed.start({Placed.extent: 8}).assign(Placed.lanes, 2)
+    occurrence = root.toy
+    assert is_attached_occurrence(occurrence)
+    assert type(occurrence) is ToyKernel
+    assert occurrence.LANES == 2
+    assert occurrence.FLAG == 1
+    assert occurrence.region == _region(8, 2)
+    assert occurrence.dataflow.accepted_answer == Decided(_region(8, 2))
+    assert isinstance(occurrence.physical.accepted_answer, Unresolved)
+    built = occurrence.assign(ToyKernel.pumped, True).physical.accepted_answer
+    assert isinstance(built, Decided)
+    assert built.value.kernel_id == "toy"

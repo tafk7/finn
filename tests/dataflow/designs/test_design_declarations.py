@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from typing import cast
 
-from typing_extensions import Self
 
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -85,8 +86,8 @@ class CopyKernel(Kernel):
     LANES = Parameter(lanes)
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
-        return ComponentABI("copy", (), (("LANES", str(configured.LANES)),))
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
+        return ComponentABI("copy", (), (("LANES", str(parameters["LANES"])),))
 
 
 class WideCopyKernel(Kernel):
@@ -111,8 +112,8 @@ class WideCopyKernel(Kernel):
     STAGES = Parameter(stages)
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
-        return ComponentABI("wide_copy", (), (("STAGES", str(configured.STAGES)),))
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
+        return ComponentABI("wide_copy", (), (("STAGES", str(parameters["STAGES"])),))
 
 
 class ScaleKernel(Kernel):
@@ -132,7 +133,7 @@ class ScaleKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI("scale", ())
 
 
@@ -491,7 +492,7 @@ def test_an_aliased_kernel_case_configures_under_its_alias() -> None:
         answer = configure_design(engine, design, chosen)
         assert isinstance(answer, Decided), answer
         assert answer.value.selected_candidates == {"compute": alias}
-        assert isinstance(answer.value.compute, CopyKernel)
+        assert answer.value.compute.kernel_id == "copy"
 
 
 def test_a_singleton_aliased_case_configures() -> None:

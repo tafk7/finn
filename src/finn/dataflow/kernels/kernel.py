@@ -1,24 +1,40 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One-Region Kernel specialization of the declarative Space frontend."""
+"""One-Region Kernel specialization of the declarative Space frontend.
+
+A ``Kernel`` answers exactly two questions about itself, and they are asked
+separately::
+
+    kernel.dataflow   -> ProjectionAssessment[DataflowRegion]
+    kernel.physical   -> ProjectionAssessment[KernelPhysicalResult]
+
+The separation is the point.  The Region is the logical contract a peer or an
+enclosing Design reads, and it must resolve from semantic facts alone: no
+physical Decision, no parameter, no ABI, no source, no target support and no
+artifact.  The physical result is the detached build unit, and a Kernel is
+permitted to have a perfectly valid Region and an explicitly unsupported
+physical realization -- an unavailable target is not a broken Region.
+
+Both projections are synthesized per concrete subclass, because their output is
+that subclass's own ``region`` member and the base class has no such
+declaration to name.  A subclass therefore writes the parts and gets the
+projections: the Region, the physical ``Parameter`` table, and at most two
+``ConstraintGroup`` members saying which of its constraints gate which
+question.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import wraps
-from inspect import signature
+from inspect import Parameter as _SignatureParameter, Signature, signature
 from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar, cast
 
-from typing_extensions import Self
-
 from finn.dataflow._engine import (
-    Absent,
     Answer,
-    Constraint,
-    ConstraintSet,
     Decided,
     DependencyKind,
     DependencyRef,
@@ -26,11 +42,7 @@ from finn.dataflow._engine import (
     DesignPoint,
     Engine,
     EvaluatorSpec,
-    Finding,
-    FindingKind,
     QualifiedPath,
-    ReadinessProfile,
-    Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.contributions import (
@@ -41,26 +53,25 @@ from finn.dataflow.artifacts.contributions import (
 )
 from finn.dataflow.artifacts.derivation import Scalar
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.semantics import DATAFLOW_REGION_SEMANTICS
-from finn.dataflow.model.compiler import (
-    _CompiledSpace,
-    _Ref,
-    _compile_space,
-    answer_for,
-    imported_decisions,
-    resolve_value_source,
-)
+from finn.dataflow.model.compiler import _CompiledSpace, _Ref
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    Constraint,
+    ConstraintGroup,
     Decision,
     Derived,
     Problem,
+    Projection,
+    Readiness,
     Space,
     ValueSource,
     declared_members,
     reject,
+    resolve_declared_value,
     semantics_for,
 )
+from finn.dataflow.model.occurrence import ProjectionAssessment, evaluate_projection
+from finn.dataflow.model.semantics import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.region import DataflowRegion
 from finn.dataflow.region_validation import validate_region
 
@@ -68,6 +79,22 @@ T = TypeVar("T")
 K = TypeVar("K", bound="Kernel")
 
 _MISSING = object()
+
+#: The member names ``Kernel.__init_subclass__`` writes onto every concrete
+#: subclass.  A declaration under one of these would be silently replaced, so it
+#: is refused in the class body instead -- the same rule and the same reason as
+#: the generic reserved names, stated by the layer that owns these seven.
+RESERVED_KERNEL_NAMES: frozenset[str] = frozenset(
+    {
+        "region_structurally_valid",
+        "dataflow_accepts",
+        "dataflow_ready",
+        "dataflow",
+        "physical_result",
+        "physical_ready",
+        "physical",
+    }
+)
 
 
 class RegionRefused(ValueError):
@@ -85,6 +112,59 @@ class RegionRefused(ValueError):
     a fixture, or the canonical model's own tests -- still catches what it always
     caught.
     """
+
+
+class PhysicallyUnsupported(ValueError):
+    """This Kernel cannot realize the configuration its Region already accepts.
+
+    Raised by ``component_abi``.  Its existence is the concrete form of the rule
+    that a valid dataflow projection does not oblige a valid physical one: an
+    implementation that has no wiring for a resolved Region says so here and the
+    physical projection becomes a rejecting absence, while the Region carries on
+    being exactly what it was.  The alternative -- a dummy ABI over invented
+    widths -- would make an unbuildable point look buildable right up until
+    synthesis.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class KernelPhysicalResult:
+    """The detached build unit one configured Kernel hands to artifact code.
+
+    Detached means what it says: no Engine, no point, no ``_Ref``, no compiled
+    record and no attached occurrence.  Everything here is a resolved value, so
+    an artifact function cannot reach back into the design space through it, and
+    an artifact key built from it cannot accidentally depend on where in a
+    namespace tree the Kernel happened to sit.
+
+    ``region`` is carried for witness association -- a physical result must be
+    attributable to the exact logical contract it realizes -- and for nothing
+    else.  Artifact code reads identity, parameters, ABI and contributions.
+
+    ``imported_decisions`` is provenance: the outside Decision paths this
+    Kernel's own values depend on.  It is computed from the compiled fragment
+    rather than from what happens to be committed, so it does not change as a
+    point is filled in.
+    """
+
+    kernel_id: str
+    kernel_version: str
+    computation: ComputationContract
+    region_family: str
+    region_version: str
+    region: DataflowRegion
+    assignments: Mapping[str, object]
+    parameters: Mapping[str, bool | int | float | str]
+    abi: ComponentABI
+    contributions: tuple[Contribution, ...]
+    render_context: Mapping[str, Scalar]
+    imported_decisions: tuple[QualifiedPath, ...] = ()
+
+    @property
+    def build_unit(self) -> str:
+        """The one externally addressable module this Kernel builds."""
+
+        return self.abi.entry_point
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
@@ -204,12 +284,20 @@ class Parameter(Generic[T]):
         return built
 
     def __get__(self, instance: object | None, owner: type[object]) -> object:
+        """Class access is the declaration; instance access is the resolved scalar.
+
+        A constant answers from the declaration itself.  A sourced Parameter is
+        a *view* on the declaration it names rather than a value of its own, so
+        it resolves through the same dispatcher every other value descriptor
+        uses -- which is what makes ``kernel.PE`` mean the same thing on an
+        attached occurrence as ``kernel.pe`` does.
+        """
+
         if instance is None:
             return self
-        resolver = getattr(instance, "_kernel_parameter", None)
-        if resolver is None:
-            raise AttributeError("physical parameters exist only on configured Kernels")
-        return resolver(self)
+        if self.source is None:
+            return self.fixed_value
+        return resolve_declared_value(instance, cast("ValueSource[object]", self.source))
 
 
 @dataclass(frozen=True)
@@ -217,14 +305,20 @@ class _CompiledParameter:
     member_name: str
     physical_name: str
     template: Parameter[object]
-    source: _Ref[object] | None
+    source: ValueSource[object] | None
     constant: object = _MISSING
     why: str = ""
 
 
 @dataclass(frozen=True)
 class _KernelCompilation(Generic[K]):
-    """Kernel-only metadata attached to a generic compiled Space."""
+    """Kernel-only metadata attached to a generic compiled Space.
+
+    Private, and deliberately so: the Decision classification below exists for
+    diagnostics and for the review that U2b was asked to make possible, not as
+    a capability.  Publishing it would invite a caller to act on it, and the
+    only rule that currently acts on it is the authoring refusal.
+    """
 
     owner: type[K]
     kernel_id: str
@@ -235,10 +329,16 @@ class _KernelCompilation(Generic[K]):
     region_version: str
     computation: ComputationContract
     parameters: tuple[_CompiledParameter, ...]
-    feasibility_set: str
-    readiness_profile: str
-    local_decisions: tuple[tuple[str, _Ref[object]], ...]
     contributions: tuple[Contribution, ...]
+    physical_result: _Ref[KernelPhysicalResult]
+    #: Local Decisions inside the Region's value/applicability closure.  Always
+    #: empty while the ownership refusal stands; kept because "the rule held"
+    #: and "the rule was never tested" are different facts.
+    region_closure_decisions: tuple[QualifiedPath, ...]
+    #: Local Decisions outside that closure: the physical axes this Kernel owns.
+    physical_decisions: tuple[QualifiedPath, ...]
+    #: Outside Decisions this fragment reads.  Provenance, never ownership.
+    imported_decisions: tuple[QualifiedPath, ...]
 
 
 class Kernel(Space):
@@ -252,15 +352,29 @@ class Kernel(Space):
     #: The Region is the one automatic Kernel output to a containing Design.
     _implicit_exports = ("region",)
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        _synthesize_projections(cls)
+
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
+        """The external ABI this Kernel presents at one resolved parameter table.
+
+        Takes the resolved scalars rather than a configured object, because that
+        is all an ABI can legitimately read and because an artifact-facing value
+        must not be reachable from one.  Raise :class:`PhysicallyUnsupported` to
+        say the configuration has no realization here.
+        """
+
         raise NotImplementedError(f"{cls.__name__} does not declare a component ABI")
 
     @classmethod
-    def render_context(cls, configured: Self) -> Mapping[str, Scalar]:
+    def render_context(
+        cls, parameters: Mapping[str, bool | int | float | str]
+    ) -> Mapping[str, Scalar]:
         """Flat scalar context for this Kernel's rendered source contributions."""
 
-        del configured
+        del parameters
         return MappingProxyType({})
 
     @classmethod
@@ -268,74 +382,6 @@ class Kernel(Space):
         if not isinstance(compiled, _CompiledSpace):
             raise AuthoringError(f"{cls.__name__} received an invalid Space compilation")
         return _finalize_kernel(cls, cast("_CompiledSpace[Kernel]", compiled))
-
-    def _initialize(
-        self,
-        compilation: _KernelCompilation[Kernel],
-        values: Mapping[int, object],
-        assignments: Mapping[QualifiedPath, object],
-        parameters: Mapping[str, bool | int | float | str],
-        imported_decisions: Sequence[QualifiedPath],
-    ) -> None:
-        self._compilation = compilation
-        self._values = MappingProxyType(dict(values))
-        self.assignments = MappingProxyType(dict(assignments))
-        self.parameters = MappingProxyType(dict(parameters))
-        self.imported_decisions = tuple(imported_decisions)
-        self.abi = type(self).component_abi(self)
-        if not isinstance(self.abi, ComponentABI):
-            raise AuthoringError(
-                f"{type(self).__name__}.component_abi() did not return ComponentABI"
-            )
-        expected_parameters = tuple(
-            sorted(
-                (
-                    name,
-                    str(int(value)) if isinstance(value, bool) else str(value),
-                )
-                for name, value in self.parameters.items()
-            )
-        )
-        if self.abi.parameters != expected_parameters:
-            raise AuthoringError(
-                f"{type(self).__name__}.component_abi() must expose its exact resolved "
-                "physical parameter table"
-            )
-
-    def _space_value(self, declaration: ValueSource[object]) -> object:
-        try:
-            return self._values[id(declaration)]
-        except KeyError:
-            raise AttributeError(
-                "this declaration is not retained on the configured Kernel; "
-                "route artifact-facing values through a Parameter"
-            ) from None
-
-    def _kernel_parameter(self, declaration: Parameter[object]) -> object:
-        for parameter in self._compilation.parameters:
-            if parameter.template is declaration:
-                return self.parameters[parameter.physical_name]
-        raise AttributeError("this Parameter does not belong to the configured Kernel")
-
-    @property
-    def resolved_region(self) -> DataflowRegion:
-        return cast(DataflowRegion, self._values[id(self._compilation.region_template)])
-
-    @property
-    def region_family(self) -> str:
-        """The semantic Region family, readable without knowing the Kernel id."""
-
-        return self._compilation.region_family
-
-    @property
-    def region_version(self) -> str:
-        """The Region family's schema version."""
-
-        return self._compilation.region_version
-
-    @property
-    def source_contributions(self) -> tuple[Contribution, ...]:
-        return self._compilation.contributions
 
 
 def _parameter_members(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[object]], ...]:
@@ -353,39 +399,249 @@ def _parameter_members(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[
     return tuple(ordered.items())
 
 
-def _region_constraint(
-    path: QualifiedPath,
-    region: _Ref[DataflowRegion],
-) -> Constraint:
-    dependency = region.dependency("region")
-
-    def evaluate(values: DependencyView) -> Answer[bool]:
-        report = validate_region(cast(DataflowRegion, values["region"]))
-        if not report.issues:
-            return Decided(True)
-        return Absent(
-            tuple(
-                Finding(
-                    FindingKind.REJECTION,
-                    f"kernel-region-{issue.code}",
-                    path,
-                    issue.message,
-                    (("region_path", issue.path),),
-                    (region.path,),
-                )
-                for issue in report.issues
+def _physical_names(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[object], str], ...]:
+    seen: set[str] = set()
+    resolved: list[tuple[str, Parameter[object], str]] = []
+    for member_name, template in _parameter_members(kernel_type):
+        physical_name = template.stable_name or member_name
+        if physical_name in seen:
+            raise AuthoringError(
+                f"{kernel_type.__name__} declares physical parameter {physical_name!r} twice"
             )
+        seen.add(physical_name)
+        resolved.append((member_name, template, physical_name))
+    return tuple(resolved)
+
+
+def _region_valid(region: Region) -> Constraint:
+    """The one constraint every Kernel gets: its Region is canonically valid.
+
+    Generated rather than asked for.  A Kernel that had to remember to validate
+    its own Region would be a Kernel that could forget, and the failure mode --
+    a structurally invalid Region travelling into a Network as though it were
+    fine -- is exactly the one the canonical validator exists to prevent.
+    """
+
+    def evaluate(*, region: DataflowRegion) -> object:
+        report = validate_region(region)
+        if not report.issues:
+            return True
+        first = report.issues[0]
+        return reject(
+            f"kernel-region-{first.code}",
+            first.message,
+            values={
+                "region_path": first.path,
+                "issues": tuple(issue.code for issue in report.issues),
+            },
         )
 
-    return Constraint(path, EvaluatorSpec((dependency,), evaluate))
+    return Constraint((("region", cast("ValueSource[object]", region)),), evaluate)
 
 
-def _audit_region_ownership(
+def _physical_result_property(
     kernel_type: type[Kernel],
+    region: Region,
+    parameters: tuple[tuple[str, Parameter[object], str], ...],
+    decisions: tuple[tuple[str, Decision[object]], ...],
+) -> Derived[KernelPhysicalResult]:
+    """Assemble the detached build unit from resolved values and nothing else.
+
+    Every input is an ordinary dependency, so the property is ``Unresolved``
+    exactly when one of them is and there is no second notion of "configured".
+    The ABI is built here rather than stored on an object because it is a
+    function of the resolved parameter table, and a Kernel that says the table
+    is unrealizable does so by raising, which becomes a rejecting absence.
+    """
+
+    dependencies: list[tuple[str, ValueSource[object]]] = [
+        ("region", cast("ValueSource[object]", region))
+    ]
+    for member_name, template, _physical_name in parameters:
+        if template.source is not None:
+            dependencies.append((f"parameter_{member_name}", template.source))
+    for member_name, declaration in decisions:
+        dependencies.append((f"decision_{member_name}", cast("ValueSource[object]", declaration)))
+
+    def evaluate(**values: object) -> object:
+        table: dict[str, bool | int | float | str] = {}
+        for member_name, template, physical_name in parameters:
+            value = (
+                template.fixed_value
+                if template.source is None
+                else values[f"parameter_{member_name}"]
+            )
+            if type(value) not in (bool, int, float, str):
+                raise AuthoringError(
+                    f"{kernel_type.__name__} physical parameter {physical_name!r} resolved to "
+                    f"{type(value).__name__}, which is not a scalar"
+                )
+            table[physical_name] = cast("bool | int | float | str", value)
+        frozen_table = MappingProxyType(dict(table))
+        try:
+            abi = kernel_type.component_abi(frozen_table)
+        except PhysicallyUnsupported as error:
+            return reject(
+                "kernel-physically-unsupported",
+                f"{kernel_type.id} has no realization for this configuration: {error}",
+                values={"kernel": kernel_type.id},
+            )
+        if not isinstance(abi, ComponentABI):
+            raise AuthoringError(
+                f"{kernel_type.__name__}.component_abi() did not return ComponentABI"
+            )
+        expected = tuple(
+            sorted(
+                (name, str(int(value)) if isinstance(value, bool) else str(value))
+                for name, value in frozen_table.items()
+            )
+        )
+        if abi.parameters != expected:
+            raise AuthoringError(
+                f"{kernel_type.__name__}.component_abi() must expose its exact resolved "
+                "physical parameter table"
+            )
+        return KernelPhysicalResult(
+            kernel_type.id,
+            kernel_type.version,
+            kernel_type.computation,
+            region.family,
+            region.version,
+            cast(DataflowRegion, values["region"]),
+            MappingProxyType(
+                {member_name: values[f"decision_{member_name}"] for member_name, _ in decisions}
+            ),
+            frozen_table,
+            abi,
+            tuple(kernel_type.sources),
+            kernel_type.render_context(frozen_table),
+        )
+
+    # The compiler checks an evaluator's *signature* against its dependency
+    # mapping, and rightly refuses a ``**kwargs`` one: a typo in an authored
+    # dependency name would otherwise be silently accepted.  This evaluator is
+    # generated, and its parameter list is generated from the same tuple the
+    # mapping is, so the declared signature is stated explicitly rather than
+    # the check being weakened for everyone.
+    evaluate.__signature__ = Signature(  # type: ignore[attr-defined]
+        [
+            _SignatureParameter(name, _SignatureParameter.KEYWORD_ONLY)
+            for name, _source in dependencies
+        ]
+    )
+    return Derived(
+        semantics_for(KernelPhysicalResult),
+        None,
+        tuple(dependencies),
+        evaluate,
+    )
+
+
+def _synthesize_projections(kernel_type: type[Kernel]) -> None:
+    """Write the two projections and their parts onto one concrete Kernel class.
+
+    Synthesis rather than authoring, because the output of each projection is
+    this class's own ``region`` -- a declaration the base class cannot name --
+    and because a Kernel that had to hand-assemble a readiness profile over its
+    own parameter table would be hand-assembling something with exactly one
+    correct answer.  What the author still owns is the classification: which of
+    their constraints gate the Region and which gate the build unit.
+
+    An abstract intermediate Kernel -- one with no ``region`` yet -- is left
+    alone.  ``_finalize_kernel`` is where a class that is actually compiled is
+    required to be complete, so an incomplete base is a perfectly ordinary
+    thing to write and not an error until someone tries to use it.
+    """
+
+    shadowed = sorted(RESERVED_KERNEL_NAMES & set(kernel_type.__dict__))
+    if shadowed:
+        raise AuthoringError(
+            f"{kernel_type.__name__} declares {shadowed[0]!r}, which the Kernel layer "
+            "synthesizes from the Region, the Parameter table and the support groups"
+        )
+
+    declarations = dict(declared_members(kernel_type))
+    region = declarations.get("region")
+    if not isinstance(region, Region):
+        return
+
+    parameters = _physical_names(kernel_type)
+    decisions = tuple(
+        (name, declaration)
+        for name, declaration in declarations.items()
+        if isinstance(declaration, Decision)
+    )
+
+    dataflow_support = declarations.get("dataflow_support")
+    physical_support = declarations.get("physical_support")
+    for label, group in (
+        ("dataflow_support", dataflow_support),
+        ("physical_support", physical_support),
+    ):
+        if group is not None and not isinstance(group, ConstraintGroup):
+            raise AuthoringError(
+                f"{kernel_type.__name__}.{label} is a {type(group).__name__}; it names one "
+                "ConstraintGroup of the constraints that gate that projection"
+            )
+
+    region_valid = _region_valid(region)
+    dataflow_accepts = ConstraintGroup(
+        region_valid,
+        *(dataflow_support.constraints if isinstance(dataflow_support, ConstraintGroup) else ()),
+    )
+    dataflow_ready = Readiness(
+        properties=(cast("ValueSource[object]", region),),
+        constraints=dataflow_accepts,
+    )
+    physical_result = _physical_result_property(kernel_type, region, parameters, decisions)
+    physical_ready = Readiness(
+        decisions=tuple(declaration for _name, declaration in decisions),
+        properties=(cast("ValueSource[object]", physical_result),),
+        constraints=(
+            *dataflow_accepts.constraints,
+            *(
+                physical_support.constraints
+                if isinstance(physical_support, ConstraintGroup)
+                else ()
+            ),
+        ),
+    )
+    projection_constraints: tuple[ConstraintGroup, ...] = (dataflow_accepts,)
+    if isinstance(physical_support, ConstraintGroup):
+        projection_constraints = (*projection_constraints, physical_support)
+
+    setattr(kernel_type, "region_structurally_valid", region_valid)
+    setattr(kernel_type, "dataflow_accepts", dataflow_accepts)
+    setattr(kernel_type, "dataflow_ready", dataflow_ready)
+    setattr(
+        kernel_type,
+        "dataflow",
+        Projection(
+            cast("ValueSource[DataflowRegion]", region),
+            readiness=dataflow_ready,
+            constraints=(dataflow_accepts,),
+            name="dataflow",
+        ),
+    )
+    setattr(kernel_type, "physical_result", physical_result)
+    setattr(kernel_type, "physical_ready", physical_ready)
+    setattr(
+        kernel_type,
+        "physical",
+        Projection(
+            cast("ValueSource[KernelPhysicalResult]", physical_result),
+            readiness=physical_ready,
+            constraints=projection_constraints,
+            name="physical",
+        ),
+    )
+
+
+def _region_closure_decisions(
     compiled: _CompiledSpace[K],
     region: _Ref[DataflowRegion],
-) -> None:
-    """Refuse a Kernel whose own Decisions can change its Region.
+) -> tuple[QualifiedPath, ...]:
+    """Classify local Decisions by whether they can change the Region.
 
     A Kernel-local Decision is physical only: it may reorganize the hardware,
     never the logical contract a peer or a Design reads.  The mechanical form of
@@ -401,11 +657,19 @@ def _audit_region_ownership(
     not a reorganization of hardware.  So both the value graph and the
     applicability graph are walked.  An *outer* gate -- a Design's segment
     condition or branch selector -- is still fine, because it is not owned here.
+
+    The classification is returned rather than enforced here.  U2b asked for
+    the analysis to exist without the ownership rule relaxing, so the two are
+    separated: this function computes the set and ``_finalize_kernel`` refuses a
+    non-empty one.  A set that is computed and proven empty is a different piece
+    of evidence from a set nobody ever computed, and a synthetic local dataflow
+    Decision is explicitly *not* an argument for removing the refusal.
     """
 
     owned = {declaration.path for declaration in compiled.spec.decisions}
     properties = {declaration.path: declaration for declaration in compiled.spec.properties}
     decisions = {declaration.path: declaration for declaration in compiled.spec.decisions}
+    reached: list[QualifiedPath] = []
     pending = [region.path]
     visited: set[QualifiedPath] = set()
     while pending:
@@ -428,14 +692,73 @@ def _audit_region_ownership(
                 edges.extend(applies_if.dependencies)
         for dependency in edges:
             if dependency.kind is DependencyKind.DECISION and dependency.path in owned:
-                raise AuthoringError(
-                    f"{kernel_type.__name__} lets its own Decision "
-                    f"{dependency.path} reach {region.path}; a choice that changes "
-                    "the Region -- including whether it applies at all -- belongs to "
-                    "the enclosing Design and arrives as an Input"
-                )
+                reached.append(dependency.path)
             if dependency.kind in (DependencyKind.DECISION, DependencyKind.PROPERTY):
                 pending.append(dependency.path)
+    return tuple(dict.fromkeys(reached))
+
+
+def _external_decisions(compiled: _CompiledSpace[K]) -> tuple[QualifiedPath, ...]:
+    """Decision paths this fragment reads but does not own.
+
+    Static, unlike the point-filtered form it replaces.  Provenance that changes
+    as a point is filled in is provenance a persisted artifact key cannot use;
+    "which outside choices can this Kernel's values depend on" is a property of
+    the compiled fragment and is the same question anyone actually asks.
+    """
+
+    owned = {declaration.path for declaration in compiled.spec.decisions}
+    local = {declaration.path for declaration in compiled.spec.properties}
+    found: list[QualifiedPath] = []
+    for declaration in (
+        *compiled.spec.decisions,
+        *compiled.spec.properties,
+        *compiled.spec.constraints,
+    ):
+        edges: list[DependencyRef] = []
+        evaluator = getattr(declaration, "evaluator", None)
+        if evaluator is not None:
+            edges.extend(evaluator.dependencies)
+        domain = getattr(declaration, "domain", None)
+        if domain is not None:
+            edges.extend(domain.dependencies)
+        applies_if = getattr(declaration, "applies_if", None)
+        if applies_if is not None:
+            edges.extend(applies_if.dependencies)
+        for dependency in edges:
+            if dependency.kind is DependencyKind.DECISION and dependency.path not in owned:
+                found.append(dependency.path)
+    for _name, reference in compiled.inputs:
+        if reference.kind is DependencyKind.DECISION and reference.path not in owned:
+            found.append(reference.path)
+        elif reference.kind is DependencyKind.PROPERTY and reference.path not in local:
+            # An Input bound to an outside property is an outside dependency, but
+            # the decisions behind it belong to whoever owns that property and
+            # are named there; recording the property would confuse the two.
+            continue
+    return tuple(dict.fromkeys(found))
+
+
+def _with_provenance(
+    specification: EvaluatorSpec[Answer[object]],
+    provenance: tuple[QualifiedPath, ...],
+) -> EvaluatorSpec[Answer[object]]:
+    """Stamp the compiled fragment's import provenance onto the physical result.
+
+    Done here and not in the declaration because the same Kernel class placed at
+    two roles reads two different sets of outside paths, and a closure written
+    in the class body would have to pretend otherwise.
+    """
+
+    inner = specification.evaluator
+
+    def evaluate(values: DependencyView) -> Answer[object]:
+        answer = inner(values)
+        if isinstance(answer, Decided) and isinstance(answer.value, KernelPhysicalResult):
+            return Decided(replace(answer.value, imported_decisions=provenance))
+        return answer
+
+    return EvaluatorSpec(specification.dependencies, evaluate)
 
 
 def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
@@ -471,6 +794,8 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         )
     if region_template.value_semantics.type_token is not DATAFLOW_REGION_SEMANTICS.type_token:
         raise AuthoringError(f"{kernel_type.__name__}.region is not a DataflowRegion")
+    _check_constraints_are_classified(kernel_type, declarations)
+
     region_ref = cast("_Ref[DataflowRegion]", compiled.member("region"))
     region_paths = tuple(
         declaration.path
@@ -482,36 +807,12 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
             f"{kernel_type.__name__} must declare exactly one DataflowRegion; "
             f"compiled Region properties are {tuple(str(path) for path in region_paths)}"
         )
-    _audit_region_ownership(kernel_type, compiled, region_ref)
-
-    parameters: list[_CompiledParameter] = []
-    physical_names: set[str] = set()
-    for member_name, template in _parameter_members(kernel_type):
-        physical_name = template.stable_name or member_name
-        if physical_name in physical_names:
-            raise AuthoringError(
-                f"{kernel_type.__name__} declares physical parameter {physical_name!r} twice"
-            )
-        physical_names.add(physical_name)
-        if template.source is None:
-            parameters.append(
-                _CompiledParameter(
-                    member_name,
-                    physical_name,
-                    template,
-                    None,
-                    template.fixed_value,
-                    template.why,
-                )
-            )
-            continue
-        parameters.append(
-            _CompiledParameter(
-                member_name,
-                physical_name,
-                template,
-                resolve_value_source(compiled, template.source, "parameter"),
-            )
+    in_closure = _region_closure_decisions(compiled, region_ref)
+    if in_closure:
+        raise AuthoringError(
+            f"{kernel_type.__name__} lets its own Decision {in_closure[0]} reach "
+            f"{region_ref.path}; a choice that changes the Region -- including whether it "
+            "applies at all -- belongs to the enclosing Design and arrives as an Input"
         )
 
     contributions = tuple(kernel_type.sources)
@@ -520,41 +821,15 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
     ):
         raise AuthoringError(f"{kernel_type.__name__}.sources contains a non-Contribution")
 
-    region_constraint_path = QualifiedPath(
-        f"constraint.{compiled.namespace}.region_structurally_valid"
-    )
-    structural = _region_constraint(region_constraint_path, region_ref)
-    constraints = (*compiled.spec.constraints, structural)
-    constraint_paths = tuple(item.path for item in constraints)
-    feasibility_name = f"{compiled.namespace}.feasibility"
-    readiness_name = f"{compiled.namespace}.configured"
-    property_paths = [region_ref.path]
-    for parameter in parameters:
-        if parameter.source is not None and parameter.source.kind is DependencyKind.PROPERTY:
-            if parameter.source.path not in property_paths:
-                property_paths.append(parameter.source.path)
-    decision_refs: tuple[tuple[str, _Ref[object]], ...] = tuple(
-        (
-            decision.path.value,
-            _Ref(decision.path, DependencyKind.DECISION, decision.value_semantics),
-        )
-        for decision in compiled.spec.decisions
-    )
+    physical_ref = cast("_Ref[KernelPhysicalResult]", compiled.member("physical_result"))
+    provenance = _external_decisions(compiled)
     specification = replace(
         compiled.spec,
-        constraints=constraints,
-        constraint_sets=(
-            *compiled.spec.constraint_sets,
-            ConstraintSet(feasibility_name, constraint_paths),
-        ),
-        readiness_profiles=(
-            *compiled.spec.readiness_profiles,
-            ReadinessProfile(
-                readiness_name,
-                tuple(ref.path for _name, ref in decision_refs),
-                tuple(property_paths),
-                constraint_paths,
-            ),
+        properties=tuple(
+            replace(declaration, evaluator=_with_provenance(declaration.evaluator, provenance))
+            if declaration.path == physical_ref.path
+            else declaration
+            for declaration in compiled.spec.properties
         ),
     )
     metadata = _KernelCompilation(
@@ -566,11 +841,22 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         region_template.family,
         region_template.version,
         computation,
-        tuple(parameters),
-        feasibility_name,
-        readiness_name,
-        decision_refs,
+        tuple(
+            _CompiledParameter(
+                member_name,
+                physical_name,
+                template,
+                template.source,
+                template.fixed_value,
+                template.why,
+            )
+            for member_name, template, physical_name in _physical_names(kernel_type)
+        ),
         contributions,
+        physical_ref,
+        in_closure,
+        tuple(declaration.path for declaration in compiled.spec.decisions),
+        provenance,
     )
     exports = dict(compiled.exports)
     exports.setdefault("region", cast("_Ref[object]", region_ref))
@@ -582,127 +868,76 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
     )
 
 
-def _compile_kernel(
-    kernel_type: type[K],
-    namespace: str,
-    inputs: Mapping[str, _Ref[object]],
-    *,
-    applies_if: EvaluatorSpec[Answer[bool]] | None = None,
-) -> _CompiledSpace[K]:
-    compiled = _compile_space(
-        kernel_type,
-        namespace,
-        inputs,
-        applies_if=applies_if,
-        _allow_problem=False,
+def _check_constraints_are_classified(
+    kernel_type: type[Kernel], declarations: Mapping[str, object]
+) -> None:
+    """Every authored Constraint gates one projection or the other, explicitly.
+
+    An unclassified constraint is the failure this rule exists to prevent: it
+    would be compiled, evaluated, and consulted by nothing, so a Kernel would
+    silently stop refusing what its author wrote a refusal for.  Which of the
+    two questions it answers is a real decision and is not inferable from what
+    it reads -- a physical feasibility constraint and a semantic one routinely
+    depend on exactly the same folding facts.
+    """
+
+    grouped: set[int] = set()
+    for name in ("dataflow_accepts", "dataflow_support", "physical_support"):
+        group = declarations.get(name)
+        if isinstance(group, ConstraintGroup):
+            grouped.update(id(item) for item in group.constraints)
+    ungrouped = sorted(
+        name
+        for name, declaration in declarations.items()
+        if isinstance(declaration, Constraint) and id(declaration) not in grouped
     )
-    if not isinstance(compiled.extension, _KernelCompilation):
-        raise AuthoringError(f"{kernel_type.__name__} did not produce Kernel metadata")
-    return compiled
+    if ungrouped:
+        raise AuthoringError(
+            f"{kernel_type.__name__} declares Constraint {ungrouped[0]!r} in neither "
+            "dataflow_support nor physical_support; a Kernel says which projection each "
+            "of its constraints gates, because a constraint in no group refuses nothing"
+        )
 
 
-def configure_kernel(
+def kernel_dataflow(
     engine: Engine,
     compiled: _CompiledSpace[K],
     point: DesignPoint,
-) -> Answer[K]:
-    """Resolve one Kernel from the declarations it owns, then detach from the point."""
+) -> ProjectionAssessment[DataflowRegion]:
+    """Ask one compiled Kernel fragment for its Region at one point.
 
-    metadata = compiled.extension
-    if not isinstance(metadata, _KernelCompilation):
-        raise AuthoringError(f"{compiled.owner.__name__} is not a compiled Kernel")
-    readiness = engine.check_readiness(point, metadata.readiness_profile)
-    if readiness.ready is not True:
-        findings = tuple(
-            finding
-            for answer in readiness.answers.values()
-            if isinstance(answer, Unresolved)
-            for finding in answer.findings
-        )
-        return Unresolved(
-            findings
-            or (
-                Finding(
-                    FindingKind.BLOCKER,
-                    "kernel-not-ready",
-                    QualifiedPath(compiled.namespace),
-                    f"{metadata.kernel_id} is not ready to configure",
-                ),
-            )
-        )
-    assessment = engine.evaluate_constraint_set(point, metadata.feasibility_set)
-    if assessment.verdict is not True:
-        findings = tuple(
-            finding
-            for answer in assessment.answers.values()
-            if isinstance(answer, (Absent, Unresolved))
-            for finding in answer.findings
-        )
-        return Unresolved(
-            findings
-            or (
-                Finding(
-                    FindingKind.REJECTION,
-                    "kernel-infeasible",
-                    QualifiedPath(compiled.namespace),
-                    f"{metadata.kernel_id} does not cover this configuration",
-                ),
-            )
-        )
+    The direct-fragment form of ``kernel.dataflow``, for a caller that holds a
+    compiled record rather than an attached occurrence -- an enclosing Design
+    resolving a selected candidate, or evidence configuring a Kernel from a flat
+    engine point.  It runs the same compiled projection and the same reduction.
+    """
 
-    region_answer = answer_for(engine, point, cast("_Ref[object]", metadata.region))
-    if not isinstance(region_answer, Decided):
-        return Unresolved(region_answer.findings)
-
-    parameter_values: dict[str, bool | int | float | str] = {}
-    for parameter in metadata.parameters:
-        if parameter.source is None:
-            value = parameter.constant
-        else:
-            answer = answer_for(engine, point, parameter.source)
-            if not isinstance(answer, Decided):
-                return Unresolved(answer.findings)
-            value = answer.value
-        if type(value) not in (bool, int, float, str):
-            return Unresolved(
-                (
-                    Finding(
-                        FindingKind.BLOCKER,
-                        "kernel-parameter-not-scalar",
-                        QualifiedPath(compiled.namespace),
-                        f"physical parameter {parameter.physical_name!r} is not scalar",
-                    ),
-                )
-            )
-        parameter_values[parameter.physical_name] = cast("bool | int | float | str", value)
-
-    assignments = {
-        reference.path: point.assignments[reference.path]
-        for _name, reference in metadata.local_decisions
-    }
-    retained = {
-        id(metadata.region_template): cast(DataflowRegion, region_answer.value),
-        **{
-            id(declaration): point.assignments[compiled.member(name).path]
-            for name, declaration in declared_members(metadata.owner)
-            if isinstance(declaration, Decision)
-        },
-    }
-    instance = object.__new__(metadata.owner)
-    Kernel._initialize(
-        instance,
-        cast("_KernelCompilation[Kernel]", metadata),
-        retained,
-        assignments,
-        parameter_values,
-        imported_decisions(
-            point,
-            compiled.spec,
-            compiled.inputs,
-            {reference.path for _name, reference in metadata.local_decisions},
-        ),
+    return cast(
+        "ProjectionAssessment[DataflowRegion]",
+        evaluate_projection(engine, point, compiled.projection("dataflow")),
     )
-    return Decided(cast(K, instance))
 
 
-__all__ = ["Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel"]
+def kernel_physical(
+    engine: Engine,
+    compiled: _CompiledSpace[K],
+    point: DesignPoint,
+) -> ProjectionAssessment[KernelPhysicalResult]:
+    """Ask one compiled Kernel fragment for its detached build unit at one point."""
+
+    return cast(
+        "ProjectionAssessment[KernelPhysicalResult]",
+        evaluate_projection(engine, point, compiled.projection("physical")),
+    )
+
+
+__all__ = [
+    "Kernel",
+    "KernelPhysicalResult",
+    "Parameter",
+    "PhysicallyUnsupported",
+    "Region",
+    "RegionRefused",
+    "kernel_dataflow",
+    "kernel_physical",
+]

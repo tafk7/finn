@@ -12,9 +12,10 @@ service.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from typing import cast
 
-from typing_extensions import Self
 
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -168,11 +169,11 @@ class BufferedConsumerKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI(
             "buffered_consumer",
             (),
-            (("DEPTH", str(configured.DEPTH)), ("LANES", str(configured.LANES))),
+            (("DEPTH", str(parameters["DEPTH"])), ("LANES", str(parameters["LANES"]))),
         )
 
 
@@ -192,7 +193,7 @@ class ProducingKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI("producing", ())
 
 
@@ -212,7 +213,7 @@ class MisportedConsumerKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI("misported_consumer", ())
 
 
@@ -292,12 +293,12 @@ def test_an_alternative_keeps_the_region_and_changes_only_physical_facts() -> No
     first = configure_design(engine, design, plain)
     second = configure_design(engine, design, buffered)
     assert isinstance(first, Decided) and isinstance(second, Decided)
-    assert type(first.value.consume) is ConsumerKernel
-    assert type(second.value.consume) is BufferedConsumerKernel
+    assert first.value.consume.kernel_id == "consumer"
+    assert second.value.consume.kernel_id == "buffered_consumer"
     assert dict(first.value.consume.parameters) == {}
     assert dict(second.value.consume.parameters) == {"LANES": 2, "DEPTH": 4}
-    assert first.value.consume.source_contributions == ()
-    assert len(second.value.consume.source_contributions) == 2
+    assert first.value.consume.contributions == ()
+    assert len(second.value.consume.contributions) == 2
     assert first.value.resolved_network == second.value.resolved_network
 
 
@@ -495,7 +496,7 @@ def test_committing_the_selector_changes_only_what_is_allowed_to_vary() -> None:
     assert plain.value.node_id("consume") == buffered.value.node_id("consume")
     assert plain.value.region_family("consume") == buffered.value.region_family("consume")
     assert plain.value.selected_candidates != buffered.value.selected_candidates
-    assert type(plain.value.consume) is not type(buffered.value.consume)
+    assert plain.value.consume.kernel_id != buffered.value.consume.kernel_id
 
 
 def test_the_configured_design_keeps_the_selection_but_not_the_catalog() -> None:

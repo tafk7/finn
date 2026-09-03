@@ -10,7 +10,7 @@ from typing import cast
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Decided, Engine, Unresolved
+from finn.dataflow._engine import Absent, Decided, Engine
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
@@ -21,7 +21,7 @@ from finn.dataflow.kernels.dotp_axi import (
     FINNLIB_SOURCES,
     construct_dot_product_region,
 )
-from finn.dataflow.kernels.kernel import configure_kernel
+from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.ops.mvau.regions import construct_dot_product_region as baseline_region
 from finn.dataflow.model.spec_algebra import assemble_specs
 
@@ -119,7 +119,7 @@ def _configure(
             "dotp_test.kernel.compute_pumping": pumping,
         },
     ).point
-    return configure_kernel(engine, kernel, point)
+    return kernel_physical(engine, kernel, point).accepted_answer
 
 
 def test_dotp_region_matches_the_previous_authority() -> None:
@@ -135,8 +135,8 @@ def test_dotp_region_matches_the_previous_authority() -> None:
         2,
         4,
     )
-    assert configured.value.resolved_region == expected
-    assert configured.value.resolved_region == construct_dot_product_region(
+    assert configured.value.region == expected
+    assert configured.value.region == construct_dot_product_region(
         2,
         8,
         4,
@@ -170,9 +170,7 @@ def test_dotp_parameter_table_remains_exact() -> None:
 def test_dotp_owns_only_its_physical_decision() -> None:
     configured = _configure(pe=2, simd=4, pumping=True)
     assert isinstance(configured, Decided)
-    assert {path.value for path in configured.value.assignments} == {
-        "dotp_test.kernel.compute_pumping",
-    }
+    assert set(configured.value.assignments) == {"compute_pumping"}
     assert {path.value for path in configured.value.imported_decisions} == {
         "dotp_test.pe",
         "dotp_test.simd",
@@ -184,19 +182,21 @@ def test_dotp_region_family_is_inspectable_without_the_kernel_id() -> None:
     assert isinstance(configured, Decided)
     assert configured.value.region_family == "mvau.dot_product"
     assert configured.value.region_version == "1"
-    assert configured.value.id == "dotp_axi"
+    assert configured.value.kernel_id == "dotp_axi"
 
 
 def test_dotp_feasibility_rejects_numeric_pumping_and_packing_failures() -> None:
     bad_output = _configure(output="INT16")
-    assert isinstance(bad_output, Unresolved)
+    # A refusal, not an unfinished point: every fact is decided and this
+    # implementation says no.
+    assert isinstance(bad_output, Absent)
     assert "dotp-axi-numeric-types-unsupported" in {finding.code for finding in bad_output.findings}
 
     bad_pumping = _configure(simd=1, pumping=True)
-    assert isinstance(bad_pumping, Unresolved)
+    assert isinstance(bad_pumping, Absent)
 
     bad_packing = _configure(weight="INT27", target=DspBlock.DSP58, narrow=False)
-    assert isinstance(bad_packing, Unresolved)
+    assert isinstance(bad_packing, Absent)
     assert "dotp-axi-weights-do-not-pack" in {finding.code for finding in bad_packing.findings}
 
 
@@ -204,7 +204,7 @@ def test_dotp_sources_and_abi_are_exact() -> None:
     configured = _configure(pe=2, simd=4, pumping=True)
     assert isinstance(configured, Decided)
     kernel = configured.value
-    assert tuple(source.path for source in kernel.source_contributions) == FINNLIB_SOURCES
+    assert tuple(source.path for source in kernel.contributions) == FINNLIB_SOURCES
     assert kernel.abi.entry_point == "dotp_axi"
     assert set(kernel.abi.physical_names()) == {
         "ap_clk",

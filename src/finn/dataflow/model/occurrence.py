@@ -835,20 +835,27 @@ def _rejection_findings(
     return tuple(findings)
 
 
-def occurrence_project(instance: Space, declaration: Projection[T]) -> ProjectionAssessment[T]:
-    """Evaluate a Projection without exposing its bound runtime handles."""
+def evaluate_projection(
+    engine: Engine,
+    point: DesignPoint,
+    compiled: _CompiledProjection[object],
+) -> ProjectionAssessment[T]:
+    """Run one compiled projection at one point.
 
-    state = _occurrence_state(instance)
-    lineage = state.runtime.lineage
-    point = state.runtime.point
-    compiled = _projection_for_declaration(state, cast("Projection[object]", declaration))
-    with lineage.lock:
-        readiness = lineage.engine.check_readiness(point, compiled.readiness_profile)
-        output = answer_for(lineage.engine, point, compiled.output)
-        constraints = tuple(
-            lineage.engine.evaluate_constraint_set(point, name) for name in compiled.constraint_sets
-        )
-        accepted = _reduce_projection(compiled, readiness, constraints, output)
+    The reduction lives here and only here.  A layer that evaluates a compiled
+    fragment directly -- a Design resolving a selected candidate's physical
+    projection, say -- calls this rather than reimplementing the ordering, so
+    "Unresolved dominates, then absence, then refusal" cannot come to mean two
+    slightly different things in two places.  Locking is the caller's, because a
+    caller inside a lineage already holds it.
+    """
+
+    readiness = engine.check_readiness(point, compiled.readiness_profile)
+    output = answer_for(engine, point, compiled.output)
+    constraints = tuple(
+        engine.evaluate_constraint_set(point, name) for name in compiled.constraint_sets
+    )
+    accepted = _reduce_projection(compiled, readiness, constraints, output)
     return ProjectionAssessment(
         compiled.name,
         readiness,
@@ -856,6 +863,16 @@ def occurrence_project(instance: Space, declaration: Projection[T]) -> Projectio
         cast("Answer[T]", output),
         cast("Answer[T]", accepted),
     )
+
+
+def occurrence_project(instance: Space, declaration: Projection[T]) -> ProjectionAssessment[T]:
+    """Evaluate a Projection without exposing its bound runtime handles."""
+
+    state = _occurrence_state(instance)
+    lineage = state.runtime.lineage
+    compiled = _projection_for_declaration(state, cast("Projection[object]", declaration))
+    with lineage.lock:
+        return evaluate_projection(lineage.engine, state.runtime.point, compiled)
 
 
 def _subject_findings(subject: object) -> tuple[Finding, ...]:
@@ -1075,6 +1092,7 @@ __all__ = [
     "ProblemSource",
     "ProjectionAssessment",
     "VariantView",
+    "evaluate_projection",
     "is_attached_occurrence",
     "start_from_model",
     "start_occurrence",

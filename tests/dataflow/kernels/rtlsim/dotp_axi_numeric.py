@@ -23,7 +23,7 @@ from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.kernels.dotp_axi import DspBlock, DotpAxiKernel, FINNLIB_SOURCES
-from finn.dataflow.kernels.kernel import configure_kernel
+from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.model.spec_algebra import assemble_specs
 
 PASS, FAIL = 0, 1
@@ -273,7 +273,7 @@ def _configure(case: Case, weights: np.ndarray):
             "fixture.dotp_axi.compute_pumping": case.pumping,
         },
     ).point
-    answer = configure_kernel(engine, kernel, point)
+    answer = kernel_physical(engine, kernel, point).accepted_answer
     if not isinstance(answer, Decided):
         raise AssertionError(f"{case.label} did not configure: {answer.findings}")
     return answer.value

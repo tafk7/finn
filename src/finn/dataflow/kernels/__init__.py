@@ -9,12 +9,14 @@ Inputs, and owns nothing but physical realization locally.  ``DotpAxiKernel``
 and ``ReplayBufferKernel`` are the two reusable implementations; a Kernel that
 belongs to one operation belongs with that operation instead.
 
-Artifact projection is downstream and one-way -- ``artifacts`` reads a
-configured Kernel and produces artifact-native values.  Nothing in
+Artifact projection is downstream and one-way.  Nothing in
 ``finn.dataflow.artifacts`` imports this package.
 
-The final detached ``KernelPhysicalResult`` handoff is U2 work; today the
-artifact helpers still read the configured occurrence directly.
+A Kernel answers two questions separately -- ``kernel.dataflow`` for its
+Region, ``kernel.physical`` for its detached build unit -- and only the second
+crosses into artifact code.  ``KernelPhysicalResult`` is that boundary: an
+artifact function receives resolved identity, parameters, ABI and
+contributions, and no handle back into the design space.
 """
 
 from importlib import import_module
@@ -29,16 +31,28 @@ if TYPE_CHECKING:
     from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
     from finn.dataflow.kernels.kernel import (
         Kernel,
+        KernelPhysicalResult,
         Parameter,
+        PhysicallyUnsupported,
         Region,
         RegionRefused,
-        configure_kernel,
+        kernel_dataflow,
+        kernel_physical,
     )
     from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 
 _LAZY_EXPORTS = {
     name: ("finn.dataflow.kernels.kernel", name)
-    for name in ("Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel")
+    for name in (
+        "Kernel",
+        "KernelPhysicalResult",
+        "Parameter",
+        "PhysicallyUnsupported",
+        "Region",
+        "RegionRefused",
+        "kernel_dataflow",
+        "kernel_physical",
+    )
 }
 _LAZY_EXPORTS.update(
     {
@@ -75,9 +89,13 @@ __all__ = [
     # the generic Kernel contract
     "Kernel",
     "Parameter",
+    "PhysicallyUnsupported",
     "Region",
     "RegionRefused",
-    "configure_kernel",
+    # the two projections, and the detached value the physical one produces
+    "KernelPhysicalResult",
+    "kernel_dataflow",
+    "kernel_physical",
     # downstream artifact projection, one-way
     "kernel_source_derivation",
     "portable_kernel_component",

@@ -120,10 +120,13 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
     assert tuple(import_module("finn.dataflow.ops.mvau.designs").__all__) == ()
     assert set(import_module("finn.dataflow.kernels").__all__) == {
         "Kernel",
+        "KernelPhysicalResult",
         "Parameter",
+        "PhysicallyUnsupported",
         "Region",
         "RegionRefused",
-        "configure_kernel",
+        "kernel_dataflow",
+        "kernel_physical",
         "kernel_source_derivation",
         "portable_kernel_component",
         "resolve_kernel_contributions",

@@ -7,9 +7,8 @@ from __future__ import annotations
 
 from enum import Enum
 from math import ceil, floor
+from collections.abc import Mapping
 from typing import cast
-
-from typing_extensions import Self
 
 from finn.dataflow.artifacts.abi import (
     Bus,
@@ -28,6 +27,7 @@ from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.declarations import (
+    ConstraintGroup,
     Decision,
     Input,
     constraint,
@@ -510,6 +510,22 @@ class DotpAxiKernel(Kernel):
     def pumping_supported(*, pumping: bool, simd: int) -> bool:
         return simd >= 2 if pumping else True
 
+    #: Every one of this Kernel's constraints is about *this implementation*.
+    #: The dot-product Region is a logical contract over folding and operand
+    #: types; whether a DSP58 can pack those operands, whether the core drives
+    #: its accumulator straight out, and whether pumping is available at this
+    #: SIMD are questions about realizing that contract here.  A Region this
+    #: core cannot build is still a Region, and something else may build it.
+    physical_support = ConstraintGroup(
+        operand_types_supported,
+        operand_widths_supported,
+        target_supported,
+        width_supported,
+        narrow_weights_supported,
+        pumping_supported,
+        name="realizable",
+    )
+
     PE = Parameter(pe)
     SIMD = Parameter(simd)
     PUMPED_COMPUTE = Parameter(compute_pumping)
@@ -561,8 +577,7 @@ class DotpAxiKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
-        parameters = configured.parameters
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
         pe = cast(int, parameters["PE"])
         simd = cast(int, parameters["SIMD"])
         activation_width = cast(int, parameters["ACTIVATION_WIDTH"])

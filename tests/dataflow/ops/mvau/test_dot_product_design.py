@@ -178,8 +178,8 @@ def test_the_design_matches_the_retained_decomposed_authority(
         pe,
         simd,
     )
-    assert configured.kernels["replay"].resolved_region == expected_replay
-    assert configured.kernels["compute"].resolved_region == expected_compute
+    assert configured.kernels["replay"].region == expected_replay
+    assert configured.kernels["compute"].region == expected_compute
     assert configured.resolved_network == construct_decomposed_mvau_network(
         expected_replay, expected_compute
     )
@@ -208,8 +208,8 @@ def test_the_configured_design_contains_exactly_two_kernels() -> None:
     assert isinstance(answer, Decided)
     configured = answer.value
     assert set(configured.kernels) == {"replay", "compute"}
-    assert isinstance(configured.replay, ReplayBufferKernel)
-    assert isinstance(configured.compute, DotpAxiKernel)
+    assert configured.replay.kernel_id == "replay_buffer"
+    assert configured.compute.kernel_id == "dotp_axi"
     assert configured.selected_candidates == {
         "replay": "replay_buffer",
         "compute": "dotp_axi",
@@ -245,9 +245,7 @@ def test_the_design_owns_pe_and_simd_and_the_kernels_import_them() -> None:
             "mvau.dot_product.pe",
             "mvau.dot_product.simd",
         }
-    assert dict(configured.compute.assignments) == {
-        QualifiedPath("mvau.dot_product.compute.dotp_axi.compute_pumping"): False
-    }
+    assert dict(configured.compute.assignments) == {"compute_pumping": False}
     assert dict(configured.replay.assignments) == {}
 
 

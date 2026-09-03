@@ -28,7 +28,7 @@ from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
-from finn.dataflow.kernels.kernel import configure_kernel
+from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.kernels.replay_buffer import FINNLIB_SOURCES, ReplayBufferKernel
 from finn.dataflow.model.spec_algebra import assemble_specs
 
@@ -139,7 +139,7 @@ def _configure(case: Case) -> ReplayBufferKernel:
     point = engine.commit_assignments(
         point, {"fixture.pe": case.pe, "fixture.simd": case.simd}
     ).point
-    answer = configure_kernel(engine, kernel, point)
+    answer = kernel_physical(engine, kernel, point).accepted_answer
     if not isinstance(answer, Decided):
         raise AssertionError(f"{case.label} did not configure: {answer.findings}")
     return cast(ReplayBufferKernel, answer.value)
@@ -167,7 +167,7 @@ def _pack(
 
 def run_one(case: Case) -> int:
     kernel = _configure(case)
-    region = kernel.resolved_region
+    region = kernel.region
     datatype = DataType[case.activation]
     width = datatype.bitwidth()
     generator = np.random.RandomState(zlib.crc32(case.label.encode()) % (2**31))

@@ -64,7 +64,12 @@ from finn.dataflow.model.declarations import (
     declared_members,
     semantics_for,
 )
-from finn.dataflow.kernels.kernel import Kernel, _KernelCompilation, configure_kernel
+from finn.dataflow.kernels.kernel import (
+    Kernel,
+    KernelPhysicalResult,
+    _KernelCompilation,
+    kernel_physical,
+)
 from finn.dataflow.model.occurrence import is_attached_occurrence
 from finn.dataflow.network import (
     BoundaryContract,
@@ -95,7 +100,7 @@ class DataflowDesign(Space):
         self,
         compilation: _DesignCompilation[DataflowDesign],
         network: DataflowNetwork,
-        kernels: Mapping[str, Kernel],
+        kernels: Mapping[str, KernelPhysicalResult],
         selected: Mapping[str, str],
         values: Mapping[int, object],
         assignments: Mapping[QualifiedPath, object],
@@ -118,7 +123,7 @@ class DataflowDesign(Space):
                 "only Design-owned decisions and selectors are"
             ) from None
 
-    def _design_kernel(self, declaration: Kernels) -> Kernel:
+    def _design_kernel(self, declaration: Kernels) -> KernelPhysicalResult:
         for segment in self._compilation.segments:
             if segment.declaration is declaration:
                 try:
@@ -1045,7 +1050,9 @@ def _readiness_properties(
     paths = [network.path, *(segment.selected_region.path for segment in segments)]
     for segment in segments:
         for case in segment.cases:
-            wanted = case.metadata.readiness_profile
+            wanted = case.compiled.engine_name(
+                case.compiled.readiness_names, "physical_ready", "Readiness"
+            )
             for profile in case.compiled.spec.readiness_profiles:
                 if profile.name == wanted:
                     paths.extend(profile.properties)
@@ -1167,7 +1174,7 @@ def configure_design(
             ),
         )
 
-    kernels: dict[str, Kernel] = {}
+    kernels: dict[str, KernelPhysicalResult] = {}
     selected: dict[str, str] = {}
     for segment in design.segments:
         active = _segment_is_active(engine, point, segment)
@@ -1179,10 +1186,13 @@ def configure_design(
         if not isinstance(chosen, Decided):
             return cast("Answer[D]", chosen)
         case = segment.case(chosen.value)
-        configured = configure_kernel(engine, case.compiled, point)
-        if not isinstance(configured, Decided):
-            return cast("Answer[D]", configured)
-        kernels[segment.role] = configured.value
+        # One reduction, the occurrence layer's.  A Design resolving a selected
+        # candidate is asking that candidate's own physical projection, not a
+        # second question that happens to look like it.
+        physical = kernel_physical(engine, case.compiled, point)
+        if not isinstance(physical.accepted_answer, Decided):
+            return cast("Answer[D]", physical.accepted_answer)
+        kernels[segment.role] = physical.accepted_answer.value
         selected[segment.role] = chosen.value
 
     resolved = engine.query_property(point, design.network.path)
@@ -1222,7 +1232,7 @@ def _correspondence_findings(
     namespace: str,
     design: _DesignCompilation[D],
     network: DataflowNetwork,
-    kernels: Mapping[str, Kernel],
+    kernels: Mapping[str, KernelPhysicalResult],
     selected: Mapping[str, str],
 ) -> tuple[Finding, ...]:
     """Exact role, node, Region, and configured-Kernel correspondence.
@@ -1247,7 +1257,7 @@ def _correspondence_findings(
     for role, kernel in kernels.items():
         segment = design.segment(role)
         node_region = nodes.get(segment.node_id)
-        if node_region is None or kernel.resolved_region != node_region:
+        if node_region is None or kernel.region != node_region:
             findings.append(
                 Finding(
                     FindingKind.BLOCKER,
@@ -1257,7 +1267,7 @@ def _correspondence_findings(
                     (("role", role), ("node", segment.node_id)),
                 )
             )
-        if type(kernel) is not segment.case(selected[role]).compiled.owner:
+        if kernel.kernel_id != segment.case(selected[role]).compiled.owner.id:
             findings.append(
                 Finding(
                     FindingKind.BLOCKER,

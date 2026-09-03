@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from typing_extensions import Self
 
 import pytest
 
@@ -26,7 +27,7 @@ from finn.dataflow.computation import ComputationContract
 from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.declarations import Decision, Input, Problem, Space
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, configure_kernel
+from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, kernel_physical
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
@@ -66,11 +67,11 @@ class ArtifactKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
         return ComponentABI(
             "core",
             (),
-            (("LANES", str(configured.LANES)),),
+            (("LANES", str(parameters["LANES"])),),
         )
 
 
@@ -93,7 +94,7 @@ def _configured(namespace: str, lanes: int) -> ArtifactKernel:
         {"problem.root.extent": 8},
     )
     point = engine.commit_assignments(point, {"root.lanes": lanes}).point
-    answer = configure_kernel(engine, compiled, point)
+    answer = kernel_physical(engine, compiled, point).accepted_answer
     assert isinstance(answer, Decided)
     return answer.value
 

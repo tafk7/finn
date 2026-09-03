@@ -20,9 +20,8 @@ The core predates FINN's AXI naming and takes ``clk`` with an active-high
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import cast
-
-from typing_extensions import Self
 
 from finn.dataflow.artifacts.abi import (
     Bus,
@@ -211,8 +210,8 @@ class ReplayBufferKernel(Kernel):
     )
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
-        width = cast(int, configured.parameters["W"])
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
+        width = cast(int, parameters["W"])
         return ComponentABI(
             "replay_buffer",
             (
@@ -247,7 +246,7 @@ class ReplayBufferKernel(Kernel):
                 # one sequence, so it is not an AXI-Stream member of `out0`.
                 Signal("ofin", Direction.OUT, 1),
             ),
-            tuple((name, str(value)) for name, value in configured.parameters.items()),
+            tuple((name, str(value)) for name, value in parameters.items()),
         )
 
 
