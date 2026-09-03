@@ -12,13 +12,13 @@ rule**, tested rather than documented:
     ``artifacts`` imports the standard library and the approved dependencies.
     ``hardware`` may import ``artifacts``; never the reverse.
 
-``artifacts`` is a leaf.  ``ComponentABI``, ``ModuleDefinition``,
-``ModuleInstance`` and ``BuildUnit`` therefore live here rather than under
-``hardware`` as the design's §19 table first placed them -- a portable
-packaging boundary cannot depend on the semantic stack it is meant to be
-portable across.
+``artifacts`` is a leaf.  ``ComponentABI`` therefore lives here rather than
+beside the Kernel that declares one -- a portable packaging boundary cannot
+depend on the semantic stack it is meant to be portable across.
 
-The package is empty on purpose while it is built.  Nothing outside it imports
-it until the shadow-mode adapter (A9), so an increment that lands here cannot
-move a recorded value anywhere else.
+The rule is checked, not merely stated: ``test_package_boundaries`` walks every
+module in this package and refuses an import of ``model``, ``kernels``,
+``designs``, ``ops`` or ``_engine``.  What crosses *into* it is a detached
+value -- ``KernelPhysicalResult`` today, and whatever U5's composition
+contract settles on for a Design -- never an occurrence.
 """
