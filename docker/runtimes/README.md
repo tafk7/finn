@@ -46,6 +46,7 @@ against it.
 
 - **XRT** — `v++` links against it and `make_driver.py` calls `xclbinutil`.
 - **SLASH** — `MakeCPPDriver` builds `finn-vrt-driver` against VRT.
+- **slashkit** — the Slash Alveo link flow executes this linker in the image.
 - **PyNQ** — does NOT belong. `from pynq import ...` occurs only in
   `src/finn/qnn-data/templates/driver/driver_base.py`, which is a template
   copied to the board. Nothing in the image imports it.
@@ -59,8 +60,8 @@ container cannot own them. Install them on the host.
 **Source builds.** FINN fetches published artifacts and accepts supplied
 packages. It does not build third-party runtime stacks. A user with a V80 has
 already built and installed SLASH on the host, because the kernel module has to
-be there, so the `.deb` is a by-product they already hold. FINN has no V80 to
-test a build against.
+be there, so the SLASH and slashkit `.deb` files are by-products they already
+hold. FINN has no V80 to test a build against.
 
 **The Xilinx toolchain.** Vivado and Vitis are host facts. `docker/config`
 resolves them at launch and the lane mounts them read-only.

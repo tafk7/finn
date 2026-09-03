@@ -48,7 +48,7 @@ ARG UBUNTU_TAG=jammy-20230126
 
 # --- system: OS packages, locale, timezone. Changes ~never. ------------------
 FROM ubuntu:${UBUNTU_TAG} AS system
-LABEL maintainer="Jakoba Petri-Koenig <jakoba.petri-koenig@amd.com>, Yaman Umuroglu <yaman.umuroglu@amd.com>"
+LABEL maintainer="Jakoba Petri-Koenig <jakoba.petri-koenig@amd.com>, Thomas Preusser <thomas.preusser@amd.com>"
 
 # some Vitis deps require a timezone to be specified, which hangs in Docker
 # use workaround from https://grigorkh.medium.com/fix-tzdata-hangs-docker-image-build-cdb52cc3360d

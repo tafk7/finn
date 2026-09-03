@@ -142,7 +142,8 @@ tier adds no toolchain, licence or secret mounts. Docker networking remains
 open; use ``./docker/run --sbx`` when egress must be denied.
 
 If Docker is new to you, there are good `online resources <https://docker-curriculum.com/>`_.
-Read :ref:`General FINN Docker tips` and :ref:`Environment variables` also.
+Read :ref:`getting_started:General FINN Docker tips` and
+:ref:`getting_started:Environment variables` also.
 
 Launch interactive shell
 ************************
@@ -225,6 +226,7 @@ legacy callers. The most relevant are:
 * (required for Vitis) ``PLATFORM_REPO_PATHS`` points to the Vitis platform files (DSA).
 * ``FINN_RUNTIMES`` selects image runtime packages such as ``xrt`` or ``xrt,slash``.
 * (optional) ``NUM_DEFAULT_WORKERS`` (default 4) specifies the degree of parallelization for the transformations that can be run in parallel, potentially reducing build time
+* (optional) ``FINN_XELAB_MT`` overrides the number of threads used by ``xelab`` when building XSI simulations. It defaults to ``NUM_DEFAULT_WORKERS`` or 8 if unset; set it to 1 to disable xelab multithreading.
 * (optional) ``FINN_HOST_BUILD_DIR`` specifies which directory on the host will be used as the build directory. Defaults to ``/tmp/finn_build_<uid>``
 * (optional) ``JUPYTER_PORT`` (default 8888) changes the port for Jupyter inside Docker
 * (optional) ``JUPYTER_PASSWD_HASH`` (default "") Set the Jupyter notebook password hash. If set to empty string, token authentication will be used (token printed in terminal on launch).
@@ -422,7 +424,16 @@ Supported FPGA Hardware
 =======================
 **Vivado IPI support for any Xilinx FPGA:** FINN generates a Vivado IP Integrator (IPI) design from the neural network with AXI stream (FIFO) in-out interfaces, which can be integrated onto any Xilinx-AMD FPGA as part of a larger system. It’s up to you to take the FINN-generated accelerator (what we call “stitched IP” in the tutorials), wire it up to your FPGA design and send/receive neural network data to/from the accelerator.
 
-**Shell-integrated accelerator + driver:** For quick deployment, we target boards supported by  `PYNQ <http://www.pynq.io/>`_ . For these platforms, we can build a full bitfile including DMAs to move data into and out of the FINN-generated accelerator, as well as a Python driver to launch the accelerator. We support the Pynq-Z1, Pynq-Z2, Kria SOM, Ultra96, ZCU102 and ZCU104 boards, as well as UltraScale+-based Alveo datacenter accelerator cards.
+**Shell-integrated accelerator + driver:** For quick deployment, we target boards supported by  `PYNQ <http://www.pynq.io/>`_ . For these platforms, we can build a full bitfile including DMAs to move data into and out of the FINN-generated accelerator, as well as a Python driver to launch the accelerator. We support the AUP-ZU3, Kria SOM, Ultra96, ZCU102 and ZCU104 boards, as well as UltraScale+-based Alveo datacenter accelerator cards.
+
+Retired boards (Pynq-Z1/Pynq-Z2)
+********************************
+The Zynq-7000-based Pynq-Z1 and Pynq-Z2 boards were retired from official
+support with the move to Vivado 2024.2. AUP-ZU3 is the recommended supported
+replacement for academic use. The old board mappings remain available, but
+their board files are no longer downloaded or exercised by CI. Re-enabling
+them requires removing the boards from ``retired_pynq_boards`` and restoring
+their downloads in ``fetch-repos.sh``.
 
 PYNQ board first-time setup
 ****************************
@@ -449,7 +460,7 @@ Continue on the host side (replace the ``<PYNQ_IP>`` and ``<PYNQ_USERNAME>`` wit
 
 Vitis-based Alveo first-time setup
 **********************************
-The Vitis toolchain targets UltraScale and UltraScale+-based Alveo cards, such as the U250. We use *host* to refer to the PC running the FINN Docker environment, which will build the accelerator+driver and package it up, and *target* to refer to the PC where the Alveo card is installed. These two can be the same PC, or connected over the network -- FINN includes some utilities to make it easier to test on remote PCs too. Prior to first usage, you need to set up both the host and the target in the following manner:
+The Vitis toolchain targets UltraScale and UltraScale+-based Alveo cards, such as the U250 or U55C. We use *host* to refer to the PC running the FINN Docker environment, which will build the accelerator+driver and package it up, and *target* to refer to the PC where the Alveo card is installed. These two can be the same PC, or connected over the network -- FINN includes some utilities to make it easier to test on remote PCs too. Prior to first usage, you need to set up both the host and the target in the following manner:
 
 On the target side:
 
@@ -471,7 +482,7 @@ On the build host:
 
 Slash-based Alveo first-time setup
 ***********************************
-The Slash toolchain targets Versal-based Alveo cards such as the V80 using the V80++
+The Slash toolchain targets Versal-based Alveo cards such as the V80 using the ``slashkit``
 linker. We use *host* to refer to the PC running the FINN Docker environment, which will
 build the accelerator and package it up, and *target* to refer to the PC where the V80
 card is installed. These two can be the same PC, or connected over the network.
@@ -479,7 +490,7 @@ card is installed. These two can be the same PC, or connected over the network.
 Prior to first usage, you need to build the Slash packages from source and set up both
 the host and the target. Please refer to the `Slash GitHub repository
 <https://github.com/Xilinx/slash>`_ for instructions on how to build all Slash packages,
-including the ``v80++`` linker package.
+including the ``slashkit`` linker package.
 
 On the target side:
 
@@ -492,8 +503,8 @@ On the host side:
 1. Build the required Debian packages from the `Slash GitHub repository
    <https://github.com/Xilinx/slash>`_.
 2. Copy them to the names required by ``docker/runtimes/slash.env`` and
-   ``docker/runtimes/v80pp.env`` under ``docker/packages/``.
-3. Set ``FINN_RUNTIMES=xrt,slash,v80pp`` when building or launching the image.
+   ``docker/runtimes/slashkit.env`` under ``docker/packages/``.
+3. Set ``FINN_RUNTIMES=xrt,slash,slashkit`` when building or launching the image.
 4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_
    and point ``FINN_SSH_KEY_DIR`` at the key directory.
 5. Done!

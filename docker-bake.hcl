@@ -15,7 +15,7 @@
 #
 #   axis            values                     appears in the tag as
 #   base            one                        <git>
-#   runtime target  a set: xrt, slash, v80pp   .xrt.slash   (sorted, dot-joined)
+#   runtime target  a set: xrt, slash, slashkit   .slash.xrt   (sorted, dot-joined)
 #   sbx contract    boolean                    sbx- prefix
 #
 # There is no profile axis and no tier axis. The profile axis had one member and
@@ -32,7 +32,7 @@
 # finn-runtime / finn-sbx-runtime targets accept any manifest set without
 # generating a powerset of named targets:
 #
-#   FINN_RUNTIMES=xrt,v80pp docker buildx bake -f docker-bake.hcl finn-runtime
+#   FINN_RUNTIMES=xrt,slash,slashkit docker buildx bake -f docker-bake.hcl finn-runtime
 #
 # WHAT IS *NOT* HERE
 # ------------------
@@ -92,7 +92,7 @@ variable "AUPZU3_BDF_COMMIT" { default = "" }
 #
 #   ""          -> xilinx/finn:<git>
 #   "xrt"       -> xilinx/finn:<git>.xrt
-#   "xrt,slash" -> xilinx/finn:<git>.xrt.slash
+#   "xrt,slash" -> xilinx/finn:<git>.slash.xrt
 #   sbx         -> xilinx/finn:sbx-<git>[...]
 #
 # The runtime part is a function of the SET, so sort before joining. Otherwise
@@ -236,12 +236,12 @@ target "finn-xrt-slash" {
   inherits = ["finn-slash-xrt"]
 }
 
-target "finn-v80pp-xrt" {
+target "finn-slashkit-xrt" {
   inherits = ["_common"]
   target   = "runtime"
-  args     = { FINN_RUNTIMES = "v80pp,xrt" }
-  labels   = labels("v80pp,xrt", false)
-  tags     = [tag("xrt,v80pp", false)]
+  args     = { FINN_RUNTIMES = "slash,slashkit,xrt" }
+  labels   = labels("slash,slashkit,xrt", false)
+  tags     = [tag("slash,slashkit,xrt", false)]
 }
 
 # ---------------------------------------------------------------------------

@@ -68,6 +68,7 @@ SHIMMED_TOOLS = (
     "vitis_hls",
     "vitis-run",
     "v++",
+    "slashkit",
     "xelab",
     "xsim",
     "xvlog",
@@ -347,8 +348,9 @@ def add_licenses(out):
 
 def add_optional_inputs(out):
     """Add explicitly requested, tier-independent runtime inputs."""
-    if os.environ.get("NUM_DEFAULT_WORKERS"):
-        out["env"]["NUM_DEFAULT_WORKERS"] = os.environ["NUM_DEFAULT_WORKERS"]
+    for variable in ("NUM_DEFAULT_WORKERS", "FINN_XELAB_MT"):
+        if os.environ.get(variable):
+            out["env"][variable] = os.environ[variable]
     imagenet = hostpath(os.environ.get("IMAGENET_VAL_PATH"))
     if not imagenet:
         return

@@ -147,16 +147,14 @@ fetch_board_files() {
     mkdir -p "$SCRIPTPATH/deps/board_files"
     OLD_PWD=$(pwd)
     cd "$SCRIPTPATH/deps/board_files"
-    retry wget -qO pynq-z1.zip https://github.com/cathalmccabe/pynq-z1_board_files/raw/master/pynq-z1.zip
-    retry wget -qO pynq-z2.zip https://dpoauwgwqsy2x.cloudfront.net/Download/pynq-z2.zip
-    unzip -q pynq-z1.zip
-    unzip -q pynq-z2.zip
-    cp -r $SCRIPTPATH/deps/$AVNET_BDF_DIR/* $SCRIPTPATH/deps/board_files/
-    cp -r $SCRIPTPATH/deps/$XIL_BDF_DIR/boards/Xilinx/rfsoc2x2 $SCRIPTPATH/deps/board_files/;
-    cp -r $SCRIPTPATH/deps/$RFSOC4x2_BDF_DIR/board_files/rfsoc4x2 $SCRIPTPATH/deps/board_files/;
-    cp -r $SCRIPTPATH/deps/$KV260_SOM_BDF_DIR/boards/Xilinx/kv260_som $SCRIPTPATH/deps/board_files/;
-    cp -r $SCRIPTPATH/deps/$AUPZU3_BDF_DIR/board-files/aup-zu3-8gb $SCRIPTPATH/deps/board_files/;
-    cd $OLD_PWD
+    # Pynq-Z1/Z2 were retired with the move to Vivado 2024.2. To re-enable
+    # them, restore their downloads and update EXP_BOARD_FILES_MD5 in deps.env.
+    cp -r "$SCRIPTPATH/deps/$AVNET_BDF_DIR/." "$SCRIPTPATH/deps/board_files/"
+    cp -r "$SCRIPTPATH/deps/$XIL_BDF_DIR/boards/Xilinx/rfsoc2x2" "$SCRIPTPATH/deps/board_files/"
+    cp -r "$SCRIPTPATH/deps/$RFSOC4x2_BDF_DIR/board_files/rfsoc4x2" "$SCRIPTPATH/deps/board_files/"
+    cp -r "$SCRIPTPATH/deps/$KV260_SOM_BDF_DIR/boards/Xilinx/kv260_som" "$SCRIPTPATH/deps/board_files/"
+    cp -r "$SCRIPTPATH/deps/$AUPZU3_BDF_DIR/board-files/aup-zu3-8gb" "$SCRIPTPATH/deps/board_files/"
+    cd "$OLD_PWD"
 }
 
 # Indirect through the group lists from deps.env so adding a dep means editing
@@ -179,7 +177,7 @@ else
     if [ ! -d "$SCRIPTPATH/deps/board_files" ]; then
         fetch_board_files
     else
-        cd $SCRIPTPATH
+        cd "$SCRIPTPATH"
         BOARD_FILES_MD5=$(find deps/board_files/ -type f -exec md5sum {} \; | sort -k 2 | md5sum | cut -d' ' -f 1)
         if [ "$BOARD_FILES_MD5" = "$EXP_BOARD_FILES_MD5" ]; then
             echo "Verified board files folder content md5: $BOARD_FILES_MD5"

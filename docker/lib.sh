@@ -59,7 +59,7 @@ finn_normalize_runtimes () {
 # `local`, never `unknown`. docker-bake.hcl's GIT_DESCRIBE default is `local`,
 # so a different fallback here produces a tag bake cannot reproduce.
 finn_git_describe () {
-    git describe --always --tags 2>/dev/null || echo local
+    git describe --always --tags --abbrev=12 2>/dev/null || echo local
 }
 
 # The bake target for a runtime set and the sbx flag.

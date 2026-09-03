@@ -602,6 +602,25 @@ def test_sh_output_carries_the_canonical_runtime_set():
     assert "FINN_IMAGE=" not in proc.stdout
 
 
+def test_sh_output_carries_xelab_thread_override():
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": "/home/someone",
+            "FINN_XELAB_MT": "3",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "FINN_XELAB_MT='3'" in proc.stdout
+
+
+def test_slashkit_has_a_transparent_tool_shim():
+    assert "slashkit" in finn_env.SHIMMED_TOOLS
+
+
 def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
     """The dev contract, checked in the format that is actually consumed."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
@@ -865,6 +884,7 @@ def test_container_docs_do_not_reference_retired_interfaces():
         "docker/finn-apptainer",
         "XRT_DEB_VERSION",
         "V80PP_DEB_PACKAGE",
+        "docker/runtimes/v80pp.env",
         "FINN_XRT_SHA256",
     ):
         assert retired not in body

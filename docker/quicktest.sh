@@ -6,7 +6,7 @@ cd "$FINN_ROOT" || exit 1
 case "${1:-}" in
 "")
   echo "Running quicktest: non-hardware, non-container tests with pytest-xdist"
-  pytest -m 'not (vivado or slow or vitis or board or notebooks or container or sanity_bnn or bnn_pynq or bnn_zcu104 or bnn_kv260 or bnn_u250)' --dist=loadfile -n "$PYTEST_PARALLEL"
+  pytest -m 'not (vivado or slow or vitis or board or notebooks or container or sanity_bnn or bnn_aup_zu3 or bnn_zcu104 or bnn_kv260 or bnn_u55c)' --dist=loadgroup -n "$PYTEST_PARALLEL"
   ;;
 verify)
   echo "Running verification tests (minimal install verification with Vivado)"
@@ -14,7 +14,7 @@ verify)
   ;;
 main)
   echo "Running main test suite: not (rtlsim or end2end) with pytest-xdist"
-  pytest -k 'not (rtlsim or end2end)' --dist=loadfile -n "$PYTEST_PARALLEL"
+  pytest -k 'not (rtlsim or end2end)' --dist=loadgroup -n "$PYTEST_PARALLEL"
   ;;
 rtlsim)
   echo "Running rtlsim test suite with pytest-parallel"

@@ -427,6 +427,11 @@ def test_12_bake_owns_runtime_tags_and_custom_flavors():
         ("finn", "", "xilinx/finn:CONFORMANCE"),
         ("finn-xrt", "", "xilinx/finn:CONFORMANCE.xrt"),
         ("finn-slash-xrt", "", "xilinx/finn:CONFORMANCE.slash.xrt"),
+        (
+            "finn-slashkit-xrt",
+            "",
+            "xilinx/finn:CONFORMANCE.slash.slashkit.xrt",
+        ),
         ("finn-runtime", "xrt,slash,xrt", "xilinx/finn:CONFORMANCE.slash.xrt"),
     ]
     for target, runtimes, expected in cases:
