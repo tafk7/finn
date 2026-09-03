@@ -63,6 +63,7 @@ done
 
 RUNTIMES=$(finn_normalize_runtimes "$RUNTIMES")
 export FINN_RUNTIMES="$RUNTIMES"
+finn_set_provenance
 
 artifact=docker
 variant=""
@@ -78,6 +79,8 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'artifact=%s\n' "$artifact"
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'bake_target=%s\n' "$target"
+    printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
+    printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
     printf 'rebuild=%s\n' "${FINN_CONTAINER_REBUILD:-0}"
     printf 'output=%s\n' "$SIF_OUTPUT"
     exit 0

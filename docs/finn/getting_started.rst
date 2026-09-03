@@ -296,13 +296,21 @@ experimental in sbx 0.39.0. Environment-variable changes apply when reusing a
 sandbox; image, workspace and mount changes require removing and recreating it.
 
 The ``dev`` tier in a sandbox has no toolchain, no licence and no network
-permission. This is not because the variables are empty. It is because the tier
-does not read the file that adds them.
+grant for the FINN workload. This is not because the variables are empty. It is
+because the tier does not read the file that adds them. sbx may separately use
+package-repository access while provisioning the microVM; audit logs can show
+that setup traffic even though commands run inside the finished sandbox have no
+egress.
 
 The command builds the image, puts it into the image store of sbx, and then
 uses ``sbx env`` to make or connect to the sandbox.
 ``docker/config sbx`` renders the complete sandbox environment file outside the
 workspace, including the build tier's toolchain, platform and licence mounts.
+
+The sbx template follows an ``env-<hash>`` of Docker image inputs, not the Git
+revision of the mounted FINN checkout. Committing source therefore reuses the
+same template. ``FINN_SOURCE_REVISION``, ``FINN_SOURCE_DESCRIBE`` and
+``FINN_SOURCE_DIRTY`` record the mounted source separately inside each run.
 
 .. note::
    Node-locked licences are not verified in a sandbox. FLEXlm connects a

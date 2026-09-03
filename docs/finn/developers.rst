@@ -93,7 +93,6 @@ To build without launching:
   ./docker/build --runtime xrt
   ./docker/build --sbx
   ./docker/build --export-sif ./finn.sif
-  FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
 
 Arbitrary runtime combinations use the parameterized ``finn-runtime`` and
 ``finn-sbx-runtime`` Bake targets. Bake computes their args, labels and tag; a
@@ -164,9 +163,15 @@ Launch sequence
    installed in site-packages, toolchain application is shared by the
    entrypoint/BASH_ENV/tool shims, and ``finn_xsi`` builds on demand.
 
-Container images are periodically rebuilt rather than bit-for-bit reproducible
-from their human-readable tag. Treat the image digest as the identity of the
-environment and use an SBOM to inspect its package contents.
+The human-readable image tag contains an ``env-<hash>`` revision computed from
+``docker/image-inputs.txt`` and the relevant Bake argument overrides. Mounted
+FINN source is deliberately excluded; its commit and dirty state travel as
+``FINN_SOURCE_*`` runtime provenance. Images are periodically rebuilt rather
+than bit-for-bit reproducible from the tag, so treat the image digest as the
+identity of a concrete build and use an SBOM to inspect its package contents.
+An explicitly supplied ``FINN_IMAGE_REVISION`` overrides the computed hash and
+therefore makes the caller responsible for changing it whenever environment
+inputs change.
 
 (Re-)launching builds outside of Docker
 ========================================

@@ -32,7 +32,7 @@ DOCKER_DIR=$(dirname "$SCRIPT")
 REPO=$(dirname "$DOCKER_DIR")
 cd "$REPO"
 
-# gecho/recho/yecho, finn_git_describe, finn_bake_target, finn_bake_tag.
+# Diagnostics, provenance, target and tag helpers.
 # shellcheck source=/dev/null
 . "$DOCKER_DIR/lib.sh"
 
@@ -93,8 +93,7 @@ fi
 # 1. Build and load the template
 # --------------------------------------------------------------------------
 
-GIT_DESCRIBE=$(finn_git_describe)
-export GIT_DESCRIBE
+finn_set_provenance || exit 2
 
 # The tier does NOT appear in the target. There is one image; dev and build
 # differ only in what this script mounts and allows, decided further down. The
@@ -102,6 +101,7 @@ export GIT_DESCRIBE
 BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES" sbx)
 FINN_SBX_TEMPLATE=$(finn_bake_tag "$BAKE_TARGET")
 [ -n "$FINN_SBX_TEMPLATE" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
+gecho "Environment $FINN_IMAGE_REVISION; source $FINN_SOURCE_DESCRIBE"
 
 # sbx does not resolve the Docker Hub domain implicitly, so its store lists the
 # template as docker.io/<tag>. Skipping the load when it is already there is
@@ -152,7 +152,7 @@ rm -f "$STATE_DIR/base.sbxenv.yaml" "$STATE_DIR/fpga.sbxenv.yaml" "$STATE_DIR/ho
 ENV_FILES=(finn.sbxenv.yaml)
 "$DOCKER_DIR/config" sbx --tier "$TIER" > "$STATE_DIR/finn.sbxenv.yaml"
 if [ "$TIER" = "dev" ]; then
-    gecho "dev tier: no Xilinx mount, no licence, no toolchain egress"
+    gecho "dev tier: no Xilinx mount, no licence, no FINN workload egress grants"
 fi
 
 cd "$STATE_DIR"

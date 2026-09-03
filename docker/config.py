@@ -388,6 +388,14 @@ def resolve_host(tier, backend, workspace_policy="auto"):
             "FINN_DEPS": os.environ.get("FINN_DEPS", "frozen").lower(),
         },
     }
+    for variable in (
+        "FINN_IMAGE_REVISION",
+        "FINN_SOURCE_REVISION",
+        "FINN_SOURCE_DESCRIBE",
+        "FINN_SOURCE_DIRTY",
+    ):
+        if os.environ.get(variable):
+            out["env"][variable] = os.environ[variable]
     add_optional_inputs(out)
 
     if tier == "dev":

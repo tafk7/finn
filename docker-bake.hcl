@@ -14,7 +14,7 @@
 # One base image, plus two orthogonal layers:
 #
 #   axis            values                     appears in the tag as
-#   base            one                        <git>
+#   base            one                        <environment revision>
 #   runtime target  a set: xrt, slash, slashkit   .slash.xrt   (sorted, dot-joined)
 #   sbx contract    boolean                    sbx- prefix
 #
@@ -51,18 +51,10 @@
 # Variables
 # ---------------------------------------------------------------------------
 
-# Injected by the launchers / CI from `git describe`. HCL cannot shell out, so a
-# bare `docker buildx bake` produces the "local" fallback rather than a
-# provenance-bearing tag. CI must always pass this.
-#
-# No --dirty variant. The old `build` tags carried one and `dev` did not, which
-# was the right call for `dev` and is now the right call for everything: FINN's
-# source is MOUNTED, not baked, so an edited working tree does not change the
-# image. A dirty tag would rebuild on every edit under an agent workflow, which
-# is the normal state there. The trade is that editing the Dockerfile or
-# deps.env does not move the tag on its own; CI builds from a clean tree, so
-# this only ever bites locally.
-variable "GIT_DESCRIBE" { default = "local" }
+# Injected by the launchers / CI from docker/image-inputs.txt. FINN source is
+# mounted, not baked, so its commit and dirty state are runtime provenance and
+# never part of this value. A bare Bake invocation uses the explicit fallback.
+variable "FINN_IMAGE_REVISION" { default = "env-unresolved" }
 
 variable "REGISTRY" { default = "xilinx/finn" }
 
@@ -90,10 +82,10 @@ variable "AUPZU3_BDF_COMMIT" { default = "" }
 
 # runtimes: a comma-separated list, or "". sbx: true or false.
 #
-#   ""          -> xilinx/finn:<git>
-#   "xrt"       -> xilinx/finn:<git>.xrt
-#   "xrt,slash" -> xilinx/finn:<git>.slash.xrt
-#   sbx         -> xilinx/finn:sbx-<git>[...]
+#   ""          -> xilinx/finn:<environment>
+#   "xrt"       -> xilinx/finn:<environment>.xrt
+#   "xrt,slash" -> xilinx/finn:<environment>.slash.xrt
+#   sbx         -> xilinx/finn:sbx-<environment>[...]
 #
 # The runtime part is a function of the SET, so sort before joining. Otherwise
 # `xrt,slash` and `slash,xrt` are the same image under two names.
@@ -107,7 +99,7 @@ function "tag" {
   result = join("", [
     "${REGISTRY}:",
     sbx ? "sbx-" : "",
-    GIT_DESCRIBE,
+    FINN_IMAGE_REVISION,
     runtime_set(runtimes) == "" ? "" : ".${join(".", split(",", runtime_set(runtimes)))}",
   ])
 }
@@ -147,14 +139,15 @@ target "_common" {
 # dev.finn.runtimes carries the names the tag also carries. The exact package
 # versions are NOT here, because they live in docker/runtimes/*.env and HCL
 # cannot read a file -- restating them would be the stale-copy trap. Read the
-# manifest at the recorded revision, or `dpkg -l` inside the image.
+# manifest included in the environment revision, or `dpkg -l` inside the image.
 function "labels" {
   params = [runtimes, sbx]
   result = {
     "org.opencontainers.image.title"       = "FINN"
     "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 22.04 / Python 3.10"
     "org.opencontainers.image.source"      = "https://github.com/Xilinx/finn"
-    "org.opencontainers.image.revision"    = GIT_DESCRIBE
+    "org.opencontainers.image.version"     = FINN_IMAGE_REVISION
+    "dev.finn.environment-revision"        = FINN_IMAGE_REVISION
     "dev.finn.runtimes"                    = runtime_set(runtimes)
     # Whether the image grants NOPASSWD root INSIDE the container. This is not
     # host privilege -- no devices, no capabilities, no privileged mode -- but

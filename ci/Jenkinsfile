@@ -92,12 +92,10 @@ static final String FINN_BUILD_LABEL = 'finn-build'
 
 // The commit every stage checks out. Resolved once from the branch tip on the
 // first checkoutPinned() call (Validate) and reused unchanged for the rest of
-// the build, so `git describe` — and therefore the Docker tag recorded by
-// build-images.sh — is identical in the Build Docker Image stage and its
-// consumers. Without this, each stage's checkout re-resolves the branch head;
-// a push mid-build desyncs the tag and hard-fails the PREBUILT check in
-// the Jenkins compatibility launcher. @Field so the SHA survives CPS replay
-// across stages/agents.
+// the build, so every stage tests the same mounted FINN source even if the
+// branch moves mid-run. Image tags are source-neutral environment revisions;
+// PINNED_SCM_COMMIT is the separate source half of the provenance tuple.
+// @Field so the SHA survives CPS replay across stages/agents.
 @Field
 String PINNED_SCM_COMMIT = ''
 
@@ -899,8 +897,8 @@ void findCopyZip(String testType, String board, String findDir, String copyDir) 
 // records it in PINNED_SCM_COMMIT; every later call — on any agent — checks out
 // that exact SHA, reusing the job's configured remotes/extensions/browser so
 // credentials, refspecs and tag fetching match a plain `checkout scm`. This
-// keeps `git describe` (and the Docker tag) constant across stages even if the
-// branch moves mid-build. Must run before wipeStaleWorkspace(), which needs a
+// keeps mounted source constant across stages even if the branch moves
+// mid-build. Must run before wipeStaleWorkspace(), which needs a
 // populated git workspace to `git clean`/`git status`.
 void checkoutPinned() {
   if (!PINNED_SCM_COMMIT) {

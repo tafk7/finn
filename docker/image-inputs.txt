@@ -1,0 +1,33 @@
+# Files whose contents define the Docker-built FINN environment.
+#
+# One shell-style glob per line, relative to the repository root. Prefix a
+# pattern with ? when it is optional. Keep this synchronized with COPY and
+# RUN --mount sources in Dockerfile.finn. The manifest itself is hashed.
+
+.dockerignore
+docker-bake.hcl
+requirements.txt
+deps.env
+fetch-repos.sh
+docker/image-inputs.txt
+docker/Dockerfile.finn
+docker/pip-constraints.txt
+docker/pip-torch.txt
+docker/pip-tools.txt
+docker/pip-post.txt
+docker/pip-extra.txt
+docker/finn_paths.py
+docker/finn-live.pth
+docker/finn_entrypoint.sh
+docker/quicktest.sh
+docker/build_dataflow
+docker/config.py
+docker/finn-env
+docker/toolchain-shim
+docker/finn-bashenv.sh
+docker/finn-toolchain.sh
+docker/install-runtimes.sh
+docker/runtimes/*.env
+?docker/packages/*.deb
+?docker/packages/*.rpm
+docker/sbx-contract.sh

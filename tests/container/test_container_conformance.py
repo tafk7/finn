@@ -44,9 +44,9 @@ def run(argv, *, env=None, timeout=600, check=False, cwd=REPO):
     return proc
 
 
-def bake_config(target, *, runtimes="", git_describe="CONFORMANCE"):
+def bake_config(target, *, runtimes="", image_revision="env-CONFORMANCE"):
     env = dict(os.environ)
-    env.update({"FINN_RUNTIMES": runtimes, "GIT_DESCRIBE": git_describe})
+    env.update({"FINN_RUNTIMES": runtimes, "FINN_IMAGE_REVISION": image_revision})
     proc = run(["docker", "buildx", "bake", "-f", "docker-bake.hcl", "--print", target], env=env)
     if proc.returncode:
         pytest.fail(proc.stderr or proc.stdout)
@@ -55,8 +55,8 @@ def bake_config(target, *, runtimes="", git_describe="CONFORMANCE"):
     return json.loads(proc.stdout[start:])
 
 
-def bake_tag(target="finn", *, runtimes="", git_describe="CONFORMANCE"):
-    return bake_config(target, runtimes=runtimes, git_describe=git_describe)["target"][target][
+def bake_tag(target="finn", *, runtimes="", image_revision="env-CONFORMANCE"):
+    return bake_config(target, runtimes=runtimes, image_revision=image_revision)["target"][target][
         "tags"
     ][0]
 
@@ -79,7 +79,7 @@ def ensure_image(target="finn", runtimes=""):
     tag = bake_tag(target, runtimes=runtimes)
     if run(["docker", "image", "inspect", tag], timeout=30).returncode:
         env = dict(os.environ)
-        env.update({"FINN_RUNTIMES": runtimes, "GIT_DESCRIBE": "CONFORMANCE"})
+        env.update({"FINN_RUNTIMES": runtimes, "FINN_IMAGE_REVISION": "env-CONFORMANCE"})
         run(
             ["docker", "buildx", "bake", "-f", "docker-bake.hcl", "--load", target],
             env=env,
@@ -291,6 +291,73 @@ def test_05_bare_sbx_exec(docker_daemon):
             )
 
 
+def test_05b_sbx_template_identity_ignores_source_commit(docker_daemon, tmp_path):
+    """An empty mounted-source commit reuses the prepared sbx template."""
+    require_command("sbx")
+    if run(["git", "status", "--porcelain"], timeout=30).stdout.strip():
+        pytest.skip("source-identity worktree check requires a committed tree")
+    name = "finn-conformance-source-identity"
+    checkout = tmp_path / "finn"
+    child_env = dict(os.environ)
+    for variable in (
+        "FINN_IMAGE_REVISION",
+        "FINN_SOURCE_REVISION",
+        "FINN_SOURCE_DESCRIBE",
+        "FINN_SOURCE_DIRTY",
+    ):
+        child_env.pop(variable, None)
+
+    def printed(repo):
+        proc = run(
+            [repo / "docker/run", "--sbx", "--name", name, "--no-build", "--print"],
+            cwd=repo,
+            env=child_env,
+            timeout=120,
+            check=True,
+        )
+        return dict(line.split("=", 1) for line in proc.stdout.splitlines())
+
+    try:
+        # Prepare/import the template, then remove only the sandbox. The sbx
+        # template store is deliberately retained for the source-only retry.
+        run(
+            [REPO / "docker/run", "--sbx", "--name", name, "--", "true"],
+            env=child_env,
+            timeout=2400,
+            check=True,
+        )
+        before = printed(REPO)
+        run([REPO / "docker/run", "--sbx", "--name", name, "--remove"], timeout=120)
+
+        run(["git", "worktree", "add", "--detach", checkout, "HEAD"], timeout=120, check=True)
+        run(["git", "config", "user.name", "FINN Conformance"], cwd=checkout, check=True)
+        run(
+            ["git", "config", "user.email", "finn-conformance@example.invalid"],
+            cwd=checkout,
+            check=True,
+        )
+        run(["git", "commit", "--allow-empty", "-m", "source-only"], cwd=checkout, check=True)
+
+        after = printed(checkout)
+        assert before["image_revision"] == after["image_revision"]
+        assert before["source_revision"] != after["source_revision"]
+        assert before["source_describe"] != after["source_describe"]
+        run(
+            [checkout / "docker/run", "--sbx", "--name", name, "--no-build", "--", "true"],
+            cwd=checkout,
+            env=child_env,
+            timeout=600,
+            check=True,
+        )
+    finally:
+        runner = checkout / "docker/run" if checkout.exists() else REPO / "docker/run"
+        run(
+            [runner, "--sbx", "--name", name, "--remove"],
+            cwd=checkout if checkout.exists() else REPO,
+        )
+        run(["git", "worktree", "remove", "--force", checkout], timeout=120)
+
+
 def test_06_resolved_toolchain_mounts_are_read_only(docker_daemon):
     """Every host capability mount is declared read-only and enforced as such."""
     root = os.environ.get("FINN_XILINX_PATH")
@@ -424,19 +491,22 @@ def test_12_bake_owns_runtime_tags_and_custom_flavors():
     """Fixed and parameterized targets expose the runtime set in their tag."""
     require_command("docker")
     cases = [
-        ("finn", "", "xilinx/finn:CONFORMANCE"),
-        ("finn-xrt", "", "xilinx/finn:CONFORMANCE.xrt"),
-        ("finn-slash-xrt", "", "xilinx/finn:CONFORMANCE.slash.xrt"),
+        ("finn", "", "xilinx/finn:env-CONFORMANCE"),
+        ("finn-xrt", "", "xilinx/finn:env-CONFORMANCE.xrt"),
+        ("finn-slash-xrt", "", "xilinx/finn:env-CONFORMANCE.slash.xrt"),
         (
             "finn-slashkit-xrt",
             "",
-            "xilinx/finn:CONFORMANCE.slash.slashkit.xrt",
+            "xilinx/finn:env-CONFORMANCE.slash.slashkit.xrt",
         ),
-        ("finn-runtime", "xrt,slash,xrt", "xilinx/finn:CONFORMANCE.slash.xrt"),
+        ("finn-runtime", "xrt,slash,xrt", "xilinx/finn:env-CONFORMANCE.slash.xrt"),
     ]
     for target, runtimes, expected in cases:
         config = bake_config(target, runtimes=runtimes)
         assert config["target"][target]["tags"][0] == expected
+        labels = config["target"][target]["labels"]
+        assert labels["dev.finn.environment-revision"] == "env-CONFORMANCE"
+        assert "org.opencontainers.image.revision" not in labels
     proc = run(["bash", "-c", ". ./docker/lib.sh; finn_bake_target xrt,slash"])
     assert proc.stdout == "finn-runtime"
 

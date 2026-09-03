@@ -16,7 +16,8 @@
 # Two shards on one digest can still execute different code if the workspace or
 # the dependency checkouts differ. Hence the full tuple:
 #
-#     finn_commit      what src/finn was
+#     finn_commit      what mounted src/finn was
+#     image_revision   which environment inputs selected the reusable tag
 #     image_digest     what the environment was
 #     target           which image (base, plus any runtime targets)
 #     deps             the resolved dependency commits, not branch names
@@ -36,13 +37,9 @@ cd "$(dirname "$0")/../.."
 # shellcheck source=docker/lib.sh
 . ./docker/lib.sh
 
-# finn_git_describe, not a local copy. This script used to fall back to
-# `unknown` where every other site -- and docker-bake.hcl's own default -- uses
-# `local`, so a provenance record built outside a git checkout named a tag bake
-# could never emit.
-GIT_DESCRIBE=$(finn_git_describe)
-FINN_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
-export GIT_DESCRIBE
+# Image identity and mounted-source provenance are deliberately independent.
+finn_set_provenance
+FINN_COMMIT="$FINN_SOURCE_REVISION"
 
 # FINN_DEPS is load-bearing for this record, not a preference: in `auto` or
 # `live` the mounted checkouts shadow the baked wheels and the digest stops
@@ -57,7 +54,7 @@ if [ "$FINN_DEPS_MODE" != "frozen" ]; then
     exit 1
 fi
 
-if ! git diff --quiet HEAD 2>/dev/null; then
+if [ "$FINN_SOURCE_DIRTY" = 1 ]; then
     echo "WARNING: building from a dirty tree; provenance records the commit," >&2
     echo "         which does not describe the uncommitted changes." >&2
 fi
@@ -114,8 +111,10 @@ print(json.dumps({
     "target": "$TARGET",
     "tag": "$TAG",
     "image_digest": "$DIGEST",
+    "image_revision": "$FINN_IMAGE_REVISION",
     "finn_commit": "$FINN_COMMIT",
-    "git_describe": "$GIT_DESCRIBE",
+    "git_describe": "$FINN_SOURCE_DESCRIBE",
+    "source_dirty": $([ "$FINN_SOURCE_DIRTY" = 1 ] && echo True || echo False),
     "finn_deps_mode": "$FINN_DEPS_MODE",
     "deps": json.loads('''$DEPS_JSON'''),
 }, indent=2, sort_keys=True))

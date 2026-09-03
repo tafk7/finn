@@ -12,6 +12,7 @@ nothing.
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -755,6 +756,118 @@ def test_custom_runtime_sets_use_the_parameterized_bake_target():
     assert 'target "finn-sbx-runtime"' in bake
 
 
+def _provenance(image_root, source_root=None, extra_env=None):
+    env = {
+        "PATH": os.environ["PATH"],
+        "FINN_IMAGE_INPUT_ROOT": str(image_root),
+    }
+    if source_root is not None:
+        env["FINN_SOURCE_ROOT"] = str(source_root)
+    if extra_env:
+        env.update(extra_env)
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. ./docker/lib.sh; finn_set_provenance; printf "%s|%s|%s|%s" '
+            '"$FINN_IMAGE_REVISION" "$FINN_SOURCE_REVISION" '
+            '"$FINN_SOURCE_DESCRIBE" "$FINN_SOURCE_DIRTY"',
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.split("|")
+
+
+def _make_image_input_fixture(tmp_path):
+    root = tmp_path / "image-root"
+    (root / "docker").mkdir(parents=True)
+    manifest = root / "docker/image-inputs.txt"
+    manifest.write_text("docker/image-inputs.txt\nimage.txt\n")
+    (root / "image.txt").write_text("environment\n")
+    (root / "src").mkdir()
+    (root / "src/finn.py").write_text("source v1\n")
+    return root
+
+
+def test_image_revision_ignores_mounted_source_changes(tmp_path):
+    root = _make_image_input_fixture(tmp_path)
+    before = _provenance(root)[0]
+    (root / "src/finn.py").write_text("source v2\n")
+    after = _provenance(root)[0]
+    assert before == after
+
+
+def test_image_revision_changes_with_image_inputs_and_build_args(tmp_path):
+    root = _make_image_input_fixture(tmp_path)
+    original = _provenance(root)[0]
+    (root / "image.txt").write_text("changed environment\n")
+    changed_file = _provenance(root)[0]
+    changed_arg = _provenance(root, extra_env={"QONNX_COMMIT": "override"})[0]
+    assert original != changed_file
+    assert changed_file != changed_arg
+
+
+def test_source_commit_changes_without_changing_image_revision(tmp_path):
+    image_root = _make_image_input_fixture(tmp_path)
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source_root, check=True)
+    subprocess.run(["git", "config", "user.name", "FINN Test"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "finn-test@example.invalid"],
+        cwd=source_root,
+        check=True,
+    )
+    (source_root / "README").write_text("source\n")
+    subprocess.run(["git", "add", "README"], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=source_root, check=True)
+    before = _provenance(image_root, source_root)
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "source-only"],
+        cwd=source_root,
+        check=True,
+    )
+    after = _provenance(image_root, source_root)
+    assert before[0] == after[0]
+    assert before[1] != after[1]
+    assert before[2] != after[2]
+    assert before[3] == after[3] == "0"
+
+
+def test_image_input_manifest_covers_dockerfile_sources():
+    manifest = (Path(REPO) / "docker/image-inputs.txt").read_text()
+    for path in (
+        "requirements.txt",
+        "deps.env",
+        "fetch-repos.sh",
+        "docker/Dockerfile.finn",
+        "docker/finn_paths.py",
+        "docker/finn-live.pth",
+        "docker/finn_entrypoint.sh",
+        "docker/quicktest.sh",
+        "docker/build_dataflow",
+        "docker/config.py",
+        "docker/finn-env",
+        "docker/toolchain-shim",
+        "docker/finn-bashenv.sh",
+        "docker/finn-toolchain.sh",
+        "docker/install-runtimes.sh",
+        "docker/runtimes/*.env",
+        "docker/sbx-contract.sh",
+    ):
+        assert path in manifest
+    patterns = {
+        line.lstrip("?") for line in manifest.splitlines() if line and not line.startswith("#")
+    }
+    assert not any(path.startswith("src/") for path in patterns)
+    assert "docker/run" not in patterns
+    assert "docs/finn/getting_started.rst" not in patterns
+
+
 def test_compose_override_consumes_resolved_mounts(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     licdir = tmp_path / "lic"
@@ -792,6 +905,10 @@ def test_compose_override_uses_the_bake_resolved_image(tmp_path):
             "HOME": str(tmp_path),
             "FINN_HOST_BUILD_DIR": str(tmp_path / "build"),
             "FINN_IMAGE": "xilinx/finn:test.xrt",
+            "FINN_IMAGE_REVISION": "env-test",
+            "FINN_SOURCE_REVISION": "abc123",
+            "FINN_SOURCE_DESCRIBE": "v1-test",
+            "FINN_SOURCE_DIRTY": "0",
             "FINN_RUNTIMES": "xrt",
         },
     )
@@ -799,6 +916,8 @@ def test_compose_override_uses_the_bake_resolved_image(tmp_path):
     service = json.loads(proc.stdout)["services"]["dev"]
     assert service["image"] == "xilinx/finn:test.xrt"
     assert service["build"]["args"]["FINN_RUNTIMES"] == "xrt"
+    assert service["environment"]["FINN_IMAGE_REVISION"] == "env-test"
+    assert service["environment"]["FINN_SOURCE_REVISION"] == "abc123"
 
 
 def test_compose_rejects_runtime_content_without_a_resolved_image(tmp_path):
@@ -833,6 +952,10 @@ def test_sbx_overlay_consumes_resolved_mounts(tmp_path):
             "PLATFORM_REPO_PATHS": str(platforms),
             "FINN_SBX_NAME": "test-sandbox",
             "FINN_SBX_TEMPLATE": "xilinx/finn:test-sbx",
+            "FINN_IMAGE_REVISION": "env-test",
+            "FINN_SOURCE_REVISION": "abc123",
+            "FINN_SOURCE_DESCRIBE": "v1-test",
+            "FINN_SOURCE_DIRTY": "0",
         },
     )
     assert proc.returncode == 0, proc.stderr
@@ -841,6 +964,9 @@ def test_sbx_overlay_consumes_resolved_mounts(tmp_path):
     assert mounts[root]["readOnly"] is True
     assert mounts[str(platforms)]["readOnly"] is True
     assert overlay["env"]["PLATFORM_REPO_PATHS"] == str(platforms)
+    assert overlay["env"]["FINN_IMAGE_REVISION"] == "env-test"
+    assert overlay["env"]["FINN_SOURCE_REVISION"] == "abc123"
+    assert overlay["env"]["FINN_SOURCE_DESCRIBE"] == "v1-test"
     assert overlay["sandboxOptions"]["template"] == "xilinx/finn:test-sbx"
 
 
@@ -888,6 +1014,13 @@ def test_container_docs_do_not_reference_retired_interfaces():
         "FINN_XRT_SHA256",
     ):
         assert retired not in body
+
+
+def test_sbx_docs_distinguish_provisioning_from_workload_egress():
+    with open(os.path.join(REPO, "docs/finn/getting_started.rst"), errors="replace") as handle:
+        body = handle.read()
+    assert "no network\ngrant for the FINN workload" in body
+    assert "package-repository access while provisioning" in body
 
 
 def test_python_dependency_pins_are_not_duplicated_in_installers():

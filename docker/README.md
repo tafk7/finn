@@ -51,6 +51,12 @@ apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
   --env FINN_ROOT="$PWD" ./finn.sif python -c 'import finn'
 ```
 
+Image tags contain an ``env-<hash>`` revision derived from the declared image
+inputs in ``docker/image-inputs.txt``. Mounted FINN source is not an image
+input: its commit, description and dirty state are passed separately as
+``FINN_SOURCE_*`` runtime provenance. The immutable identity of a concrete
+build remains its Docker image digest or exported SIF checksum.
+
 ## Configuration
 
 `docker/config.py` is the shared host resolver. The `docker/config` command can
@@ -64,7 +70,9 @@ inspect its result or render Docker and sbx configuration:
 ```
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
-advanced workflows.
+advanced workflows. A direct Bake invocation must set
+`FINN_IMAGE_REVISION` explicitly; the supported `docker/build` path computes it
+from `docker/image-inputs.txt` automatically.
 
 ## Compatibility
 

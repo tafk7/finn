@@ -33,8 +33,7 @@ cd "$REPO"
 : "${FINN_RUNTIMES:=}"
 FINN_RUNTIMES=$(finn_normalize_runtimes "$FINN_RUNTIMES")
 export FINN_RUNTIMES
-GIT_DESCRIBE=$(finn_git_describe)
-export GIT_DESCRIBE
+finn_set_provenance || exit 2
 
 BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES")
 TAG=$(finn_bake_tag "$BAKE_TARGET")

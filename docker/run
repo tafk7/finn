@@ -96,6 +96,7 @@ if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && [ "${FINN_CONTAINER_NO_BUILD:-0}" =
 fi
 
 RUNTIMES=$(finn_normalize_runtimes "$RUNTIMES")
+finn_set_provenance
 TIER=dev
 [ "$FPGA" = 1 ] && TIER=build
 if [ "$NAME_EXPLICIT" != 1 ]; then
@@ -130,6 +131,10 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'deps=%s\n' "$DEPS"
     printf 'bake_target=%s\n' "$target"
+    printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
+    printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
+    printf 'source_describe=%s\n' "$FINN_SOURCE_DESCRIBE"
+    printf 'source_dirty=%s\n' "$FINN_SOURCE_DIRTY"
     printf 'operation=%s\n' "$operation"
     printf 'rebuild=%s\n' "${FINN_CONTAINER_REBUILD:-0}"
     printf 'no_build=%s\n' "${FINN_CONTAINER_NO_BUILD:-0}"

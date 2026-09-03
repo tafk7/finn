@@ -57,7 +57,7 @@ DOCKER_DIR=$(dirname "$SCRIPT")
 REPO=$(dirname "$DOCKER_DIR")
 cd "$REPO" || exit 1
 
-# gecho/recho/yecho, finn_git_describe, finn_bake_target, finn_bake_tag.
+# Diagnostics, provenance, target and tag helpers.
 # shellcheck source=docker/lib.sh
 . "$DOCKER_DIR/lib.sh"
 
@@ -160,11 +160,9 @@ fi
 # one, kept in sync with docker-bake.hcl by an assertion, and one authority is
 # better than two that agree.
 # ----------------------------------------------------------------------------
-# No GIT_DESCRIBE_DIRTY any more. FINN's source is mounted, not baked, so an
-# edited tree does not change the image; bake dropped the dirty variant with the
-# tier split. See the note on the variable in docker-bake.hcl.
-GIT_DESCRIBE="$(finn_git_describe)"
-export GIT_DESCRIBE
+# The Docker-built environment follows its actual build inputs. Mounted FINN
+# source has separate runtime provenance and never changes the image tag.
+finn_set_provenance || exit 2
 
 # The target for the axes resolved above. finn_bake_target and finn_bake_tag
 # live in docker/lib.sh -- they were duplicated across the runtime scripts and

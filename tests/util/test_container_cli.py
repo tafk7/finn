@@ -26,6 +26,14 @@ def test_default_is_the_docker_dev_environment():
     assert data["runtimes"] == ""
     assert data["deps"] == "frozen"
     assert data["operation"] == "run"
+    assert data["image_revision"].startswith("env-")
+    assert (
+        data["source_revision"]
+        == subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    )
+    assert data["source_describe"]
 
 
 def test_common_options_are_normalized():
@@ -85,6 +93,8 @@ def test_build_defaults_to_the_docker_image():
     assert data["artifact"] == "docker"
     assert data["bake_target"] == "finn"
     assert data["output"] == ""
+    assert data["image_revision"].startswith("env-")
+    assert data["source_revision"]
 
 
 def test_build_can_prepare_the_sbx_variant():
