@@ -97,6 +97,7 @@ from finn.dataflow.ops.schema import (
     SourceDeclaration,
     InputTensor,
     OutputTensor,
+    TensorDatatypeFact,
     attribute_name,
     lower_source_schema,
 )
@@ -353,13 +354,18 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return fresh.bind(model, build)
 
     @classmethod
-    def _start_bound(cls, binding: SourceBinding, recorded: DataflowState | None) -> Any:
-        facts = cls._problem_values(binding)
-        root = cls.start(
-            facts,
+    def _start_unrecorded(cls, binding: SourceBinding) -> Any:
+        """One root over this frozen source, with nothing replayed onto it."""
+
+        return cls.start(
+            cls._problem_values(binding),
             namespace=cls.root_namespace,
             root_factory=lambda context: cls._allocate_bound(context, binding),
         )
+
+    @classmethod
+    def _start_bound(cls, binding: SourceBinding, recorded: DataflowState | None) -> Any:
+        root = cls._start_unrecorded(binding)
         _check_recorded_identity(cls, binding, root)
         return _hydrate(cls, binding, root, recorded)
 
@@ -388,8 +394,20 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 values[problem] = binding.source.operand(member_name)
                 continue
             if isinstance(declaration, BuildFact):
-                if member_name in binding.build.values:
+                # ``None`` is *absence*, not a value: an optional build fact the
+                # configuration did not supply must reach the design space as an
+                # absent Problem, so a reader has to say what it does about
+                # that.  Supplying it as ``None`` would fail the Problem's own
+                # type check, which is the engine telling us the same thing.
+                if binding.build.values.get(member_name) is not None:
                     values[problem] = binding.build[member_name]
+                continue
+            if isinstance(declaration, TensorDatatypeFact):
+                # Supplied only for the nodes whose mathematics reads it, and
+                # then fingerprinted like any other Problem.
+                operand_id = declaration.operand.member_name
+                if declaration.applies_to(binding.source) and binding.source.has(operand_id):
+                    values[problem] = binding.source.operand(operand_id).datatype
                 continue
             if isinstance(declaration, InitializerAnalysis):
                 # No entry means the analysis has no answer for this node.  It
@@ -716,11 +734,65 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             )
         return self.read_source(self._model)
 
+    def assess_source(self, model: Any = None) -> Any:
+        """Assess this operation's own semantics, bound or not, with no build.
+
+        The path FINN's verification actually takes.  ``verify_nodes(model)``
+        gets an ordinary wrapper from ``get_customop_wrapper`` -- attached to a
+        model, and not bound to a design space -- so an assessment that
+        required an occurrence would be an assessment nothing in FINN could
+        reach.  A bound occurrence answers from itself; an unbound one starts a
+        root over its frozen source with **no build facts at all**.
+
+        That is sound because ``source_accepts`` is by definition about the
+        operation's own mathematics: it reads operands and node attributes, and
+        a constraint there that needed a synthesis target would be a constraint
+        in the wrong group.  The build facts are absent rather than invented,
+        so anything that did read one would report unresolved rather than
+        answer from a fabricated default.
+
+        The recorded state is deliberately *not* replayed: verification asks
+        whether the node is well formed, not whether somebody's stored choices
+        still fit it.
+        """
+
+        if self._binding is not None:
+            return self.assess(type(self).source_accepts)
+        graph_model = self._model if model is None else model
+        if graph_model is None:
+            raise DataflowOpError(
+                f"{type(self).__name__} has no model attached, so its source semantics "
+                "cannot be read; QONNX attaches one through attach_model"
+            )
+        binding = self._binding_with(graph_model, BuildFacts({}))
+        root = type(self)._start_unrecorded(binding)
+        return root.assess(type(self).source_accepts)
+
     def execute_node(self, context: Any, graph: Any) -> None:
         raise NotImplementedError(f"{type(self).__name__} does not execute its source semantics")
 
     def verify_node(self) -> list[str]:
-        return []
+        """Every way this node's own semantics are inconsistent, as messages.
+
+        The same constraints the projection uses, reported the way QONNX's
+        verification expects -- never a second set of checks, because a node
+        that passed verification and was then refused by the design space for a
+        reason verification never mentioned is the failure this shares code to
+        prevent.
+
+        A repairable output annotation is deliberately not reported: it is a
+        reconciliation difference, and calling it an invalid node would make
+        ``verify_nodes`` fail on a graph that ``graph_effects`` can fix.
+        """
+
+        assessment = self.assess_source()
+        if assessment.verdict is True:
+            return []
+        return [
+            finding.message
+            for answer in assessment.answers.values()
+            for finding in getattr(answer, "findings", ())
+        ]
 
     # -- identity -------------------------------------------------------------
 
@@ -937,19 +1009,31 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return self.rebind(model)
 
     def recorded(self) -> Mapping[str, object]:
-        """The choices this object represents.
+        """The choices this occurrence represents, as decoded Python values.
 
-        Two states, two honest answers.  An *unbound* operation is a view on a
-        node, so it reports what is physically written there.  A *bound* one is
-        a point, so it reports the choices reachable at that point -- which is
-        what a later ``graph_effects`` would write, and which is not the same
-        thing as the frozen node it was bound from.  Conflating them would make
-        ``recorded()`` on a successor report the state before the assignment
-        that produced it.
+        **A bound-occurrence API, deliberately.**  It used to answer on an
+        unbound wrapper too, by handing back the document's *canonical* values
+        -- which for an Enum or a structured value is a different type from
+        what the bound form returns, so two callers reading "the same" mapping
+        could disagree about what a choice is.  Decoding needs the declarations
+        the codecs live on, and those come with the occurrence.
+
+        For a raw node, read the document: ``decode_dataflow_state(node)``
+        returns the envelope and its canonical values, and
+        ``format_dataflow_state(node)`` renders it for a human.  Both say
+        plainly that they are reading what is written, not what it means.
+
+        What is reported is the *reachable* point, not the frozen node it was
+        bound from -- which is what a later ``graph_effects`` would write, and
+        is why a successor reports the assignment that produced it.
         """
 
         if self._binding is None:
-            return self._recorded_on(self.onnx_node)
+            raise DataflowOpError(
+                f"{type(self).__name__} is not bound, and decoding a recorded choice needs "
+                "the declaration its codec lives on; call bind(model, build) first, or read "
+                "the node's document with decode_dataflow_state(node)"
+            )
         return MappingProxyType(
             {
                 choice.path: answer.value
@@ -957,18 +1041,6 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 if isinstance(answer := occurrence_answer_at(self, choice.reference), Decided)
             }
         )
-
-    @classmethod
-    def _recorded_on(cls, node: Any) -> Mapping[str, object]:
-        """Every choice physically present on this node, by compiled path."""
-
-        try:
-            state = decode_dataflow_state(node)
-        except DecodeError as error:
-            raise DataflowOpError(f"{node.name}: {error}") from error
-        if state is None:
-            return MappingProxyType({})
-        return MappingProxyType({path: item.value for path, item in state.assignments.items()})
 
 
 def _root_projection(operation: DataflowOp) -> ProjectionAssessment[DataflowNetwork]:

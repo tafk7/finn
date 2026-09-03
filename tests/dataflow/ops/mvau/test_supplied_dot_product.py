@@ -20,7 +20,11 @@ from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.model.declarations import Problem, Space, Subspace
-from finn.dataflow.ops.mvau.computation import MvauComputationProfile
+from finn.dataflow.ops.mvau.computation import (
+    AccumulationMode,
+    ActivationMode,
+    MvauComputationProfile,
+)
 from finn.dataflow.model.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -91,7 +95,9 @@ def _occurrence(
             Source.accumulator_type: DataType["INT32"],
             Source.output_type: DataType["INT32"],
             Source.narrow_weights: False,
-            Source.computation_profile: MvauComputationProfile.ACCUMULATOR_INTEGER,
+            Source.computation_profile: MvauComputationProfile(
+                AccumulationMode.INTEGER, ActivationMode.NONE
+            ),
             Source.target_dsp: DspBlock.DSP58,
             Source.clock_period_ns: CLOCK_PERIOD_NS,
             Source.initializer_present: initializer,
@@ -233,7 +239,9 @@ def test_the_mode_is_uncommitted_until_it_is_chosen() -> None:
             Source.accumulator_type: DataType["INT32"],
             Source.output_type: DataType["INT32"],
             Source.narrow_weights: False,
-            Source.computation_profile: MvauComputationProfile.ACCUMULATOR_INTEGER,
+            Source.computation_profile: MvauComputationProfile(
+                AccumulationMode.INTEGER, ActivationMode.NONE
+            ),
             Source.target_dsp: DspBlock.DSP58,
             Source.clock_period_ns: CLOCK_PERIOD_NS,
             Source.initializer_present: True,

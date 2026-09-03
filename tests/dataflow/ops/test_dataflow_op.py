@@ -411,7 +411,11 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
         "activation_bias",
         "accumulator_type",
         "weight_excludes_minimum",
+        "output_type",
+        "source_nodes",
         "target_dsp",
+        "runtime_writable_weights",
+        "runtime_weight_range_contract",
         "clock_period_ns",
     ]
     assert [name for name, _ in source_declarations(type(replay))] == [
@@ -668,7 +672,11 @@ def test_a_structural_choice_can_be_changed_without_touching_the_node() -> None:
     assert dict(final.recorded())["design.case"] == "dot_product"
     # Nothing belonging to the alternative left behind survived.
     assert "design.supplied.weight_supply" not in dict(final.recorded())
-    assert "design.supplied.weight_supply" not in dict(_unbound(model, "mvau0").recorded())
+    # Read from the node itself, which is what an unbound wrapper can honestly
+    # answer: the document's canonical values, not decoded ones.
+    document = decode_dataflow_state(model.graph.node[0])
+    assert document is not None
+    assert "design.supplied.weight_supply" not in document.assignments
     # And it rebinds cleanly: nothing left over refuses to replay.
     assert _unbound(model, "mvau0").bind(model, Build()).recorded()["design.case"] == (
         "dot_product"
@@ -1546,3 +1554,24 @@ def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() 
     assert isinstance(operation.network, Decided)
     assert operation.expected_outputs()["output"][0] == (4,)
     assert operation.reconciliation() == ()
+
+
+def test_recorded_is_a_bound_api_and_the_node_is_read_as_a_document() -> None:
+    """One mapping, one meaning.
+
+    ``recorded()`` used to answer on an unbound wrapper by handing back the
+    document's canonical values, so the same key was an Enum through one path
+    and a string through the other.  Decoding needs the declaration the codec
+    lives on; a raw node has no declarations, so it is read as what it is.
+    """
+
+    model, operation = _configured_mvau(design="supplied", supply=WeightSupply.EMBEDDED)
+
+    assert dict(operation.recorded())["design.supplied.weight_supply"] is WeightSupply.EMBEDDED
+
+    with pytest.raises(DataflowOpError, match="not bound"):
+        _unbound(model, "mvau0").recorded()
+
+    document = decode_dataflow_state(model.graph.node[0])
+    assert document is not None
+    assert document.assignments["design.supplied.weight_supply"].value == "embedded"

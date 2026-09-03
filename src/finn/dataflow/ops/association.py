@@ -131,6 +131,14 @@ class SourceAssociation:
     family: str
     family_version: str
     operands: tuple[OperandAssociation, ...]
+    #: The original graph nodes this one was fused from, if it was fused.
+    #:
+    #: Provenance, and the only record of it.  Once several nodes become one
+    #: logical operation the lineage exists nowhere else in the graph, and a
+    #: consumer tracing a result back to the model the user wrote needs it.
+    #: Empty means "this node is its own origin", which is the ordinary case
+    #: and is not the same as "the lineage was lost".
+    origin_nodes: tuple[str, ...] = ()
 
     def operand(self, operand_id: str) -> OperandAssociation:
         for item in self.operands:

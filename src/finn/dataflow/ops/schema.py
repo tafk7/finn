@@ -269,6 +269,9 @@ class BuildFact(Problem[Any]):
     """
 
     value_type: type[Any] = object
+    #: ``None`` from an accessor is *absence*, not a value: an optional build
+    #: fact the configuration does not supply must reach the design space as an
+    #: absent Problem, so a reader has to say what it does about that.
     accessor: Callable[[Any], Any] = bool
     default: Any = None
     member_name: str = ""
@@ -277,17 +280,73 @@ class BuildFact(Problem[Any]):
         self,
         value_type: type[T],
         *,
-        accessor: Callable[[Any], T],
+        accessor: Callable[[Any], T | None],
         default: T | None = None,
         required: bool = True,
     ) -> None:
         if not callable(accessor):
             raise AuthoringError("a BuildFact needs a callable accessor")
-        Problem.__init__(self, value_type, required=required)
+        # ``required`` is a claim about the *build configuration*, enforced when
+        # the accessor runs, and deliberately not about the Problem.  A Problem
+        # that refuses to start without a build value would make the whole
+        # occurrence unavailable to the questions that need no build at all --
+        # QONNX's shape, datatype and verification passes, which run on a graph
+        # long before anybody has chosen a target.
+        Problem.__init__(self, value_type, required=False)
         object.__setattr__(self, "value_type", value_type)
         object.__setattr__(self, "accessor", accessor)
         object.__setattr__(self, "default", default)
         object.__setattr__(self, "member_name", "")
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class TensorDatatypeFact(Problem[Any]):
+    """One tensor's annotated datatype, read as a *source fact* about the node.
+
+    The exception the ``OutputTensor`` rule needs, stated precisely.  An output
+    annotation is an observation **when the operation derives and owns its
+    expected value** -- then the graph's copy is something to compare against
+    and repair.  It is an authoritative source fact when the annotation
+    *determines the operation's mathematics*: a thresholded MVAU scales and
+    biases its result according to the output type it was given, so changing
+    that annotation changes the numbers, and a value that changes the numbers
+    must be in the problem and in its fingerprint.
+
+    ``when`` decides which of the two a given node is.  A fact that is not
+    supplied is absent rather than defaulted, so a reader has to say what it
+    does about that; a fact that *is* supplied is fingerprinted like any other
+    Problem, so no recorded choice can outlive the value it was made against.
+
+    This is deliberately not "make ``OutputTensor`` a Problem again".  The
+    identity of the output tensor and its repairable shape stay observations;
+    only the one annotation the mathematics reads becomes a fact.
+    """
+
+    operand: Any = None
+    when: Any = None
+    member_name: str = ""
+
+    def __init__(
+        self,
+        operand: TensorDeclaration,
+        *,
+        when: Callable[[Any], bool] | None = None,
+    ) -> None:
+        if not isinstance(operand, TensorDeclaration):
+            raise AuthoringError("a TensorDatatypeFact reads one declared tensor")
+        if when is not None and not callable(when):
+            raise AuthoringError("a TensorDatatypeFact when= is a callable over the reading")
+        Problem.__init__(
+            self, QONNX_DATATYPE_VALUE_SEMANTICS, required=False, canonical=QONNX_DATATYPE_CODEC
+        )
+        object.__setattr__(self, "operand", operand)
+        object.__setattr__(self, "when", when)
+        object.__setattr__(self, "member_name", "")
+
+    def applies_to(self, source: Any) -> bool:
+        """Whether this node is one whose mathematics reads the annotation."""
+
+        return True if self.when is None else bool(self.when(source))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -343,11 +402,18 @@ SOURCE_DECLARATION_TYPES: tuple[type, ...] = (
     DatatypeAttribute,
     BuildFact,
     InitializerAnalysis,
+    TensorDatatypeFact,
 )
 
 #: The union, for a caller that wants to name it.
 SourceDeclaration = (
-    InputTensor | OutputTensor | Attribute | DatatypeAttribute | BuildFact | InitializerAnalysis
+    InputTensor
+    | OutputTensor
+    | Attribute
+    | DatatypeAttribute
+    | BuildFact
+    | InitializerAnalysis
+    | TensorDatatypeFact
 )
 
 
@@ -457,6 +523,7 @@ __all__ = [
     "InputTensor",
     "OutputTensor",
     "SourceDeclaration",
+    "TensorDatatypeFact",
     "TensorDeclaration",
     "attribute_name",
     "facet_name",

@@ -62,12 +62,61 @@ from finn.dataflow.ops.schema import (
     InitializerAnalysis,
     InputTensor,
     OutputTensor,
+    TensorDatatypeFact,
 )
 
 
 def _target_dsp(build: Any) -> DspBlock:
     value = getattr(build, "target_dsp", DspBlock.DSP58)
     return value if isinstance(value, DspBlock) else DspBlock(str(value))
+
+
+def mvau_profile(source: SourceNode) -> MvauComputationProfile:
+    """One reading's computation profile, without an occurrence.
+
+    The formula the derived member uses, reachable from the unbound side --
+    ``execute_node`` runs on a wrapper QONNX built and has no design space, and
+    two spellings of "what does this node compute" is exactly the drift the
+    derivation exists to prevent.
+    """
+
+    return computation_profile(
+        no_activation=bool(source.attributes["no_activation"]),
+        binary_xnor=bool(source.attributes["binary_xnor"]),
+        activation_type=source.operand("activation").datatype,
+        weight_type=source.operand("weight").datatype,
+    )
+
+
+def origin_nodes(source: SourceNode) -> tuple[str, ...]:
+    """The original nodes fused into this one, from the comma-separated list.
+
+    The spelling FINN's transformations already write.  Parsed here rather than
+    at every reader, and empty entries are dropped so a trailing comma is not a
+    node called ``""``.
+    """
+
+    raw = str(source.attributes.get("source_nodes", ""))
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _runtime_writable(build: Any) -> bool:
+    """Whether this build writes the matrix at runtime.  Absent means no."""
+
+    return bool(getattr(build, "runtime_writable_weights", False))
+
+
+def _runtime_weight_range_contract(build: Any) -> bool | None:
+    """The caller's promise about a runtime matrix's range, if they made one.
+
+    ``None`` is not ``False``: "no contract" and "a contract that says the
+    minimum is used" both prevent narrowing, but only one of them is a
+    statement, and a later reader that wants to warn about the first must be
+    able to tell them apart.
+    """
+
+    value = getattr(build, "runtime_weight_range_contract", None)
+    return None if value is None else bool(value)
 
 
 def _design_view(root: Space) -> VariantView:
@@ -176,7 +225,33 @@ class MvauDataflowOp(DataflowOp):
         weight, bool, evaluate=initializer_excludes_minimum
     )
 
+    #: The output annotation, as a *source fact*, for the nodes whose
+    #: mathematics reads it.  A thresholded MVAU scales and biases by the type
+    #: it was asked to produce, so that annotation changes the numbers -- and a
+    #: value that changes the numbers belongs in the problem and its
+    #: fingerprint, or a recorded choice can outlive the value it was made
+    #: against.  A plain node derives its own output type from ``accDataType``
+    #: and *repairs* the annotation, so for it the annotation is an observation
+    #: and this fact is absent.  The distinction is the ``when``.
+    output_type = TensorDatatypeFact(
+        output, when=lambda source: not bool(source.attributes["no_activation"])
+    )
+
+    #: Which original graph nodes were fused into this one.  Carried because it
+    #: is provenance nothing else records: once several nodes become one
+    #: logical MVAU, the lineage exists only here.
+    source_nodes = Attribute(str, default="", onnx="dataflow_source_nodes")
+
     target_dsp = BuildFact(DspBlock, accessor=_target_dsp)
+    #: Whether the matrix is written at runtime, and what range the caller
+    #: promises it will hold.  Build facts rather than node attributes: both
+    #: are decisions of the surrounding build, not properties of the graph.
+    runtime_writable_weights = BuildFact(
+        bool, accessor=_runtime_writable, default=False, required=False
+    )
+    runtime_weight_range_contract = BuildFact(
+        bool, accessor=_runtime_weight_range_contract, required=False
+    )
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
 
     # -- what the composition below reads -------------------------------------
@@ -230,29 +305,61 @@ class MvauDataflowOp(DataflowOp):
             total *= extent
         return total // width
 
-    @derived(MvauComputationProfile, activated=no_activation, xnor=binary_xnor)
-    def profile(*, activated: bool, xnor: bool) -> object:
-        """Which of the three MVAU computations this node describes.
+    @derived(
+        MvauComputationProfile,
+        activated=no_activation,
+        xnor=binary_xnor,
+        activation_type=activation.datatype,
+        weight_type=weight.datatype,
+    )
+    def profile(
+        *, activated: bool, xnor: bool, activation_type: object, weight_type: object
+    ) -> object:
+        """What this node computes, on both of the axes that decide it.
 
-        Derived once and read by everything -- the execution, the output
-        datatype, and the Designs' applicability -- so a consumer that asked
-        ``noActivation`` directly could not come to disagree with it.
+        Derived once and read by everything -- the execution, the Designs'
+        applicability, any later parity record -- so a consumer that asked
+        ``noActivation`` directly could not come to disagree with it.  The
+        operand datatypes are dependencies because the accumulation genuinely
+        depends on them: two BIPOLAR operands are a popcount whatever the
+        attributes say.
         """
 
-        return computation_profile(no_activation=activated, binary_xnor=xnor)
+        return computation_profile(
+            no_activation=activated,
+            binary_xnor=xnor,
+            activation_type=cast(Any, activation_type),
+            weight_type=cast(Any, weight_type),
+        )
 
-    @derived(bool, excludes_minimum=allow_absent(weight_excludes_minimum))
-    def effective_narrow_weights(*, excludes_minimum: object) -> object:
+    @derived(
+        bool,
+        excludes_minimum=allow_absent(weight_excludes_minimum),
+        runtime_writable=allow_absent(runtime_writable_weights),
+        runtime_range=allow_absent(runtime_weight_range_contract),
+    )
+    def effective_narrow_weights(
+        *, excludes_minimum: object, runtime_writable: object, runtime_range: object
+    ) -> object:
         """Whether the weights can be stored one bit narrower.
 
-        Absent -- an operand with no initializer, or values the analysis could
-        not judge -- is ``False``: a supplied matrix whose contents are not
-        known at build time cannot be promised to avoid its minimum, and
-        assuming otherwise would build hardware that cannot represent a weight
-        the graph is entitled to deliver later.
+        Two sources, and which one applies is a property of the *weights*, not
+        a preference.  A matrix baked in at build time is judged by its own
+        values.  A runtime-writable matrix has no values yet, so the only thing
+        that can promise anything about the range it will hold is the caller's
+        explicit contract -- and reading the initializer analysis for such a
+        node would narrow the hardware on the strength of weights that are
+        about to be overwritten.
+
+        Absent, on either path, is ``False``: no initializer, values the
+        analysis could not judge, or a runtime-writable matrix with no contract
+        all mean nobody has promised anything, and hardware must not be built
+        on a promise nobody made.
         """
 
-        return excludes_minimum is not ABSENT and bool(excludes_minimum)
+        writable = runtime_writable is not ABSENT and bool(runtime_writable)
+        promised = runtime_range if writable else excludes_minimum
+        return promised is not ABSENT and bool(promised)
 
     @constraint(shape=matrix)
     def weight_is_a_matrix(*, shape: tuple[int, ...]) -> object:
@@ -430,6 +537,7 @@ class MvauDataflowOp(DataflowOp):
                 type(self).family,
                 type(self).family_version,
                 tuple(operands),
+                origin_nodes(self.source),
             )
         )
 
@@ -462,7 +570,7 @@ class MvauDataflowOp(DataflowOp):
     # -- executing the source semantics ----------------------------------------
 
     def execute_node(self, context: Any, graph: Any) -> None:
-        """Compute this node in ONNX, for the three profiles it can describe."""
+        """Compute this node in ONNX, on both of its semantic axes."""
 
         del graph
         source = self.attached_source()
@@ -474,12 +582,10 @@ class MvauDataflowOp(DataflowOp):
             activation=context[node.input[0]],
             weight=context[node.input[1]],
             thresholds=thresholds,
-            profile=computation_profile(
-                no_activation=bool(source.attributes["no_activation"]),
-                binary_xnor=bool(source.attributes["binary_xnor"]),
-            ),
-            activation_type=source.operand("activation").datatype,
-            weight_type=source.operand("weight").datatype,
+            profile=mvau_profile(source),
+            # The annotation, which for a thresholded node is the declared
+            # source fact ``output_type`` -- the same value, read the same way,
+            # and in the problem's fingerprint because it changes the numbers.
             output_type=source.operand("output").datatype,
             activation_bias=int(cast(int, source.attributes["activation_bias"])),
         )
@@ -487,25 +593,6 @@ class MvauDataflowOp(DataflowOp):
         if expected is None:
             raise DataflowOpError(f"{node.name} cannot state the shape of its own output")
         context[node.output[0]] = result.reshape(expected)
-
-    def verify_node(self) -> list[str]:
-        """Every way this node's own semantics are inconsistent, as messages.
-
-        The same constraints the projection uses, reported the way QONNX's
-        verification expects.  Written as a reading of ``source_accepts``
-        rather than as a second set of checks, so a node cannot pass
-        verification and then be refused by the design space for a reason
-        verification never mentioned.
-        """
-
-        assessment = self.assess(type(self).source_accepts)
-        if assessment.verdict is True:
-            return []
-        return [
-            finding.message
-            for answer in assessment.answers.values()
-            for finding in getattr(answer, "findings", ())
-        ]
 
 
 def _internal_destination(
@@ -552,4 +639,4 @@ def _selected_shape(
     return None
 
 
-__all__ = ["MvauDataflowOp"]
+__all__ = ["MvauDataflowOp", "mvau_profile", "origin_nodes"]

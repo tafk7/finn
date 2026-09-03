@@ -63,13 +63,13 @@ class WeightedDotProductDesign(DataflowDesign):
         inapplicable Design instead of an unreadable node.
         """
 
-        if profile is not MvauComputationProfile.FUSED_THRESHOLD:
+        if not profile.fuses_activation:
             return True
         return reject(
             "mvau-design-fuses-no-activation",
-            f"this Design computes {MvauComputationProfile.ACCUMULATOR_INTEGER.value} and "
-            f"has no stage for a fused threshold; this node is {profile.value}",
-            values={"computation_profile": profile.value},
+            "this Design emits its accumulator directly and has no stage for a fused "
+            f"threshold; this node computes {profile.name}",
+            values={"computation_profile": profile.name},
         )
 
     dataflow_support = ConstraintGroup(computes_a_bare_accumulator)

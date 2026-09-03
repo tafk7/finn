@@ -19,6 +19,7 @@ Three claims, and they are checked separately because they fail separately:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np  # type: ignore[import-not-found]
@@ -31,10 +32,13 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
     multithreshold,
 )
 
+from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow._engine import Decided
 from finn.dataflow.model.declarations import AuthoringError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.mvau.computation import (
+    AccumulationMode,
+    ActivationMode,
     MvauComputationProfile,
     execute_mvau,
     initializer_excludes_minimum,
@@ -44,7 +48,7 @@ from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import Attribute, InputTensor, OutputTensor
 
-from dataflow.ops.test_dataflow_op import Build, _replay_model, _unbound
+from dataflow.ops.test_dataflow_op import Build, _configured_mvau, _replay_model, _unbound
 
 MATRIX_WIDTH = 8
 MATRIX_HEIGHT = 4
@@ -149,24 +153,39 @@ def _refusals(operation: MvauDataflowOp) -> set[str]:
 
 
 @pytest.mark.parametrize(
-    ("no_activation", "binary_xnor", "expected"),
+    ("no_activation", "binary_xnor", "accumulation", "activation"),
     [
-        (True, False, MvauComputationProfile.ACCUMULATOR_INTEGER),
-        (True, True, MvauComputationProfile.BIPOLAR_XNOR_ACCUMULATOR),
-        (False, False, MvauComputationProfile.FUSED_THRESHOLD),
-        # A fused threshold outranks the XNOR mode: the threshold is what
-        # decides the output type and the operand list.
-        (False, True, MvauComputationProfile.FUSED_THRESHOLD),
+        (True, False, AccumulationMode.INTEGER, ActivationMode.NONE),
+        (True, True, AccumulationMode.XNOR_POPCOUNT, ActivationMode.NONE),
+        (False, False, AccumulationMode.INTEGER, ActivationMode.MULTITHRESHOLD),
+        # The combination one exclusive enum could not hold: an XNOR popcount
+        # *and then* a threshold.  Neither axis wins; both happen.
+        (False, True, AccumulationMode.XNOR_POPCOUNT, ActivationMode.MULTITHRESHOLD),
     ],
-    ids=["integer", "bipolar", "thresholded", "thresholded-bipolar"],
+    ids=["integer", "xnor", "thresholded", "xnor-and-thresholded"],
 )
-def test_the_profile_is_derived_from_the_two_attributes_that_decide_it(
-    no_activation: bool, binary_xnor: bool, expected: MvauComputationProfile
+def test_the_profile_carries_both_axes_independently(
+    no_activation: bool,
+    binary_xnor: bool,
+    accumulation: AccumulationMode,
+    activation: ActivationMode,
 ) -> None:
     thresholds = None if no_activation else np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
     model = _model(no_activation=no_activation, binary_xnor=binary_xnor, thresholds=thresholds)
 
-    assert _bound(model).answer(MvauDataflowOp.profile) == Decided(expected)
+    assert _bound(model).answer(MvauDataflowOp.profile) == Decided(
+        MvauComputationProfile(accumulation, activation)
+    )
+
+
+def test_bipolar_operands_are_a_popcount_whatever_the_attribute_says() -> None:
+    """The accumulation depends on the datatypes, so the derivation reads them."""
+
+    model = _model(activation_type="BIPOLAR", weight_type="BIPOLAR")
+
+    assert _bound(model).answer(MvauDataflowOp.profile) == Decided(
+        MvauComputationProfile(AccumulationMode.BIPOLAR_POPCOUNT, ActivationMode.NONE)
+    )
 
 
 # -- the threshold operand ------------------------------------------------------
@@ -399,9 +418,7 @@ def test_a_bipolar_output_scales_and_biases_the_threshold_result() -> None:
         activation=activation,
         weight=weight,
         thresholds=thresholds,
-        profile=MvauComputationProfile.FUSED_THRESHOLD,
-        activation_type=DataType["INT8"],
-        weight_type=DataType["INT8"],
+        profile=MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.MULTITHRESHOLD),
         output_type=DataType["BIPOLAR"],
         activation_bias=0,
     )
@@ -433,9 +450,7 @@ def test_a_four_dimensional_result_is_transposed_around_multithreshold() -> None
         activation=activation,
         weight=weight,
         thresholds=thresholds,
-        profile=MvauComputationProfile.FUSED_THRESHOLD,
-        activation_type=DataType["INT8"],
-        weight_type=DataType["INT8"],
+        profile=MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.MULTITHRESHOLD),
         output_type=DataType["UINT4"],
         activation_bias=0,
     )
@@ -548,3 +563,235 @@ def test_a_stale_output_annotation_is_still_not_a_verification_failure() -> None
 
     assert operation.verify_node() == []
     assert operation.reconciliation() != ()
+
+
+# -- the combination one exclusive enum could not represent -----------------------
+
+
+def test_an_xnor_node_that_also_thresholds_does_both_in_order() -> None:
+    """The defect the two-axis profile exists to prevent, checked numerically.
+
+    Collapsing accumulation and activation into one exclusive value made the
+    threshold win, so this node computed a plain matrix product and thresholded
+    *that* -- a different function of the same graph, with no error anywhere.
+    """
+
+    activation = (
+        np.random.RandomState(4).randint(0, 2, (REPETITIONS, MATRIX_WIDTH)).astype(np.float32)
+    )
+    weight = (
+        np.random.RandomState(5).randint(0, 2, (MATRIX_WIDTH, MATRIX_HEIGHT)).astype(np.float32)
+    )
+    thresholds = np.array([[2.0, 5.0]] * MATRIX_HEIGHT, dtype=np.float32)
+    model = _model(
+        no_activation=False,
+        binary_xnor=True,
+        activation_type="BINARY",
+        weight_type="BINARY",
+        output_type="UINT4",
+        thresholds=thresholds,
+    )
+
+    result = _executed(model, activation=activation, weight=weight, threshold=thresholds)
+
+    expected = multithreshold(xnor.xnorpopcountmatmul(activation, weight), thresholds, 1, 0)
+    assert np.array_equal(result, expected)
+    # And it is genuinely a different answer from the collapsed behaviour.
+    assert not np.array_equal(
+        result, multithreshold(np.matmul(activation, weight), thresholds, 1, 0)
+    )
+
+
+def test_bipolar_operands_that_also_threshold_map_before_the_popcount() -> None:
+    activation = (
+        np.random.RandomState(6).choice([-1.0, 1.0], (REPETITIONS, MATRIX_WIDTH)).astype(np.float32)
+    )
+    weight = (
+        np.random.RandomState(7)
+        .choice([-1.0, 1.0], (MATRIX_WIDTH, MATRIX_HEIGHT))
+        .astype(np.float32)
+    )
+    thresholds = np.array([[2.0, 5.0]] * MATRIX_HEIGHT, dtype=np.float32)
+    model = _model(
+        no_activation=False,
+        activation_type="BIPOLAR",
+        weight_type="BIPOLAR",
+        output_type="UINT4",
+        thresholds=thresholds,
+    )
+
+    result = _executed(model, activation=activation, weight=weight, threshold=thresholds)
+
+    popcount = xnor.xnorpopcountmatmul((activation + 1) / 2, (weight + 1) / 2)
+    assert np.array_equal(result, multithreshold(popcount, thresholds, 1, 0))
+
+
+# -- the fused output datatype is a source fact ----------------------------------
+
+
+def _fused(output_type: str = "UINT4") -> Any:
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
+    return _bound(_model(no_activation=False, thresholds=thresholds, output_type=output_type))
+
+
+def test_a_fused_output_datatype_is_in_the_problem_and_its_fingerprint() -> None:
+    """It decides the scale and bias, so it decides the numbers."""
+
+    assert _fused("UINT4").answer(MvauDataflowOp.output_type) == Decided(DataType["UINT4"])
+    assert _fused("UINT4").problem_fingerprint != _fused("BIPOLAR").problem_fingerprint
+
+
+def test_a_plain_node_does_not_take_its_output_annotation_as_a_fact() -> None:
+    """It derives the value and repairs the annotation, so reading it back
+    would make the design space depend on something it is authoritative for --
+    and would move the fingerprint every time a stale annotation was fixed."""
+
+    plain = _bound(_model(output_type="INT32"))
+    other = _bound(_model(output_type="UINT8"))
+
+    assert not isinstance(plain.answer(MvauDataflowOp.output_type), Decided)
+    assert plain.problem_fingerprint == other.problem_fingerprint
+
+
+def test_changing_a_fused_output_datatype_changes_the_numbers() -> None:
+    """Which is exactly why it may not sit outside the problem identity."""
+
+    activation = np.arange(REPETITIONS * MATRIX_WIDTH, dtype=np.float32).reshape(
+        REPETITIONS, MATRIX_WIDTH
+    )
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    thresholds = np.array([[40.0]] * MATRIX_HEIGHT, dtype=np.float32)
+
+    unsigned = _executed(
+        _model(no_activation=False, thresholds=thresholds, output_type="UINT4"),
+        activation=activation,
+        weight=weight,
+        threshold=thresholds,
+    )
+    bipolar = _executed(
+        _model(no_activation=False, thresholds=thresholds, output_type="BIPOLAR"),
+        activation=activation,
+        weight=weight,
+        threshold=thresholds,
+    )
+
+    assert not np.array_equal(unsigned, bipolar)
+
+
+# -- runtime-writable weights ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RuntimeBuild(Build):
+    """A build that writes the matrix at runtime, with or without a promise."""
+
+    runtime_writable_weights: bool = True
+    runtime_weight_range_contract: bool | None = None
+
+
+def _narrow(build: Build, *, weights: np.ndarray | None = None) -> Any:
+    model = _model(weights=weights)
+    operation = _unbound(model, "mvau0").bind(model, build)
+    return operation.answer(MvauDataflowOp.effective_narrow_weights)
+
+
+def test_a_runtime_written_matrix_is_judged_by_its_contract_not_its_initializer() -> None:
+    """The initializer is about to be overwritten; narrowing on it is unsound."""
+
+    avoiding = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -127.0, dtype=np.float32)
+
+    assert _narrow(Build(), weights=avoiding) == Decided(True)
+    assert _narrow(RuntimeBuild(), weights=avoiding) == Decided(False)
+    assert _narrow(RuntimeBuild(runtime_weight_range_contract=True), weights=avoiding) == Decided(
+        True
+    )
+
+
+def test_a_runtime_contract_that_promises_nothing_is_not_narrow() -> None:
+    using_minimum = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -128.0, dtype=np.float32)
+
+    assert _narrow(
+        RuntimeBuild(runtime_weight_range_contract=False), weights=using_minimum
+    ) == Decided(False)
+    # And a contract can promise narrowness for weights that do not have it
+    # yet, because the values on the node are not the ones that will be used.
+    assert _narrow(
+        RuntimeBuild(runtime_weight_range_contract=True), weights=using_minimum
+    ) == Decided(True)
+
+
+def test_the_runtime_facts_are_part_of_the_problem_identity() -> None:
+    """They change what is built, so a recorded choice must not outlive them."""
+
+    model = _model()
+    plain = _unbound(model, "mvau0").bind(model, Build())
+    runtime = _unbound(model, "mvau0").bind(model, RuntimeBuild())
+
+    assert plain.problem_fingerprint != runtime.problem_fingerprint
+
+
+# -- provenance ------------------------------------------------------------------
+
+
+def test_the_association_carries_the_nodes_this_one_was_fused_from() -> None:
+    """The lineage exists nowhere else once the fusion has happened."""
+
+    model = _model()
+    _set_source_nodes(model, "matmul0,add0,relu0")
+    _model_, operation = _configured_mvau(model)
+
+    association = operation.association
+    assert isinstance(association, Decided)
+    assert association.value.origin_nodes == ("matmul0", "add0", "relu0")
+
+
+def test_an_unfused_node_is_its_own_origin_and_says_so_with_an_empty_lineage() -> None:
+    _model_, operation = _configured_mvau(_model())
+
+    association = operation.association
+    assert isinstance(association, Decided)
+    assert association.value.origin_nodes == ()
+
+
+def _set_source_nodes(model: ModelWrapper, value: str) -> None:
+    model.graph.node[0].attribute.append(
+        helper.make_attribute("dataflow_source_nodes", value.encode("utf-8"))
+    )
+
+
+# -- verification through FINN's own analysis ------------------------------------
+
+
+def test_verify_nodes_runs_over_an_ordinary_wrapper() -> None:
+    """The path FINN actually takes: a model-attached, design-space-unbound op."""
+
+    report = verify_nodes(_model())
+
+    assert report == {"MvauDataflowOp": []}
+
+
+def test_verify_nodes_reports_a_malformed_node_through_the_same_analysis() -> None:
+    model = _model(no_activation=False)
+
+    report = verify_nodes(model)
+
+    assert any("threshold" in message for message in report["MvauDataflowOp"])
+
+
+def test_verifying_needs_no_build_configuration() -> None:
+    """A graph is verified long before anybody has chosen a synthesis target."""
+
+    operation = _unbound(_model(), "mvau0")
+
+    assert operation.verify_node() == []
+    assert operation.assess_source().verdict is True
+
+
+def test_verification_does_not_replay_recorded_choices() -> None:
+    """Verification asks whether the node is well formed, nothing more."""
+
+    model, _operation = _configured_mvau(_model())
+    # A recorded choice made against a *different* problem would refuse a bind.
+    model.set_tensor_shape("activation", [4, MATRIX_WIDTH])
+
+    assert verify_nodes(model) == {"MvauDataflowOp": []}
