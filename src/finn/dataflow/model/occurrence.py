@@ -13,9 +13,10 @@ views that can only name declarations in their own authored scope.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from threading import RLock
 from types import MappingProxyType
-from typing import TypeVar, cast
+from typing import Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     Absent,
@@ -25,13 +26,16 @@ from finn.dataflow._engine import (
     DesignPoint,
     Engine,
     Finding,
+    FindingKind,
     ItemOutcome,
     QualifiedPath,
     ReadinessAssessment,
     Unresolved,
 )
+from finn.dataflow._engine.results import ordered_findings
 from finn.dataflow.model.compiler import (
     _CompiledBranch,
+    _CompiledProjection,
     _CompiledSpace,
     _Ref,
     _compile_space,
@@ -45,6 +49,7 @@ from finn.dataflow.model.declarations import (
     Decision,
     OneOf,
     Problem,
+    Projection,
     Readiness,
     Space,
     Use,
@@ -64,6 +69,16 @@ class OccurrenceError(ValueError):
     def __init__(self, message: str, findings: tuple[Finding, ...] = ()) -> None:
         super().__init__(message)
         self.findings = findings
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionAssessment(Generic[T]):
+    """Readiness, validation, raw output, and accepted projection answer."""
+
+    readiness: ReadinessAssessment
+    constraints: tuple[ConstraintAssessment, ...]
+    output: Answer[T]
+    accepted_answer: Answer[T]
 
 
 class _RootRuntime:
@@ -314,6 +329,103 @@ def occurrence_assess(
     raise TypeError("assess() requires a Readiness, ConstraintGroup, or Constraint declaration")
 
 
+def _projection_for_declaration(
+    compiled: _CompiledSpace[Space], declaration: Projection[object]
+) -> _CompiledProjection[object]:
+    name = _effective_member_name(compiled.owner, declaration, (Projection,))
+    if name is None:
+        raise OccurrenceError(f"{compiled.owner.__name__} does not own that Projection")
+    return compiled.projection(name)
+
+
+def _assessment_findings(
+    readiness: ReadinessAssessment,
+    constraints: tuple[ConstraintAssessment, ...],
+    output: Answer[object],
+) -> tuple[Finding, ...]:
+    answers = (
+        *readiness.answers.values(),
+        *(answer for assessment in constraints for answer in assessment.answers.values()),
+        output,
+    )
+    return ordered_findings(
+        [
+            finding
+            for answer in answers
+            if isinstance(answer, (Absent, Unresolved))
+            for finding in answer.findings
+        ]
+    )
+
+
+def _reduce_projection(
+    compiled: _CompiledProjection[object],
+    readiness: ReadinessAssessment,
+    constraints: tuple[ConstraintAssessment, ...],
+    output: Answer[object],
+) -> Answer[object]:
+    findings = _assessment_findings(readiness, constraints, output)
+    any_unresolved = (
+        readiness.ready is None
+        or isinstance(output, Unresolved)
+        or any(assessment.verdict is None for assessment in constraints)
+    )
+    if any_unresolved:
+        return Unresolved(
+            findings
+            or (
+                Finding(
+                    FindingKind.BLOCKER,
+                    "projection-not-ready",
+                    compiled.output.path,
+                    f"projection {compiled.name!r} is not ready",
+                ),
+            )
+        )
+
+    refused: list[Finding] = [
+        finding for finding in findings if finding.kind is FindingKind.REJECTION
+    ]
+    for assessment in constraints:
+        for path, answer in assessment.answers.items():
+            if isinstance(answer, Decided) and answer.value is False:
+                refused.append(
+                    Finding(
+                        FindingKind.REJECTION,
+                        "projection-constraint-rejected",
+                        path,
+                        f"constraint rejected projection {compiled.name!r}",
+                    )
+                )
+    if any(assessment.verdict is False for assessment in constraints):
+        return Absent(ordered_findings(refused))
+    if isinstance(output, Absent):
+        return Absent(findings)
+    assert isinstance(output, Decided)
+    return Decided(compiled.output.semantics.freeze(output.value))
+
+
+def occurrence_project(instance: Space, declaration: Projection[T]) -> ProjectionAssessment[T]:
+    """Evaluate a Projection without exposing its bound runtime handles."""
+
+    runtime, compiled_space, _root = _occurrence_parts(instance)
+    compiled = _projection_for_declaration(compiled_space, cast("Projection[object]", declaration))
+    with runtime.lock:
+        readiness = runtime.engine.check_readiness(runtime.point, compiled.readiness_profile)
+        output = answer_for(runtime.engine, runtime.point, compiled.output)
+        constraints = tuple(
+            runtime.engine.evaluate_constraint_set(runtime.point, name)
+            for name in compiled.constraint_sets
+        )
+        accepted = _reduce_projection(compiled, readiness, constraints, output)
+    return ProjectionAssessment(
+        readiness,
+        constraints,
+        cast("Answer[T]", output),
+        cast("Answer[T]", accepted),
+    )
+
+
 def _direct_children(compiled: _CompiledSpace[Space]) -> tuple[_CompiledSpace[Space], ...]:
     return (
         *(child for _name, child in compiled.children),
@@ -453,4 +565,10 @@ def occurrence_branch(instance: Space, declaration: OneOf) -> BranchView:
     return BranchView(instance, _branch_for_declaration(compiled, declaration))
 
 
-__all__ = ["BranchView", "OccurrenceError", "ProblemSource", "start_occurrence"]
+__all__ = [
+    "BranchView",
+    "OccurrenceError",
+    "ProblemSource",
+    "ProjectionAssessment",
+    "start_occurrence",
+]

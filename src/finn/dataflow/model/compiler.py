@@ -60,6 +60,7 @@ from finn.dataflow.model.declarations import (
     OneOf,
     PendingFinding,
     Problem,
+    Projection,
     Readiness,
     Rejected,
     Space,
@@ -150,6 +151,19 @@ class _CompiledBranch:
 
 
 @dataclass(frozen=True)
+class _CompiledProjection(Generic[T_co]):
+    """Private bound metadata for one public Projection declaration."""
+
+    member_name: str
+    name: str
+    output: _Ref[T_co]
+    readiness_profile: str
+    constraint_sets: tuple[str, ...]
+    absence_policy: str
+    snapshot_policy: str
+
+
+@dataclass(frozen=True)
 class _CompiledSpace(Generic[S]):
     """One bound, namespaced Space declaration and its typed member handles."""
 
@@ -163,6 +177,7 @@ class _CompiledSpace(Generic[S]):
     extension: object | None = None
     branches: tuple[tuple[str, _CompiledBranch], ...] = ()
     catalog: BranchCatalog = BranchCatalog()
+    projections: tuple[tuple[str, _CompiledProjection[object]], ...] = ()
 
     def branch(self, name: str) -> _CompiledBranch:
         try:
@@ -189,6 +204,12 @@ class _CompiledSpace(Generic[S]):
             return dict(self.children)[name]
         except KeyError:
             raise AuthoringError(f"{self.owner.__name__} has no child Use {name!r}") from None
+
+    def projection(self, name: str) -> _CompiledProjection[object]:
+        try:
+            return dict(self.projections)[name]
+        except KeyError:
+            raise AuthoringError(f"{self.owner.__name__} has no Projection {name!r}") from None
 
 
 def _path(prefix: str, name: str) -> QualifiedPath:
@@ -310,6 +331,11 @@ class _Compilation:
             for name, declaration in self.declarations
             if isinstance(declaration, OneOf)
         )
+        projections = tuple(
+            (name, self._compile_projection(name, declaration))
+            for name, declaration in self.declarations
+            if isinstance(declaration, Projection)
+        )
         compiled = _CompiledSpace(
             self.space_type,
             self.namespace,
@@ -325,6 +351,7 @@ class _Compilation:
             None,
             branches,
             self._catalog(),
+            projections,
         )
         finalized = self.space_type._finalize_compilation(compiled)
         if not isinstance(finalized, _CompiledSpace):
@@ -580,6 +607,45 @@ class _Compilation:
             tuple(constraints),
             tuple(groups),
             tuple(readiness),
+        )
+
+    def _owned_declaration(
+        self,
+        declaration: object,
+        expected: type,
+        role: str,
+    ) -> tuple[str, object]:
+        member_name = self.alias_names.get(id(declaration))
+        effective = dict(self.declarations).get(member_name or "")
+        if member_name is None or not isinstance(effective, expected):
+            raise AuthoringError(
+                f"{self.space_type.__name__} Projection {role} belongs outside the class"
+            )
+        return member_name, effective
+
+    def _compile_projection(
+        self,
+        member_name: str,
+        declaration: Projection[object],
+    ) -> _CompiledProjection[object]:
+        readiness_name, readiness = self._owned_declaration(
+            declaration.readiness, Readiness, "readiness"
+        )
+        groups: list[str] = []
+        for group in declaration.constraints:
+            group_name, effective = self._owned_declaration(
+                group, ConstraintGroup, "constraint group"
+            )
+            groups.append(f"{self.namespace}.{_local_name(group_name, effective)}")
+        local_name = _local_name(member_name, declaration)
+        return _CompiledProjection(
+            member_name,
+            f"{self.namespace}.{local_name}",
+            self._source_ref(declaration.output),
+            f"{self.namespace}.{_local_name(readiness_name, readiness)}",
+            tuple(groups),
+            declaration.absence_policy,
+            declaration.snapshot_policy,
         )
 
     def _when_gate(

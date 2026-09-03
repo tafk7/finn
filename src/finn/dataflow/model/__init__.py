@@ -73,6 +73,7 @@ from finn.dataflow.model.declarations import (
     Input,
     OneOf,
     Problem,
+    Projection,
     Readiness,
     Space,
     Use,
@@ -84,7 +85,11 @@ from finn.dataflow.model.declarations import (
     reject,
     unresolved,
 )
-from finn.dataflow.model.occurrence import BranchView, OccurrenceError
+from finn.dataflow.model.occurrence import (
+    BranchView,
+    OccurrenceError,
+    ProjectionAssessment,
+)
 
 if TYPE_CHECKING:
     from finn.dataflow.model.design import (
@@ -166,6 +171,8 @@ __all__ = [
     "OneOf",
     "OccurrenceError",
     "Problem",
+    "Projection",
+    "ProjectionAssessment",
     "Readiness",
     "Space",
     "Use",

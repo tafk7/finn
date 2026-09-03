@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from importlib import import_module
-from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, Union, cast
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union, cast
 
 from typing_extensions import Self
 
@@ -34,7 +34,11 @@ E = TypeVar("E", bound=Enum)
 
 if TYPE_CHECKING:
     from finn.dataflow._engine import Answer, ConstraintAssessment, ReadinessAssessment
-    from finn.dataflow.model.occurrence import BranchView, ProblemSource
+    from finn.dataflow.model.occurrence import (
+        BranchView,
+        ProblemSource,
+        ProjectionAssessment,
+    )
 
 
 class AuthoringError(ValueError):
@@ -171,6 +175,12 @@ class Space:
             "ReadinessAssessment | ConstraintAssessment",
             api.occurrence_assess(self, declaration),
         )
+
+    def project(self, declaration: Projection[T]) -> ProjectionAssessment[T]:
+        """Evaluate one validated projection at this occurrence's point."""
+
+        api = import_module("finn.dataflow.model.occurrence")
+        return cast("ProjectionAssessment[T]", api.occurrence_project(self, declaration))
 
     def branch(self, declaration: OneOf) -> BranchView:
         """Return a capability-limited view of one branch in this scope."""
@@ -417,6 +427,50 @@ class Readiness:
         object.__setattr__(self, "stable_name", name)
 
 
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class Projection(Generic[T_co]):
+    """One output plus the readiness and constraint groups that validate it."""
+
+    output: ValueSource[T_co]
+    readiness: Readiness
+    constraints: tuple[ConstraintGroup, ...]
+    absence_policy: Literal["propagate"]
+    snapshot_policy: Literal["declared"]
+    stable_name: str | None
+
+    def __init__(
+        self,
+        output: ValueSource[T_co],
+        *,
+        readiness: Readiness,
+        constraints: Sequence[ConstraintGroup] = (),
+        absence_policy: Literal["propagate"] = "propagate",
+        snapshot_policy: Literal["declared"] = "declared",
+        name: str | None = None,
+    ) -> None:
+        if not isinstance(output, ValueSource):
+            raise AuthoringError("a Projection output must be a declared value")
+        if not isinstance(readiness, Readiness):
+            raise AuthoringError("a Projection readiness must be a Readiness declaration")
+        if any(not isinstance(group, ConstraintGroup) for group in constraints):
+            raise AuthoringError("Projection constraints must be ConstraintGroup declarations")
+        if absence_policy != "propagate":
+            raise AuthoringError("the only U1 Projection absence policy is 'propagate'")
+        if snapshot_policy != "declared":
+            raise AuthoringError("the only U1 Projection snapshot policy is 'declared'")
+        object.__setattr__(self, "output", output)
+        object.__setattr__(self, "readiness", readiness)
+        object.__setattr__(self, "constraints", tuple(constraints))
+        object.__setattr__(self, "absence_policy", absence_policy)
+        object.__setattr__(self, "snapshot_policy", snapshot_policy)
+        object.__setattr__(self, "stable_name", name)
+
+    def __get__(self, instance: Space | None, owner: type[Space]) -> object:
+        if instance is None:
+            return self
+        return instance.project(self)
+
+
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
 class ChildValue(ValueSource[T_co]):
     """One exported value of a recursively used child Space."""
@@ -618,6 +672,7 @@ Declaration = Union[
     Constraint,
     ConstraintGroup,
     Readiness,
+    Projection[object],
     Use[Space],
     OneOf,
 ]
@@ -631,6 +686,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Constraint,
     ConstraintGroup,
     Readiness,
+    Projection,
     Use,
     OneOf,
 )
@@ -717,6 +773,7 @@ __all__ = [
     "OneOf",
     "PendingFinding",
     "Problem",
+    "Projection",
     "Readiness",
     "Rejected",
     "Space",
