@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -1591,3 +1592,38 @@ def test_a_stable_compiled_name_is_independent_of_its_python_member() -> None:
     root = Aliased.start({Aliased.size: 2})
     assert type(root.held) is Leaf
     assert root.choice.alternatives == ("one",)
+
+
+# -- C9: the descriptor API's static contract ---------------------------------
+
+
+def test_the_descriptor_api_types_are_pinned_statically() -> None:
+    """The claims a runtime test cannot make.
+
+    `pipeline.fixed` returns the right object whatever its annotations say, so
+    the thing at risk is what a contributor's type checker sees: a descriptor
+    overload that degrades to `Any`, or to the declaration, breaks nothing a
+    runtime assertion would notice.  The fixture is a positive one -- strict
+    mypy must accept it unchanged -- and it is checked in a subprocess for the
+    same reason the existing negative fixture is: mypy is the oracle, not the
+    interpreter running the suite.
+    """
+
+    mypy = shutil.which("mypy")
+    if mypy is None:
+        pytest.skip("mypy is not installed in this test environment")
+    root = Path(__file__).parents[3]
+    fixture = root / "tests" / "dataflow" / "typing" / "space_descriptor_types.py"
+    environment = dict(os.environ)
+    environment["MYPYPATH"] = os.pathsep.join((str(root / "src"), str(root / "tests")))
+    environment.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [mypy, "--no-incremental", "--strict", "--explicit-package-bases", str(fixture)],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout or completed.stderr
+    assert "Success" in completed.stdout

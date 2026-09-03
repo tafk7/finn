@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from inspect import signature
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
@@ -74,6 +74,13 @@ from finn.dataflow.model.declarations import (
     finite,
 )
 from finn.dataflow.spec_algebra import assemble_specs, combine_applicability, gate_spec
+
+if TYPE_CHECKING:
+    # The occurrence runtime is built on this module, so the dependency can only
+    # travel in this direction at type-check time.  ``from __future__ import
+    # annotations`` makes the reference below a string, so nothing is imported
+    # at runtime and the cycle never forms.
+    from finn.dataflow.model.occurrence import ProblemSource
 
 S = TypeVar("S", bound=Space)
 T_co = TypeVar("T_co", covariant=True)
@@ -1180,7 +1187,7 @@ class SpaceModel(Generic[S]):
 
     def start(
         self,
-        problem: object,
+        problem: ProblemSource,
         *,
         expected_problem_fingerprint: str | None = None,
     ) -> S:

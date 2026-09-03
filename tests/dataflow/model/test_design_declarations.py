@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""KD3: ``DataflowDesign`` owns semantics and ``Kernels`` specializes ``OneOf``."""
+"""KD3: ``DataflowDesign`` owns semantics and ``Kernels`` specializes ``Variant``."""
 
 from __future__ import annotations
 

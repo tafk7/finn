@@ -1022,6 +1022,17 @@ class Variant:
     and the selection, and candidate-specific applicability is a separate
     question that has not yet been forced.  Instance access returns the bound
     :class:`VariantView`, never the declaration.
+
+    **Ordering.**  The mapping is consumed exactly once, at construction, in its
+    own iteration order, and frozen into ``alternatives``.  That order is then
+    the order of everything downstream: the selector's finite domain, the
+    compiled case namespaces, ``BranchInfo.cases``, and
+    ``VariantView.alternatives``.  An ordinary ``dict`` literal therefore says
+    what it looks like it says, and a caller who wants a different order writes
+    a different literal or passes an ``OrderedDict``.  Nothing here introduces a
+    second collection type to express that: the mapping a Python author already
+    has is enough, and reading it once means a later mutation of the caller's
+    dict cannot change a compiled space.
     """
 
     alternatives: tuple[tuple[str, Subspace[Space]], ...]
