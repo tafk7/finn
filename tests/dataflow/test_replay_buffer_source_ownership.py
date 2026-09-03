@@ -15,14 +15,7 @@ import pytest
 from finn.custom_op.fpgadataflow.rtl.matrixvectoractivation_rtl import MVAU_rtl
 from finn.custom_op.fpgadataflow.rtl.vectorvectoractivation_rtl import VVAU_rtl
 from finn.custom_op.fpgadataflow.rtlbackend import get_finnlib_root
-from finn.dataflow.kernels.replay_buffer import (
-    FINNLIB_ROOT as LEGACY_FINNLIB_ROOT,
-    FINNLIB_SOURCES as LEGACY_FINNLIB_SOURCES,
-)
-from finn.dataflow.model.replay_buffer import (
-    FINNLIB_ROOT as MODEL_FINNLIB_ROOT,
-    FINNLIB_SOURCES as MODEL_FINNLIB_SOURCES,
-)
+from finn.dataflow.kernels.replay_buffer import FINNLIB_ROOT, FINNLIB_SOURCES
 
 FINN_ROOT = Path(__file__).parents[2]
 REPLAY_PATH = Path("rtl/infra/replay_buffer.sv")
@@ -51,9 +44,9 @@ def _assert_legacy_source_resolution(operator: Any, finnlib: Path) -> None:
     assert all("finn-rtllib/mvu/replay_buffer.sv" not in item for item in commands)
 
 
-def test_both_kernel_generations_declare_one_finnlib_source() -> None:
-    assert MODEL_FINNLIB_ROOT == LEGACY_FINNLIB_ROOT == "finnlib"
-    assert MODEL_FINNLIB_SOURCES == LEGACY_FINNLIB_SOURCES == (str(REPLAY_PATH),)
+def test_the_kernel_declares_one_finnlib_source() -> None:
+    assert FINNLIB_ROOT == "finnlib"
+    assert FINNLIB_SOURCES == (str(REPLAY_PATH),)
 
 
 def test_legacy_mvu_and_vvau_resolve_the_caller_selected_finnlib(

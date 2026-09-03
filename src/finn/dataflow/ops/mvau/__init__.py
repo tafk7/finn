@@ -1,28 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Public MVAU dataflow-operation façade."""
+"""MVAU: canonical semantic values today, the operation itself in U4.
 
-from importlib import import_module
-from typing import TYPE_CHECKING
+What survives the legacy reset is the part that was never an experiment --
+the normalized Region declarations and the decomposed Network they form.  They
+are the reference semantics every later MVAU implementation is measured
+against, and they depend on nothing but ``region`` and ``network``.
 
-if TYPE_CHECKING:
-    from finn.dataflow.ops.mvau.op import MVAUDataflowBuildContext, MvauDataflowOp
+The DataflowOp, its source projection, persistence and association arrive here
+in U4 and are authored against the occurrence lifecycle rather than restored
+from the retired stack.  This namespace performs no eager operation import.
+"""
 
-_LAZY_EXPORTS = {
-    name: ("finn.dataflow.ops.mvau.op", name)
-    for name in ("MVAUDataflowBuildContext", "MvauDataflowOp")
-}
-
-
-def __getattr__(name: str) -> object:
-    target = _LAZY_EXPORTS.get(name)
-    if target is None:
-        raise AttributeError(name)
-    module_name, attribute_name = target
-    value = getattr(import_module(module_name), attribute_name)
-    globals()[name] = value
-    return value
-
-
-__all__ = ["MVAUDataflowBuildContext", "MvauDataflowOp"]
+__all__: list[str] = []

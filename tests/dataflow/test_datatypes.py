@@ -21,7 +21,7 @@ from typing import Any, cast
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.design.region import QONNX_DATATYPE_SEMANTICS
+from finn.dataflow.model.semantics import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,

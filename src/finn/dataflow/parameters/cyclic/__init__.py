@@ -3,16 +3,10 @@
 
 """Cyclic parameter-supply vocabulary and regions."""
 
-from finn.dataflow.parameters.cyclic.definition import (
-    CyclicParameterKernelPaths,
-    CyclicRamStyle,
-    CyclicTargetMemoryCapabilities,
-)
+from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 
 __all__ = [
-    "CyclicParameterKernelPaths",
-    "CyclicRamStyle",
-    "CyclicTargetMemoryCapabilities",
+    "CYCLIC_PARAMETER_DELIVERY",
     "construct_cyclic_parameter_region",
 ]

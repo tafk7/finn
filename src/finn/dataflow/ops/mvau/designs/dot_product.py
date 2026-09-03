@@ -1,201 +1,118 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The production replay-plus-dot-product ``DataflowDesign``."""
+"""The real two-Kernel Design: activation replay feeding a folded dot product.
+
+```text
+activation boundary -> replay -> activation_replay -> compute -> output boundary
+                                                  weight boundary -^
+```
+
+The Design owns PE and SIMD once.  They change the replay Region, the
+dot-product Region, and the beat contract on the edge between them, so no single
+Kernel can own them and no export or equality constraint has to connect the two.
+Both Kernels consume the same engine decision handles as ordinary Inputs.
+
+DotpAxi keeps pumping and its own physical feasibility.  Each Kernel declares
+exactly one Region.  The Design constructs neither, and calls no historical
+Region or Network helper: the Network it publishes is generated from the exact
+selected Regions and the topology declared here.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from finn.dataflow.authoring.design import (
+from finn.dataflow.computation import (
+    ACTIVATION_REPLAY_COMPUTATION,
+    DOT_PRODUCT_COMPUTATION,
+)
+from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.declarations import Decision, Input, Subspace, divisors_of
+from finn.dataflow.designs.design import (
+    Boundary,
+    Connection,
     DataflowDesign,
-    DataflowDesignScope,
+    Kernels,
+    Sink,
 )
-from finn.dataflow.authoring.inventory import (
-    DataflowDesignDeclaration,
-    DataflowDesignEntry,
-    DataflowDesignInventory,
-    declare_dataflow_design_inventory,
-)
-from finn.dataflow.authoring.scope import Ref
-from finn.dataflow.design import DesignSpaceSpec
-from finn.dataflow.kernels.dotp_axi import DotpAxiHandles, DotpAxiKernel
-from finn.dataflow.kernels.dotp_axi import DotProductKernelInputs
-from finn.dataflow.kernels.replay_buffer import ReplayBufferInputs
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.ops.mvau.input_supply import (
-    MVAUInputSupply,
-    declare_mvau_input_supply,
-    declare_supplied_source_association,
-)
-from finn.dataflow.ops.mvau.semantics import (
-    DOT_PRODUCT_NODE,
-    REPLAY_NODE,
-    MVAUDotProductSemantics,
-    declare_dot_product_semantics,
-)
-from finn.dataflow.ops.mvau.problem import (
-    MVAU_EFFECTIVE_NARROW_WEIGHTS,
-    MVAU_PROBLEM,
-    MVAU_PROBLEM_SPEC,
-    MVAUProblem,
-)
-from finn.dataflow.ops.mvau.associations import MVAUSourceAssociation
-from finn.dataflow.region import element_width
-
-
-@dataclass(frozen=True)
-class DotProductDesignInputs:
-    """Shared MVAU declarations imported by ``DotProductDesign``."""
-
-    problem: MVAUProblem
-    semantics: MVAUDotProductSemantics
-    narrow_weights: Ref[bool]
 
 
 class DotProductDesign(DataflowDesign):
-    """Activation replay and dot product in two independent Kernel placements."""
+    """Matrix-vector arithmetic decomposed into replay and dot product."""
 
     id = "dot_product"
     version = "1"
 
-    @classmethod
-    def define(cls, design: DataflowDesignScope[DotProductDesignInputs]) -> None:
-        inputs = design.inputs
-        semantics = inputs.semantics
-        replay = design.node(
-            "replay",
-            node_id=REPLAY_NODE,
-            region=semantics.replay_region,
-            computation=semantics.replay_computation,
-        )
-        compute = design.node(
-            "compute",
-            node_id=DOT_PRODUCT_NODE,
-            region=semantics.dot_product_region,
-            computation=semantics.dot_product_computation,
-        )
-        design.use_network(semantics.network)
-        weight_interface = design.input_interface("compute.weight_interface", compute, "weight")
-        design.map_input("weight", boundary_id="weight", consumer=weight_interface)
-        design.kernels(
-            "compute",
-            covers=(compute,),
-            candidates=(DotpAxiKernel,),
-            inputs=DotProductKernelInputs(
-                role=compute.role,
-                region=semantics.dot_product_region,
-                computation=semantics.dot_product_computation,
-                pe=semantics.pe,
-                simd=semantics.simd,
-                activation_element_type=inputs.problem.activation_element_type,
-                weight_element_type=inputs.problem.weight_element_type,
-                output_element_type=inputs.problem.output_element_type,
-                accumulator_element_type=inputs.problem.accumulator_element_type,
-                narrow_weights=inputs.narrow_weights,
-                target_dsp_block=inputs.problem.target_dsp_block,
-                target_clock_period_ns=inputs.problem.target_clock_period_ns,
-            ),
-        )
-        replay_length = design.derived(
-            "replay.length",
-            int,
-            dependencies={"matrix_width": inputs.problem.matrix_width, "simd": semantics.simd},
-            evaluate=lambda matrix_width, simd: matrix_width // simd,
-        )
-        replay_repetitions = design.derived(
-            "replay.repetitions",
-            int,
-            dependencies={"matrix_height": inputs.problem.matrix_height, "pe": semantics.pe},
-            evaluate=lambda matrix_height, pe: matrix_height // pe,
-        )
-        replay_width = design.derived(
-            "replay.width",
-            int,
-            dependencies={
-                "activation_type": inputs.problem.activation_element_type,
-                "simd": semantics.simd,
-            },
-            evaluate=lambda activation_type, simd: simd * element_width(activation_type),
-        )
-        design.kernels(
-            "replay",
-            covers=(replay,),
-            candidates=(ReplayBufferKernel,),
-            inputs=ReplayBufferInputs(
-                role=replay.role,
-                region=semantics.replay_region,
-                computation=semantics.replay_computation,
-                length=replay_length,
-                repetitions=replay_repetitions,
-                width=replay_width,
-            ),
-        )
+    repetitions = Input(int)
+    matrix_width = Input(int)
+    matrix_height = Input(int)
+    activation_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weight_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    accumulator_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    output_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    narrow_weights = Input(bool)
+    target_dsp = Input(DspBlock)
+    clock_period_ns = Input(float)
 
+    #: Owned here because each of them changes both Regions and their edge.
+    pe = Decision(int, domain=divisors_of(matrix_height))
+    simd = Decision(int, domain=divisors_of(matrix_width))
 
-@dataclass(frozen=True)
-class DotProductDesignAssembly:
-    """The shared semantics and compiled design declared together once."""
-
-    semantics: MVAUDotProductSemantics
-    input_supply: MVAUInputSupply
-    inventory: DataflowDesignInventory
-    design: DataflowDesignDeclaration
-    compute_pumping: Ref[bool]
-    source_association: Ref[MVAUSourceAssociation]
-
-    @property
-    def specification(self) -> DesignSpaceSpec:
-        return self.inventory.specification
-
-
-def declare_dot_product_design(
-    problem: MVAUProblem = MVAU_PROBLEM,
-    *,
-    narrow_weights: Ref[bool] = MVAU_EFFECTIVE_NARROW_WEIGHTS,
-) -> DotProductDesignAssembly:
-    """Declare DotProduct over the shared semantic handles without selecting it."""
-
-    semantics = declare_dot_product_semantics(problem)
-    supply = declare_mvau_input_supply(problem)
-    source_association, association_spec = declare_supplied_source_association(
-        "mvau.design.dot_product",
-        semantics.source_association,
-        supply.declaration,
-    )
-    inventory = declare_dataflow_design_inventory(
-        "mvau",
-        (
-            DataflowDesignEntry(
-                DotProductDesign,
-                DotProductDesignInputs(problem, semantics, narrow_weights),
-                (semantics.spec, association_spec),
-                (semantics.pe, semantics.simd),
-                semantics.feasibility_constraints,
-            ),
+    replay = Kernels(
+        Subspace(
+            ReplayBufferKernel,
+            repetitions=repetitions,
+            matrix_width=matrix_width,
+            matrix_height=matrix_height,
+            activation_type=activation_type,
+            pe=pe,
+            simd=simd,
         ),
-        input_supplies=(supply.declaration,),
-        shared_specs=(MVAU_PROBLEM_SPEC,),
-    )
-    declaration = inventory.declarations[0]
-    compute = declaration.placement("compute").candidates[0]
-    return DotProductDesignAssembly(
-        semantics,
-        supply,
-        inventory,
-        declaration,
-        compute.typed_handles(DotpAxiHandles).compute_pumping,
-        source_association,
+        computation=ACTIVATION_REPLAY_COMPUTATION,
     )
 
+    compute = Kernels(
+        Subspace(
+            DotpAxiKernel,
+            repetitions=repetitions,
+            matrix_width=matrix_width,
+            matrix_height=matrix_height,
+            activation_type=activation_type,
+            weight_type=weight_type,
+            accumulator_type=accumulator_type,
+            output_type=output_type,
+            narrow_weights=narrow_weights,
+            target_dsp=target_dsp,
+            clock_period_ns=clock_period_ns,
+            pe=pe,
+            simd=simd,
+        ),
+        computation=DOT_PRODUCT_COMPUTATION,
+    )
 
-MVAU_DOT_PRODUCT_DESIGN = declare_dot_product_design()
+    activation_replay = Connection(
+        replay.output("activation_out"),
+        Sink(compute.input("activation")),
+    )
+
+    activation = Boundary(replay.input("activation_in"))
+    weight = Boundary(compute.input("weight"))
+    output = Boundary(compute.output("output"))
 
 
-__all__ = [
-    "DotProductDesign",
-    "DotProductDesignAssembly",
-    "DotProductDesignInputs",
-    "MVAU_DOT_PRODUCT_DESIGN",
-    "declare_dot_product_design",
-]
+#: Every Input the Design consumes, for a caller assembling the bindings.
+DESIGN_INPUTS = (
+    "repetitions",
+    "matrix_width",
+    "matrix_height",
+    "activation_type",
+    "weight_type",
+    "accumulator_type",
+    "output_type",
+    "narrow_weights",
+    "target_dsp",
+    "clock_period_ns",
+)
+
+__all__ = ["DESIGN_INPUTS", "DotProductDesign"]

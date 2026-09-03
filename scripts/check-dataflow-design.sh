@@ -46,8 +46,6 @@ PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_
 DATAFLOW_SOURCES=(
     src/finn/analysis/verify_custom_nodes.py
     src/finn/dataflow
-    src/finn/transformation/fpgadataflow/infer_mvau_dataflow.py
-    src/finn/transformation/fpgadataflow/select_dataflow_design.py
     tests/dataflow
     tests/fpgadataflow/test_mvau_cycle_estimate.py
 )
@@ -55,45 +53,25 @@ DATAFLOW_SOURCES=(
 "$RUFF_BIN" format --check "${DATAFLOW_SOURCES[@]}"
 "$RUFF_BIN" check "${DATAFLOW_SOURCES[@]}"
 
+# One package, one invocation.  The U1.5 reset removed the experimental stacks
+# that forced this into a hand-maintained file list, so a module added under
+# src/finn/dataflow is now type-checked without editing this script.
+env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
+    --no-incremental \
+    --strict \
+    --explicit-package-bases \
+    -p finn.dataflow
+
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental \
     --strict \
     --explicit-package-bases \
     src/finn/analysis/verify_custom_nodes.py \
-    src/finn/dataflow/_engine \
-    src/finn/dataflow/design \
-    src/finn/dataflow/authoring \
-    src/finn/dataflow/op.py \
-    src/finn/dataflow/resolution.py \
-    src/finn/dataflow/testing \
-    src/finn/dataflow/region.py \
-    src/finn/dataflow/region_profiles.py \
-    src/finn/dataflow/region_validation.py \
-    src/finn/dataflow/kernels \
-    src/finn/dataflow/spec_algebra.py \
-    src/finn/dataflow/network.py \
-    src/finn/dataflow/network_validation.py \
-    src/finn/dataflow/parameters \
-    src/finn/dataflow/ops \
-    src/finn/custom_op/dataflow \
-    src/finn/transformation/fpgadataflow/infer_mvau_dataflow.py \
-    src/finn/transformation/fpgadataflow/select_dataflow_design.py \
     tests/dataflow/engine \
-    tests/dataflow/design \
-    tests/dataflow/hardware \
-    tests/dataflow/mvau \
     tests/dataflow/parameters \
-    tests/dataflow/synthetic_op.py \
-    tests/dataflow/mvau_op_facts.py \
-    tests/dataflow/normalized_structure.py \
+    tests/dataflow/typing \
+    tests/dataflow/model/test_value_semantics.py \
     tests/dataflow/test_datatypes.py \
-    tests/dataflow/test_authoring_op_design.py \
-    tests/dataflow/test_authoring_scope.py \
-    tests/dataflow/test_dataflow_design_authoring.py \
-    tests/dataflow/test_mvau_narrow_weights.py \
-    tests/dataflow/test_mvau_problem_fields.py \
-    tests/dataflow/test_dataflow_op.py \
     tests/dataflow/test_network.py \
     tests/dataflow/test_network_validation.py \
-    tests/dataflow/test_mvau_inference.py \
-    tests/dataflow/test_dataflow_selection.py
+    tests/dataflow/test_package_boundaries.py

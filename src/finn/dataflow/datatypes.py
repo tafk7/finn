@@ -23,7 +23,7 @@ This module is the boundary that makes that safe.  It has **no FINN imports at
 all**, so ``region.py`` can depend on it without a cycle and without dragging
 the engine into the model layer -- a separation ``test_api_and_boundaries``
 enforces.  The engine-side ``ValueSemantics`` declaration therefore lives in
-``finn.dataflow.design.region``, built from the helpers here.
+``finn.dataflow.model.semantics``, built from the helpers here.
 
 Three hazards it exists to close, each verified against the pinned QONNX:
 
@@ -352,6 +352,6 @@ def decode_datatype(payload: object) -> QONNXDataType:
 #: compared.
 #: The single object every datatype value-semantics declaration must use as its
 #: ``type_token``.  Exported so that the declaration -- which lives in
-#: ``finn.dataflow.design.region``, because the model layer must not import the
+#: ``finn.dataflow.model.semantics``, because the model layer must not import the
 #: engine -- names the same object this module recognizes against.
 QONNX_DATATYPE_TOKEN = BaseDataType

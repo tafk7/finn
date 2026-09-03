@@ -1,46 +1,58 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``DotpAxiKernel``: FinnLib's ``dotp_axi`` covering the dot-product Region.
-
-Everything here is physical.  The folding it is built for -- ``PE`` and
-``SIMD`` -- is imported from the Region declaration that already fixed it, and
-the Kernel cannot choose a conflicting one because it never declares one.  What
-it does own is the microarchitecture: whether the compute runs on a doubled
-clock, which DSP generation the core instantiates, how long a cascade the
-target clock can carry, and which operand widths the datapath covers.
-
-The internal soft-vector versus packed-DSP58 dispatch is *inside* the core and
-is not a Kernel identity.  It has no separate manifest, no separate build, and
-no policy-visible choice: ``VERSION`` selects it mechanically from the target
-family.  See the vocabulary note section 5.5.
-"""
+"""Declarative one-Region model of FinnLib's ``dotp_axi`` Kernel."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from enum import Enum
+from math import ceil, floor
 from typing import cast
 
-from finn.dataflow.authoring.scope import Ref, finite, reject
-from finn.dataflow.computation import ComputationContract, DOT_PRODUCT_COMPUTATION
-from finn.dataflow.kernels import (
-    KernelScope,
-    Kernel,
-    PhysicalComponent,
-    scalar_parameters,
-)
-from finn.dataflow.kernels.dsp import DspBlock, pack_lanes
-from finn.dataflow.kernels.numeric import DotProductNumericTypes, RoleVerdict
-from finn.dataflow.kernels.rtl_parameters import (
-    DSP_VERSION,
-    dsp_version,
-    segment_length,
-    signed_activations,
-)
-from finn.dataflow.region import DataflowRegion, NumericElementType, element_width
+from typing_extensions import Self
 
-#: FinnLib's half of the composition, relative to the FinnLib root, in compile
-#: order -- ``dotp_axi`` instantiates ``dotp``, which instantiates the core.
+from finn.dataflow.artifacts.abi import (
+    Bus,
+    Clock,
+    ComponentABI,
+    Derived as DerivedClock,
+    Direction,
+    Endpoint,
+    Free,
+    Member,
+    Reset,
+    Signal,
+    StandardProtocol,
+)
+from finn.dataflow.artifacts.contributions import CopiedSource
+from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
+from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.declarations import (
+    Decision,
+    Input,
+    constraint,
+    derived,
+    reject,
+    unresolved,
+)
+from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, RegionRefused
+from finn.dataflow.region import (
+    BeatSequence,
+    Coordinate,
+    DataflowRegion,
+    InputInterface,
+    LogicalSchedule,
+    NumericElementType,
+    Operand,
+    OutputInterface,
+    Port,
+    RequirementKey,
+    ScheduledInputRequirements,
+    ScheduledOutputAvailability,
+    ScheduleLevel,
+    element_width,
+)
+
 FINNLIB_ROOT = "finnlib"
 FINNLIB_SOURCES = (
     "rtl/arith/add_multi_pkg.sv",
@@ -50,195 +62,180 @@ FINNLIB_SOURCES = (
     "rtl/linalg/dotp_axi.sv",
 )
 
-#: The physical module this Kernel instantiates.
-DOTP_AXI_MODULE = "finnlib.rtl.dotp_axi"
 
-#: Multiplier operand and accumulator widths each DSP generation offers.
+class DspBlock(str, Enum):
+    """DSP generation selected by the target platform."""
+
+    DSP48E1 = "DSP48E1"
+    DSP48E2 = "DSP48E2"
+    DSP58 = "DSP58"
+
+
+_DSP_VERSION = {
+    DspBlock.DSP48E1: 1,
+    DspBlock.DSP48E2: 2,
+    DspBlock.DSP58: 3,
+}
 _DSP_WIDTHS = {
     DspBlock.DSP48E1: (25, 18, 48),
     DspBlock.DSP48E2: (27, 18, 48),
     DspBlock.DSP58: (27, 24, 58),
 }
-
-
-#: The datatypes this core's datapath is a two's-complement multiplier for.
-#:
-#: Matched by **canonical identity**, not by family and width.  QONNX reports
-#: ``is_integer()`` true for ``BINARY``, ``BIPOLAR``, and ``TERNARY`` as well,
-#: and those are integer-*valued* domains rather than two's-complement ones:
-#: ``TERNARY`` is two bits wide and spans -1..1, so a width-and-family test
-#: admits it and the RTL then computes over a range it was never given.  That
-#: is the ``TERNARY``-lowered-as-``INT2`` defect, and naming the families
-#: explicitly is what closes it.
 _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
+_SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
+_SEGMENT_BASE_DELAY_NS = 0.741
+_SEGMENT_STAGE_DELAY_NS = 0.605
 
 
-@dataclass(frozen=True)
-class DotProductKernelInputs:
-    """Operation-neutral contracts and facts consumed by ``DotpAxiKernel``."""
-
-    role: str
-    region: Ref[DataflowRegion]
-    computation: Ref[ComputationContract]
-    pe: Ref[int]
-    simd: Ref[int]
-    activation_element_type: Ref[NumericElementType]
-    weight_element_type: Ref[NumericElementType]
-    output_element_type: Ref[NumericElementType]
-    accumulator_element_type: Ref[NumericElementType]
-    narrow_weights: Ref[bool]
-    target_dsp_block: Ref[DspBlock]
-    target_clock_period_ns: Ref[float]
+def _expanded_activation_beats(
+    repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
+) -> tuple[tuple[Coordinate, ...], ...]:
+    return tuple(
+        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
+        for repetition in range(repetitions)
+        for _neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+    )
 
 
-@dataclass(frozen=True)
-class DotpAxiHandles:
-    """Typed handles exported by the Kernel authoring declaration."""
+def _weight_beats(
+    repetitions: int,
+    neuron_folds: int,
+    synapse_folds: int,
+    pe: int,
+    simd: int,
+) -> tuple[tuple[Coordinate, ...], ...]:
+    return tuple(
+        tuple(
+            (neuron_fold * pe + pe_index, synapse_fold * simd + lane)
+            for pe_index in range(pe)
+            for lane in range(simd)
+        )
+        for _repetition in range(repetitions)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+    )
 
-    compute_pumping: Ref[bool]
+
+def _output_beats(
+    repetitions: int, neuron_folds: int, pe: int
+) -> tuple[tuple[Coordinate, ...], ...]:
+    return tuple(
+        tuple((repetition, neuron_fold * pe + pe_index) for pe_index in range(pe))
+        for repetition in range(repetitions)
+        for neuron_fold in range(neuron_folds)
+    )
+
+
+def construct_dot_product_region(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    activation_type: NumericElementType,
+    weight_type: NumericElementType,
+    output_type: NumericElementType,
+    pe: int,
+    simd: int,
+) -> DataflowRegion:
+    """The folded stream contract directly implemented by ``dotp_axi``."""
+
+    dimensions = (repetitions, matrix_width, matrix_height, pe, simd)
+    if any(type(value) is not int or value <= 0 for value in dimensions):
+        raise RegionRefused("dot-product dimensions and folding must be positive integers")
+    if matrix_width % simd:
+        raise RegionRefused("SIMD must divide matrix_width exactly")
+    if matrix_height % pe:
+        raise RegionRefused("PE must divide matrix_height exactly")
+
+    neuron_folds = matrix_height // pe
+    synapse_folds = matrix_width // simd
+    schedule = LogicalSchedule(
+        (
+            ScheduleLevel("rep", repetitions),
+            ScheduleLevel("nf", neuron_folds),
+            ScheduleLevel("sf", synapse_folds),
+        )
+    )
+    activation = Operand("X", activation_type, (repetitions, matrix_width))
+    weight = Operand("W", weight_type, (matrix_height, matrix_width))
+    output = Operand("Y", output_type, (repetitions, matrix_height))
+    activation_requirements: dict[RequirementKey, int] = {
+        (
+            (repetition, neuron_fold, synapse_fold),
+            (repetition, synapse_fold * simd + lane),
+        ): 1
+        for repetition in range(repetitions)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+        for lane in range(simd)
+    }
+    weight_requirements: dict[RequirementKey, int] = {
+        (
+            (repetition, neuron_fold, synapse_fold),
+            (neuron_fold * pe + pe_index, synapse_fold * simd + lane),
+        ): 1
+        for repetition in range(repetitions)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+        for pe_index in range(pe)
+        for lane in range(simd)
+    }
+    availability_entries: dict[Coordinate, Coordinate] = {
+        (repetition, neuron_fold * pe + pe_index): (
+            repetition,
+            neuron_fold,
+            synapse_folds - 1,
+        )
+        for repetition in range(repetitions)
+        for neuron_fold in range(neuron_folds)
+        for pe_index in range(pe)
+    }
+    availability = ScheduledOutputAvailability(availability_entries)
+    return DataflowRegion(
+        schedule,
+        (
+            InputInterface(
+                Port(
+                    "activation",
+                    activation,
+                    BeatSequence(
+                        simd,
+                        _expanded_activation_beats(repetitions, neuron_folds, synapse_folds, simd),
+                    ),
+                ),
+                ScheduledInputRequirements(activation_requirements),
+            ),
+            InputInterface(
+                Port(
+                    "weight",
+                    weight,
+                    BeatSequence(
+                        pe * simd,
+                        _weight_beats(repetitions, neuron_folds, synapse_folds, pe, simd),
+                    ),
+                ),
+                ScheduledInputRequirements(weight_requirements),
+            ),
+        ),
+        (
+            OutputInterface(
+                Port(
+                    "output",
+                    output,
+                    BeatSequence(pe, _output_beats(repetitions, neuron_folds, pe)),
+                ),
+                availability,
+            ),
+        ),
+    )
 
 
 def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
-    """Whether ``datatype`` is a plain sized integer this datapath can multiply.
-
-    ``INT<n>`` / ``UINT<n>`` and nothing else.  Special encodings are excluded
-    by name even where they answer ``is_integer()``, and a datatype QONNX would
-    canonicalize to a special name -- ``UINT1`` is ``BINARY`` -- is excluded
-    with them, because the canonical name is the identity.
-    """
-
     name = datatype.name
     return any(
         name.startswith(prefix) and name[len(prefix) :].isdigit()
         for prefix in _MULTIPLIABLE_FAMILIES
     )
-
-
-#: The roles this core declares *signed* in its own RTL, and therefore cannot
-#: accept an unsigned datatype for.
-#:
-#: ``dotp.sv`` and ``dotp_top.sv`` declare the result port as
-#:
-#:     output logic signed [PE-1:0][ACCU_WIDTH-1:0]  p
-#:
-#: so the accumulation and the value leaving the core are two's-complement
-#: signed.  A ``UINT16`` accumulator would be reinterpreted at the boundary,
-#: and every value above the signed maximum would come back negative.
-#:
-#: The weight operand is signed for the same kind of reason: the multiplier's
-#: A port is fed as a signed operand.
-#:
-#: The activation is *not* in this set -- ``SIGNED_ACTIVATIONS`` exists
-#: precisely so the core can be told which of the two it is getting.  So the
-#: role contract is deliberately non-uniform:
-#:
-#:     activation   INT<n> or UINT<n>
-#:     weight       INT<n>
-#:     accumulator  INT<n>
-#:     output       INT<n>, and equal to the accumulator
-#:
-#: Applying one rule to all four roles was the previous shape, and it admitted
-#: an unsigned accumulator and output with no refusal at all.
-_SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
-
-
-def covers_numeric_types(types: DotProductNumericTypes) -> tuple[RoleVerdict, ...]:
-    """This core's one authoritative datatype predicate, over every role.
-
-    The single implementation behind both the physical coverage constraint and
-    the operation's transitional admission bridge.  They ask it through thin
-    adapters rather than each restating the rule, so the two cannot answer
-    differently -- which §10 of the adoption note requires while the bridge
-    exists at all.
-
-    Answerable from graph facts alone: no target, no decision.  That is what
-    lets admission ask it before anything is selected, and it is also why the
-    *width envelope* is not here -- the DSP datapath limits depend on the board,
-    so they stay in :func:`_width_supported`, where a refusal removes a target
-    from coverage rather than a graph from inference.
-
-    Returns a verdict per role rather than one boolean, so a refusal names which
-    operand was wrong; the callers reduce that as they need it.
-
-    Integrality is *physical*, not semantic.  A ``DataflowRegion`` admits
-    floating-point element types perfectly well, and arithmetic behaviour is
-    binding-owned; a float dot product is a Region this Kernel cannot build, not
-    a Region that does not exist.  Adding a float Kernel widens what FINN admits
-    without touching the Region declaration or the source matcher.
-    """
-
-    roles = (
-        ("activation", types.activation),
-        ("weight", types.weight),
-        ("accumulator", types.accumulator),
-        ("output", types.output),
-    )
-    verdicts = []
-    for role, datatype in roles:
-        if not _is_twos_complement_integer(datatype):
-            verdicts.append(
-                RoleVerdict(role, False, f"{datatype.name} is not a two's-complement integer")
-            )
-            continue
-        if role in _SIGNED_ROLES and not datatype.signed():
-            verdicts.append(
-                RoleVerdict(
-                    role,
-                    False,
-                    f"{datatype.name} is unsigned; the core declares this role signed",
-                )
-            )
-            continue
-        verdicts.append(RoleVerdict(role, True))
-    return _with_output_paired_to_accumulator(tuple(verdicts), types)
-
-
-def _with_output_paired_to_accumulator(
-    verdicts: tuple[RoleVerdict, ...], types: DotProductNumericTypes
-) -> tuple[RoleVerdict, ...]:
-    """The last clause of the role contract: the output *is* the accumulator.
-
-    Stated in the table above and never asked.  The core drives ``PE *
-    ACCU_WIDTH`` bits straight out of ``m_axis_output_tdata``, and the composed
-    wrapper sizes its own ``out0_V_tdata`` from the *output* element type -- so
-    an output that is not the accumulator produces a top whose port does not
-    match what the core was connected to.  Nothing truncates, converts, or
-    reports; the widths simply disagree.  ``INT32`` accumulator with ``INT24``
-    output generated a wrapper declaring ``OSTREAM = 48`` around a core driving
-    64 bits.
-
-    The semantic Kernels carry the same rule as a source constraint, which
-    gates *inference*.  A caller that commits a selection directly never passes
-    through inference, so until this was a coverage question the disagreement
-    reached a generated wrapper unremarked.
-
-    Applied only when both roles are otherwise fine, so that an unsigned
-    accumulator stays separately diagnosable instead of also reporting an
-    output that never had a chance to match it.
-    """
-
-    by_role = {verdict.role: verdict for verdict in verdicts}
-    if not (by_role["accumulator"].supported and by_role["output"].supported):
-        return verdicts
-    if types.output == types.accumulator:
-        return verdicts
-    return tuple(
-        RoleVerdict(
-            verdict.role,
-            False,
-            f"{types.output.name} is not the accumulator {types.accumulator.name}; "
-            "the core drives the accumulator straight out",
-        )
-        if verdict.role == "output"
-        else verdict
-        for verdict in verdicts
-    )
-
-
-def covers_operand_types(types: DotProductNumericTypes) -> bool:
-    """The boolean reduction, for callers that only need admission's answer."""
-
-    return all(verdict.supported for verdict in covers_numeric_types(types))
 
 
 def _operand_types_supported(
@@ -247,32 +244,32 @@ def _operand_types_supported(
     accumulator: NumericElementType,
     output: NumericElementType,
 ) -> object:
-    """The coverage adapter: the same predicate, reported as a finding."""
-
-    refused = [
-        verdict
-        for verdict in covers_numeric_types(
-            DotProductNumericTypes(activation, weight, accumulator, output)
+    rejected: dict[str, str] = {}
+    for role, datatype in (
+        ("activation", activation),
+        ("weight", weight),
+        ("accumulator", accumulator),
+        ("output", output),
+    ):
+        if not _is_twos_complement_integer(datatype):
+            rejected[role] = f"{datatype.name} is not a two's-complement integer"
+        elif role in _SIGNED_ROLES and not datatype.signed():
+            rejected[role] = f"{datatype.name} is unsigned; the core declares this role signed"
+    if "accumulator" not in rejected and "output" not in rejected and output != accumulator:
+        rejected["output"] = (
+            f"{output.name} is not the accumulator {accumulator.name}; "
+            "the core drives the accumulator straight out"
         )
-        if not verdict.supported
-    ]
-    if refused:
+    if rejected:
         return reject(
             "dotp-axi-numeric-types-unsupported",
             "this dot-product core multiplies two's-complement integers",
-            values={verdict.role: verdict.detail for verdict in refused},
+            values=rejected,
         )
     return True
 
 
 def _operand_widths_supported(activation: NumericElementType, weight: NumericElementType) -> object:
-    """This multiplier needs at least two bits of each operand.
-
-    A one-bit dot product is a perfectly good Region, and something that
-    implemented it -- an XNOR-popcount core, say -- would be a different Kernel
-    over the same semantics, not a different Region.
-    """
-
     if element_width(activation) < 2 or element_width(weight) < 2:
         return reject(
             "dotp-axi-operands-too-narrow",
@@ -288,16 +285,28 @@ def _width_supported(
     weight: NumericElementType,
     accumulator: NumericElementType,
     output: NumericElementType,
-) -> object:
-    """Whether the operands and accumulator fit the target's DSP datapath."""
-
+) -> bool:
     a_width, b_width, p_width = _DSP_WIDTHS[target]
     return (
-        2 <= element_width(weight) <= a_width
-        and 2 <= element_width(activation) <= b_width
+        element_width(weight) <= a_width
+        and element_width(activation) <= b_width
         and element_width(accumulator) <= p_width
         and element_width(output) <= p_width
     )
+
+
+def _packing_fits(
+    *, a_width: int, weight_width: int, activation_width: int, narrow_weights: bool
+) -> tuple[bool, int]:
+    sign_bit = 0 if narrow_weights else 1
+    minimum_lane_width = weight_width + activation_width - 1
+    lanes = (
+        1
+        if a_width == weight_width
+        else 1 + (a_width - sign_bit - weight_width) // minimum_lane_width
+    )
+    slack = a_width - sign_bit - weight_width - (lanes - 1) * minimum_lane_width
+    return slack >= 0, slack
 
 
 def _narrow_weights_supported(
@@ -306,33 +315,17 @@ def _narrow_weights_supported(
     weight: NumericElementType,
     narrow: bool,
 ) -> object:
-    """Whether these weights pack into the A port at all.
-
-    Coverage, not admission: the source is perfectly expressible, the board just
-    cannot build it without the stronger contract on the weights.
-
-    Asked of ``dotp.sv``'s own lane calculation rather than of the target
-    family.  This used to read ``narrow if target is DSP48E1 else True``, which
-    was wrong in both directions -- it admitted 27-bit non-narrow weights on
-    DSP48E2 and DSP58, which reach the generic ``dotp`` core and terminate in
-    ``sliceLanes()``, and it refused 8-bit non-narrow weights on DSP48E1, which
-    pack into three lanes with a bit to spare and which baseline FINN builds
-    routinely.
-    """
-
-    a_width, _b_width, _p_width = _DSP_WIDTHS[target]
+    a_width = _DSP_WIDTHS[target][0]
     weight_bits = element_width(weight)
     if weight_bits > a_width:
-        # ``width_supported`` reports this; the packing is undefined past here
-        # and must not be asked, because the RTL's subtraction is unsigned.
         return True
-    packing = pack_lanes(
+    fits, slack = _packing_fits(
         a_width=a_width,
         weight_width=weight_bits,
         activation_width=element_width(activation),
         narrow_weights=narrow,
     )
-    if not packing.fits:
+    if not fits:
         return reject(
             "dotp-axi-weights-do-not-pack",
             "these weights do not fit the DSP A datapath without the narrow-weight promise",
@@ -340,182 +333,273 @@ def _narrow_weights_supported(
                 "weight_width": weight_bits,
                 "a_datapath_width": a_width,
                 "narrow_weights": narrow,
-                "bit_slack": packing.slack,
+                "bit_slack": slack,
             },
         )
     return True
 
 
+def _segment_length(clock_period_ns: float, pumping: bool, simd: int) -> object:
+    reference_clock = clock_period_ns / 2 if pumping else clock_period_ns
+    if reference_clock <= _SEGMENT_BASE_DELAY_NS:
+        return unresolved(
+            "mvau-segment-length-clock-infeasible",
+            "the target clock period is below the covered RTL segment-delay bound",
+            values={"reference_clock_ns": reference_clock},
+        )
+    covered = floor((reference_clock - _SEGMENT_BASE_DELAY_NS) / _SEGMENT_STAGE_DELAY_NS + 1)
+    longest = ceil(simd / (6 if pumping else 3))
+    return min(covered, longest)
+
+
+def _byte_aligned(width: int) -> int:
+    return (width + 7) // 8 * 8
+
+
+def _rtl_scalar(value: bool | int | float | str) -> str:
+    return str(int(value)) if isinstance(value, bool) else str(value)
+
+
+def _axis(
+    name: str,
+    *,
+    width: int,
+    endpoint: Endpoint,
+    last: bool = False,
+) -> Bus:
+    members = [
+        Member("tdata", f"{name}_tdata", width),
+        Member("tvalid", f"{name}_tvalid"),
+        Member("tready", f"{name}_tready"),
+    ]
+    if last:
+        members.append(Member("tlast", f"{name}_tlast"))
+    return Bus(
+        name,
+        StandardProtocol.AXIS,
+        members,
+        endpoint=endpoint,
+        associated_clock="ap_clk",
+        associated_reset="ap_rst_n",
+    )
+
+
 class DotpAxiKernel(Kernel):
-    """Folded multiply-accumulate over an already-expanded activation stream."""
+    """FinnLib folded dot product as one Region and one physical module."""
 
     id = "dotp_axi"
     version = "1"
+    computation = DOT_PRODUCT_COMPUTATION
+
+    repetitions = Input(int)
+    matrix_width = Input(int)
+    matrix_height = Input(int)
+    activation_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weight_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    accumulator_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    output_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    narrow_weights = Input(bool)
+    target_dsp = Input(DspBlock)
+    clock_period_ns = Input(float)
+
+    # PE and SIMD change this Region *and* the replay Region it composes with,
+    # and the beat contract on the edge between them.  They are therefore owned
+    # once by the enclosing Design and arrive here as facts.
+    pe = Input(int)
+    simd = Input(int)
+
+    #: Physical only: pumping preserves the Region exactly.
+    compute_pumping = Decision(bool, values=(False, True))
+
+    region = Region(
+        family="mvau.dot_product",
+        version="1",
+        construct=construct_dot_product_region,
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation_type=activation_type,
+        weight_type=weight_type,
+        output_type=output_type,
+        pe=pe,
+        simd=simd,
+    )
+
+    @derived(int, target=target_dsp)
+    def dsp_version(*, target: DspBlock) -> int:
+        return _DSP_VERSION[target]
+
+    @derived(bool, activation=activation_type)
+    def signed_activations(*, activation: NumericElementType) -> bool:
+        return bool(activation.signed())
+
+    @derived(int, clock=clock_period_ns, pumping=compute_pumping, simd=simd)
+    def segment_length(*, clock: float, pumping: bool, simd: int) -> object:
+        return _segment_length(clock, pumping, simd)
+
+    @derived(int, datatype=activation_type)
+    def activation_width(*, datatype: NumericElementType) -> int:
+        return element_width(datatype)
+
+    @derived(int, datatype=weight_type)
+    def weight_width(*, datatype: NumericElementType) -> int:
+        return element_width(datatype)
+
+    @derived(int, datatype=accumulator_type)
+    def accumulator_width(*, datatype: NumericElementType) -> int:
+        return element_width(datatype)
+
+    @constraint(
+        activation=activation_type,
+        weight=weight_type,
+        accumulator=accumulator_type,
+        output=output_type,
+    )
+    def operand_types_supported(
+        *,
+        activation: NumericElementType,
+        weight: NumericElementType,
+        accumulator: NumericElementType,
+        output: NumericElementType,
+    ) -> object:
+        return _operand_types_supported(activation, weight, accumulator, output)
+
+    @constraint(activation=activation_type, weight=weight_type)
+    def operand_widths_supported(
+        *, activation: NumericElementType, weight: NumericElementType
+    ) -> object:
+        return _operand_widths_supported(activation, weight)
+
+    @constraint(target=target_dsp)
+    def target_supported(*, target: DspBlock) -> bool:
+        return target in _DSP_VERSION
+
+    @constraint(
+        target=target_dsp,
+        activation=activation_type,
+        weight=weight_type,
+        accumulator=accumulator_type,
+        output=output_type,
+    )
+    def width_supported(
+        *,
+        target: DspBlock,
+        activation: NumericElementType,
+        weight: NumericElementType,
+        accumulator: NumericElementType,
+        output: NumericElementType,
+    ) -> bool:
+        return _width_supported(target, activation, weight, accumulator, output)
+
+    @constraint(
+        target=target_dsp,
+        activation=activation_type,
+        weight=weight_type,
+        narrow=narrow_weights,
+    )
+    def narrow_weights_supported(
+        *,
+        target: DspBlock,
+        activation: NumericElementType,
+        weight: NumericElementType,
+        narrow: bool,
+    ) -> object:
+        return _narrow_weights_supported(target, activation, weight, narrow)
+
+    @constraint(pumping=compute_pumping, simd=simd)
+    def pumping_supported(*, pumping: bool, simd: int) -> bool:
+        return simd >= 2 if pumping else True
+
+    PE = Parameter(pe)
+    SIMD = Parameter(simd)
+    PUMPED_COMPUTE = Parameter(compute_pumping)
+    ACTIVATION_WIDTH = Parameter(activation_width)
+    WEIGHT_WIDTH = Parameter(weight_width)
+    ACCU_WIDTH = Parameter(accumulator_width)
+    VERSION = Parameter(dsp_version)
+    SIGNED_ACTIVATIONS = Parameter(signed_activations)
+    SEGMENTLEN = Parameter(segment_length)
+    NARROW_WEIGHTS = Parameter(narrow_weights)
+    ACTIVATION_BROADCASTING = Parameter.constant(
+        1,
+        why="this implementation broadcasts one activation vector across its PE lanes",
+    )
+    FORCE_BEHAVIORAL = Parameter.constant(
+        0,
+        why="the production implementation uses inferred DSP logic",
+    )
+
+    sources = (
+        CopiedSource(
+            FINNLIB_ROOT,
+            FINNLIB_SOURCES[0],
+            provides=("package:add_multi_pkg",),
+        ),
+        CopiedSource(
+            FINNLIB_ROOT,
+            FINNLIB_SOURCES[1],
+            provides=("module:add_multi",),
+            requires=("package:add_multi_pkg",),
+        ),
+        CopiedSource(
+            FINNLIB_ROOT,
+            FINNLIB_SOURCES[2],
+            provides=("module:dotp_8sx9_dsp58",),
+        ),
+        CopiedSource(
+            FINNLIB_ROOT,
+            FINNLIB_SOURCES[3],
+            provides=("module:dotp",),
+            requires=("package:add_multi_pkg", "module:add_multi"),
+        ),
+        CopiedSource(
+            FINNLIB_ROOT,
+            FINNLIB_SOURCES[4],
+            provides=("module:dotp_axi",),
+            requires=("module:dotp", "module:dotp_8sx9_dsp58"),
+        ),
+    )
 
     @classmethod
-    def define_design(cls, design: KernelScope[DotProductKernelInputs]) -> DotpAxiHandles:
-        facts = design.inputs
-        design.covers_region(
-            facts.role,
-            region=facts.region,
-            computation=facts.computation,
-            implements=DOT_PRODUCT_COMPUTATION,
-            description="the folded dot product over an expanded activation stream",
-        )
-        design.source(FINNLIB_ROOT, *FINNLIB_SOURCES)
-
-        # -- the one physical choice --------------------------------------
-        # Pumping changes how fast the datapath runs, not what crosses the
-        # boundary, so the Region is untouched by it.
-        pumping = design.choice("compute_pumping", bool, domain=finite((False, True)))
-
-        # -- derived physical parameters -----------------------------------
-        version = design.derived(
-            "dsp_version",
-            int,
-            dependencies={"target": facts.target_dsp_block},
-            evaluate=dsp_version,
-        )
-        signed = design.derived(
-            "signed_activations",
-            bool,
-            dependencies={"activation": facts.activation_element_type},
-            evaluate=signed_activations,
-        )
-        segment = design.derived(
-            "segment_length",
-            int,
-            dependencies={
-                "clock_period_ns": facts.target_clock_period_ns,
-                "pumping": pumping,
-                "simd": facts.simd,
-            },
-            evaluate=segment_length,
-        )
-        # Widths reach the RTL as declared properties.  Projecting an element
-        # type to its bit count on the way out would put a number in the
-        # artifact that appears nowhere in the design point.
-        activation_width = design.derived(
-            "activation_width",
-            int,
-            dependencies={"element_type": facts.activation_element_type},
-            evaluate=element_width,
-        )
-        weight_width = design.derived(
-            "weight_width",
-            int,
-            dependencies={"element_type": facts.weight_element_type},
-            evaluate=element_width,
-        )
-        accumulator_width = design.derived(
-            "accumulator_width",
-            int,
-            dependencies={"element_type": facts.accumulator_element_type},
-            evaluate=element_width,
-        )
-
-        # -- what this core can actually build ------------------------------
-        design.coverage_constraint(
-            "operand_types_supported",
-            # Every numeric role, not just the two that get multiplied.  An
-            # integer dot product with a floating-point accumulator used to pass
-            # here because nothing asked.
-            dependencies={
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-                "accumulator": facts.accumulator_element_type,
-                "output": facts.output_element_type,
-            },
-            evaluate=_operand_types_supported,
-        )
-        design.coverage_constraint(
-            "operand_widths_supported",
-            dependencies={
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-            },
-            evaluate=_operand_widths_supported,
-        )
-        design.coverage_constraint(
-            "target_supported",
-            dependencies={"target": facts.target_dsp_block},
-            evaluate=lambda target: target in DSP_VERSION,
-        )
-        design.coverage_constraint(
-            "width_supported",
-            dependencies={
-                "target": facts.target_dsp_block,
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-                "accumulator": facts.accumulator_element_type,
-                "output": facts.output_element_type,
-            },
-            evaluate=_width_supported,
-        )
-        design.coverage_constraint(
-            "narrow_weights_supported",
-            dependencies={
-                "target": facts.target_dsp_block,
-                "activation": facts.activation_element_type,
-                "weight": facts.weight_element_type,
-                "narrow": facts.narrow_weights,
-            },
-            evaluate=_narrow_weights_supported,
-        )
-        design.coverage_constraint(
-            "pumping_supported",
-            dependencies={"pumping": pumping, "simd": facts.simd},
-            evaluate=lambda pumping, simd: simd >= 2 if pumping else True,
-        )
-
-        # -- the parameter table --------------------------------------------
-        # No MW or MH: dotp_axi does not take them.  The fused wrapper did, only
-        # to size the replay it contained -- which is now the replay Kernel's
-        # LEN and REP.  That absence is the decomposition in the parameter list.
-        design.parameter("PE", cast("Ref[object]", facts.pe))
-        design.parameter("SIMD", cast("Ref[object]", facts.simd))
-        design.parameter("PUMPED_COMPUTE", cast("Ref[object]", pumping))
-        design.parameter("ACTIVATION_WIDTH", cast("Ref[object]", activation_width))
-        design.parameter("WEIGHT_WIDTH", cast("Ref[object]", weight_width))
-        design.parameter("ACCU_WIDTH", cast("Ref[object]", accumulator_width))
-        design.parameter("VERSION", cast("Ref[object]", version))
-        design.parameter("SIGNED_ACTIVATIONS", cast("Ref[object]", signed))
-        design.parameter("SEGMENTLEN", cast("Ref[object]", segment))
-        design.parameter("NARROW_WEIGHTS", cast("Ref[object]", facts.narrow_weights))
-        design.constant(
-            "ACTIVATION_BROADCASTING",
-            1,
-            why=(
-                "this implementation broadcasts one activation vector across its "
-                "parallel output lanes"
+    def component_abi(cls, configured: Self) -> ComponentABI:
+        parameters = configured.parameters
+        pe = cast(int, parameters["PE"])
+        simd = cast(int, parameters["SIMD"])
+        activation_width = cast(int, parameters["ACTIVATION_WIDTH"])
+        weight_width = cast(int, parameters["WEIGHT_WIDTH"])
+        accumulator_width = cast(int, parameters["ACCU_WIDTH"])
+        return ComponentABI(
+            "dotp_axi",
+            (
+                Signal("ap_clk", Direction.IN, 1, Clock(Free())),
+                Signal("ap_clk2x", Direction.IN, 1, Clock(DerivedClock("ap_clk", 2))),
+                Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
+                _axis(
+                    "s_axis_weights",
+                    width=_byte_aligned(pe * simd * weight_width),
+                    endpoint=Endpoint.TARGET,
+                ),
+                _axis(
+                    "s_axis_input",
+                    width=_byte_aligned(simd * activation_width),
+                    endpoint=Endpoint.TARGET,
+                    last=True,
+                ),
+                _axis(
+                    "m_axis_output",
+                    width=_byte_aligned(pe * accumulator_width),
+                    endpoint=Endpoint.INITIATOR,
+                ),
             ),
-        )
-        design.constant(
-            "FORCE_BEHAVIORAL",
-            0,
-            why="synthesis uses the inferred implementation; behavioural is a debug aid",
-        )
-        return DotpAxiHandles(pumping)
-
-    @classmethod
-    def elaborate(cls, kernel: Kernel) -> tuple[PhysicalComponent, ...]:
-        """One ``dotp_axi`` instance.  Composition is the assembly's business."""
-
-        return (
-            PhysicalComponent(
-                "dotp_axi",
-                DOTP_AXI_MODULE,
-                scalar_parameters(dict(kernel.parameters)),
-            ),
+            tuple((name, _rtl_scalar(value)) for name, value in parameters.items()),
         )
 
 
 __all__ = [
-    "DOTP_AXI_MODULE",
-    "DotpAxiHandles",
+    "DOT_PRODUCT_COMPUTATION",
+    "DspBlock",
+    "DotpAxiKernel",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
-    "DotpAxiKernel",
-    "DotProductKernelInputs",
-    "covers_operand_types",
+    "construct_dot_product_region",
 ]

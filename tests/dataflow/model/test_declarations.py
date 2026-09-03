@@ -10,8 +10,10 @@ from enum import Enum
 
 import pytest
 
+import finn.dataflow.designs as designs
+import finn.dataflow.kernels as kernels
+import finn.dataflow.kernels.kernel as kernel
 import finn.dataflow.model as model
-import finn.dataflow.model.kernel as kernel
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Constraint,
@@ -162,60 +164,46 @@ def test_decision_requires_exactly_one_domain_form() -> None:
         Decision(int, values=(1,), domain=finite((1,)))
 
 
-def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
+def test_public_model_facade_exposes_only_generic_vocabulary() -> None:
     assert set(model.__all__) == {
         "AuthoringError",
         "RESERVED_LIFECYCLE_NAMES",
         "RESERVED_PROTOCOL_NAMES",
-        "Boundary",
         "BranchCatalog",
         "BranchInfo",
         "BranchOutputInfo",
+        "CanonicalValueCodec",
         "CaseInfo",
-        "Connection",
         "ConstraintGroup",
-        "DataflowDesign",
         "Decision",
-        "DotProductDesign",
-        "DotpAxiKernel",
-        "DspBlock",
         "Input",
-        "Kernel",
-        "Kernels",
         "OccurrenceContext",
         "OccurrenceDiagnostic",
-        "CanonicalValueCodec",
-        "Parameter",
         "Problem",
         "Projection",
         "ProjectionAssessment",
         "Readiness",
-        "Region",
-        "RegionRefused",
-        "ReplayBufferKernel",
-        "Sink",
         "Space",
-        "Subspace",
         "SpaceModel",
+        "Subspace",
         "Variant",
         "VariantView",
         "compile_space",
         "compile_space_model",
-        "configure_design",
-        "configure_kernel",
         "constraint",
         "derived",
         "divisors_of",
         "domain",
         "finite",
-        "kernel_source_derivation",
-        "portable_kernel_component",
         "reject",
-        "resolve_kernel_contributions",
         "unresolved",
     }
     # No private compiler record, engine declaration, or `_Ref` reaches an author.
     assert not {"Constraint", "Derived", "Domain", "BranchOutput", "SegmentEndpoint"} & set(
+        model.__all__
+    )
+    # No layer specialization either: those are exported by their own package.
+    assert not {"DataflowDesign", "DotpAxiKernel", "Kernel", "Kernels", "Region"} & set(
         model.__all__
     )
     assert all(not name.startswith("_") for name in model.__all__)
@@ -226,11 +214,13 @@ def test_every_named_export_resolves() -> None:
         assert getattr(model, name) is not None
 
 
-def test_everything_a_contributor_writes_comes_from_the_facade() -> None:
-    """A Kernel author raising `RegionRefused` should not reach past the package."""
+def test_every_layer_names_its_own_specialization() -> None:
+    """A Kernel author raising `RegionRefused` reaches for the Kernel package."""
 
-    assert model.Region is kernel.Region
-    assert model.RegionRefused is kernel.RegionRefused
-    assert issubclass(model.RegionRefused, ValueError)
+    assert kernels.Region is kernel.Region
+    assert kernels.RegionRefused is kernel.RegionRefused
+    assert issubclass(kernels.RegionRefused, ValueError)
     for name in ("Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel"):
-        assert name in model.__all__
+        assert name in kernels.__all__
+    for name in ("Boundary", "Connection", "DataflowDesign", "Kernels", "Sink"):
+        assert name in designs.__all__

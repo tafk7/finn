@@ -1,69 +1,89 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The physical hardware layer: Kernels, coverage, and bindings.
+"""The Kernel layer: one Region, its physics, and the reusable Kernels.
 
-A ``Kernel`` covers one or more selected Region families and the edges
-between them.  It owns microarchitecture, target coverage, physical-only
-choices, physical parameter derivation, elaboration, and a source manifest.  It
-owns no logical dataflow: the Regions it covers were selected before it, and it
-imports the folding they were built from rather than choosing its own.
+A ``Kernel`` is an ordinary ``Space`` that derives exactly one canonical
+``DataflowRegion`` from semantic facts its enclosing Design supplies as typed
+Inputs, and owns nothing but physical realization locally.  ``DotpAxiKernel``
+and ``ReplayBufferKernel`` are the two reusable implementations; a Kernel that
+belongs to one operation belongs with that operation instead.
 
-To contribute one, subclass ``Kernel``, declare its design through
-``KernelScope``, and hand it to ``declare_kernel``. A ``DataflowDesign`` owns
-which Kernel classes are candidates at each placement; candidate selection is
-deliberately not part of this public façade.
+Artifact projection is downstream and one-way -- ``artifacts`` reads a
+configured Kernel and produces artifact-native values.  Nothing in
+``finn.dataflow.artifacts`` imports this package.
 
-``CompiledKernelDeclaration`` is deliberately absent from this surface.  It is
-the *compiled* form -- a Kernel class with its scoped declarations already
-built -- and a contributor never names it. Generic assembly code that
-genuinely needs the type imports it from the private
-``finn.dataflow.kernels._declaration`` leaf.
+The final detached ``KernelPhysicalResult`` handoff is U2 work; today the
+artifact helpers still read the configured occurrence directly.
 """
 
-from finn.dataflow.kernels.authoring import (
-    COVERAGE,
-    KernelScope,
-    declare_kernel,
-    kernel_namespace,
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from finn.dataflow.kernels.artifacts import (
+        kernel_source_derivation,
+        portable_kernel_component,
+        resolve_kernel_contributions,
+    )
+    from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+    from finn.dataflow.kernels.kernel import (
+        Kernel,
+        Parameter,
+        Region,
+        RegionRefused,
+        configure_kernel,
+    )
+    from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
+
+_LAZY_EXPORTS = {
+    name: ("finn.dataflow.kernels.kernel", name)
+    for name in ("Kernel", "Parameter", "Region", "RegionRefused", "configure_kernel")
+}
+_LAZY_EXPORTS.update(
+    {
+        name: ("finn.dataflow.kernels.artifacts", name)
+        for name in (
+            "kernel_source_derivation",
+            "portable_kernel_component",
+            "resolve_kernel_contributions",
+        )
+    }
 )
-from finn.dataflow.kernels.kernel import (
-    BINDING_PATH,
-    BoundRegion,
-    CoveragePattern,
-    EdgeCoverage,
-    Kernel,
-    KernelOrigin,
-    KernelParameter,
-    PhysicalComponent,
-    RegionCoverage,
-    SourceFile,
-    audit_elaboration,
-    bind_kernel,
-    bound_regions,
-    check_declared_references,
-    scalar_parameters,
+_LAZY_EXPORTS.update(
+    {name: ("finn.dataflow.kernels.dotp_axi", name) for name in ("DspBlock", "DotpAxiKernel")}
 )
+_LAZY_EXPORTS["ReplayBufferKernel"] = (
+    "finn.dataflow.kernels.replay_buffer",
+    "ReplayBufferKernel",
+)
+
+
+def __getattr__(name: str) -> object:
+    """Load a Kernel implementation only when it is named."""
+
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
 
 
 __all__ = [
-    "BINDING_PATH",
-    "COVERAGE",
-    "BoundRegion",
-    "CoveragePattern",
-    "EdgeCoverage",
-    "KernelScope",
+    # the generic Kernel contract
     "Kernel",
-    "KernelOrigin",
-    "KernelParameter",
-    "PhysicalComponent",
-    "RegionCoverage",
-    "SourceFile",
-    "audit_elaboration",
-    "bind_kernel",
-    "bound_regions",
-    "check_declared_references",
-    "declare_kernel",
-    "kernel_namespace",
-    "scalar_parameters",
+    "Parameter",
+    "Region",
+    "RegionRefused",
+    "configure_kernel",
+    # downstream artifact projection, one-way
+    "kernel_source_derivation",
+    "portable_kernel_component",
+    "resolve_kernel_contributions",
+    # reusable implementations
+    "DotpAxiKernel",
+    "DspBlock",
+    "ReplayBufferKernel",
 ]

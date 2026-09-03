@@ -34,7 +34,7 @@ from finn.dataflow.model.declarations import (
     derived,
     divisors_of,
 )
-from finn.dataflow.model.design import (
+from finn.dataflow.designs.design import (
     Boundary,
     Connection,
     DataflowDesign,
@@ -42,7 +42,7 @@ from finn.dataflow.model.design import (
     Sink,
     configure_design,
 )
-from finn.dataflow.model.kernel import Kernel, Parameter, Region
+from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
 from finn.dataflow.region import (
     BeatSequence,
     DataflowRegion,
@@ -55,7 +55,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.spec_algebra import assemble_specs
+from finn.dataflow.model.spec_algebra import assemble_specs
 
 from dataflow.model.test_branch_inspection import (
     Assessment,
@@ -68,7 +68,7 @@ from dataflow.model.test_branch_inspection import (
     first_globally_feasible_case,
     resolve_recursively,
 )
-from dataflow.model.test_design_compiler import (
+from dataflow.designs.test_design_compiler import (
     CONSUME,
     PRODUCE,
     ConsumerKernel,

@@ -73,7 +73,7 @@ from finn.dataflow.model.declarations import (
     exported_members,
     finite,
 )
-from finn.dataflow.spec_algebra import assemble_specs, combine_applicability, gate_spec
+from finn.dataflow.model.spec_algebra import assemble_specs, combine_applicability, gate_spec
 
 if TYPE_CHECKING:
     # The occurrence runtime is built on this module, so the dependency can only
