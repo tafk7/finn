@@ -14,8 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from importlib import import_module
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union, cast, overload
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, Union, cast, overload
 
 from typing_extensions import Self
 
@@ -44,6 +44,75 @@ if TYPE_CHECKING:
 
 class AuthoringError(ValueError):
     """A declarative Space is malformed before engine validation."""
+
+
+#: Class-member names an authored Space may not use for a declaration, because
+#: each one is an occurrence lifecycle operation every authored class inherits.
+#: The check is on the *Python member name*, never on a declaration's stable
+#: compiled name: ``choice = OneOf(..., name="branch")`` keeps the engine path
+#: ``<ns>.branch`` without shadowing :meth:`Space.branch`.
+RESERVED_LIFECYCLE_NAMES: frozenset[str] = frozenset(
+    {
+        "start",
+        "assign",
+        "answer",
+        "assess",
+        "project",
+        "diagnostics",
+        "branch",
+        "child",
+        "root",
+        "problem_snapshot",
+        "problem_fingerprint",
+        "is_stale",
+        "reconstruct",
+    }
+)
+
+
+def check_reserved_names(
+    space_type: type[object],
+    members: Iterable[tuple[str, object]],
+) -> None:
+    """Refuse a declaration that shadows an occurrence lifecycle operation.
+
+    Hiding the lifecycle behind a ``.occurrence`` accessor would recreate the
+    very wrapper the class-centered design removes, so the names are reserved
+    instead -- and reserved loudly, because the alternative failure is a
+    declaration silently winning and the method vanishing with an unrelated
+    error message at the call site.
+    """
+
+    for member_name, declaration in members:
+        if member_name in RESERVED_LIFECYCLE_NAMES:
+            raise AuthoringError(
+                f"{space_type.__name__}.{member_name} declares a "
+                f"{type(declaration).__name__} under a reserved name; "
+                f"{member_name!r} is the occurrence operation Space.{member_name}. "
+                f"Rename the class member and pass name={member_name!r} to keep the "
+                "compiled path unchanged"
+            )
+
+
+_OCCURRENCE_API: ModuleType | None = None
+
+
+def _occurrence_api() -> Any:
+    """The occurrence runtime, imported once and cached.
+
+    ``occurrence`` is built on the compiler, which is built on these
+    declarations, so the import cannot be stated at module scope.  Resolving it
+    once into a module global -- rather than calling ``import_module`` inside
+    every lifecycle method -- keeps the dispatch a single, statically
+    reviewable seam instead of a dynamic lookup repeated on every query.
+    """
+
+    global _OCCURRENCE_API
+    if _OCCURRENCE_API is None:
+        from finn.dataflow.model import occurrence  # noqa: PLC0415 - see docstring
+
+        _OCCURRENCE_API = occurrence
+    return _OCCURRENCE_API
 
 
 def enum_semantics(enum_type: type[E]) -> ValueSemantics[object]:
@@ -130,17 +199,72 @@ def unresolved(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OccurrenceContext:
+    """What an authored class is told while one of its occurrences is allocated.
+
+    The construction seam, and deliberately nothing more.  A class whose normal
+    constructor needs context -- a future ``DataflowOp`` around a ``NodeProto``,
+    say -- overrides :meth:`Space._new_occurrence` and reads this record.  What
+    it does *not* contain is the Engine, the point, a ``_Ref``, or any compiled
+    record: an authored constructor is given identity and its root, never the
+    runtime.
+
+    ``root`` is ``None`` for a root occurrence and the already-constructed root
+    for a child view.  A child therefore reaches its root's context by asking
+    the root, rather than by having the root's state copied into it.
+    """
+
+    space_type: type[Space]
+    namespace: str
+    scope: tuple[str, ...]
+    root: Space | None
+
+    @property
+    def is_root(self) -> bool:
+        return self.root is None
+
+
 class Space:
     """Base class for a declarative, reusable design-space specification."""
 
     exports: tuple[ValueSource[object], ...] = ()
     _implicit_exports: tuple[str, ...] = ()
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        check_reserved_names(
+            cls,
+            tuple(
+                (name, value)
+                for name, value in cls.__dict__.items()
+                if isinstance(value, DECLARATION_TYPES)
+            ),
+        )
+
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
         """Private specialization hook; generic Spaces leave the result unchanged."""
 
         return compiled
+
+    @classmethod
+    def _new_occurrence(cls, context: OccurrenceContext) -> Space:
+        """Allocate one occurrence instance of this authored class.
+
+        The default deliberately does *not* call ``__init__``: an ordinary
+        declaration-only Space has no constructor worth running, and running one
+        would mean every authored class had to accept whatever arguments the
+        occurrence layer happened to pass.  That behaviour is documented here
+        rather than being an accident of ``object.__new__`` at the call site.
+
+        A subclass whose instances genuinely need context overrides this,
+        allocates however it likes, and initializes from ``context``.  The
+        occurrence layer then attaches its private runtime to whatever this
+        returns, so an override must return an instance of ``cls``.
+        """
+
+        return object.__new__(cls)
 
     @classmethod
     def start(
@@ -152,7 +276,7 @@ class Space:
     ) -> S:
         """Start one class-centered root occurrence over a frozen problem."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(
             "S",
             api.start_occurrence(
@@ -166,13 +290,13 @@ class Space:
     def assign(self, declaration: Decision[T], value: T) -> Self:
         """Return the same authored occurrence class over a successor point."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast("Self", api.occurrence_assign(self, declaration, value))
 
     def answer(self, declaration: ValueSource[T]) -> Answer[T]:
         """Query one declaration through this occurrence's bound scope."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast("Answer[T]", api.occurrence_answer(self, declaration))
 
     @overload
@@ -186,7 +310,7 @@ class Space:
     ) -> ReadinessAssessment | ConstraintAssessment:
         """Assess one readiness or constraint declaration in this scope."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(
             "ReadinessAssessment | ConstraintAssessment",
             api.occurrence_assess(self, declaration),
@@ -195,7 +319,7 @@ class Space:
     def project(self, declaration: Projection[T]) -> ProjectionAssessment[T]:
         """Evaluate one validated projection at this occurrence's point."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast("ProjectionAssessment[T]", api.occurrence_project(self, declaration))
 
     def diagnostics(
@@ -206,7 +330,7 @@ class Space:
     ) -> tuple[OccurrenceDiagnostic, ...]:
         """Interpret findings in this root's occurrence vocabulary."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(
             "tuple[OccurrenceDiagnostic, ...]",
             api.occurrence_diagnostics(self, subject, projection=projection),
@@ -215,7 +339,7 @@ class Space:
     def branch(self, declaration: OneOf) -> BranchView:
         """Return a capability-limited view of one branch in this scope."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast("BranchView", api.occurrence_branch(self, declaration))
 
     @overload
@@ -230,21 +354,21 @@ class Space:
     def child(self, declaration: Use[S] | Case | type[S]) -> Space:
         """Return one exact direct child occurrence of this scope."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast("Space", api.occurrence_child(self, declaration))
 
     @property
     def root(self) -> Space:
         """The root facade at this occurrence's immutable point."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast("Space", api.occurrence_root(self))
 
     @property
     def problem_snapshot(self) -> Mapping[Problem[object], object]:
         """The immutable Problem values captured when the root was started."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(
             "Mapping[Problem[object], object]",
             api.occurrence_problem_snapshot(self),
@@ -254,13 +378,13 @@ class Space:
     def problem_fingerprint(self) -> str:
         """Stable identity of the root's declared Problem snapshot."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(str, api.occurrence_problem_fingerprint(self))
 
     def is_stale(self, problem: ProblemSource | None = None) -> bool:
         """Explicitly compare current declared Problem facts with the snapshot."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(bool, api.occurrence_is_stale(self, problem))
 
     def reconstruct(
@@ -271,7 +395,7 @@ class Space:
     ) -> Self:
         """Create a fresh strict lineage, retaining no assignments."""
 
-        api = import_module("finn.dataflow.model.occurrence")
+        api = _occurrence_api()
         return cast(
             "Self",
             api.occurrence_reconstruct(
@@ -281,11 +405,30 @@ class Space:
             ),
         )
 
-    def _space_value(self, declaration: ValueSource[object]) -> object:
-        """Resolve descriptors on generic occurrence instances."""
 
-        api = import_module("finn.dataflow.model.occurrence")
-        return api.occurrence_value(self, declaration)
+def resolve_declared_value(instance: object, declaration: ValueSource[object]) -> object:
+    """The one dispatcher every value descriptor goes through.
+
+    Two protocols reach the same attribute access and must not be allowed to
+    decide by inheritance order.  An *attached occurrence* resolves through the
+    occurrence runtime; a *legacy configured instance* -- what
+    ``configure_kernel`` and ``configure_design`` still return -- resolves
+    through the ``_space_value`` hook those classes already implement.  Asking
+    "is this attached?" first, explicitly, is what keeps a configured Kernel's
+    behaviour identical while an attached Kernel occurrence gets the runtime,
+    even though both are instances of the same class.
+
+    Neither present is an ``AttributeError``, because a bare declaration-only
+    instance has no values at all.
+    """
+
+    api = _occurrence_api()
+    if api.is_attached_occurrence(instance):
+        return api.occurrence_value(instance, declaration)
+    resolver = getattr(instance, "_space_value", None)
+    if resolver is None:
+        raise AttributeError("declarative values exist only on configured instances")
+    return resolver(declaration)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -304,10 +447,7 @@ class ValueSource(Generic[T_co]):
     def __get__(self, instance: object | None, owner: type[object]) -> Self | T_co:
         if instance is None:
             return self
-        resolver = getattr(instance, "_space_value", None)
-        if resolver is None:
-            raise AttributeError("declarative values exist only on configured instances")
-        return cast("T_co", resolver(self))
+        return cast("T_co", resolve_declared_value(instance, cast("ValueSource[object]", self)))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -854,6 +994,7 @@ def exported_members(space_type: type[Space]) -> Mapping[str, ValueSource[object
 
 __all__ = [
     "DECLARATION_TYPES",
+    "RESERVED_LIFECYCLE_NAMES",
     "AuthoringError",
     "BranchOutput",
     "Case",
@@ -864,6 +1005,7 @@ __all__ = [
     "Derived",
     "Domain",
     "Input",
+    "OccurrenceContext",
     "OneOf",
     "PendingFinding",
     "Problem",
@@ -874,6 +1016,7 @@ __all__ = [
     "Unresolvable",
     "Use",
     "ValueSource",
+    "check_reserved_names",
     "constraint",
     "declared_members",
     "derived",
@@ -883,6 +1026,7 @@ __all__ = [
     "exported_members",
     "finite",
     "reject",
+    "resolve_declared_value",
     "semantics_for",
     "unresolved",
 ]

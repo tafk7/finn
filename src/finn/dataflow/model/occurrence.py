@@ -39,19 +39,23 @@ from finn.dataflow._engine import (
 )
 from finn.dataflow._engine.results import ordered_findings
 from finn.dataflow.model.compiler import (
+    SpaceModel,
     _CompiledBranch,
     _CompiledProjection,
     _CompiledSpace,
+    _members_of,
     _Ref,
-    _compile_space,
     answer_for,
+    compiled_model_for,
     resolve_value_source,
 )
 from finn.dataflow.model.declarations import (
+    AuthoringError,
     Case,
     Constraint,
     ConstraintGroup,
     Decision,
+    OccurrenceContext,
     OneOf,
     Problem,
     Projection,
@@ -101,63 +105,102 @@ class OccurrenceDiagnostic:
         return f"{location}{requested}: {self.finding.message} ({self.finding.code})"
 
 
-class _RootRuntime:
-    """The only owner of compiled records, Engine, point, and synchronization."""
+@dataclass(frozen=True, slots=True)
+class _Lineage:
+    """Everything one root and all its successors privately share.
 
-    def __init__(
-        self,
-        compiled: _CompiledSpace[Space],
-        engine: Engine,
-        point: DesignPoint,
-        problem_source: ProblemSource,
-        problem_snapshot: Mapping[Problem[object], object],
-        problem_fingerprint: str,
-    ) -> None:
-        self.compiled = compiled
-        self.engine = engine
-        self.point = point
-        self.problem_source = problem_source
-        self.problem_snapshot = MappingProxyType(dict(problem_snapshot))
-        self.problem_fingerprint = problem_fingerprint
-        self.lock = RLock()
+    The split from :class:`SpaceModel` is the point.  The *model* holds what is
+    immutable and worth reusing -- the compiled tree, the validated
+    ``DesignSpace``, the branch catalog and the projection metadata -- and is
+    shared by every root of that family.  The *lineage* holds what must not be
+    shared: one ``Engine``, whose evaluation caches belong to this root alone,
+    the frozen problem it was started from, and the one lock that serializes
+    engine calls for this root and its successors.  Two independent roots
+    therefore reuse compilation without ever serializing on each other or
+    reading each other's caches.
+    """
 
-    def successor(self, point: DesignPoint) -> _RootRuntime:
-        successor = _RootRuntime.__new__(_RootRuntime)
-        successor.compiled = self.compiled
-        successor.engine = self.engine
-        successor.point = point
-        successor.problem_source = self.problem_source
-        successor.problem_snapshot = self.problem_snapshot
-        successor.problem_fingerprint = self.problem_fingerprint
-        successor.lock = self.lock
-        return successor
+    model: SpaceModel
+    tree: _CompiledSpace[Space]
+    engine: Engine
+    problem_source: ProblemSource
+    problem_snapshot: Mapping[Problem[object], object]
+    problem_fingerprint: str
+    lock: RLock
 
 
-def _occurrence_parts(instance: Space) -> tuple[_RootRuntime, _CompiledSpace[Space], Space]:
-    try:
-        compiled = cast(
-            "_CompiledSpace[Space]", object.__getattribute__(instance, "_occurrence_compiled")
-        )
-        root = cast(Space, object.__getattribute__(instance, "_occurrence_root"))
-        runtime = cast(_RootRuntime, object.__getattribute__(root, "_occurrence_runtime"))
-    except AttributeError:
-        raise OccurrenceError(
-            f"{type(instance).__name__} is not an attached Space occurrence"
-        ) from None
-    return runtime, compiled, root
+@dataclass(frozen=True, slots=True)
+class _Runtime:
+    """One immutable point inside one lineage.  A successor replaces the point."""
+
+    lineage: _Lineage
+    point: DesignPoint
+
+    def successor(self, point: DesignPoint) -> _Runtime:
+        return _Runtime(self.lineage, point)
+
+
+@dataclass(frozen=True, slots=True)
+class _State:
+    """The single private attribute an attached occurrence carries."""
+
+    runtime: _Runtime
+    compiled: _CompiledSpace[Space]
+    scope: tuple[str, ...]
+    root: Space
+
+
+#: The one attribute name that means "this instance is an attached occurrence".
+#: One name, checked in one place, so descriptor resolution never has to guess
+#: which of two protocols an instance is speaking.
+_STATE_ATTRIBUTE = "_occurrence_state"
+
+
+def is_attached_occurrence(instance: object) -> bool:
+    """Whether this instance carries an attached occurrence runtime."""
+
+    return isinstance(getattr(instance, _STATE_ATTRIBUTE, None), _State)
+
+
+def _occurrence_state(instance: Space) -> _State:
+    state = getattr(instance, _STATE_ATTRIBUTE, None)
+    if not isinstance(state, _State):
+        raise OccurrenceError(f"{type(instance).__name__} is not an attached Space occurrence")
+    return state
 
 
 def _make_occurrence(
-    runtime: _RootRuntime,
+    runtime: _Runtime,
     compiled: _CompiledSpace[S],
+    scope: tuple[str, ...],
     root: Space | None = None,
 ) -> S:
-    instance = object.__new__(compiled.owner)
-    object.__setattr__(instance, "_occurrence_compiled", compiled)
-    object.__setattr__(instance, "_occurrence_root", instance if root is None else root)
-    if root is None:
-        object.__setattr__(instance, "_occurrence_runtime", runtime)
-    return instance
+    """Allocate one occurrence through the authored class's construction hook.
+
+    The hook exists because ``object.__new__`` as a convention is a promise
+    nobody made: it silently skips whatever initialization a subclass needs, and
+    the subclass that will need it -- a ``DataflowOp`` around a ``NodeProto`` --
+    is the whole reason this layer is being built.  The default still allocates
+    without calling ``__init__``, but now that is a documented contract with a
+    seam, and the runtime is attached *after* the class has had its say so no
+    constructor ever sees the Engine or the point.
+    """
+
+    owner = compiled.owner
+    context = OccurrenceContext(owner, compiled.namespace, scope, root)
+    instance = owner._new_occurrence(context)
+    if not isinstance(instance, owner):
+        raise AuthoringError(
+            f"{owner.__name__}._new_occurrence returned "
+            f"{type(instance).__name__}, which is not an instance of {owner.__name__}"
+        )
+    typed = instance
+    object.__setattr__(
+        typed,
+        _STATE_ATTRIBUTE,
+        _State(runtime, cast("_CompiledSpace[Space]", compiled), scope, root or typed),
+    )
+    return typed
 
 
 def _problem_members(space_type: type[Space]) -> tuple[tuple[str, Problem[object]], ...]:
@@ -271,6 +314,49 @@ def _problem_fingerprint(
     return sha256(encoded).hexdigest()
 
 
+def start_from_model(
+    model: SpaceModel,
+    problem: ProblemSource,
+    *,
+    expected_problem_fingerprint: str | None = None,
+) -> Space:
+    """Freeze one problem into a new root occurrence over a reusable model.
+
+    The compiled model is shared; everything minted here is not.  A fresh
+    ``Engine``, a fresh lock and a fresh frozen problem mean this root's
+    evaluation caches are its own, which is the whole reason compilation reuse
+    can be a cache and concurrency still be per-lineage.
+    """
+
+    tree = model._compiled_tree()
+    engine = Engine()
+    problem_paths, _by_declaration = _prepare_problem(tree, problem)
+    try:
+        point = engine.start(model._design_space(), problem_paths)
+    except RequestError as error:
+        raise OccurrenceError("the Space problem was rejected", error.findings) from error
+    frozen = _freeze_problem(tree, point)
+    fingerprint = _problem_fingerprint(tree.owner, frozen)
+    if expected_problem_fingerprint is not None and fingerprint != expected_problem_fingerprint:
+        raise OccurrenceError(
+            "persisted assignments were recorded for an incompatible problem fingerprint"
+        )
+    lineage = _Lineage(model, tree, engine, problem, frozen, fingerprint, RLock())
+    return _make_occurrence(_Runtime(lineage, point), tree, (tree.namespace,))
+
+
+def _freeze_problem(
+    tree: _CompiledSpace[Space], point: DesignPoint
+) -> Mapping[Problem[object], object]:
+    return MappingProxyType(
+        {
+            declaration: point.problem[tree.member(name).path]
+            for name, declaration in _problem_members(tree.owner)
+            if tree.member(name).path in point.problem
+        }
+    )
+
+
 def start_occurrence(
     space_type: type[S],
     problem: ProblemSource,
@@ -278,98 +364,59 @@ def start_occurrence(
     namespace: str = "root",
     expected_problem_fingerprint: str | None = None,
 ) -> S:
-    """Compile and start one root occurrence of the authored class."""
+    """Start one root occurrence of the authored class through the model service."""
 
-    compiled = _compile_space(
+    model = compiled_model_for(
         space_type,
         namespace,
         problem_namespace=f"problem.{namespace}",
     )
-    engine = Engine()
-    design_space = engine.validate(compiled.spec)
-    problem_paths, _problem_declarations = _prepare_problem(
-        cast("_CompiledSpace[Space]", compiled), problem
+    return cast(
+        S,
+        start_from_model(
+            model,
+            problem,
+            expected_problem_fingerprint=expected_problem_fingerprint,
+        ),
     )
-    try:
-        point = engine.start(design_space, problem_paths)
-    except RequestError as error:
-        raise OccurrenceError("the Space problem was rejected", error.findings) from error
-    frozen = {
-        declaration: point.problem[compiled.member(name).path]
-        for name, declaration in _problem_members(space_type)
-        if compiled.member(name).path in point.problem
-    }
-    fingerprint = _problem_fingerprint(space_type, frozen)
-    if expected_problem_fingerprint is not None and fingerprint != expected_problem_fingerprint:
-        raise OccurrenceError(
-            "persisted assignments were recorded for an incompatible problem fingerprint"
-        )
-    runtime = _RootRuntime(
-        cast("_CompiledSpace[Space]", compiled),
-        engine,
-        point,
-        problem,
-        frozen,
-        fingerprint,
-    )
-    return _make_occurrence(runtime, compiled)
 
 
 def occurrence_root(instance: Space) -> Space:
     """Return the root facade for this exact immutable occurrence state."""
 
-    _runtime, _compiled, root = _occurrence_parts(instance)
-    return root
+    return _occurrence_state(instance).root
 
 
 def occurrence_problem_snapshot(instance: Space) -> Mapping[Problem[object], object]:
     """Return the immutable declaration-keyed Problem snapshot."""
 
-    runtime, _compiled, _root = _occurrence_parts(instance)
-    return runtime.problem_snapshot
+    return _occurrence_state(instance).runtime.lineage.problem_snapshot
 
 
 def occurrence_problem_fingerprint(instance: Space) -> str:
     """Return the stable identity of this root's authored Problem facts."""
 
-    runtime, _compiled, _root = _occurrence_parts(instance)
-    return runtime.problem_fingerprint
+    return _occurrence_state(instance).runtime.lineage.problem_fingerprint
 
 
-def _snapshot_problem(
-    runtime: _RootRuntime, source: ProblemSource
-) -> tuple[Mapping[Problem[object], object], str]:
-    problem_paths, _raw = _prepare_problem(runtime.compiled, source)
-    with runtime.lock:
+def _project_problem(lineage: _Lineage, source: ProblemSource) -> str:
+    """Read the source again and fingerprint it, without disturbing this point."""
+
+    problem_paths, _raw = _prepare_problem(lineage.tree, source)
+    with lineage.lock:
         try:
-            point = runtime.engine.start(runtime.point.design_space, problem_paths)
+            point = lineage.engine.start(lineage.model._design_space(), problem_paths)
         except RequestError as error:
             raise OccurrenceError("the Space problem was rejected", error.findings) from error
-    frozen = {
-        declaration: point.problem[runtime.compiled.member(name).path]
-        for name, declaration in _problem_members(runtime.compiled.owner)
-        if runtime.compiled.member(name).path in point.problem
-    }
-    return MappingProxyType(frozen), _problem_fingerprint(runtime.compiled.owner, frozen)
+    return _problem_fingerprint(lineage.tree.owner, _freeze_problem(lineage.tree, point))
 
 
 def occurrence_is_stale(instance: Space, problem: ProblemSource | None = None) -> bool:
     """Explicitly compare current declared Problem facts with the frozen snapshot."""
 
-    runtime, _compiled, _root = _occurrence_parts(instance)
-    source = runtime.problem_source if problem is None else problem
-    _snapshot, fingerprint = _snapshot_problem(runtime, source)
-    return fingerprint != runtime.problem_fingerprint
-
-
-def _find_compiled(compiled: _CompiledSpace[Space], namespace: str) -> _CompiledSpace[Space] | None:
-    if compiled.namespace == namespace:
-        return compiled
-    for child in _direct_children(compiled):
-        found = _find_compiled(child, namespace)
-        if found is not None:
-            return found
-    return None
+    lineage = _occurrence_state(instance).runtime.lineage
+    source = lineage.problem_source if problem is None else problem
+    return _project_problem(lineage, source) != lineage.problem_fingerprint
 
 
 def occurrence_reconstruct(
@@ -380,42 +427,42 @@ def occurrence_reconstruct(
 ) -> S:
     """Strictly construct a fresh root lineage, retaining no old assignments."""
 
-    runtime, compiled, _root = _occurrence_parts(instance)
-    source = runtime.problem_source if problem is None else problem
-    fresh_root = start_occurrence(
-        runtime.compiled.owner,
-        source,
-        namespace=runtime.compiled.namespace,
+    state = _occurrence_state(instance)
+    lineage = state.runtime.lineage
+    fresh_root = start_from_model(
+        lineage.model,
+        lineage.problem_source if problem is None else problem,
         expected_problem_fingerprint=expected_problem_fingerprint,
     )
-    fresh_runtime, fresh_compiled, _fresh_root = _occurrence_parts(fresh_root)
-    if compiled.namespace == runtime.compiled.namespace:
+    if state.compiled is lineage.tree:
         return cast(S, fresh_root)
-    rebound = _find_compiled(fresh_compiled, compiled.namespace)
-    if rebound is None:
-        raise OccurrenceError(
-            f"fresh compilation no longer contains occurrence {compiled.namespace!r}"
-        )
-    return _make_occurrence(fresh_runtime, cast("_CompiledSpace[S]", rebound), fresh_root)
+    fresh = _occurrence_state(fresh_root)
+    # The compiled model is shared, so the fresh lineage carries the identical
+    # compiled child record; rebinding is a change of runtime, never of identity.
+    return _make_occurrence(
+        fresh.runtime,
+        cast("_CompiledSpace[S]", state.compiled),
+        state.scope,
+        fresh_root,
+    )
 
 
-def _effective_member_name(
+def _member_name(
     space_type: type[Space], declaration: object, expected: tuple[type, ...]
 ) -> str | None:
-    found: str | None = None
-    for base in reversed(space_type.__mro__):
-        if not issubclass(base, Space) or base is Space:
-            continue
-        for name, value in base.__dict__.items():
-            if isinstance(value, expected) and value is declaration:
-                found = name
-    return found
+    """The class-member name this declaration was authored under, if any.
+
+    One index, the compiler's, so the occurrence layer and the lowering can
+    never disagree about which member a declaration is.
+    """
+
+    return _members_of(space_type, expected).get(id(declaration))
 
 
 def _decision_reference(
     compiled: _CompiledSpace[Space], declaration: Decision[object]
 ) -> _Ref[object]:
-    name = _effective_member_name(compiled.owner, declaration, (Decision,))
+    name = _member_name(compiled.owner, declaration, (Decision,))
     if name is None:
         raise OccurrenceError(
             f"{compiled.owner.__name__} does not own that Decision; "
@@ -435,42 +482,51 @@ def _raise_failed_assignment(outcomes: tuple[ItemOutcome, ...]) -> None:
     raise OccurrenceError(f"assignment was not accepted ({disposition})", findings)
 
 
-def _successor_root(runtime: _RootRuntime) -> Space:
-    return _make_occurrence(runtime, runtime.compiled)
+def _successor_root(runtime: _Runtime) -> Space:
+    tree = runtime.lineage.tree
+    return _make_occurrence(runtime, tree, (tree.namespace,))
 
 
 def occurrence_assign(instance: S, declaration: Decision[T], value: T) -> S:
     """Assign one Decision owned by this exact view and return its successor view."""
 
-    runtime, compiled, _root = _occurrence_parts(instance)
-    reference = _decision_reference(compiled, cast("Decision[object]", declaration))
-    with runtime.lock:
+    state = _occurrence_state(instance)
+    runtime = state.runtime
+    lineage = runtime.lineage
+    reference = _decision_reference(state.compiled, cast("Decision[object]", declaration))
+    with lineage.lock:
         try:
-            committed = runtime.engine.commit_assignments(runtime.point, {reference.path: value})
+            committed = lineage.engine.commit_assignments(runtime.point, {reference.path: value})
         except RequestError as error:
             raise OccurrenceError("the assignment request was rejected", error.findings) from error
     _raise_failed_assignment(committed.outcomes)
-    successor_runtime = runtime.successor(committed.point)
-    successor_root = _successor_root(successor_runtime)
-    if compiled is runtime.compiled:
+    successor = runtime.successor(committed.point)
+    successor_root = _successor_root(successor)
+    if state.compiled is lineage.tree:
         return cast(S, successor_root)
-    return _make_occurrence(successor_runtime, cast("_CompiledSpace[S]", compiled), successor_root)
+    return _make_occurrence(
+        successor,
+        cast("_CompiledSpace[S]", state.compiled),
+        state.scope,
+        successor_root,
+    )
 
 
 def occurrence_answer(instance: Space, declaration: ValueSource[T]) -> Answer[T]:
     """Answer one declaration that this view is allowed to name."""
 
-    runtime, compiled, _root = _occurrence_parts(instance)
+    state = _occurrence_state(instance)
     try:
         reference = resolve_value_source(
-            compiled,
+            state.compiled,
             cast("ValueSource[object]", declaration),
             "occurrence query",
         )
     except ValueError as error:
         raise OccurrenceError(str(error)) from error
-    with runtime.lock:
-        answer = answer_for(runtime.engine, runtime.point, reference)
+    lineage = state.runtime.lineage
+    with lineage.lock:
+        answer = answer_for(lineage.engine, state.runtime.point, reference)
     return cast("Answer[T]", answer)
 
 
@@ -491,37 +547,39 @@ def occurrence_assess(
 ) -> ReadinessAssessment | ConstraintAssessment:
     """Assess one readiness or constraint declaration owned by this view."""
 
-    runtime, compiled, _root = _occurrence_parts(instance)
+    state = _occurrence_state(instance)
+    compiled = state.compiled
+    lineage = state.runtime.lineage
     if isinstance(declaration, Readiness):
-        name = _effective_member_name(compiled.owner, declaration, (Readiness,))
+        name = _member_name(compiled.owner, declaration, (Readiness,))
         if name is None:
             raise OccurrenceError(
                 f"{compiled.owner.__name__} does not own that Readiness declaration"
             )
         profile = f"{compiled.namespace}.{declaration.stable_name or name}"
-        with runtime.lock:
-            return runtime.engine.check_readiness(runtime.point, profile)
+        with lineage.lock:
+            return lineage.engine.check_readiness(state.runtime.point, profile)
     if isinstance(declaration, ConstraintGroup):
-        name = _effective_member_name(compiled.owner, declaration, (ConstraintGroup,))
+        name = _member_name(compiled.owner, declaration, (ConstraintGroup,))
         if name is None:
             raise OccurrenceError(f"{compiled.owner.__name__} does not own that ConstraintGroup")
         group = f"{compiled.namespace}.{declaration.stable_name or name}"
-        with runtime.lock:
-            return runtime.engine.evaluate_constraint_set(runtime.point, group)
+        with lineage.lock:
+            return lineage.engine.evaluate_constraint_set(state.runtime.point, group)
     if isinstance(declaration, Constraint):
-        name = _effective_member_name(compiled.owner, declaration, (Constraint,))
+        name = _member_name(compiled.owner, declaration, (Constraint,))
         if name is None:
             raise OccurrenceError(f"{compiled.owner.__name__} does not own that Constraint")
         path = f"constraint.{compiled.namespace}.{declaration.stable_name or name}"
-        with runtime.lock:
-            return runtime.engine.evaluate_constraints(runtime.point, (path,))
+        with lineage.lock:
+            return lineage.engine.evaluate_constraints(state.runtime.point, (path,))
     raise TypeError("assess() requires a Readiness, ConstraintGroup, or Constraint declaration")
 
 
 def _projection_for_declaration(
     compiled: _CompiledSpace[Space], declaration: Projection[object]
 ) -> _CompiledProjection[object]:
-    name = _effective_member_name(compiled.owner, declaration, (Projection,))
+    name = _member_name(compiled.owner, declaration, (Projection,))
     if name is None:
         raise OccurrenceError(f"{compiled.owner.__name__} does not own that Projection")
     return compiled.projection(name)
@@ -596,14 +654,15 @@ def _reduce_projection(
 def occurrence_project(instance: Space, declaration: Projection[T]) -> ProjectionAssessment[T]:
     """Evaluate a Projection without exposing its bound runtime handles."""
 
-    runtime, compiled_space, _root = _occurrence_parts(instance)
-    compiled = _projection_for_declaration(compiled_space, cast("Projection[object]", declaration))
-    with runtime.lock:
-        readiness = runtime.engine.check_readiness(runtime.point, compiled.readiness_profile)
-        output = answer_for(runtime.engine, runtime.point, compiled.output)
+    state = _occurrence_state(instance)
+    lineage = state.runtime.lineage
+    point = state.runtime.point
+    compiled = _projection_for_declaration(state.compiled, cast("Projection[object]", declaration))
+    with lineage.lock:
+        readiness = lineage.engine.check_readiness(point, compiled.readiness_profile)
+        output = answer_for(lineage.engine, point, compiled.output)
         constraints = tuple(
-            runtime.engine.evaluate_constraint_set(runtime.point, name)
-            for name in compiled.constraint_sets
+            lineage.engine.evaluate_constraint_set(point, name) for name in compiled.constraint_sets
         )
         accepted = _reduce_projection(compiled, readiness, constraints, output)
     return ProjectionAssessment(
@@ -720,13 +779,13 @@ def occurrence_diagnostics(
 ) -> tuple[OccurrenceDiagnostic, ...]:
     """Interpret findings without losing their original paths or causal traces."""
 
-    runtime, compiled, _root = _occurrence_parts(instance)
+    state = _occurrence_state(instance)
     projection_name: str | None = None
     if projection is not None:
-        projection_name = _projection_for_declaration(compiled, projection).member_name
+        projection_name = _projection_for_declaration(state.compiled, projection).member_name
     interpreted: list[OccurrenceDiagnostic] = []
     for finding in _subject_findings(subject):
-        owner, chain = _scope_for_finding(runtime.compiled, finding)
+        owner, chain = _scope_for_finding(state.runtime.lineage.tree, finding)
         interpreted.append(
             OccurrenceDiagnostic(
                 finding,
@@ -738,24 +797,32 @@ def occurrence_diagnostics(
     return tuple(interpreted)
 
 
-def _direct_children(compiled: _CompiledSpace[Space]) -> tuple[_CompiledSpace[Space], ...]:
+def _direct_children(
+    compiled: _CompiledSpace[Space],
+) -> tuple[tuple[str, _CompiledSpace[Space]], ...]:
     return (
-        *(child for _name, child in compiled.children),
-        *(case.compiled for _name, branch in compiled.branches for case in branch.cases),
+        *compiled.children,
+        *(
+            (f"{name}.{case.case_id}", case.compiled)
+            for name, branch in compiled.branches
+            for case in branch.cases
+        ),
     )
 
 
 def _child_for_declaration(
     compiled: _CompiledSpace[Space], declaration: Use[Space] | Case
-) -> _CompiledSpace[Space]:
+) -> tuple[tuple[str, ...], _CompiledSpace[Space]]:
+    """The compiled child a use site names, and the scope segment it adds."""
+
     if isinstance(declaration, Use):
-        name = _effective_member_name(compiled.owner, declaration, (Use,))
+        name = _member_name(compiled.owner, declaration, (Use,))
         if name is None:
             raise OccurrenceError(f"{compiled.owner.__name__} does not own that Use")
-        return compiled.child(name)
+        return (name,), compiled.child(name)
 
     found = tuple(
-        candidate.compiled
+        ((authored_branch_name, candidate.case_id), candidate.compiled)
         for authored_branch_name, authored_branch in declared_members(compiled.owner)
         if isinstance(authored_branch, OneOf)
         for authored_case, candidate in zip(
@@ -775,9 +842,14 @@ def occurrence_child(
 ) -> S:
     """Return the exact direct child occurrence selected by a use site or case."""
 
-    runtime, compiled, root = _occurrence_parts(instance)
+    state = _occurrence_state(instance)
+    compiled = state.compiled
     if isinstance(declaration, type) and issubclass(declaration, Space):
-        matches = tuple(child for child in _direct_children(compiled) if child.owner is declaration)
+        matches = tuple(
+            (name, child)
+            for name, child in _direct_children(compiled)
+            if child.owner is declaration
+        )
         if not matches:
             raise OccurrenceError(
                 f"{compiled.owner.__name__} has no direct child of class {declaration.__name__}"
@@ -787,16 +859,23 @@ def occurrence_child(
                 f"{compiled.owner.__name__} has {len(matches)} direct occurrences of "
                 f"{declaration.__name__}; name the exact Use or Case"
             )
-        child = matches[0]
+        segment: tuple[str, ...] = (matches[0][0],)
+        child = matches[0][1]
     elif isinstance(declaration, (Use, Case)):
-        child = _child_for_declaration(compiled, cast("Use[Space] | Case", declaration))
+        segment, child = _child_for_declaration(compiled, cast("Use[Space] | Case", declaration))
+
     else:
         raise TypeError("child() requires a Use, Case, or Space subclass")
-    return _make_occurrence(runtime, cast("_CompiledSpace[S]", child), root)
+    return _make_occurrence(
+        state.runtime,
+        cast("_CompiledSpace[S]", child),
+        (*state.scope, *segment),
+        state.root,
+    )
 
 
 def _branch_for_declaration(compiled: _CompiledSpace[Space], declaration: OneOf) -> _CompiledBranch:
-    name = _effective_member_name(compiled.owner, declaration, (OneOf,))
+    name = _member_name(compiled.owner, declaration, (OneOf,))
     if name is None:
         raise OccurrenceError(f"{compiled.owner.__name__} does not own that OneOf")
     return compiled.branch(name)
@@ -824,19 +903,21 @@ class BranchView:
         return occurrence_root(self.__owner)
 
     def selected(self) -> Answer[str]:
-        runtime, _compiled, _root = _occurrence_parts(self.__owner)
+        state = _occurrence_state(self.__owner)
+        lineage = state.runtime.lineage
+        point = state.runtime.point
         active = self.__branch.active
         if active is not None:
-            with runtime.lock:
-                active_answer = answer_for(runtime.engine, runtime.point, active)
+            with lineage.lock:
+                active_answer = answer_for(lineage.engine, point, active)
             if isinstance(active_answer, Unresolved):
                 return active_answer
             if isinstance(active_answer, Absent) or not cast(bool, active_answer.value):
                 return Absent()
         if self.__branch.selector is None:
             return Decided(self.__branch.cases[0].case_id)
-        with runtime.lock:
-            answer = answer_for(runtime.engine, runtime.point, self.__branch.selector)
+        with lineage.lock:
+            answer = answer_for(lineage.engine, point, self.__branch.selector)
         return cast("Answer[str]", answer)
 
     def case(self, case_id: str) -> Space:
@@ -844,8 +925,13 @@ class BranchView:
             child = self.__branch.case(case_id).compiled
         except ValueError as error:
             raise OccurrenceError(str(error)) from error
-        runtime, _compiled, root = _occurrence_parts(self.__owner)
-        return _make_occurrence(runtime, child, root)
+        state = _occurrence_state(self.__owner)
+        return _make_occurrence(
+            state.runtime,
+            child,
+            (*state.scope, self.name, case_id),
+            state.root,
+        )
 
     def select(self, case_id: str) -> BranchView:
         if case_id not in self.cases:
@@ -854,23 +940,24 @@ class BranchView:
             )
         if self.__branch.selector is None:
             return self
-        runtime, compiled, _root = _occurrence_parts(self.__owner)
-        with runtime.lock:
+        state = _occurrence_state(self.__owner)
+        lineage = state.runtime.lineage
+        with lineage.lock:
             try:
-                committed = runtime.engine.commit_assignments(
-                    runtime.point, {self.__branch.selector.path: case_id}
+                committed = lineage.engine.commit_assignments(
+                    state.runtime.point, {self.__branch.selector.path: case_id}
                 )
             except RequestError as error:
                 raise OccurrenceError(
                     "the branch selection request was rejected", error.findings
                 ) from error
         _raise_failed_assignment(committed.outcomes)
-        successor_runtime = runtime.successor(committed.point)
-        successor_root = _successor_root(successor_runtime)
+        successor = state.runtime.successor(committed.point)
+        successor_root = _successor_root(successor)
         successor_owner = (
             successor_root
-            if compiled is runtime.compiled
-            else _make_occurrence(successor_runtime, compiled, successor_root)
+            if state.compiled is lineage.tree
+            else _make_occurrence(successor, state.compiled, state.scope, successor_root)
         )
         return BranchView(successor_owner, self.__branch)
 
@@ -878,8 +965,8 @@ class BranchView:
 def occurrence_branch(instance: Space, declaration: OneOf) -> BranchView:
     """Bind one authored branch to this exact occurrence namespace."""
 
-    _runtime, compiled, _root = _occurrence_parts(instance)
-    return BranchView(instance, _branch_for_declaration(compiled, declaration))
+    state = _occurrence_state(instance)
+    return BranchView(instance, _branch_for_declaration(state.compiled, declaration))
 
 
 __all__ = [
@@ -888,5 +975,7 @@ __all__ = [
     "OccurrenceError",
     "ProblemSource",
     "ProjectionAssessment",
+    "is_attached_occurrence",
+    "start_from_model",
     "start_occurrence",
 ]

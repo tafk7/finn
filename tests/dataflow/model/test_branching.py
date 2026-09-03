@@ -182,7 +182,13 @@ def test_bindings_come_from_problem_decision_property_and_parent_input() -> None
 
     class Inner(Space):
         supplied = Input(int)
-        branch = OneOf(Case(Scaled, name="scaled", scale=supplied), outputs=("result",))
+        # ``branch`` is a reserved occurrence operation, so the member is named
+        # ``choice`` and ``name=`` keeps the compiled path the assertions use.
+        choice = OneOf(
+            Case(Scaled, name="scaled", scale=supplied),
+            outputs=("result",),
+            name="branch",
+        )
 
     class Outer(Space):
         size = Problem(int)
@@ -217,8 +223,12 @@ def test_bindings_come_from_problem_decision_property_and_parent_input() -> None
 def test_a_parent_input_may_be_bound_into_a_nested_case() -> None:
     class Middle(Space):
         supplied = Input(int)
-        branch = OneOf(Case(Scaled, name="scaled", scale=supplied), outputs=("result",))
-        result = branch.result
+        choice = OneOf(
+            Case(Scaled, name="scaled", scale=supplied),
+            outputs=("result",),
+            name="branch",
+        )
+        result = choice.result
         exports = (result,)
 
     class Root(Space):
@@ -488,8 +498,11 @@ def test_a_recursive_case_cycle_is_rejected_deterministically() -> None:
     class Recursive(Space):
         supplied = Input(int)
 
-    Recursive.branch = OneOf(  # type: ignore[attr-defined]
-        Case(Recursive, name="again", supplied=Recursive.supplied), outputs=()
+    # Attached after class creation, so ``__init_subclass__`` never saw it: this
+    # is the path the compiler's reserved-name backstop exists for, and the
+    # member is named ``recurse`` for exactly that reason.
+    Recursive.recurse = OneOf(  # type: ignore[attr-defined]
+        Case(Recursive, name="again", supplied=Recursive.supplied), outputs=(), name="branch"
     )
 
     class Root(Space):

@@ -246,7 +246,7 @@ def test_nested_space_cannot_introduce_problem_fields() -> None:
         value = Problem(int)
 
     class Broken(Space):
-        child = Use(ChildWithProblem)
+        nested = Use(ChildWithProblem)
 
     with pytest.raises(AuthoringError, match="inside a reusable child Space"):
         _compile_space(Broken, "broken", problem_namespace="problem.broken")
@@ -288,7 +288,7 @@ def test_gated_use_uses_existing_engine_applicability() -> None:
     class Root(Space):
         extent = Problem(int)
         enabled = Problem(bool)
-        child = Use(Tiled, extent=extent, when=enabled)
+        nested = Use(Tiled, extent=extent, when=enabled, name="child")
 
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
     engine = Engine()

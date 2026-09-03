@@ -567,14 +567,14 @@ def test_kernel_region_is_implicitly_exported() -> None:
     class Root(Space):
         extent = Problem(int)
         lanes = Decision(int, domain=divisors_of(extent))
-        child = Use(ToyKernel, extent=extent, lanes=lanes)
+        nested = Use(ToyKernel, extent=extent, lanes=lanes, name="child")
 
-        @derived(DATAFLOW_REGION_SEMANTICS, child=child.region)
+        @derived(DATAFLOW_REGION_SEMANTICS, child=nested.region)
         def observed(*, child: DataflowRegion) -> DataflowRegion:
             return child
 
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
-    assert compiled.child("child").exported("region").kind is DependencyKind.PROPERTY
+    assert compiled.child("nested").exported("region").kind is DependencyKind.PROPERTY
     assert tuple(exported_members(ToyKernel)) == ("region",)
 
 
@@ -684,10 +684,10 @@ def test_an_outer_gate_over_the_region_stays_legal() -> None:
         extent = Problem(int)
         lanes = Decision(int, domain=divisors_of(extent))
         present = Decision(bool, values=(False, True))
-        child = Use(ToyKernel, extent=extent, lanes=lanes, when=present)
+        nested = Use(ToyKernel, extent=extent, lanes=lanes, when=present, name="child")
 
     compiled = _compile_space(Conditional, "outer", problem_namespace="problem.outer")
-    assert compiled.child("child").exported("region").kind is DependencyKind.PROPERTY
+    assert compiled.child("nested").exported("region").kind is DependencyKind.PROPERTY
 
 
 def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:

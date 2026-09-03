@@ -165,6 +165,7 @@ def test_decision_requires_exactly_one_domain_form() -> None:
 def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
     assert set(model.__all__) == {
         "AuthoringError",
+        "RESERVED_LIFECYCLE_NAMES",
         "Boundary",
         "BranchCatalog",
         "BranchInfo",
@@ -183,6 +184,7 @@ def test_public_model_facade_exposes_only_contributor_vocabulary() -> None:
         "Kernel",
         "Kernels",
         "OneOf",
+        "OccurrenceContext",
         "OccurrenceDiagnostic",
         "OccurrenceError",
         "Parameter",

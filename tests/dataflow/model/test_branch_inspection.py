@@ -321,7 +321,7 @@ def test_an_ambiguous_case_property_name_is_refused() -> None:
 
     class Root_(Space):
         size = Problem(int)
-        branch = OneOf(Case(TwoPrices, name="both", size=size))
+        choice = OneOf(Case(TwoPrices, name="both", size=size), name="branch")
 
     catalog = compile_space_model(Root_, "root", problem_namespace="problem.root").branches
     case = catalog.branch("root.branch").case("both")

@@ -14,10 +14,12 @@ import pytest
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.model import (
+    AuthoringError,
     Case,
     ConstraintGroup,
     Decision,
     Input,
+    OccurrenceContext,
     OccurrenceError,
     OneOf,
     Problem,
@@ -26,9 +28,18 @@ from finn.dataflow.model import (
     Readiness,
     Space,
     Use,
+    RESERVED_LIFECYCLE_NAMES,
     constraint,
     derived,
 )
+from finn.dataflow.model.compiler import compile_space, compile_space_model, compiled_model_for
+from finn.dataflow.model.occurrence import _Lineage, _occurrence_state, is_attached_occurrence
+
+
+def _lineage(instance: Space) -> _Lineage:
+    """Reach the private lineage record; a test may, a contributor may not."""
+
+    return _occurrence_state(instance).runtime.lineage
 
 
 class Leaf(Space):
@@ -344,3 +355,182 @@ print("CAPABILITY_AUDIT_PASS")
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "CAPABILITY_AUDIT_PASS"
+
+
+# -- C2: construction, compiled-model reuse, dispatch, reserved names ----------
+
+
+def test_a_declaration_may_not_shadow_a_lifecycle_operation() -> None:
+    with pytest.raises(AuthoringError) as raised:
+
+        class Shadowing(Space):
+            size = Problem(int)
+            project = Decision(int, values=(1, 2))  # type: ignore[assignment]
+
+    message = str(raised.value)
+    assert "Shadowing.project" in message
+    assert "Decision" in message
+    assert "Space.project" in message
+
+
+@pytest.mark.parametrize("member", sorted(RESERVED_LIFECYCLE_NAMES))
+def test_every_reserved_lifecycle_name_is_refused(member: str) -> None:
+    with pytest.raises(AuthoringError, match=f"Space.{member}"):
+        type(
+            "Reserved",
+            (Space,),
+            {"size": Problem(int), member: Decision(int, values=(1, 2))},
+        )
+
+
+def test_a_declaration_attached_after_class_creation_is_refused_at_compilation() -> None:
+    """``__init_subclass__`` cannot see this one; the compiler backstop must."""
+
+    class Late(Space):
+        size = Problem(int)
+
+    Late.assign = Decision(int, values=(1, 2))  # type: ignore[method-assign, assignment]
+
+    with pytest.raises(AuthoringError, match="Space.assign"):
+        compile_space(Late, "root", problem_namespace="problem.root")
+
+
+def test_a_reserved_name_is_still_available_as_a_stable_compiled_name() -> None:
+    """The check is on the Python member, not on the engine path."""
+
+    class Renamed(Space):
+        size = Problem(int)
+        choice = Decision(int, values=(1, 2), name="project")
+
+    specification = compile_space(Renamed, "root", problem_namespace="problem.root")
+    assert tuple(item.path.value for item in specification.decisions) == ("root.project",)
+
+
+class _Contextual(Space):
+    """An authored class whose ordinary constructor requires external context."""
+
+    size = Problem(int)
+    lanes = Decision(int, values=(1, 2))
+    inner = Use(Leaf, supplied=size)
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+
+    @classmethod
+    def _new_occurrence(cls, context: OccurrenceContext) -> Space:
+        instance = object.__new__(cls)
+        parent = context.root
+        instance.__init__(  # type: ignore[misc]
+            context.namespace if parent is None else getattr(parent, "label")
+        )
+        return instance
+
+
+def test_a_context_bearing_class_is_initialized_by_the_construction_hook() -> None:
+    root = _Contextual.start({_Contextual.size: 3})
+    assert type(root) is _Contextual
+    assert root.label == "root"
+
+    # A child view is constructed through the same hook and reads the root's
+    # context rather than having it copied in by the occurrence layer.
+    child = root.child(_Contextual.inner)
+    assert type(child) is Leaf
+    assert child.root is root
+
+    # A successor is allocated through the hook as well, so its context is
+    # constructed rather than carried over by attribute copying.
+    successor = root.assign(_Contextual.lanes, 2)
+    assert type(successor) is _Contextual
+    assert successor.label == "root"
+    assert successor is not root
+
+
+def test_the_construction_hook_must_return_an_instance_of_the_authored_class() -> None:
+    class Wrong(Space):
+        size = Problem(int)
+
+        @classmethod
+        def _new_occurrence(cls, context: OccurrenceContext) -> Space:
+            del context
+            return Leaf.__new__(Leaf)
+
+    with pytest.raises(AuthoringError, match="not an instance of Wrong"):
+        Wrong.start({Wrong.size: 1})
+
+
+def test_repeated_starts_reuse_one_compiled_model() -> None:
+    first = compiled_model_for(Root, "root", problem_namespace="problem.root")
+    second = compiled_model_for(Root, "root", problem_namespace="problem.root")
+    assert first is second
+    assert first._compiled_tree() is second._compiled_tree()
+    assert first._design_space() is second._design_space()
+
+
+def test_a_mutated_declaration_structure_forces_recompilation() -> None:
+    class Mutable(Space):
+        size = Problem(int)
+        lanes = Decision(int, values=(1, 2))
+
+    before = compiled_model_for(Mutable, "root", problem_namespace="problem.root")
+    Mutable.lanes = Decision(int, values=(1, 2, 4))
+    after = compiled_model_for(Mutable, "root", problem_namespace="problem.root")
+    assert after is not before
+    assert compiled_model_for(Mutable, "root", problem_namespace="problem.root") is after
+
+
+def test_independent_roots_share_compilation_but_not_engine_or_lock() -> None:
+    first = Root.start({Root.size: 4})
+    second = Root.start({Root.size: 8})
+    left = _lineage(first)
+    right = _lineage(second)
+    assert left.model is right.model
+    assert left.tree is right.tree
+    assert left.engine is not right.engine
+    assert left.lock is not right.lock
+
+    # A successor stays inside its own lineage.
+    successor = first.assign(Root.mode, "small")
+    assert _lineage(successor).engine is left.engine
+    assert _lineage(successor).lock is left.lock
+
+
+def test_the_compiled_model_is_a_public_compiler_service_entry() -> None:
+    model = compile_space_model(Root, "root", problem_namespace="problem.root")
+    first = model.start({Root.size: 4})
+    second = model.start({Root.size: 8})
+    assert type(first) is Root
+    assert type(second) is Root
+    assert model.space_type is Root
+    assert first.size == 4
+    assert second.size == 8
+    assert _lineage(first).engine is not _lineage(second).engine
+
+
+def test_a_legacy_configured_instance_still_resolves_through_its_own_hook() -> None:
+    """Attached and configured are two protocols; the dispatcher must not guess."""
+
+    class Legacy(Space):
+        size = Problem(int)
+
+        def __init__(self, value: int) -> None:
+            self._value = value
+
+        def _space_value(self, declaration: object) -> object:
+            del declaration
+            return self._value
+
+    configured = Legacy(11)
+    assert not is_attached_occurrence(configured)
+    assert configured.size == 11
+
+    attached = Legacy.start({Legacy.size: 4})
+    assert is_attached_occurrence(attached)
+    assert attached.size == 4
+
+
+def test_an_instance_that_is_neither_attached_nor_configured_has_no_values() -> None:
+    class Plain(Space):
+        size = Problem(int)
+
+    with pytest.raises(AttributeError, match="configured instances"):
+        _ = Plain().size

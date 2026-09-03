@@ -66,11 +66,13 @@ from finn.dataflow.model.branching import (
 )
 from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_space_model
 from finn.dataflow.model.declarations import (
+    RESERVED_LIFECYCLE_NAMES,
     AuthoringError,
     Case,
     ConstraintGroup,
     Decision,
     Input,
+    OccurrenceContext,
     OneOf,
     Problem,
     Projection,
@@ -163,6 +165,7 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     # authoring vocabulary shared by every layer
+    "RESERVED_LIFECYCLE_NAMES",
     "AuthoringError",
     "BranchView",
     "Case",
@@ -170,6 +173,7 @@ __all__ = [
     "Decision",
     "Input",
     "OneOf",
+    "OccurrenceContext",
     "OccurrenceDiagnostic",
     "OccurrenceError",
     "Problem",

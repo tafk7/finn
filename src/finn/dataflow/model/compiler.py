@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Set as AbstractSet
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from inspect import signature
+from threading import RLock
 from types import MappingProxyType
-from typing import Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
@@ -26,6 +27,7 @@ from finn.dataflow._engine import (
     DependencyView,
     DerivedProperty,
     DesignPoint,
+    DesignSpace,
     DesignSpaceSpec,
     Engine,
     EvaluatorSpec,
@@ -67,6 +69,7 @@ from finn.dataflow.model.declarations import (
     Unresolvable,
     Use,
     ValueSource,
+    check_reserved_names,
     declared_members,
     exported_members,
     finite,
@@ -271,6 +274,11 @@ class _Compilation:
         self.allow_problem = allow_problem
         self.ancestors = ancestors
         self.declarations = declared_members(space_type)
+        # ``__init_subclass__`` catches the ordinary class-body spelling at the
+        # point of the mistake.  This is the backstop for a declaration attached
+        # to a class after it was created -- the recursive-Space idiom does
+        # exactly that -- which no class-creation hook can see.
+        check_reserved_names(space_type, self.declarations)
         self.names = {id(value): name for name, value in self.declarations}
         self.alias_names: dict[int, str] = {}
         for base in reversed(space_type.__mro__):
@@ -1070,14 +1078,169 @@ def imported_decisions(
 class SpaceModel:
     """One compiled Space: the ordinary flat spec plus its branch catalog.
 
-    The two are deliberately separate values.  ``specification`` is everything
-    the engine sees; ``branches`` is the class-to-flat-spec relationship the
-    engine does not model and a specialization algorithm needs.  Neither
-    exposes a compiled declaration, a ``_Ref``, or an evaluator.
+    The two public fields are deliberately separate values.  ``specification``
+    is everything the engine sees; ``branches`` is the class-to-flat-spec
+    relationship the engine does not model and a specialization algorithm
+    needs.  Neither exposes a compiled declaration, a ``_Ref``, or an evaluator.
+
+    ``start`` adds the third thing a caller needs and neither public field can
+    give: a bound occurrence of the authored class.  The compiled declaration
+    tree it needs is held privately, because that is exactly the record which
+    would let a contributor reconstruct paths.
+
+    What the model owns is *immutable and reusable*: the tree, the validated
+    ``DesignSpace``, the branch catalog and the projection metadata.  What it
+    does **not** own is the Engine, the point or the lock -- every ``start``
+    mints those fresh, so two roots from one model never share an evaluation
+    cache and never serialize on each other.
     """
 
     specification: DesignSpaceSpec
     branches: BranchCatalog
+    _tree: _CompiledSpace[Space] | None = field(default=None, repr=False, compare=False)
+    _shared: _SharedCompilation = field(
+        default_factory=lambda: _SharedCompilation(), repr=False, compare=False
+    )
+
+    @property
+    def space_type(self) -> type[Space]:
+        """The authored root class this model was compiled from."""
+
+        return self._compiled_tree().owner
+
+    def start(
+        self,
+        problem: object,
+        *,
+        expected_problem_fingerprint: str | None = None,
+    ) -> Space:
+        """Freeze one problem into a new root occurrence of the authored class.
+
+        The compiler-service entry point.  A pipeline that processes many
+        occurrences of one family holds the model and calls this repeatedly;
+        ``Space.start`` is the ordinary authoring spelling of the same thing and
+        goes through here.
+        """
+
+        started = _occurrence_api().start_from_model(
+            self,
+            problem,
+            expected_problem_fingerprint=expected_problem_fingerprint,
+        )
+        return cast("Space", started)
+
+    def _compiled_tree(self) -> _CompiledSpace[Space]:
+        if self._tree is None:
+            raise AuthoringError(
+                "this SpaceModel was built without its compiled declarations and cannot "
+                "start an occurrence; use compile_space_model()"
+            )
+        return self._tree
+
+    def _design_space(self) -> DesignSpace:
+        """The validated space, computed once and shared by every root."""
+
+        return self._shared.design_space(self.specification)
+
+
+class _SharedCompilation:
+    """The immutable-by-contract results one compiled model memoizes.
+
+    Separate from ``SpaceModel`` so the model itself stays a frozen, comparable
+    value.  Validation is memoized rather than eager because compiling a Space
+    and validating one are different questions and existing callers compile
+    specifications they never intend to run.  The lock guards only this memo --
+    it is a *compilation* lock, not a lineage lock, and no engine call is made
+    under it.
+    """
+
+    __slots__ = ("_lock", "_space")
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._space: DesignSpace | None = None
+
+    def design_space(self, specification: DesignSpaceSpec) -> DesignSpace:
+        with self._lock:
+            if self._space is None:
+                # ``Engine.validate`` is a pure function of the specification, so
+                # the transient engine here validates without becoming the one
+                # the lineages evaluate through.  Reaching into ``_engine`` for
+                # the underlying function would be the only alternative, and U1
+                # is not allowed to widen that surface.
+                self._space = Engine().validate(specification)
+            return self._space
+
+
+def _occurrence_api() -> Any:
+    """The occurrence runtime, resolved once; see ``declarations._occurrence_api``."""
+
+    from finn.dataflow.model.declarations import _occurrence_api as resolve  # noqa: PLC0415
+
+    return resolve()
+
+
+def _structural_signature(
+    space_type: type[Space],
+    seen: frozenset[type[Space]] = frozenset(),
+) -> tuple[object, ...]:
+    """A hashable witness of everything compilation reads from a class tree.
+
+    Caching a compiled model on class identity alone is wrong: a class body is
+    ordinary mutable Python, and a test or a plugin that rebinds one member
+    would silently keep answering with stale compiled metadata.  The signature
+    therefore carries the declaration *objects* themselves -- they hash by
+    identity and, being held by the cache key, cannot have their ids recycled --
+    together with the member names and the classes referenced by every ``Use``
+    and ``Case``.  Rebinding, adding, removing or reordering a declaration
+    anywhere in the tree changes the key, so the next request recompiles instead
+    of reusing.
+    """
+
+    if space_type in seen:
+        return (space_type, "<recursive>")
+    members = declared_members(space_type)
+    parts: list[object] = [space_type, tuple((name, declaration) for name, declaration in members)]
+    nested = seen | {space_type}
+    for _name, declaration in members:
+        if isinstance(declaration, Use):
+            parts.append(_structural_signature(declaration.space_type, nested))
+        elif isinstance(declaration, OneOf):
+            for case in declaration.cases:
+                parts.append(_structural_signature(case.space_type, nested))
+    return tuple(parts)
+
+
+def compiled_model_for(
+    space_type: type[Space],
+    namespace: str,
+    *,
+    problem_namespace: str | None = None,
+) -> SpaceModel:
+    """One compiled model per (class, namespaces, declaration structure).
+
+    The cache lives on the authored class rather than in a module-level table so
+    that it dies with the class -- a process that builds Spaces dynamically must
+    not accumulate compiled models forever.  ``__dict__`` rather than attribute
+    lookup, so a subclass never reuses its parent's entries.
+    """
+
+    key = (namespace, problem_namespace, _structural_signature(space_type))
+    cache = space_type.__dict__.get("_space_compiled_models")
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(space_type, "_space_compiled_models", cache)
+    cached = cache.get(key)
+    if cached is not None:
+        return cast(SpaceModel, cached)
+    compiled = _compile_space(
+        space_type,
+        namespace,
+        problem_namespace=problem_namespace,
+    )
+    model = SpaceModel(compiled.spec, compiled.catalog, compiled)
+    cache[key] = model
+    return model
 
 
 def compile_space_model(
@@ -1088,12 +1251,11 @@ def compile_space_model(
 ) -> SpaceModel:
     """Compile a closed root Space into its spec and its branch catalog."""
 
-    compiled = _compile_space(
+    return compiled_model_for(
         space_type,
         namespace,
         problem_namespace=problem_namespace,
     )
-    return SpaceModel(compiled.spec, compiled.catalog)
 
 
 def compile_space(
@@ -1117,5 +1279,6 @@ __all__ = [
     "resolve_value_source",
     "compile_space",
     "compile_space_model",
+    "compiled_model_for",
     "imported_decisions",
 ]
