@@ -36,17 +36,17 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import uuid4
 
 from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Answer, Decided, QualifiedPath, RequestError, Unresolved
+from finn.dataflow._engine import Answer, Decided, RequestError, Unresolved
 from finn.dataflow.model.declarations import AuthoringError, Decision, Problem, Space
 from finn.dataflow.model.occurrence import VariantView
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.association import SourceAssociation
-from finn.dataflow.ops.source import SourceError, SourceNode
+from finn.dataflow.ops.source import SourceNode
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from onnx import NodeProto  # type: ignore[import-not-found]
@@ -471,12 +471,6 @@ def unresolved_reason(answer: Answer[Any]) -> str:
     return f"{kind}: {codes}"
 
 
-def qualified(path: str) -> QualifiedPath:
-    """A ``QualifiedPath`` from a string, for callers that already hold one."""
-
-    return QualifiedPath(path)
-
-
 __all__ = [
     "BOOL_CODEC",
     "DATAFLOW_DOMAIN",
@@ -493,7 +487,5 @@ __all__ = [
     "DecisionAttribute",
     "PersistentAttribute",
     "SelectorAttribute",
-    "SourceError",
-    "cast",
     "unresolved_reason",
 ]
