@@ -64,7 +64,9 @@ class VVAU_rtl(VVAU, RTLBackend):
                 # the second input are the weights
                 # the third input are the thresholds
                 if in_ind == 0:
-                    assert str(context[inputs].dtype) == "float32", """Input datatype is
+                    assert (
+                        str(context[inputs].dtype) == "float32"
+                    ), """Input datatype is
                     not float32 as expected."""
                     expected_inp_shape = self.get_folded_input_shape()
                     reshaped_input = context[inputs].reshape(expected_inp_shape)
@@ -129,7 +131,9 @@ class VVAU_rtl(VVAU, RTLBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )
 
     def lut_estimation(self):
@@ -234,8 +238,12 @@ class VVAU_rtl(VVAU, RTLBackend):
         # ~0.741 ns seems the worst-case delay through first DSP
         # ~0.605 ns seems to be (on average) delay for all subsequent DSPs
         # clk >= (critical_path_dsps - 1) * 0.605 + 0.741
-        assert clk > 0.741, """Infeasible clk target of {} ns has been set,
-        consider lowering the targeted clock frequency!""".format(clk)
+        assert (
+            clk > 0.741
+        ), """Infeasible clk target of {} ns has been set,
+        consider lowering the targeted clock frequency!""".format(
+            clk
+        )
         critical_path_dsps = np.floor((clk - 0.741) / 0.605 + 1)
         max_chain_len = np.ceil(self.get_nodeattr("SIMD") / 3)
         dsp_chain_len = critical_path_dsps if critical_path_dsps < max_chain_len else max_chain_len
@@ -251,9 +259,9 @@ class VVAU_rtl(VVAU, RTLBackend):
             self.onnx_node.name
         )
         is_versal_family = is_versal(fpgapart)
-        assert is_versal_family, (
-            "DSP-based (RTL) VVU currently only supported on Versal (DSP58) devices"
-        )
+        assert (
+            is_versal_family
+        ), "DSP-based (RTL) VVU currently only supported on Versal (DSP58) devices"
 
         return 3
 

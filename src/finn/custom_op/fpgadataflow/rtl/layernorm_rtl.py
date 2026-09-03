@@ -39,7 +39,9 @@ class LayerNorm_rtl(LayerNorm, RTLBackend):
         simd = self.get_nodeattr("SIMD")
         topname = self.get_verilog_top_module_name()
         n = self.get_normal_input_shape()[-1]
-        assert n % simd == 0, """Requirement N (last dim) divisable by SIMD is violated.
+        assert (
+            n % simd == 0
+        ), """Requirement N (last dim) divisable by SIMD is violated.
             Please set SIMD to a different value"""
         code_gen_dict = {
             "$N$": int(n),
@@ -125,7 +127,9 @@ class LayerNorm_rtl(LayerNorm, RTLBackend):
         simd = self.get_nodeattr("SIMD")
         idim = self.get_normal_input_shape()
         n = idim[-1]
-        assert n % simd == 0, """Requirement N (last dim) divisable by SIMD is violated.
+        assert (
+            n % simd == 0
+        ), """Requirement N (last dim) divisable by SIMD is violated.
             Please set SIMD to a different value"""
         val_queue_len_0 = n // simd + math.ceil(math.log2(simd)) * 2 + 7
         val_queue_len_1 = n // simd + math.ceil(math.log2(simd)) * 2 + 24

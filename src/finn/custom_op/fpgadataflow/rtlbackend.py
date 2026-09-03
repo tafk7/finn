@@ -142,12 +142,14 @@ class RTLBackend(ABC):
                 output = np.asarray([output], dtype=np.float32).reshape(*exp_oshape)
                 context[outp] = output
 
-                assert context[outp].shape == exp_oshape, (
-                    "Output shape doesn't match expected shape."
-                )
+                assert (
+                    context[outp].shape == exp_oshape
+                ), "Output shape doesn't match expected shape."
 
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following value ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following value ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )

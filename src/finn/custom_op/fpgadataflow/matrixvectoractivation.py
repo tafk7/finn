@@ -216,7 +216,9 @@ class MVAU(HWCustomOp):
         else:
             info_messages.append(
                 """noActivation attribute contains {} should
-                be 0 or 1""".format(no_act)
+                be 0 or 1""".format(
+                    no_act
+                )
             )
         return info_messages
 
@@ -591,7 +593,9 @@ class MVAU(HWCustomOp):
         pe = self.get_nodeattr("PE")
         tmem = mh // pe
         assert mh % pe == 0, "Requirement MH divisable by PE is violated."
-        assert orig_thres_matrix.ndim == 2, """Threshold matrix dimension is
+        assert (
+            orig_thres_matrix.ndim == 2
+        ), """Threshold matrix dimension is
         not as expected (2)."""
         n_thres_steps = orig_thres_matrix.shape[1]
         inp_is_bipolar = self.get_input_datatype(0) == DataType["BIPOLAR"]
@@ -614,11 +618,17 @@ class MVAU(HWCustomOp):
         assert ret.shape[0] == mh, "Channels of threshold matrix are not as expected (mh)"
         # distribute rows between PEs
         ret = interleave_matrix_outer_dim_from_partitions(ret, pe)
-        assert ret.shape[0] == pe, """First dimension after distribution of the
+        assert (
+            ret.shape[0] == pe
+        ), """First dimension after distribution of the
         rows between PEs is not as expected (pe)"""
-        assert ret.shape[1] == tmem, """Second dimension after distribution of the
+        assert (
+            ret.shape[1] == tmem
+        ), """Second dimension after distribution of the
         rows between PEs is not as expected (tmem)"""
-        assert ret.shape[2] == n_thres_steps, """Third dimension after distribution of the
+        assert (
+            ret.shape[2] == n_thres_steps
+        ), """Third dimension after distribution of the
         rows between PEs is not as expected (n_thres_steps)"""
         return ret.reshape(1, pe, tmem, n_thres_steps)
 
@@ -874,12 +884,11 @@ class MVAU(HWCustomOp):
                 wt_is_bipolar = wt_is_bipolar or (wt_is_binary and bin_xnor_mode)
                 # get computed threshold datatype from tensor
                 tdt = model.get_tensor_datatype(self.onnx_node.input[2])
-                assert np.vectorize(tdt.allowed)(threshold_tensor).all(), (
-                    "Thresholds in %s can't be expressed with type %s"
-                    % (
-                        self.onnx_node.name,
-                        str(tdt),
-                    )
+                assert np.vectorize(tdt.allowed)(
+                    threshold_tensor
+                ).all(), "Thresholds in %s can't be expressed with type %s" % (
+                    self.onnx_node.name,
+                    str(tdt),
                 )
                 thresholds_hls_code = numpy_to_hls_code(
                     threshold_tensor, tdt, "thresholds", False, True
@@ -1004,7 +1013,9 @@ class MVAU(HWCustomOp):
                 self.generate_hdl_memstream(
                     fpgapart,
                     pumped_memory=self.get_nodeattr("pumpedMemory"),
-                    allow_missing_initializer=bool(self.get_nodeattr("runtime_writeable_weights")),
+                    allow_missing_initializer=bool(
+                        self.get_nodeattr("runtime_writeable_weights")
+                    ),
                 )
 
     def code_generation_ipi(self):

@@ -79,12 +79,11 @@ class Pad1D_rtl(Pad1D, RTLBackend):
 
         pad_values = self._get_pad_values(model, ind)
 
-        assert np.vectorize(dtype.allowed)(pad_values).all(), (
-            "Pad1D %s pad values cannot be represented with %s"
-            % (
-                self._get_pad_side_name(ind),
-                dtype.name,
-            )
+        assert np.vectorize(dtype.allowed)(
+            pad_values
+        ).all(), "Pad1D %s pad values cannot be represented with %s" % (
+            self._get_pad_side_name(ind),
+            dtype.name,
         )
 
         packed = 0
@@ -207,5 +206,7 @@ class Pad1D_rtl(Pad1D, RTLBackend):
         else:
             raise Exception(
                 """Invalid value for attribute exec_mode! Is currently set to: {}
-            has to be set to one of the following values ("cppsim", "rtlsim")""".format(mode)
+            has to be set to one of the following values ("cppsim", "rtlsim")""".format(
+                    mode
+                )
             )
