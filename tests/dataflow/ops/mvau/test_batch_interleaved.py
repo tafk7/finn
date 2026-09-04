@@ -55,6 +55,9 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import (
     BatchInterleavedDesign,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.model.declarations import derived
+from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, InputTensor, OutputTensor
+from finn.dataflow.ops.state import decode_dataflow_state
 from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port as baseline_weight_port,
 )
@@ -618,3 +621,170 @@ def test_the_aliased_slots_are_two_distinct_persistable_subtrees() -> None:
     paths = {item.path for item in occurrence_persistable(_aliased_root())}
     assert "aliased.compute.first_slot.compute_pumping" in paths
     assert "aliased.compute.second_slot.compute_pumping" in paths
+
+
+# -- and the same aliasing, persisted through a real node --------------------
+
+
+class _AliasedOp(DataflowOp):
+    """A whole operation over the aliased Design, so persistence is end to end.
+
+    The path-level tests above prove the two slots have distinct persistable
+    identities.  That is necessary and not sufficient: what a caller relies on
+    is that a *document written to a node* replays into the slot it named, and
+    the seam between "the walk found this path" and "the file said this" is
+    exactly where an aliased candidate could go wrong without any path test
+    noticing.
+    """
+
+    family = "test.aliased_mvau"
+    family_version = "1"
+
+    activation = InputTensor(index=0)
+    weight = InputTensor(index=1)
+    output = OutputTensor(index=0)
+
+    accumulator_type = DatatypeAttribute(default="INT32", onnx="accDataType")
+    target_dsp = BuildFact(DspBlock, accessor=lambda build: build.target_dsp)
+    clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
+
+    @derived(int, shape=weight.shape)
+    def matrix_width(*, shape: tuple[int, ...]) -> object:
+        return shape[0]
+
+    @derived(int, shape=weight.shape)
+    def matrix_height(*, shape: tuple[int, ...]) -> object:
+        return shape[1]
+
+    @derived(int, shape=activation.shape)
+    def repetitions(*, shape: tuple[int, ...]) -> object:
+        total = 1
+        for extent in shape[:-1]:
+            total *= extent
+        return total
+
+    @derived(bool, shape=weight.shape)
+    def narrow_weights(*, shape: tuple[int, ...]) -> object:
+        del shape
+        return False
+
+    @derived(MvauComputationProfile, shape=weight.shape)
+    def profile(*, shape: tuple[int, ...]) -> object:
+        del shape
+        return MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.NONE)
+
+    design = Subspace(
+        _AliasedDesign,
+        name="aliased",
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation_type=activation.datatype,
+        weight_type=weight.datatype,
+        accumulator_type=accumulator_type,
+        output_type=accumulator_type,
+        narrow_weights=narrow_weights,
+        target_dsp=target_dsp,
+        clock_period_ns=clock_period_ns,
+        computation_profile=profile,
+    )
+
+    def selected_dataflow(self) -> Any:
+        return cast(Any, self.design).dataflow  # type: ignore[attr-defined]
+
+
+def _aliased_model() -> Any:
+    node = helper.make_node(
+        "_AliasedOp",
+        ["activation", "weight"],
+        ["output"],
+        domain=DATAFLOW_DOMAIN,
+        name="aliased0",
+        accDataType="INT32",
+    )
+    graph = helper.make_graph(
+        [node],
+        "aliased",
+        [_tensor("activation", (4, 8))],
+        [_tensor("output", (4, 4))],
+        value_info=[_tensor("weight", (8, 4))],
+    )
+    model = ModelWrapper(
+        helper.make_model(
+            graph,
+            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+        )
+    )
+    model.set_tensor_datatype("activation", DataType["INT8"])
+    model.set_tensor_datatype("weight", DataType["INT8"])
+    model.set_tensor_datatype("output", DataType["INT32"])
+    model.set_initializer("weight", np.ones((8, 4), dtype=np.float32))
+    assign_dataflow_scope_ids(model, domain=DATAFLOW_DOMAIN)
+    return model
+
+
+def _configure_alias(model: Any, slot: str, *, pumped: bool, fresh: bool = False) -> Any:
+    """Select one slot and commit a Decision that lives *inside* it.
+
+    ``fresh`` reconstructs first, which is how a *structural* choice is
+    changed: an immutable point does not rebase a committed selector, so
+    switching slots means a point that never had the first one.
+    """
+
+    operation = _AliasedOp(model.graph.node[0], 1).bind(model, Build())
+    if fresh:
+        operation = operation.reconstruct()
+    design = cast(Any, operation.design)
+    chosen = design.compute.select(slot).root
+    kernel = cast(Any, chosen.design).kernel("compute")
+    assert isinstance(kernel, Decided)
+    chosen = kernel.value.assign(DotpAxiKernel.compute_pumping, pumped).root
+    for declaration, value in (
+        (WeightedDotProductDesign.pe, 2),
+        (WeightedDotProductDesign.simd, 2),
+        (BatchInterleavedDesign.interleave, 2),
+    ):
+        chosen = cast(Any, chosen.design).assign(declaration, value).root
+    return chosen.commit(model, Build())
+
+
+@pytest.mark.parametrize("slot", ["first_slot", "second_slot"])
+def test_an_aliased_slot_survives_a_real_save_and_reload(slot: str, tmp_path: Path) -> None:
+    other = "second_slot" if slot == "first_slot" else "first_slot"
+
+    model = _aliased_model()
+    committed = _configure_alias(model, slot, pumped=True)
+    recorded = dict(committed.recorded())
+    assert recorded["aliased.compute.kernel"] == slot
+    assert recorded[f"aliased.compute.{slot}.compute_pumping"] is True
+
+    path = tmp_path / f"{slot}.onnx"
+    model.save(str(path))
+    reloaded = ModelWrapper(str(path))
+    restored = _AliasedOp(reloaded.graph.node[0], 1).bind(reloaded, Build())
+    returned = dict(restored.recorded())
+
+    assert returned == recorded
+    assert returned["aliased.compute.kernel"] == slot
+    assert returned[f"aliased.compute.{slot}.compute_pumping"] is True
+
+    # And nothing came back under the alias that was not chosen -- neither in
+    # the replayed point nor in the document on the node.
+    assert not any(name.startswith(f"aliased.compute.{other}.") for name in returned)
+    document = decode_dataflow_state(reloaded.graph.node[0])
+    assert document is not None
+    assert not any(name.startswith(f"aliased.compute.{other}.") for name in document.assignments)
+    assert document.assignments["aliased.compute.kernel"].value == slot
+
+
+def test_switching_the_alias_leaves_the_other_slots_decision_behind() -> None:
+    """The prune is by *slot*, not by Kernel class -- which here are not the same."""
+
+    model = _aliased_model()
+    _configure_alias(model, "first_slot", pumped=True)
+    committed = _configure_alias(model, "second_slot", pumped=False, fresh=True)
+
+    recorded = dict(committed.recorded())
+    assert recorded["aliased.compute.kernel"] == "second_slot"
+    assert recorded["aliased.compute.second_slot.compute_pumping"] is False
+    assert "aliased.compute.first_slot.compute_pumping" not in recorded

@@ -86,6 +86,25 @@ SOURCE_FIXTURES = (
         thresholds=[[10.0], [20.0]],
         output_type="UINT2",
     ),
+    #: The same threshold shape and datatype with *different* contents, and
+    #: again with the same contents.  Without all three, a fingerprint
+    #: comparison has one non-absent digest to look at and can say nothing
+    #: about content sensitivity -- which is the whole property a fingerprint
+    #: exists to have.
+    fixture(
+        "fused_threshold_other_values",
+        no_activation=False,
+        weights=_NARROW,
+        thresholds=[[11.0], [21.0]],
+        output_type="UINT2",
+    ),
+    fixture(
+        "fused_threshold_same_values",
+        no_activation=False,
+        weights=_NARROW,
+        thresholds=[[10.0], [20.0]],
+        output_type="UINT2",
+    ),
     fixture(
         "xnor_popcount",
         binary_xnor=True,
@@ -104,6 +123,14 @@ SOURCE_FIXTURES = (
         accumulator_type="INT8",
     ),
     fixture("runtime_writable", weights=_NARROW, runtime_writable=True),
+    #: A contract that says *no*: distinct from no contract at all, and the two
+    #: must not be spelled the same way.
+    fixture(
+        "runtime_writable_false_contract",
+        weights=_NARROW,
+        runtime_writable=True,
+        runtime_range_contract=False,
+    ),
     fixture(
         "runtime_writable_with_contract",
         weights=_NARROW,
@@ -170,6 +197,22 @@ PROFILE_FIXTURES = (
 )
 
 
+#: The effective-narrowness selection rule, as six cases and their expected
+#: answers.  The rule is *which source applies*, not what either source says:
+#: a baked matrix is judged by its values, a runtime-writable one only by the
+#: caller's contract -- and reading the initializer for a matrix about to be
+#: overwritten would narrow the hardware on the strength of weights that are
+#: about to stop existing.
+NARROWNESS_ROWS = (
+    ("static_excludes_minimum", "plain_integer", True),
+    ("static_contains_minimum", "wide_weights", False),
+    ("no_initializer", "no_initializer", False),
+    ("runtime_no_contract", "runtime_writable", False),
+    ("runtime_false_contract", "runtime_writable_false_contract", False),
+    ("runtime_true_contract", "runtime_writable_with_contract", True),
+)
+
+
 def by_name(name: str) -> dict[str, Any]:
     for item in PROFILE_FIXTURES:
         if item["name"] == name:
@@ -195,6 +238,7 @@ def activation_values(spec: dict[str, Any]) -> list[list[float]]:
 
 __all__ = [
     "BUILD",
+    "NARROWNESS_ROWS",
     "PROFILE_FIXTURES",
     "PROFILE_ROWS",
     "SOURCE_FIXTURES",

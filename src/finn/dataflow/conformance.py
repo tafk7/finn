@@ -152,6 +152,7 @@ def assert_dataflow_op_conforms(
 
     _effects_write_nothing(model, configured)
     _a_mismatched_build_cannot_change_the_graph(model, configured, case)
+    _a_fresh_rebind_reads_the_graph_again(case, bound)
 
     committed = configured.commit(model, case.build)
     _require(committed.is_bound, "commit returns a bound occurrence")
@@ -159,12 +160,73 @@ def assert_dataflow_op_conforms(
         decode_dataflow_state(_node(model, case.node_name)) is not None,
         "the commit wrote a state document to the node",
     )
+    _the_committed_occurrence_describes_the_post_commit_node(case, model, committed)
 
     restored = _survives_a_save_and_reload(case, committed)
     _staleness_is_reported_and_a_stale_plan_changes_nothing(case, model)
     _executes_with_an_attached_model(case)
 
     return DataflowOpConformanceResult(committed, restored)
+
+
+def _a_fresh_rebind_reads_the_graph_again(case: DataflowOpConformanceCase, bound: Any) -> None:
+    """A frozen source stays frozen; ``rebind`` is how a caller gets a new one.
+
+    Both halves matter and only together. An occurrence that quietly re-read the
+    graph would make every answer depend on when it was asked; one that had no
+    way to re-read it would be stuck describing a node that no longer exists.
+    So the bound occurrence keeps its snapshot across an edit, and the
+    explicitly rebound successor observes the edit.
+
+    Run *before* the commit, deliberately: after one, a document written against
+    the old problem is refused on the way in — which is a different promise, and
+    is checked separately.
+    """
+
+    if case.mutate_problem is None:
+        return
+    from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found] # noqa: PLC0415
+
+    edited = ModelWrapper(case.model.model, make_deepcopy=True)
+    case.mutate_problem(edited)
+
+    frozen = bound.source
+    rebound = bound.rebind(edited, case.build)
+
+    _require(
+        bound.source is frozen,
+        "the original occurrence still holds the source it froze",
+    )
+    _require(
+        rebound.problem_fingerprint != bound.problem_fingerprint,
+        "an explicit rebind over a changed graph observes a changed problem",
+    )
+    _require(
+        rebound.binding.node_bytes != bound.binding.node_bytes or rebound.source != bound.source,
+        "the rebound occurrence read the graph again rather than reusing the snapshot",
+    )
+
+
+def _the_committed_occurrence_describes_the_post_commit_node(
+    case: DataflowOpConformanceCase, model: Any, committed: Any
+) -> None:
+    """``commit`` continues the lifecycle; it does not end it at the mutation.
+
+    Returning the live node, or an occurrence still bound to the pre-commit
+    graph, would leave every later question being answered from the graph as it
+    was *before* the caller's own commit — and that failure looks like a
+    successful commit, which is worse than an error.
+    """
+
+    node = _node(model, case.node_name)
+    _require(
+        committed.binding.node_bytes == node.SerializeToString(deterministic=True),
+        "the returned occurrence froze the bytes of the node the commit produced",
+    )
+    _require(
+        not committed.is_stale((model, case.build)),
+        "the returned occurrence is not stale against the model it just committed to",
+    )
 
 
 def _recorded_refuses_on_an_unbound_wrapper(unbound: Any) -> None:
@@ -242,7 +304,7 @@ def _a_mismatched_build_cannot_change_the_graph(
 
 def _survives_a_save_and_reload(case: DataflowOpConformanceCase, committed: Any) -> Any:
     case.model.save(str(case.reload_path))
-    from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found] # noqa: PLC0415
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
 
     reloaded_model = ModelWrapper(str(case.reload_path))
     restored = _unbound(reloaded_model, case.node_name).bind(reloaded_model, case.build)

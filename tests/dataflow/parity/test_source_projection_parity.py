@@ -45,6 +45,10 @@ def _entry(name: str) -> dict[str, Any]:
     return dict(_report()["fixtures"][name])
 
 
+def _spec(name: str) -> dict[str, Any]:
+    return next(item for item in SPECS if item["name"] == name)
+
+
 # -- the table itself ---------------------------------------------------------
 
 
@@ -136,7 +140,8 @@ def test_the_initializer_fingerprints_agree_about_which_nodes_differ(field: str)
     A fingerprint's contract is that a node's identity moves when its values do.
     Two stacks can keep that promise with different hash functions, and
     demanding equal digests would be pinning an implementation detail as though
-    it were the contract.
+    it were the contract.  What is comparable is the *partition*: which fixtures
+    each stack considers to have the same initializer.
     """
 
     entry = next(item for item in PROBLEM_TABLE if item.oracle == field)
@@ -152,11 +157,67 @@ def test_the_initializer_fingerprints_agree_about_which_nodes_differ(field: str)
         local_groups.setdefault(local_value, set()).add(spec["name"])
 
     assert sorted(map(sorted, oracle_groups.values())) == sorted(map(sorted, local_groups.values()))
-    absent = {spec["name"] for spec in SPECS if spec["weights"] is None}
-    if field == "weight_initializer_fingerprint" and absent:
-        assert oracle_groups.get(MISSING, set()) | {""} >= absent or any(
-            absent <= group for group in local_groups.values()
+
+
+def test_the_threshold_fingerprint_is_sensitive_to_contents() -> None:
+    """Same shape, same datatype, different numbers -- a different fingerprint.
+
+    The property a fingerprint exists to have, and one the fixture set could
+    not previously establish: with a single non-absent threshold digest, every
+    partition is trivially equal and a stack that hashed only the shape would
+    pass.  Three fixtures make it a real question -- two identical, one
+    different -- and it is asked of both stacks separately rather than of the
+    comparison between them.
+    """
+
+    same_a = _entry("fused_threshold")
+    same_b = _entry("fused_threshold_same_values")
+    different = _entry("fused_threshold_other_values")
+    read = next(
+        item for item in PROBLEM_TABLE if item.oracle == "threshold_initializer_fingerprint"
+    )
+    assert read.read_oracle is not None and read.read_local is not None
+
+    oracle = tuple(read.read_oracle(item) for item in (same_a, same_b, different))
+    assert oracle[0] == oracle[1], "the oracle gives equal contents one fingerprint"
+    assert oracle[0] != oracle[2], "and different contents another"
+
+    local = tuple(
+        read.read_local(bound(_spec(name), BUILD)[1])
+        for name in (
+            "fused_threshold",
+            "fused_threshold_same_values",
+            "fused_threshold_other_values",
         )
+    )
+    assert local[0] == local[1]
+    assert local[0] != local[2]
+
+    # The shapes and datatypes really were equal, so the difference cannot be
+    # coming from anything but the values.
+    for name in ("fused_threshold_same_values", "fused_threshold_other_values"):
+        _model, occurrence = bound(_spec(name), BUILD)
+        _reference, base = bound(_spec("fused_threshold"), BUILD)
+        assert occurrence.source.operand("threshold").shape == (
+            base.source.operand("threshold").shape
+        )
+        assert occurrence.source.operand("threshold").datatype == (
+            base.source.operand("threshold").datatype
+        )
+
+
+def test_the_weight_fingerprint_is_absent_exactly_when_the_initializer_is() -> None:
+    """Absence is a value here, and must not be spelled like a digest."""
+
+    entry = next(item for item in PROBLEM_TABLE if item.oracle == "weight_initializer_fingerprint")
+    assert entry.read_local is not None
+    for spec in SPECS:
+        _model, occurrence = bound(spec, BUILD)
+        value = entry.read_local(occurrence)
+        if spec["weights"] is None:
+            assert value is MISSING, spec["name"]
+        else:
+            assert isinstance(value, str) and value, spec["name"]
 
 
 # -- verification -------------------------------------------------------------
