@@ -6,7 +6,7 @@
 The operation is thin on purpose.  Everything below it -- the folding, the
 Regions, the topology, the weight path -- belongs to the Designs and the
 Kernels, and everything above it belongs to the graph.  What lives here is the
-part only this operation can say: which two Designs are its alternatives, how a
+part only this operation can say: which Designs are its alternatives, how a
 matrix-vector node's tensors become the facts they read, and where each of
 those tensors ends up in whichever Network is selected.
 
@@ -51,6 +51,7 @@ from finn.dataflow.ops.mvau.computation import (
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
+from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
 from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
     SuppliedDotProductDesign,
@@ -473,6 +474,20 @@ class MvauDataflowOp(DataflowOp):
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
+            ),
+            "batch_interleaved": Subspace(
+                BatchInterleavedDesign,
+                repetitions=repetitions,
+                matrix_width=matrix_width,
+                matrix_height=matrix_height,
+                activation_type=activation.datatype,
+                weight_type=weight.datatype,
+                accumulator_type=accumulator_type,
+                output_type=accumulator_type,
+                narrow_weights=effective_narrow_weights,
+                computation_profile=profile,
+                target_dsp=target_dsp,
+                clock_period_ns=clock_period_ns,
             ),
         },
     )

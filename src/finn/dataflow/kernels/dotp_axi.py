@@ -277,6 +277,142 @@ def construct_embedded_dot_product_region(
     )
 
 
+def construct_batch_interleaved_dot_product_region(
+    repetitions: int,
+    matrix_width: int,
+    matrix_height: int,
+    activation_type: NumericElementType,
+    weight_type: NumericElementType,
+    output_type: NumericElementType,
+    pe: int,
+    simd: int,
+    interleave: int,
+) -> DataflowRegion:
+    """The same arithmetic with one weight tile amortized over ``interleave`` rows.
+
+    A *third* Region, and semantic for the same reason the embedded one is: the
+    weight tile arrives in ``interleave`` chunks of ``PE * SIMD / interleave``
+    elements instead of one full tile per iteration, and elements-per-beat is
+    part of the boundary contract.  A consumer of this Network sees a different
+    weight stream, so this cannot be a mode of the streamed Region.
+
+    It also does **not** consume a replayed activation.  Each activation row is
+    presented once and reused across the interleaved iterations, so the
+    activation port carries the compact sequence and the schedule grows a fourth
+    level rather than the replay Kernel growing a Region.  That is why the
+    Design over this Kernel places one node and not two.
+
+    ``interleave`` must be greater than one -- at one this is exactly the
+    streamed Region, and two spellings of one Region is how a design space ends
+    up with two points that mean the same thing.
+    """
+
+    dimensions = (repetitions, matrix_width, matrix_height, pe, simd, interleave)
+    if any(type(value) is not int or value <= 0 for value in dimensions):
+        raise RegionRefused("dot-product dimensions and folding must be positive integers")
+    if matrix_width % simd:
+        raise RegionRefused("SIMD must divide matrix_width exactly")
+    if matrix_height % pe:
+        raise RegionRefused("PE must divide matrix_height exactly")
+    if interleave <= 1:
+        raise RegionRefused("interleave must be greater than one; at one this is the streamed form")
+    if repetitions % interleave:
+        raise RegionRefused("interleave must divide repetitions exactly")
+    if (pe * simd) % interleave:
+        raise RegionRefused("interleave must divide PE * SIMD exactly")
+
+    batches = repetitions // interleave
+    neuron_folds = matrix_height // pe
+    synapse_folds = matrix_width // simd
+    weight_fields = pe * simd // interleave
+    schedule = LogicalSchedule(
+        (
+            ScheduleLevel("batch", batches),
+            ScheduleLevel("nf", neuron_folds),
+            ScheduleLevel("sf", synapse_folds),
+            ScheduleLevel("t", interleave),
+        )
+    )
+    activation = Operand("X", activation_type, (repetitions, matrix_width))
+    weight = Operand("W", weight_type, (matrix_height, matrix_width))
+    output = Operand("Y", output_type, (repetitions, matrix_height))
+
+    activation_requirements: dict[RequirementKey, int] = {
+        (
+            (batch, neuron_fold, synapse_fold, reuse),
+            (batch * interleave + reuse, synapse_fold * simd + lane),
+        ): 1
+        for batch in range(batches)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+        for reuse in range(interleave)
+        for lane in range(simd)
+    }
+    weight_requirements: dict[RequirementKey, int] = {
+        (
+            (batch, neuron_fold, synapse_fold, reuse),
+            (neuron_fold * pe + pe_index, synapse_fold * simd + lane),
+        ): 1
+        for batch in range(batches)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+        for reuse in range(interleave)
+        for pe_index in range(pe)
+        for lane in range(simd)
+    }
+    availability_entries: dict[Coordinate, Coordinate] = {
+        (batch * interleave + reuse, neuron_fold * pe + pe_index): (
+            batch,
+            neuron_fold,
+            synapse_folds - 1,
+            reuse,
+        )
+        for batch in range(batches)
+        for neuron_fold in range(neuron_folds)
+        for reuse in range(interleave)
+        for pe_index in range(pe)
+    }
+    weight_beats = tuple(
+        tuple(
+            (
+                neuron_fold * pe + (chunk * weight_fields + field) // simd,
+                synapse_fold * simd + (chunk * weight_fields + field) % simd,
+            )
+            for field in range(weight_fields)
+        )
+        for _batch in range(batches)
+        for neuron_fold in range(neuron_folds)
+        for synapse_fold in range(synapse_folds)
+        for chunk in range(interleave)
+    )
+    activation_beats = tuple(
+        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
+        for repetition in range(repetitions)
+        for synapse_fold in range(synapse_folds)
+    )
+    return DataflowRegion(
+        schedule,
+        (
+            InputInterface(
+                Port("activation", activation, BeatSequence(simd, activation_beats)),
+                ScheduledInputRequirements(activation_requirements),
+            ),
+            InputInterface(
+                Port("weight", weight, BeatSequence(weight_fields, weight_beats)),
+                ScheduledInputRequirements(weight_requirements),
+            ),
+        ),
+        (
+            OutputInterface(
+                Port(
+                    "output", output, BeatSequence(pe, _output_beats(repetitions, neuron_folds, pe))
+                ),
+                ScheduledOutputAvailability(availability_entries),
+            ),
+        ),
+    )
+
+
 def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
     name = datatype.name
     return any(
@@ -697,13 +833,64 @@ class EmbeddedDotpAxiKernel(DotpAxiKernel):
         )
 
 
+class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
+    """The dot product with one weight tile amortized over several rows.
+
+    Everything about the arithmetic is DotpAxi's, so this inherits it -- the
+    same operand Inputs, the same physical parameter table, the same numeric and
+    packing constraints.  What differs is the Region: the weight tile arrives in
+    chunks and the activation is not replayed.
+
+    ``interleave`` arrives as an **Input**, not as a Decision here.  It is in
+    this Region's dependency closure, and a Region-visible choice belongs to the
+    enclosing Design -- the same rule that puts PE and SIMD there.
+
+    Its physical projection is explicitly unavailable.  No RTL in FinnLib
+    accepts a chunked weight stream: ``dotp_axi`` takes one ``PE * SIMD`` tile
+    per iteration and has no parameter that would change that.  Saying so with
+    ``PhysicallyUnsupported`` is the honest form -- the Region and the Network
+    are fully resolved, and the build unit genuinely does not exist.  Inventing
+    a parameter to make the table look complete would produce a build unit that
+    cannot be built and would report as though it could.
+    """
+
+    id = "dotp_axi_batch_interleaved"
+
+    #: Region-visible, and therefore the Design's to own.
+    interleave = Input(int)
+
+    region = Region(
+        family="mvau.dot_product.batch_interleaved",
+        version="1",
+        construct=construct_batch_interleaved_dot_product_region,
+        repetitions=DotpAxiKernel.repetitions,
+        matrix_width=DotpAxiKernel.matrix_width,
+        matrix_height=DotpAxiKernel.matrix_height,
+        activation_type=DotpAxiKernel.activation_type,
+        weight_type=DotpAxiKernel.weight_type,
+        output_type=DotpAxiKernel.output_type,
+        pe=DotpAxiKernel.pe,
+        simd=DotpAxiKernel.simd,
+        interleave=interleave,
+    )
+
+    @classmethod
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
+        raise PhysicallyUnsupported(
+            "no FinnLib core accepts a chunked weight stream; the interleaved build unit "
+            "does not exist yet"
+        )
+
+
 __all__ = [
     "DOT_PRODUCT_COMPUTATION",
+    "BatchInterleavedDotpAxiKernel",
     "DspBlock",
     "DotpAxiKernel",
     "EmbeddedDotpAxiKernel",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
+    "construct_batch_interleaved_dot_product_region",
     "construct_dot_product_region",
     "construct_embedded_dot_product_region",
 ]
