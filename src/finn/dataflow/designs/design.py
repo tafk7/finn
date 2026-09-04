@@ -1249,6 +1249,26 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
         for case in segment.cases
         for path in case.metadata.physical_only_constraints
     )
+    # ...and every *other* constraint a candidate declares, which is the half of
+    # the same claim that was missing: excluding the physical ones only means
+    # something if the rest are included.  Until this line the Design's
+    # feasibility set held its own two constraints alone, so a Kernel that
+    # refused its Region -- for a reason it had explicitly classified as
+    # semantic -- left the Network accepted, and the exclusion below had nothing
+    # to exclude from.
+    #
+    # An unselected candidate is not a problem and does not need guarding here:
+    # its constraints depend on a branch this point did not take, so the engine
+    # answers them Absent and reports them as *not applicable* rather than
+    # refused.  That is the same machinery a conditional segment already relies
+    # on, and it is why this can be a flat union over every case.
+    candidate_dataflow = frozenset(
+        declaration.path
+        for segment in segments
+        for case in segment.cases
+        for declaration in case.compiled.spec.constraints
+        if declaration.path not in physical_only
+    )
     feasibility_name = design.engine_name(
         design.constraint_set_names, "dataflow_accepts", "ConstraintGroup"
     )
@@ -1264,12 +1284,15 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
     # its own Decisions, those nested in Design-owned helper Spaces and generic
     # branches, and the segment selectors, which live in the Design namespace.
     design_decisions = internal_decisions - kernel_decisions
-    accepted = tuple(
-        path
-        for item in design.spec.constraint_sets
-        if item.name == feasibility_name
-        for path in item.constraints
-        if path not in physical_only
+    accepted = (
+        *(
+            path
+            for item in design.spec.constraint_sets
+            if item.name == feasibility_name
+            for path in item.constraints
+            if path not in physical_only
+        ),
+        *sorted(candidate_dataflow, key=str),
     )
     specification = replace(
         design.spec,

@@ -502,11 +502,15 @@ design.imported_decisions  # provenance
 ```
 
 The Network resolves from semantics alone. Its readiness profile lists the
-Network and the selected Regions and nothing else, and its constraint set
-excludes each candidate's `physical_support`, so a Kernel that cannot be built
-at this configuration still contributes a Region. `design_dataflow(engine,
-compiled, point)` is the same projection for a caller holding a compiled
-fragment.
+Network and the selected Regions and nothing else. Its constraint set holds the
+Design's own constraints **and every candidate constraint that is not
+physical-only**, so a Kernel refusing its Region refuses the Network, while one
+that cannot be *built* at this configuration still contributes a Region.
+Physical-only is a difference — `physical_support` minus `dataflow_support` — so
+a constraint an author classifies twice gates both projections rather than
+neither. An unselected candidate's constraints report as *not applicable*, not
+as refusals. `design_dataflow(engine, compiled, point)` is the same projection
+for a caller holding a compiled fragment.
 
 ## The production slice
 

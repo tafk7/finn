@@ -878,12 +878,27 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
 def _physical_only_constraints(
     declarations: Mapping[str, object], compiled: _CompiledSpace[K]
 ) -> frozenset[QualifiedPath]:
-    """The compiled paths of the constraints that gate the build unit alone."""
+    """The compiled paths of the constraints that gate the build unit *alone*.
+
+    "Alone" is the whole content of this function, and it is a **difference**
+    rather than a membership test.  An author may put one Constraint in both
+    groups -- a folding rule that is simultaneously a semantic requirement and a
+    build feasibility one is the ordinary case, not a corner -- and reading only
+    ``physical_support`` would classify it as physical-only.  The enclosing
+    Design excludes physical-only constraints from its Network question, so that
+    reading would silently stop a constraint from gating the Network its author
+    explicitly said it gates.  Declaring it twice must *add* a projection, never
+    remove one.
+    """
 
     group = declarations.get("physical_support")
     if not isinstance(group, ConstraintGroup):
         return frozenset()
-    owned = {id(item) for item in group.constraints}
+    shared = declarations.get("dataflow_support")
+    also_dataflow = (
+        {id(item) for item in shared.constraints} if isinstance(shared, ConstraintGroup) else set()
+    )
+    owned = {id(item) for item in group.constraints} - also_dataflow
     by_member = dict(compiled.constraint_members)
     return frozenset(
         by_member[name]

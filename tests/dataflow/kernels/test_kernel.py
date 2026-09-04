@@ -834,3 +834,103 @@ def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
     built = occurrence.assign(ToyKernel.pumped, True).physical.accepted_answer
     assert isinstance(built, Decided)
     assert built.value.kernel_id == "toy"
+
+
+# -- which projection each constraint gates -----------------------------------
+#
+# A Kernel classifies every constraint it declares, and a constraint may be
+# classified *twice*: a folding rule that is both a semantic requirement and a
+# build feasibility one is ordinary.  Declaring it in both groups must add a
+# projection, never remove one -- and the way it removed one was that
+# "physical-only" was read as membership in ``physical_support`` rather than as
+# a difference, so a shared constraint was excluded from the Design's Network
+# question that its author had explicitly said it gates.
+
+
+def _classified(*, shared: bool, physical: bool) -> frozenset[QualifiedPath]:
+    """One Kernel's physical-only set, for one classification of one constraint."""
+
+    class Classified(Kernel):
+        id = f"classified_{int(shared)}{int(physical)}"
+        computation = COMPUTATION
+        extent = Input(int)
+        lanes = Input(int)
+        region = Region(
+            family="test.copy", version="1", construct=_region, extent=extent, lanes=lanes
+        )
+
+        @constraint(lanes=lanes)
+        def lanes_supported(*, lanes: int) -> bool:
+            return lanes <= 2
+
+        if shared:
+            dataflow_support = ConstraintGroup(lanes_supported)
+        if physical:
+            physical_support = ConstraintGroup(lanes_supported, name="realizable")
+
+        @classmethod
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
+            return ComponentABI("classified", ())
+
+    harness, _kernel = _compiled()
+    compiled = _compile_space(
+        Classified, f"test.{Classified.id}", _bindings(harness), _allow_problem=False
+    )
+    return compiled.extension.physical_only_constraints
+
+
+def test_a_constraint_in_physical_support_alone_is_physical_only() -> None:
+    paths = _classified(shared=False, physical=True)
+    assert [path.value for path in paths] == ["constraint.test.classified_01.lanes_supported"]
+
+
+def test_a_constraint_in_both_groups_is_not_physical_only() -> None:
+    """The whole correction: two classifications add a projection, not subtract."""
+
+    assert _classified(shared=True, physical=True) == frozenset()
+
+
+def test_a_kernel_whose_groups_coincide_has_no_physical_only_constraints() -> None:
+    assert _classified(shared=True, physical=False) == frozenset()
+    assert _classified(shared=True, physical=True) == frozenset()
+
+
+def test_a_shared_constraint_still_gates_both_of_the_kernels_own_projections() -> None:
+    """Not physical-only does not mean not physical: it still refuses the build."""
+
+    class Shared(Kernel):
+        id = "shared_gate"
+        computation = COMPUTATION
+        extent = Input(int)
+        lanes = Input(int)
+        region = Region(
+            family="test.copy", version="1", construct=_region, extent=extent, lanes=lanes
+        )
+
+        @constraint(lanes=lanes)
+        def lanes_supported(*, lanes: int) -> bool:
+            return lanes <= 2
+
+        dataflow_support = ConstraintGroup(lanes_supported)
+        physical_support = ConstraintGroup(lanes_supported, name="realizable")
+
+        @classmethod
+        def component_abi(cls, parameters: Scalars) -> ComponentABI:
+            return ComponentABI("shared", ())
+
+    harness, _kernel = _compiled()
+    compiled = _compile_space(Shared, "test.shared_gate", _bindings(harness), _allow_problem=False)
+    engine = Engine()
+    point = engine.start(
+        engine.validate(assemble_specs((harness.spec, compiled.spec))),
+        {"problem.test.extent": 8},
+    )
+    refusing = engine.commit_assignments(point, {"test.lanes": 4}).point
+
+    dataflow = kernel_dataflow(engine, compiled, refusing)
+    assert isinstance(dataflow.accepted_answer, Absent)
+    physical = kernel_physical(engine, compiled, refusing)
+    assert isinstance(physical.accepted_answer, Absent)
+
+    accepting = engine.commit_assignments(point, {"test.lanes": 2}).point
+    assert kernel_dataflow(engine, compiled, accepting).accepted_answer == Decided(_region(8, 2))

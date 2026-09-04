@@ -23,12 +23,14 @@ from finn.dataflow.model.compiler import _Ref, _compile_space
 from finn.dataflow.model.occurrence import is_attached_occurrence
 from finn.dataflow.model.declarations import (
     AuthoringError,
+    ConstraintGroup,
     Decision,
     Input,
     Variant,
     Problem,
     Space,
     Subspace,
+    constraint,
     derived,
     divisors_of,
 )
@@ -38,6 +40,7 @@ from finn.dataflow.designs.design import (
     DataflowDesign,
     Kernels,
     Sink,
+    design_dataflow,
 )
 from finn.dataflow.model.occurrence import VariantView
 from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
@@ -1223,3 +1226,114 @@ def test_the_design_occurrence_is_attached_and_answers_its_own_declarations() ->
     assert design.region_family("produce") == Decided(("test.produce", "1"))
     with pytest.raises(AttributeError, match="only on an attached Space occurrence"):
         _ = Chain.__new__(Chain).extent
+
+
+# -- which of a candidate's constraints gate the Network -----------------------
+#
+# U3's claim has two halves and only one of them was implemented.  Excluding a
+# candidate's ``physical_support`` from the Design's question means nothing
+# unless the *rest* of that candidate's constraints are in it -- and they were
+# not, so a Kernel that refused its own Region for a reason it had classified
+# as semantic left the Network accepted.
+
+
+def _consumer_with(name: str, verdict: bool, *, physical: bool):
+    """One consumer Kernel whose single constraint is classified either way."""
+
+    class Classified(Kernel):
+        id = name
+        computation = CONSUME
+        extent = Input(int)
+        lanes = Input(int)
+        region = Region(
+            family="test.consume",
+            version="1",
+            construct=_consumer_region,
+            extent=extent,
+            lanes=lanes,
+        )
+
+        @constraint(lanes=lanes)
+        def supported(*, lanes: int) -> bool:
+            return verdict
+
+        if physical:
+            physical_support = ConstraintGroup(supported, name="realizable")
+        else:
+            dataflow_support = ConstraintGroup(supported)
+
+        @classmethod
+        def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
+            return ComponentABI(name, ())
+
+    Classified.__name__ = name
+    return Classified
+
+
+def _chain_over(*candidates: type[Kernel]) -> type[DataflowDesign]:
+    # The declarations are built here rather than in the class body because a
+    # generator expression there cannot see the class namespace.
+    declared_extent = Input(int)
+    declared_lanes = Input(int)
+    cases = tuple(
+        Subspace(item, extent=declared_extent, lanes=declared_lanes) for item in candidates
+    )
+
+    class Classified(DataflowDesign):
+        id = "classified_chain"
+        version = "1"
+        extent = declared_extent
+        lanes = declared_lanes
+
+        produce = Kernels(
+            Subspace(ProducerKernel, extent=declared_extent, lanes=declared_lanes),
+            computation=PRODUCE,
+        )
+        consume = Kernels(*cases, computation=CONSUME)
+        stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
+        source = Boundary(produce.input("source"))
+        result = Boundary(consume.output("result"))
+
+    return Classified
+
+
+def _network_verdict(design_type: type[DataflowDesign], **assignments: object) -> object:
+    engine, point, design = _started(design_type)
+    if assignments:
+        point = engine.commit_assignments(point, assignments).point
+    return design_dataflow(engine, design, point)
+
+
+def test_a_candidates_semantic_refusal_refuses_the_network() -> None:
+    """A Kernel that says its Region is wrong here is not overruled by silence."""
+
+    assessment = _network_verdict(_chain_over(_consumer_with("semantic", False, physical=False)))
+    assert isinstance(assessment.accepted_answer, Absent)
+    assert assessment.constraints[0].verdict is False
+
+
+def test_a_candidates_build_refusal_does_not_refuse_the_network() -> None:
+    """The other half, unchanged: an unbuildable Kernel still contributes a Region."""
+
+    assessment = _network_verdict(_chain_over(_consumer_with("buildable", False, physical=True)))
+    assert isinstance(assessment.accepted_answer, Decided)
+
+
+def test_an_unselected_candidates_refusal_is_not_applicable_rather_than_a_refusal() -> None:
+    """Every candidate's constraints are in the set; only the selected one answers."""
+
+    accepting = _consumer_with("accepting", True, physical=False)
+    refusing = _consumer_with("refusing", False, physical=False)
+    design_type = _chain_over(accepting, refusing)
+
+    chosen = _network_verdict(design_type, **{"root.design.consume.kernel": "accepting"})
+    assert isinstance(chosen.accepted_answer, Decided)
+    assessment = chosen.constraints[0]
+    assert assessment.verdict is True
+    assert any(
+        path.value == "constraint.root.design.consume.refusing.supported"
+        for path in assessment.not_applicable
+    )
+
+    other = _network_verdict(design_type, **{"root.design.consume.kernel": "refusing"})
+    assert isinstance(other.accepted_answer, Absent)
