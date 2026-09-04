@@ -34,6 +34,7 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow._engine import Decided
+from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.model.declarations import AuthoringError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.mvau.computation import (
@@ -795,3 +796,60 @@ def test_verification_does_not_replay_recorded_choices() -> None:
     model.set_tensor_shape("activation", [4, MATRIX_WIDTH])
 
     assert verify_nodes(model) == {"MvauDataflowOp": []}
+
+
+# -- what the build configuration owes -------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoClockBuild:
+    """A configuration missing a fact this operation declares as required."""
+
+    target_dsp: DspBlock = DspBlock.DSP58
+
+
+@dataclass(frozen=True)
+class EmptyClockBuild(Build):
+    """A configuration that supplies the attribute and sets it to nothing."""
+
+    synth_clk_period_ns: Any = None
+
+
+def test_a_required_build_fact_that_is_missing_fails_loudly() -> None:
+    """The Problem is absence-tolerant; the *configuration* is not let off."""
+
+    model = _model()
+
+    with pytest.raises(DataflowOpError, match="clock_period_ns"):
+        _unbound(model, "mvau0").bind(model, NoClockBuild())
+
+
+def test_a_required_build_fact_supplied_as_none_fails_the_same_way() -> None:
+    """Supplying the attribute and setting it to nothing has supplied nothing."""
+
+    model = _model()
+
+    with pytest.raises(DataflowOpError, match="clock_period_ns"):
+        _unbound(model, "mvau0").bind(model, EmptyClockBuild())
+
+
+def test_a_valid_build_still_binds() -> None:
+    model = _model()
+
+    assert _unbound(model, "mvau0").bind(model, Build()).is_bound
+
+
+def test_an_optional_build_fact_that_is_absent_becomes_an_absent_problem() -> None:
+    """And a reader has to say what it does about that, rather than get a default."""
+
+    operation = _bound(_model())
+
+    assert not isinstance(operation.answer(MvauDataflowOp.runtime_weight_range_contract), Decided)
+    # The optional fact that *does* declare a default uses it.
+    assert operation.answer(MvauDataflowOp.runtime_writable_weights) == Decided(False)
+
+
+def test_verification_still_needs_no_build_at_all() -> None:
+    """The property the absence-tolerant Problem exists for, kept."""
+
+    assert verify_nodes(_model()) == {"MvauDataflowOp": []}

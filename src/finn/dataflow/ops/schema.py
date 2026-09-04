@@ -275,6 +275,17 @@ class BuildFact(Problem[Any]):
     accessor: Callable[[Any], Any] = bool
     default: Any = None
     member_name: str = ""
+    #: Whether the *build configuration* must supply this fact.
+    #:
+    #: Deliberately a second field, and not ``Problem.required``.  They are two
+    #: different claims about two different things, and collapsing them loses
+    #: one of the two: as one flag it must be ``False`` so that an occurrence
+    #: can start with no build at all -- which QONNX's shape, datatype and
+    #: verification passes need -- and a ``False`` read back at extraction time
+    #: turns a missing ``synth_clk_period_ns`` from a loud refusal into a
+    #: silent ``None``.  So the Problem is always absence-tolerant and this
+    #: says what the configuration owes.
+    build_required: bool = True
 
     def __init__(
         self,
@@ -286,17 +297,12 @@ class BuildFact(Problem[Any]):
     ) -> None:
         if not callable(accessor):
             raise AuthoringError("a BuildFact needs a callable accessor")
-        # ``required`` is a claim about the *build configuration*, enforced when
-        # the accessor runs, and deliberately not about the Problem.  A Problem
-        # that refuses to start without a build value would make the whole
-        # occurrence unavailable to the questions that need no build at all --
-        # QONNX's shape, datatype and verification passes, which run on a graph
-        # long before anybody has chosen a target.
         Problem.__init__(self, value_type, required=False)
         object.__setattr__(self, "value_type", value_type)
         object.__setattr__(self, "accessor", accessor)
         object.__setattr__(self, "default", default)
         object.__setattr__(self, "member_name", "")
+        object.__setattr__(self, "build_required", required)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)

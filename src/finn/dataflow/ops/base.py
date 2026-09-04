@@ -1253,15 +1253,37 @@ def _build_value(
     declaration: BuildFact,
     build: Any,
 ) -> object:
+    """One build scalar, or a refusal naming what the configuration owes.
+
+    ``build_required`` and not ``Problem.required``: the Problem is always
+    absence-tolerant so that an occurrence can start with no build at all, and
+    reading that flag here would mean every build fact is optional -- a missing
+    clock period would silently become ``None`` and travel into a Design as an
+    unresolved Input, reported as a folding problem rather than a
+    configuration one.
+
+    A ``None`` result is checked as strictly as a raising accessor: a
+    configuration that supplies the attribute and sets it to nothing has
+    supplied nothing.
+    """
+
     try:
-        return declaration.accessor(build)
+        value = declaration.accessor(build)
     except (AttributeError, KeyError, TypeError) as error:
-        if declaration.required and declaration.default is None:
+        if declaration.build_required and declaration.default is None:
             raise DataflowOpError(
                 f"{operation_type.__name__} needs build fact {member_name!r}, and this "
                 f"build configuration does not supply it: {error}"
             ) from error
         return declaration.default
+    if value is None:
+        if declaration.build_required and declaration.default is None:
+            raise DataflowOpError(
+                f"{operation_type.__name__} needs build fact {member_name!r}, and this "
+                "build configuration supplies nothing for it"
+            )
+        return declaration.default
+    return value
 
 
 def _check_recorded_identity(
