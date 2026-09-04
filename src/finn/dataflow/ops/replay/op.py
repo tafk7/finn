@@ -191,17 +191,12 @@ class ActivationReplayOp(DataflowOp):
         rows = activation.reshape(-1, activation.shape[-1])
         context[node.output[0]] = numpy.repeat(rows, folds, axis=0).reshape(expected)
 
-    def verify_node(self) -> list[str]:
-        """The same constraints the projection uses, as QONNX expects them."""
-
-        assessment = self.assess(type(self).source_accepts)
-        if assessment.verdict is True:
-            return []
-        return [
-            finding.message
-            for answer in assessment.answers.values()
-            for finding in getattr(answer, "findings", ())
-        ]
+    # ``verify_node`` is deliberately *not* overridden.  This class used to
+    # carry a copy that called ``assess`` directly, which requires an attached
+    # occurrence -- so verification crashed on the path FINN actually takes,
+    # where ``verify_nodes(model)`` holds an ordinary unbound wrapper.  The
+    # generic form on DataflowOp goes through ``assess_source()``, which answers
+    # bound or not, and there is no reason for an operation to have its own.
 
     def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
         activation = source.operand("activation")
