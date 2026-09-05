@@ -18,7 +18,7 @@ Four layers share that frontend and lower to one flat spec:
 
 ```text
 Space                  ordinary declarations, direct Subspace composition,
-                       and Variant structural choice
+                       and SubspaceChoice structural choice
    |
 Kernel(Space)          semantic Inputs, physical-only Decisions,
                        one Region(family, version, construct, **deps)
@@ -134,14 +134,14 @@ at all:
 
 ```python
 root.left.assign(Tile.lanes, 2)  # the exact member that places the child
-variant = root.implementation  # the bound VariantView
-variant.alternatives  # ("fast", "small")
-variant.selected()  # Answer[str]
-variant = variant.select("fast")  # ordinary selector assignment
-fast = variant.alternative("fast")
+choice = root.implementation  # the bound ChoiceView
+choice.alternatives  # ("fast", "small")
+choice.selected()  # Answer[str]
+choice = choice.select("fast")  # ordinary selector assignment
+fast = choice.alternative("fast")
 ```
 
-A `VariantView` exposes alternative ids, selection, and exact alternative views
+A `ChoiceView` exposes alternative ids, selection, and exact alternative views
 without exposing its generated selector path. `answer`, `assign`, `assess` and
 `project` accept declarations, never path strings.
 
@@ -157,7 +157,8 @@ protocol names are reserved the same way -- `_new_occurrence`
 `_finalize_compilation` `_occurrence_state` `_space_value` `_implicit_exports`
 `exports` -- against a *declaration* bound to them, never against overriding the
 method or metadata itself. Both checks are on the Python member name only, so
-`choice = Variant(..., name="branch")` keeps the compiled path `<ns>.branch`.
+`choice = SubspaceChoice(..., name="branch")` keeps the compiled path
+`<ns>.branch`.
 
 Two error kinds and no third. A malformed or out-of-scope declaration, a
 malformed `Projection`, a reserved name or a Problem value with no canonical
@@ -396,10 +397,10 @@ Design-owned fact.
 
 ## Structural variation
 
-A `Variant` owns an ordered mapping from stable alternative id to `Subspace`:
+A `SubspaceChoice` owns an ordered mapping from stable alternative id to `Subspace`:
 
 ```python
-implementation = Variant(
+implementation = SubspaceChoice(
     {
         "fast": Subspace(FastImplementation, extent=extent),
         "small": Subspace(SmallImplementation, extent=extent),
@@ -418,10 +419,28 @@ vocabularies and unrelated Space classes.
 There is one nested-space declaration, not two. The mapping key *is* the
 alternative id, so nothing restates it; the exclusivity, the selector and the
 selected outputs all belong to the container. A per-alternative `when=` is
-refused during this phase: the Variant owns the outer condition, and
+refused during this phase: the choice owns the outer condition, and
 candidate-specific applicability is a separate question no case has yet forced.
 Internal compiler vocabulary -- `BranchCatalog`, `BranchInfo`, `CaseInfo` --
 still describes the lowered branch IR and is not the authoring vocabulary.
+
+A layer specializes a choice through three methods and nothing else:
+`candidate_id(subspace)` names a candidate that already carries its own stable
+id, so nothing writes that id twice; `validate_candidate(owner, subspace)`
+refuses a candidate the layer does not admit, and the caller -- `admit_candidate`
+-- says which member declared it; `default_outputs()` supplies the selected
+outputs the layer implies. A specialization that takes positional candidates
+initializes through `_from_candidates`. Everything else -- selector creation,
+gating, namespaces, forwarding, the view, and the persistence identity -- is the
+one generic implementation, and a specialization neither overrides nor
+duplicates it. `selector_name` renames the generated selector; it does not add
+a second one.
+
+The compiled root-relative declaration name is the stable persistence identity.
+`name=` overrides the local segment, and there is no second naming mechanism:
+`occurrence_persistable()` reports every selector and `Decision` beneath one
+root under that name, selectors first, with the root namespace removed so the
+same document reloads under any root. This package writes nothing down itself.
 
 The declaration stores no selection algorithm. `compile_space_model()` returns
 the ordinary spec plus a `BranchCatalog` of namespaces, selector paths, case ids,
@@ -461,9 +480,11 @@ class ExampleDesign(DataflowDesign):
     result = Boundary(consume.output("output"))
 ```
 
-`Kernels` is a thin `Variant` specialization. It adds the required
-`ComputationContract` that every candidate must declare, the implicit selected
-Region output, and the stable Design role and Network node id. Its alternatives
+`Kernels` is a thin `SubspaceChoice` specialization written through the
+three-method seam -- `candidate_id`, `validate_candidate`, `default_outputs` --
+and nothing else. It adds the required `ComputationContract` that every
+candidate must declare, the implicit selected Region output, and the stable
+Design role and Network node id. Its alternatives
 are positional rather than a mapping because a Kernel already carries its own
 stable `id`, and that id *is* the alternative id; `Subspace(..., name=...)`
 aliases it, which is what lets one Kernel class fill two candidate slots. Roles,

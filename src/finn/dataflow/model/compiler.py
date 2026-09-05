@@ -68,7 +68,7 @@ from finn.dataflow.model.declarations import (
     Subspace,
     Unresolvable,
     ValueSource,
-    Variant,
+    SubspaceChoice,
     check_reserved_names,
     declared_members,
     exported_members,
@@ -250,6 +250,33 @@ class _CompiledSpace(Generic[S]):
             raise AuthoringError(f"{self.owner.__name__} has no Projection {name!r}") from None
 
 
+def admit_candidate(
+    owner: type[Space],
+    member_name: str,
+    declaration: SubspaceChoice,
+    subspace: Subspace[Space],
+) -> None:
+    """Run one specialization's admission rule and say which member refused.
+
+    The one place a ``SubspaceChoice`` specialization's ``validate_candidate``
+    is called and its refusal is attributed.  The seam method receives the
+    owning class and the candidate, never a pair of strings to interpolate:
+    where the declaration is written is the *caller's* fact, and a
+    specialization that had to restate it would be one more place for the member
+    name to go stale.
+
+    Public because admission is sometimes worth running before compilation --
+    a layer that is about to consume a candidate's exports gets a useful
+    message instead of a true but unhelpful one -- and because running it early
+    must not mean writing the rule, or its attribution, a second time.
+    """
+
+    try:
+        declaration.validate_candidate(owner, subspace)
+    except AuthoringError as error:
+        raise AuthoringError(f"{owner.__name__}.{member_name}: {error}") from error
+
+
 def _path(prefix: str, name: str) -> QualifiedPath:
     return QualifiedPath(f"{prefix}.{name}")
 
@@ -331,7 +358,9 @@ class _Compilation:
         self.compiling_uses: set[int] = set()
         self.branches: dict[int, _CompiledBranch] = {}
         self.branch_names = {
-            id(value): name for name, value in self.declarations if isinstance(value, Variant)
+            id(value): name
+            for name, value in self.declarations
+            if isinstance(value, SubspaceChoice)
         }
         self.compiling_branches: set[int] = set()
         self.branch_decisions: dict[int, EngineDecision] = {}
@@ -343,14 +372,14 @@ class _Compilation:
         for name, declaration in self.declarations:
             if isinstance(declaration, Subspace):
                 self._compile_use(name, declaration)
-            elif isinstance(declaration, Variant):
+            elif isinstance(declaration, SubspaceChoice):
                 self._compile_branch(name, declaration)
         local = self._local_spec()
         children: list[DesignSpaceSpec] = []
         for _name, declaration in self.declarations:
             if isinstance(declaration, Subspace):
                 children.append(self.uses[id(declaration)].spec)
-            elif isinstance(declaration, Variant):
+            elif isinstance(declaration, SubspaceChoice):
                 children.extend(case.compiled.spec for case in self.branches[id(declaration)].cases)
         specification = assemble_specs((local, *children))
         if self.applies_if is not None:
@@ -372,7 +401,7 @@ class _Compilation:
         branches = tuple(
             (name, self.branches[id(declaration)])
             for name, declaration in self.declarations
-            if isinstance(declaration, Variant)
+            if isinstance(declaration, SubspaceChoice)
         )
         projections = tuple(
             (name, self._compile_projection(name, declaration))
@@ -484,7 +513,7 @@ class _Compilation:
         for _name, declaration in self.declarations:
             if isinstance(declaration, Subspace):
                 collected.extend(self.uses[id(declaration)].catalog.branches)
-            elif isinstance(declaration, Variant):
+            elif isinstance(declaration, SubspaceChoice):
                 record = self.branches[id(declaration)]
                 collected.append(record.info)
                 for case in record.cases:
@@ -501,10 +530,12 @@ class _Compilation:
                 absence=AbsenceMode.ALLOWS_ABSENT,
             )
         if isinstance(source, BranchOutput):
-            branch = source.variant
+            branch = source.choice
             branch_name = self.branch_names.get(id(branch))
             if branch_name is None:
-                raise AuthoringError("a selected output belongs to a Variant outside this Space")
+                raise AuthoringError(
+                    "a selected output belongs to a SubspaceChoice outside this Space"
+                )
             return self._compile_branch(branch_name, branch).output(source.output_name)
         if isinstance(source, ChildValue):
             use = source.subspace
@@ -657,7 +688,7 @@ class _Compilation:
                         tuple(self._constraint_path(item) for item in declaration.constraints),
                     )
                 )
-            elif isinstance(declaration, Variant):
+            elif isinstance(declaration, SubspaceChoice):
                 selector = self.branch_decisions.get(id(declaration))
                 if selector is not None:
                     decisions.append(selector)
@@ -774,12 +805,14 @@ class _Compilation:
 
         return EvaluatorSpec((condition.dependency(name),), applies)
 
-    def _compile_branch(self, member_name: str, declaration: Variant) -> _CompiledBranch:
+    def _compile_branch(self, member_name: str, declaration: SubspaceChoice) -> _CompiledBranch:
         key = id(declaration)
         if key in self.branches:
             return self.branches[key]
         if key in self.compiling_branches:
-            raise AuthoringError(f"{self.space_type.__name__}.{member_name} forms a Variant cycle")
+            raise AuthoringError(
+                f"{self.space_type.__name__}.{member_name} forms a SubspaceChoice cycle"
+            )
         self.compiling_branches.add(key)
         try:
             record = self._build_branch(member_name, declaration)
@@ -788,7 +821,7 @@ class _Compilation:
         finally:
             self.compiling_branches.discard(key)
 
-    def _case_ids(self, member_name: str, declaration: Variant) -> tuple[str, ...]:
+    def _case_ids(self, member_name: str, declaration: SubspaceChoice) -> tuple[str, ...]:
         ids: list[str] = []
         for case_id, subspace in declaration.alternatives:
             if "." in case_id:
@@ -796,7 +829,7 @@ class _Compilation:
                     f"{self.space_type.__name__}.{member_name} alternative id {case_id!r} "
                     "contains a dot; an alternative id is one path segment of its namespace"
                 )
-            declaration.check_alternative(self.space_type.__name__, member_name, subspace)
+            self._admit_candidate(member_name, declaration, subspace)
             if case_id in ids:
                 raise AuthoringError(
                     f"{self.space_type.__name__}.{member_name} declares alternative id "
@@ -804,6 +837,14 @@ class _Compilation:
                 )
             ids.append(case_id)
         return tuple(ids)
+
+    def _admit_candidate(
+        self,
+        member_name: str,
+        declaration: SubspaceChoice,
+        subspace: Subspace[Space],
+    ) -> None:
+        admit_candidate(self.space_type, member_name, declaration, subspace)
 
     def _selected_output(
         self,
@@ -854,7 +895,7 @@ class _Compilation:
 
         return DerivedProperty(path, semantics, EvaluatorSpec(dependencies, forward))
 
-    def _build_branch(self, member_name: str, declaration: Variant) -> _CompiledBranch:
+    def _build_branch(self, member_name: str, declaration: SubspaceChoice) -> _CompiledBranch:
         branch_name = _local_name(member_name, declaration)
         namespace = f"{self.namespace}.{branch_name}"
         case_ids = self._case_ids(member_name, declaration)
@@ -1093,16 +1134,18 @@ def resolve_value_source(
     them here rather than reimplementing the walk.  Each partial copy of this
     was a place where one kind of source silently stopped composing: both
     handled ``ChildValue`` and neither handled ``BranchOutput``, so a value
-    selected by a ``Variant`` could not reach a Parameter or a topology condition
+    selected by a ``SubspaceChoice`` could not reach a Parameter or a topology condition
     even though the generic compiler understood it perfectly well.
     """
 
     owner = compiled.owner
     if isinstance(source, BranchOutput):
-        branches = _members_of(owner, (Variant,))
-        name = branches.get(id(source.variant))
+        branches = _members_of(owner, (SubspaceChoice,))
+        name = branches.get(id(source.choice))
         if name is None:
-            raise AuthoringError(f"{owner.__name__} {what} names a Variant outside the class")
+            raise AuthoringError(
+                f"{owner.__name__} {what} names a SubspaceChoice outside the class"
+            )
         return compiled.branch(name).output(source.output_name)
     if isinstance(source, ChildValue):
         children = _members_of(owner, (Subspace,))
@@ -1392,6 +1435,7 @@ def compile_space(
 __all__ = [
     "DeclarationOwner",
     "SpaceModel",
+    "admit_candidate",
     "answer_for",
     "resolve_value_source",
     "compile_space",

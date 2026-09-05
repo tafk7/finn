@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""KD3: ``DataflowDesign`` owns semantics and ``Kernels`` specializes ``Variant``."""
+"""KD3: ``DataflowDesign`` owns semantics and ``Kernels`` specializes ``SubspaceChoice``."""
 
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ from finn.dataflow.model.declarations import (
     Problem,
     Space,
     Subspace,
-    Variant,
+    SubspaceChoice,
     divisors_of,
 )
 from finn.dataflow.designs.design import Boundary, DataflowDesign, Kernels
-from finn.dataflow.model.occurrence import VariantView
+from finn.dataflow.model.occurrence import ChoiceView
 from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
 from finn.dataflow.region import (
     BeatSequence,
@@ -218,10 +218,10 @@ def _occurrence(
     root = root_type.start({root_type.extent: extent}, namespace="root")
     design = cast(DataflowDesign, root.assign(root_type.lanes, lanes).design)
     for role, alternative in (select or {}).items():
-        view = cast(VariantView, getattr(design, role))
+        view = cast(ChoiceView, getattr(design, role))
         design = cast(DataflowDesign, view.select(alternative).root.design)
     for role, alternative, declaration, value in kernel_decisions:
-        view = cast(VariantView, getattr(design, role))
+        view = cast(ChoiceView, getattr(design, role))
         kernel = view.alternative(alternative)
         design = cast(DataflowDesign, kernel.assign(declaration, value).root.design)
     return design
@@ -486,7 +486,7 @@ def test_one_external_algorithm_selects_a_kernel_through_generic_branch_info() -
 def test_kernels_reuses_generic_branch_compilation() -> None:
     """No second candidate catalog, no coverage object, no binding object."""
 
-    assert issubclass(Kernels, Variant)
+    assert issubclass(Kernels, SubspaceChoice)
     _harness, design = _compiled(Alternatives)
     assert not hasattr(design, "coverage")
     assert not hasattr(design, "bindings")

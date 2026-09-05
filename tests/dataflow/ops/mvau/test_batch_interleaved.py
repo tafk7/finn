@@ -7,7 +7,7 @@ The point of this module is not that batch interleaving works -- the Region
 mathematics was retained from U1.5 and is compared against here, not rewritten.
 It is that adding a third alternative, with a Decision of its own, needed no new
 persistence code, no new Design mechanism, and no change to the operation beyond
-one entry in its Variant.  Every claim below is a claim about *that*.
+one entry in its SubspaceChoice.  Every claim below is a claim about *that*.
 """
 
 from __future__ import annotations

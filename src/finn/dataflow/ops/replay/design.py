@@ -4,9 +4,9 @@
 """One segment, one Kernel, two boundaries.
 
 The smallest Design that is still a Design.  Its value here is negative: it has
-no Variant, so nothing in the operation layer may assume a selector exists; it
-has one node, so nothing may assume an edge; and it has no weight path, so
-nothing may assume a matrix.
+no SubspaceChoice, so nothing in the operation layer may assume a selector
+exists; it has one node, so nothing may assume an edge; and it has no weight
+path, so nothing may assume a matrix.
 """
 
 from __future__ import annotations

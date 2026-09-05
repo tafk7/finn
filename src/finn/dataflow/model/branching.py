@@ -3,16 +3,17 @@
 
 """The policy-neutral inspection seam for compiled structural variation.
 
-A ``Variant`` declaration lowers to ordinary engine declarations, and the engine
-deliberately does not model "these five decisions belong to one alternative".
+A ``SubspaceChoice`` declaration lowers to ordinary engine declarations, and
+the engine deliberately does not model "these five decisions belong to one
+alternative".
 That relationship is what a specialization algorithm needs, so the compiler
 publishes it here as immutable paths and case structure.
 
 Branch and case are the *lowered* vocabulary and stay so: ``BranchCatalog``,
 ``BranchInfo`` and ``CaseInfo`` describe the flat IR a specialization policy
 reads, not the authoring surface, where the two names are ``Subspace`` and
-``Variant``.  A ``CaseInfo.id`` is the alternative id its ``Variant`` mapping
-key gave it, in that mapping's iteration order.
+``SubspaceChoice``.  A ``CaseInfo.id`` is the alternative id its
+``SubspaceChoice`` mapping key gave it, in that mapping's iteration order.
 
 These values carry no evaluator, no point, no cost, no measurement service, and
 no chosen search policy.  An algorithm reads a :class:`BranchInfo`, enumerates

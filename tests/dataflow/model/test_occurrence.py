@@ -34,7 +34,7 @@ from finn.dataflow.model import (
     Decision,
     Input,
     OccurrenceContext,
-    Variant,
+    SubspaceChoice,
     Problem,
     Projection,
     ProjectionAssessment,
@@ -56,7 +56,7 @@ from finn.dataflow.model.compiler import (
 )
 from finn.dataflow.model.declarations import declared_members
 from finn.dataflow.model.occurrence import (
-    VariantView,
+    ChoiceView,
     _Lineage,
     _occurrence_state,
     _Runtime,
@@ -102,7 +102,7 @@ class Root(Space):
     mode = Decision(str, values=("small", "large"))
     left = Subspace(Leaf, supplied=size)
     right = Subspace(Leaf, supplied=size)
-    choice = Variant(
+    choice = SubspaceChoice(
         {"nested": Subspace(Nested, supplied=size), "direct": Subspace(Leaf, supplied=size)},
         outputs=("result",),
     )
@@ -165,10 +165,10 @@ def test_repeated_child_classes_require_an_exact_use_site() -> None:
     assert isinstance(right.answer(Leaf.result), Unresolved)
 
 
-def test_variant_views_select_and_navigate_alternatives_without_paths() -> None:
+def test_choice_views_select_and_navigate_alternatives_without_paths() -> None:
     root = Root.start({Root.size: 3})
     branch = root.choice
-    assert isinstance(branch, VariantView)
+    assert isinstance(branch, ChoiceView)
     assert branch.name == "choice"
     assert branch.alternatives == ("nested", "direct")
     assert isinstance(branch.selected(), Unresolved)
@@ -322,7 +322,7 @@ class _DiagRoot(Space):
     size = Problem(int)
     left = Subspace(_Watched, supplied=size)
     right = Subspace(_Watched, supplied=size)
-    pick = Variant(
+    pick = SubspaceChoice(
         {
             "nested": Subspace(_WatchedNest, supplied=size),
             "direct": Subspace(_Watched, supplied=size),
@@ -855,7 +855,7 @@ def test_a_query_never_commits_anything() -> None:
 def test_a_singleton_branch_is_selected_without_a_committed_decision() -> None:
     class Only(Space):
         size = Problem(int)
-        pick = Variant({"one": Subspace(Leaf, supplied=size)}, outputs=("result",))
+        pick = SubspaceChoice({"one": Subspace(Leaf, supplied=size)}, outputs=("result",))
 
     root = Only.start({Only.size: 2})
     branch = root.pick
@@ -1130,7 +1130,7 @@ class _FivePlacements(Space):
     size = Problem(int)
     pair = Subspace(_PlacedPair, supplied=size)
     solo = Subspace(_Placed, supplied=size)
-    pick = Variant(
+    pick = SubspaceChoice(
         {"one": Subspace(_Placed, supplied=size), "two": Subspace(_Placed, supplied=size)},
         outputs=("scaled",),
     )
@@ -1158,7 +1158,7 @@ def test_five_placements_of_one_class_are_five_distinct_occurrences() -> None:
     )
 
 
-def test_a_subspace_inside_a_variant_alternative_is_reached_by_naming_both() -> None:
+def test_a_subspace_inside_a_choice_alternative_is_reached_by_naming_both() -> None:
     root = Root.start({Root.size: 3})
     nested = root.choice.select("nested").alternative("nested")
     assert type(nested) is Nested
@@ -1308,7 +1308,7 @@ class _Falsey(Space):
 
     size = Problem(int)
     inner = Subspace(Leaf, supplied=size)
-    pick = Variant({"one": Subspace(Leaf, supplied=size)}, outputs=("result",))
+    pick = SubspaceChoice({"one": Subspace(Leaf, supplied=size)}, outputs=("result",))
 
     def __bool__(self) -> bool:
         return False
@@ -1513,40 +1513,40 @@ class _Narrow(Space):
 
 
 class _Heterogeneous(Space):
-    """One fixed Subspace beside a Variant over two unrelated Space classes."""
+    """One fixed Subspace beside a SubspaceChoice over two unrelated Space classes."""
 
     size = Problem(int)
     fixed = Subspace(_Wide, supplied=size)
-    implementation = Variant(
+    implementation = SubspaceChoice(
         {"wide": Subspace(_Wide, supplied=size), "narrow": Subspace(_Narrow, supplied=size)},
         outputs=("result",),
     )
 
 
-def test_a_variant_holds_heterogeneous_subspaces_and_stays_inferrable() -> None:
+def test_a_choice_holds_heterogeneous_subspaces_and_stays_inferrable() -> None:
     root = _Heterogeneous.start({_Heterogeneous.size: 5})
 
     # Class access is the declaration; instance access is the bound view.
     assert isinstance(_Heterogeneous.fixed, Subspace)
-    assert isinstance(_Heterogeneous.implementation, Variant)
-    assert isinstance(root.implementation, VariantView)
+    assert isinstance(_Heterogeneous.implementation, SubspaceChoice)
+    assert isinstance(root.implementation, ChoiceView)
 
     fixed = root.fixed
     assert type(fixed) is _Wide
     assert fixed.answer(_Wide.result) == Decided(6)
 
-    variant = root.implementation
-    assert variant.alternatives == ("wide", "narrow")
-    assert type(variant.alternative("wide")) is _Wide
-    assert type(variant.alternative("narrow")) is _Narrow
+    choice = root.implementation
+    assert choice.alternatives == ("wide", "narrow")
+    assert type(choice.alternative("wide")) is _Wide
+    assert type(choice.alternative("narrow")) is _Narrow
 
-    narrow = variant.select("narrow").alternative("narrow").assign(_Narrow.offset, 10)
+    narrow = choice.select("narrow").alternative("narrow").assign(_Narrow.offset, 10)
     assert narrow.answer(_Narrow.result) == Decided(-5)
     assert narrow.root.answer(_Heterogeneous.implementation.result) == Decided(-5)
 
 
 def test_a_conditional_subspace_keeps_its_own_when() -> None:
-    """``when=`` survives on a direct Subspace; only Variant members refuse it."""
+    """``when=`` survives on a direct Subspace; only SubspaceChoice members refuse it."""
 
     class Conditional(Space):
         size = Problem(int)
@@ -1564,7 +1564,7 @@ def test_a_descriptor_needs_an_attached_occurrence() -> None:
     class Plain(Space):
         size = Problem(int)
         inner = Subspace(Leaf, supplied=size)
-        pick = Variant({"one": Subspace(Leaf, supplied=size)}, outputs=("result",))
+        pick = SubspaceChoice({"one": Subspace(Leaf, supplied=size)}, outputs=("result",))
 
     plain = Plain()
     with pytest.raises(AttributeError, match="attached Space occurrence"):
@@ -1576,7 +1576,9 @@ def test_a_descriptor_needs_an_attached_occurrence() -> None:
 def test_a_stable_compiled_name_is_independent_of_its_python_member() -> None:
     class Aliased(Space):
         size = Problem(int)
-        choice = Variant({"one": Subspace(Leaf, supplied=size)}, outputs=("result",), name="branch")
+        choice = SubspaceChoice(
+            {"one": Subspace(Leaf, supplied=size)}, outputs=("result",), name="branch"
+        )
         held = Subspace(Leaf, supplied=size, name="child")
 
     specification = compile_space(Aliased, "root", problem_namespace="problem.root")

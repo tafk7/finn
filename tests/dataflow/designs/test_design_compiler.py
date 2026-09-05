@@ -26,7 +26,7 @@ from finn.dataflow.model.declarations import (
     ConstraintGroup,
     Decision,
     Input,
-    Variant,
+    SubspaceChoice,
     Problem,
     Space,
     Subspace,
@@ -42,7 +42,7 @@ from finn.dataflow.designs.design import (
     Sink,
     design_dataflow,
 )
-from finn.dataflow.model.occurrence import VariantView
+from finn.dataflow.model.occurrence import ChoiceView
 from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
 from finn.dataflow.network import (
     BoundaryContract,
@@ -780,12 +780,12 @@ def _occurrence(
     root = root_type.start({root_type.extent: extent}, namespace="root")
     design = cast(DataflowDesign, root.assign(root_type.lanes, lanes).design)
     for role, alternative in (select or {}).items():
-        view = cast(VariantView, getattr(design, role))
+        view = cast(ChoiceView, getattr(design, role))
         design = cast(DataflowDesign, view.select(alternative).root.design)
     for declaration, value in design_decisions:
         design = design.assign(declaration, value)
     for role, alternative, declaration, value in kernel_decisions:
-        view = cast(VariantView, getattr(design, role))
+        view = cast(ChoiceView, getattr(design, role))
         kernel = view.alternative(alternative)
         design = cast(DataflowDesign, kernel.assign(declaration, value).root.design)
     return design
@@ -1032,7 +1032,7 @@ def _nested(stages: int = 1) -> DataflowDesign:
 def _occurrence_assign_candidate(
     design: DataflowDesign, role: str, alternative: str, stages: int
 ) -> DataflowDesign:
-    view = cast(VariantView, getattr(design, role))
+    view = cast(ChoiceView, getattr(design, role))
     kernel = view.alternative(alternative)
     return cast(DataflowDesign, kernel.assign(PipelinedConsumerKernel.stages, stages).root.design)
 
@@ -1180,7 +1180,7 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         computation = CONSUME
         extent = Input(int)
         lanes = Input(int)
-        choice = Variant({"only": Subspace(Chooser, extent=extent)}, outputs=("depth",))
+        choice = SubspaceChoice({"only": Subspace(Chooser, extent=extent)}, outputs=("depth",))
         region = Region(
             family="test.consume",
             version="1",
@@ -1199,7 +1199,7 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        policy = Variant({"always": Subspace(Always, extent=extent)}, outputs=("flag",))
+        policy = SubspaceChoice({"always": Subspace(Always, extent=extent)}, outputs=("flag",))
         produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
         consume = Kernels(Subspace(Parameterized, extent=extent, lanes=lanes), computation=CONSUME)
         stream = Connection(produce.output("stream"), Sink(consume.input("stream")))

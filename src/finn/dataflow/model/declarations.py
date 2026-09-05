@@ -41,7 +41,7 @@ if TYPE_CHECKING:
         OccurrenceDiagnostic,
         ProblemSource,
         ProjectionAssessment,
-        VariantView,
+        ChoiceView,
     )
 
 
@@ -52,8 +52,8 @@ class AuthoringError(ValueError):
 #: Class-member names an authored Space may not use for a declaration, because
 #: each one is an occurrence lifecycle operation every authored class inherits.
 #: The check is on the *Python member name*, never on a declaration's stable
-#: compiled name: ``choice = Variant(..., name="branch")`` keeps the engine path
-#: ``<ns>.branch`` while leaving the Python member free.
+#: compiled name: ``choice = SubspaceChoice(..., name="branch")`` keeps the
+#: engine path ``<ns>.branch`` while leaving the Python member free.
 #:
 #: Eleven names, not thirteen: navigation is descriptor-based, so there is no
 #: ``Space.child`` or ``Space.branch`` for a declaration to shadow.  Any future
@@ -1034,7 +1034,7 @@ class Subspace(Generic[S]):
 
     A ``Subspace`` is the *only* nested-space declaration.  Used directly as a
     class member it denotes one fixed child occurrence; used as a value inside a
-    :class:`Variant` it denotes one alternative, and the mapping key -- not a
+    :class:`SubspaceChoice` it denotes one alternative, and the mapping key -- not a
     ``name=`` -- is that alternative's stable id.  There is no second
     ``Case``-shaped spelling for the second position, because the exclusivity,
     the selector and the selected outputs all belong to the container.
@@ -1100,37 +1100,37 @@ class Subspace(Generic[S]):
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
 class BranchOutput(ValueSource[T_co]):
-    """One selected output of a Variant, forwarded from the live alternative."""
+    """One selected output of a SubspaceChoice, forwarded from the live alternative."""
 
-    variant: Variant
+    choice: SubspaceChoice
     output_name: str
 
     def __init__(
         self,
         value_semantics: ValueSemantics[object],
-        variant: Variant,
+        choice: SubspaceChoice,
         output_name: str,
     ) -> None:
         object.__setattr__(self, "value_semantics", value_semantics)
         object.__setattr__(self, "stable_name", None)
-        object.__setattr__(self, "variant", variant)
+        object.__setattr__(self, "choice", choice)
         object.__setattr__(self, "output_name", output_name)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class Variant:
+class SubspaceChoice:
     """One structural choice: exactly one of several named alternative Subspaces.
 
-    ``Variant`` is declaration, never policy.  It says which alternatives exist,
-    lowers them beneath stable disjoint namespaces, and -- when there is more
-    than one -- adds one ordinary selector ``Decision``.  It stores no search
-    callback: an external specialization algorithm discovers the selector
+    ``SubspaceChoice`` is declaration, never policy.  It says which alternatives
+    exist, lowers them beneath stable disjoint namespaces, and -- when there is
+    more than one -- adds one ordinary selector ``Decision``.  It stores no
+    search callback: an external specialization algorithm discovers the selector
     through the compiled branch catalog and commits it like any other decision.
 
     The name states what the parent owns.  A parent does not own "a one-of"; it
-    owns a structural variation point, selected from alternatives it names::
+    owns a structural choice between Subspaces it names::
 
-        implementation = Variant(
+        implementation = SubspaceChoice(
             {
                 "fast": Subspace(FastImplementation, size=size),
                 "small": Subspace(SmallImplementation, size=size),
@@ -1139,16 +1139,33 @@ class Variant:
         )
 
     The mapping key is the alternative's stable id, so nothing repeats it.  A
-    per-alternative ``when=`` is refused: the Variant owns the outer condition
+    per-alternative ``when=`` is refused: the choice owns the outer condition
     and the selection, and candidate-specific applicability is a separate
     question that has not yet been forced.  Instance access returns the bound
-    :class:`VariantView`, never the declaration.
+    :class:`ChoiceView`, never the declaration.
+
+    **Stable identity.**  The compiled branch namespace is the Python member
+    name unless ``name=`` overrides it, exactly as for every other declaration.
+    That compiled, root-relative name is what a persistence layer writes the
+    selector down as, so ``name=`` is the one place an author decouples a
+    persisted choice from the member it happens to be spelled with::
+
+        design = SubspaceChoice({...}, name="dataflow_design")
+
+    This package still knows nothing about persistence; it only guarantees the
+    name is stable and collision-free.
+
+    **Specialization.**  A layer that needs more than a structural branch --
+    admission rules, ids the candidates already own, implied selected outputs --
+    subclasses this and overrides the three seam methods below.  It does not
+    reimplement selector creation, gating, namespaces, forwarding, or the view:
+    there is one of each, here and in the compiler.
 
     **Ordering.**  The mapping is consumed exactly once, at construction, in its
     own iteration order, and frozen into ``alternatives``.  That order is then
     the order of everything downstream: the selector's finite domain, the
     compiled case namespaces, ``BranchInfo.cases``, and
-    ``VariantView.alternatives``.  An ordinary ``dict`` literal therefore says
+    ``ChoiceView.alternatives``.  An ordinary ``dict`` literal therefore says
     what it looks like it says, and a caller who wants a different order writes
     a different literal or passes an ``OrderedDict``.  Nothing here introduces a
     second collection type to express that: the mapping a Python author already
@@ -1168,24 +1185,26 @@ class Variant:
         self,
         alternatives: Mapping[str, Subspace[Space]],
         *,
-        outputs: Sequence[str] = (),
+        outputs: Sequence[str] | None = None,
         when: ValueSource[bool] | None = None,
         name: str | None = None,
     ) -> None:
         if not isinstance(alternatives, Mapping):
-            raise AuthoringError("a Variant takes an ordered mapping of alternative id to Subspace")
+            raise AuthoringError(
+                "a SubspaceChoice takes an ordered mapping of alternative id to Subspace"
+            )
         ordered: list[tuple[str, Subspace[Space]]] = []
         for alternative_id, subspace in alternatives.items():
             if not isinstance(alternative_id, str) or not alternative_id:
-                raise AuthoringError("a Variant alternative id is a non-empty string")
+                raise AuthoringError("a SubspaceChoice alternative id is a non-empty string")
             if not isinstance(subspace, Subspace):
                 raise AuthoringError(
-                    f"Variant alternative {alternative_id!r} is a "
+                    f"SubspaceChoice alternative {alternative_id!r} is a "
                     f"{type(subspace).__name__}, not a Subspace"
                 )
             if subspace.stable_name is not None:
                 raise AuthoringError(
-                    f"Variant alternative {alternative_id!r} also carries name="
+                    f"SubspaceChoice alternative {alternative_id!r} also carries name="
                     f"{subspace.stable_name!r}; the mapping key is the alternative id"
                 )
             ordered.append((alternative_id, subspace))
@@ -1194,38 +1213,89 @@ class Variant:
     def _initialize(
         self,
         alternatives: Sequence[tuple[str, Subspace[Space]]],
-        outputs: Sequence[str],
+        outputs: Sequence[str] | None,
         when: ValueSource[bool] | None,
         name: str | None,
     ) -> None:
         if not alternatives:
-            raise AuthoringError("a Variant needs at least one alternative Subspace")
+            raise AuthoringError("a SubspaceChoice needs at least one alternative Subspace")
         for alternative_id, subspace in alternatives:
             if subspace.when is not None:
                 raise AuthoringError(
-                    f"Variant alternative {alternative_id!r} declares when=; a Variant owns "
-                    "the outer condition and the selection between its alternatives"
+                    f"SubspaceChoice alternative {alternative_id!r} declares when=; the choice "
+                    "owns the outer condition and the selection between its alternatives"
                 )
-        ordered = tuple(outputs)
+        ordered = self.default_outputs() if outputs is None else tuple(outputs)
         if len(set(ordered)) != len(ordered):
-            raise AuthoringError("a Variant names one selected output twice")
+            raise AuthoringError("a SubspaceChoice names one selected output twice")
         object.__setattr__(self, "alternatives", tuple(alternatives))
         object.__setattr__(self, "outputs", ordered)
         object.__setattr__(self, "when", when)
         object.__setattr__(self, "stable_name", name)
 
-    def check_alternative(
-        self, owner_name: str, member_name: str, subspace: Subspace[Space]
+    def _from_candidates(
+        self,
+        candidates: Sequence[Subspace[Space]],
+        *,
+        outputs: Sequence[str] | None = None,
+        when: ValueSource[bool] | None = None,
+        name: str | None = None,
     ) -> None:
-        """A specialization's own admission rule; a generic Variant has none."""
+        """Initialize from candidates that already carry their own stable ids.
 
-        del owner_name, member_name, subspace
+        The second half of the ``candidate_id`` seam, and the only reason it
+        exists: a specialization whose alternatives are self-naming cannot use
+        the mapping spelling without writing each id twice.  Everything after
+        this point -- selector, gating, namespaces, forwarding, view -- is the
+        generic path, unchanged.
+        """
+
+        named = tuple((self.candidate_id(candidate), candidate) for candidate in candidates)
+        self._initialize(named, outputs, when, name)
+
+    # -- the specialization seam ------------------------------------------
+    #
+    # Three methods, no compiler knowledge.  A layer overrides what it needs and
+    # inherits one selector, one gating rule, one view, and one persistence
+    # identity.  The compiler calls ``validate_candidate``; the other two are
+    # consumed at construction.
+
+    def candidate_id(self, subspace: Subspace[Space]) -> str:
+        """The stable alternative id of a self-naming candidate.
+
+        A generic choice never asks: its alternative ids are the mapping keys
+        the author already wrote.  Only a specialization using
+        ``_from_candidates`` overrides this.
+        """
+
+        del subspace
+        raise AuthoringError(
+            f"{type(self).__name__} names its alternatives with mapping keys; "
+            "override candidate_id to accept candidates that carry their own id"
+        )
+
+    def validate_candidate(self, owner: type[Space], subspace: Subspace[Space]) -> None:
+        """A specialization's own admission rule; a generic choice has none.
+
+        Raise :class:`AuthoringError` to refuse the candidate.  The compiler
+        names the offending member, so the message says only what is wrong with
+        the candidate itself.
+        """
+
+        del owner, subspace
+
+    def default_outputs(self) -> tuple[str, ...]:
+        """Selected outputs a specialization implies when the author names none."""
+
+        return ()
 
     def __getattr__(self, member_name: str) -> BranchOutput[object]:
         if member_name.startswith("_"):
             raise AttributeError(member_name)
         if member_name not in self.outputs:
-            raise AttributeError(f"this Variant does not select an output named {member_name!r}")
+            raise AttributeError(
+                f"this SubspaceChoice does not select an output named {member_name!r}"
+            )
         semantics = self._output_semantics(member_name)
         return BranchOutput(semantics, self, member_name)
 
@@ -1233,18 +1303,18 @@ class Variant:
     def __get__(self, instance: None, owner: type[object]) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object]) -> VariantView: ...
+    def __get__(self, instance: Space, owner: type[object]) -> ChoiceView: ...
 
-    def __get__(self, instance: Space | None, owner: type[object]) -> Self | VariantView:
+    def __get__(self, instance: Space | None, owner: type[object]) -> Self | ChoiceView:
         if instance is None:
             return self
         api = _occurrence_api()
         if not api.is_attached_occurrence(instance):
             raise AttributeError(
-                "a Variant view exists only on an attached Space occurrence; "
+                "a SubspaceChoice view exists only on an attached Space occurrence; "
                 f"start one with {type(instance).__name__}.start(...)"
             )
-        return cast("VariantView", api.occurrence_variant(instance, self))
+        return cast("ChoiceView", api.occurrence_choice(instance, self))
 
     def _output_semantics(self, output_name: str) -> ValueSemantics[object]:
         first: ValueSemantics[object] | None = None
@@ -1259,7 +1329,7 @@ class Variant:
                 first = declaration.value_semantics
             elif not first.is_compatible_with(declaration.value_semantics):
                 raise AuthoringError(
-                    f"Variant output {output_name!r} changes value semantics from "
+                    f"SubspaceChoice output {output_name!r} changes value semantics from "
                     f"{first.name} to {declaration.value_semantics.name}"
                 )
         assert first is not None
@@ -1276,7 +1346,7 @@ Declaration = Union[
     Readiness,
     Projection[object],
     Subspace[Space],
-    Variant,
+    SubspaceChoice,
 ]
 
 #: Every class-body value the declarative compiler recognizes as a declaration.
@@ -1290,7 +1360,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Readiness,
     Projection,
     Subspace,
-    Variant,
+    SubspaceChoice,
 )
 
 
@@ -1387,7 +1457,7 @@ __all__ = [
     "Subspace",
     "Unresolvable",
     "ValueSource",
-    "Variant",
+    "SubspaceChoice",
     "allow_absent",
     "check_canonical",
     "check_reserved_names",

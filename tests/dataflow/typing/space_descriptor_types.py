@@ -21,8 +21,8 @@ from finn.dataflow.model import (
     Problem,
     Space,
     Subspace,
-    Variant,
-    VariantView,
+    SubspaceChoice,
+    ChoiceView,
     compile_space_model,
     derived,
 )
@@ -53,7 +53,7 @@ class SmallImplementation(Space):
 class Pipeline(Space):
     size = Problem(int)
     fixed = Subspace(FixedImplementation, size=size)
-    implementation = Variant(
+    implementation = SubspaceChoice(
         {
             "fast": Subspace(FixedImplementation, size=size),
             "small": Subspace(SmallImplementation, size=size),
@@ -64,7 +64,7 @@ class Pipeline(Space):
 
 # Class access is the declaration; the Subspace keeps its concrete child type.
 assert_type(Pipeline.fixed, Subspace[FixedImplementation])
-assert_type(Pipeline.implementation, Variant)
+assert_type(Pipeline.implementation, SubspaceChoice)
 
 # The compiler service preserves the authored root class through the model.
 model = compile_space_model(Pipeline, "root", problem_namespace="problem.root")
@@ -77,11 +77,11 @@ assert_type(pipeline, Pipeline)
 
 # Instance access binds the exact use site.
 assert_type(pipeline.fixed, FixedImplementation)
-assert_type(pipeline.implementation, VariantView)
+assert_type(pipeline.implementation, ChoiceView)
 
 # And the bound view's own surface stays typed.
 assert_type(pipeline.implementation.alternatives, tuple[str, ...])
-assert_type(pipeline.implementation.select("fast"), VariantView)
+assert_type(pipeline.implementation.select("fast"), ChoiceView)
 assert_type(pipeline.implementation.alternative("fast"), Space)
 
 # A declared value read through an occurrence has its declared type.

@@ -22,7 +22,7 @@ from finn.dataflow.model import (
     Problem,
     Space,
     Subspace,
-    Variant,
+    SubspaceChoice,
     compile_space_model,
     finite,
 )
@@ -41,7 +41,7 @@ class Leaf(Space):
 
 
 class OtherLeaf(Leaf):
-    """A second child class, so a Variant has something to choose between."""
+    """A second child class, so a SubspaceChoice has something to choose between."""
 
     seen: list[OccurrenceContext] = []
 
@@ -51,7 +51,7 @@ class Bound(Space):
 
     width = Problem(int)
     child = Subspace(Leaf)
-    pick = Variant({"a": Subspace(Leaf), "b": Subspace(OtherLeaf)})
+    pick = SubspaceChoice({"a": Subspace(Leaf), "b": Subspace(OtherLeaf)})
 
     payload: object = None
 
