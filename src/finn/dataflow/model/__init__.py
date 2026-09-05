@@ -8,7 +8,7 @@ flat ``DesignSpaceSpec``:
 
 ```text
 Space          ordinary declarations, direct Subspace composition,
-               and Variant structural choice
+               and SubspaceChoice structural choice
    |
 SpaceModel[S]  the compiled, reusable model of one authored root
    |
@@ -27,15 +27,15 @@ nested DesignPoint, or a second answer lattice.
 
 **Fixed child versus structural choice.**  `Subspace(Child, ...)` used directly
 as a class member places one child Space; the same declaration used inside
-`Variant({"a": Subspace(A, ...), "b": Subspace(B, ...)})` places exactly one of
-several, keyed by the alternative id the mapping already gives it.  Several
+`SubspaceChoice({"a": Subspace(A, ...), "b": Subspace(B, ...)})` places exactly
+one of several, keyed by the alternative id the mapping already gives it.  Several
 alternatives add one ordinary selector `Decision` over those ids and gate every
 alternative fragment through it.  A singleton adds no selector but keeps the
 same selected-output paths, so adding an alternative later renames nothing that
 already existed.  Both are descriptors: `pipeline.fixed` is the child
-occurrence and `pipeline.implementation` is its bound `VariantView`.
+occurrence and `pipeline.implementation` is its bound `ChoiceView`.
 
-**Selection policy is not here.**  A Variant declaration stores no search
+**Selection policy is not here.**  A SubspaceChoice declaration stores no search
 callback.  The compiler publishes a `BranchCatalog` of paths and case structure;
 an external algorithm reads it, trials immutable successor points, and commits
 the ordinary selector.  `BranchInfo` carries no evaluator, point, cost, or
@@ -57,7 +57,12 @@ from finn.dataflow.model.branching import (
     BranchOutputInfo,
     CaseInfo,
 )
-from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_space_model
+from finn.dataflow.model.compiler import (
+    SpaceModel,
+    admit_candidate,
+    compile_space,
+    compile_space_model,
+)
 from finn.dataflow.model.declarations import (
     RESERVED_LIFECYCLE_NAMES,
     RESERVED_PROTOCOL_NAMES,
@@ -73,7 +78,7 @@ from finn.dataflow.model.declarations import (
     Readiness,
     Space,
     Subspace,
-    Variant,
+    SubspaceChoice,
     allow_absent,
     constraint,
     derived,
@@ -87,7 +92,7 @@ from finn.dataflow.model.occurrence import (
     OccurrenceDiagnostic,
     ProjectionAssessment,
     RootFactory,
-    VariantView,
+    ChoiceView,
 )
 
 __all__ = [
@@ -110,8 +115,8 @@ __all__ = [
     "Space",
     "Subspace",
     "RootFactory",
-    "Variant",
-    "VariantView",
+    "SubspaceChoice",
+    "ChoiceView",
     "allow_absent",
     "constraint",
     "derived",
@@ -126,6 +131,7 @@ __all__ = [
     "BranchOutputInfo",
     "CaseInfo",
     "SpaceModel",
+    "admit_candidate",
     "compile_space",
     "compile_space_model",
 ]

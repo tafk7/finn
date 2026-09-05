@@ -171,7 +171,7 @@ def structural_codec(token: object) -> PersistentCodec[Any] | None:
     return None
 
 
-#: A Variant selector's alternative id.  Given its own codec even though the
+#: A SubspaceChoice selector's alternative id.  Given its own codec even though the
 #: values are stable strings today, so that a future change to how a selection
 #: is written is a version bump rather than a silent reinterpretation.
 SELECTOR_CODEC: PersistentCodec[Any] = _exact(str, "dataflow.selector")

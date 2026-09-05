@@ -26,7 +26,7 @@ from finn.dataflow.model.declarations import (
     Readiness,
     Space,
     Subspace,
-    Variant,
+    SubspaceChoice,
     constraint,
     derived,
     reject,
@@ -89,7 +89,7 @@ class Silent(Space):
 
 class Alternatives(Space):
     size = Problem(int)
-    implementation = Variant(
+    implementation = SubspaceChoice(
         {"scaled": Subspace(Scaled, scale=size), "offset": Subspace(Offset, base=size)},
         outputs=("result",),
     )
@@ -101,7 +101,7 @@ class Alternatives(Space):
 
 class Singleton(Space):
     size = Problem(int)
-    implementation = Variant({"scaled": Subspace(Scaled, scale=size)}, outputs=("result",))
+    implementation = SubspaceChoice({"scaled": Subspace(Scaled, scale=size)}, outputs=("result",))
 
     @derived(int, selected=implementation.result)
     def observed(*, selected: int) -> int:
@@ -180,7 +180,7 @@ def test_bindings_come_from_problem_decision_property_and_parent_input() -> None
         supplied = Input(int)
         # ``branch`` is a reserved occurrence operation, so the member is named
         # ``choice`` and ``name=`` keeps the compiled path the assertions use.
-        choice = Variant(
+        choice = SubspaceChoice(
             {"scaled": Subspace(Scaled, scale=supplied)}, outputs=("result",), name="branch"
         )
 
@@ -192,9 +192,9 @@ def test_bindings_come_from_problem_decision_property_and_parent_input() -> None
         def scaled(*, size: int, doubled: int) -> int:
             return size * doubled
 
-        from_problem = Variant({"a": Subspace(Scaled, scale=size)}, outputs=("result",))
-        from_decision = Variant({"b": Subspace(Scaled, scale=doubled)}, outputs=("result",))
-        from_property = Variant({"c": Subspace(Scaled, scale=scaled)}, outputs=("result",))
+        from_problem = SubspaceChoice({"a": Subspace(Scaled, scale=size)}, outputs=("result",))
+        from_decision = SubspaceChoice({"b": Subspace(Scaled, scale=doubled)}, outputs=("result",))
+        from_property = SubspaceChoice({"c": Subspace(Scaled, scale=scaled)}, outputs=("result",))
 
     del Supplier, Inner
     specification = compile_space(Outer, "root", problem_namespace="problem.root")
@@ -217,7 +217,7 @@ def test_bindings_come_from_problem_decision_property_and_parent_input() -> None
 def test_a_parent_input_may_be_bound_into_a_nested_case() -> None:
     class Middle(Space):
         supplied = Input(int)
-        choice = Variant(
+        choice = SubspaceChoice(
             {"scaled": Subspace(Scaled, scale=supplied)}, outputs=("result",), name="branch"
         )
         result = choice.result
@@ -225,7 +225,7 @@ def test_a_parent_input_may_be_bound_into_a_nested_case() -> None:
 
     class Root(Space):
         size = Problem(int)
-        middle = Variant({"middle": Subspace(Middle, supplied=size)}, outputs=("result",))
+        middle = SubspaceChoice({"middle": Subspace(Middle, supplied=size)}, outputs=("result",))
 
     specification = compile_space(Root, "root", problem_namespace="problem.root")
     engine = Engine()
@@ -286,7 +286,7 @@ def test_a_branch_condition_gates_the_whole_branch() -> None:
         def large(*, size: int) -> bool:
             return size > 10
 
-        implementation = Variant(
+        implementation = SubspaceChoice(
             {"scaled": Subspace(Scaled, scale=size), "offset": Subspace(Offset, base=size)},
             outputs=("result",),
             when=large,
@@ -306,7 +306,7 @@ def test_a_branch_condition_gates_the_whole_branch() -> None:
 
 class Nested(Space):
     supplied = Input(int)
-    inner = Variant(
+    inner = SubspaceChoice(
         {"scaled": Subspace(Scaled, scale=supplied), "offset": Subspace(Offset, base=supplied)},
         outputs=("result",),
     )
@@ -320,7 +320,7 @@ class Nested(Space):
 
 class Outermost(Space):
     size = Problem(int)
-    outer = Variant(
+    outer = SubspaceChoice(
         {"nested": Subspace(Nested, supplied=size), "offset": Subspace(Offset, base=size)},
         outputs=("result",),
     )
@@ -349,8 +349,8 @@ def test_a_nested_branch_gets_its_own_selector_beneath_its_case() -> None:
 def test_one_case_class_may_be_used_by_several_branches_without_mutation() -> None:
     class Twice(Space):
         size = Problem(int)
-        left = Variant({"scaled": Subspace(Scaled, scale=size)}, outputs=("result",))
-        right = Variant({"scaled": Subspace(Scaled, scale=size)}, outputs=("result",))
+        left = SubspaceChoice({"scaled": Subspace(Scaled, scale=size)}, outputs=("result",))
+        right = SubspaceChoice({"scaled": Subspace(Scaled, scale=size)}, outputs=("result",))
 
     specification = compile_space(Twice, "root", problem_namespace="problem.root")
     assert [str(item.path) for item in specification.decisions] == [
@@ -379,12 +379,12 @@ def test_concurrent_compilation_of_one_class_is_deterministic() -> None:
 # -- authoring refusals -------------------------------------------------------
 
 
-def test_a_variant_alternative_is_named_by_its_mapping_key() -> None:
+def test_a_choice_alternative_is_named_by_its_mapping_key() -> None:
     """The id is the key, so it exists by construction and cannot be repeated."""
 
     class Named(Space):
         size = Problem(int)
-        implementation = Variant(
+        implementation = SubspaceChoice(
             {"scaled": Subspace(Scaled, scale=size), "offset": Subspace(Offset, base=size)},
             outputs=("result",),
         )
@@ -395,47 +395,47 @@ def test_a_variant_alternative_is_named_by_its_mapping_key() -> None:
     assert "semantic.root.implementation.offset.result" in paths
 
 
-def test_a_variant_alternative_may_not_restate_its_id() -> None:
+def test_a_choice_alternative_may_not_restate_its_id() -> None:
     with pytest.raises(AuthoringError, match="the mapping key is the alternative id"):
-        Variant({"scaled": Subspace(Scaled, name="scaled", scale=Input(int))})
+        SubspaceChoice({"scaled": Subspace(Scaled, name="scaled", scale=Input(int))})
 
 
-def test_variant_alternative_ids_are_non_empty_path_segments() -> None:
+def test_choice_alternative_ids_are_non_empty_path_segments() -> None:
     with pytest.raises(AuthoringError, match="alternative id is a non-empty string"):
-        Variant({"": Subspace(Scaled, scale=Input(int))})
+        SubspaceChoice({"": Subspace(Scaled, scale=Input(int))})
 
     class Dotted(Space):
         size = Problem(int)
-        implementation = Variant({"a.b": Subspace(Scaled, scale=size)}, outputs=("result",))
+        implementation = SubspaceChoice({"a.b": Subspace(Scaled, scale=size)}, outputs=("result",))
 
     with pytest.raises(AuthoringError, match="contains a dot"):
         compile_space(Dotted, "root", problem_namespace="problem.root")
 
 
-def test_a_variant_needs_at_least_one_alternative() -> None:
+def test_a_choice_needs_at_least_one_alternative() -> None:
     with pytest.raises(AuthoringError, match="at least one alternative Subspace"):
-        Variant({}, outputs=("result",))
+        SubspaceChoice({}, outputs=("result",))
 
 
-def test_a_variant_takes_a_mapping_of_subspaces() -> None:
+def test_a_choice_takes_a_mapping_of_subspaces() -> None:
     with pytest.raises(AuthoringError, match="ordered mapping of alternative id to Subspace"):
-        Variant([Subspace(Scaled, scale=Input(int))])  # type: ignore[arg-type]
+        SubspaceChoice([Subspace(Scaled, scale=Input(int))])  # type: ignore[arg-type]
 
     with pytest.raises(AuthoringError, match="not a Subspace"):
-        Variant({"scaled": Scaled})  # type: ignore[dict-item]
+        SubspaceChoice({"scaled": Scaled})  # type: ignore[dict-item]
 
 
-def test_a_variant_owns_the_condition_its_alternatives_do_not() -> None:
+def test_a_choice_owns_the_condition_its_alternatives_do_not() -> None:
     """A per-alternative ``when=`` is a different question, and not yet forced."""
 
-    with pytest.raises(AuthoringError, match="a Variant owns the outer condition"):
-        Variant({"scaled": Subspace(Scaled, when=Input(bool), scale=Input(int))})
+    with pytest.raises(AuthoringError, match="the choice owns the outer condition"):
+        SubspaceChoice({"scaled": Subspace(Scaled, when=Input(bool), scale=Input(int))})
 
 
 def test_a_case_binding_must_be_exact_and_semantics_compatible() -> None:
     class Missing(Space):
         size = Problem(int)
-        implementation = Variant({"scaled": Subspace(Scaled)}, outputs=("result",))
+        implementation = SubspaceChoice({"scaled": Subspace(Scaled)}, outputs=("result",))
 
     with pytest.raises(AuthoringError, match="Input binding is not exact"):
         compile_space(Missing, "root", problem_namespace="problem.root")
@@ -447,7 +447,9 @@ def test_a_case_binding_must_be_exact_and_semantics_compatible() -> None:
         def flag(*, size: int) -> bool:
             return size > 0
 
-        implementation = Variant({"scaled": Subspace(Scaled, scale=flag)}, outputs=("result",))
+        implementation = SubspaceChoice(
+            {"scaled": Subspace(Scaled, scale=flag)}, outputs=("result",)
+        )
 
     with pytest.raises(AuthoringError, match="expects int"):
         compile_space(WrongType, "root", problem_namespace="problem.root")
@@ -456,7 +458,7 @@ def test_a_case_binding_must_be_exact_and_semantics_compatible() -> None:
 def test_every_case_must_expose_each_selected_output_compatibly() -> None:
     class Absent_(Space):
         size = Problem(int)
-        implementation = Variant(
+        implementation = SubspaceChoice(
             {"scaled": Subspace(Scaled, scale=size), "silent": Subspace(Silent, value=size)},
             outputs=("result",),
         )
@@ -466,7 +468,7 @@ def test_every_case_must_expose_each_selected_output_compatibly() -> None:
 
     class Incompatible(Space):
         size = Problem(int)
-        implementation = Variant(
+        implementation = SubspaceChoice(
             {
                 "scaled": Subspace(Scaled, scale=size),
                 "mismatched": Subspace(Mismatched, value=size),
@@ -479,7 +481,7 @@ def test_every_case_must_expose_each_selected_output_compatibly() -> None:
 
 
 def test_an_undeclared_selected_output_is_not_reachable() -> None:
-    branch = Variant({"scaled": Subspace(Scaled, scale=Input(int))}, outputs=("result",))
+    branch = SubspaceChoice({"scaled": Subspace(Scaled, scale=Input(int))}, outputs=("result",))
     with pytest.raises(AttributeError, match="does not select an output"):
         branch.other
 
@@ -501,7 +503,7 @@ def test_a_case_may_not_declare_a_problem() -> None:
 
     class Root(Space):
         size = Problem(int)
-        implementation = Variant({"owns": Subspace(OwnsProblem)}, outputs=("result",))
+        implementation = SubspaceChoice({"owns": Subspace(OwnsProblem)}, outputs=("result",))
 
     with pytest.raises(AuthoringError, match="declares a Problem inside a reusable child Space"):
         compile_space(Root, "root", problem_namespace="problem.root")
@@ -514,13 +516,13 @@ def test_a_recursive_case_cycle_is_rejected_deterministically() -> None:
     # Attached after class creation, so ``__init_subclass__`` never saw it: this
     # is the path the compiler's reserved-name backstop exists for, and the
     # member is named ``recurse`` for exactly that reason.
-    Recursive.recurse = Variant(
+    Recursive.recurse = SubspaceChoice(
         {"again": Subspace(Recursive, supplied=Recursive.supplied)}, outputs=(), name="branch"
     )
 
     class Root(Space):
         size = Problem(int)
-        implementation = Variant({"recursive": Subspace(Recursive, supplied=size)})
+        implementation = SubspaceChoice({"recursive": Subspace(Recursive, supplied=size)})
 
     with pytest.raises(AuthoringError, match="cycle"):
         compile_space(Root, "root", problem_namespace="problem.root")

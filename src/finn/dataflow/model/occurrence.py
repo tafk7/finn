@@ -80,7 +80,7 @@ from finn.dataflow.model.declarations import (
     Space,
     Subspace,
     ValueSource,
-    Variant,
+    SubspaceChoice,
     check_canonical,
     declared_members,
 )
@@ -1018,9 +1018,9 @@ class PersistableChoice:
     same design saved under two different root namespaces produces the same
     document and reloads under either.
 
-    ``codec`` is ``None`` for a Variant selector, whose values are alternative
-    ids the branch itself owns; the persistence layer supplies the selector
-    encoding rather than each Variant declaring one.
+    ``codec`` is ``None`` for a selector, whose values are alternative ids the
+    branch itself owns; the persistence layer supplies the selector encoding
+    rather than each ``SubspaceChoice`` declaring one.
     """
 
     path: str
@@ -1261,8 +1261,8 @@ def occurrence_child(instance: Space, declaration: Subspace[S]) -> S:
     Kernel class may be placed at several roles, and "you probably meant the
     only one" is precisely the behaviour that breaks the day a second placement
     appears -- silently, and in whichever call site happened to be written
-    first.  A Variant's alternatives are reached through its view instead, since
-    an alternative is identified by its id within its container.
+    first.  A choice's alternatives are reached through its view instead,
+    since an alternative is identified by its id within its container.
     """
 
     state = _occurrence_state(instance)
@@ -1279,12 +1279,14 @@ def occurrence_child(instance: Space, declaration: Subspace[S]) -> S:
     )
 
 
-def _branch_for_declaration(state: _State, declaration: Variant) -> _CompiledBranch:
-    return state.compiled.branch(_owned_member(state, declaration, (Variant,), "Variant"))
+def _branch_for_declaration(state: _State, declaration: SubspaceChoice) -> _CompiledBranch:
+    return state.compiled.branch(
+        _owned_member(state, declaration, (SubspaceChoice,), "SubspaceChoice")
+    )
 
 
-class VariantView:
-    """Capability-limited inspection and selection for one exact ``Variant``.
+class ChoiceView:
+    """Capability-limited inspection and selection for one exact ``SubspaceChoice``.
 
     A use-site capability over the root's point, not another Engine and not a
     nested Space: it owns no runtime of its own and reaches everything through
@@ -1303,7 +1305,7 @@ class VariantView:
 
     @property
     def alternatives(self) -> tuple[str, ...]:
-        """The stable ids of every alternative this Variant declares."""
+        """The stable ids of every alternative this SubspaceChoice declares."""
 
         return tuple(item.case_id for item in self.__branch.cases)
 
@@ -1334,7 +1336,7 @@ class VariantView:
 
         if alternative_id not in self.alternatives:
             raise AuthoringError(
-                f"Variant {self.name!r} has no alternative {alternative_id!r}; "
+                f"SubspaceChoice {self.name!r} has no alternative {alternative_id!r}; "
                 f"expected one of {self.alternatives}"
             )
         child = self.__branch.case(alternative_id).compiled
@@ -1346,10 +1348,10 @@ class VariantView:
             state.root,
         )
 
-    def select(self, alternative_id: str) -> VariantView:
+    def select(self, alternative_id: str) -> ChoiceView:
         if alternative_id not in self.alternatives:
             raise AuthoringError(
-                f"Variant {self.name!r} has no alternative {alternative_id!r}; "
+                f"SubspaceChoice {self.name!r} has no alternative {alternative_id!r}; "
                 f"expected one of {self.alternatives}"
             )
         if self.__branch.selector is None:
@@ -1368,14 +1370,14 @@ class VariantView:
             if state.compiled is lineage.tree
             else _make_occurrence(successor, state.compiled, state.scope, successor_root)
         )
-        return VariantView(successor_owner, self.__branch)
+        return ChoiceView(successor_owner, self.__branch)
 
 
-def occurrence_variant(instance: Space, declaration: Variant) -> VariantView:
-    """Bind one authored Variant to this exact occurrence namespace."""
+def occurrence_choice(instance: Space, declaration: SubspaceChoice) -> ChoiceView:
+    """Bind one authored SubspaceChoice to this exact occurrence namespace."""
 
     state = _occurrence_state(instance)
-    return VariantView(instance, _branch_for_declaration(state, declaration))
+    return ChoiceView(instance, _branch_for_declaration(state, declaration))
 
 
 __all__ = [
@@ -1384,7 +1386,7 @@ __all__ = [
     "ProjectionAssessment",
     "RootFactory",
     "combine_assessments",
-    "VariantView",
+    "ChoiceView",
     "LayerRuntime",
     "evaluate_projection",
     "layer_runtime",

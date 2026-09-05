@@ -12,7 +12,7 @@ those tensors ends up in whichever Network is selected.
 
 The operation *is* the root Space.  Its Problem members are its declared
 tensors and attributes, lowered from the source schema, and its ``design``
-Variant is an ordinary structural choice on the same class.  There is no
+SubspaceChoice is an ordinary structural choice on the same class.  There is no
 separate source Space and no wrapper between the node and the point.
 """
 
@@ -26,13 +26,13 @@ from finn.dataflow.model.declarations import (
     ConstraintGroup,
     Space,
     Subspace,
-    Variant,
+    SubspaceChoice,
     allow_absent,
     constraint,
     derived,
     reject,
 )
-from finn.dataflow.model.occurrence import ProjectionAssessment, VariantView
+from finn.dataflow.model.occurrence import ChoiceView, ProjectionAssessment
 from finn.dataflow.network import DataflowNetwork
 from finn.dataflow.ops.association import (
     BoundaryDestination,
@@ -120,8 +120,8 @@ def _runtime_weight_range_contract(build: Any) -> bool | None:
     return None if value is None else bool(value)
 
 
-def _design_view(root: Space) -> VariantView:
-    return cast(VariantView, root.design)  # type: ignore[attr-defined]
+def _design_view(root: Space) -> ChoiceView:
+    return cast(ChoiceView, root.design)  # type: ignore[attr-defined]
 
 
 def _selected_design(root: Space) -> WeightedDotProductDesign:
@@ -137,8 +137,8 @@ def _selected_design(root: Space) -> WeightedDotProductDesign:
     return cast(WeightedDotProductDesign, view.alternative(chosen.value))
 
 
-def _compute_segment(root: Space) -> VariantView:
-    return cast(VariantView, _selected_design(root).compute)  # type: ignore[attr-defined]
+def _compute_segment(root: Space) -> ChoiceView:
+    return cast(ChoiceView, _selected_design(root).compute)  # type: ignore[attr-defined]
 
 
 def _compute_kernel(root: Space) -> Space:
@@ -441,7 +441,7 @@ class MvauDataflowOp(DataflowOp):
 
     # -- the composition ------------------------------------------------------
 
-    design = Variant(
+    design = SubspaceChoice(
         {
             "dot_product": Subspace(
                 DotProductDesign,

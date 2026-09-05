@@ -50,6 +50,7 @@ from finn.dataflow.model.compiler import (
     answer_for,
     imported_decisions,
     resolve_value_source,
+    admit_candidate,
 )
 from finn.dataflow.model.declarations import (
     AuthoringError,
@@ -62,7 +63,7 @@ from finn.dataflow.model.declarations import (
     Space,
     Subspace,
     ValueSource,
-    Variant,
+    SubspaceChoice,
     allow_absent,
     declared_members,
     reject,
@@ -75,10 +76,10 @@ from finn.dataflow.kernels.kernel import (
 )
 from finn.dataflow.model.occurrence import (
     ProjectionAssessment,
-    VariantView,
+    ChoiceView,
     evaluate_projection,
     layer_runtime,
-    occurrence_variant,
+    occurrence_choice,
 )
 from finn.dataflow.network import (
     BoundaryContract,
@@ -291,10 +292,10 @@ class DataflowDesign(Space):
             _design_metadata(self).internal_decisions,
         )
 
-    def _segment_view(self, role: str) -> VariantView:
-        """The bound Variant view of one role, reached by its own declaration."""
+    def _segment_view(self, role: str) -> ChoiceView:
+        """The bound SubspaceChoice view of one role, reached by its own declaration."""
 
-        return occurrence_variant(self, _design_metadata(self).segment(role).declaration)
+        return occurrence_choice(self, _design_metadata(self).segment(role).declaration)
 
 
 def _design_metadata(design: DataflowDesign) -> _DesignCompilation[DataflowDesign]:
@@ -326,21 +327,23 @@ def _atomic(what: str, value: str | None) -> None:
         raise AuthoringError(f"{what} must be one path segment; {value!r} contains a dot")
 
 
-class Kernels(Variant):
+class Kernels(SubspaceChoice):
     """One stable Design segment holding exactly one selected Kernel.
 
-    A thin ``Variant`` specialization.  Selector creation, alternative gating,
-    stable namespaces, inspection, and selected-output forwarding all stay in
-    the generic machinery; what a Kernel segment adds is the required
-    computation, the implicit selected Region, and the stable Design role and
-    Network node identity.
+    A thin ``SubspaceChoice`` specialization written entirely through the
+    generic seam.  Selector creation, alternative gating, stable namespaces,
+    inspection, and selected-output forwarding all stay in the generic
+    machinery; what a Kernel segment adds is the required computation, the
+    implicit selected Region, and the stable Design role and Network node
+    identity.
 
     Its alternatives are written positionally rather than as a mapping because a
     Kernel already carries its own stable ``id``, and that id *is* the
-    alternative id.  Restating it as a mapping key would be the one duplication
-    a Variant's mapping exists to avoid, in the one place where the id is not
-    the author's to choose.  ``Subspace(..., name=...)`` still aliases it, which
-    is precisely what lets one Kernel class fill two candidate slots.
+    alternative id -- which is what ``candidate_id`` exists to say.  Restating
+    it as a mapping key would be the one duplication a SubspaceChoice's mapping
+    exists to avoid, in the one place where the id is not the author's to
+    choose.  ``Subspace(..., name=...)`` still aliases it, which is precisely
+    what lets one Kernel class fill two candidate slots.
     """
 
     computation: ComputationContract
@@ -367,14 +370,15 @@ class Kernels(Variant):
         _atomic("a Kernel segment node id", node_id)
         object.__setattr__(self, "computation", computation)
         object.__setattr__(self, "node_id", node_id)
-        named = tuple(
-            (self._alternative_id(item), cast("Subspace[Space]", item)) for item in alternatives
-        )
-        # The role *is* the namespace segment, so it travels as the Variant's
+        # The role *is* the namespace segment, so it travels as the choice's
         # stable name rather than as a second parallel identity.
-        self._initialize(named, ("region",), when, role)
+        self._from_candidates(
+            tuple(cast("Subspace[Space]", item) for item in alternatives),
+            when=when,
+            name=role,
+        )
 
-    def _alternative_id(self, subspace: Subspace[Kernel]) -> str:
+    def candidate_id(self, subspace: Subspace[Space]) -> str:
         """A Kernel candidate is named by its Kernel id unless the author aliases it."""
 
         if subspace.stable_name is not None:
@@ -389,18 +393,22 @@ class Kernels(Variant):
         _atomic("a Kernel candidate id", candidate)
         return candidate
 
-    def check_alternative(
-        self, owner_name: str, member_name: str, subspace: Subspace[Space]
-    ) -> None:
+    def default_outputs(self) -> tuple[str, ...]:
+        """Every Kernel segment forwards the selected candidate's Region."""
+
+        return ("region",)
+
+    def validate_candidate(self, owner: type[Space], subspace: Subspace[Space]) -> None:
+        del owner
         if not issubclass(subspace.space_type, Kernel):
             raise AuthoringError(
-                f"{owner_name}.{member_name} is a Kernel segment, but "
+                f"a Kernel segment admits Kernels, and "
                 f"{subspace.space_type.__name__} is not a Kernel"
             )
         offered = getattr(subspace.space_type, "computation", None)
         if offered != self.computation:
             raise AuthoringError(
-                f"{owner_name}.{member_name} requires computation "
+                f"the segment requires computation "
                 f"{self.computation.id}:{self.computation.version}, but "
                 f"{subspace.space_type.__name__} declares "
                 f"{getattr(offered, 'id', offered)!r}"
@@ -1006,7 +1014,7 @@ def _declared_segments(
         # non-Kernel candidate would fail that with "does not export 'region'"
         # -- true, unhelpful, and not the thing the author got wrong.
         for _alternative_id, subspace in declaration.alternatives:
-            declaration.check_alternative(design_type.__name__, member_name, subspace)
+            admit_candidate(design_type, member_name, declaration, subspace)
         role = declaration.stable_name or member_name
         resolved.append((role, declaration.node_id or role, declaration))
     return tuple(resolved)

@@ -35,7 +35,7 @@ from finn.dataflow.model.declarations import (
     Readiness,
     Space,
     Subspace,
-    Variant,
+    SubspaceChoice,
     constraint,
     derived,
     reject,
@@ -82,7 +82,7 @@ class Costly(Space):
 
 class Inner(Space):
     size = Input(int)
-    nested = Variant(
+    nested = SubspaceChoice(
         {"cheap": Subspace(Cheap, size=size), "costly": Subspace(Costly, size=size)},
         outputs=("result", "cost"),
     )
@@ -93,7 +93,7 @@ class Inner(Space):
 
 class Root(Space):
     size = Problem(int)
-    top = Variant(
+    top = SubspaceChoice(
         {"inner": Subspace(Inner, size=size), "costly": Subspace(Costly, size=size)},
         outputs=("result", "cost"),
     )
@@ -101,7 +101,7 @@ class Root(Space):
 
 class Only(Space):
     size = Problem(int)
-    solo = Variant({"costly": Subspace(Costly, size=size)}, outputs=("result",))
+    solo = SubspaceChoice({"costly": Subspace(Costly, size=size)}, outputs=("result",))
 
 
 def _model(
@@ -313,13 +313,13 @@ def test_an_ambiguous_case_property_name_is_refused() -> None:
 
     class TwoPrices(Space):
         size = Input(int)
-        left = Variant({"only": Subspace(Priced, size=size)}, outputs=("cost",))
-        right = Variant({"only": Subspace(Priced, size=size)}, outputs=("cost",))
+        left = SubspaceChoice({"only": Subspace(Priced, size=size)}, outputs=("cost",))
+        right = SubspaceChoice({"only": Subspace(Priced, size=size)}, outputs=("cost",))
         exports = ()
 
     class Root_(Space):
         size = Problem(int)
-        choice = Variant({"both": Subspace(TwoPrices, size=size)}, name="branch")
+        choice = SubspaceChoice({"both": Subspace(TwoPrices, size=size)}, name="branch")
 
     catalog = compile_space_model(Root_, "root", problem_namespace="problem.root").branches
     case = catalog.branch("root.branch").case("both")
