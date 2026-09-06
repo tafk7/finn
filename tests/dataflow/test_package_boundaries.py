@@ -177,6 +177,10 @@ def test_artifact_projection_stays_one_way() -> None:
 def test_canonical_values_stay_importable_without_the_engine() -> None:
     _assert_fresh_import_avoids("finn.dataflow.region", ("finn.dataflow._engine",))
     _assert_fresh_import_avoids("finn.dataflow.network", ("finn.dataflow._engine",))
+    _assert_fresh_import_avoids(
+        "finn.dataflow.input_service",
+        ("finn.dataflow._engine", "finn.dataflow.ops", "finn.dataflow.designs"),
+    )
     _assert_fresh_import_avoids("finn.dataflow.ops.mvau.regions", ("finn.dataflow._engine",))
     _assert_fresh_import_avoids("finn.dataflow.ops.mvau.networks", ("finn.dataflow._engine",))
 

@@ -354,10 +354,14 @@ def validate_network(network: DataflowNetwork) -> NetworkValidationReport:
         elif is_input is False:
             output_uses.append(boundary.endpoint)
 
+    # Ported inputs only.  An unported input is not a network endpoint: there is
+    # no port for an edge to sink into or a boundary to expose, so requiring it
+    # to be consumed or exposed exactly once would refuse every region that
+    # declares one.
     expected_inputs = [
         RegionEndpoint(node.id, interface.port.id)
         for node in network.nodes
-        for interface in node.region.inputs
+        for interface in node.region.input_interfaces
     ]
     expected_outputs = [
         RegionEndpoint(node.id, interface.port.id)

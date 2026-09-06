@@ -38,6 +38,7 @@ from finn.dataflow.region import (
     Port,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
+    UnportedInput,
 )
 
 INT8 = DataType["INT8"]
@@ -341,3 +342,49 @@ def test_directed_cycles_are_reported() -> None:
         (),
     )
     assert "network.cycle" in {issue.code for issue in validate_network(network).issues}
+
+
+def test_an_unported_input_is_not_a_network_endpoint():
+    """Endpoint ownership ranges over ports, and an unported input has none.
+
+    Requiring it to be consumed or exposed exactly once would refuse every
+    region that declares one, which is every region that says it consumes an
+    operand no port carries.
+    """
+
+    operand = Operand("w", DataType["INT8"], (1,))
+    activation = Operand("x", DataType["INT8"], (1,))
+    region = DataflowRegion(
+        LogicalSchedule((("step", 1),)),
+        (
+            InputInterface(
+                Port("x_in", activation, BeatSequence(1, (((0,),),))),
+                ScheduledInputRequirements({((0,), (0,)): 1}),
+            ),
+            UnportedInput(operand, ScheduledInputRequirements({((0,), (0,)): 1})),
+        ),
+        (
+            OutputInterface(
+                Port("y_out", activation, BeatSequence(1, (((0,),),))),
+                ScheduledOutputAvailability({(0,): (0,)}),
+            ),
+        ),
+    )
+    network = DataflowNetwork(
+        (NetworkNode("only", region),),
+        (),
+        (
+            BoundaryContract(
+                "in",
+                RegionEndpoint("only", "x_in"),
+                region.input_interface("x_in").port.beat_sequence,
+            ),
+            BoundaryContract(
+                "out",
+                RegionEndpoint("only", "y_out"),
+                region.output_interface("y_out").port.beat_sequence,
+            ),
+        ),
+    )
+
+    assert not validate_network(network)

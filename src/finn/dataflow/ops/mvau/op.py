@@ -622,7 +622,7 @@ def _internal_destination(
     """
 
     for node in network.nodes:
-        for item in node.region.inputs:
+        for item in node.region.input_interfaces:
             if item.port.id == operand_id:
                 return StreamDestination(node.id, item.port.id)
     for node in network.nodes:
@@ -645,7 +645,7 @@ def _selected_shape(
     if isinstance(destination, RegionStateDestination):
         return None
     node = network.node(destination.node_id)
-    for interface in node.region.inputs:
+    for interface in node.region.input_interfaces:
         if interface.port.id == destination.port_id:
             return tuple(interface.port.operand.shape)
     for output in node.region.outputs:

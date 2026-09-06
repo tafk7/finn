@@ -13,6 +13,7 @@ from finn.dataflow.region import (
     InputInterface,
     Operand,
     OutputInterface,
+    RegionInput,
     element_width,
 )
 
@@ -58,12 +59,36 @@ def _interface_path(interface: InputInterface | OutputInterface) -> str:
     return f"{direction}[{interface.port.id!r}]"
 
 
+def _input_path(item: RegionInput) -> str:
+    """Where an input is, named by whichever identity it actually has.
+
+    A ported input keeps the path it has always had, so existing diagnostics are
+    unchanged.  An unported one has no port id to be named by, and is addressed
+    by the operand it requires.
+    """
+
+    return (
+        _interface_path(item)
+        if isinstance(item, InputInterface)
+        else f"unported_input[{item.operand.id!r}]"
+    )
+
+
 def validate_region(region: DataflowRegion) -> RegionValidationReport:
     """Return all independently detectable structural issues in stable order.
 
     This function implements only ``REGION.md`` section 5.1 and the output
     domain/image equality it cites. It deliberately makes no claim about
     binding realizability, timing, storage, or network compatibility.
+
+    Two of its conditions range differently since region inputs became a sum.
+    Operand and requirement rules cover every input, so an operand no port
+    presents is validated exactly as one that is; port-shaped rules cover the
+    interfaces that exist, so an unported input contributes to none of them.
+    There is deliberately no rule comparing required occurrences against
+    presented fields: section 3.7 refuses that equality for inputs, and whether
+    a beat sequence and binding-owned state jointly satisfy the requirements is
+    the realizability obligation in section 5.2.
 
     Args:
         region: Complete normalized region value to inspect.
@@ -99,7 +124,9 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
         )
 
     # Condition 2: interface objects guarantee one operand and sequence per
-    # port; identity uniqueness is checked across both directions.
+    # port; identity uniqueness is checked across both directions.  Only
+    # port-bearing interfaces participate: an unported input has no port id to
+    # collide with, and is not a network endpoint.
     port_ids = tuple(interface.port.id for interface in region.interfaces)
     for port_id in _duplicate_values(port_ids):
         issues.append(
@@ -110,11 +137,31 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
             )
         )
 
-    # Conditions 3 and 4: operand declarations and derived beat-field domains.
+    # One input per operand.  An unported input has no port id to distinguish a
+    # second entry, so a repeat is two requirement maps for one computation's
+    # use of one operand, with no defined relation between them -- which is also
+    # the relation a multi-interface widening would first have to define.
+    for operand_id in _duplicate_values(tuple(item.operand.id for item in region.inputs)):
+        issues.append(
+            RegionValidationIssue(
+                "input.operand_duplicate",
+                "region.inputs",
+                f"operand {operand_id!r} declares more than one region input",
+            )
+        )
+
+    # Condition 3: operand declarations, over every region input and every
+    # output port.  Reaching the inputs rather than the *ports* is what gives an
+    # operand with no port a datatype and a shape that anything checks; before
+    # the unported case existed there was nothing here to check.
     operands_by_id: dict[str, Operand] = {}
-    for interface in region.interfaces:
-        path = _interface_path(interface)
-        operand = interface.port.operand
+    declared_operands: list[tuple[Operand, str]] = [
+        (item.operand, f"{_input_path(item)}.operand") for item in region.inputs
+    ] + [
+        (interface.port.operand, f"{_interface_path(interface)}.port.operand")
+        for interface in region.outputs
+    ]
+    for operand, path in declared_operands:
         previous = operands_by_id.get(operand.id)
         if previous is None:
             operands_by_id[operand.id] = operand
@@ -122,7 +169,7 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
             issues.append(
                 RegionValidationIssue(
                     "operand.identity_conflict",
-                    f"{path}.port.operand",
+                    path,
                     f"operand identity {operand.id!r} has inconsistent type or shape",
                 )
             )
@@ -131,7 +178,7 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
             issues.append(
                 RegionValidationIssue(
                     "operand.bit_width_not_positive",
-                    f"{path}.port.operand.element_type.bit_width",
+                    f"{path}.element_type.bit_width",
                     f"numeric bit width must be positive, got {width}",
                 )
             )
@@ -140,26 +187,31 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
                 issues.append(
                     RegionValidationIssue(
                         "operand.extent_not_positive",
-                        f"{path}.port.operand.shape[{dimension}]",
+                        f"{path}.shape[{dimension}]",
                         f"operand extent must be positive, got {extent}",
                     )
                 )
+
+    # Condition 4: derived beat-field domains, over the ports that exist.
+    for interface in region.interfaces:
         if interface.port.beat_sequence.elements_per_beat <= 0:
             issues.append(
                 RegionValidationIssue(
                     "beat.elements_per_beat_not_positive",
-                    f"{path}.port.beat_sequence.elements_per_beat",
+                    f"{_interface_path(interface)}.port.beat_sequence.elements_per_beat",
                     "elements_per_beat must be positive",
                 )
             )
 
     # Condition 5: sparse omission supplies total zero; every explicit key and
-    # nonzero value must still belong to the declared function.
-    for interface in region.inputs:
-        path = _interface_path(interface)
-        operand = interface.port.operand
+    # nonzero value must still belong to the declared function.  Ranges over
+    # every region input, ported or not: the requirement map is a statement
+    # about the computation, and it is exactly as checkable without a port.
+    for item in region.inputs:
+        path = _input_path(item)
+        operand = item.operand
         for entry_index, ((iteration, position), multiplicity) in enumerate(
-            interface.requirements.entries
+            item.requirements.entries
         ):
             entry_path = f"{path}.requirements.entries[{entry_index}]"
             if not schedule.contains_point(iteration):

@@ -141,7 +141,9 @@ class ActivationReplayOp(DataflowOp):
                 operand_id, boundary.endpoint.node_id, boundary.endpoint.port_id
             )
             node = network.node(destination.node_id)
-            interfaces = node.region.inputs if operand_id == "activation" else node.region.outputs
+            interfaces = (
+                node.region.input_interfaces if operand_id == "activation" else node.region.outputs
+            )
             selected = next(
                 (
                     tuple(item.port.operand.shape)
