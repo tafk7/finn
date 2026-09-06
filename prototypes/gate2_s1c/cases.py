@@ -4,24 +4,25 @@
 """The forcing cases, over the real FINN Region constructors where they exist.
 
 ```text
-external              W required by compute, one port, exposed at a boundary
-embedded              W required by compute, no port
-decoupled             W required by memory, no port; memory's output edge
-                      transports W to compute's W requirement
-partial service       one Region whose ports present some of what it requires:
-                      X re-read three times and presented once,
-                      W half presented and half not
-plural mapping        two Regions requiring the same operand from one source
-                      tensor
-multi-port operand    one operand presented by two ports -- the named risk, not
-                      a forcing case; the recommendation refuses it
+external            W required by compute, one port, exposed at a boundary
+embedded            W required by compute, no port
+decoupled           W required by memory with no port; memory's edge feeds
+                    compute's W port, which presents all of it
+partial service     one Region whose port presents some of what it requires:
+                    X re-read three times and presented once,
+                    W half presented and half not
+partial internal    compute's W port IS fed by an edge and still presents only
+                    half the required positions -- the case a boolean
+                    "edge-fed" answer gets wrong
+plural target       two Regions requiring the same operand from one source
+                    tensor
+collision           two unrelated Regions both calling an operand W
 ```
 
 The first three lift production Regions -- ``construct_dot_product_region``,
 ``construct_activation_replay_region``, ``construct_weight_stream_region`` --
-and change only what the recommendation proposes.  Note what the embedded case
-becomes: the streamed Region with the weight *port* set to ``None`` and the
-weight *requirement* kept, which is one argument rather than a separate
+and change only what is proposed.  The embedded case is the streamed Region with
+``drop_ports=("weight",)``: one argument where today there is a separate
 constructor.
 """
 
@@ -29,7 +30,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dataflow_model import ProtoNetwork, ProtoNode, ProtoRegion, RegionInput
+from dataflow_model import (
+    InputInterface,
+    ProtoNetwork,
+    ProtoNode,
+    ProtoRegion,
+    UnportedInput,
+)
 from finn.dataflow.kernels.memstream import construct_weight_stream_region
 from finn.dataflow.network import (
     BoundaryContract,
@@ -53,7 +60,6 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from candidates import InputRequirement, SplitRegion
 from qonnx.core.datatype import DataType
 
 REPLAY = "replay"
@@ -81,26 +87,22 @@ def lift(
     region: DataflowRegion,
     *,
     drop_ports: tuple[str, ...] = (),
-    add_inputs: tuple[RegionInput, ...] = (),
+    add_inputs: tuple[UnportedInput, ...] = (),
 ) -> ProtoRegion:
     """Rewrite a production Region's interfaces in the recommended shape.
 
-    ``(Port, requirements)`` becomes ``(operand, requirements, port)``.  The
-    operand comes off the port, so the rewrite is lossless and mechanical --
-    which is the migration this recommendation asks for, performed here on the
-    real values before asking for it.
-
-    ``drop_ports`` sets the port to ``None`` and keeps the requirement.  That
-    one argument is the entire difference between the streamed and embedded
-    dot-product Regions.
+    A ported input is ``InputInterface(port, requirements)`` -- the same class
+    name, the same fields, the same construction order it has today, so this
+    loop is the identity for every current FINN Region.  ``drop_ports`` turns
+    one into an ``UnportedInput`` carrying the same operand and the same
+    requirements, which is the entire difference between the streamed and
+    embedded dot-product Regions.
     """
 
     inputs = tuple(
-        RegionInput(
-            interface.port.operand,
-            interface.requirements,
-            None if interface.port.id in drop_ports else interface.port,
-        )
+        UnportedInput(interface.port.operand, interface.requirements)
+        if interface.port.id in drop_ports
+        else InputInterface(interface.port, interface.requirements)
         for interface in region.inputs
     )
     return ProtoRegion(region.schedule, inputs + add_inputs, tuple(region.outputs))
@@ -157,7 +159,7 @@ def _mvau_frame(
         _boundary(COMPUTE, compute.output_interface("output").port, "output"),
     ]
     if weight_boundary:
-        boundaries.append(_boundary(COMPUTE, compute.input_port("weight"), "weight"))
+        boundaries.append(_boundary(COMPUTE, compute.input_interface("weight").port, "weight"))
     return (
         (ProtoNode(REPLAY, lift(replay)), ProtoNode(COMPUTE, compute)),
         (_activation_edge(replay),),
@@ -199,7 +201,7 @@ def memory_region(folding: Folding) -> ProtoRegion:
     return lift(
         produced,
         add_inputs=(
-            RegionInput(
+            UnportedInput(
                 operand,
                 ScheduledInputRequirements({((), position): 1 for position in operand.positions}),
             ),
@@ -224,22 +226,25 @@ def decoupled_network(folding: Folding = Folding()) -> ProtoNetwork:
     return ProtoNetwork((*nodes, ProtoNode(MEMORY, memory)), (*edges, weight_edge), boundaries)
 
 
-# -- partial service ----------------------------------------------------------
+# -- partial service, within one Region ---------------------------------------
 
 
 def partial_service_region() -> ProtoRegion:
     """One Region whose ports present part of what it requires, two ways.
 
-    ``X`` is read once per visit and the port presents each position once: the
+    ``X`` is read once per visit and its port presents each position once: the
     position set is fully presented and two thirds of the *occurrences* are not.
     This is the multi-visit kernel the deadlock proofs name -- softmax reads its
     row three times -- and the canon's instruction is to declare the re-reads as
-    multiplicity, not as extra boundary beats.
+    multiplicity, not as extra boundary beats.  The tensor has entered; serving
+    the re-reads is the binding's business.
 
     ``W`` is required in full and its port presents only the upper columns: half
-    the *positions* are not presented at all.  ``REGION.md`` §3.7 permits exactly
-    this, per position, which is why "streamed" and "locally supplied" cannot be
-    classifications of a whole operand.
+    the *positions* are not presented at all, so half of W has not entered.
+    ``REGION.md`` §3.7 permits exactly this, per position, which is why
+    "streamed" and "locally supplied" cannot be classifications of a whole
+    operand -- and why the position sets below are position-granular rather than
+    occurrence-granular.
     """
 
     schedule = LogicalSchedule(
@@ -274,33 +279,109 @@ def partial_service_region() -> ProtoRegion:
     return ProtoRegion(
         schedule,
         (
-            RegionInput(activation, read_every_visit, activation_port),
-            RegionInput(weight, read_every_visit, weight_port),
+            InputInterface(activation_port, read_every_visit),
+            InputInterface(weight_port, read_every_visit),
         ),
         (output,),
     )
 
 
-# -- plural source mapping ----------------------------------------------------
+# -- partial service across an edge -------------------------------------------
 
 
-def _twin(suffix: str) -> ProtoRegion:
-    """A tiny Region requiring its own activation and a shared matrix ``W``."""
+def partial_internal_network() -> ProtoNetwork:
+    """A port that an edge feeds, presenting only half of what is required.
+
+    The case a boolean "is this input edge-fed" answer gets wrong.  ``compute``
+    requires all four positions of ``W``; its ``w_hi`` port is the sink of
+    ``weight_supply``; and that port presents two of the four.  The Network
+    supplies half.  The other half is owed by something else, and the source
+    tensor corresponds to both the memory Region's requirement and the residue
+    at compute.
+    """
+
+    weight = Operand("W", WEIGHT, (2, 2))
+    activation = Operand("X", ACTIVATION, (2,))
+    result = Operand("Y", OUTPUT, (2,))
+    upper = BeatSequence(1, (((0, 1),), ((1, 1),)))
+
+    compute = ProtoRegion(
+        LogicalSchedule((ScheduleLevel("step", 2),)),
+        (
+            InputInterface(
+                Port("x_in", activation, BeatSequence(1, (((0,),), ((1,),)))),
+                ScheduledInputRequirements({((step,), (step,)): 1 for step in range(2)}),
+            ),
+            InputInterface(
+                Port("w_hi", weight, upper),
+                ScheduledInputRequirements(
+                    {
+                        ((step,), (row, col)): 1
+                        for step in range(2)
+                        for row in range(2)
+                        for col in range(2)
+                    }
+                ),
+            ),
+        ),
+        (
+            OutputInterface(
+                Port("y_out", result, BeatSequence(1, (((0,),), ((1,),)))),
+                ScheduledOutputAvailability({(0,): (0,), (1,): (1,)}),
+            ),
+        ),
+    )
+    memory = ProtoRegion(
+        LogicalSchedule(()),
+        (
+            UnportedInput(
+                weight,
+                ScheduledInputRequirements({((), position): 1 for position in upper.image}),
+            ),
+        ),
+        (
+            OutputInterface(
+                Port("w_out", weight, upper),
+                ScheduledOutputAvailability({position: () for position in upper.image}),
+            ),
+        ),
+    )
+    return ProtoNetwork(
+        (ProtoNode(COMPUTE, compute), ProtoNode(MEMORY, memory)),
+        (
+            Edge(
+                "weight_supply",
+                RegionEndpoint(MEMORY, "w_out"),
+                (SinkContract(RegionEndpoint(COMPUTE, "w_hi"), PositionMap.identity(upper.image)),),
+            ),
+        ),
+        (
+            _boundary(COMPUTE, compute.input_interface("x_in").port, "activation"),
+            _boundary(COMPUTE, compute.output_interface("y_out").port, "output"),
+        ),
+    )
+
+
+# -- plural targets and operand-id collision ----------------------------------
+
+
+def _twin(suffix: str, weight: Operand) -> ProtoRegion:
+    """A tiny Region requiring its own activation and a shared matrix."""
 
     schedule = LogicalSchedule((ScheduleLevel("step", 2),))
     activation = Operand(f"X{suffix}", ACTIVATION, (2,))
-    weight = Operand("W", WEIGHT, (2,))
     result = Operand(f"Y{suffix}", OUTPUT, (2,))
     uses = ScheduledInputRequirements({((step,), (step,)): 1 for step in range(2)})
+    weight_uses = ScheduledInputRequirements(
+        {((step,), position): 1 for step in range(2) for position in weight.positions}
+    )
     return ProtoRegion(
         schedule,
         (
-            RegionInput(
-                activation,
-                uses,
-                Port(f"x{suffix}", activation, BeatSequence(1, (((0,),), ((1,),)))),
+            InputInterface(
+                Port(f"x{suffix}", activation, BeatSequence(1, (((0,),), ((1,),)))), uses
             ),
-            RegionInput(weight, uses),
+            UnportedInput(weight, weight_uses),
         ),
         (
             OutputInterface(
@@ -311,14 +392,11 @@ def _twin(suffix: str) -> ProtoRegion:
     )
 
 
-def plural_mapping_network() -> ProtoNetwork:
-    """Two Regions requiring the same matrix, neither exposing it.
-
-    One source tensor, two dataflow requirements.  Under a rule that insists on
-    exactly one mapping this Network is an error.  It is not one.
-    """
-
-    nodes = tuple(ProtoNode(f"compute_{suffix}", _twin(suffix)) for suffix in ("a", "b"))
+def _twin_network(left: Operand, right: Operand) -> ProtoNetwork:
+    nodes = (
+        ProtoNode("compute_a", _twin("a", left)),
+        ProtoNode("compute_b", _twin("b", right)),
+    )
     boundaries = tuple(
         boundary
         for node in nodes
@@ -330,37 +408,27 @@ def plural_mapping_network() -> ProtoNetwork:
     return ProtoNetwork(nodes, (), boundaries)
 
 
-# -- one operand, two ports ---------------------------------------------------
+def plural_target_network() -> ProtoNetwork:
+    """Two Regions requiring the same matrix, neither exposing it.
 
-
-def split_supply_region() -> SplitRegion:
-    """``W`` delivered by two ports -- the one shape the recommendation refuses.
-
-    Built in the widening shape so the refusal can be triggered on demand rather
-    than reasoned about.  Nothing in FINN or in the canon requires it today; it
-    is here as the named risk, not as a forcing case.
+    One source tensor, two dataflow requirements.  Under a rule that insists on
+    exactly one mapping this Network is an error.  It is not one.
     """
 
-    schedule = LogicalSchedule((ScheduleLevel("step", 2),))
-    weight = Operand("W", WEIGHT, (2, 2))
-    result = Operand("Y", OUTPUT, (2,))
-    uses = ScheduledInputRequirements(
-        {((step,), (row, col)): 1 for step in range(2) for row in range(2) for col in range(2)}
-    )
-    return SplitRegion(
-        schedule,
-        (InputRequirement(weight, uses),),
-        (
-            Port("w_lo", weight, BeatSequence(2, (((0, 0), (0, 1)),))),
-            Port("w_hi", weight, BeatSequence(2, (((1, 0), (1, 1)),))),
-        ),
-        (
-            OutputInterface(
-                Port("y", result, BeatSequence(1, (((0,),), ((1,),)))),
-                ScheduledOutputAvailability({(0,): (0,), (1,): (1,)}),
-            ),
-        ),
-    )
+    shared = Operand("W", WEIGHT, (2,))
+    return _twin_network(shared, shared)
+
+
+def colliding_network() -> ProtoNetwork:
+    """Two unrelated tensors that both happen to be called ``W``.
+
+    The one the Network can catch: they disagree on shape.  Two unrelated
+    tensors that agree on type and shape are an authoring collision no
+    structural rule can see, and the declaration-side qualification is the
+    answer to those.
+    """
+
+    return _twin_network(Operand("W", WEIGHT, (2,)), Operand("W", WEIGHT, (4,)))
 
 
 __all__ = [
@@ -371,12 +439,13 @@ __all__ = [
     "OUTPUT",
     "REPLAY",
     "WEIGHT",
+    "colliding_network",
     "decoupled_network",
     "embedded_network",
     "external_network",
     "lift",
     "memory_region",
+    "partial_internal_network",
     "partial_service_region",
-    "plural_mapping_network",
-    "split_supply_region",
+    "plural_target_network",
 ]

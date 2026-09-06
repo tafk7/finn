@@ -1,39 +1,53 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The recommended dataflow model — one Region input, optional stream exposure.
+"""The recommended dataflow model — a Region input is ported or it is not.
 
 Today a Region input is ``(Port, ScheduledInputRequirements)``, so requirements
-cannot exist without a port: an operand the computation consumes but no port
-presents is absent from the value entirely.  That is the bug.  The fix is to
-make the *port* the optional part rather than the requirements:
+cannot exist without a port and an operand no port presents is absent from the
+value entirely.  That is the bug.  The fix adds the missing case rather than
+making the existing one nullable:
 
 ```python
 @dataclass(frozen=True)
-class RegionInput:
+class InputInterface:
+    port: Port
+    requirements: ScheduledInputRequirements
+
+    @property
+    def operand(self) -> Operand:
+        return self.port.operand
+
+
+@dataclass(frozen=True)
+class UnportedInput:
     operand: Operand
     requirements: ScheduledInputRequirements
-    port: Port | None = None
+
+
+RegionInput = InputInterface | UnportedInput
 
 
 @dataclass(frozen=True)
 class DataflowRegion:
     schedule: LogicalSchedule
-    inputs: tuple[RegionInput, ...]      # element type changes; signature does not
+    inputs: tuple[RegionInput, ...]
     outputs: tuple[OutputInterface, ...]
 ```
 
-The requirement is stated whether or not a port presents it.  Whether the port
-presents every required occurrence, some of them, or none is a *derived*
-comparison, and covering the difference is the binding's obligation under
-``REGION.md`` §5.2 -- not a field here.  The Region never declares storage and
-the words "local state" do not appear in the value.
+``InputInterface`` keeps its name, its fields and its constructor.  The operand
+is authored once in both cases -- off the port when there is one -- so an input
+whose declared operand disagrees with its port's is not a validation rule but an
+unrepresentable state.
 
-The structural claim this shape makes is **at most one input port per operand**.
-Zero is the embedded and parameter-source case.  It says nothing about output
-ports: the replay Region carries ``X`` on an input and an output, and the output
-side is untouched.  ``candidates.py`` holds the two-collection widening for the
-day that claim fails, and states its trigger.
+Requirements are mandatory in both cases.  A ported input and an unported one
+are equally complete statements about the computation: which positions, at which
+schedule points, how often.  They differ only in whether an ordered channel
+carries any of them.
+
+The Region declares no storage and the words "local state" do not appear in the
+value.  ``REGION.md`` §5.2 gives "declared local state" to the binding witness,
+and this redesign leaves it there.
 
 The prototype cannot edit ``finn.dataflow.region`` before C1, so it mirrors the
 proposed value and reuses every canonical part underneath: ``Operand``,
@@ -62,65 +76,64 @@ from finn.dataflow.region import (
 
 
 @dataclass(frozen=True)
-class RegionInput:
-    """One operand the Region requires, and at most one port presenting it.
+class InputInterface:
+    """One operand the Region requires, presented by one ordered channel.
 
-    ``requirements`` is never optional.  A streamed input and an unported one
-    are equally complete statements about the computation -- which positions, at
-    which schedule points, how often -- and differ only in whether an ordered
-    channel carries any of them.
+    Unchanged from today in name, fields and construction order.  ``operand`` is
+    a property over the port rather than a field, so the two can never disagree.
+    """
+
+    port: Port
+    requirements: ScheduledInputRequirements
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.port, Port):
+            raise TypeError("port must be a Port")
+        if not isinstance(self.requirements, ScheduledInputRequirements):
+            raise TypeError("requirements must be ScheduledInputRequirements")
+
+    @property
+    def operand(self) -> Operand:
+        return self.port.operand
+
+
+@dataclass(frozen=True)
+class UnportedInput:
+    """One operand the Region requires that no ordered channel presents.
+
+    The only genuinely new case.  It says the computation consumes the operand
+    and that this factorization gives it no port; it names no memory,
+    technology, slot, image or module, and a physical choice can never add or
+    remove one.
     """
 
     operand: Operand
     requirements: ScheduledInputRequirements
-    port: Port | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.operand, Operand):
             raise TypeError("operand must be an Operand")
         if not isinstance(self.requirements, ScheduledInputRequirements):
             raise TypeError("requirements must be ScheduledInputRequirements")
-        if self.port is not None and not isinstance(self.port, Port):
-            raise TypeError("port must be a Port or None")
 
-    @property
-    def id(self) -> str:
-        """A Region input is named by its operand; it may have no channel."""
 
-        return self.operand.id
+RegionInput = InputInterface | UnportedInput
 
-    @property
-    def occurrence_count(self) -> int:
-        return self.requirements.occurrence_count
 
-    @property
-    def required_positions(self) -> frozenset[Coordinate]:
-        return frozenset(
-            position
-            for (_iteration, position), multiplicity in self.requirements.entries
-            if multiplicity > 0
-        )
+def required_positions(item: RegionInput) -> frozenset[Coordinate]:
+    """Positions the computation requires at least once."""
 
-    @property
-    def presented_positions(self) -> frozenset[Coordinate]:
-        """Positions the port presents, or none when there is no port."""
+    return frozenset(
+        position
+        for (_iteration, position), multiplicity in item.requirements.entries
+        if multiplicity > 0
+    )
 
-        return frozenset() if self.port is None else self.port.beat_sequence.image
 
-    @property
-    def unpresented_positions(self) -> frozenset[Coordinate]:
-        """Required positions the port does not present.
+def presented_positions(item: RegionInput) -> frozenset[Coordinate]:
+    """Positions this input's port presents, or none when it has no port."""
 
-        Derived, never stored.  It is the size of the question the binding has
-        to answer, and it is a *report*, not a classification: empty does not
-        mean "streamed" and full does not mean "embedded".
-        """
-
-        return self.required_positions - self.presented_positions
-
-    @property
-    def presented_field_count(self) -> int:
-        return 0 if self.port is None else self.port.beat_sequence.delivered_field_count
+    return item.port.beat_sequence.image if isinstance(item, InputInterface) else frozenset()
 
 
 @dataclass(frozen=True)
@@ -141,7 +154,7 @@ class ProtoRegion:
 
     @property
     def input_ports(self) -> tuple[Port, ...]:
-        return tuple(item.port for item in self.inputs if item.port is not None)
+        return tuple(item.port for item in self.inputs if isinstance(item, InputInterface))
 
     @property
     def ports(self) -> tuple[Port, ...]:
@@ -155,8 +168,14 @@ class ProtoRegion:
             raise KeyError(f"expected one input operand {operand_id!r}, found {len(matches)}")
         return matches[0]
 
-    def input_port(self, port_id: str) -> Port:
-        matches = tuple(port for port in self.input_ports if port.id == port_id)
+    def input_interface(self, port_id: str) -> InputInterface:
+        """Unchanged: a port lookup can only ever find a ported input."""
+
+        matches = tuple(
+            item
+            for item in self.inputs
+            if isinstance(item, InputInterface) and item.port.id == port_id
+        )
         if len(matches) != 1:
             raise KeyError(f"expected one input port {port_id!r}, found {len(matches)}")
         return matches[0]
@@ -187,13 +206,13 @@ class ProtoNetwork:
         return matches[0]
 
 
-# -- validation ---------------------------------------------------------------
+# -- region validation --------------------------------------------------------
 #
-# The whole of ``validate_region`` restated over the new shape, not a list of
-# additions.  One REGION.md §5.1 condition changes what it ranges over, the
-# port-shaped conditions learn to skip an input with no port, and two rules are
-# new.  Writing only the new ones would have hidden the expansion, which is the
-# part that catches what today's model cannot see.
+# The whole of ``validate_region`` restated over the new shape.  One REGION.md
+# §5.1 condition changes what it ranges over, the port-shaped conditions range
+# over the ports that exist, and one rule is new.  Writing only the new one
+# would have hidden the expansion, which is the part that catches what today's
+# model cannot see.
 
 
 @dataclass(frozen=True)
@@ -206,6 +225,14 @@ class Issue:
 def _duplicates(values: tuple[str, ...]) -> tuple[str, ...]:
     counts = Counter(values)
     return tuple(sorted(value for value, count in counts.items() if count > 1))
+
+
+def _input_path(item: RegionInput) -> str:
+    return (
+        f"input[{item.port.id!r}]"
+        if isinstance(item, InputInterface)
+        else f"unported_input[{item.operand.id!r}]"
+    )
 
 
 def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
@@ -244,9 +271,9 @@ def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
         )
 
     # 2b. NEW: one input per operand.  Two inputs for one operand would be two
-    # requirement maps for one computation's use of it, with no defined
-    # relation between them.  This is also the rule that makes "at most one
-    # input port per operand" structural rather than merely observed.
+    # requirement maps for one computation's use of it, with no defined relation
+    # between them -- which is also exactly the relation a multi-port widening
+    # would have to define.  See MULTI_PORT_WIDENING.
     for operand_id in _duplicates(tuple(item.operand.id for item in region.inputs)):
         issues.append(
             Issue(
@@ -256,27 +283,16 @@ def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
             )
         )
 
-    # 2c. NEW: a port presents the operand its input declares.  Local, because
-    # both facts are inside one value -- which is the advantage of not splitting
-    # requirements and ports into two collections.
-    for item in region.inputs:
-        if item.port is not None and item.port.operand != item.operand:
-            issues.append(
-                Issue(
-                    "input.port_operand_mismatch",
-                    f"input[{item.operand.id!r}].port.operand",
-                    f"port {item.port.id!r} presents operand {item.port.operand.id!r}, "
-                    f"but its input declares {item.operand.id!r}",
-                )
-            )
+    # There is no operand/port agreement rule.  Under the sum type the operand
+    # of a ported input *is* its port's operand, so disagreement is
+    # unrepresentable rather than reportable.
 
     # 3. operand declarations -- EXPANDED.  The same rules, now ranging over
-    # every Region input's operand rather than over port operands only, which
-    # is how an operand with no port acquires datatype and shape validation at
-    # all.
+    # every Region input's operand rather than over port operands only, which is
+    # how an operand with no port acquires datatype and shape validation at all.
     seen: dict[str, tuple[Operand, str]] = {}
     checked: list[tuple[Operand, str]] = [
-        (item.operand, f"input[{item.operand.id!r}].operand") for item in region.inputs
+        (item.operand, f"{_input_path(item)}.operand") for item in region.inputs
     ] + [
         (interface.port.operand, f"output[{interface.port.id!r}].port.operand")
         for interface in region.outputs
@@ -314,7 +330,7 @@ def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
                 )
 
     # 4 and 7. beat field domain and beat positions -- unchanged rules, applied
-    # to the ports that exist.  An input with no port contributes none.
+    # to the ports that exist.  An unported input contributes none.
     for port in region.ports:
         if port.beat_sequence.elements_per_beat <= 0:
             issues.append(
@@ -345,10 +361,10 @@ def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
                         )
                     )
 
-    # 5. requirement domains -- unchanged rules, now reached for an input with
-    # no port, where today there is no input to reach.
+    # 5. requirement domains -- unchanged rules, now reached for an unported
+    # input, where today there is no input to reach.
     for item in region.inputs:
-        path = f"input[{item.operand.id!r}].requirements"
+        path = f"{_input_path(item)}.requirements"
         for index, ((iteration, position), multiplicity) in enumerate(item.requirements.entries):
             entry = f"{path}.entries[{index}]"
             if not schedule.contains_point(iteration):
@@ -379,7 +395,7 @@ def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
     # 6 and 8. output availability -- unchanged, and deliberately still
     # port-local.  REGION.md §3.7 binds availability to the port's beat image
     # and explicitly refuses the mirror equality for inputs; that asymmetry is
-    # the canon's, and it is why the input side changes and the output side
+    # the canon's, and it is why the input side gains a case and the output side
     # does not.
     for interface in region.outputs:
         path = f"output[{interface.port.id!r}]"
@@ -417,11 +433,50 @@ def validate_region(region: ProtoRegion) -> tuple[Issue, ...]:
     return tuple(sorted(issues, key=lambda issue: (issue.path, issue.code, issue.message)))
 
 
+# -- network validation, one added rule ---------------------------------------
+
+
+def network_operand_issues(network: ProtoNetwork) -> tuple[Issue, ...]:
+    """One operand identity must mean one logical tensor across the Network.
+
+    ``REGION.md`` §5.1 condition 3 states this within one Region.  Lifting it to
+    the Network is what makes ``Operand.id`` usable as the source-matching
+    namespace: without it, two unrelated Regions may each call something ``W``
+    and a source operand would correspond to both.
+
+    It catches unrelated tensors that differ in type or shape.  Two unrelated
+    tensors that happen to agree on both are an authoring collision the model
+    cannot see, and the declaration-side qualification in the submission's §5 is
+    the answer to those.
+    """
+
+    issues: list[Issue] = []
+    seen: dict[str, tuple[Operand, str]] = {}
+    for node in sorted(network.nodes, key=lambda item: item.id):
+        operands = [(item.operand, f"node[{node.id!r}].input") for item in node.region.inputs] + [
+            (interface.port.operand, f"node[{node.id!r}].output")
+            for interface in node.region.outputs
+        ]
+        for operand, path in operands:
+            previous = seen.get(operand.id)
+            if previous is None:
+                seen[operand.id] = (operand, path)
+            elif (
+                previous[0].element_type != operand.element_type
+                or previous[0].shape != operand.shape
+            ):
+                issues.append(
+                    Issue(
+                        "network.operand_identity_conflict",
+                        path,
+                        f"operand identity {operand.id!r} has inconsistent type or shape "
+                        f"against {previous[1]}",
+                    )
+                )
+    return tuple(issues)
+
+
 # -- source mapping -----------------------------------------------------------
-#
-# The question is "which selected dataflow requirement or product corresponds to
-# this source operand", and the answer is a reference into the Region model.
-# Nothing here classifies storage, and nothing repackages a BoundaryContract.
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,65 +502,117 @@ class MappingError(ValueError):
     """A source operand corresponds to no dataflow requirement or product."""
 
 
-def _edge_sinks(network: ProtoNetwork) -> set[RegionEndpoint]:
-    return {sink.endpoint for edge in network.edges for sink in edge.sinks}
-
-
-def _edge_sources(network: ProtoNetwork) -> set[RegionEndpoint]:
-    return {edge.source for edge in network.edges}
-
-
 def derive_input_mappings(network: ProtoNetwork, operand_id: str) -> tuple[RegionInputRef, ...]:
-    """Every requirement for ``operand_id`` that the Network does not supply.
+    """Every Region input requirement this source operand corresponds to.
 
-    A requirement whose port is an edge sink is fed by something the Network
-    already produced; the source tensor reaches it by transport, not by
-    correspondence.  Every other requirement for the operand -- unported, or
-    ported and exposed -- is a place the source operand enters the selected
-    construction.
+    One meaning and only one: **correspondence**.  Every input in the selected
+    Network requiring this operand is a target, whether a port presents it,
+    whether an edge feeds that port, and whether anything supplies it at all.
+    No filtering happens here, because a filtered set is a different question
+    and giving both the same name is how the meaning drifted in the earlier
+    passes.
 
-    Plural by construction.  Two Regions initialized from the same source
-    tensor are two mappings, not an ambiguity, and refusing to say so would bake
-    one operation's cardinality into the dataflow model.
+    The two other questions are asked separately, over the same refs:
+
+    ```text
+    dataflow provenance     internally_supplied_positions / externally_supplied_positions
+    what is still owed      unsupplied_positions
+    physical provisioning   not in this model at all -- U6 owns it
+    ```
+
+    Ordering is by node id for determinism of the returned tuple only.  Nothing
+    is *selected* by ordering.
     """
 
-    sinks = _edge_sinks(network)
-    mappings: list[RegionInputRef] = []
-    for node in sorted(network.nodes, key=lambda item: item.id):
-        for item in node.region.inputs:
-            if item.operand.id != operand_id:
-                continue
-            fed_internally = (
-                item.port is not None and RegionEndpoint(node.id, item.port.id) in sinks
-            )
-            if not fed_internally:
-                mappings.append(RegionInputRef(node.id, operand_id))
+    mappings = tuple(
+        RegionInputRef(node.id, operand_id)
+        for node in sorted(network.nodes, key=lambda item: item.id)
+        for item in node.region.inputs
+        if item.operand.id == operand_id
+    )
     if not mappings:
         raise MappingError(
-            f"the selected Network declares no unfed input requirement for operand {operand_id!r}"
+            f"the selected Network declares no input requirement for operand {operand_id!r}"
         )
-    return tuple(mappings)
+    return mappings
 
 
 def derive_output_mappings(network: ProtoNetwork, operand_id: str) -> tuple[RegionOutputRef, ...]:
-    """Every production of ``operand_id`` the Network does not consume itself."""
+    """Every Region product this source operand corresponds to."""
 
-    sources = _edge_sources(network)
-    mappings: list[RegionOutputRef] = []
-    for node in sorted(network.nodes, key=lambda item: item.id):
-        ports = tuple(
-            interface.port
-            for interface in node.region.outputs
-            if interface.port.operand.id == operand_id
-        )
-        if ports and not all(RegionEndpoint(node.id, port.id) in sources for port in ports):
-            mappings.append(RegionOutputRef(node.id, operand_id))
+    mappings = tuple(
+        RegionOutputRef(node.id, operand_id)
+        for node in sorted(network.nodes, key=lambda item: item.id)
+        for interface in node.region.outputs
+        if interface.port.operand.id == operand_id
+    )
     if not mappings:
-        raise MappingError(f"the selected Network produces no unconsumed operand {operand_id!r}")
-    return tuple(mappings)
+        raise MappingError(f"the selected Network produces no operand {operand_id!r}")
+    return mappings
 
 
-# -- derived exposure, computed on demand -------------------------------------
+# -- derived provenance, computed on demand -----------------------------------
+#
+# Three disjoint position sets per referenced requirement.  Position-granular,
+# not a boolean: REGION.md §3.7 is explicit that a port may present a required
+# position "once, repeatedly, or not at all", so "is this input edge-fed" cannot
+# by itself say that the Network supplies every required position.
+#
+# They are *not* occurrence-granular.  A position presented once and required
+# three times has entered the construction; serving the re-reads is the
+# binding's business, and §3.7 refuses any required-versus-presented equality
+# for inputs.
+
+
+def _region_input(network: ProtoNetwork, ref: RegionInputRef) -> RegionInput:
+    return network.node(ref.node_id).region.input(ref.operand_id)
+
+
+def _port_endpoint(network: ProtoNetwork, ref: RegionInputRef) -> RegionEndpoint | None:
+    item = _region_input(network, ref)
+    return RegionEndpoint(ref.node_id, item.port.id) if isinstance(item, InputInterface) else None
+
+
+def internally_supplied_positions(
+    network: ProtoNetwork, ref: RegionInputRef
+) -> frozenset[Coordinate]:
+    """Required positions delivered by a port that a Network edge feeds."""
+
+    endpoint = _port_endpoint(network, ref)
+    if endpoint is None:
+        return frozenset()
+    sinks = {sink.endpoint for edge in network.edges for sink in edge.sinks}
+    if endpoint not in sinks:
+        return frozenset()
+    item = _region_input(network, ref)
+    return required_positions(item) & presented_positions(item)
+
+
+def externally_supplied_positions(
+    network: ProtoNetwork, ref: RegionInputRef
+) -> frozenset[Coordinate]:
+    """Required positions delivered by a port a Network boundary exposes."""
+
+    endpoint = _port_endpoint(network, ref)
+    if endpoint is None:
+        return frozenset()
+    exposed = {boundary.endpoint for boundary in network.boundaries}
+    if endpoint not in exposed:
+        return frozenset()
+    item = _region_input(network, ref)
+    return required_positions(item) & presented_positions(item)
+
+
+def unsupplied_positions(network: ProtoNetwork, ref: RegionInputRef) -> frozenset[Coordinate]:
+    """Required positions no port of this input presents.
+
+    What the binding still owes, stated as dataflow rather than as storage.  It
+    is a report, not a classification: empty does not mean "streamed" and full
+    does not mean "embedded".
+    """
+
+    item = _region_input(network, ref)
+    return required_positions(item) - presented_positions(item)
 
 
 def exposing_ports(network: ProtoNetwork, ref: DataflowOperandRef) -> tuple[RegionEndpoint, ...]:
@@ -513,15 +620,13 @@ def exposing_ports(network: ProtoNetwork, ref: DataflowOperandRef) -> tuple[Regi
 
     region = network.node(ref.node_id).region
     if isinstance(ref, RegionInputRef):
-        port = region.input(ref.operand_id).port
-        ports: tuple[Port, ...] = () if port is None else (port,)
-    else:
-        ports = tuple(
-            interface.port
-            for interface in region.outputs
-            if interface.port.operand.id == ref.operand_id
-        )
-    return tuple(RegionEndpoint(ref.node_id, port.id) for port in ports)
+        endpoint = _port_endpoint(network, ref)
+        return () if endpoint is None else (endpoint,)
+    return tuple(
+        RegionEndpoint(ref.node_id, interface.port.id)
+        for interface in region.outputs
+        if interface.port.operand.id == ref.operand_id
+    )
 
 
 def exposing_boundaries(
@@ -540,6 +645,7 @@ def exposing_boundaries(
 
 __all__ = [
     "DataflowOperandRef",
+    "InputInterface",
     "Issue",
     "MappingError",
     "ProtoNetwork",
@@ -548,9 +654,16 @@ __all__ = [
     "RegionInput",
     "RegionInputRef",
     "RegionOutputRef",
+    "UnportedInput",
     "derive_input_mappings",
     "derive_output_mappings",
     "exposing_boundaries",
     "exposing_ports",
+    "externally_supplied_positions",
+    "internally_supplied_positions",
+    "network_operand_issues",
+    "presented_positions",
+    "required_positions",
+    "unsupplied_positions",
     "validate_region",
 ]

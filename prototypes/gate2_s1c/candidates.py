@@ -1,18 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The widening path, and the form the first pass proposed and this one withdraws.
+"""The nullable-port shape, the widening path, and the withdrawn local-state form.
 
-Two shapes are kept here rather than deleted, for two different reasons.
-
-``SplitRegion`` is where the model goes if "at most one input port per operand"
-ever fails: requirements and ports as separate collections.  It is not the
-recommendation, because it pays for a case that has no instance -- but it is
-worth having written down, because the recommendation's whole defence is that
-moving to it is cheap.
-
-``RegionLocalState`` is the first submission's form.  It is kept because the
-rule it needed is a counter-example, not because it is a live option.
+Three shapes kept beside the recommendation, for three reasons: the first is the
+one it was compared against and beat, the second is where it goes if its
+structural claim fails, and the third is the form an earlier pass proposed and
+this one withdraws.
 """
 
 from __future__ import annotations
@@ -27,71 +21,86 @@ from finn.dataflow.region import (
     ScheduledInputRequirements,
 )
 
-from dataflow_model import RegionInput
-
-# -- the widening path: requirements and ports as separate collections --------
+# -- the nullable-port shape --------------------------------------------------
 
 
 @dataclass(frozen=True)
-class InputRequirement:
-    operand: Operand
-    requirements: ScheduledInputRequirements
+class NullableInput:
+    """``RegionInput(operand, requirements, port | None)``.
 
-
-@dataclass(frozen=True)
-class SplitRegion:
-    """``DataflowRegion`` with requirements and ports keyed separately.
-
-    Holds everything the recommendation holds, plus one operand presented by
-    several ports.  The costs are permanent and paid on every read: two
-    collections to join by operand id before anything can be said about an
-    input, a rule that every port's operand is declared (structurally
-    impossible when the two live in one value), and a requirement map keyed by
-    operand while ``REGION.md`` §3.1 keys it by interface -- a canon change to
-    the notation, not just to a definition.
+    Holds every case the sum type holds.  Its cost is that the operand is
+    authored twice whenever a port exists -- once here and once inside the port
+    -- so a Region can be constructed in which they disagree, and a validation
+    rule has to exist to say so.
     """
 
+    operand: Operand
+    requirements: ScheduledInputRequirements
+    port: Port | None = None
+
+    @property
+    def operand_disagrees(self) -> bool:
+        return self.port is not None and self.port.operand != self.operand
+
+
+@dataclass(frozen=True)
+class NullableRegion:
     schedule: LogicalSchedule
-    input_requirements: tuple[InputRequirement, ...]
-    input_ports: tuple[Port, ...]
+    inputs: tuple[NullableInput, ...]
     outputs: tuple[OutputInterface, ...]
 
-    def ports_for(self, operand_id: str) -> tuple[Port, ...]:
-        return tuple(port for port in self.input_ports if port.operand.id == operand_id)
+
+#: What each shape costs at the sites that already exist, measured on
+#: 546538087 rather than estimated.  This is the comparison C1 asked for:
+#: consumer and validation change, not raw type count.
+MIGRATION = {
+    "InputInterface(...) constructions": {"sum type": 0, "nullable": 20},
+    "region.input_interface(port_id) calls": {"sum type": 0, "nullable": 33},
+    "sites reading .port off a region input": {"sum type": 15, "nullable": 15},
+    "validation rules for operand/port agreement": {"sum type": 0, "nullable": 1},
+    "new public dataclasses": {"sum type": 1, "nullable": 1},
+}
+
+
+# -- the widening path: one operand presented by several ports ----------------
 
 
 class MultiPortLimit(Exception):
     """Raised where the recommended shape cannot express a Region."""
 
 
-def as_recommended(region: SplitRegion) -> tuple[RegionInput, ...]:
-    """Fold a split Region into the recommended one, or say why it will not fold.
+def refuse_multi_port(operand_id: str, port_ids: tuple[str, ...]) -> None:
+    """The recommendation's one structural refusal, triggerable on demand."""
 
-    The failure is the whole risk of the recommendation, so it is worth being
-    able to trigger it on demand rather than reasoning about it.
-    """
-
-    inputs: list[RegionInput] = []
-    for requirement in region.input_requirements:
-        ports = region.ports_for(requirement.operand.id)
-        if len(ports) > 1:
-            raise MultiPortLimit(
-                f"operand {requirement.operand.id!r} is presented by {len(ports)} input ports "
-                f"({', '.join(port.id for port in ports)}); RegionInput holds one"
-            )
-        inputs.append(
-            RegionInput(requirement.operand, requirement.requirements, ports[0] if ports else None)
+    if len(port_ids) > 1:
+        raise MultiPortLimit(
+            f"operand {operand_id!r} would be presented by {len(port_ids)} input ports "
+            f"({', '.join(port_ids)}); one Region input holds one port"
         )
-    return tuple(inputs)
 
 
-#: What widening actually costs, if the day comes.  One field, one type.
-WIDENING = """
-    port: Port | None = None        ->      ports: tuple[Port, ...] = ()
+#: Widening is *not* guaranteed to be a mechanical field change.  Allowing an
+#: operand several ports -- either as ``ports: tuple[Port, ...]`` on one input,
+#: or by relaxing ``input.operand_duplicate`` -- forces the model to answer
+#: questions it does not answer today, and those answers are a new relation, not
+#: a new field.
+MULTI_PORT_WIDENING = """
+    mechanical
+        port: Port -> ports: tuple[Port, ...]
+        one beat image -> the union of the ports' beat images
 
-    item.port is None               ->      not item.ports
-    item.port.beat_sequence.image   ->      union of the ports' beat images
-    one port-operand equality check ->      the same check in a loop
+    not mechanical -- a service/partition relation the model does not have
+        do two ports' position sets have to be disjoint, or may they overlap?
+        if they overlap, is a position delivered twice, or is one delivery
+            authoritative?
+        is there an order across streams, or are the ports independent?
+        which occurrences does which interface serve, when the requirement map
+            counts uses and the ports count deliveries?
+
+    REGION.md §3.7 refuses a required-versus-presented equality for one port.
+    With several ports the question is not merely repeated, it is joint, and
+    §5.2's realizability witness would need to speak about interfaces rather
+    than about one beat sequence.
 """
 
 #: The trigger to spend it.  Not "two suppliers exist" -- two suppliers can
@@ -99,13 +108,13 @@ WIDENING = """
 #: two operands forces the *source mapping* to describe a partition of one ONNX
 #: tensor across several dataflow operands, which is new vocabulary in a layer
 #: that currently needs none.
-WIDENING_TRIGGER = (
+MULTI_PORT_TRIGGER = (
     "a Region requires one source tensor over two ordered channels, and naming "
     "them as two operands would put a tensor partition into OperandMapping"
 )
 
 
-# -- the form the first pass proposed, and why it was withdrawn ---------------
+# -- the form an earlier pass proposed, and why it was withdrawn --------------
 
 
 @dataclass(frozen=True)
@@ -138,13 +147,14 @@ def local_state_issue_codes(region: RegionLocalState) -> tuple[str, ...]:
 
 
 __all__ = [
-    "WIDENING",
-    "WIDENING_TRIGGER",
-    "InputRequirement",
+    "MIGRATION",
+    "MULTI_PORT_TRIGGER",
+    "MULTI_PORT_WIDENING",
     "LocalStateInput",
     "MultiPortLimit",
+    "NullableInput",
+    "NullableRegion",
     "RegionLocalState",
-    "SplitRegion",
-    "as_recommended",
     "local_state_issue_codes",
+    "refuse_multi_port",
 ]

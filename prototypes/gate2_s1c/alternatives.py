@@ -138,14 +138,16 @@ class DispositionGraph:
     dispositions: tuple[RequirementDisposition, ...]
 
 
-def derive_mappings_e(graph: DispositionGraph, operand_id: str) -> str:
+def derive_mappings_e(graph: DispositionGraph, operand_id: str) -> tuple[str, ...]:
     """Not a derivation.  A lookup in a table someone wrote by hand."""
 
     matches = [item for item in graph.dispositions if item.requirement_id == operand_id]
-    if len(matches) != 1:
-        raise ValueError(f"{operand_id}: {matches}")
-    item = matches[0]
-    return f"{item.kind.value}({item.boundary_id},{item.node_id},{item.port_id})"
+    if not matches:
+        raise ValueError(operand_id)
+    return tuple(
+        f"{item.kind.value}({item.node_id})"
+        for item in sorted(matches, key=lambda entry: entry.node_id)
+    )
 
 
 def disposition_agrees_with_network(
