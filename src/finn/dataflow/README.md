@@ -427,20 +427,32 @@ still describes the lowered branch IR and is not the authoring vocabulary.
 A layer specializes a choice through three methods and nothing else:
 `candidate_id(subspace)` names a candidate that already carries its own stable
 id, so nothing writes that id twice; `validate_candidate(owner, subspace)`
-refuses a candidate the layer does not admit, and the caller -- `admit_candidate`
--- says which member declared it; `default_outputs()` supplies the selected
-outputs the layer implies. A specialization that takes positional candidates
-initializes through `_from_candidates`. Everything else -- selector creation,
-gating, namespaces, forwarding, the view, and the persistence identity -- is the
-one generic implementation, and a specialization neither overrides nor
-duplicates it. `selector_name` renames the generated selector; it does not add
-a second one.
+refuses a candidate the layer does not admit; `default_outputs()` supplies the
+selected outputs the layer implies. A specialization that takes positional
+candidates initializes through `_from_candidates`, and both spellings pass
+through the same structural check, so supplying ids is not permission to supply
+something that is not a `Subspace`.
 
-The compiled root-relative declaration name is the stable persistence identity.
-`name=` overrides the local segment, and there is no second naming mechanism:
-`occurrence_persistable()` reports every selector and `Decision` beneath one
-root under that name, selectors first, with the root namespace removed so the
-same document reloads under any root. This package writes nothing down itself.
+`validate_candidate` is reached only through the private `_admit_candidate`,
+which attaches the declaring member's name -- one wrapper, called by the
+compiler and by any layer that must admit a candidate before compilation. It is
+not public authoring vocabulary. Everything else -- selector creation, gating,
+namespaces, forwarding, the view, and the persistence identity -- is the one
+generic implementation, and a specialization neither overrides nor duplicates
+it. `selector_name` renames the generated selector; it does not add a second
+one.
+
+The compiled root-relative declaration name is the stable persistence
+*identity*. `name=` overrides the local segment, and there is no second naming
+mechanism: `occurrence_persistable()` reports every selector and `Decision`
+beneath one root under that identity, selectors first, with the root namespace
+removed so the same document reloads under any root.
+
+That identity is not a serialized spelling. This package writes nothing down and
+fixes no attribute name; the operation persistence layer maps the identity
+deterministically onto native ONNX attribute names and owns the collision rule
+for them, so how a nested selector finally reads to a user is its decision, not
+this one's.
 
 The declaration stores no selection algorithm. `compile_space_model()` returns
 the ordinary spec plus a `BranchCatalog` of namespaces, selector paths, case ids,

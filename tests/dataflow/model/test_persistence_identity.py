@@ -1,17 +1,25 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``name=`` is the stable identity a persistence layer writes a choice down as.
+"""``name=`` is the stable identity a persistence layer keys a choice on.
 
 This package persists nothing and imports no ONNX.  What it owes a persistence
 layer is narrower and testable here: every committable choice beneath one root,
-each with a name that is stable across the two things that legitimately change
-around it -- the root namespace it is started under, and the Python member name
-it happens to be spelled with.
+each with an identity that is stable across the two things that legitimately
+change around it -- the root namespace it is started under, and the Python
+member name it happens to be spelled with.
 
 ``name=`` is the only override.  There is no ``persist_as``: a second naming
 mechanism would mean two answers to "what is this choice called" and one of them
 silently winning.
+
+**The dotted strings below are identities, not serialized spellings.**  Nothing
+here fixes what a native ONNX attribute is finally called, and no assertion in
+this file should be read as locking ``dataflow_design.case`` as the thing a user
+sees in Netron.  S2-A owns that mapping -- it may well render a nested selector
+as ``dataflow_design`` and a named ``PE`` as ``PE`` -- and owns the collision
+rule that makes such a rendering safe.  What the model guarantees, and all it
+guarantees, is that the identity S2-A maps *from* is stable and unique.
 """
 
 from __future__ import annotations
@@ -77,7 +85,11 @@ def _paths(root: Space) -> tuple[str, ...]:
 
 
 def test_every_committable_choice_is_named_relative_to_its_root() -> None:
-    """One flat identity per choice, including the ones nobody enumerated."""
+    """One flat identity per choice, including the ones nobody enumerated.
+
+    Asserted exactly because it is the input to S2-A's attribute mapping, not
+    because these strings are what any attribute is called.
+    """
 
     assert _paths(Root.start({Root.size: 3})) == (
         "dataflow_design.case",
@@ -97,7 +109,7 @@ def test_the_same_root_under_two_namespaces_produces_the_same_names() -> None:
 
 
 def test_a_name_overrides_the_member_it_is_spelled_with() -> None:
-    """The member name is a Python fact; ``name=`` is the persisted one."""
+    """The member name is a Python fact; ``name=`` is the one that travels."""
 
     names = _paths(Root.start({Root.size: 3}))
     assert "dataflow_design.case" in names
