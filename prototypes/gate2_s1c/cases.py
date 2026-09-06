@@ -1,20 +1,34 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The four forcing cases, over the real FINN Region constructors.
+"""The forcing cases, over the real FINN Region constructors where they exist.
 
-Nothing here invents a Region.  Each case calls the production constructor the
-selected Design would call and then adds the one thing schema A proposes: the
-local-state input that says the node consumes the matrix.  That is deliberate --
-if the cases were hand-built the prototype would prove only that the prototype
-is consistent with itself.
+```text
+external              W required by compute, one port, exposed at a boundary
+embedded              W required by compute, no port
+decoupled             W required by memory, no port; memory's output edge
+                      transports W to compute's W requirement
+partial service       one Region whose ports present some of what it requires:
+                      X re-read three times and presented once,
+                      W half presented and half not
+plural mapping        two Regions requiring the same operand from one source
+                      tensor
+multi-port operand    one operand presented by two ports (candidate B cannot
+                      hold it)
+```
+
+The first three lift production Regions -- ``construct_dot_product_region``,
+``construct_activation_replay_region``, ``construct_weight_stream_region`` --
+and change only what candidate A proposes.  Note what the embedded case
+becomes: the streamed Region with the weight *port* removed and the weight
+*requirement* kept, which is one argument rather than a separate constructor.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.dataflow.kernels.dotp_axi import construct_embedded_dot_product_region
+from dataflow_model import InputRequirement, ProtoNetwork, ProtoNode, ProtoRegion
 from finn.dataflow.kernels.memstream import construct_weight_stream_region
 from finn.dataflow.network import (
     BoundaryContract,
@@ -27,14 +41,26 @@ from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region,
     construct_dot_product_region,
 )
-from finn.dataflow.region import DataflowRegion, ScheduledInputRequirements
+from finn.dataflow.region import (
+    BeatSequence,
+    DataflowRegion,
+    LogicalSchedule,
+    Operand,
+    OutputInterface,
+    Port,
+    ScheduledInputRequirements,
+    ScheduledOutputAvailability,
+    ScheduleLevel,
+)
 from qonnx.core.datatype import DataType
-
-from schema_a import ProtoNetwork, ProtoNode, ProtoRegion, LocalStateInput
 
 REPLAY = "replay"
 COMPUTE = "compute"
 MEMORY = "memory"
+
+ACTIVATION = DataType["INT8"]
+WEIGHT = DataType["INT8"]
+OUTPUT = DataType["INT32"]
 
 
 @dataclass(frozen=True)
@@ -46,13 +72,32 @@ class Folding:
     simd: int = 8
 
 
-ACTIVATION = DataType["INT8"]
-WEIGHT = DataType["INT8"]
-OUTPUT = DataType["INT32"]
+# -- lifting a production Region into candidate A -----------------------------
 
 
-def _lift(region: DataflowRegion, held: tuple[LocalStateInput, ...] = ()) -> ProtoRegion:
-    return ProtoRegion(region.schedule, region.inputs, region.outputs, held)
+def lift(
+    region: DataflowRegion,
+    *,
+    drop_ports: tuple[str, ...] = (),
+    add_requirements: tuple[InputRequirement, ...] = (),
+) -> ProtoRegion:
+    """Split a production Region's interfaces into requirements and ports.
+
+    Requirements are keyed by operand rather than by port, which is the whole
+    proposal.  For every current FINN Region the two keyings coincide, so the
+    split is lossless -- worth knowing before recommending it.
+    """
+
+    requirements = tuple(
+        InputRequirement(interface.port.operand, interface.requirements)
+        for interface in region.inputs
+    )
+    ports = tuple(
+        interface.port for interface in region.inputs if interface.port.id not in drop_ports
+    )
+    return ProtoRegion(
+        region.schedule, requirements + add_requirements, ports, tuple(region.outputs)
+    )
 
 
 def _streamed_compute(folding: Folding) -> DataflowRegion:
@@ -79,28 +124,8 @@ def _replay(folding: Folding) -> DataflowRegion:
     )
 
 
-def weight_local_state(folding: Folding) -> LocalStateInput:
-    """The matrix as a local-state input, taken from the streamed Region itself.
-
-    The operand and the requirement function are lifted from the streamed
-    weight interface rather than rebuilt, so "the embedded core reads exactly
-    what the streamed one reads" is a fact about the value here and not a claim
-    in a docstring.
-    """
-
-    interface = _streamed_compute(folding).input_interface("weight")
-    return LocalStateInput(interface.port.operand, interface.requirements)
-
-
-def _boundary(
-    node_id: str, region: DataflowRegion, port_id: str, *, output: bool
-) -> BoundaryContract:
-    interface = region.output_interface(port_id) if output else region.input_interface(port_id)
-    return BoundaryContract(
-        port_id if port_id != "activation_in" else "activation",
-        RegionEndpoint(node_id, port_id),
-        interface.port.beat_sequence,
-    )
+def _boundary(node_id: str, port: Port, boundary_id: str) -> BoundaryContract:
+    return BoundaryContract(boundary_id, RegionEndpoint(node_id, port.id), port.beat_sequence)
 
 
 def _activation_edge(replay: DataflowRegion) -> Edge:
@@ -117,100 +142,207 @@ def _activation_edge(replay: DataflowRegion) -> Edge:
     )
 
 
-def external_network(folding: Folding = Folding()) -> ProtoNetwork:
-    """The matrix crosses the Design's edge.  No local state anywhere."""
-
+def _mvau_frame(
+    folding: Folding, compute: ProtoRegion, *, weight_boundary: bool
+) -> tuple[tuple[ProtoNode, ...], tuple[Edge, ...], tuple[BoundaryContract, ...]]:
     replay = _replay(folding)
-    compute = _streamed_compute(folding)
-    return ProtoNetwork(
-        (ProtoNode(REPLAY, _lift(replay)), ProtoNode(COMPUTE, _lift(compute))),
+    boundaries = [
+        _boundary(REPLAY, replay.input_interface("activation_in").port, "activation"),
+        _boundary(COMPUTE, compute.output_interface("output").port, "output"),
+    ]
+    if weight_boundary:
+        boundaries.append(_boundary(COMPUTE, compute.input_port("weight"), "weight"))
+    return (
+        (ProtoNode(REPLAY, lift(replay)), ProtoNode(COMPUTE, compute)),
         (_activation_edge(replay),),
-        (
-            _boundary(REPLAY, replay, "activation_in", output=False),
-            _boundary(COMPUTE, compute, "weight", output=False),
-            _boundary(COMPUTE, compute, "output", output=True),
-        ),
+        tuple(boundaries),
     )
+
+
+def external_network(folding: Folding = Folding()) -> ProtoNetwork:
+    compute = lift(_streamed_compute(folding))
+    nodes, edges, boundaries = _mvau_frame(folding, compute, weight_boundary=True)
+    return ProtoNetwork(nodes, edges, boundaries)
 
 
 def embedded_network(folding: Folding = Folding()) -> ProtoNetwork:
-    """The compute node holds the matrix.  No weight port, no weight boundary."""
+    """The streamed Region with the weight port dropped.  The requirement stays."""
 
-    replay = _replay(folding)
-    compute = construct_embedded_dot_product_region(
+    compute = lift(_streamed_compute(folding), drop_ports=("weight",))
+    nodes, edges, boundaries = _mvau_frame(folding, compute, weight_boundary=False)
+    return ProtoNetwork(nodes, edges, boundaries)
+
+
+def memory_region(folding: Folding) -> ProtoRegion:
+    """The parameter source, now saying which operand it requires.
+
+    A rank-zero source has one schedule point and requires every position of the
+    matrix there.  Today this Region declares no input at all, and so emits a
+    matrix it never says it needs.
+    """
+
+    produced = construct_weight_stream_region(
         folding.repetitions,
         folding.matrix_width,
         folding.matrix_height,
-        ACTIVATION,
         WEIGHT,
-        OUTPUT,
         folding.pe,
         folding.simd,
     )
-    return ProtoNetwork(
-        (
-            ProtoNode(REPLAY, _lift(replay)),
-            ProtoNode(COMPUTE, _lift(compute, (weight_local_state(folding),))),
-        ),
-        (_activation_edge(replay),),
-        (
-            _boundary(REPLAY, replay, "activation_in", output=False),
-            _boundary(COMPUTE, compute, "output", output=True),
+    operand = produced.output_interface("weight").port.operand
+    return lift(
+        produced,
+        add_requirements=(
+            InputRequirement(
+                operand,
+                ScheduledInputRequirements({((), position): 1 for position in operand.positions}),
+            ),
         ),
     )
 
 
 def decoupled_network(folding: Folding = Folding()) -> ProtoNetwork:
-    """A second node holds the matrix and streams it into the compute node.
-
-    The compute Region is the *streamed* one, unchanged: external and decoupled
-    differ only in what feeds the weight input.  The memory Region gains the
-    local-state input the production ``construct_cyclic_parameter_region`` cannot
-    currently express -- today it emits a matrix it never says it has.
-    """
-
-    replay = _replay(folding)
-    compute = _streamed_compute(folding)
-    memory = construct_weight_stream_region(
-        folding.repetitions,
-        folding.matrix_width,
-        folding.matrix_height,
-        WEIGHT,
-        folding.pe,
-        folding.simd,
-    )
-    produced = memory.output_interface("weight").port
-    consumed = compute.input_interface("weight").port
+    compute = lift(_streamed_compute(folding))
+    memory = memory_region(folding)
+    nodes, edges, boundaries = _mvau_frame(folding, compute, weight_boundary=False)
     weight_edge = Edge(
         "weight_supply",
         RegionEndpoint(MEMORY, "weight"),
         (
             SinkContract(
                 RegionEndpoint(COMPUTE, "weight"),
-                PositionMap.identity(produced.beat_sequence.image),
+                PositionMap.identity(memory.output_interface("weight").port.beat_sequence.image),
             ),
         ),
     )
-    assert produced.beat_sequence.image == consumed.beat_sequence.image
-    # A rank-zero source has one schedule point, so every position it holds is
-    # required there.  This is the memory's own requirement function, not the
-    # consumer's.
-    held = LocalStateInput(
-        produced.operand,
-        ScheduledInputRequirements(
-            {((), position): 1 for position in produced.beat_sequence.image}
+    return ProtoNetwork((*nodes, ProtoNode(MEMORY, memory)), (*edges, weight_edge), boundaries)
+
+
+# -- partial service ----------------------------------------------------------
+
+
+def partial_service_region() -> ProtoRegion:
+    """One Region whose ports present part of what it requires, two ways.
+
+    ``X`` is read once per visit and the port presents each position once: the
+    position set is fully presented and two thirds of the *occurrences* are not.
+    This is the multi-visit kernel the deadlock proofs name -- softmax reads its
+    row three times -- and the canon's instruction is to declare the re-reads as
+    multiplicity, not as extra boundary beats.
+
+    ``W`` is required in full and its port presents only the upper columns: half
+    the *positions* are not presented at all.  ``REGION.md`` §3.7 permits exactly
+    this, per position, which is why "streamed" and "locally supplied" cannot be
+    classifications of a whole operand.
+    """
+
+    schedule = LogicalSchedule(
+        (ScheduleLevel("rep", 2), ScheduleLevel("visit", 3), ScheduleLevel("col", 4))
+    )
+    activation = Operand("X", ACTIVATION, (2, 4))
+    weight = Operand("W", WEIGHT, (2, 4))
+    result = Operand("Y", OUTPUT, (2,))
+
+    read_every_visit = ScheduledInputRequirements(
+        {
+            ((rep, visit, col), (rep, col)): 1
+            for rep in range(2)
+            for visit in range(3)
+            for col in range(4)
+        }
+    )
+    activation_port = Port(
+        "x_in",
+        activation,
+        BeatSequence(4, tuple(tuple((rep, col) for col in range(4)) for rep in range(2))),
+    )
+    weight_port = Port(
+        "w_hi",
+        weight,
+        BeatSequence(2, tuple(tuple((rep, col) for col in (2, 3)) for rep in range(2))),
+    )
+    output = OutputInterface(
+        Port("y_out", result, BeatSequence(1, (((0,),), ((1,),)))),
+        ScheduledOutputAvailability({(0,): (0, 2, 3), (1,): (1, 2, 3)}),
+    )
+    return ProtoRegion(
+        schedule,
+        (
+            InputRequirement(activation, read_every_visit),
+            InputRequirement(weight, read_every_visit),
+        ),
+        (activation_port, weight_port),
+        (output,),
+    )
+
+
+# -- plural source mapping ----------------------------------------------------
+
+
+def _twin(suffix: str) -> ProtoRegion:
+    """A tiny Region requiring its own activation and a shared matrix ``W``."""
+
+    schedule = LogicalSchedule((ScheduleLevel("step", 2),))
+    activation = Operand(f"X{suffix}", ACTIVATION, (2,))
+    weight = Operand("W", WEIGHT, (2,))
+    result = Operand(f"Y{suffix}", OUTPUT, (2,))
+    uses = ScheduledInputRequirements({((step,), (step,)): 1 for step in range(2)})
+    return ProtoRegion(
+        schedule,
+        (InputRequirement(activation, uses), InputRequirement(weight, uses)),
+        (Port(f"x{suffix}", activation, BeatSequence(1, (((0,),), ((1,),)))),),
+        (
+            OutputInterface(
+                Port(f"y{suffix}", result, BeatSequence(1, (((0,),), ((1,),)))),
+                ScheduledOutputAvailability({(0,): (0,), (1,): (1,)}),
+            ),
         ),
     )
-    return ProtoNetwork(
+
+
+def plural_mapping_network() -> ProtoNetwork:
+    """Two Regions requiring the same matrix, neither exposing it.
+
+    One source tensor, two dataflow requirements.  Under a rule that insists on
+    exactly one mapping this Network is an error.  It is not one.
+    """
+
+    nodes = tuple(ProtoNode(f"compute_{suffix}", _twin(suffix)) for suffix in ("a", "b"))
+    boundaries = tuple(
+        boundary
+        for node in nodes
+        for boundary in (
+            _boundary(node.id, node.region.input_ports[0], f"{node.id}_in"),
+            _boundary(node.id, node.region.outputs[0].port, f"{node.id}_out"),
+        )
+    )
+    return ProtoNetwork(nodes, (), boundaries)
+
+
+# -- one operand, two ports ---------------------------------------------------
+
+
+def split_supply_region() -> ProtoRegion:
+    """``W`` delivered by two ports: the shape candidate B cannot hold."""
+
+    schedule = LogicalSchedule((ScheduleLevel("step", 2),))
+    weight = Operand("W", WEIGHT, (2, 2))
+    result = Operand("Y", OUTPUT, (2,))
+    uses = ScheduledInputRequirements(
+        {((step,), (row, col)): 1 for step in range(2) for row in range(2) for col in range(2)}
+    )
+    return ProtoRegion(
+        schedule,
+        (InputRequirement(weight, uses),),
         (
-            ProtoNode(REPLAY, _lift(replay)),
-            ProtoNode(COMPUTE, _lift(compute)),
-            ProtoNode(MEMORY, _lift(memory, (held,))),
+            Port("w_lo", weight, BeatSequence(2, (((0, 0), (0, 1)),))),
+            Port("w_hi", weight, BeatSequence(2, (((1, 0), (1, 1)),))),
         ),
-        (_activation_edge(replay), weight_edge),
         (
-            _boundary(REPLAY, replay, "activation_in", output=False),
-            _boundary(COMPUTE, compute, "output", output=True),
+            OutputInterface(
+                Port("y", result, BeatSequence(1, (((0,),), ((1,),)))),
+                ScheduledOutputAvailability({(0,): (0,), (1,): (1,)}),
+            ),
         ),
     )
 
@@ -226,5 +358,9 @@ __all__ = [
     "decoupled_network",
     "embedded_network",
     "external_network",
-    "weight_local_state",
+    "lift",
+    "memory_region",
+    "partial_service_region",
+    "plural_mapping_network",
+    "split_supply_region",
 ]

@@ -1,20 +1,21 @@
-# S1-C semantic-core prototype — delete at C1
+# S1-C dataflow-model prototype — delete at C1
 
-Bounded, non-production prototype for the Gate 2 simplification workstream
-S1-C.  Nothing under this directory is imported by `finn.*`, and nothing here
-survives the C1 schema decision: the accepted schema is implemented in
-`src/finn/dataflow/region.py`, `region_validation.py` and a new canonical
-placement module, and this directory is removed in the same commit.
+Bounded, non-production prototype for the Gate 2 dataflow-model redesign
+(workstream S1-C, second pass, after C1 feedback). Nothing under this directory
+is imported by `finn.*`, and nothing here survives the C1 schema decision.
 
 ```text
-schema_a.py    resident inputs on the Region, plus derived placement   (preferred)
-alternatives.py  schema B (adjacent metadata) and schema C (disposition graph)
-cases.py       external / embedded / decoupled / MLO, over the real FINN Regions
-run.py         the executable evidence; `python run.py` prints and asserts
+C1-SUBMISSION.md   the comparison, recommendation, validation rules and fold
+dataflow_model.py  candidate A: requirements independent of stream exposure
+candidates.py      candidate B, and the first submission's local-state form
+alternatives.py    companion metadata and the separate disposition graph
+cases.py           external / embedded / decoupled / partial service /
+                   plural mapping / multi-port operand, over real FINN Regions
+run.py             the executable evidence; asserts, then prints
 ```
 
-Run it with the same interpreter the dataflow suite uses:
+Run it with an interpreter that has qonnx's dependencies available:
 
 ```
-FINN_ROOT=$PWD PYTHONPATH=src:tests:deps/qonnx/src python3 prototypes/gate2_s1c/run.py
+FINN_ROOT=$PWD PYTHONPATH=src:deps/qonnx/src python3 prototypes/gate2_s1c/run.py
 ```

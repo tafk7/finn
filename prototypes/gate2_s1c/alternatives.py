@@ -1,10 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Schemas B and C, far enough to count what they cost.
+"""Schemas D and E, far enough to count what they cost.
 
-Both are written against the same four cases as schema A so the comparison is
-about structure rather than about how much of each was implemented.
+D keeps ``DataflowRegion`` and returns a companion value beside it; E models
+source-visible requirements independently and authors a disposition graph.  Both
+are written against the same cases as candidate A so the comparison is about
+structure rather than about how much of each was implemented.
+
+They were written in the first pass and are unchanged in substance.  What
+changed is the value they wrap: the companion now has to carry input
+requirements rather than a list of held operands, which makes D strictly worse
+-- the second value is no longer a small annotation but half the Region.
 """
 
 from __future__ import annotations
@@ -15,7 +22,7 @@ from enum import Enum
 from finn.dataflow.network import RegionEndpoint
 from finn.dataflow.region import DataflowRegion, Operand, ScheduledInputRequirements
 
-# -- schema B: adjacent immutable Region semantic metadata --------------------
+# -- schema D: adjacent immutable Region metadata -----------------------------
 #
 # ``DataflowRegion`` is untouched; a companion value carries what it consumes
 # without a port.  The value is small.  What is not small is that from here on
@@ -48,9 +55,9 @@ class AnnotatedNetwork:
     residency_by_node: dict[str, RegionResidency] = field(default_factory=dict)
 
 
-#: Every seam that has to learn about the companion for B to work end to end.
+#: Every seam that has to learn about the companion for D to work end to end.
 #: Read off the current code, not estimated.
-B_THREADING_SITES = (
+D_THREADING_SITES = (
     "kernels/kernel.py: Region declaration -- a second exported member, or a "
     "Region declaration that returns a pair",
     "kernels/kernel.py: the no-local-Decision audit and the region type token",
@@ -68,33 +75,32 @@ B_THREADING_SITES = (
 )
 
 
-def derive_placement_b(annotated: AnnotatedNetwork, operand_id: str) -> str:
-    """The same rule as schema A, over two values instead of one."""
+def derive_mappings_d(annotated: AnnotatedNetwork, operand_id: str) -> tuple[str, ...]:
+    """The same rule as candidate A, over two values instead of one.
+
+    Every line that reads ``node.region`` needs its companion beside it, and the
+    companion is keyed by node id in a map the Network does not own.  Nothing
+    checks that the two agree.
+    """
 
     network = annotated.network
-    sinked = {sink.endpoint for edge in network.edges for sink in edge.sinks}  # type: ignore[attr-defined]
-    boundaries = {b.endpoint: b.id for b in network.boundaries}  # type: ignore[attr-defined]
+    sinks = {sink.endpoint for edge in network.edges for sink in edge.sinks}  # type: ignore[attr-defined]
     found: list[str] = []
     for node in network.nodes:  # type: ignore[attr-defined]
-        for interface in node.region.inputs:
-            if interface.port.operand.id != operand_id:
-                continue
-            endpoint = RegionEndpoint(node.id, interface.port.id)
-            if endpoint in sinked:
-                continue
-            found.append(f"External({boundaries.get(endpoint)},{node.id},{interface.port.id})")
-        # The one line that needs the second value, and the reason the second
-        # value has to reach every consumer that ever asks this question.
         companion = annotated.residency_by_node.get(node.id, RegionResidency())
-        for operand in companion.operands:
-            if operand.id == operand_id:
-                found.append(f"LocalState({node.id},{operand.id})")
-    if len(found) != 1:
-        raise ValueError(f"{operand_id}: {found}")
-    return found[0]
+        declared = {operand.id for operand in companion.operands} | {
+            port.operand.id for port in node.region.input_ports
+        }
+        if operand_id not in declared:
+            continue
+        ports = tuple(port for port in node.region.input_ports if port.operand.id == operand_id)
+        supplied = bool(ports) and all(RegionEndpoint(node.id, port.id) in sinks for port in ports)
+        if not supplied:
+            found.append(f"RegionInputRef({node.id},{operand_id})")
+    return tuple(found)
 
 
-# -- schema C: a separate requirement / disposition graph ---------------------
+# -- schema E: a separate requirement / disposition graph ---------------------
 #
 # Source-visible requirements are modelled independently of the Region, and a
 # disposition graph beside the Network says what became of each.
@@ -132,7 +138,7 @@ class DispositionGraph:
     dispositions: tuple[RequirementDisposition, ...]
 
 
-def derive_placement_c(graph: DispositionGraph, operand_id: str) -> str:
+def derive_mappings_e(graph: DispositionGraph, operand_id: str) -> str:
     """Not a derivation.  A lookup in a table someone wrote by hand."""
 
     matches = [item for item in graph.dispositions if item.requirement_id == operand_id]
@@ -145,36 +151,37 @@ def derive_placement_c(graph: DispositionGraph, operand_id: str) -> str:
 def disposition_agrees_with_network(
     graph: DispositionGraph, network: object, operand_id: str
 ) -> bool:
-    """C's extra obligation: the table and the topology can disagree.
+    """E's extra obligation: the table and the topology can disagree.
 
-    Schema A cannot express this failure, because there is no second statement
-    to disagree with.  C can, so C has to check it -- which means C carries the
-    whole of A's derivation *as well as* the table.
+    Candidate A cannot express this failure, because there is no second
+    statement to disagree with.  E can, so E has to check it -- which means E
+    carries the whole of A's derivation *as well as* the table.
     """
 
     # Local import: the prototype's modules are siblings on sys.path, and this
-    # dependency direction (C needs A) is itself part of the finding.
-    from schema_a import External, LocalState, derive_input_placement  # noqa: PLC0415
+    # dependency direction (E needs A) is itself part of the finding.
+    from dataflow_model import derive_input_mappings  # noqa: PLC0415
 
-    truth = derive_input_placement(network, operand_id)  # type: ignore[arg-type]
-    claimed = [item for item in graph.dispositions if item.requirement_id == operand_id][0]
-    if isinstance(truth, External):
-        return claimed.kind is DispositionKind.EXTERNAL and claimed.node_id == truth.node_id
-    if isinstance(truth, LocalState):
-        return claimed.kind is DispositionKind.LOCAL_STATE and claimed.node_id == truth.node_id
-    return claimed.kind is DispositionKind.INTERNAL_STREAM and claimed.node_id == truth.node_id
+    truth = derive_input_mappings(network, operand_id)  # type: ignore[arg-type]
+    claimed = tuple(item for item in graph.dispositions if item.requirement_id == operand_id)
+    if len(claimed) != len(truth):
+        return False
+    return all(
+        item.node_id == ref.node_id
+        for item, ref in zip(sorted(claimed, key=lambda i: i.node_id), truth)
+    )
 
 
 __all__ = [
     "AnnotatedNetwork",
     "AnnotatedRegion",
-    "B_THREADING_SITES",
+    "D_THREADING_SITES",
     "DispositionGraph",
     "DispositionKind",
     "RegionResidency",
     "RequirementDisposition",
     "SemanticRequirement",
-    "derive_placement_b",
-    "derive_placement_c",
+    "derive_mappings_d",
+    "derive_mappings_e",
     "disposition_agrees_with_network",
 ]
