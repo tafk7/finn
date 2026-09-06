@@ -1,10 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Candidate B and the original local-state form, with what each cannot say.
+"""The widening path, and the form the first pass proposed and this one withdraws.
 
-Both are written far enough to be *tried* against the forcing cases in
-``cases.py``.  Each fails at a different place, and the places are the finding.
+Two shapes are kept here rather than deleted, for two different reasons.
+
+``SplitRegion`` is where the model goes if "at most one input port per operand"
+ever fails: requirements and ports as separate collections.  It is not the
+recommendation, because it pays for a case that has no instance -- but it is
+worth having written down, because the recommendation's whole defence is that
+moving to it is cheap.
+
+``RegionLocalState`` is the first submission's form.  It is kept because the
+rule it needed is a counter-example, not because it is a live option.
 """
 
 from __future__ import annotations
@@ -19,68 +27,85 @@ from finn.dataflow.region import (
     ScheduledInputRequirements,
 )
 
-# -- candidate B: one Region input value with optional stream exposure --------
+from dataflow_model import RegionInput
+
+# -- the widening path: requirements and ports as separate collections --------
 
 
 @dataclass(frozen=True)
-class RegionInput:
-    """Operand, requirements, and at most one port that exposes them."""
-
+class InputRequirement:
     operand: Operand
     requirements: ScheduledInputRequirements
-    port: Port | None = None
 
 
 @dataclass(frozen=True)
-class RegionB:
+class SplitRegion:
+    """``DataflowRegion`` with requirements and ports keyed separately.
+
+    Holds everything the recommendation holds, plus one operand presented by
+    several ports.  The costs are permanent and paid on every read: two
+    collections to join by operand id before anything can be said about an
+    input, a rule that every port's operand is declared (structurally
+    impossible when the two live in one value), and a requirement map keyed by
+    operand while ``REGION.md`` §3.1 keys it by interface -- a canon change to
+    the notation, not just to a definition.
+    """
+
     schedule: LogicalSchedule
-    inputs: tuple[RegionInput, ...]
+    input_requirements: tuple[InputRequirement, ...]
+    input_ports: tuple[Port, ...]
     outputs: tuple[OutputInterface, ...]
 
+    def ports_for(self, operand_id: str) -> tuple[Port, ...]:
+        return tuple(port for port in self.input_ports if port.operand.id == operand_id)
 
-class CandidateBLimit(Exception):
-    """Raised where candidate B cannot express a canonical Region."""
+
+class MultiPortLimit(Exception):
+    """Raised where the recommended shape cannot express a Region."""
 
 
-def region_b_from_requirements(
-    schedule: LogicalSchedule,
-    requirements: dict[str, ScheduledInputRequirements],
-    operands: dict[str, Operand],
-    ports: tuple[Port, ...],
-    outputs: tuple[OutputInterface, ...],
-) -> RegionB:
-    """Build a candidate-B Region, or explain why the shape forbids it.
+def as_recommended(region: SplitRegion) -> tuple[RegionInput, ...]:
+    """Fold a split Region into the recommended one, or say why it will not fold.
 
-    Candidate B is compact and reads well for every case in which one operand
-    has at most one port.  The moment an operand has two -- a matrix delivered
-    by two suppliers, a tile split across two channels -- the value has nowhere
-    to put the second, and the only workarounds are worse than the problem:
-    split the operand into ``W_lo``/``W_hi``, which loses the single requirement
-    map and the single source correspondence, or allow ``port`` to become a
-    tuple, at which point candidate B *is* candidate A with the collections
-    nested.
-
-    ``REGION.md`` §5.1 condition 3 -- "within one region, operands with the same
-    identity have the same element type and shape" -- exists precisely because
-    an operand identity may recur across interfaces.  A model that can hold only
-    one port per operand makes that condition unreachable for inputs.
+    The failure is the whole risk of the recommendation, so it is worth being
+    able to trigger it on demand rather than reasoning about it.
     """
 
     inputs: list[RegionInput] = []
-    for operand_id, requirement in requirements.items():
-        matching = tuple(port for port in ports if port.operand.id == operand_id)
-        if len(matching) > 1:
-            raise CandidateBLimit(
-                f"operand {operand_id!r} is presented by {len(matching)} input ports "
-                f"({', '.join(port.id for port in matching)}); RegionInput holds one"
+    for requirement in region.input_requirements:
+        ports = region.ports_for(requirement.operand.id)
+        if len(ports) > 1:
+            raise MultiPortLimit(
+                f"operand {requirement.operand.id!r} is presented by {len(ports)} input ports "
+                f"({', '.join(port.id for port in ports)}); RegionInput holds one"
             )
         inputs.append(
-            RegionInput(operands[operand_id], requirement, matching[0] if matching else None)
+            RegionInput(requirement.operand, requirement.requirements, ports[0] if ports else None)
         )
-    return RegionB(schedule, tuple(inputs), outputs)
+    return tuple(inputs)
 
 
-# -- the original submission's form: a separate local-state collection --------
+#: What widening actually costs, if the day comes.  One field, one type.
+WIDENING = """
+    port: Port | None = None        ->      ports: tuple[Port, ...] = ()
+
+    item.port is None               ->      not item.ports
+    item.port.beat_sequence.image   ->      union of the ports' beat images
+    one port-operand equality check ->      the same check in a loop
+"""
+
+#: The trigger to spend it.  Not "two suppliers exist" -- two suppliers can
+#: always be modelled as two operands.  The trigger is that modelling them as
+#: two operands forces the *source mapping* to describe a partition of one ONNX
+#: tensor across several dataflow operands, which is new vocabulary in a layer
+#: that currently needs none.
+WIDENING_TRIGGER = (
+    "a Region requires one source tensor over two ordered channels, and naming "
+    "them as two operands would put a tensor partition into OperandMapping"
+)
+
+
+# -- the form the first pass proposed, and why it was withdrawn ---------------
 
 
 @dataclass(frozen=True)
@@ -104,23 +129,22 @@ def local_state_issue_codes(region: RegionLocalState) -> tuple[str, ...]:
     says the opposite at position granularity -- a boundary sequence may present
     a position "once, repeatedly, or not at all when declared local state
     supplies it" -- so a Region whose port carries part of an operand and whose
-    binding supplies the rest is canonical and this rule rejects it.
+    binding supplies the rest is canonical, and this rule rejects it.
     """
 
-    codes: list[str] = []
     held = {item.operand.id for item in region.local_state}
     streamed = {port.operand.id for port, _requirements in region.inputs}
-    for operand_id in sorted(held & streamed):
-        codes.append("local_state.operand_also_streamed")
-    return tuple(codes)
+    return tuple("local_state.operand_also_streamed" for _ in sorted(held & streamed))
 
 
 __all__ = [
-    "CandidateBLimit",
+    "WIDENING",
+    "WIDENING_TRIGGER",
+    "InputRequirement",
     "LocalStateInput",
-    "RegionB",
-    "RegionInput",
+    "MultiPortLimit",
     "RegionLocalState",
+    "SplitRegion",
+    "as_recommended",
     "local_state_issue_codes",
-    "region_b_from_requirements",
 ]

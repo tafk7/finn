@@ -1,13 +1,14 @@
 # S1-C dataflow-model prototype — delete at C1
 
 Bounded, non-production prototype for the Gate 2 dataflow-model redesign
-(workstream S1-C, second pass, after C1 feedback). Nothing under this directory
+(workstream S1-C, third pass). Nothing under this directory
 is imported by `finn.*`, and nothing here survives the C1 schema decision.
 
 ```text
 C1-SUBMISSION.md   the comparison, recommendation, validation rules and fold
-dataflow_model.py  candidate A: requirements independent of stream exposure
-candidates.py      candidate B, and the first submission's local-state form
+dataflow_model.py  the recommendation: RegionInput(operand, requirements, port?)
+candidates.py      the two-collection widening path and its trigger, and the
+                   first pass's withdrawn local-state form
 alternatives.py    companion metadata and the separate disposition graph
 cases.py           external / embedded / decoupled / partial service /
                    plural mapping / multi-port operand, over real FINN Regions

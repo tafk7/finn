@@ -1,18 +1,45 @@
 # S1-C — dataflow-model redesign, revised for C1
 
-*Second pass, after the C1 feedback on the first submission. Base revision
-`546538087`, branch `work/dataflow-gate2-s1-semantics`. Nothing under `src/` or
-`tests/` is modified; the only files are this directory.*
+*Third pass. Base revision `546538087`, branch
+`work/dataflow-gate2-s1-semantics`. Nothing under `src/` or `tests/` is
+modified; the only files are this directory.*
 
 Inputs: `dataflow-gate2-simplification-c0-decisions.md` §7,
-`dataflow-gate2-semantic-requirements-design-note.md`, the C1 feedback, and
-`scratchpad/dataflow/canon/REGION.md`.
+`dataflow-gate2-semantic-requirements-design-note.md`, the C1 feedback on the
+first two passes, and `scratchpad/dataflow/canon/REGION.md`.
 
 ---
 
-## 1. Framing
+## 1. Recommendation
 
-Four strata, and this workstream owns exactly one of them:
+```python
+# src/finn/dataflow/region.py
+@dataclass(frozen=True)
+class RegionInput:
+    operand: Operand
+    requirements: ScheduledInputRequirements
+    port: Port | None = None
+
+
+@dataclass(frozen=True)
+class DataflowRegion:
+    schedule: LogicalSchedule
+    inputs: tuple[RegionInput, ...]  # element type changes; signature does not
+    outputs: tuple[OutputInterface, ...]
+```
+
+Today an input is `(Port, ScheduledInputRequirements)`, so requirements cannot
+exist without a port and an operand no port presents is absent from the value
+entirely. The fix is to make the **port** the optional part, not the
+requirements.
+
+Everything else follows: exposure is a derived comparison, source mappings are
+references into the Region model and may be plural, and no placement value is
+stored anywhere.
+
+---
+
+## 2. Framing
 
 ```text
 functional model        what mathematical function the source operation computes
@@ -25,29 +52,20 @@ artifact system         how those physical requirements are built, stored and
                         measured
 ```
 
-`DataflowRegion` and `DataflowNetwork` *are* the dataflow model. It is the
-connecting contract between the source operation and the physical realization:
-it does not own the operation's mathematics, and it must not own storage
-placement. "Semantic" appears below only where logical facts are being
-contrasted with physical ones.
+`DataflowRegion` and `DataflowNetwork` *are* the dataflow model — the connecting
+contract between the source operation and the physical realization. They do not
+own the operation's mathematics and must not own storage placement. "Semantic"
+appears below only where logical facts are contrasted with physical ones.
 
-The first submission crossed that line. It went from "the embedded compute
-Region does not mention W" straight to `LocalStateInput`, which is a statement
-about where data lives. The correct dataflow fact is one step earlier and one
-step more general.
+The first pass crossed that line: it went from "the embedded compute Region does
+not mention W" straight to a `LocalStateInput` collection, which is a statement
+about where data lives.
 
 ---
 
-## 2. The actual missing fact
+## 3. The missing fact
 
-Today the two facts are welded into one value:
-
-```python
-InputInterface = (Port, ScheduledInputRequirements)
-```
-
-so an operand with no port has no requirements, and a Region that consumes it
-says nothing at all. But they are different kinds of fact:
+Two different kinds of fact, welded into one value today:
 
 ```text
 requirement    this Region requires positions of operand W at these schedule
@@ -56,7 +74,7 @@ exposure       this Region presents some or all of W through this ordered
                stream interface, in this beat order
 ```
 
-`REGION.md` already treats them as separable and already says so three times:
+`REGION.md` already treats them as separable:
 
 ```text
 §3.7   "a boundary sequence can present that position once, repeatedly, or not
@@ -68,22 +86,15 @@ exposure       this Region presents some or all of W through this ordered
 
 and `AUTHORING.md` §4.2, having written `required_W`, adds: *"Embedded weights
 can be local state and omit the input port. A streamed-weight alternative
-retains the input interface and declares its own beat sequence."* The
-requirement is the same declaration in both alternatives. Only the port differs.
+retains the input interface and declares its own beat sequence."* Same
+requirement in both alternatives; only the port differs.
 
-The canon leaves "declared local state" to the **binding witness** — §5.2 lists
-"streaming, replay, parameter memory, constant operands" as the witness's
-options. That is the right home for it and this redesign does not move it. What
-the redesign moves is the *requirement*, out of the interface, so that the
-question "what does this Region consume" has an answer whether or not a port
-exposes it.
+"Declared local state" stays where the canon puts it — with the **binding
+witness**, whose options §5.2 lists as "streaming, replay, parameter memory,
+constant operands". This redesign does not move it. It moves the *requirement*,
+so that "what does this Region consume" has an answer either way.
 
-So the redesign question is:
-
-> How should `DataflowRegion` represent scheduled logical input requirements
-> independently of stream-interface exposure?
-
-### 2.1 Three findings from the first pass that stand
+### 3.1 Findings that stand
 
 - `construct_embedded_dot_product_region` (`kernels/dotp_axi.py:239`) filters
   the weight interface out of the streamed Region — port, operand and
@@ -95,183 +106,163 @@ So the redesign question is:
 - `_internal_destination` (`ops/mvau/op.py:613`) therefore guesses: it scans for
   an input *port* whose id equals the source member name, and otherwise returns
   state of the node literally named `"compute"`. In the decoupled case the scan
-  finds the downstream consumer first. Reproduced in `run.py` §2.
+  finds the downstream consumer first (`run.py` §2).
 
-### 2.2 One finding the first pass got wrong
+### 3.2 Two things the earlier passes got wrong
 
-The proposed rule `local_state.operand_also_streamed` — an operand may not be
-both streamed and local state — contradicts `REGION.md` §3.7, which permits
-exactly that at position granularity. `run.py` §4 builds a canonical Region
-whose `W` port presents half the required positions and shows that rule
-rejecting it. "Streamed" and "locally supplied" are not classifications of an
-operand at all; they are a per-occurrence comparison between what the ports
-present and what the requirement asks for, and the difference is the binding's
-to cover.
+**`local_state.operand_also_streamed` rejects a canonical Region.** The rule
+treated "streamed" and "local state" as mutually exclusive classifications of a
+whole operand. `REGION.md` §3.7 permits the mix at position granularity.
+`run.py` §4 builds a Region whose `W` port presents half the required positions
+and shows the rule rejecting it.
+
+**The multi-port argument was not evidence.** The second pass recommended two
+separate collections — requirements and ports — on the strength of one operand
+presented by two ports, and cited `REGION.md` §5.1 condition 3 ("within one
+region, operands with the same identity have the same element type and shape")
+as presuming that recurrence. The replay Region's `X` — an input port and an
+output port — fully accounts for condition 3. It says nothing about the input
+side. That argument is withdrawn; §4 replaces it with a judgement.
 
 ---
 
-## 3. Candidates
+## 4. Why one collection, not two
 
-### A — requirements and ports as separate collections *(recommended)*
+The structural claim the recommendation makes is **at most one input port per
+operand**. Not 1:1 — zero is the embedded and parameter-source case, and the
+output side is untouched, which is why the replay Region's `X` on both an input
+and an output remains legal.
 
-```python
-@dataclass(frozen=True)
-class InputRequirement:
-    operand: Operand
-    requirements: ScheduledInputRequirements
+The alternative — `input_requirements` and `input_ports` as separate collections
+(`candidates.SplitRegion`) — holds one operand on several ports. The question is
+whether that case is worth its permanent cost.
 
+**Where the case would come from.** Wide parameters exceeding a stream width is
+packing: physical, one port, a wider beat. Double-pumping is physical. The one
+genuine driver is two suppliers feeding one matrix — two memstreams, two edges,
+one `W` — which is the MLO/shared-storage direction the feedback explicitly told
+me to treat as an extension seam and not over-claim. Using a future topology to
+buy a permanent structural cost is the mistake the second pass made.
 
-@dataclass(frozen=True)
-class DataflowRegion:
-    schedule: LogicalSchedule
-    input_requirements: tuple[InputRequirement, ...]
-    input_ports: tuple[Port, ...]
-    outputs: tuple[OutputInterface, ...]
+**What splitting an operand would cost instead.** If two channels ever carry one
+tensor and we model them as `W_lo` and `W_hi`, the source mapping has to describe
+a *partition of one ONNX tensor across several dataflow operands* — new
+vocabulary in a layer that currently needs none. That, not "two suppliers exist",
+is the trigger to widen; it is recorded as `candidates.WIDENING_TRIGGER`.
+
+**The asymmetry decides it.**
+
+```text
+choose one collection and be wrong later
+    port: Port | None = None   ->   ports: tuple[Port, ...] = ()
+    item.port is None          ->   not item.ports
+    one beat image             ->   the union of the ports' beat images
+    one equality check         ->   the same check in a loop
+    a mechanical widening of one field inside one existing type
+
+choose two collections and never need it
+    two collections joined by operand id before anything can be said about an
+    input, on every read, forever
+    a rule that every port's operand is declared -- structurally impossible when
+    the two live in one value
+    a requirement map keyed by operand while REGION.md §3.1 keys it by
+    interface: a change to the canon's notation, not just to a definition
 ```
 
-One requirement per `(Region, Operand)`. Ports say which positions cross a
-boundary and in what order. Exposure is a derived comparison, never a stored
-classification.
+The second cost is paid continuously for a case with no instance. The first is
+paid once, if the case arrives. `run.py` §6 triggers the refusal on demand
+(`MultiPortLimit`) so the risk is executable rather than argued.
 
-### B — one Region input with optional stream exposure
+### 4.1 The other schemas
+
+**The first pass's local-state form** — rejected by §3.2: it classifies whole
+operands, incompatibly with `REGION.md` §3.7, and states no requirements for the
+operand it names.
+
+**Adjacent companion metadata (D)** — turns one value into a pair at nine seams
+read off the current code (`alternatives.D_THREADING_SITES`). The disqualifying
+one is `designs/design.py:_correspondence_constraint`, which exists to prove a
+Network node holds its segment's Region; with a companion, a Design that
+resolved a Region and a mismatched companion would be structurally valid. It is
+also worse now than it was in the first pass: the companion has to carry the
+requirements, so it is half the Region rather than a small annotation.
+
+**Separate disposition graph (E)** — authors what the recommendation derives.
+`alternatives.py` writes a disposition table that is well-formed and false;
+catching it needs the derivation underneath, so E is the recommendation plus a
+table that can disagree with it.
+
+---
+
+## 5. Exact schema
+
+### 5.1 `src/finn/dataflow/region.py`
 
 ```python
 @dataclass(frozen=True)
 class RegionInput:
-    operand: Operand
-    requirements: ScheduledInputRequirements
-    port: Port | None
-```
+    """One operand the Region requires, and at most one port presenting it.
 
-Compact, and it holds every current FINN Region, the embedded case, the
-decoupled case **and** partial service — `run.py` §6 builds the partial-service
-Region under candidate B successfully, so partial exposure is *not* what
-separates them.
+    ``requirements`` is never optional.  A streamed input and an unported one
+    are equally complete statements about the computation -- which positions, at
+    which schedule points, how often -- and differ only in whether an ordered
+    channel carries any of them.
 
-What separates them is one operand presented by **two** ports: a matrix
-delivered by two suppliers, or a tile split across two channels.
-`region_b_from_requirements` raises on it:
-
-```text
-CandidateBLimit: operand 'W' is presented by 2 input ports (w_hi, w_lo);
-                 RegionInput holds one
-```
-
-The workarounds are worse than the problem. Splitting into `W_lo`/`W_hi` loses
-the single requirement map and the single source correspondence — the source
-tensor would map to two operands that are not the operand. Widening `port` to a
-tuple makes candidate B into candidate A with the collections nested one level
-deeper, and then `RegionInput` is a grouping with no invariant of its own.
-
-`REGION.md` §5.1 condition 3 — *"within one region, operands with the same
-identity have the same element type and shape"* — exists precisely because an
-operand identity may recur across interfaces. Candidate B makes that condition
-unreachable on the input side.
-
-**A over B, on that case.** If C1 judges multi-port supply out of scope, B is
-smaller by one collection and everything else in this document is unchanged.
-
-### C — the first submission's local-state form
-
-Rejected by §2.2 above: it classifies whole operands, and the classification is
-incompatible with `REGION.md` §3.7. It also states no requirements for the
-operand it names, which §5 of the feedback correctly refuses.
-
-### D — adjacent companion metadata; E — separate disposition graph
-
-Unchanged from the first submission, and no new evidence has appeared.
-
-D turns one value into a pair at nine seams read off the current code
-(`alternatives.py:D_THREADING_SITES`); the disqualifying one is
-`designs/design.py:_correspondence_constraint`, which exists to prove a Network
-node holds its segment's Region — with a companion, a Design that resolved a
-Region and a mismatched companion would be structurally valid.
-
-E authors what A derives, and `alternatives.py` writes a disposition table that
-is well-formed and false. Catching that needs A's derivation underneath, so E is
-A plus a table that can disagree with it.
-
----
-
-## 4. Recommended normalized schema
-
-### 4.1 `src/finn/dataflow/region.py`
-
-```python
-@dataclass(frozen=True)
-class InputRequirement:
-    """What one Region's computation logically requires of one operand.
-
-    Stated once per operand, not once per port: ``required(i, p)`` counts the
-    computation's uses, and a computation does not use a position twice because
-    two ports happen to deliver it.  Whether any port presents those positions
-    is a separate fact, and covering what the ports do not present is the
-    binding's obligation under REGION.md 5.2, not a field here.
+    Not storage.  A ``None`` port says no ordered channel presents this operand
+    in this factorization; it names no memory, technology, slot, image or
+    module, and a physical choice can never add or remove one.
     """
 
     operand: Operand
     requirements: ScheduledInputRequirements
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.operand, Operand):
-            raise TypeError("operand must be an Operand")
-        if not isinstance(self.requirements, ScheduledInputRequirements):
-            raise TypeError("requirements must be ScheduledInputRequirements")
+    port: Port | None = None
 
     @property
-    def id(self) -> str:
-        return self.operand.id
+    def id(self) -> str: ...  # the operand id
+    @property
+    def occurrence_count(self) -> int: ...
+    @property
+    def required_positions(self) -> frozenset[Coordinate]: ...
+    @property
+    def presented_positions(self) -> frozenset[Coordinate]: ...
+    @property
+    def unpresented_positions(self) -> frozenset[Coordinate]: ...
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class DataflowRegion:
     schedule: LogicalSchedule
-    input_requirements: tuple[InputRequirement, ...]
-    input_ports: tuple[Port, ...]
-    outputs: tuple[OutputInterface, ...]
-
-    # canonical order: requirements by operand id, input ports by port id,
-    # outputs by port id.
+    inputs: tuple[RegionInput, ...]  # canonical order: by operand id
+    outputs: tuple[OutputInterface, ...]  # canonical order: by port id
 
     @property
+    def input_ports(self) -> tuple[Port, ...]: ...  # the ports that exist
+    @property
     def ports(self) -> tuple[Port, ...]: ...
-    def input_requirement(self, operand_id: str) -> InputRequirement: ...
+    def input(self, operand_id: str) -> RegionInput: ...
     def input_port(self, port_id: str) -> Port: ...
     def output_interface(self, port_id: str) -> OutputInterface: ...
-    def ports_for(self, operand_id: str) -> tuple[Port, ...]: ...
-    def presented_positions(self, operand_id: str) -> frozenset[Coordinate]: ...
-    def unpresented_positions(self, operand_id: str) -> frozenset[Coordinate]: ...
 ```
 
-Four consequences, each deliberate:
+`InputInterface` is deleted; `RegionInput` replaces it. The name change is
+deliberate — a value that may have no port should not be called an interface.
 
-**`InputInterface` is deleted.** With requirements gone it holds only a port,
-and a one-field wrapper is the ladder this effort removed. An input interface
-*is* a port. `region.inputs` becomes `region.input_ports` so every call site
-fails loudly rather than silently changing type.
-
-**`OutputInterface` is not touched.** Availability stays port-local because
+`OutputInterface` is untouched. Availability stays port-local because
 `REGION.md` §3.7 binds it to the port's beat image (`domain(available_k) =
-image(beat_k)`) and explicitly refuses the mirror equality for inputs. Moving
-requirements out and leaving availability in *implements* the canon's asymmetry
-rather than inventing one. If outputs ever need the same split — several ports
-emitting one produced operand — it is the same change again, and it is not
-needed by any case here.
+image(beat_k)`) and explicitly refuses the mirror equality for inputs. Changing
+the input side and leaving the output side alone *implements* the canon's
+asymmetry rather than inventing one.
 
-**`Port` keeps its `operand`.** A port is the complete external account of one
-pass (§3.5) and an edge compares two of them without a Region in hand. The
-apparent duplication with `InputRequirement.operand` is closed by validation,
-not by a reference: `operand.identity_conflict` now ranges over requirement
-operands too, which is the generalization of §5.1 condition 3.
+`Port` keeps its `operand`: a port is the complete external account of one pass
+(§3.5) and an edge compares two of them without a Region in hand. The apparent
+duplication with `RegionInput.operand` is closed by a **local** check inside one
+value — which is the concrete advantage of one collection over two.
 
-**Keyword-only construction.** The field list changes shape, so all 36
-positional `DataflowRegion(...)` sites must be edited regardless. Making the
-canonical constructor keyword-only means the next field addition reorders
-nothing. This is the opposite of the first submission's reasoning, which put a
-field last to avoid edits; the feedback is right that migration convenience is
-not an architectural argument.
+`unpresented_positions` is derived and never stored. It is a report, not a
+classification: empty does not mean "streamed" and full does not mean
+"embedded".
 
-### 4.2 `src/finn/dataflow/mapping.py` (new)
+### 5.2 `src/finn/dataflow/mapping.py` (new)
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -304,88 +295,84 @@ def exposing_boundaries(
 
 Imports `finn.dataflow.region` and `finn.dataflow.network` only.
 
-There is **no stored placement value**. `External`, `LocalState` and
-`InternalStream` are all withdrawn. Exposure is answered on demand and answered
-with values that already exist: `exposing_ports` returns `RegionEndpoint`,
-`exposing_boundaries` returns the `BoundaryContract` itself. A caller that wants
-the boundary's beat sequence or pass correspondence already has it, and nothing
-repackages a canonical record into a near-identical one.
+**No stored placement value.** `External`, `LocalState` and `InternalStream` are
+all withdrawn. Exposure is answered on demand with values that already exist:
+`exposing_ports` returns `RegionEndpoint`, `exposing_boundaries` returns the
+`BoundaryContract` itself. Nothing repackages a canonical record into a
+near-identical one.
 
-`InternalStream` in particular does not survive as a source-entry case. Internal
-stream continuation *is* the `Edge`; an unfed, unexposed port is a
-`validate_network` failure or an unfulfilled requirement, not a source location.
+`InternalStream` does not survive as a source-entry case. Internal stream
+continuation *is* the `Edge`; an unfed, unexposed port is a `validate_network`
+failure or an unfulfilled requirement, not a source location.
 
-### 4.3 The derivation rule
+### 5.3 The derivation rule
 
-> A source input operand's dataflow targets are the input requirements for that
-> operand that the Network does not itself supply. A requirement is supplied
-> internally when it has at least one exposing port and *every* exposing port is
-> the sink of an edge.
+> A source input operand's dataflow targets are the Region inputs for that
+> operand that the Network does not itself supply. An input is supplied
+> internally when it has a port and that port is the sink of an edge.
 
 Mirrored for outputs: a produced operand is a target unless every port emitting
 it is an edge source.
 
-Checked in `run.py` §1 and §5:
-
 | case | `derive_input_mappings(net, "W")` |
 |---|---|
-| external | `(RegionInputRef('compute', 'W'),)`, exposed by boundary `weight` |
-| embedded | `(RegionInputRef('compute', 'W'),)`, exposed by no port |
-| decoupled | `(RegionInputRef('memory', 'W'),)`, exposed by no port |
+| external | `(RegionInputRef('compute','W'),)`, exposed by boundary `weight` |
+| embedded | `(RegionInputRef('compute','W'),)`, exposed by no port |
+| decoupled | `(RegionInputRef('memory','W'),)`, exposed by no port |
 | plural | `(RegionInputRef('compute_a','W'), RegionInputRef('compute_b','W'))` |
 
-The decoupled compute Region still *requires* `W`; its requirement is fed by
-the `weight_supply` edge, so the source tensor corresponds to the memory
-Region's requirement. That is a dataflow statement. Where the memory's
-unpresented positions come from is the binding's question and is not answered
-anywhere in this model.
+The decoupled compute Region still *requires* `W`; its requirement is fed by the
+`weight_supply` edge, so the source tensor corresponds to the memory Region's
+requirement. Where the memory's unpresented positions come from is the binding's
+question and is answered nowhere in this model.
 
 ---
 
-## 5. Validation
+## 6. Validation
 
-This is not "two new rules". Two existing conditions change what they range
-over, two are new, and the rest are unchanged. `dataflow_model.validate_region`
-implements the whole list, and `run.py` §3 asserts that production and candidate
-A report the *same codes* for the same Region broken the same way.
+Not "two new rules". One condition changes what it ranges over, the port-shaped
+conditions learn to skip an input with no port, and two rules are new.
+`dataflow_model.validate_region` implements the whole list, and `run.py` §3
+asserts that production and the recommendation report the **same codes** for the
+same Region broken the same way.
 
 | REGION.md §5.1 | status | over what |
 |---|---|---|
 | 1 schedule extents, level names | unchanged | schedule |
-| 2 port identity uniqueness | unchanged | input ports + output ports |
-| 2b requirement operand uniqueness | **new** | `input_requirements` |
-| 3 operand identity / type / shape / width / extents | **expanded** | requirement operands **and** port operands |
-| 4 beat field domain | unchanged | all ports |
-| 5 requirement iteration domain, position domain, non-negative multiplicity | **expanded** | keyed by operand; now reached for unported operands |
-| 5b every input port exposes a declared requirement | **new** | input ports |
+| 2 port identity uniqueness | unchanged | the ports that exist |
+| 2b input operand uniqueness | **new** | `inputs` |
+| 2c a port presents its input's operand | **new** | `inputs` with a port |
+| 3 operand identity / type / shape / width / extents | **expanded** | every input's operand **and** output port operands |
+| 4 beat field domain | unchanged | the ports that exist |
+| 5 requirement iteration domain, position domain, non-negative multiplicity | unchanged in form | now reached for an input with no port |
 | 6 availability domains | unchanged | outputs |
-| 7 beat positions | unchanged | all ports |
+| 7 beat positions | unchanged | the ports that exist |
 | 8 availability/image equality | unchanged | outputs |
 
-New codes: `requirement.operand_duplicate`, `input_port.requirement_missing`.
-Moved paths: requirement codes are now keyed `input_requirements['W']` rather
-than `input['weight']`.
+New codes: `input.operand_duplicate`, `input.port_operand_mismatch`.
+
+Condition 2b is what makes "at most one input port per operand" structural
+rather than merely observed: two inputs for one operand would be two requirement
+maps for one computation's use of it, with no defined relation between them.
 
 Why condition 3's expansion matters, demonstrated rather than asserted
-(`run.py` §3b): declare the embedded Region's `W` with a zero extent and
-candidate A reports `operand.extent_not_positive`; today's embedded Region
+(`run.py` §3b): declare the embedded Region's `W` with a zero extent and the
+recommendation reports `operand.extent_not_positive`; today's embedded Region
 reports nothing, because the operand is not in the value to be validated.
 
 Deliberately **not** added: any rule comparing required occurrences against
-presented fields. `REGION.md` §3.7 refuses that equality for inputs, and §5.2
+presented fields. `REGION.md` §3.7 refuses that equality for inputs and §5.2
 makes joint satisfaction a binding-realizability obligation with a witness, not
-a structural one. `unpresented_positions()` reports the gap; nothing rejects it.
+a structural one. `unpresented_positions` reports the gap; nothing rejects it.
 
-`network_validation.py` needs one change only: `_resolve_port` reaches inputs
-through `region.input_port(...)` instead of `region.input_interface(...).port`.
-`endpoint.input_ownership` still ranges over *ports*, so an unported requirement
-is correctly outside it and no exemption is written.
+`network_validation.py` needs one change: `_resolve_port` reaches inputs through
+`region.input_port(...)` instead of `region.input_interface(...).port`.
+`endpoint.input_ownership` still ranges over *ports*, so an unported input is
+correctly outside it and no exemption is written.
 
 ---
 
-## 6. The source mapping contract
-
-Renaming `SourceAssociation` and reducing it, per C0 §8:
+## 7. The source mapping contract
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -407,14 +394,11 @@ class SourceMapping:
 ```
 
 It answers *which selected dataflow requirement or product corresponds to this
-source operand*. It does not answer where bytes are installed, and it carries no
+source operand*. It does not answer where bytes are installed, and carries no
 Kernel, module, artifact, storage, path or occurrence.
 
-Cardinality rules:
-
 ```text
-zero targets      an error -- MappingError, the Network has no unfed
-                  requirement for the operand
+zero targets      an error -- MappingError
 one target        the ordinary case
 several targets   explicit and legal; two Regions initialized from one source
                   tensor are two mappings
@@ -434,18 +418,15 @@ port and nothing breaks; rename an operand and the mapping fails loudly.
 
 ---
 
-## 7. What remains for the physical binding
+## 8. What remains for the physical binding
 
-Stated by the dataflow model, per Region and operand:
+Stated by the dataflow model, per Region and operand: which positions are
+required, at which schedule points, with what multiplicity; the operand's
+element type and shape; which positions the port presents and in what beat
+order; whether a boundary exposes that port or an edge feeds it; and
+consequently, by subtraction, the size and shape of the gap.
 
-- which positions are required, at which schedule points, with what
-  multiplicity;
-- the operand's element type and shape;
-- which ports present which positions, in what beat order;
-- which of those ports a boundary exposes or an edge feeds;
-- consequently, by subtraction, the size and shape of the gap.
-
-`run.py` §7 prints the gap for three cases:
+`run.py` §7:
 
 ```text
 embedded compute   occurrences 16384   unpresented positions 4096   INT8 (64, 64)
@@ -453,127 +434,120 @@ decoupled memory   occurrences  4096   unpresented positions 4096   INT8 (64, 64
 partial service    occurrences    24   unpresented positions    4   INT8 (2, 4)
 ```
 
-Left entirely to the binding and to U6:
+Left entirely to the binding and to U6: which service covers each unpresented
+occurrence (embedded ROM, shared off-chip memory, constant generation, replay
+register, parameter memory, or another supported mechanism); storage datatype,
+packing, alignment, addressing, banking; access conflict and bandwidth analysis;
+any generated external interface; and the §5.2 binding-realizability witness
+itself. None of these has a field, an enum case or a reserved name in the
+dataflow model.
 
-- which service covers each unpresented occurrence — embedded ROM, shared
-  off-chip memory, constant generation, replay register, parameter memory, or
-  another supported mechanism;
-- storage datatype, packing, alignment, addressing, banking;
-- access conflict and bandwidth analysis;
-- any generated external interface;
-- the §5.2 binding-realizability witness itself.
+### 8.1 MLO — an extension seam, narrowly
 
-None of these has a field, an enum case or a reserved name in the dataflow
-model.
-
-### 7.1 MLO — an extension seam, narrowly
-
-What this model gives a future shared-memory realization: per-node, per-operand
-scheduled requirement maps (so access pattern, occurrence count and
+What this model gives a future shared-memory realization: per-Region,
+per-operand scheduled requirement maps (so access pattern, occurrence count and
 per-schedule-point demand are computable), operand element type and shape, and
 plural source mappings so several Regions' requirements can be recognised as
 naming one source tensor.
 
-What it does **not** establish, and the first submission overstated: shared
-addressing, common or per-tensor storage datatypes, packing and alignment,
-access conflicts, bandwidth budgets, or one generated external interface. Those
-need a physical MLO value keyed on `RegionInputRef` plus the source tensor
-summary. The claim here is only that such a value can be written *without*
-changing any Region — `run.py` §5 shows two Regions' requirements naming one
-tensor, and nothing was written back.
+What it does **not** establish: shared addressing, common or per-tensor storage
+datatypes, packing and alignment, access conflicts, bandwidth budgets, or one
+generated external interface. Those need a physical MLO value keyed on
+`RegionInputRef` plus the source tensor summary. The claim tested here is only
+that such a value can be written *without* changing any Region.
 
 ---
 
-## 8. Canon fold — this requires a REGION.md amendment
+## 9. Canon fold
 
-C1 must accept a canon change, not only an implementation change. `REGION.md`
-currently indexes the requirement map **by interface**:
+`REGION.md` §2.3 currently defines
 
 ```text
-§2.3   InputInterface_k = (Port_k, ScheduledInputRequirements_k)
-§3.1   required_k : I x P_k -> N
-§5.1.5 "For every input interface, required_k is total on I x P_k"
+InputInterface_k = (Port_k, ScheduledInputRequirements_k)
 ```
 
-Under the recommendation it is indexed by operand:
+which is why requirements cannot exist without a port. The amendment:
 
 ```text
-§2.1   DataflowRegion = (S, InputRequirements, InputPorts, Outputs)
-§2.3   an input interface is a Port; requirements are declared per operand
-§3.1   required_O : I x P_O -> N
-§5.1.3 operand rules range over requirement operands and port operands
-§5.1.5 "For every input requirement, required_O is total on I x P_O"
-§5.1   new: one requirement per operand; every input port's operand is declared
+§2.3   InputInterface_k = (Operand_k, ScheduledInputRequirements_k, Port_k?)
+§3.1   required_k : I x P_k -> N        -- UNCHANGED
+§5.1   port-shaped conditions (2, 4, 7) range over interfaces that have a port
+§5.1   new: one interface per operand; a port presents its interface's operand
 §3.7   cross-reference the declaration, not only §5.2
 ```
 
-Per-interface indexing is not merely inconvenient: with two ports for one
-operand it is ambiguous, because `required_1` and `required_2` over the same
-`P_W` have no defined relation to the computation's actual use. Per-operand
-indexing removes the ambiguity and matches §3.1's own wording — *"the number of
-logical uses of operand position `p` at iteration point `i`"* — which is a
-statement about the computation, not about a channel.
+`required_k` is untouched because there is still exactly one operand per
+interface, so `P_k` still means what it meant. That is a direct benefit of one
+collection: the two-collection form would have re-keyed the requirement map by
+operand and rewritten §3.1's notation.
 
 `AUTHORING.md` §4.2 needs no change; it already writes `required_W` keyed by
-operand.
+operand and already describes the embedded alternative as omitting the port.
 
-I do not own `scratchpad/dataflow/canon/` and have edited nothing there. S4
+I own no file under `scratchpad/dataflow/canon/` and have edited none. S4
 carries the fold; C1 should record the amendment as accepted before S2 begins,
 because S2-B compiles Designs against the changed value.
 
 ---
 
-## 9. Type and authority accounting
+## 10. Type and authority accounting
 
 | | added | removed | net |
 |---|---|---|---|
-| A *(recommended)* | `InputRequirement`, `RegionInputRef`, `RegionOutputRef` | `InputInterface`, `BoundaryDestination`, `StreamDestination`, `RegionStateDestination`, `OperandDestination` | **−2** |
-| B | `RegionInput` | `InputInterface`, and the same four | −4, at the cost of §3 |
-| C (local state) | `LocalStateInput`, `External`, `LocalState`, `InternalStream` | the same three destinations | +1, and rejects a canonical Region |
-| D (companion) | `RegionResidency` + a paired Region + a second `ValueSemantics` | none | +3, and a pair that can disagree |
-| E (disposition) | `SemanticRequirement`, `RequirementDisposition`, `DispositionKind`, `DispositionGraph` | none | +4, one duplicating `Operand` |
+| **recommended** | `RegionInput`, `RegionInputRef`, `RegionOutputRef` | `InputInterface`, `BoundaryDestination`, `StreamDestination`, `RegionStateDestination`, `OperandDestination` | **−2** |
+| two collections | `InputRequirement`, and the same two refs | the same five | −2, plus a permanent join and one extra rule |
+| local-state form | `LocalStateInput`, `External`, `LocalState`, `InternalStream` | the three destinations | +1, and rejects a canonical Region |
+| companion (D) | a companion value, a paired Region, a second `ValueSemantics` | none | +3, and a pair that can disagree |
+| disposition graph (E) | `SemanticRequirement`, `RequirementDisposition`, `DispositionKind`, `DispositionGraph` | none | +4, one duplicating `Operand` |
 
-Authorities under A: one. Requirements are declared once per operand, exposure
-is declared once per port, and every other statement — placement, gap, boundary,
-mapping — is computed. No stored derived value survives anywhere in the
-proposal.
+`DataflowRegion` keeps its three fields, their names and their order; only the
+element type of `inputs` changes.
+
+Authorities: one. Each requirement is declared once, each port is declared once
+beside it, and every other statement — exposure, gap, boundary, mapping — is
+computed. No stored derived value survives anywhere in the proposal.
 
 ---
 
-## 10. Prototype evidence
+## 11. Prototype evidence
 
 ```
 FINN_ROOT=$PWD PYTHONPATH=src:deps/qonnx/src python3 prototypes/gate2_s1c/run.py
 ```
 
-Exits 0; final line `all assertions passed`. Sections:
+Exits 0; final line `all assertions passed`.
 
 - **§1** source mappings for external / embedded / decoupled, with exposure
   derived as `RegionEndpoint` and `BoundaryContract`;
 - **§2** the production `_internal_destination` answer for decoupled, asserted
-  to be `StreamDestination('compute','weight')`, beside candidate A's
+  to be `StreamDestination('compute','weight')`, beside
   `RegionInputRef('memory','W')`;
-- **§3** candidate A reports zero issues on every lifted production Region; the
-  same Region broken the same way yields the *same code set* from production
-  `validate_region` and candidate A; the round trip back to today's value
-  silently loses `compute.W` and `memory.W`;
-- **§3b** operand validation reaches an unported operand — extent 0 caught by A,
+- **§3** zero issues on every lifted production Region; the same Region broken
+  the same way yields the *same code set* from production `validate_region` and
+  from the recommendation; the round trip back to today's value silently loses
+  `compute.W` and `memory.W`;
+- **§3b** operand validation reaches an unported operand — extent 0 caught,
   invisible today;
 - **§3c** the two new rules and the expanded identity rule fire on constructed
   negatives;
 - **§4** a canonical Region with partial service both ways — `X` required 24
   times and presented 8, `W` required over 8 positions and presented over 4 —
-  validates clean, and the first submission's
-  `local_state.operand_also_streamed` rejects it;
+  validates clean, and the first pass's `local_state.operand_also_streamed`
+  rejects it;
 - **§5** one source tensor mapping to two Regions' requirements, plural, no
   error;
-- **§6** one operand on two ports: candidate A validates clean, candidate B
-  raises `CandidateBLimit`, and candidate B *does* hold the partial-service
-  Region — so multi-port supply is the discriminator, not partial exposure;
+- **§6** the multi-port refusal triggered on demand, with the widening cost and
+  its trigger printed;
 - **§7** the requirement/gap accounting and the binding boundary;
 - **§8** schema D reaching the same answer through a companion at nine seams,
   and schema E's well-formed lying disposition table;
 - **§9** type accounting.
+
+The five forcing cases in `cases.py` lift the production constructors —
+`construct_dot_product_region`, `construct_activation_replay_region`,
+`construct_weight_stream_region` — and change only what is proposed. The
+embedded case is the streamed Region with `drop_ports=("weight",)`: one argument
+where today there is a separate constructor.
 
 Suite status on this revision, unchanged by this submission:
 
@@ -585,32 +559,34 @@ tests/dataflow/kernels, artifacts, parity              not collected: the only
                                                        pyslang
 ```
 
-`git status` shows `prototypes/` as the only addition. Ruff check and format are
-clean over the prototype. Strict mypy was not run on the prototype for the
-`PYTHONPATH`/qonnx reason CLAUDE.md documents; the production implementation
-runs the real gate.
+Ruff check and format are clean over the prototype. Strict mypy was not run on
+the prototype for the `PYTHONPATH`/qonnx reason CLAUDE.md documents; the
+production implementation runs the real gate.
 
 ---
 
-## 11. Migration consequences
+## 12. Migration consequences
 
-**Mine after C1** — `region.py`, `region_validation.py`, `network_validation.py`
-(one function), new `mapping.py`, and their tests.
+**Mine after C1** — `region.py`, `region_validation.py`, one function in
+`network_validation.py`, the new `mapping.py`, and their tests.
 
-**Cross-boundary, and it needs C1's authorization.** Deleting `InputInterface`
-and making the constructor keyword-only is a destructive change. Measured on
-this revision: 36 `DataflowRegion(...)` constructions, 33 `input_interface(`
-calls and 45 `InputInterface` references, across 14 files in
+**Cross-boundary, and it needs authorization.** `DataflowRegion`'s signature is
+unchanged — same three fields, same order, same names — so there is no
+constructor migration and no keyword-only cutover. What changes is the element
+type of `inputs`. Measured on this revision: 45 `InputInterface` references and
+33 `input_interface(` calls across 14 files in
 `src/finn/dataflow/{designs,kernels,network_validation,ops/mvau,parameters}` and
-`tests/dataflow/{designs,kernels,model,ops,parameters}` — most of them owned by
-S2-A and S2-B. The implementation plan already provides for this shape of change
-(S1-B's `Variant` rename is "an atomic downstream cutover"). I propose the same:
-one atomic commit that changes the value and mechanically migrates every
-constructor and accessor, with no semantic change to any Region, followed by the
-owners' real work on top. If C1 prefers, the alternative is a defaulted
-additional field and a deprecated `inputs` property — which is exactly the
-positional-compatibility reasoning the feedback rejected, so I am not
-recommending it.
+`tests/dataflow/{designs,kernels,model,ops,parameters}`, most owned by S2-A and
+S2-B. Each is mechanical: `InputInterface(port, requirements)` becomes
+`RegionInput(port.operand, requirements, port)`, and `interface.port` accesses
+must tolerate `None`. `cases.lift` performs exactly this rewrite on the real
+production Regions, losslessly, so the migration is demonstrated before it is
+requested.
+
+The implementation plan already provides for this shape of change (S1-B's
+`Variant` rename is "an atomic downstream cutover"). I propose one atomic commit
+that changes the value and migrates every site with no semantic change to any
+Region, followed by the owners' real work on top.
 
 **S2-A (`ops`) inherits:** `_internal_destination` and `_selected_shape` delete;
 `association` becomes `mapping` over `derive_input_mappings` /
@@ -620,82 +596,78 @@ aliased; `OpInput` gains `operand=` naming a Region `Operand.id`, and optionally
 a singularity flag.
 
 **S2-B / S3 inherit:** `construct_embedded_dot_product_region` becomes the
-streamed constructor with the weight *port* dropped and the requirement kept —
-`cases.py` does this in one argument — and **its docstring must be rewritten**,
-since it currently asserts "The matrix itself is not an operand here", which the
-accepted model contradicts. `construct_cyclic_parameter_region` gains the
-requirement for the operand it emits. `tests/dataflow/ops/test_dataflow_op.py:914`
-— *"a decoupled matrix is traffic and an embedded one is state"* — changes: the
-decoupled weight now maps to the memory Region's requirement. The distinction it
-defended (embedded exposes no port) survives as `exposing_ports(...) == ()`.
+streamed constructor with the weight port set to `None` and the requirement
+kept, and **its docstring must be rewritten** — it currently asserts "The matrix
+itself is not an operand here", which the accepted model contradicts.
+`construct_cyclic_parameter_region` gains the requirement for the operand it
+emits. `tests/dataflow/ops/test_dataflow_op.py:914` — *"a decoupled matrix is
+traffic and an embedded one is state"* — changes: the decoupled weight now maps
+to the memory Region's requirement. The distinction it defended (embedded
+exposes no port) survives as `exposing_ports(...) == ()`.
 
 **Unaffected**, verified by reading rather than assumed: `designs/design.py`
 `_network_property` and `_correspondence_constraint` copy and compare whole
 Region values and name no Region field; `model/semantics.py` registers
 `DataflowRegion` as `immutable_nominal`, so equality, hashing and fingerprinting
-absorb the shape change with no engine work.
+absorb the change with no engine work.
 
 ---
 
-## 12. What I need from C1
+## 13. What I need from C1
 
-1. **Candidate A or candidate B** — A unless multi-port supply for one operand
-   is out of scope.
-2. **Accept the `REGION.md` amendment in §8** (requirements keyed by operand),
-   or reject it, in which case candidate A must be re-derived with per-interface
-   requirements and the multi-port case becomes unrepresentable.
-3. **Authorize the atomic cutover** in §11, or choose the deprecated-property
-   alternative.
-4. **`input_ports` / `input_requirements` naming**, and confirmation that
-   `InputInterface` is deleted rather than kept as a one-field wrapper.
-5. **`finn.dataflow.mapping` as the module home** for the refs and derivations,
-   leaving `ops/association.py` to become S2-A's reporting value.
+1. **Accept the `REGION.md` amendment in §9** — one line in §2.3 plus the §5.1
+   wording. Without it the implementation and the canon disagree about whether a
+   requirement can exist without a port.
+2. **Authorize the atomic cutover in §12** — one commit touching 14 files owned
+   mostly by S2-A and S2-B, mechanical, no semantic change — or say the owners
+   should do it themselves and I will ship the value and its tests only.
 
 Not mine to decide, but the schema is unusable without them: `OpInput(operand=)`
 naming a Region `Operand.id`, and the optional per-declaration singularity flag.
 
 ---
 
-## 13. Follow-up implementation prompt
+## 14. Follow-up implementation prompt
 
 > Implement the C1-accepted dataflow-model change in `{{SEMANTICS_WORKTREE}}`
 > from the reconciled C1 revision.
 >
 > You own `src/finn/dataflow/region.py`, `src/finn/dataflow/region_validation.py`,
-> the `_resolve_port` change in `src/finn/dataflow/network_validation.py`, the new
-> `src/finn/dataflow/mapping.py`, and `tests/dataflow/test_region_primitives.py`,
+> the `_resolve_port` change in `src/finn/dataflow/network_validation.py`, the
+> new `src/finn/dataflow/mapping.py`, and `tests/dataflow/test_region_primitives.py`,
 > `tests/dataflow/test_region_validation.py`,
 > `tests/dataflow/test_network_validation.py`, `tests/dataflow/test_mapping.py`.
 >
 > C1 has authorized one atomic cutover commit that also mechanically migrates
-> every `DataflowRegion` construction and every `region.inputs` /
-> `input_interface(...)` accessor in `src/` and `tests/`, including the ones in
+> every `InputInterface(...)` construction and every `region.inputs` /
+> `input_interface(...)` accessor in `src/` and `tests/`, including those in
 > `designs/design.py`, `kernels/`, `ops/mvau/`, `parameters/` and their tests.
-> Change no Region's meaning in that commit: every migrated constructor must
-> produce a Region whose requirements and ports are the ones its interfaces
-> held, and every migrated test must assert the same thing it asserted before.
-> Beyond that mechanical migration do not edit `designs/`, `kernels/`, `ops/` or
-> `artifacts/`; report any further change you believe they need instead of
-> making it.
+> `InputInterface(port, requirements)` becomes
+> `RegionInput(port.operand, requirements, port)`; accessors that reach a port
+> must tolerate `None`. Change no Region's meaning in that commit, and let every
+> migrated test assert what it asserted before. Beyond that migration do not
+> edit `designs/`, `kernels/`, `ops/` or `artifacts/`; report any further change
+> you believe they need instead of making it.
 >
 > Land, in order:
-> 1. `InputRequirement`; `DataflowRegion` as
->    `(schedule, input_requirements, input_ports, outputs)`, keyword-only, with
->    the canonical orders and the accessors in §4.1; `InputInterface` deleted;
->    the mechanical migration of all call sites.
-> 2. `validate_region` per the table in §5 — the expanded operand and
->    requirement conditions and the two new codes — plus `_resolve_port`.
+> 1. `RegionInput` with `operand`, `requirements` and `port: Port | None`, the
+>    derived position properties in §5.1, `DataflowRegion.inputs` retyped,
+>    `input()` / `input_port()` / `input_ports` / `ports`, `InputInterface`
+>    deleted, and the mechanical migration.
+> 2. `validate_region` per the table in §6 — the expanded operand condition, the
+>    port-shaped conditions skipping unported inputs, and the two new codes —
+>    plus `_resolve_port`.
 > 3. `mapping.py` with `RegionInputRef`, `RegionOutputRef`, `DataflowOperandRef`,
 >    `MappingError`, `derive_input_mappings`, `derive_output_mappings`,
 >    `exposing_ports`, `exposing_boundaries`. No stored placement value.
 > 4. Delete `prototypes/gate2_s1c/`.
 >
 > Tests must cover: the three MVAU supply modes built from the production
-> constructors; a Region whose ports present a subset of required positions; a
-> Region whose ports present every position but not every occurrence; one operand
-> on two ports; zero mappings raising `MappingError`; two mappings returned as
-> two; an unported operand caught by every operand rule; a port presenting an
-> undeclared operand; two requirements for one operand.
+> constructors; a Region whose port presents a subset of required positions; a
+> Region whose port presents every position but not every occurrence; zero
+> mappings raising `MappingError`; two mappings returned as two; an unported
+> operand caught by every operand rule; two inputs for one operand; a port whose
+> operand differs from its input's.
 >
 > Evidence: `tests/dataflow/test_region_*`, `tests/dataflow/test_network_*`,
 > `tests/dataflow/test_mapping.py`, `tests/dataflow/test_package_boundaries.py`,

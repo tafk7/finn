@@ -24,11 +24,13 @@ from alternatives import (  # noqa: E402
     disposition_agrees_with_network,
 )
 from candidates import (  # noqa: E402
-    CandidateBLimit,
+    WIDENING,
+    WIDENING_TRIGGER,
     LocalStateInput,
+    MultiPortLimit,
     RegionLocalState,
+    as_recommended,
     local_state_issue_codes,
-    region_b_from_requirements,
 )
 from cases import (  # noqa: E402
     ACTIVATION,
@@ -46,9 +48,9 @@ from cases import (  # noqa: E402
     split_supply_region,
 )
 from dataflow_model import (  # noqa: E402
-    InputRequirement,
     ProtoNetwork,
     ProtoNode,
+    RegionInput,
     RegionInputRef,
     RegionOutputRef,
     derive_input_mappings,
@@ -92,8 +94,9 @@ def as_network(proto: ProtoNetwork) -> DataflowNetwork:
     nodes = []
     for node in proto.nodes:
         interfaces = tuple(
-            InputInterface(port, node.region.input_requirement(port.operand.id).requirements)
-            for port in node.region.input_ports
+            InputInterface(item.port, item.requirements)
+            for item in node.region.inputs
+            if item.port is not None
         )
         nodes.append(
             NetworkNode(
@@ -169,11 +172,11 @@ for name, network in CASES.items():
     lost = tuple(
         f"{node.id}.{item.operand.id}"
         for node in network.nodes
-        for item in node.region.input_requirements
-        if not node.region.ports_for(item.operand.id)
+        for item in node.region.inputs
+        if item.port is None
     )
     print(
-        f"{name:<10} candidate-A validate_region: 0 issues   "
+        f"{name:<10} validate_region: 0 issues               "
         f"lost in the round trip to today's value: {lost or '()'}"
     )
 
@@ -193,11 +196,11 @@ broken_production = DataflowRegion(
 )
 broken_a = replace(
     lift(streamed),
-    input_requirements=tuple(
-        InputRequirement(item.operand, ScheduledInputRequirements({((99, 0, 0), (0, 0)): 1}))
+    inputs=tuple(
+        replace(item, requirements=ScheduledInputRequirements({((99, 0, 0), (0, 0)): 1}))
         if item.operand.id == "W"
         else item
-        for item in lift(streamed).input_requirements
+        for item in lift(streamed).inputs
     ),
 )
 production_codes = {issue.code for issue in production_validate(broken_production)}
@@ -208,7 +211,7 @@ assert production_codes == candidate_codes == {"requirement.iteration_out_of_dom
 )
 print(
     f"same Region broken the same way: production {sorted(production_codes)} == "
-    f"candidate A {sorted(candidate_codes)}"
+    f"recommended {sorted(candidate_codes)}"
 )
 
 # -- 3b. the rules that now reach an unported operand ------------------------
@@ -218,11 +221,9 @@ bad_operand = Operand("W", WEIGHT, (0, 8))
 embedded_compute = next(node for node in CASES["embedded"].nodes if node.id == COMPUTE).region
 unported_bad = replace(
     embedded_compute,
-    input_requirements=tuple(
-        InputRequirement(bad_operand, ScheduledInputRequirements())
-        if item.operand.id == "W"
-        else item
-        for item in embedded_compute.input_requirements
+    inputs=tuple(
+        RegionInput(bad_operand, ScheduledInputRequirements()) if item.operand.id == "W" else item
+        for item in embedded_compute.inputs
     ),
 )
 codes = tuple(issue.code for issue in validate_region(unported_bad))
@@ -230,48 +231,50 @@ assert "operand.extent_not_positive" in codes, codes
 today = DataflowRegion(
     embedded_compute.schedule,
     tuple(
-        InputInterface(port, embedded_compute.input_requirement(port.operand.id).requirements)
-        for port in embedded_compute.input_ports
+        InputInterface(item.port, item.requirements)
+        for item in embedded_compute.inputs
+        if item.port is not None
     ),
     embedded_compute.outputs,
 )
 assert production_validate(today).issues == ()
-print(f"candidate A, W declared with extent 0 and no port -> {codes}")
+print(f"recommended, W declared with extent 0 and no port -> {codes}")
 print("the same operand in today's embedded Region -> () : it is not in the value at all")
 
 # -- 3c. the new uniqueness and coverage rules -------------------------------
 
-rule("3c the rules the split adds")
-requirement = embedded_compute.input_requirement("W")
-doubled = replace(
-    embedded_compute, input_requirements=(*embedded_compute.input_requirements, requirement)
-)
+rule("3c the rules the new shape adds")
+held = embedded_compute.input("W")
+doubled = replace(embedded_compute, inputs=(*embedded_compute.inputs, held))
 codes = tuple(issue.code for issue in validate_region(doubled))
-assert codes == ("requirement.operand_duplicate",), codes
-print(f"two requirements for one operand      -> {codes}")
+assert codes == ("input.operand_duplicate",), codes
+print(f"two inputs for one operand              -> {codes}")
 
-orphan = replace(
+mismatched = replace(
     embedded_compute,
-    input_requirements=tuple(
-        item for item in embedded_compute.input_requirements if item.operand.id != "X"
+    inputs=tuple(
+        replace(item, operand=Operand("Z", WEIGHT, item.operand.shape))
+        if item.operand.id == "X"
+        else item
+        for item in embedded_compute.inputs
     ),
 )
-codes = tuple(issue.code for issue in validate_region(orphan))
-assert codes == ("input_port.requirement_missing",), codes
-print(f"a port presenting an undeclared operand -> {codes}")
+codes = {issue.code for issue in validate_region(mismatched)}
+assert "input.port_operand_mismatch" in codes, codes
+print(f"a port presenting a different operand   -> {sorted(codes)[:1]}")
 
 conflicting = replace(
     embedded_compute,
-    input_requirements=tuple(
-        InputRequirement(Operand("X", WEIGHT, (1, 1)), item.requirements)
-        if item.operand.id == "X"
+    inputs=tuple(
+        RegionInput(Operand("Y", WEIGHT, (1, 1)), item.requirements)
+        if item.operand.id == "W"
         else item
-        for item in embedded_compute.input_requirements
+        for item in embedded_compute.inputs
     ),
 )
 codes = {issue.code for issue in validate_region(conflicting)}
 assert "operand.identity_conflict" in codes, codes
-print(f"requirement and port disagree on an operand -> {sorted(codes)}")
+print(f"an input and an output disagree on Y    -> {sorted(codes)[:1]}")
 
 # -- 4. partial service ------------------------------------------------------
 
@@ -279,29 +282,22 @@ rule("4  a Region whose ports present part of what it requires")
 partial = partial_service_region()
 assert validate_region(partial) == (), validate_region(partial)
 for operand_id in ("X", "W"):
-    required = partial.input_requirement(operand_id)
-    presented_positions = partial.presented_positions(operand_id)
-    presented_fields = sum(
-        port.beat_sequence.delivered_field_count for port in partial.ports_for(operand_id)
-    )
+    item = partial.input(operand_id)
     print(
-        f"{operand_id}: required occurrences {required.occurrence_count:>3}   "
-        f"presented fields {presented_fields:>3}   "
-        f"positions presented {len(presented_positions)}/{required.operand.position_count}   "
-        f"unpresented positions {len(partial.unpresented_positions(operand_id))}"
+        f"{operand_id}: required occurrences {item.occurrence_count:>3}   "
+        f"presented fields {item.presented_field_count:>3}   "
+        f"positions presented {len(item.presented_positions)}/{item.operand.position_count}   "
+        f"unpresented positions {len(item.unpresented_positions)}"
     )
-assert partial.unpresented_positions("X") == frozenset()
-assert partial.input_requirement("X").occurrence_count == 24
-assert len(partial.unpresented_positions("W")) == 4
+assert partial.input("X").unpresented_positions == frozenset()
+assert partial.input("X").occurrence_count == 24
+assert len(partial.input("W").unpresented_positions) == 4
 
 old_form = RegionLocalState(
     partial.schedule,
-    tuple(
-        (port, partial.input_requirement(port.operand.id).requirements)
-        for port in partial.input_ports
-    ),
+    tuple((item.port, item.requirements) for item in partial.inputs if item.port is not None),
     partial.outputs,
-    (LocalStateInput(partial.input_requirement("W").operand),),
+    (LocalStateInput(partial.input("W").operand),),
 )
 assert local_state_issue_codes(old_form) == ("local_state.operand_also_streamed",)
 print(
@@ -327,30 +323,20 @@ print("operation contract needs singularity can require it; the model does not."
 
 # -- 6. one operand, two ports -----------------------------------------------
 
-rule("6  one operand presented by two ports")
+rule("6  the one shape the recommendation refuses, and what widening costs")
 split = split_supply_region()
-assert validate_region(split) == (), validate_region(split)
-print(f"candidate A: W requirement + ports {tuple(p.id for p in split.ports_for('W'))} -> 0 issues")
 try:
-    region_b_from_requirements(
-        split.schedule,
-        {item.operand.id: item.requirements for item in split.input_requirements},
-        {item.operand.id: item.operand for item in split.input_requirements},
-        split.input_ports,
-        split.outputs,
-    )
-    raise AssertionError("expected candidate B to fail")
-except CandidateBLimit as error:
-    print(f"candidate B: CandidateBLimit: {error}")
-region_b = region_b_from_requirements(
-    partial.schedule,
-    {item.operand.id: item.requirements for item in partial.input_requirements},
-    {item.operand.id: item.operand for item in partial.input_requirements},
-    partial.input_ports,
-    partial.outputs,
+    as_recommended(split)
+    raise AssertionError("expected the fold to fail")
+except MultiPortLimit as error:
+    print(f"MultiPortLimit: {error}")
+print(
+    "\nNothing in FINN or in the canon requires this today.  It is the named risk,\n"
+    "not a forcing case: REGION.md 5.1.3 permits an operand identity to recur, and\n"
+    "the replay Region already accounts for that with X on an input and an output."
 )
-assert len(region_b.inputs) == 2
-print("candidate B does hold every one-port-per-operand case, including partial service.")
+print(f"\nthe trigger to spend the widening: {WIDENING_TRIGGER}")
+print(f"what it costs:{WIDENING}")
 
 # -- 7. what is left for the physical binding --------------------------------
 
@@ -360,11 +346,11 @@ for label, region, operand_id in (
     ("decoupled memory", CASES["decoupled"].node(MEMORY).region, "W"),
     ("partial service ", partial, "W"),
 ):
-    requirement = region.input_requirement(operand_id)
+    item = region.input(operand_id)
     print(
-        f"{label}  occurrences {requirement.occurrence_count:>6}  "
-        f"unpresented positions {len(region.unpresented_positions(operand_id)):>5}  "
-        f"element {requirement.operand.element_type.name} shape {requirement.operand.shape}"
+        f"{label}  occurrences {item.occurrence_count:>6}  "
+        f"unpresented positions {len(item.unpresented_positions):>5}  "
+        f"element {item.operand.element_type.name} shape {item.operand.shape}"
     )
 print(
     "\nstated by the model : which positions, at which schedule points, how often,\n"
@@ -379,11 +365,19 @@ print(
 # -- 8. schemas D and E on the same cases ------------------------------------
 
 rule("8  companion metadata (D) and an authored disposition graph (E)")
-memory_region_value = CASES["decoupled"].node(MEMORY).region
 annotated = AnnotatedNetwork(
     ProtoNetwork(
         tuple(
-            ProtoNode(node.id, replace(node.region, input_requirements=()))
+            ProtoNode(
+                node.id,
+                replace(
+                    node.region,
+                    inputs=tuple(
+                        replace(item, requirements=ScheduledInputRequirements())
+                        for item in node.region.inputs
+                    ),
+                ),
+            )
             for node in CASES["decoupled"].nodes
         ),
         CASES["decoupled"].edges,
@@ -391,8 +385,8 @@ annotated = AnnotatedNetwork(
     ),
     {
         node.id: RegionResidency(
-            tuple(item.operand for item in node.region.input_requirements),
-            tuple(item.requirements for item in node.region.input_requirements),
+            tuple(item.operand for item in node.region.inputs),
+            tuple(item.requirements for item in node.region.inputs),
         )
         for node in CASES["decoupled"].nodes
     },
@@ -419,16 +413,18 @@ assert disposition_agrees_with_network(truthful, CASES["decoupled"], "W")
 assert not disposition_agrees_with_network(lying, CASES["decoupled"], "W")
 print(f"\nE looks the answer up in a table: {derive_mappings_e(truthful, 'W')}")
 print("   a disposition naming 'compute' is well-formed and passes E's own rules;")
-print("   catching it needs candidate A's derivation, which E must then also carry.")
+print("   catching it needs the recommendation's derivation, which E must then also carry.")
 
 # -- 9. type and authority accounting ----------------------------------------
 
 rule("9  public type accounting")
-print("added    InputRequirement, RegionInputRef, RegionOutputRef            3")
-print("removed  InputInterface (an input interface is now a Port)            1")
+print("added    RegionInput, RegionInputRef, RegionOutputRef                 3")
+print("removed  InputInterface (RegionInput replaces it)                     1")
 print("         BoundaryDestination, StreamDestination,                      3")
 print("         RegionStateDestination, OperandDestination alias             1")
 print("                                                              net    -2")
+print("DataflowRegion keeps its three fields, their names and their order;")
+print("only the element type of `inputs` changes.")
 print("stored derived values: none.  exposing_ports returns RegionEndpoint and")
 print("exposing_boundaries returns BoundaryContract -- both already canonical.")
 

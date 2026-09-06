@@ -13,22 +13,23 @@ partial service       one Region whose ports present some of what it requires:
                       W half presented and half not
 plural mapping        two Regions requiring the same operand from one source
                       tensor
-multi-port operand    one operand presented by two ports (candidate B cannot
-                      hold it)
+multi-port operand    one operand presented by two ports -- the named risk, not
+                      a forcing case; the recommendation refuses it
 ```
 
 The first three lift production Regions -- ``construct_dot_product_region``,
 ``construct_activation_replay_region``, ``construct_weight_stream_region`` --
-and change only what candidate A proposes.  Note what the embedded case
-becomes: the streamed Region with the weight *port* removed and the weight
-*requirement* kept, which is one argument rather than a separate constructor.
+and change only what the recommendation proposes.  Note what the embedded case
+becomes: the streamed Region with the weight *port* set to ``None`` and the
+weight *requirement* kept, which is one argument rather than a separate
+constructor.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dataflow_model import InputRequirement, ProtoNetwork, ProtoNode, ProtoRegion
+from dataflow_model import ProtoNetwork, ProtoNode, ProtoRegion, RegionInput
 from finn.dataflow.kernels.memstream import construct_weight_stream_region
 from finn.dataflow.network import (
     BoundaryContract,
@@ -52,6 +53,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
+from candidates import InputRequirement, SplitRegion
 from qonnx.core.datatype import DataType
 
 REPLAY = "replay"
@@ -72,32 +74,36 @@ class Folding:
     simd: int = 8
 
 
-# -- lifting a production Region into candidate A -----------------------------
+# -- lifting a production Region into the recommended shape -------------------
 
 
 def lift(
     region: DataflowRegion,
     *,
     drop_ports: tuple[str, ...] = (),
-    add_requirements: tuple[InputRequirement, ...] = (),
+    add_inputs: tuple[RegionInput, ...] = (),
 ) -> ProtoRegion:
-    """Split a production Region's interfaces into requirements and ports.
+    """Rewrite a production Region's interfaces in the recommended shape.
 
-    Requirements are keyed by operand rather than by port, which is the whole
-    proposal.  For every current FINN Region the two keyings coincide, so the
-    split is lossless -- worth knowing before recommending it.
+    ``(Port, requirements)`` becomes ``(operand, requirements, port)``.  The
+    operand comes off the port, so the rewrite is lossless and mechanical --
+    which is the migration this recommendation asks for, performed here on the
+    real values before asking for it.
+
+    ``drop_ports`` sets the port to ``None`` and keeps the requirement.  That
+    one argument is the entire difference between the streamed and embedded
+    dot-product Regions.
     """
 
-    requirements = tuple(
-        InputRequirement(interface.port.operand, interface.requirements)
+    inputs = tuple(
+        RegionInput(
+            interface.port.operand,
+            interface.requirements,
+            None if interface.port.id in drop_ports else interface.port,
+        )
         for interface in region.inputs
     )
-    ports = tuple(
-        interface.port for interface in region.inputs if interface.port.id not in drop_ports
-    )
-    return ProtoRegion(
-        region.schedule, requirements + add_requirements, ports, tuple(region.outputs)
-    )
+    return ProtoRegion(region.schedule, inputs + add_inputs, tuple(region.outputs))
 
 
 def _streamed_compute(folding: Folding) -> DataflowRegion:
@@ -192,8 +198,8 @@ def memory_region(folding: Folding) -> ProtoRegion:
     operand = produced.output_interface("weight").port.operand
     return lift(
         produced,
-        add_requirements=(
-            InputRequirement(
+        add_inputs=(
+            RegionInput(
                 operand,
                 ScheduledInputRequirements({((), position): 1 for position in operand.positions}),
             ),
@@ -268,10 +274,9 @@ def partial_service_region() -> ProtoRegion:
     return ProtoRegion(
         schedule,
         (
-            InputRequirement(activation, read_every_visit),
-            InputRequirement(weight, read_every_visit),
+            RegionInput(activation, read_every_visit, activation_port),
+            RegionInput(weight, read_every_visit, weight_port),
         ),
-        (activation_port, weight_port),
         (output,),
     )
 
@@ -289,8 +294,14 @@ def _twin(suffix: str) -> ProtoRegion:
     uses = ScheduledInputRequirements({((step,), (step,)): 1 for step in range(2)})
     return ProtoRegion(
         schedule,
-        (InputRequirement(activation, uses), InputRequirement(weight, uses)),
-        (Port(f"x{suffix}", activation, BeatSequence(1, (((0,),), ((1,),)))),),
+        (
+            RegionInput(
+                activation,
+                uses,
+                Port(f"x{suffix}", activation, BeatSequence(1, (((0,),), ((1,),)))),
+            ),
+            RegionInput(weight, uses),
+        ),
         (
             OutputInterface(
                 Port(f"y{suffix}", result, BeatSequence(1, (((0,),), ((1,),)))),
@@ -322,8 +333,13 @@ def plural_mapping_network() -> ProtoNetwork:
 # -- one operand, two ports ---------------------------------------------------
 
 
-def split_supply_region() -> ProtoRegion:
-    """``W`` delivered by two ports: the shape candidate B cannot hold."""
+def split_supply_region() -> SplitRegion:
+    """``W`` delivered by two ports -- the one shape the recommendation refuses.
+
+    Built in the widening shape so the refusal can be triggered on demand rather
+    than reasoned about.  Nothing in FINN or in the canon requires it today; it
+    is here as the named risk, not as a forcing case.
+    """
 
     schedule = LogicalSchedule((ScheduleLevel("step", 2),))
     weight = Operand("W", WEIGHT, (2, 2))
@@ -331,7 +347,7 @@ def split_supply_region() -> ProtoRegion:
     uses = ScheduledInputRequirements(
         {((step,), (row, col)): 1 for step in range(2) for row in range(2) for col in range(2)}
     )
-    return ProtoRegion(
+    return SplitRegion(
         schedule,
         (InputRequirement(weight, uses),),
         (
