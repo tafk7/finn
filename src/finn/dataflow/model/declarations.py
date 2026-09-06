@@ -1146,14 +1146,19 @@ class SubspaceChoice:
 
     **Stable identity.**  The compiled branch namespace is the Python member
     name unless ``name=`` overrides it, exactly as for every other declaration.
-    That compiled, root-relative name is what a persistence layer writes the
-    selector down as, so ``name=`` is the one place an author decouples a
-    persisted choice from the member it happens to be spelled with::
+    That compiled, root-relative name is the *stable identity* a persistence
+    layer keys on, and ``name=`` is the one place an author decouples it from
+    the member it happens to be spelled with::
 
         design = SubspaceChoice({...}, name="dataflow_design")
 
-    This package still knows nothing about persistence; it only guarantees the
-    name is stable and collision-free.
+    It is an identity, not a serialized spelling.  What a persisted attribute is
+    finally called -- whether a nested selector reads as ``dataflow_design`` or
+    as some qualified form of it -- belongs to the operation persistence layer,
+    which maps this identity deterministically onto native attribute names and
+    owns the collision rule for them.  This package knows nothing about
+    persistence and fixes no attribute name; it guarantees only that the
+    identity is stable across root namespaces and cannot collide within a root.
 
     **Specialization.**  A layer that needs more than a structural branch --
     admission rules, ids the candidates already own, implied selected outputs --
@@ -1195,13 +1200,7 @@ class SubspaceChoice:
             )
         ordered: list[tuple[str, Subspace[Space]]] = []
         for alternative_id, subspace in alternatives.items():
-            if not isinstance(alternative_id, str) or not alternative_id:
-                raise AuthoringError("a SubspaceChoice alternative id is a non-empty string")
-            if not isinstance(subspace, Subspace):
-                raise AuthoringError(
-                    f"SubspaceChoice alternative {alternative_id!r} is a "
-                    f"{type(subspace).__name__}, not a Subspace"
-                )
+            self._check_alternative(alternative_id, subspace)
             if subspace.stable_name is not None:
                 raise AuthoringError(
                     f"SubspaceChoice alternative {alternative_id!r} also carries name="
@@ -1209,6 +1208,32 @@ class SubspaceChoice:
                 )
             ordered.append((alternative_id, subspace))
         self._initialize(tuple(ordered), outputs, when, name)
+
+    @staticmethod
+    def _check_alternative(alternative_id: object, subspace: object) -> None:
+        """Structural validity of one alternative, whichever spelling produced it.
+
+        Both construction paths pass through here, so a specialization cannot
+        widen what an alternative may be by supplying its own ids.  A
+        ``candidate_id`` returning ``None``, an empty string, or something that
+        is not a ``Subspace`` at all fails against the same rule as a malformed
+        mapping literal, and fails at the declaration rather than several frames
+        later inside lowering.
+
+        Duplicate ids and dotted ids stay with the compiler: those are questions
+        about the set of alternatives and the namespace they compile into, not
+        about whether one alternative is well formed.
+        """
+
+        if not isinstance(alternative_id, str) or not alternative_id:
+            raise AuthoringError(
+                f"a SubspaceChoice alternative id is a non-empty string, not {alternative_id!r}"
+            )
+        if not isinstance(subspace, Subspace):
+            raise AuthoringError(
+                f"SubspaceChoice alternative {alternative_id!r} is a "
+                f"{type(subspace).__name__}, not a Subspace"
+            )
 
     def _initialize(
         self,
@@ -1250,15 +1275,47 @@ class SubspaceChoice:
         generic path, unchanged.
         """
 
-        named = tuple((self.candidate_id(candidate), candidate) for candidate in candidates)
-        self._initialize(named, outputs, when, name)
+        named: list[tuple[str, Subspace[Space]]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, Subspace):
+                raise AuthoringError(
+                    f"a {type(self).__name__} candidate is a "
+                    f"{type(candidate).__name__}, not a Subspace"
+                )
+            candidate_id = self.candidate_id(candidate)
+            self._check_alternative(candidate_id, candidate)
+            named.append((candidate_id, candidate))
+        self._initialize(tuple(named), outputs, when, name)
+
+    def _admit_candidate(
+        self, owner: type[Space], member_name: str, subspace: Subspace[Space]
+    ) -> None:
+        """Run this choice's admission rule and say which member declared it.
+
+        The one contextual wrapper around :meth:`validate_candidate`, and the
+        only thing any caller invokes.  The compiler calls it while compiling a
+        branch; a layer that must consume a candidate *before* compilation --
+        Design projection synthesis asks each candidate for its exported Region,
+        and "does not export 'region'" is true and useless -- calls the same
+        wrapper rather than reimplementing the rule or its attribution.
+
+        Not overridable in spirit and not public in fact: a specialization
+        supplies the rule, never the framing.  Where a declaration is written is
+        the caller's fact, so ``validate_candidate`` never has to restate it and
+        cannot let it go stale.
+        """
+
+        try:
+            self.validate_candidate(owner, subspace)
+        except AuthoringError as error:
+            raise AuthoringError(f"{owner.__name__}.{member_name}: {error}") from error
 
     # -- the specialization seam ------------------------------------------
     #
     # Three methods, no compiler knowledge.  A layer overrides what it needs and
     # inherits one selector, one gating rule, one view, and one persistence
-    # identity.  The compiler calls ``validate_candidate``; the other two are
-    # consumed at construction.
+    # identity.  ``validate_candidate`` is reached only through
+    # ``_admit_candidate``; the other two are consumed at construction.
 
     def candidate_id(self, subspace: Subspace[Space]) -> str:
         """The stable alternative id of a self-naming candidate.
@@ -1277,9 +1334,9 @@ class SubspaceChoice:
     def validate_candidate(self, owner: type[Space], subspace: Subspace[Space]) -> None:
         """A specialization's own admission rule; a generic choice has none.
 
-        Raise :class:`AuthoringError` to refuse the candidate.  The compiler
-        names the offending member, so the message says only what is wrong with
-        the candidate itself.
+        Raise :class:`AuthoringError` to refuse the candidate.  Callers reach
+        this through :meth:`_admit_candidate`, which names the offending member,
+        so the message says only what is wrong with the candidate itself.
         """
 
         del owner, subspace

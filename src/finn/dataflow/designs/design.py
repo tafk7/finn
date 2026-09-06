@@ -50,7 +50,6 @@ from finn.dataflow.model.compiler import (
     answer_for,
     imported_decisions,
     resolve_value_source,
-    admit_candidate,
 )
 from finn.dataflow.model.declarations import (
     AuthoringError,
@@ -1014,7 +1013,7 @@ def _declared_segments(
         # non-Kernel candidate would fail that with "does not export 'region'"
         # -- true, unhelpful, and not the thing the author got wrong.
         for _alternative_id, subspace in declaration.alternatives:
-            admit_candidate(design_type, member_name, declaration, subspace)
+            declaration._admit_candidate(design_type, member_name, subspace)
         role = declaration.stable_name or member_name
         resolved.append((role, declaration.node_id or role, declaration))
     return tuple(resolved)

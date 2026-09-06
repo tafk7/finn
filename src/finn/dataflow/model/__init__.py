@@ -57,12 +57,7 @@ from finn.dataflow.model.branching import (
     BranchOutputInfo,
     CaseInfo,
 )
-from finn.dataflow.model.compiler import (
-    SpaceModel,
-    admit_candidate,
-    compile_space,
-    compile_space_model,
-)
+from finn.dataflow.model.compiler import SpaceModel, compile_space, compile_space_model
 from finn.dataflow.model.declarations import (
     RESERVED_LIFECYCLE_NAMES,
     RESERVED_PROTOCOL_NAMES,
@@ -131,7 +126,6 @@ __all__ = [
     "BranchOutputInfo",
     "CaseInfo",
     "SpaceModel",
-    "admit_candidate",
     "compile_space",
     "compile_space_model",
 ]

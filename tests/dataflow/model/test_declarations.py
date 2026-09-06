@@ -190,7 +190,6 @@ def test_public_model_facade_exposes_only_generic_vocabulary() -> None:
         "Subspace",
         "SubspaceChoice",
         "ChoiceView",
-        "admit_candidate",
         "allow_absent",
         "compile_space",
         "compile_space_model",

@@ -24,7 +24,8 @@ from typing import ClassVar, cast
 import pytest
 
 from finn.dataflow._engine import Decided, QualifiedPath, Unresolved
-from finn.dataflow.model.compiler import admit_candidate, compile_space, compile_space_model
+from finn.dataflow.model.compiler import compile_space, compile_space_model
+from finn.dataflow import model
 from finn.dataflow.model.declarations import (
     AuthoringError,
     Decision,
@@ -184,14 +185,57 @@ def test_a_refused_candidate_names_the_member_that_declared_it() -> None:
 
 
 def test_admission_can_be_run_early_without_restating_the_rule() -> None:
-    """A layer that consumes a candidate before compilation reuses the one call."""
+    """A layer consuming a candidate before compilation reuses the one wrapper.
+
+    Private, and deliberately not a free function on the public model surface:
+    there is one way to invoke the rule and one place the member name is
+    attached, whether the caller is the compiler or a layer running early.
+    """
 
     class Untagged(Space):
         size = Input(int)
 
     choice = Tagged(Subspace(Wide, size=Input(int)))
     with pytest.raises(AuthoringError, match=r"Wide\.segment: Untagged is not tagged"):
-        admit_candidate(Wide, "segment", choice, Subspace(Untagged, size=Input(int)))
+        choice._admit_candidate(Wide, "segment", Subspace(Untagged, size=Input(int)))
+
+
+def test_the_admission_wrapper_is_not_public_model_vocabulary() -> None:
+    """Compiler plumbing, not something an ordinary Space author calls."""
+
+    assert "admit_candidate" not in model.__all__
+    assert not hasattr(model, "admit_candidate")
+
+
+# -- one structural rule, whichever spelling produced the alternative ---------
+
+
+def test_a_specialization_cannot_widen_what_an_alternative_may_be() -> None:
+    """``candidate_id`` supplies the id, never permission to skip the checks."""
+
+    class Empty(Tagged):
+        __slots__ = ()
+
+        def candidate_id(self, subspace: Subspace[Space]) -> str:
+            return ""
+
+    class NotAString(Tagged):
+        __slots__ = ()
+
+        def candidate_id(self, subspace: Subspace[Space]) -> str:
+            return cast(str, None)
+
+    with pytest.raises(AuthoringError, match="non-empty string"):
+        Empty(Subspace(Wide, size=Input(int)))
+    with pytest.raises(AuthoringError, match="non-empty string"):
+        NotAString(Subspace(Wide, size=Input(int)))
+
+
+def test_a_non_subspace_candidate_is_refused_in_both_spellings() -> None:
+    with pytest.raises(AuthoringError, match="not a Subspace"):
+        Tagged(cast("Subspace[Space]", "wide"))
+    with pytest.raises(AuthoringError, match="not a Subspace"):
+        SubspaceChoice({"wide": cast("Subspace[Space]", "wide")})
 
 
 def test_a_generic_choice_admits_every_subspace() -> None:

@@ -250,33 +250,6 @@ class _CompiledSpace(Generic[S]):
             raise AuthoringError(f"{self.owner.__name__} has no Projection {name!r}") from None
 
 
-def admit_candidate(
-    owner: type[Space],
-    member_name: str,
-    declaration: SubspaceChoice,
-    subspace: Subspace[Space],
-) -> None:
-    """Run one specialization's admission rule and say which member refused.
-
-    The one place a ``SubspaceChoice`` specialization's ``validate_candidate``
-    is called and its refusal is attributed.  The seam method receives the
-    owning class and the candidate, never a pair of strings to interpolate:
-    where the declaration is written is the *caller's* fact, and a
-    specialization that had to restate it would be one more place for the member
-    name to go stale.
-
-    Public because admission is sometimes worth running before compilation --
-    a layer that is about to consume a candidate's exports gets a useful
-    message instead of a true but unhelpful one -- and because running it early
-    must not mean writing the rule, or its attribution, a second time.
-    """
-
-    try:
-        declaration.validate_candidate(owner, subspace)
-    except AuthoringError as error:
-        raise AuthoringError(f"{owner.__name__}.{member_name}: {error}") from error
-
-
 def _path(prefix: str, name: str) -> QualifiedPath:
     return QualifiedPath(f"{prefix}.{name}")
 
@@ -829,7 +802,7 @@ class _Compilation:
                     f"{self.space_type.__name__}.{member_name} alternative id {case_id!r} "
                     "contains a dot; an alternative id is one path segment of its namespace"
                 )
-            self._admit_candidate(member_name, declaration, subspace)
+            declaration._admit_candidate(self.space_type, member_name, subspace)
             if case_id in ids:
                 raise AuthoringError(
                     f"{self.space_type.__name__}.{member_name} declares alternative id "
@@ -837,14 +810,6 @@ class _Compilation:
                 )
             ids.append(case_id)
         return tuple(ids)
-
-    def _admit_candidate(
-        self,
-        member_name: str,
-        declaration: SubspaceChoice,
-        subspace: Subspace[Space],
-    ) -> None:
-        admit_candidate(self.space_type, member_name, declaration, subspace)
 
     def _selected_output(
         self,
@@ -1435,7 +1400,6 @@ def compile_space(
 __all__ = [
     "DeclarationOwner",
     "SpaceModel",
-    "admit_candidate",
     "answer_for",
     "resolve_value_source",
     "compile_space",
