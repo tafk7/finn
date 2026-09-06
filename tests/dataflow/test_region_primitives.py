@@ -15,6 +15,7 @@ from finn.dataflow.region import (
     Operand,
     Port,
     ScheduledInputRequirements,
+    UnportedInput,
 )
 
 
@@ -147,3 +148,98 @@ def test_region_interface_sets_have_deterministic_order_and_equality():
 
     assert left == right
     assert tuple(interface.port.id for interface in left.inputs) == ("a", "b")
+
+
+def test_ported_input_order_is_the_port_order_even_when_operands_sort_the_other_way():
+    """Ported inputs keep their port-id order, deliberately.
+
+    The MVAU compute region's ports are ``activation`` before ``weight`` and its
+    operands are ``W`` before ``X``, so a single key over operand ids would have
+    reordered every region that already exists and stopped two regions meaning
+    the same thing from comparing equal.  The names below sort the two ways
+    round on purpose, so this is a decision with a test rather than an accident
+    of the current MVAU vocabulary.
+    """
+
+    early_port_late_operand = InputInterface(
+        Port("a_port", Operand("z_operand", DataType["INT8"], (1,)), BeatSequence(1, (((0,),),))),
+        ScheduledInputRequirements(),
+    )
+    late_port_early_operand = InputInterface(
+        Port("z_port", Operand("a_operand", DataType["INT8"], (1,)), BeatSequence(1, (((0,),),))),
+        ScheduledInputRequirements(),
+    )
+
+    region = DataflowRegion(
+        LogicalSchedule(()), (late_port_early_operand, early_port_late_operand), ()
+    )
+
+    assert tuple(item.port.id for item in region.inputs) == ("a_port", "z_port")
+    assert tuple(item.operand.id for item in region.inputs) == ("z_operand", "a_operand")
+
+
+def test_unported_inputs_follow_the_ported_ones_in_operand_order():
+    """Grouped, so a ported-only region's value is exactly what it was.
+
+    ``inputs[:n]`` equals ``input_interfaces`` for every region, and for a
+    region that has no unported input the whole tuple is unchanged from before
+    the sum type existed.
+    """
+
+    operand = Operand("x", DataType["INT8"], (2,))
+    ported = InputInterface(
+        Port("z_port", operand, BeatSequence(1, (((0,),),))), ScheduledInputRequirements()
+    )
+    first_unported = UnportedInput(
+        Operand("b", DataType["INT8"], (1,)), ScheduledInputRequirements()
+    )
+    second_unported = UnportedInput(
+        Operand("a", DataType["INT8"], (1,)), ScheduledInputRequirements()
+    )
+
+    left = DataflowRegion(LogicalSchedule(()), (first_unported, ported, second_unported), ())
+    right = DataflowRegion(LogicalSchedule(()), (ported, second_unported, first_unported), ())
+
+    assert left == right
+    assert left.inputs == (ported, second_unported, first_unported)
+    assert left.input_interfaces == (ported,)
+    assert left.unported_inputs == (second_unported, first_unported)
+    assert left.inputs[: len(left.input_interfaces)] == left.input_interfaces
+
+
+def test_a_ported_input_takes_its_operand_from_its_port():
+    """No second field, so the two can never disagree."""
+
+    operand = Operand("x", DataType["INT8"], (2,))
+    interface = InputInterface(
+        Port("in", operand, BeatSequence(1, (((0,),),))), ScheduledInputRequirements()
+    )
+
+    assert interface.operand is operand
+
+
+def test_a_region_input_is_reachable_by_operand_and_a_port_by_its_id():
+    operand = Operand("x", DataType["INT8"], (2,))
+    ported = InputInterface(
+        Port("in", operand, BeatSequence(1, (((0,),),))), ScheduledInputRequirements()
+    )
+    unported = UnportedInput(Operand("w", DataType["INT8"], (1,)), ScheduledInputRequirements())
+    region = DataflowRegion(LogicalSchedule(()), (ported, unported), ())
+
+    assert region.input("x") is ported
+    assert region.input("w") is unported
+    assert region.input_interface("in") is ported
+    assert region.interfaces == (ported,)
+    with pytest.raises(KeyError):
+        region.input_interface("w")
+    with pytest.raises(KeyError):
+        region.input("absent")
+
+
+def test_required_positions_collapse_iterations_and_multiplicity():
+    requirements = ScheduledInputRequirements(
+        {((step, visit), (step,)): 1 for step in range(2) for visit in range(3)}
+    )
+
+    assert requirements.occurrence_count == 6
+    assert requirements.required_positions == frozenset({(0,), (1,)})

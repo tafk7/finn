@@ -272,7 +272,15 @@ def construct_embedded_dot_product_region(
     )
     return DataflowRegion(
         streamed.schedule,
-        tuple(item for item in streamed.inputs if item.port.id != "weight"),
+        # Mechanical adaptation only.  The weight interface is still dropped
+        # rather than turned into an ``UnportedInput`` carrying the same
+        # requirements; that is a semantic change to this Kernel and belongs to
+        # its owner, not to the dataflow-core migration.
+        tuple(
+            item
+            for item in streamed.inputs
+            if not isinstance(item, InputInterface) or item.port.id != "weight"
+        ),
         streamed.outputs,
     )
 

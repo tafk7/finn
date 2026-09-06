@@ -319,3 +319,28 @@ def test_replacing_the_case_build_does_not_disturb_the_frozen_one(tmp_path: Path
     assert case.other_build != case.build
     assert replace(case, other_build=None).other_build is None
     assert_dataflow_op_conforms(case)
+
+
+def test_the_replay_association_reads_the_ports_a_region_actually_has() -> None:
+    """The one line the sum type changed in this operation, executed.
+
+    ``association`` looks a shape up by port id -- on the ported inputs for the
+    activation and on the outputs for the expanded stream.  Since a region input
+    may now be unported, that lookup ranges over ``input_interfaces`` rather than
+    over every input, and nothing else in this operation moved.  No other test
+    reaches this property, so without this one the migrated line would be
+    unexecuted.
+    """
+
+    model = _replay_model()
+    node = next(item for item in model.graph.node if item.name == "replay0")
+    chosen = _configure_replay(model.get_customop_wrapper(node).bind(model, Build()))
+    answer = chosen.association
+
+    assert isinstance(answer, Decided)
+    activation = answer.value.operand("activation")
+    expanded = answer.value.operand("expanded")
+    assert (activation.node_id, activation.port_id) == ("replay", "activation_in")
+    assert (expanded.node_id, expanded.port_id) == ("replay", "activation_out")
+    assert activation.selected_shape == (2, 8)
+    assert expanded.selected_shape == (2, 8)

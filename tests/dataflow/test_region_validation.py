@@ -13,6 +13,7 @@ from finn.dataflow.region import (
     Port,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
+    UnportedInput,
 )
 from finn.dataflow.region_validation import validate_region
 
@@ -220,3 +221,111 @@ def test_condition_7_beat_fields_are_total_and_positions_valid():
     codes = _codes(region)
     assert "beat.field_count_mismatch" in codes
     assert "beat.position_out_of_domain" in codes
+
+
+def test_an_unported_input_is_validated_exactly_as_a_ported_one():
+    """The operand and requirement rules reach an operand no port presents.
+
+    Before the unported case existed there was nothing here to reach: an
+    embedded matrix was absent from the value, so its datatype, its shape and
+    its requirement domain were unvalidated because they were unstated.
+    """
+
+    region = DataflowRegion(
+        LogicalSchedule((("step", 2),)),
+        (
+            UnportedInput(
+                Operand("w", ELEMENT_TYPE, (2,)),
+                ScheduledInputRequirements({((step,), (step,)): 1 for step in range(2)}),
+            ),
+        ),
+        (),
+    )
+    assert _codes(region) == ()
+
+
+def test_an_unported_operand_reaches_every_operand_rule():
+    region = DataflowRegion(
+        LogicalSchedule((("step", 1),)),
+        (
+            UnportedInput(
+                Operand("w", DataType["INT0"], (0, 2)),
+                ScheduledInputRequirements({((9,), (7,)): -1}),
+            ),
+        ),
+        (),
+    )
+    codes = _codes(region)
+    assert "operand.bit_width_not_positive" in codes
+    assert "operand.extent_not_positive" in codes
+    assert "requirement.iteration_out_of_domain" in codes
+    assert "requirement.position_out_of_domain" in codes
+    assert "requirement.multiplicity_negative" in codes
+
+
+def test_an_unported_operand_conflicts_with_a_ported_one_of_the_same_name():
+    """Operand identity consistency is region-wide, and now spans both arms."""
+
+    ported = Operand("x", ELEMENT_TYPE, (1,))
+    unported = Operand("x", DataType["INT4"], (3,))
+    region = DataflowRegion(
+        LogicalSchedule(()),
+        (
+            _input("in", ported, (((0,),),), {}),
+            UnportedInput(unported, ScheduledInputRequirements()),
+        ),
+        (),
+    )
+    assert "operand.identity_conflict" in _codes(region)
+
+
+def test_two_region_inputs_may_not_declare_the_same_operand():
+    """The executable refusal of the multi-interface form.
+
+    One region input has at most one stream interface, so an operand delivered
+    over two ports would have to be two inputs -- two requirement maps for one
+    computation's use of one operand, with no relation defined between them.
+    Widening to several interfaces means defining that relation: which
+    positions each serves, whether they may overlap, whether a repeat is a
+    duplicate delivery, and in what order across the interfaces.  Until then
+    this is an authoring error and says so.
+    """
+
+    operand = Operand("w", ELEMENT_TYPE, (2,))
+    region = DataflowRegion(
+        LogicalSchedule(()),
+        (
+            _input("w_lo", operand, (((0,),),), {}),
+            _input("w_hi", operand, (((1,),),), {}),
+        ),
+        (),
+    )
+    assert "input.operand_duplicate" in _codes(region)
+
+
+def test_a_ported_and_an_unported_input_may_not_share_an_operand_either():
+    operand = Operand("w", ELEMENT_TYPE, (2,))
+    region = DataflowRegion(
+        LogicalSchedule(()),
+        (
+            _input("w_hi", operand, (((1,),),), {}),
+            UnportedInput(operand, ScheduledInputRequirements()),
+        ),
+        (),
+    )
+    assert "input.operand_duplicate" in _codes(region)
+
+
+def test_an_unported_input_is_not_a_port_and_collides_with_no_port_id():
+    """It has no port id, so the port-shaped rules do not range over it."""
+
+    region = DataflowRegion(
+        LogicalSchedule(()),
+        (
+            _input("shared", Operand("x", ELEMENT_TYPE, (1,)), (((0,),),), {}),
+            UnportedInput(Operand("w", ELEMENT_TYPE, (1,)), ScheduledInputRequirements()),
+        ),
+        (),
+    )
+    assert "port.id_duplicate" not in _codes(region)
+    assert tuple(port.id for port in region.ports) == ("shared",)

@@ -443,6 +443,24 @@ class ScheduledInputRequirements:
         """Return the total number of validly non-negative declared uses."""
         return sum(max(0, multiplicity) for _, multiplicity in self._nonzero_entries)
 
+    @property
+    def required_positions(self) -> frozenset[Coordinate]:
+        """Return the operand positions required at one or more iterations.
+
+        The *set* of positions, with the iteration points and multiplicities
+        collapsed.  Presentation questions are answered against this rather than
+        against the occurrence count: a position presented once can serve
+        several scheduled uses through binding-owned replay, and ``REGION.md``
+        3.7 refuses any required-versus-presented equality for inputs for
+        exactly that reason.
+        """
+
+        return frozenset(
+            position
+            for (_iteration, position), multiplicity in self._nonzero_entries
+            if multiplicity > 0
+        )
+
 
 @dataclass(frozen=True, init=False)
 class ScheduledOutputAvailability:
@@ -523,6 +541,58 @@ class InputInterface:
         if not isinstance(self.requirements, ScheduledInputRequirements):
             raise TypeError("requirements must be ScheduledInputRequirements")
 
+    @property
+    def operand(self) -> Operand:
+        """The operand this input requires.
+
+        A property over the port rather than a second field, so a ported input
+        cannot declare one operand and present another.  It is what makes the
+        sibling :class:`UnportedInput` a *sum* rather than a nullable port: the
+        two cases answer ``.operand`` and ``.requirements`` alike, and differ
+        only in whether there is a channel to ask about.
+        """
+
+        return self.port.operand
+
+
+@dataclass(frozen=True)
+class UnportedInput:
+    """An operand the region requires and exposes no stream port for.
+
+    One dataflow statement and no more:
+
+        this region requires this operand according to this schedule, and this
+        factorization gives it no stream port.
+
+    It does not say embedded RAM, local storage, a data slot, a parameter image
+    or any other realization.  Which service covers the positions no port
+    presents is the binding's obligation under ``REGION.md`` 5.2, and a physical
+    choice can neither add nor remove one of these.
+
+    ``requirements`` is mandatory, exactly as it is for a ported input.  An
+    unported input is not a weaker statement about the computation than a ported
+    one -- it says which positions are required, at which iteration points, how
+    often -- it is a weaker statement about *transport*.
+    """
+
+    operand: Operand
+    requirements: ScheduledInputRequirements
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operand, Operand):
+            raise TypeError("operand must be an Operand")
+        if not isinstance(self.requirements, ScheduledInputRequirements):
+            raise TypeError("requirements must be ScheduledInputRequirements")
+
+
+#: One region input: presented by a stream port, or not presented at all.
+#:
+#: Requirements live on both arms.  Before this union they lived only on the
+#: ported one, so a region that consumed an operand no port carried said nothing
+#: about it -- the embedded dot product dropped its weight interface entirely,
+#: and the parameter source emitted a matrix it never declared requiring.
+RegionInput = InputInterface | UnportedInput
+
 
 @dataclass(frozen=True)
 class OutputInterface:
@@ -542,12 +612,35 @@ def _interface_sort_key(interface: InputInterface | OutputInterface) -> Tuple[st
     return (interface.port.id, repr(interface))
 
 
+def _input_sort_key(item: RegionInput) -> Tuple[int, str, str]:
+    """Ported inputs first in port-id order, then unported in operand-id order.
+
+    Not one key over both arms.  Sorting the whole tuple by operand id would
+    reorder every region that already exists -- the MVAU compute region's ports
+    are ``activation`` before ``weight`` and its operands are ``W`` before ``X``
+    -- and two regions that mean the same thing would stop comparing equal
+    across this change.  Grouping the arms keeps every ported-only region's
+    value, ordering and hash exactly what they were, and leaves ``inputs[:n]``
+    equal to ``input_interfaces`` for all of them.
+
+    ``repr`` still breaks ties, for the same reason it did before: duplicate
+    identities are a validation issue, not a construction error, and the value
+    must still sort deterministically while carrying one.
+    """
+
+    return (
+        (0, item.port.id, repr(item))
+        if isinstance(item, InputInterface)
+        else (1, item.operand.id, repr(item))
+    )
+
+
 @dataclass(frozen=True)
 class DataflowRegion:
     """One complete, not necessarily validated, logical dataflow region."""
 
     schedule: LogicalSchedule
-    inputs: Tuple[InputInterface, ...]
+    inputs: Tuple[RegionInput, ...]
     outputs: Tuple[OutputInterface, ...]
 
     def __post_init__(self) -> None:
@@ -555,21 +648,56 @@ class DataflowRegion:
             raise TypeError("schedule must be a LogicalSchedule")
         inputs = tuple(self.inputs)
         outputs = tuple(self.outputs)
-        if not all(isinstance(interface, InputInterface) for interface in inputs):
-            raise TypeError("inputs must contain only InputInterface values")
+        if not all(isinstance(item, (InputInterface, UnportedInput)) for item in inputs):
+            raise TypeError("inputs must contain only InputInterface or UnportedInput values")
         if not all(isinstance(interface, OutputInterface) for interface in outputs):
             raise TypeError("outputs must contain only OutputInterface values")
-        object.__setattr__(self, "inputs", tuple(sorted(inputs, key=_interface_sort_key)))
+        object.__setattr__(self, "inputs", tuple(sorted(inputs, key=_input_sort_key)))
         object.__setattr__(self, "outputs", tuple(sorted(outputs, key=_interface_sort_key)))
 
     @property
+    def input_interfaces(self) -> Tuple[InputInterface, ...]:
+        """Return the inputs a stream port presents, in port-id order."""
+        return tuple(item for item in self.inputs if isinstance(item, InputInterface))
+
+    @property
+    def unported_inputs(self) -> Tuple[UnportedInput, ...]:
+        """Return the inputs no stream port presents, in operand-id order."""
+        return tuple(item for item in self.inputs if isinstance(item, UnportedInput))
+
+    @property
     def interfaces(self) -> Tuple[InputInterface | OutputInterface, ...]:
-        """Return all interfaces in deterministic input-then-output order."""
-        return self.inputs + self.outputs
+        """Return every port-bearing interface, input then output.
+
+        Unported inputs are deliberately absent: every caller of this property
+        reads ``.port`` off what it yields, and an unported input has none.  It
+        is the collection of things a network can name as an endpoint, which is
+        what it always was.
+        """
+        return self.input_interfaces + self.outputs
+
+    @property
+    def ports(self) -> Tuple[Port, ...]:
+        """Return every port the region actually has, input then output."""
+        return tuple(interface.port for interface in self.interfaces)
+
+    def input(self, operand_id: str) -> RegionInput:
+        """Return the uniquely identified region input, ported or not."""
+        matches = tuple(item for item in self.inputs if item.operand.id == operand_id)
+        if len(matches) != 1:
+            raise KeyError(f"expected one input operand {operand_id!r}, found {len(matches)}")
+        return matches[0]
 
     def input_interface(self, port_id: str) -> InputInterface:
-        """Return the uniquely identified input interface."""
-        matches = tuple(interface for interface in self.inputs if interface.port.id == port_id)
+        """Return the uniquely identified input interface.
+
+        Unchanged in signature and meaning: a port lookup can only ever find an
+        input that has a port, so this keeps returning an ``InputInterface`` and
+        every existing caller keeps compiling.
+        """
+        matches = tuple(
+            interface for interface in self.input_interfaces if interface.port.id == port_id
+        )
         if len(matches) != 1:
             raise KeyError(f"expected one input port {port_id!r}, found {len(matches)}")
         return matches[0]
