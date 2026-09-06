@@ -69,6 +69,33 @@ inspect its result or render Docker and sbx configuration:
 ./docker/config sbx --tier build
 ```
 
+## Workspace-controller profile
+
+FINN publishes a provider-neutral development profile under `execution/`:
+
+```bash
+./execution/plan --tier dev
+sbxc plan --canonical --config execution/sbx-compose.toml
+```
+
+`execution/plan` is the versioned machine-readable interface for workspace
+controllers. It combines the existing host resolver with FINN's environment
+and source identities, names the preparation command, and points to the public
+sbxc manifest and agent. Secret values are never emitted; only required secret
+names may appear. The initial public profile is deliberately the portable dev
+tier: frozen dependencies, no Xilinx toolchain, no licence, and no FINN
+workload egress grants.
+
+Prepare the local sbx image/template before first attachment:
+
+```bash
+./docker/build --sbx
+```
+
+The public sbxc profile carries no provider configuration. Company LLM
+gateways, certificates, licence servers, concrete toolchain paths, and model
+policy belong in private adapter overlays.
+
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
 advanced workflows. A direct Bake invocation must set
 `FINN_IMAGE_REVISION` explicitly; the supported `docker/build` path computes it

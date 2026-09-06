@@ -1,0 +1,29 @@
+# Provider-neutral FINN development profile for sbxc and workspace controllers.
+# Company endpoints, credentials, licence servers, and concrete toolchain paths
+# belong in private adapter overlays.
+
+schema = 1
+name = "finn-public"
+default_agent = "dev"
+backend = "sbx"
+
+[defaults]
+harnesses = ["opencode"]
+default_harness = "opencode"
+image = "finn-sbx-opencode"
+workspace = "direct"
+posture = "rw"
+
+[images.finn-sbx-opencode]
+base_command = ["./docker/run-docker", "print-tag", "sbx-dev"]
+base_command_dir = ".."
+harnesses = ["opencode"]
+
+[env]
+FINN_DEPS = "frozen"
+FINN_BUILD_DIR = "/tmp/finn_build"
+
+[network]
+posture = "closed"
+
+[agents.dev]

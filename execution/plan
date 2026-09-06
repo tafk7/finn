@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Emit FINN's versioned, provider-neutral controller execution plan."""
+
+import argparse
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[1]
+DOCKER = REPO / "docker"
+CONTRACT = "finn-execution-plan/v1alpha1"
+SECRET_ENV = ("LM_LICENSE_FILE", "XILINXD_LICENSE_FILE")
+
+
+def load_config_module():
+    spec = importlib.util.spec_from_file_location("finn_docker_config", DOCKER / "config.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load docker/config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_output(argv):
+    result = subprocess.run(
+        [str(item) for item in argv],
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(result.returncode)
+    return result.stdout
+
+
+def key_values(text):
+    values = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key] = value
+    return values
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tier", default="dev", choices=("dev",))
+    parser.add_argument("--workspace-policy", default="mirror", choices=("mirror",))
+    args = parser.parse_args()
+
+    config = load_config_module()
+    resolved = config.resolve_host(args.tier, "sbx", args.workspace_policy)
+    launch = key_values(run_output([DOCKER / "run", "--sbx", "--print"]))
+    image = run_output([DOCKER / "run-docker", "print-tag", "sbx-dev"]).strip()
+    if not image:
+        raise SystemExit("execution/plan: FINN image resolver returned an empty reference")
+
+    environment = {key: value for key, value in resolved["env"].items() if key not in SECRET_ENV}
+    required_secrets = sorted(key for key in SECRET_ENV if key in resolved["env"])
+    plan = {
+        "contract": CONTRACT,
+        "profile": "finn-dev-sbx",
+        "tier": resolved["tier"],
+        "backend": resolved["backend"],
+        "dependencies": environment.get("FINN_DEPS", "frozen"),
+        "runtimes": resolved["runtimes"],
+        "image": {
+            "reference": image,
+            "revision": launch["image_revision"],
+            "bake_target": launch["bake_target"],
+            "pull_policy": "never",
+        },
+        "source": {
+            "revision": launch["source_revision"],
+            "describe": launch["source_describe"],
+            "dirty": launch["source_dirty"] == "1",
+        },
+        "workspace": resolved["workspace"],
+        "environment": environment,
+        "mounts": resolved["mounts"],
+        "network": {
+            "posture": "closed",
+            "allow": resolved["egress"],
+            "enforcement": resolved["egress_enforcement"],
+        },
+        "secrets": {"required": required_secrets},
+        "capabilities": resolved["dev_contract"],
+        "prepare": {
+            "command": ["./docker/build", "--sbx"],
+            "working_directory": ".",
+        },
+        "sbxc": {
+            "manifest": "execution/sbx-compose.toml",
+            "agent": "dev",
+        },
+    }
+    json.dump(plan, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

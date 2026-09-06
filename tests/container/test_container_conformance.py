@@ -20,6 +20,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 DOCKER_DIR = REPO / "docker"
 FINN_ENV = DOCKER_DIR / "config"
+EXECUTION_PLAN = REPO / "execution" / "plan"
+PUBLIC_SBXC_PROFILE = REPO / "execution" / "sbx-compose.toml"
 sys.path.insert(0, str(DOCKER_DIR))
 import config as finn_env  # noqa: E402
 
@@ -152,6 +154,69 @@ def compose_run(override, service, command, tag, tmp_path, env=None, timeout=600
         env=child_env,
         timeout=timeout,
     )
+
+
+def test_00_public_controller_plan_is_versioned_and_provider_neutral():
+    """The public dev profile is complete without company-private bindings."""
+    child_env = dict(os.environ)
+    for variable in (
+        "FINN_DEPS",
+        "FINN_IMAGE_REVISION",
+        "FINN_RUNTIMES",
+        "FINN_SOURCE_DESCRIBE",
+        "FINN_SOURCE_DIRTY",
+        "FINN_SOURCE_REVISION",
+    ):
+        child_env.pop(variable, None)
+    child_env.update(
+        {
+            "FINN_XILINX_PATH": "/not-used-by-dev",
+            "XILINXD_LICENSE_FILE": "2100@private.example.invalid",
+        }
+    )
+    first = run([EXECUTION_PLAN, "--tier", "dev"], env=child_env)
+    second = run([EXECUTION_PLAN, "--tier", "dev"], env=child_env)
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert first.stdout == second.stdout
+    plan = json.loads(first.stdout)
+    assert plan["contract"] == "finn-execution-plan/v1alpha1"
+    assert plan["profile"] == "finn-dev-sbx"
+    assert plan["backend"] == "sbx"
+    assert plan["dependencies"] == "frozen"
+    assert plan["workspace"]["source"] == str(REPO)
+    assert plan["workspace"]["target"] == str(REPO)
+    assert plan["image"]["revision"].startswith("env-")
+    assert plan["image"]["reference"].startswith("xilinx/finn:sbx-env-")
+    assert plan["source"]["revision"] == run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    assert plan["mounts"] == []
+    assert plan["network"]["allow"] == []
+    assert plan["secrets"]["required"] == []
+    assert plan["capabilities"] == {"toolchain": False, "license": False, "egress": False}
+    assert plan["sbxc"] == {"manifest": "execution/sbx-compose.toml", "agent": "dev"}
+
+    public_text = EXECUTION_PLAN.read_text() + PUBLIC_SBXC_PROFILE.read_text()
+    for private_value in ("gitenterprise", "llm-api.amd.com", "LLM_GATEWAY_KEY"):
+        assert private_value not in public_text
+
+
+def test_00b_public_profile_resolves_with_sbxc_when_available():
+    """sbxc can consume the FINN-owned profile without a private adapter."""
+    sbxc = os.environ.get("FINN_SBXC") or shutil.which("sbxc")
+    if not sbxc:
+        pytest.skip("set FINN_SBXC or install sbxc to test public profile consumption")
+    proc = run(
+        [sbxc, "plan", "--canonical", "--config", PUBLIC_SBXC_PROFILE],
+        env=dict(os.environ),
+    )
+    assert proc.returncode == 0, proc.stderr
+    plan = json.loads(proc.stdout)
+    assert plan["backend"] == "sbx"
+    assert plan["agent"] == "dev"
+    assert plan["env"] == {"FINN_BUILD_DIR": "/tmp/finn_build", "FINN_DEPS": "frozen"}
+    assert plan["network"]["posture"] == "closed"
+    assert plan["network"]["allow"] == []
+    assert plan["secrets"]["required"] == []
 
 
 def test_01_supported_targets_build(docker_daemon):
