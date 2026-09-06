@@ -7,7 +7,7 @@ IPython
 matplotlib
 netron
 pytest
-qonnx@git+https://github.com/tafk7/qonnx@46b69021e3a38b57c636f6941a52d809c8928a7b#egg=qonnx
+qonnx@git+https://github.com/tafk7/qonnx@106941a231cdea6a4201a4cf035fecf1d6f2cc71#egg=qonnx
 sphinx_rtd_theme==2.0.0
 torch
 torchvision
