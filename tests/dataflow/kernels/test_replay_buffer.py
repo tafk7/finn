@@ -30,8 +30,8 @@ from finn.dataflow.kernels.replay_buffer import (
     FINNLIB_ROOT,
     FINNLIB_SOURCES,
     ReplayBufferKernel,
-    construct_activation_replay_region,
 )
+from finn.dataflow.ops.mvau import regions as mvau_regions
 from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region as baseline_region,
 )
@@ -143,9 +143,6 @@ def test_replay_region_matches_the_previous_authority(
         repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
     )
     assert configured.region == expected
-    assert configured.region == construct_activation_replay_region(
-        repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
-    )
     assert not validate_region(configured.region).issues
 
 
@@ -329,3 +326,9 @@ def test_replay_packages_into_a_portable_component(tmp_path: Path) -> None:
     assert component.abi is kernel.abi
     assert tuple(path for path, _content in component.files) == FINNLIB_SOURCES
     del tmp_path
+
+
+def test_the_replay_kernel_declares_the_one_semantic_constructor_authority() -> None:
+    """The Kernel-local copy is gone; the declaration names `ops.mvau.regions`."""
+
+    assert ReplayBufferKernel.region.construct is mvau_regions.construct_activation_replay_region

@@ -28,78 +28,8 @@ from finn.dataflow.kernels.kernel import (
 )
 from finn.dataflow.space.declarations import Input
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.ops.mvau.regions import construct_weight_stream_region
 from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
-from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
-from finn.dataflow.model.region import (
-    RegionRefused,
-    BeatSequence,
-    Coordinate,
-    DataflowRegion,
-    NumericElementType,
-    Operand,
-    Port,
-)
-
-
-def _weight_beats(
-    repetitions: int,
-    neuron_folds: int,
-    synapse_folds: int,
-    pe: int,
-    simd: int,
-) -> tuple[tuple[Coordinate, ...], ...]:
-    """The exact order the folded dot product consumes its matrix in.
-
-    Restated here rather than imported from the consumer: a supplier that
-    derived its output order from a particular consumer's module would be a
-    supplier bound to that consumer.  The two agreeing is a property the Network
-    checks, position by position, and it should be checkable rather than
-    guaranteed by a shared import.
-    """
-
-    return tuple(
-        tuple(
-            (neuron_fold * pe + pe_index, synapse_fold * simd + lane)
-            for pe_index in range(pe)
-            for lane in range(simd)
-        )
-        for _repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-    )
-
-
-def construct_weight_stream_region(
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
-    weight_type: NumericElementType,
-    pe: int,
-    simd: int,
-) -> DataflowRegion:
-    """One rank-zero source emitting the matrix in folded consumption order."""
-
-    dimensions = (repetitions, matrix_width, matrix_height, pe, simd)
-    if any(type(value) is not int or value <= 0 for value in dimensions):
-        raise RegionRefused("weight-stream dimensions and folding must be positive integers")
-    if matrix_width % simd:
-        raise RegionRefused("SIMD must divide matrix_width exactly")
-    if matrix_height % pe:
-        raise RegionRefused("PE must divide matrix_height exactly")
-
-    neuron_folds = matrix_height // pe
-    synapse_folds = matrix_width // simd
-    weight = Operand("W", weight_type, (matrix_height, matrix_width))
-    return construct_cyclic_parameter_region(
-        Port(
-            "weight",
-            weight,
-            BeatSequence(
-                pe * simd,
-                _weight_beats(repetitions, neuron_folds, synapse_folds, pe, simd),
-            ),
-        )
-    )
 
 
 class MemstreamKernel(Kernel):
@@ -134,7 +64,7 @@ class MemstreamKernel(Kernel):
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
-        weight_type=weight_type,
+        weight_element_type=weight_type,
         pe=pe,
         simd=simd,
     )
@@ -149,5 +79,4 @@ class MemstreamKernel(Kernel):
 __all__ = [
     "CYCLIC_PARAMETER_DELIVERY",
     "MemstreamKernel",
-    "construct_weight_stream_region",
 ]

@@ -41,23 +41,11 @@ from finn.dataflow.kernels.kernel import (
     PhysicallyUnsupported,
     RegionDeclaration,
 )
-from finn.dataflow.model.region import (
-    RegionRefused,
-    BeatSequence,
-    Coordinate,
-    DataflowRegion,
-    InputInterface,
-    InternalInput,
-    LogicalSchedule,
-    NumericElementType,
-    Operand,
-    OutputInterface,
-    Port,
-    RequirementKey,
-    ScheduledInputRequirements,
-    ScheduledOutputAvailability,
-    ScheduleLevel,
-    element_width,
+from finn.dataflow.model.region import NumericElementType, element_width
+from finn.dataflow.ops.mvau.regions import (
+    construct_batch_interleaved_streamed_mvau_region,
+    construct_dot_product_region,
+    construct_embedded_dot_product_region,
 )
 
 FINNLIB_ROOT = "finnlib"
@@ -92,336 +80,6 @@ _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
 _SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
 _SEGMENT_BASE_DELAY_NS = 0.741
 _SEGMENT_STAGE_DELAY_NS = 0.605
-
-
-def _expanded_activation_beats(
-    repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
-) -> tuple[tuple[Coordinate, ...], ...]:
-    return tuple(
-        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
-        for repetition in range(repetitions)
-        for _neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-    )
-
-
-def _weight_beats(
-    repetitions: int,
-    neuron_folds: int,
-    synapse_folds: int,
-    pe: int,
-    simd: int,
-) -> tuple[tuple[Coordinate, ...], ...]:
-    return tuple(
-        tuple(
-            (neuron_fold * pe + pe_index, synapse_fold * simd + lane)
-            for pe_index in range(pe)
-            for lane in range(simd)
-        )
-        for _repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-    )
-
-
-def _output_beats(
-    repetitions: int, neuron_folds: int, pe: int
-) -> tuple[tuple[Coordinate, ...], ...]:
-    return tuple(
-        tuple((repetition, neuron_fold * pe + pe_index) for pe_index in range(pe))
-        for repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-    )
-
-
-def construct_dot_product_region(
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
-    activation_type: NumericElementType,
-    weight_type: NumericElementType,
-    output_type: NumericElementType,
-    pe: int,
-    simd: int,
-) -> DataflowRegion:
-    """The folded stream contract directly implemented by ``dotp_axi``."""
-
-    dimensions = (repetitions, matrix_width, matrix_height, pe, simd)
-    if any(type(value) is not int or value <= 0 for value in dimensions):
-        raise RegionRefused("dot-product dimensions and folding must be positive integers")
-    if matrix_width % simd:
-        raise RegionRefused("SIMD must divide matrix_width exactly")
-    if matrix_height % pe:
-        raise RegionRefused("PE must divide matrix_height exactly")
-
-    neuron_folds = matrix_height // pe
-    synapse_folds = matrix_width // simd
-    schedule = LogicalSchedule(
-        (
-            ScheduleLevel("rep", repetitions),
-            ScheduleLevel("nf", neuron_folds),
-            ScheduleLevel("sf", synapse_folds),
-        )
-    )
-    activation = Operand("X", activation_type, (repetitions, matrix_width))
-    weight = Operand("W", weight_type, (matrix_height, matrix_width))
-    output = Operand("Y", output_type, (repetitions, matrix_height))
-    activation_requirements: dict[RequirementKey, int] = {
-        (
-            (repetition, neuron_fold, synapse_fold),
-            (repetition, synapse_fold * simd + lane),
-        ): 1
-        for repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for lane in range(simd)
-    }
-    weight_requirements: dict[RequirementKey, int] = {
-        (
-            (repetition, neuron_fold, synapse_fold),
-            (neuron_fold * pe + pe_index, synapse_fold * simd + lane),
-        ): 1
-        for repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for pe_index in range(pe)
-        for lane in range(simd)
-    }
-    availability_entries: dict[Coordinate, Coordinate] = {
-        (repetition, neuron_fold * pe + pe_index): (
-            repetition,
-            neuron_fold,
-            synapse_folds - 1,
-        )
-        for repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-        for pe_index in range(pe)
-    }
-    availability = ScheduledOutputAvailability(availability_entries)
-    return DataflowRegion(
-        schedule,
-        (
-            InputInterface(
-                Port(
-                    "activation",
-                    activation,
-                    BeatSequence(
-                        simd,
-                        _expanded_activation_beats(repetitions, neuron_folds, synapse_folds, simd),
-                    ),
-                ),
-                ScheduledInputRequirements(activation_requirements),
-            ),
-            InputInterface(
-                Port(
-                    "weight",
-                    weight,
-                    BeatSequence(
-                        pe * simd,
-                        _weight_beats(repetitions, neuron_folds, synapse_folds, pe, simd),
-                    ),
-                ),
-                ScheduledInputRequirements(weight_requirements),
-            ),
-        ),
-        (
-            OutputInterface(
-                Port(
-                    "output",
-                    output,
-                    BeatSequence(pe, _output_beats(repetitions, neuron_folds, pe)),
-                ),
-                availability,
-            ),
-        ),
-    )
-
-
-def construct_embedded_dot_product_region(
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
-    activation_type: NumericElementType,
-    weight_type: NumericElementType,
-    output_type: NumericElementType,
-    pe: int,
-    simd: int,
-) -> DataflowRegion:
-    """The same arithmetic with the weights already inside.
-
-    A *different Region*, not the streamed one with a port suppressed.  Where
-    the weights come from is a physical question, but whether they cross this
-    Region's boundary is a semantic one: an embedded core presents no weight
-    input, so a Network that placed it has no weight edge and no weight
-    boundary to substitute.  Saying that with a flag on one Region would make
-    the boundary contract depend on a physical choice, which is the thing the
-    Region exists to be independent of.
-
-    The matrix *is* an operand here, and is required exactly as the streamed
-    sibling requires it -- same operand id, datatype, shape, iteration points and
-    multiplicities.  What it is not is traffic at this boundary.  Deleting the
-    input entirely was the older reading, and it made the embedded Region say
-    nothing at all about a matrix it demonstrably consumes; an ``InternalInput``
-    says the requirement and withholds only the port.
-    """
-
-    streamed = construct_dot_product_region(
-        repetitions,
-        matrix_width,
-        matrix_height,
-        activation_type,
-        weight_type,
-        output_type,
-        pe,
-        simd,
-    )
-    weight = streamed.input_interface("weight")
-    return DataflowRegion(
-        streamed.schedule,
-        tuple(
-            InternalInput(weight.operand, weight.requirements)
-            if isinstance(item, InputInterface) and item.port.id == "weight"
-            else item
-            for item in streamed.inputs
-        ),
-        streamed.outputs,
-    )
-
-
-def construct_batch_interleaved_dot_product_region(
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
-    activation_type: NumericElementType,
-    weight_type: NumericElementType,
-    output_type: NumericElementType,
-    pe: int,
-    simd: int,
-    interleave: int,
-) -> DataflowRegion:
-    """The same arithmetic with one weight tile amortized over ``interleave`` rows.
-
-    A *third* Region, and semantic for the same reason the embedded one is: the
-    weight tile arrives in ``interleave`` chunks of ``PE * SIMD / interleave``
-    elements instead of one full tile per iteration, and elements-per-beat is
-    part of the boundary contract.  A consumer of this Network sees a different
-    weight stream, so this cannot be a mode of the streamed Region.
-
-    It also does **not** consume a replayed activation.  Each activation row is
-    presented once and reused across the interleaved iterations, so the
-    activation port carries the compact sequence and the schedule grows a fourth
-    level rather than the replay Kernel growing a Region.  That is why the
-    Design over this Kernel places one node and not two.
-
-    ``interleave`` must be greater than one -- at one this is exactly the
-    streamed Region, and two spellings of one Region is how a design space ends
-    up with two points that mean the same thing.
-    """
-
-    dimensions = (repetitions, matrix_width, matrix_height, pe, simd, interleave)
-    if any(type(value) is not int or value <= 0 for value in dimensions):
-        raise RegionRefused("dot-product dimensions and folding must be positive integers")
-    if matrix_width % simd:
-        raise RegionRefused("SIMD must divide matrix_width exactly")
-    if matrix_height % pe:
-        raise RegionRefused("PE must divide matrix_height exactly")
-    if interleave <= 1:
-        raise RegionRefused("interleave must be greater than one; at one this is the streamed form")
-    if repetitions % interleave:
-        raise RegionRefused("interleave must divide repetitions exactly")
-    if (pe * simd) % interleave:
-        raise RegionRefused("interleave must divide PE * SIMD exactly")
-
-    batches = repetitions // interleave
-    neuron_folds = matrix_height // pe
-    synapse_folds = matrix_width // simd
-    weight_fields = pe * simd // interleave
-    schedule = LogicalSchedule(
-        (
-            ScheduleLevel("batch", batches),
-            ScheduleLevel("nf", neuron_folds),
-            ScheduleLevel("sf", synapse_folds),
-            ScheduleLevel("t", interleave),
-        )
-    )
-    activation = Operand("X", activation_type, (repetitions, matrix_width))
-    weight = Operand("W", weight_type, (matrix_height, matrix_width))
-    output = Operand("Y", output_type, (repetitions, matrix_height))
-
-    activation_requirements: dict[RequirementKey, int] = {
-        (
-            (batch, neuron_fold, synapse_fold, reuse),
-            (batch * interleave + reuse, synapse_fold * simd + lane),
-        ): 1
-        for batch in range(batches)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for reuse in range(interleave)
-        for lane in range(simd)
-    }
-    weight_requirements: dict[RequirementKey, int] = {
-        (
-            (batch, neuron_fold, synapse_fold, reuse),
-            (neuron_fold * pe + pe_index, synapse_fold * simd + lane),
-        ): 1
-        for batch in range(batches)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for reuse in range(interleave)
-        for pe_index in range(pe)
-        for lane in range(simd)
-    }
-    availability_entries: dict[Coordinate, Coordinate] = {
-        (batch * interleave + reuse, neuron_fold * pe + pe_index): (
-            batch,
-            neuron_fold,
-            synapse_folds - 1,
-            reuse,
-        )
-        for batch in range(batches)
-        for neuron_fold in range(neuron_folds)
-        for reuse in range(interleave)
-        for pe_index in range(pe)
-    }
-    weight_beats = tuple(
-        tuple(
-            (
-                neuron_fold * pe + (chunk * weight_fields + field) // simd,
-                synapse_fold * simd + (chunk * weight_fields + field) % simd,
-            )
-            for field in range(weight_fields)
-        )
-        for _batch in range(batches)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for chunk in range(interleave)
-    )
-    activation_beats = tuple(
-        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
-        for repetition in range(repetitions)
-        for synapse_fold in range(synapse_folds)
-    )
-    return DataflowRegion(
-        schedule,
-        (
-            InputInterface(
-                Port("activation", activation, BeatSequence(simd, activation_beats)),
-                ScheduledInputRequirements(activation_requirements),
-            ),
-            InputInterface(
-                Port("weight", weight, BeatSequence(weight_fields, weight_beats)),
-                ScheduledInputRequirements(weight_requirements),
-            ),
-        ),
-        (
-            OutputInterface(
-                Port(
-                    "output", output, BeatSequence(pe, _output_beats(repetitions, neuron_folds, pe))
-                ),
-                ScheduledOutputAvailability(availability_entries),
-            ),
-        ),
-    )
 
 
 def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
@@ -612,9 +270,9 @@ class DotpAxiKernel(Kernel):
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
-        activation_type=activation_type,
-        weight_type=weight_type,
-        output_type=output_type,
+        activation_element_type=activation_type,
+        weight_element_type=weight_type,
+        output_element_type=output_type,
         pe=pe,
         simd=simd,
     )
@@ -830,9 +488,9 @@ class EmbeddedDotpAxiKernel(DotpAxiKernel):
         repetitions=DotpAxiKernel.repetitions,
         matrix_width=DotpAxiKernel.matrix_width,
         matrix_height=DotpAxiKernel.matrix_height,
-        activation_type=DotpAxiKernel.activation_type,
-        weight_type=DotpAxiKernel.weight_type,
-        output_type=DotpAxiKernel.output_type,
+        activation_element_type=DotpAxiKernel.activation_type,
+        weight_element_type=DotpAxiKernel.weight_type,
+        output_element_type=DotpAxiKernel.output_type,
         pe=DotpAxiKernel.pe,
         simd=DotpAxiKernel.simd,
     )
@@ -873,13 +531,13 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
     region = RegionDeclaration(
         family="mvau.dot_product.batch_interleaved",
         version="1",
-        construct=construct_batch_interleaved_dot_product_region,
+        construct=construct_batch_interleaved_streamed_mvau_region,
         repetitions=DotpAxiKernel.repetitions,
         matrix_width=DotpAxiKernel.matrix_width,
         matrix_height=DotpAxiKernel.matrix_height,
-        activation_type=DotpAxiKernel.activation_type,
-        weight_type=DotpAxiKernel.weight_type,
-        output_type=DotpAxiKernel.output_type,
+        activation_element_type=DotpAxiKernel.activation_type,
+        weight_element_type=DotpAxiKernel.weight_type,
+        output_element_type=DotpAxiKernel.output_type,
         pe=DotpAxiKernel.pe,
         simd=DotpAxiKernel.simd,
         interleave=interleave,
@@ -901,7 +559,4 @@ __all__ = [
     "EmbeddedDotpAxiKernel",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
-    "construct_batch_interleaved_dot_product_region",
-    "construct_dot_product_region",
-    "construct_embedded_dot_product_region",
 ]

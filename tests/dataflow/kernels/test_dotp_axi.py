@@ -16,12 +16,14 @@ from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SE
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.kernels.dotp_axi import (
+    BatchInterleavedDotpAxiKernel,
     DspBlock,
     DotpAxiKernel,
+    EmbeddedDotpAxiKernel,
     FINNLIB_SOURCES,
-    construct_dot_product_region,
 )
 from finn.dataflow.kernels.kernel import kernel_physical
+from finn.dataflow.ops.mvau import regions as mvau_regions
 from finn.dataflow.ops.mvau.regions import construct_dot_product_region as baseline_region
 from finn.dataflow.space.spec_algebra import assemble_specs
 
@@ -136,16 +138,6 @@ def test_dotp_region_matches_the_previous_authority() -> None:
         4,
     )
     assert configured.value.region == expected
-    assert configured.value.region == construct_dot_product_region(
-        2,
-        8,
-        4,
-        DataType["INT8"],
-        DataType["INT8"],
-        DataType["INT32"],
-        2,
-        4,
-    )
 
 
 def test_dotp_parameter_table_remains_exact() -> None:
@@ -247,3 +239,24 @@ def test_dotp_abi_agrees_with_pinned_finnlib() -> None:
     )
     assert not isinstance(result, Declined)
     assert result == ()
+
+
+def test_every_dotp_kernel_declares_the_one_semantic_constructor_authority() -> None:
+    """No Kernel-local copy of an MVAU Region constructor.
+
+    These three Kernels each carried their own implementation of a constructor
+    that also existed in `ops.mvau.regions` -- value-identical, and a second
+    place for a semantic contract to drift.  The declaration now names the one
+    authority, and this is an identity check, not an equality one.
+    """
+
+    assert DotpAxiKernel.region.construct is mvau_regions.construct_dot_product_region
+    assert (
+        EmbeddedDotpAxiKernel.region.construct is mvau_regions.construct_embedded_dot_product_region
+    )
+    assert (
+        BatchInterleavedDotpAxiKernel.region.construct
+        is mvau_regions.construct_batch_interleaved_streamed_mvau_region
+    )
+    for kernel in (DotpAxiKernel, EmbeddedDotpAxiKernel, BatchInterleavedDotpAxiKernel):
+        assert kernel.region.construct.__module__ == "finn.dataflow.ops.mvau.regions"

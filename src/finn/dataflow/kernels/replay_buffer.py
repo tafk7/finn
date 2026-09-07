@@ -40,124 +40,11 @@ from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Input, derived
 from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
-from finn.dataflow.model.region import (
-    RegionRefused,
-    BeatSequence,
-    Coordinate,
-    DataflowRegion,
-    InputInterface,
-    LogicalSchedule,
-    NumericElementType,
-    Operand,
-    OutputInterface,
-    Port,
-    RequirementKey,
-    ScheduledInputRequirements,
-    ScheduledOutputAvailability,
-    ScheduleLevel,
-    element_width,
-)
+from finn.dataflow.model.region import NumericElementType, element_width
+from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
 
 FINNLIB_ROOT = "finnlib"
 FINNLIB_SOURCES = ("rtl/infra/replay_buffer.sv",)
-
-
-def _compact_beats(
-    repetitions: int, synapse_folds: int, simd: int
-) -> tuple[tuple[Coordinate, ...], ...]:
-    return tuple(
-        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
-        for repetition in range(repetitions)
-        for synapse_fold in range(synapse_folds)
-    )
-
-
-def _expanded_beats(
-    repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
-) -> tuple[tuple[Coordinate, ...], ...]:
-    return tuple(
-        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
-        for repetition in range(repetitions)
-        for _neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-    )
-
-
-def construct_activation_replay_region(
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
-    activation_type: NumericElementType,
-    pe: int,
-    simd: int,
-) -> DataflowRegion:
-    """Expand a compact activation sequence to one presentation per neuron fold.
-
-    ``R x SF`` beats in, ``R x NF x SF`` beats out: same operand, same position
-    image, same elements per beat.
-    """
-
-    dimensions = (repetitions, matrix_width, matrix_height, pe, simd)
-    if any(type(value) is not int or value <= 0 for value in dimensions):
-        raise RegionRefused("replay dimensions and folding must be positive integers")
-    if matrix_width % simd:
-        raise RegionRefused("SIMD must divide matrix_width exactly")
-    if matrix_height % pe:
-        raise RegionRefused("PE must divide matrix_height exactly")
-
-    neuron_folds = matrix_height // pe
-    synapse_folds = matrix_width // simd
-    schedule = LogicalSchedule(
-        (
-            ScheduleLevel("rep", repetitions),
-            ScheduleLevel("nf", neuron_folds),
-            ScheduleLevel("sf", synapse_folds),
-        )
-    )
-    activation = Operand("X", activation_type, (repetitions, matrix_width))
-    requirements: dict[RequirementKey, int] = {
-        (
-            (repetition, neuron_fold, synapse_fold),
-            (repetition, synapse_fold * simd + lane),
-        ): 1
-        for repetition in range(repetitions)
-        for neuron_fold in range(neuron_folds)
-        for synapse_fold in range(synapse_folds)
-        for lane in range(simd)
-    }
-    # A position occurs NF times in the expanded sequence; availability is keyed
-    # by position, so it records the first occurrence -- at nf = 0.
-    availability: dict[Coordinate, Coordinate] = {
-        (repetition, synapse_fold * simd + lane): (repetition, 0, synapse_fold)
-        for repetition in range(repetitions)
-        for synapse_fold in range(synapse_folds)
-        for lane in range(simd)
-    }
-    return DataflowRegion(
-        schedule,
-        (
-            InputInterface(
-                Port(
-                    "activation_in",
-                    activation,
-                    BeatSequence(simd, _compact_beats(repetitions, synapse_folds, simd)),
-                ),
-                ScheduledInputRequirements(requirements),
-            ),
-        ),
-        (
-            OutputInterface(
-                Port(
-                    "activation_out",
-                    activation,
-                    BeatSequence(
-                        simd, _expanded_beats(repetitions, neuron_folds, synapse_folds, simd)
-                    ),
-                ),
-                ScheduledOutputAvailability(availability),
-            ),
-        ),
-    )
 
 
 class ReplayBufferKernel(Kernel):
@@ -181,7 +68,7 @@ class ReplayBufferKernel(Kernel):
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
-        activation_type=activation_type,
+        activation_element_type=activation_type,
         pe=pe,
         simd=simd,
     )
@@ -256,5 +143,4 @@ __all__ = [
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
     "ReplayBufferKernel",
-    "construct_activation_replay_region",
 ]

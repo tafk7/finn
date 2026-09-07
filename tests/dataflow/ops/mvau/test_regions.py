@@ -5,7 +5,10 @@ import pytest
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.ops.mvau.regions import MVAUWeightInterface, construct_mvau_compute_region
+from finn.dataflow.ops.mvau.regions import (
+    construct_standard_embedded_mvau_region,
+    construct_standard_streamed_mvau_region,
+)
 from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
@@ -29,7 +32,7 @@ def _mvau_region(
     output_field_order=None,
 ):
     element_type = DataType["INT8"]
-    region = construct_mvau_compute_region(
+    region = construct_standard_streamed_mvau_region(
         repetitions,
         matrix_width,
         matrix_height,
@@ -38,7 +41,6 @@ def _mvau_region(
         element_type,
         pe,
         simd,
-        MVAUWeightInterface.STREAMED,
     )
     if weight_field_order is None and output_field_order is None:
         return region
@@ -137,27 +139,11 @@ def test_embedded_weight_mvau_region_withholds_only_the_weight_port():
     """
 
     element_type = DataType["INT8"]
-    streamed = construct_mvau_compute_region(
-        2,
-        4,
-        4,
-        element_type,
-        element_type,
-        element_type,
-        2,
-        2,
-        MVAUWeightInterface.STREAMED,
+    streamed = construct_standard_streamed_mvau_region(
+        2, 4, 4, element_type, element_type, element_type, 2, 2
     )
-    embedded = construct_mvau_compute_region(
-        2,
-        4,
-        4,
-        element_type,
-        element_type,
-        element_type,
-        2,
-        2,
-        MVAUWeightInterface.EMBEDDED,
+    embedded = construct_standard_embedded_mvau_region(
+        2, 4, 4, element_type, element_type, element_type, 2, 2
     )
     streamed_weight = streamed.input("W")
     embedded_weight = embedded.input("W")

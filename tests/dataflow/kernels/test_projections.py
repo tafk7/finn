@@ -17,16 +17,17 @@ from typing import cast
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Engine, Unresolved
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock, construct_dot_product_region
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.kernel import (
     KernelPhysicalResult,
     _KernelCompilation,
     kernel_dataflow,
     kernel_physical,
 )
-from finn.dataflow.kernels.replay_buffer import (
-    ReplayBufferKernel,
+from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
+from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region,
+    construct_dot_product_region,
 )
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Input, Problem, Space, divisors_of
@@ -95,9 +96,9 @@ def test_the_dotp_region_resolves_before_any_physical_choice_is_made() -> None:
             repetitions=2,
             matrix_width=8,
             matrix_height=4,
-            activation_type=DataType["INT8"],
-            weight_type=DataType["INT8"],
-            output_type=DataType["INT32"],
+            activation_element_type=DataType["INT8"],
+            weight_element_type=DataType["INT8"],
+            output_element_type=DataType["INT32"],
             pe=2,
             simd=4,
         )
@@ -121,7 +122,7 @@ def test_the_replay_region_resolves_with_no_physical_decision_at_all() -> None:
             repetitions=2,
             matrix_width=8,
             matrix_height=4,
-            activation_type=DataType["INT8"],
+            activation_element_type=DataType["INT8"],
             pe=2,
             simd=4,
         )
