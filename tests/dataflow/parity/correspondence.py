@@ -226,30 +226,12 @@ def _profile_pair(bound: Any) -> Any:
     return [encode(profile.accumulation), encode(profile.activation)]
 
 
-def _association(field: str) -> Callable[[Any], Any]:
-    def read(bound: Any) -> Any:
-        answer = bound.association
-        value = getattr(answer, "value", None)
-        if value is None:
-            return MISSING
-        if field == "scope_id":
-            return encode(value.scope_id)
-        if field == "origin_nodes":
-            return encode(value.origin_nodes)
-        for item in value.operands:
-            if item.operand == field:
-                return encode(item.tensor)
-        return MISSING
-
-    return read
-
-
 def _tensor(operand: str, *, optional: bool = False) -> Callable[[Any], Any]:
     """The graph name of one operand, read from the frozen source.
 
     From the source rather than from the association, deliberately.  The
     oracle's description was a *source* projection: it existed whether or not a
-    Design applied.  ``SourceAssociation`` is read off a resolved Network, and a
+    Design applied.  ``OperandMapping`` is read off a resolved Network, and a
     node with no applicable Design -- a fused-threshold one, here -- has none.
     Comparing the source reading keeps every fixture in the comparison;
     ``test_the_association_carries_the_same_identities`` then checks that the
@@ -266,7 +248,7 @@ def _tensor(operand: str, *, optional: bool = False) -> Callable[[Any], Any]:
 
 
 def _scope_id(bound: Any) -> Any:
-    return encode(bound.binding.node_identity)
+    return encode(bound.recorded_scope_id())
 
 
 def _origin_nodes(bound: Any) -> Any:
@@ -390,14 +372,14 @@ PROBLEM_TABLE: tuple[Entry, ...] = (
     Entry(
         "source_description",
         REPRESENTED_BY,
-        "the wrapper is retired; SourceAssociation and the source reading own its eight "
+        "the wrapper is retired; OperandMapping and the source reading own its eight "
         "fields, each disposed of in DESCRIPTION_TABLE",
         compared_in="test_association_parity",
     ),
     Entry(
         "initializer_excludes_minimum",
         REPRESENTED_BY,
-        "weight_excludes_minimum, the same InitializerAnalysis",
+        "weight_excludes_minimum, derived from the QONNX summary",
         _problem("problem.mvau.initializer_excludes_minimum"),
         _member("weight_excludes_minimum"),
     ),
@@ -461,13 +443,13 @@ PROBLEM_TABLE: tuple[Entry, ...] = (
 
 
 #: Every field of the oracle's ``MVAUSourceDescription``.  The wrapper itself is
-#: retired -- ``SourceAssociation`` owns what it carried -- so there is no
+#: retired -- ``OperandMapping`` owns what it carried -- so there is no
 #: structural counterpart to compare, only these.
 DESCRIPTION_TABLE: tuple[Entry, ...] = (
     Entry(
         "source_node_id",
         REPRESENTED_BY,
-        "SourceAssociation.scope_id, and the frozen binding's node identity",
+        "the operation's recorded scope id",
         _description("source_node_id"),
         _scope_id,
     ),
@@ -516,7 +498,7 @@ DESCRIPTION_TABLE: tuple[Entry, ...] = (
     Entry(
         "fused_source_node_ids",
         REPRESENTED_BY,
-        "SourceAssociation.origin_nodes -- the one field with no other home once nodes are fused",
+        "origin_nodes(source) from the explicit source_nodes attribute",
         _description("fused_source_node_ids"),
         _origin_nodes,
     ),

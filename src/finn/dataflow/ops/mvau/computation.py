@@ -122,30 +122,6 @@ def computation_profile(
     )
 
 
-def initializer_excludes_minimum(values: Any, datatype: QONNXDataType) -> bool | None:
-    """Whether an initializer avoids the minimum value its datatype can hold.
-
-    The one fact MVAU needs from the weights themselves, and the reason a
-    narrow-weights encoding is *derivable* rather than an attribute somebody
-    sets: a signed weight matrix that never uses its most negative value can be
-    stored one bit narrower, and whether it does is a property of the values.
-
-    ``None`` when the question cannot be asked -- an empty array, a datatype
-    with no minimum -- because "no answer" and "uses the minimum" lead to
-    different builds and must not be spelled the same way.
-    """
-
-    import numpy  # type: ignore[import-not-found]  # noqa: PLC0415 - heavy import
-
-    try:
-        array = numpy.asarray(values)
-        if array.size == 0:
-            return None
-        return bool(float(array.min()) != float(datatype.min()))
-    except (AttributeError, TypeError, ValueError):
-        return None
-
-
 def execute_mvau(
     *,
     activation: Any,
@@ -163,7 +139,7 @@ def execute_mvau(
     and a test that has to build a model to check it tests the model too.
     """
 
-    import numpy  # noqa: PLC0415 - heavy import
+    import numpy  # type: ignore[import-not-found]  # noqa: PLC0415 - heavy import
     import qonnx.custom_op.general.xnorpopcount as xnor  # type: ignore[import-not-found] # noqa: PLC0415
     from qonnx.core.datatype import DataType  # noqa: PLC0415
     from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-found] # noqa: PLC0415
@@ -210,5 +186,4 @@ __all__ = [
     "MvauComputationProfile",
     "computation_profile",
     "execute_mvau",
-    "initializer_excludes_minimum",
 ]

@@ -42,12 +42,11 @@ from finn.dataflow.ops.mvau.computation import (
     ActivationMode,
     MvauComputationProfile,
     execute_mvau,
-    initializer_excludes_minimum,
 )
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import origin_nodes, MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
-from finn.dataflow.ops.schema import Attribute, InputTensor, OutputTensor
+from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
 from dataflow.ops.test_dataflow_op import Build, _configured_mvau, _replay_model, _unbound
 
@@ -84,6 +83,8 @@ def _model(
         ["output"],
         domain=DATAFLOW_DOMAIN,
         name="mvau0",
+        outputDataType=output_type,
+        accDataType=output_type if no_activation else "INT32",
         noActivation=int(no_activation),
         binaryXnorMode=int(binary_xnor),
         ActVal=activation_bias,
@@ -257,7 +258,7 @@ def test_a_matrix_with_no_initializer_is_not_promised_to_be_narrow() -> None:
 
     operation = _bound(_model(weight_initializer=False))
 
-    assert "weight_excludes_minimum" not in operation.source.analyses
+    assert not isinstance(operation.answer(MvauDataflowOp.weight.value_summary), Decided)
     assert operation.answer(MvauDataflowOp.effective_narrow_weights) == Decided(False)
 
 
@@ -266,8 +267,8 @@ def test_the_analysis_keeps_only_its_scalar_result() -> None:
 
     operation = _bound(_model(weights=np.full((MATRIX_WIDTH, MATRIX_HEIGHT), 3.0)))
 
-    assert operation.source.analyses == {"weight_excludes_minimum": True}
-    assert all(not isinstance(value, np.ndarray) for value in operation.source.analyses.values())
+    assert operation.answer(MvauDataflowOp.weight_excludes_minimum) == Decided(True)
+    assert all(not isinstance(value, np.ndarray) for value in operation.problem_snapshot.values())
 
 
 @pytest.mark.parametrize(
@@ -282,7 +283,11 @@ def test_the_analysis_keeps_only_its_scalar_result() -> None:
 def test_the_analysis_says_nothing_when_it_cannot_ask(
     values: np.ndarray, expected: bool | None
 ) -> None:
-    assert initializer_excludes_minimum(values, DataType["INT8"]) is expected
+    answer = _bound(_model(weights=values)).answer(MvauDataflowOp.weight_excludes_minimum)
+    if expected is None:
+        assert not isinstance(answer, Decided)
+    else:
+        assert answer == Decided(expected)
 
 
 # -- what the operation is authoritative for ------------------------------------
@@ -295,8 +300,8 @@ def test_a_plain_node_derives_its_output_datatype_from_the_accumulator() -> None
     )
 
 
-def test_a_thresholded_node_does_not_claim_its_output_datatype() -> None:
-    """Whoever wrote the thresholds chose it; this operation must not contradict them."""
+def test_a_thresholded_node_derives_its_output_datatype_from_the_source_attribute() -> None:
+    """The explicit source outputDataType also repairs the graph annotation."""
 
     thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
     operation = _bound(_model(no_activation=False, thresholds=thresholds, output_type="UINT4"))
@@ -304,7 +309,7 @@ def test_a_thresholded_node_does_not_claim_its_output_datatype() -> None:
     shape, datatype = operation.expected_outputs()["output"]
 
     assert shape == (REPETITIONS, MATRIX_HEIGHT)
-    assert datatype is None
+    assert datatype == DataType["UINT4"]
     assert operation.reconciliation() == ()
 
 
@@ -517,8 +522,8 @@ def test_two_members_may_not_read_one_node_attribute() -> None:
 
         class Doubled(DataflowOp):
             family = "test.doubled"
-            activation = InputTensor(index=0)
-            result = OutputTensor(index=0)
+            activation = OpInput(index=0)
+            result = OpOutput(index=0)
             first = Attribute(int, default=0, onnx="shared")
             second = Attribute(int, default=0, onnx="shared")
 
@@ -648,9 +653,11 @@ def test_a_plain_node_does_not_take_its_output_annotation_as_a_fact() -> None:
     and would move the fingerprint every time a stale annotation was fixed."""
 
     plain = _bound(_model(output_type="INT32"))
-    other = _bound(_model(output_type="UINT8"))
+    other_model = _model()
+    other_model.set_tensor_datatype("output", DataType["UINT8"])
+    other = _bound(other_model)
 
-    assert not isinstance(plain.answer(MvauDataflowOp.output_type), Decided)
+    assert plain.answer(MvauDataflowOp.output_type) == Decided(DataType["INT32"])
     assert plain.problem_fingerprint == other.problem_fingerprint
 
 
@@ -741,17 +748,13 @@ def test_the_association_carries_the_nodes_this_one_was_fused_from() -> None:
     _set_source_nodes(model, "matmul0,add0,relu0")
     _model_, operation = _configured_mvau(model)
 
-    association = operation.association
-    assert isinstance(association, Decided)
-    assert association.value.origin_nodes == ("matmul0", "add0", "relu0")
+    assert origin_nodes(operation.source) == ("matmul0", "add0", "relu0")
 
 
 def test_an_unfused_node_is_its_own_origin_and_says_so_with_an_empty_lineage() -> None:
     _model_, operation = _configured_mvau(_model())
 
-    association = operation.association
-    assert isinstance(association, Decided)
-    assert association.value.origin_nodes == ()
+    assert origin_nodes(operation.source) == ()
 
 
 def _set_source_nodes(model: ModelWrapper, value: str) -> None:
@@ -853,3 +856,47 @@ def test_verification_still_needs_no_build_at_all() -> None:
     """The property the absence-tolerant Problem exists for, kept."""
 
     assert verify_nodes(_model()) == {"MvauDataflowOp": []}
+
+
+@pytest.mark.parametrize("fused", [False, True])
+def test_output_annotations_are_observations_even_for_fused_nodes(fused: bool) -> None:
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32) if fused else None
+    expected = "UINT4" if fused else "INT32"
+    model = _model(no_activation=not fused, thresholds=thresholds, output_type=expected)
+    bound = _bound(model)
+    original_fingerprint = bound.problem_fingerprint
+    model.set_tensor_datatype("output", DataType["BIPOLAR"])
+    model.set_tensor_shape("output", [999])
+    fresh = bound.rebind(model)
+    assert fresh.problem_fingerprint == original_fingerprint
+    assert len(fresh.reconciliation()) == 2
+    assert fresh.expected_outputs()["output"][1] == DataType[expected]
+    wrapper = _unbound(model, "mvau0")
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType[expected]
+    # No annotation at all is also a repairable observation.
+    del model.graph.quantization_annotation[:]
+    for tensor, datatype in (("activation", "INT8"), ("weight", "INT8")):
+        model.set_tensor_datatype(tensor, DataType[datatype])
+    if fused:
+        model.set_tensor_datatype("threshold", DataType["INT32"])
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType[expected]
+
+
+def test_output_source_attribute_is_required_and_no_activation_must_match_accumulator() -> None:
+    model = _model()
+    node = model.graph.node[0]
+    for attribute in node.attribute:
+        if attribute.name == "outputDataType":
+            attribute.s = b"INT16"
+    assert "output-accumulator-mismatch" in {
+        finding.code
+        for answer in _bound(model).assess_source().answers.values()
+        for finding in getattr(answer, "findings", ())
+    }
+    kept = [attribute for attribute in node.attribute if attribute.name != "outputDataType"]
+    del node.attribute[:]
+    node.attribute.extend(kept)
+    with pytest.raises(ValueError, match="requires source attribute 'outputDataType'"):
+        _bound(model)

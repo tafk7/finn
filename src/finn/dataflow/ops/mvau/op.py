@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, cast
 
-from finn.dataflow._engine import ABSENT, Answer, Decided
+from finn.dataflow._engine import ABSENT, Decided
+from finn.dataflow.model.datatypes import QONNXDataType
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -34,20 +35,14 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.space.occurrence import ChoiceView, ProjectionAssessment
 from finn.dataflow.model.network import DataflowNetwork
-from finn.dataflow.ops.association import (
-    BoundaryDestination,
-    CoordinateMapping,
-    OperandAssociation,
-    RegionStateDestination,
-    SourceAssociation,
-    StreamDestination,
-)
+from finn.dataflow.ops.mapping import CoordinateMapping
+from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
+from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError, unresolved_reason
 from finn.dataflow.ops.mvau.computation import (
     MvauComputationProfile,
     computation_profile,
     execute_mvau,
-    initializer_excludes_minimum,
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
@@ -60,10 +55,8 @@ from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
     DatatypeAttribute,
-    InitializerAnalysis,
-    InputTensor,
-    OutputTensor,
-    TensorDatatypeFact,
+    OpInput,
+    OpOutput,
 )
 
 
@@ -189,15 +182,15 @@ class MvauDataflowOp(DataflowOp):
 
     # -- the source schema ----------------------------------------------------
 
-    activation = InputTensor(index=0)
-    weight = InputTensor(index=1, fingerprint=True)
+    activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
+    weight = OpInput(index=1, operand="W", correspondence=CoordinateMapping.TRANSPOSE_2D)
     #: Present exactly when the node fuses an activation.  Optional rather than
     #: conditional-by-declaration: presence is *emergent* -- it is read from the
     #: graph -- and the agreement between it and ``no_activation`` is a
     #: constraint that can be reported, not a schema rule that makes the node
     #: unreadable.
-    threshold = InputTensor(index=2, optional=True, fingerprint=True)
-    output = OutputTensor(index=0)
+    threshold = OpInput(index=2, optional=True)
+    output = OpOutput(index=0, operand="Y", correspondence=CoordinateMapping.FLATTEN_LEADING)
 
     #: The three attributes FINN's graphs already carry, under the names they
     #: already have.  ``no_activation`` defaults to ``True`` because a plain
@@ -217,26 +210,14 @@ class MvauDataflowOp(DataflowOp):
     #: recorded choices be silently wrong.
     accumulator_type = DatatypeAttribute(default="INT32", onnx="accDataType")
 
-    #: Narrowness is *derived from the weights*, never asserted about them.  An
-    #: attribute saying "these weights are narrow" is a claim a caller can get
-    #: wrong and nothing can check; whether the matrix uses the most negative
-    #: value its datatype allows is a property of the matrix, read once at
-    #: binding time and reduced to one boolean before anything enters the point.
-    weight_excludes_minimum = InitializerAnalysis(
-        weight, bool, evaluate=initializer_excludes_minimum
-    )
+    @derived(bool, summary=allow_absent(weight.value_summary), datatype=weight.datatype)
+    def weight_excludes_minimum(*, summary: object, datatype: QONNXDataType) -> object:
+        if not isinstance(summary, TensorValueSummary) or summary.minimum is None:
+            return reject("weight-summary-absent", "weight extrema are unavailable")
+        return bool(summary.minimum != datatype.min())
 
-    #: The output annotation, as a *source fact*, for the nodes whose
-    #: mathematics reads it.  A thresholded MVAU scales and biases by the type
-    #: it was asked to produce, so that annotation changes the numbers -- and a
-    #: value that changes the numbers belongs in the problem and its
-    #: fingerprint, or a recorded choice can outlive the value it was made
-    #: against.  A plain node derives its own output type from ``accDataType``
-    #: and *repairs* the annotation, so for it the annotation is an observation
-    #: and this fact is absent.  The distinction is the ``when``.
-    output_type = TensorDatatypeFact(
-        output, when=lambda source: not bool(source.attributes["no_activation"])
-    )
+    # Required source authority, including for fused-threshold scale/bias.
+    output_type = DatatypeAttribute(onnx="outputDataType")
 
     #: Which original graph nodes were fused into this one.  Carried because it
     #: is provenance nothing else records: once several nodes become one
@@ -432,7 +413,18 @@ class MvauDataflowOp(DataflowOp):
             values={"shape": list(shape), "matrix_height": height},
         )
 
+    @constraint(no_activation=no_activation, output=output_type, accumulator=accumulator_type)
+    def unactivated_output_matches_accumulator(
+        *, no_activation: bool, output: QONNXDataType, accumulator: QONNXDataType
+    ) -> object:
+        if no_activation and output != accumulator:
+            return reject(
+                "output-accumulator-mismatch", "noActivation requires outputDataType == accDataType"
+            )
+        return True
+
     source_accepts = ConstraintGroup(
+        unactivated_output_matches_accumulator,
         weight_is_a_matrix,
         activation_matches_the_matrix,
         threshold_present_iff_activated,
@@ -454,7 +446,7 @@ class MvauDataflowOp(DataflowOp):
                 # This core drives the accumulator straight out, so the output
                 # type *is* the accumulator type.  Derived onto the tensor, not
                 # read back off it.
-                output_type=accumulator_type,
+                output_type=output_type,
                 narrow_weights=effective_narrow_weights,
                 computation_profile=profile,
                 target_dsp=target_dsp,
@@ -468,7 +460,7 @@ class MvauDataflowOp(DataflowOp):
                 activation_type=activation.datatype,
                 weight_type=weight.datatype,
                 accumulator_type=accumulator_type,
-                output_type=accumulator_type,
+                output_type=output_type,
                 narrow_weights=effective_narrow_weights,
                 computation_profile=profile,
                 target_dsp=target_dsp,
@@ -483,7 +475,7 @@ class MvauDataflowOp(DataflowOp):
                 activation_type=activation.datatype,
                 weight_type=weight.datatype,
                 accumulator_type=accumulator_type,
-                output_type=accumulator_type,
+                output_type=output_type,
                 narrow_weights=effective_narrow_weights,
                 computation_profile=profile,
                 target_dsp=target_dsp,
@@ -501,60 +493,17 @@ class MvauDataflowOp(DataflowOp):
             return None
         return cast(WeightedDotProductDesign, view.alternative(chosen.value)).dataflow
 
-    @property
-    def association(self) -> Answer[SourceAssociation]:
-        """Where each tensor crosses, given whichever Network was selected.
-
-        Read off the resolved Network rather than off the Design's
-        declarations, so that a mode which produces the matrix internally
-        reports what actually happens to it instead of the boundary it would
-        have had.
-        """
-
-        answer = self.network
-        if not isinstance(answer, Decided):
-            return cast("Answer[SourceAssociation]", answer)
-        network = answer.value
-        boundaries = {item.id: item for item in network.boundaries}
-
-        operands: list[OperandAssociation] = []
-        for operand_id, boundary_id, correspondence in (
-            ("activation", "activation", CoordinateMapping.FLATTEN_LEADING),
-            ("weight", "weight", CoordinateMapping.TRANSPOSE_2D),
-            ("output", "output", CoordinateMapping.FLATTEN_LEADING),
-        ):
-            operand = self.source.operand(operand_id)
-            boundary = boundaries.get(boundary_id)
-            destination = (
-                BoundaryDestination(
-                    boundary_id, boundary.endpoint.node_id, boundary.endpoint.port_id
-                )
-                if boundary is not None
-                # No boundary is a fact about this Network, not a gap: an
-                # embedded or decoupled matrix never crosses the Design's edge.
-                else _internal_destination(network, operand_id)
-            )
-            operands.append(
-                OperandAssociation(
-                    operand_id,
-                    operand.tensor,
-                    destination,
-                    correspondence,
-                    operand.shape,
-                    _selected_shape(network, destination),
-                )
-            )
-        binding = self.binding
-        return Decided(
-            SourceAssociation(
-                binding.node_identity,
-                self.source.node_name,
-                type(self).family,
-                type(self).family_version,
-                tuple(operands),
-                origin_nodes(self.source),
-            )
-        )
+    def operand_references(
+        self, network: DataflowNetwork
+    ) -> dict[str, tuple[DataflowOperandRef, ...]]:
+        # Roles are operation-owned. In the supplied form the source matrix
+        # enters memory.W, not the downstream compute.W stream.
+        nodes = {node.id for node in network.nodes}
+        return {
+            "activation": (RegionInputRef("replay" if "replay" in nodes else "compute", "X"),),
+            "weight": (RegionInputRef("memory" if "memory" in nodes else "compute", "W"),),
+            "output": (RegionOutputRef("compute", "Y"),),
+        }
 
     # -- what this operation is authoritative for -----------------------------
 
@@ -570,15 +519,10 @@ class MvauDataflowOp(DataflowOp):
         weight = source.operand("weight")
         if len(weight.shape) != 2 or not activation.shape:
             return {}
-        fused = not bool(source.attributes["no_activation"])
         return {
             "output": (
                 (*activation.shape[:-1], weight.shape[1]),
-                # A fused threshold's output type is chosen by whoever wrote
-                # the thresholds, and this operation is not authoritative for
-                # it.  ``None`` says exactly that: the graph's annotation
-                # stands, and nothing here repairs or contradicts it.
-                None if fused else cast(Any, source.attributes["accumulator_type"]),
+                cast(Any, source.attributes["output_type"]),
             )
         }
 
@@ -598,60 +542,13 @@ class MvauDataflowOp(DataflowOp):
             weight=context[node.input[1]],
             thresholds=thresholds,
             profile=mvau_profile(source),
-            # The annotation, which for a thresholded node is the declared
-            # source fact ``output_type`` -- the same value, read the same way,
-            # and in the problem's fingerprint because it changes the numbers.
-            output_type=source.operand("output").datatype,
+            output_type=cast(Any, source.attributes["output_type"]),
             activation_bias=int(cast(int, source.attributes["activation_bias"])),
         )
         expected = self.expected_for(source)["output"][0]
         if expected is None:
             raise DataflowOpError(f"{node.name} cannot state the shape of its own output")
         context[node.output[0]] = result.reshape(expected)
-
-
-def _internal_destination(
-    network: DataflowNetwork, operand_id: str
-) -> StreamDestination | RegionStateDestination:
-    """Where an operand that never crosses a boundary actually goes.
-
-    Two genuinely different answers, and the record says which.  A decoupled
-    matrix is *traffic*: it reaches a real port on a real node, reached without
-    crossing the Design's edge.  An embedded matrix is *state*: it is baked into
-    the node and there is no port at all.
-    """
-
-    for node in network.nodes:
-        for item in node.region.input_interfaces:
-            if item.port.id == operand_id:
-                return StreamDestination(node.id, item.port.id)
-    for node in network.nodes:
-        if node.id == "compute":
-            return RegionStateDestination(node.id, operand_id)
-    raise DataflowOpError(f"the selected Network has nowhere for {operand_id!r} to go")
-
-
-def _selected_shape(
-    network: DataflowNetwork,
-    destination: BoundaryDestination | StreamDestination | RegionStateDestination,
-) -> tuple[int, ...] | None:
-    """The shape at the destination port, or ``None`` when there is no port.
-
-    ``None`` rather than ``()``: an empty tuple is the shape of a scalar, and a
-    consumer that compared it against the operand's own shape would report a
-    mismatch instead of "this operand has no port to have a shape at".
-    """
-
-    if isinstance(destination, RegionStateDestination):
-        return None
-    node = network.node(destination.node_id)
-    for interface in node.region.input_interfaces:
-        if interface.port.id == destination.port_id:
-            return tuple(interface.port.operand.shape)
-    for output in node.region.outputs:
-        if output.port.id == destination.port_id:
-            return tuple(output.port.operand.shape)
-    return None
 
 
 __all__ = ["MvauDataflowOp", "mvau_profile", "origin_nodes"]

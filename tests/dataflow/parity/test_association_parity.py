@@ -4,7 +4,7 @@
 """L6: the retired source description, field by field.
 
 ``MVAUSourceDescription`` is **retired**, not reimplemented.  It was a wrapper
-holding eight facts that the source reading and ``SourceAssociation`` now own
+holding eight facts that the source reading and ``OperandMapping`` now own
 between them, and restoring it for structural parity would be restoring a
 container for the sake of the comparison.
 
@@ -15,6 +15,8 @@ and produces the same value.
 from __future__ import annotations
 
 from typing import Any
+
+from finn.dataflow.ops.mvau.op import origin_nodes
 
 import pytest
 
@@ -64,11 +66,11 @@ def test_the_problem_field_delegates_here_and_this_is_here() -> None:
 def test_the_wrapper_itself_is_retired() -> None:
     """Nothing in this stack reintroduces the container under any spelling."""
 
-    import finn.dataflow.ops.association as association  # noqa: PLC0415
+    import finn.dataflow.ops.mapping as association  # noqa: PLC0415
 
     assert not hasattr(association, "MVAUSourceDescription")
     assert not hasattr(association, "SourceDescription")
-    assert hasattr(association, "SourceAssociation")
+    assert hasattr(association, "OperandMapping")
 
 
 CASES = tuple((spec["name"], item) for spec in SPECS for item in comparable(DESCRIPTION_TABLE))
@@ -115,17 +117,17 @@ def test_the_association_carries_the_same_identities_where_a_network_resolves() 
     assert isinstance(kernel, Decided)
     chosen = kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
 
-    answer = chosen.association
+    answer = chosen.operand_mapping
     assert isinstance(answer, Decided)
     association = answer.value
-    assert association.scope_id == chosen.binding.node_identity
-    assert association.origin_nodes == ("mul0", "add0")
-    assert {item.operand: item.tensor for item in association.operands} == {
+    assert chosen.recorded_scope_id() == "parity_scope"
+    assert origin_nodes(chosen.source) == ("mul0", "add0")
+    assert {item.source_operand: item.tensor for item in association} == {
         "activation": "activation",
         "weight": "weight",
         "output": "output",
     }
-    assert encode(association.origin_nodes) == ["mul0", "add0"]
+    assert encode(origin_nodes(chosen.source)) == ["mul0", "add0"]
 
 
 def test_the_additions_are_recorded_rather_than_left_out() -> None:

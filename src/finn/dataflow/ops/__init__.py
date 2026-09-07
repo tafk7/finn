@@ -5,7 +5,7 @@
 
 ``finn.dataflow.ops.base`` holds the generic contract -- one source node, one
 frozen problem, one root occurrence, one persistence authority -- and
-``source`` and ``association`` hold the two value families it reads and
+``source`` and ``mapping`` hold the two value families it reads and
 produces.  Concrete operations live beside their own Designs, for example
 ``finn.dataflow.ops.mvau``.
 

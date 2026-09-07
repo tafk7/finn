@@ -60,6 +60,7 @@ def local_model(spec: dict[str, Any]) -> Any:
         noActivation=int(bool(spec["no_activation"])),
         binaryXnorMode=int(bool(spec["binary_xnor"])),
         accDataType=str(spec["accumulator_type"]),
+        outputDataType=str(spec["output_type"] if fused else spec["accumulator_type"]),
         ActVal=int(spec["activation_bias"]),
         dataflow_source_nodes=str(spec["source_nodes"]),
         # The same scope id the oracle probe writes: the identity is the graph's
