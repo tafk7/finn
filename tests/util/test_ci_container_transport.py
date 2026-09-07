@@ -180,6 +180,18 @@ def test_root_bridge_delegates_to_the_docker_launcher():
     assert (REPO / "docker/run-docker").is_file()
 
 
+def test_loader_diagnostics_are_not_shell_escaped_twice(transport):
+    # The colour setup had been through a shell-quoting layer one time too
+    # many, so every message arrived as  "'\033[0;32m'"Loading...  Console
+    # output is the only diagnostic a Jenkins operator has for this path.
+    transport.publish("xilinx/finn:abc123", digest=ID_A + "\n")
+    proc = transport.run("xilinx/finn:abc123")
+    assert proc.returncode == 0, proc.stderr
+    assert "Verified" in proc.stdout
+    assert "\\033" not in proc.stdout
+    assert "\"'" not in proc.stdout
+
+
 def test_docker_launcher_delegates_shared_image_loading_to_this_script():
     # The loader is only reachable through run-docker, so a rename here would
     # break every Jenkins shard without any test noticing.
@@ -292,6 +304,7 @@ def test_mismatching_digest_fails_before_the_container_runs(transport):
     assert proc.returncode == 1
     assert "image identity mismatch" in proc.stderr.lower()
     assert ID_A in proc.stderr and ID_B in proc.stderr
+    assert "\\033" not in proc.stderr
 
 
 def test_empty_digest_file_fails(transport):

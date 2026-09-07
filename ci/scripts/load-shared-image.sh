@@ -19,9 +19,9 @@
 
 set -uo pipefail
 
-RED=$'"'"'\033[0;31m'"'"'; GREEN=$'"'"'\033[0;32m'"'"'; NC=$'"'"'\033[0m'"'"'
-gecho () { echo "${GREEN}$1${NC}"; }
-recho () { echo "${RED}$1${NC}" >&2; }
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; NC=$'\033[0m'
+gecho () { echo "${GREEN}$*${NC}"; }
+recho () { echo "${RED}$*${NC}" >&2; }
 
 FINN_DOCKER_TAG="${1:?usage: $0 <tag>}"
 : "${FINN_DOCKER_PREBUILT:=0}"
