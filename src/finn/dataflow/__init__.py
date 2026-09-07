@@ -58,9 +58,9 @@ from finn.dataflow.network_validation import (
     is_network_structurally_well_formed,
     validate_network,
 )
-from finn.dataflow.input_service import (
+from finn.dataflow.network_operands import (
     DataflowOperandRef,
-    InputServiceError,
+    NetworkOperandError,
     RegionInputRef,
     RegionOutputRef,
     exposing_boundaries,
@@ -85,7 +85,7 @@ __all__ = [
     "FanoutMode",
     "DataflowRegion",
     "InputInterface",
-    "InputServiceError",
+    "NetworkOperandError",
     "LogicalSchedule",
     "NumericElementType",
     "NetworkNode",

@@ -66,7 +66,7 @@ class RegionOutputRef:
 DataflowOperandRef = RegionInputRef | RegionOutputRef
 
 
-class InputServiceError(ValueError):
+class NetworkOperandError(ValueError):
     """A reference does not resolve, or its endpoint ownership is malformed."""
 
 
@@ -74,18 +74,18 @@ def resolve_input(network: DataflowNetwork, ref: RegionInputRef) -> RegionInput:
     """Return the region input a reference names.
 
     Raises:
-        InputServiceError: the node or the operand is not there, or the operand
+        NetworkOperandError: the node or the operand is not there, or the operand
             is declared by more than one input.
     """
 
     try:
         node = network.node(ref.node_id)
     except KeyError as error:
-        raise InputServiceError(f"no node {ref.node_id!r} in the selected Network") from error
+        raise NetworkOperandError(f"no node {ref.node_id!r} in the selected Network") from error
     try:
         return node.region.input(ref.operand_id)
     except KeyError as error:
-        raise InputServiceError(
+        raise NetworkOperandError(
             f"node {ref.node_id!r} does not declare exactly one input for operand "
             f"{ref.operand_id!r}"
         ) from error
@@ -99,21 +99,21 @@ def resolve_output(network: DataflowNetwork, ref: RegionOutputRef) -> OutputInte
     caller needs a port, not a preference order.
 
     Raises:
-        InputServiceError: the node is not there, or the operand is produced by
+        NetworkOperandError: the node is not there, or the operand is produced by
             no output port or by more than one.
     """
 
     try:
         node = network.node(ref.node_id)
     except KeyError as error:
-        raise InputServiceError(f"no node {ref.node_id!r} in the selected Network") from error
+        raise NetworkOperandError(f"no node {ref.node_id!r} in the selected Network") from error
     matches = tuple(
         interface
         for interface in node.region.outputs
         if interface.port.operand.id == ref.operand_id
     )
     if len(matches) != 1:
-        raise InputServiceError(
+        raise NetworkOperandError(
             f"node {ref.node_id!r} produces operand {ref.operand_id!r} on {len(matches)} "
             "output ports, expected one"
         )
@@ -170,7 +170,7 @@ def _owned_endpoint(
     sinks = sum(1 for edge in network.edges for sink in edge.sinks if sink.endpoint == endpoint)
     exposures = sum(1 for boundary in network.boundaries if boundary.endpoint == endpoint)
     if sinks + exposures != 1:
-        raise InputServiceError(
+        raise NetworkOperandError(
             f"endpoint {endpoint.node_id!r}.{endpoint.port_id!r} is consumed by {sinks} edges "
             f"and exposed by {exposures} boundaries; exactly one is required before its "
             "presentation can be described"
@@ -223,7 +223,7 @@ def _presented(item: RegionInput) -> frozenset[Coordinate]:
 
 __all__ = [
     "DataflowOperandRef",
-    "InputServiceError",
+    "NetworkOperandError",
     "RegionInputRef",
     "RegionOutputRef",
     "exposing_boundaries",

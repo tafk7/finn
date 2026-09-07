@@ -12,8 +12,8 @@ port, and from where.
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.input_service import (
-    InputServiceError,
+from finn.dataflow.network_operands import (
+    NetworkOperandError,
     RegionInputRef,
     RegionOutputRef,
     exposing_boundaries,
@@ -287,12 +287,12 @@ def test_a_qualified_reference_resolves_an_input_and_an_output():
     ids=["unknown node", "unknown operand"],
 )
 def test_an_unresolvable_reference_is_refused(reference):
-    with pytest.raises(InputServiceError):
+    with pytest.raises(NetworkOperandError):
         resolve_input(external_network(), reference)
 
 
 def test_an_output_reference_refuses_an_operand_it_cannot_disambiguate():
-    with pytest.raises(InputServiceError):
+    with pytest.raises(NetworkOperandError):
         resolve_output(external_network(), RegionOutputRef("compute", "W"))
 
 
@@ -310,7 +310,7 @@ def test_presentation_queries_refuse_an_endpoint_no_one_owns():
     reference = RegionInputRef("compute", "W")
 
     assert validate_network(unowned)
-    with pytest.raises(InputServiceError, match="exactly one is required"):
+    with pytest.raises(NetworkOperandError, match="exactly one is required"):
         unpresented_positions(unowned, reference)
 
 
@@ -329,7 +329,7 @@ def test_presentation_queries_refuse_an_endpoint_owned_twice():
         weight_boundary=True,
     )
 
-    with pytest.raises(InputServiceError, match="exactly one is required"):
+    with pytest.raises(NetworkOperandError, match="exactly one is required"):
         internally_presented_positions(doubly_owned, RegionInputRef("compute", "W"))
 
 
