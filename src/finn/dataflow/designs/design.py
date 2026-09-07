@@ -669,7 +669,7 @@ def _segment(
     # Taken from the declaration, not split back out of the namespace it was
     # joined into.  Reconstruction happened to work only because roles are
     # atomic, and would have gone quietly wrong the moment one was not.
-    role = declaration.stable_name or member_name
+    role = member_name if declaration.stable_name is None else declaration.stable_name
     cases = []
     for case in branch.cases:
         compiled = cast("_CompiledSpace[Kernel]", case.compiled)
@@ -779,7 +779,7 @@ def _topology(
     boundaries: list[_CompiledBoundary] = []
     maps: list[DerivedProperty] = []
     for member_name, declaration in topology_members(design_type):
-        identity = declaration.stable_name or member_name
+        identity = member_name if declaration.stable_name is None else declaration.stable_name
         what = f"topology {identity!r}"
         active = _boolean_ref(design_type, compiled, declaration.when, what)
         if isinstance(declaration, Connection):
@@ -1014,7 +1014,7 @@ def _declared_segments(
         # -- true, unhelpful, and not the thing the author got wrong.
         for _alternative_id, subspace in declaration.alternatives:
             declaration._admit_candidate(design_type, member_name, subspace)
-        role = declaration.stable_name or member_name
+        role = member_name if declaration.stable_name is None else declaration.stable_name
         resolved.append((role, declaration.node_id or role, declaration))
     return tuple(resolved)
 

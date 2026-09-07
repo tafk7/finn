@@ -408,7 +408,7 @@ def _physical_names(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[obj
     seen: set[str] = set()
     resolved: list[tuple[str, Parameter[object], str]] = []
     for member_name, template in _parameter_members(kernel_type):
-        physical_name = template.stable_name or member_name
+        physical_name = member_name if template.stable_name is None else template.stable_name
         if physical_name in seen:
             raise AuthoringError(
                 f"{kernel_type.__name__} declares physical parameter {physical_name!r} twice"

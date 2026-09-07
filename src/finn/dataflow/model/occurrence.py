@@ -429,7 +429,7 @@ def _problem_fingerprint(
         "space": f"{space_type.__module__}.{space_type.__qualname__}",
         "problem": [
             {
-                "name": declaration.stable_name or name,
+                "name": name if declaration.stable_name is None else declaration.stable_name,
                 "semantics": declaration.value_semantics.name,
                 "codec": f"{declaration.canonical.identity}@{declaration.canonical.version}",
                 "value": (

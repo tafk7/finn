@@ -256,7 +256,7 @@ def _path(prefix: str, name: str) -> QualifiedPath:
 
 def _local_name(member_name: str, declaration: object) -> str:
     stable = getattr(declaration, "stable_name", None)
-    return cast(str, stable or member_name)
+    return member_name if stable is None else cast(str, stable)
 
 
 def _check_signature(

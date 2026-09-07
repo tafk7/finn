@@ -49,6 +49,32 @@ class AuthoringError(ValueError):
     """A declarative Space is malformed before engine validation."""
 
 
+def _declaration_name(name: str | None, what: str) -> str | None:
+    """Validate one optional stable local declaration-name segment.
+
+    ``None`` alone means "use the Python member name". An explicitly supplied
+    name uses the engine's ASCII path-segment vocabulary but may not inject
+    structural nesting with a dot; nesting comes only from actual Subspace and
+    SubspaceChoice structure.
+    """
+
+    if name is None:
+        return None
+    if not isinstance(name, str) or "." in name:
+        raise AuthoringError(
+            f"{what} name must be one non-empty QualifiedPath segment using only "
+            f"ASCII letters, digits, '_' and '-', got {name!r}"
+        )
+    try:
+        QualifiedPath(name)
+    except ValueError as error:
+        raise AuthoringError(
+            f"{what} name must be one non-empty QualifiedPath segment using only "
+            f"ASCII letters, digits, '_' and '-', got {name!r}"
+        ) from error
+    return name
+
+
 #: Class-member names an authored Space may not use for a declaration, because
 #: each one is an occurrence lifecycle operation every authored class inherits.
 #: The check is on the *Python member name*, never on a declaration's stable
@@ -682,7 +708,7 @@ class Problem(ValueSource[T_co]):
         if canonical is not None and not isinstance(canonical, CanonicalValueCodec):
             raise AuthoringError("a Problem canonical= is one CanonicalValueCodec")
         object.__setattr__(self, "value_semantics", semantics_for(value_type))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Problem"))
         object.__setattr__(self, "required", required)
         object.__setattr__(self, "validate", validate)
         object.__setattr__(self, "description", description)
@@ -703,7 +729,7 @@ class Input(ValueSource[T_co]):
         name: str | None = None,
     ) -> None:
         object.__setattr__(self, "value_semantics", semantics_for(value_type))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "an Input"))
         object.__setattr__(
             self,
             "absence",
@@ -832,7 +858,7 @@ class Decision(ValueSource[T_co]):
         if canonical is not None and not isinstance(canonical, PersistentCodec):
             raise AuthoringError("a Decision canonical= is one PersistentCodec")
         object.__setattr__(self, "value_semantics", semantics_for(value_type))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Decision"))
         object.__setattr__(self, "domain", domain if domain is not None else finite(values or ()))
         object.__setattr__(self, "canonical", canonical)
 
@@ -855,9 +881,10 @@ def derived(
     """Declare a derived property from explicit class-member dependencies."""
 
     semantics = semantics_for(value_type)
+    stable_name = _declaration_name(name, "a Derived")
 
     def decorate(evaluate: Callable[..., object]) -> Derived[T]:
-        return Derived(semantics, name, tuple(dependencies.items()), evaluate)
+        return Derived(semantics, stable_name, tuple(dependencies.items()), evaluate)
 
     return decorate
 
@@ -878,8 +905,10 @@ def constraint(
 ) -> Callable[[Callable[..., object]], Constraint]:
     """Declare a constraint from explicit class-member dependencies."""
 
+    stable_name = _declaration_name(name, "a Constraint")
+
     def decorate(evaluate: Callable[..., object]) -> Constraint:
-        return Constraint(tuple(dependencies.items()), evaluate, name)
+        return Constraint(tuple(dependencies.items()), evaluate, stable_name)
 
     return decorate
 
@@ -893,7 +922,7 @@ class ConstraintGroup:
 
     def __init__(self, *constraints: Constraint, name: str | None = None) -> None:
         object.__setattr__(self, "constraints", tuple(constraints))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a ConstraintGroup"))
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -928,7 +957,7 @@ class Readiness:
         object.__setattr__(self, "decisions", tuple(decisions))
         object.__setattr__(self, "properties", tuple(properties))
         object.__setattr__(self, "constraints", tuple(grouped))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Readiness"))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -988,12 +1017,10 @@ class Projection(Generic[T_co]):
                 "a Projection's constraints= are ConstraintGroup declarations; a bare "
                 "Constraint belongs to a group, so that the group can be named and shared"
             )
-        if name is not None and not name:
-            raise AuthoringError("a Projection name must be non-empty")
         object.__setattr__(self, "output", output)
         object.__setattr__(self, "readiness", readiness)
         object.__setattr__(self, "constraints", groups)
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Projection"))
 
     @overload
     def __get__(self, instance: None, owner: type[Space]) -> Self: ...
@@ -1063,12 +1090,10 @@ class Subspace(Generic[S]):
     ) -> None:
         if not isinstance(space_type, type) or not issubclass(space_type, Space):
             raise AuthoringError("Subspace requires a Space subclass")
-        if name is not None and not name:
-            raise AuthoringError("a Subspace name must be non-empty")
         object.__setattr__(self, "space_type", space_type)
         object.__setattr__(self, "bindings", tuple(bindings.items()))
         object.__setattr__(self, "when", when)
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Subspace"))
 
     def __getattr__(self, member_name: str) -> ChildValue[object]:
         exported = exported_members(self.space_type)
@@ -1256,7 +1281,7 @@ class SubspaceChoice:
         object.__setattr__(self, "alternatives", tuple(alternatives))
         object.__setattr__(self, "outputs", ordered)
         object.__setattr__(self, "when", when)
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a SubspaceChoice"))
 
     def _from_candidates(
         self,

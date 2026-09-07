@@ -448,6 +448,12 @@ mechanism: `occurrence_persistable()` reports every selector and `Decision`
 beneath one root under that identity, selectors first, with the root namespace
 removed so the same document reloads under any root.
 
+`name=None` means “use the Python member name.” Any explicit `name=` is one
+non-empty `QualifiedPath` segment using only ASCII letters, digits, `_`, and
+`-`; a dot is refused because structural nesting comes from actual `Subspace`
+or `SubspaceChoice` declarations. An invalid explicit name never falls back to
+the member name.
+
 That identity is not a serialized spelling. This package writes nothing down and
 fixes no attribute name; the operation persistence layer maps the identity
 deterministically onto native ONNX attribute names and owns the collision rule

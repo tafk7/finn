@@ -118,6 +118,29 @@ def test_a_name_overrides_the_member_it_is_spelled_with() -> None:
     assert "second.tile" not in names
 
 
+def test_a_valid_name_is_stable_across_a_python_member_rename() -> None:
+    class Before(Space):
+        old_spelling = Decision(int, values=(1, 2), name="stable_identity")
+
+    class After(Space):
+        new_spelling = Decision(int, values=(1, 2), name="stable_identity")
+
+    assert _paths(Before.start({})) == ("stable_identity",)
+    assert _paths(After.start({})) == ("stable_identity",)
+
+
+def test_nested_identity_comes_from_real_structural_nesting() -> None:
+    class Middle(Space):
+        size = Input(int)
+        leaf = Subspace(Leaf, size=size)
+
+    class NestedRoot(Space):
+        size = Problem(int)
+        middle = Subspace(Middle, size=size)
+
+    assert _paths(NestedRoot.start({NestedRoot.size: 3})) == ("middle.leaf.tile",)
+
+
 def test_two_placements_of_one_class_do_not_collide() -> None:
     names = _paths(Root.start({Root.size: 3}))
     assert names.count("held.tile") == 1
@@ -180,3 +203,12 @@ def test_an_empty_name_is_refused_rather_than_falling_back_to_the_member() -> No
 
     with pytest.raises(AuthoringError):
         Subspace(Leaf, name="", size=Input(int))
+    with pytest.raises(AuthoringError):
+        Decision(int, values=(1, 2), name="")
+    with pytest.raises(AuthoringError):
+        SubspaceChoice({"plain": Subspace(Leaf, size=Input(int))}, name="")
+
+
+def test_a_local_name_cannot_inject_structural_path_segments() -> None:
+    with pytest.raises(AuthoringError, match="one non-empty QualifiedPath segment"):
+        Decision(int, values=(1, 2), name="outer.inner")

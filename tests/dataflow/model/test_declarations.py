@@ -22,9 +22,11 @@ from finn.dataflow.model.declarations import (
     Derived,
     Input,
     Problem,
+    Projection,
     Readiness,
     Space,
     Subspace,
+    SubspaceChoice,
     constraint,
     declared_members,
     derived,
@@ -162,6 +164,39 @@ def test_decision_requires_exactly_one_domain_form() -> None:
         Decision(int)
     with pytest.raises(AuthoringError, match="exactly one"):
         Decision(int, values=(1,), domain=finite((1,)))
+
+
+def _named_declaration_factories():
+    return (
+        ("Problem", lambda name: Problem(int, name=name)),
+        ("Input", lambda name: Input(int, name=name)),
+        ("Decision", lambda name: Decision(int, values=(1,), name=name)),
+        ("Derived", lambda name: derived(int, name=name)(lambda: 1)),
+        ("Constraint", lambda name: constraint(name=name)(lambda: True)),
+        ("ConstraintGroup", lambda name: ConstraintGroup(name=name)),
+        ("Readiness", lambda name: Readiness(name=name)),
+        (
+            "Projection",
+            lambda name: Projection(Decision(int, values=(1,)), readiness=Readiness(), name=name),
+        ),
+        ("Subspace", lambda name: Subspace(Child, extent=Input(int), name=name)),
+        (
+            "SubspaceChoice",
+            lambda name: SubspaceChoice({"child": Subspace(Child, extent=Input(int))}, name=name),
+        ),
+    )
+
+
+@pytest.mark.parametrize("label,factory", _named_declaration_factories())
+@pytest.mark.parametrize("name", ["", "nested.name", "not a segment", "non_ascii_é"])
+def test_every_explicit_declaration_name_is_one_nonempty_path_segment(label, factory, name) -> None:
+    with pytest.raises(AuthoringError, match="one non-empty QualifiedPath segment"):
+        factory(name)
+
+
+@pytest.mark.parametrize("_label,factory", _named_declaration_factories())
+def test_none_remains_the_only_member_name_fallback(_label, factory) -> None:
+    assert factory(None).stable_name is None
 
 
 def test_public_model_facade_exposes_only_generic_vocabulary() -> None:
