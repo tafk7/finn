@@ -374,6 +374,15 @@ source roots; the ABI and render helpers receive only the resolved parameter
 table. Region family/version remain on `RegionDeclaration`; local assignments
 remain on the Space occurrence.
 
+A permanently unavailable implementation declares a reason with
+`physical_unavailable = PhysicallyUnsupported("reason")`. Its physical
+projection is immediately `Absent`, even if inherited physical Decisions and
+parameters remain unresolved; it needs no dummy ABI. Its semantic projection
+still runs all Region and `dataflow_support` constraints. A subclass adding an
+implementation resets the declaration to `None` and provides `component_abi`.
+Parameter-specific refusals continue to raise `PhysicallyUnsupported` from that
+helper after the relevant parameters resolve.
+
 The ABI parameter table must exactly match the Kernel's resolved physical
 parameter table. A physical constant uses `ModuleParameter.constant(value, why=...)`
 so the reason it is not a design-space value is explicit.
@@ -538,6 +547,14 @@ Design-specific supplement is `segments_match_network`.
 `when=` on a segment, a NetworkEdge, or a NetworkBoundary makes it conditional.
 Complementarity is not proved syntactically; canonical endpoint ownership
 rejects both-active and neither-active at every point.
+
+Use `design.dataflow.accepted_answer` for a Network passed to operand
+correspondence or presentation queries. `design.network` and the projection's
+`output` are construction/diagnostic values; they do not establish semantic
+acceptance. The accepted projection applies `validate_network`, Design support,
+and selected-Kernel semantic constraints before returning `Decided`. Presentation
+queries then operate on that validated Network without repeating whole-Network
+validation.
 
 ### Asking a Design
 

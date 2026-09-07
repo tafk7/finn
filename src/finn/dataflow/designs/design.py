@@ -112,6 +112,11 @@ class SelectedNetwork(Derived[DataflowNetwork]):
     layer for a projection called ``"dataflow"``, so an operation could not
     depend on a Design's Network the way a Design depends on a Kernel's Region.
     Now it can.
+
+    This member is the construction result. Consumers requiring an accepted
+    Network, including operand correspondence and presentation, use
+    ``design.dataflow.accepted_answer``. That projection applies the complete
+    semantic constraint set, including canonical ``validate_network``.
     """
 
     def __init__(self, *, name: str | None = None) -> None:

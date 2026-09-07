@@ -313,7 +313,7 @@ def test_the_build_unit_is_honestly_unavailable() -> None:
     assert isinstance(design.dataflow.accepted_answer, Decided)
     kernel = design.kernel("compute")
     assert isinstance(kernel, Decided)
-    built = kernel.value.assign(DotpAxiKernel.compute_pumping, False).physical.accepted_answer
+    built = kernel.value.physical.accepted_answer
     assert isinstance(built, Absent)
     assert any(finding.code == "kernel-physically-unsupported" for finding in built.findings)
 

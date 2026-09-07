@@ -11,7 +11,7 @@ from typing import ClassVar, cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Decided, QualifiedPath
+from finn.dataflow._engine import Absent, Decided, QualifiedPath, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.contributions import RenderedSource
 from finn.dataflow.artifacts.derivation import Scalar, build_key
@@ -19,6 +19,7 @@ from finn.dataflow.kernels import (
     Kernel,
     ModuleBuildSpec,
     ModuleParameter,
+    PhysicallyUnsupported,
     RegionDeclaration,
     kernel_source_derivation,
     resolve_kernel_contributions,
@@ -34,7 +35,16 @@ from finn.dataflow.model import (
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
-from finn.dataflow.space import Decision, Input, Space, Subspace, SubspaceChoice
+from finn.dataflow.space import (
+    AuthoringError,
+    ConstraintGroup,
+    Decision,
+    Input,
+    Space,
+    Subspace,
+    SubspaceChoice,
+    constraint,
+)
 from finn.dataflow.space.occurrence import occurrence_persistable
 
 
@@ -155,3 +165,86 @@ def test_build_spec_refuses_query_handles_in_scalar_context_and_provenance() -> 
         replace(spec, render_context={"undeclared": cast(Scalar, root)})
     with pytest.raises(TypeError, match="declaration names"):
         replace(spec, imported_decisions=(cast(str, QualifiedPath("node.lanes")),))
+
+
+class UnavailableModule(ModuleKernel):
+    id = "unavailable_module"
+    physical_unavailable: ClassVar[PhysicallyUnsupported | None] = PhysicallyUnsupported(
+        "this implementation has no standalone module"
+    )
+    pipeline = Decision(int, values=(1, 2))
+    PIPELINE = ModuleParameter(pipeline)
+
+    @constraint(width=ModuleKernel.width)
+    def semantic_width(*, width: int) -> bool:
+        return width == 2
+
+    @constraint(pipeline=pipeline)
+    def physical_pipeline(*, pipeline: int) -> bool:
+        raise AssertionError("a permanently unavailable implementation must not query physics")
+
+    dataflow_support = ConstraintGroup(semantic_width)
+    physical_support = ConstraintGroup(semantic_width, physical_pipeline)
+
+    @classmethod
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
+        raise AssertionError("a permanently unavailable implementation must not construct an ABI")
+
+
+class UnavailableRoot(Space):
+    width = Decision(int, values=(1, 2))
+    module = Subspace(UnavailableModule, width=width)
+
+
+def test_permanent_absence_does_not_wait_for_inherited_parameters_or_choices() -> None:
+    root = UnavailableRoot.start({})
+    assert isinstance(root.module.dataflow.accepted_answer, Unresolved)
+    for occurrence in (root, root.assign(UnavailableRoot.width, 2)):
+        physical = occurrence.module.physical
+        assert isinstance(physical.accepted_answer, Absent)
+        assert {finding.code for finding in physical.accepted_answer.findings} == {
+            "kernel-physically-unsupported"
+        }
+    assert root.assign(UnavailableRoot.width, 2).module.dataflow.accepted_answer == Decided(
+        _region(2)
+    )
+
+
+def test_permanent_absence_preserves_semantic_refusal_in_a_shared_constraint() -> None:
+    kernel = UnavailableRoot.start({}).assign(UnavailableRoot.width, 1).module
+    assert isinstance(kernel.dataflow.accepted_answer, Absent)
+    assert isinstance(kernel.physical.accepted_answer, Absent)
+
+
+def _unit_region() -> DataflowRegion:
+    return _region(1)
+
+
+class NoStandaloneModule(Kernel):
+    id = "no_standalone_module"
+    region = RegionDeclaration(family="test.module", version="1", construct=_unit_region)
+    physical_unavailable: ClassVar[PhysicallyUnsupported | None] = PhysicallyUnsupported(
+        "implemented only inside a containing module"
+    )
+
+
+def test_unavailable_kernel_needs_no_dummy_abi_and_can_be_implemented_by_a_subclass() -> None:
+    leaf = NoStandaloneModule.start({})
+    assert isinstance(leaf.dataflow.accepted_answer, Decided)
+    assert isinstance(leaf.physical.accepted_answer, Absent)
+
+    class Implemented(NoStandaloneModule):
+        physical_unavailable = None
+
+        @classmethod
+        def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
+            return ComponentABI("implemented", ())
+
+    assert isinstance(Implemented.start({}).physical.accepted_answer, Decided)
+
+
+def test_permanent_unavailability_is_a_typed_declaration() -> None:
+    with pytest.raises(AuthoringError, match="physical_unavailable must be PhysicallyUnsupported"):
+
+        class Untyped(NoStandaloneModule):
+            physical_unavailable = "unavailable"  # type: ignore[assignment]
