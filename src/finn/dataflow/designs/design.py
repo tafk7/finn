@@ -41,7 +41,6 @@ from finn.dataflow._engine import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_NETWORK_SEMANTICS
 from finn.dataflow.space.compiler import (
     _CompiledBranch,
@@ -217,11 +216,6 @@ class DataflowDesign(Space):
 
         return _design_metadata(self).segment(role).node_id
 
-    def computation(self, role: str) -> ComputationContract:
-        """What the traffic at this role is required to mean."""
-
-        return _design_metadata(self).segment(role).required_computation
-
     def is_active(self, role: str) -> Answer[bool]:
         """Whether this role is present at this point."""
 
@@ -333,9 +327,8 @@ class KernelChoice(SubspaceChoice):
     A thin ``SubspaceChoice`` specialization written entirely through the
     generic seam.  Selector creation, alternative gating, stable namespaces,
     inspection, and selected-output forwarding all stay in the generic
-    machinery; what a Kernel segment adds is the required computation, the
-    implicit selected Region, and the stable Design role and Network node
-    identity.
+    machinery; a KernelChoice admits Kernel candidates, forwards their selected
+    Region, and supplies stable Design role and Network node identities.
 
     Its alternatives are written positionally rather than as a mapping because a
     Kernel already carries its own stable ``id``, and that id *is* the
@@ -346,29 +339,24 @@ class KernelChoice(SubspaceChoice):
     what lets one Kernel class fill two candidate slots.
     """
 
-    computation: ComputationContract
     node_id: str | None
 
     #: A Kernel segment's selector chooses a Kernel, so it says so.
     selector_name: ClassVar[str] = "kernel"
 
-    __slots__ = ("computation", "node_id")
+    __slots__ = ("node_id",)
 
     def __init__(
         self,
         *alternatives: Subspace[Kernel],
-        computation: ComputationContract,
         role: str | None = None,
         node_id: str | None = None,
         when: ValueSource[bool] | None = None,
     ) -> None:
-        if not isinstance(computation, ComputationContract):
-            raise AuthoringError("a Kernel segment declares one ComputationContract")
         if any(not isinstance(item, Subspace) for item in alternatives):
             raise AuthoringError("a Kernel segment takes Subspace declarations")
         _atomic("a Kernel segment role", role)
         _atomic("a Kernel segment node id", node_id)
-        object.__setattr__(self, "computation", computation)
         object.__setattr__(self, "node_id", node_id)
         # The role *is* the namespace segment, so it travels as the choice's
         # stable name rather than as a second parallel identity.
@@ -404,14 +392,6 @@ class KernelChoice(SubspaceChoice):
             raise AuthoringError(
                 f"a Kernel segment admits Kernels, and "
                 f"{subspace.space_type.__name__} is not a Kernel"
-            )
-        offered = getattr(subspace.space_type, "computation", None)
-        if offered != self.computation:
-            raise AuthoringError(
-                f"the segment requires computation "
-                f"{self.computation.id}:{self.computation.version}, but "
-                f"{subspace.space_type.__name__} declares "
-                f"{getattr(offered, 'id', offered)!r}"
             )
 
     @property
@@ -582,7 +562,6 @@ class _CompiledKernelSegment:
     declaration: KernelChoice
     role: str
     node_id: str
-    required_computation: ComputationContract
     active: _Ref[object] | None
     selector: _Ref[object] | None
     cases: tuple[_CompiledKernelCase, ...]
@@ -682,7 +661,6 @@ def _segment(
         declaration,
         role,
         declaration.node_id or role,
-        declaration.computation,
         branch.active,
         branch.selector,
         tuple(cases),

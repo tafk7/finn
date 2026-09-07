@@ -113,6 +113,8 @@ class _Ref(Generic[T_co]):
     kind: DependencyKind
     semantics: ValueSemantics[object]
     absence: AbsenceMode = AbsenceMode.REQUIRES_APPLICABLE
+    #: Decision provenance survives Input binding across separately compiled fragments.
+    root_namespace: str = ""
 
     def dependency(self, name: str) -> DependencyRef:
         return DependencyRef(
@@ -210,6 +212,9 @@ class _CompiledSpace(Generic[S]):
     #: and never rebuilds a profile name from a convention.
     readiness_names: tuple[tuple[str, str], ...] = ()
     constraint_set_names: tuple[tuple[str, str], ...] = ()
+    #: The root prefix, retained intact even when it contains several segments.
+    #: Higher layers use this only to publish stable declaration names.
+    root_namespace: str = ""
 
     def engine_name(self, table: tuple[tuple[str, str], ...], name: str, what: str) -> str:
         try:
@@ -298,11 +303,13 @@ class _Compilation:
         applies_if: EvaluatorSpec[Answer[bool]] | None,
         allow_problem: bool,
         ancestors: tuple[type[Space], ...],
+        root_namespace: str,
     ) -> None:
         if not namespace:
             raise AuthoringError("a Space compilation needs a namespace")
         self.space_type = space_type
         self.namespace = namespace
+        self.root_namespace = root_namespace
         self.supplied_inputs = dict(inputs)
         self.problem_namespace = problem_namespace
         self.applies_if = applies_if
@@ -412,6 +419,7 @@ class _Compilation:
                 for name, declaration in self.declarations
                 if isinstance(declaration, ConstraintGroup)
             ),
+            self.root_namespace,
         )
         finalized = self.space_type._finalize_compilation(compiled)
         if not isinstance(finalized, _CompiledSpace):
@@ -462,6 +470,7 @@ class _Compilation:
                     _path(self.namespace, name),
                     DependencyKind.DECISION,
                     declaration.value_semantics,
+                    root_namespace=self.root_namespace,
                 )
             elif isinstance(declaration, Derived):
                 self.refs[id(declaration)] = _Ref(
@@ -874,7 +883,12 @@ class _Compilation:
         selector: _Ref[object] | None = None
         if len(case_ids) > 1:
             selector_path = _path(namespace, declaration.selector_name)
-            selector = _Ref(selector_path, DependencyKind.DECISION, _CASE_ID_SEMANTICS)
+            selector = _Ref(
+                selector_path,
+                DependencyKind.DECISION,
+                _CASE_ID_SEMANTICS,
+                root_namespace=self.root_namespace,
+            )
             self.branch_decisions[id(declaration)] = EngineDecision(
                 selector_path,
                 _CASE_ID_SEMANTICS,
@@ -982,6 +996,7 @@ class _Compilation:
             applies_if=gate,
             _allow_problem=False,
             _ancestors=(*self.ancestors, self.space_type),
+            _root_namespace=self.root_namespace,
         )
 
     def _compile_use(self, member_name: str, declaration: Subspace[Space]) -> _CompiledSpace[Space]:
@@ -1002,6 +1017,7 @@ class _Compilation:
                 applies_if=gate,
                 _allow_problem=False,
                 _ancestors=(*self.ancestors, self.space_type),
+                _root_namespace=self.root_namespace,
             )
             self.uses[key] = child
             return child
@@ -1018,6 +1034,7 @@ def _compile_space(
     applies_if: EvaluatorSpec[Answer[bool]] | None = None,
     _allow_problem: bool = True,
     _ancestors: tuple[type[Space], ...] = (),
+    _root_namespace: str | None = None,
 ) -> _CompiledSpace[S]:
     """Compile one class declaration into an ordinary flat spec fragment."""
 
@@ -1034,6 +1051,7 @@ def _compile_space(
         applies_if=applies_if,
         allow_problem=_allow_problem,
         ancestors=_ancestors,
+        root_namespace=namespace if _root_namespace is None else _root_namespace,
     ).compile()
     return cast("_CompiledSpace[S]", compiled)
 

@@ -14,7 +14,7 @@ Artifact projection is downstream and one-way.  Nothing in
 
 A Kernel answers two questions separately -- ``kernel.dataflow`` for its
 Region, ``kernel.physical`` for its detached build unit -- and only the second
-crosses into artifact code.  ``KernelPhysicalResult`` is that boundary: an
+crosses into artifact code.  ``ModuleBuildSpec`` is that boundary: an
 artifact function receives resolved identity, parameters, ABI and
 contributions, and no handle back into the design space.
 """
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
     from finn.dataflow.kernels.kernel import (
         Kernel,
-        KernelPhysicalResult,
+        ModuleBuildSpec,
         ModuleParameter,
         PhysicallyUnsupported,
         RegionDeclaration,
@@ -44,7 +44,7 @@ _LAZY_EXPORTS = {
     name: ("finn.dataflow.kernels.kernel", name)
     for name in (
         "Kernel",
-        "KernelPhysicalResult",
+        "ModuleBuildSpec",
         "ModuleParameter",
         "PhysicallyUnsupported",
         "RegionDeclaration",
@@ -90,7 +90,7 @@ __all__ = [
     "PhysicallyUnsupported",
     "RegionDeclaration",
     # the two projections, and the detached value the physical one produces
-    "KernelPhysicalResult",
+    "ModuleBuildSpec",
     "kernel_dataflow",
     "kernel_physical",
     # downstream artifact projection, one-way

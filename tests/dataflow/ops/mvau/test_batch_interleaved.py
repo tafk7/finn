@@ -23,7 +23,6 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
-from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
@@ -553,7 +552,6 @@ class _AliasedDesign(WeightedDotProductDesign):
             simd=simd,
             interleave=interleave,
         ),
-        computation=DOT_PRODUCT_COMPUTATION,
     )
 
     activation = NetworkBoundary(compute.input("activation"))

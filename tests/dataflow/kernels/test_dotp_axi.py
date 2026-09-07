@@ -162,19 +162,17 @@ def test_dotp_parameter_table_remains_exact() -> None:
 def test_dotp_owns_only_its_physical_decision() -> None:
     configured = _configure(pe=2, simd=4, pumping=True)
     assert isinstance(configured, Decided)
-    assert set(configured.value.assignments) == {"compute_pumping"}
-    assert {path.value for path in configured.value.imported_decisions} == {
-        "dotp_test.pe",
-        "dotp_test.simd",
+    assert set(configured.value.imported_decisions) == {
+        "pe",
+        "simd",
     }
 
 
 def test_dotp_region_family_is_inspectable_without_the_kernel_id() -> None:
     configured = _configure()
     assert isinstance(configured, Decided)
-    assert configured.value.region_family == "mvau.dot_product"
-    assert configured.value.region_version == "1"
-    assert configured.value.kernel_id == "dotp_axi"
+    assert configured.value.implementation_id == "dotp_axi"
+    assert (DotpAxiKernel.region.family, DotpAxiKernel.region.version) == ("mvau.dot_product", "1")
 
 
 def test_dotp_feasibility_rejects_numeric_pumping_and_packing_failures() -> None:

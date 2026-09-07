@@ -24,7 +24,6 @@ from finn.dataflow.artifacts.abi import (
     StandardProtocol,
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
-from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -241,7 +240,6 @@ class DotpAxiKernel(Kernel):
 
     id = "dotp_axi"
     version = "1"
-    computation = DOT_PRODUCT_COMPUTATION
 
     repetitions = Input(int)
     matrix_width = Input(int)
@@ -552,7 +550,6 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
 
 
 __all__ = [
-    "DOT_PRODUCT_COMPUTATION",
     "BatchInterleavedDotpAxiKernel",
     "DspBlock",
     "DotpAxiKernel",

@@ -23,7 +23,6 @@ from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.projection import content_digest
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Input, Problem, Space
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
@@ -42,7 +41,6 @@ from dataflow.kernels.test_dotp_axi import _configure as _configure_dotp
 class ArtifactKernel(Kernel):
     id = "artifact_test"
     version = "2"
-    computation = ComputationContract("test.artifact")
 
     extent = Input(int)
     lanes = Input(int)

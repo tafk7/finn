@@ -18,10 +18,6 @@ from finn.dataflow._engine import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.computation import (
-    ACTIVATION_REPLAY_COMPUTATION,
-    DOT_PRODUCT_COMPUTATION,
-)
 from finn.dataflow.space.dataflow_value_semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -31,7 +27,7 @@ from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSour
 from finn.dataflow.designs.design import design_dataflow
 from finn.dataflow.ops.mvau.designs.dot_product import DESIGN_INPUTS, DotProductDesign
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.kernels.kernel import KernelPhysicalResult, kernel_physical
+from finn.dataflow.kernels.kernel import ModuleBuildSpec, kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.model.network import (
     DataflowNetwork,
@@ -149,12 +145,12 @@ def _configure(**kwargs: object) -> Answer[DataflowNetwork]:
     return _occurrence(**kwargs).dataflow.accepted_answer  # type: ignore[arg-type]
 
 
-def _built(role: str, **kwargs: object) -> Answer[KernelPhysicalResult]:
+def _built(role: str, **kwargs: object) -> Answer[ModuleBuildSpec]:
     """The detached build unit at one role of one specialized Design."""
 
     kernel = _occurrence(**kwargs).kernel(role)  # type: ignore[arg-type]
     if not isinstance(kernel, Decided):
-        return cast("Answer[KernelPhysicalResult]", kernel)
+        return cast("Answer[ModuleBuildSpec]", kernel)
     return kernel.value.physical.accepted_answer
 
 
@@ -260,8 +256,6 @@ def test_the_design_reports_two_roles_and_what_fills_each() -> None:
     assert set(design.roles) == {"replay", "compute"}
     assert design.selected("replay") == Decided("replay_buffer")
     assert design.selected("compute") == Decided("dotp_axi")
-    assert design.computation("replay") == ACTIVATION_REPLAY_COMPUTATION
-    assert design.computation("compute") == DOT_PRODUCT_COMPUTATION
     assert design.region_family("replay") == Decided(("mvau.activation_replay", "1"))
     assert design.region_family("compute") == Decided(("mvau.dot_product", "1"))
     assert design.node_id("replay") == "replay"
@@ -288,14 +282,13 @@ def test_the_design_owns_pe_and_simd_and_the_kernels_import_them() -> None:
         QualifiedPath("mvau.dot_product.pe"): 2,
         QualifiedPath("mvau.dot_product.simd"): 4,
     }
-    for role, expected in (("compute", {"compute_pumping": False}), ("replay", {})):
+    for role in ("compute", "replay"):
         built = _built(role, pe=2, simd=4)
         assert isinstance(built, Decided)
-        assert {path.value for path in built.value.imported_decisions} >= {
-            "mvau.dot_product.pe",
-            "mvau.dot_product.simd",
+        assert set(built.value.imported_decisions) >= {
+            "dot_product.pe",
+            "dot_product.simd",
         }
-        assert dict(built.value.assignments) == expected
 
 
 def test_the_physical_parameter_tables_stay_kernel_local() -> None:

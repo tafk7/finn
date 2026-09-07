@@ -21,10 +21,6 @@ selected Regions and the topology declared here.
 
 from __future__ import annotations
 
-from finn.dataflow.computation import (
-    ACTIVATION_REPLAY_COMPUTATION,
-    DOT_PRODUCT_COMPUTATION,
-)
 from finn.dataflow.space.declarations import Subspace
 from finn.dataflow.designs.design import (
     NetworkBoundary,
@@ -72,7 +68,6 @@ class DotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
-        computation=ACTIVATION_REPLAY_COMPUTATION,
     )
 
     compute = KernelChoice(
@@ -91,7 +86,6 @@ class DotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
-        computation=DOT_PRODUCT_COMPUTATION,
     )
 
     activation_replay = NetworkEdge(

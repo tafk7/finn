@@ -20,7 +20,6 @@ import pytest
 
 from finn.dataflow._engine import DependencyKind, Engine
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.designs.design import (
     RESERVED_DESIGN_NAMES,
     NetworkBoundary,
@@ -63,8 +62,6 @@ from finn.dataflow.space.spec_algebra import assemble_specs
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-EMIT = ComputationContract("test.emit")
-
 
 def _region(extent: int) -> DataflowRegion:
     schedule = LogicalSchedule((ScheduleLevel("beat", extent),))
@@ -81,7 +78,6 @@ def _region(extent: int) -> DataflowRegion:
 class EmitKernel(Kernel):
     id = "emit"
     version = "1"
-    computation = EMIT
 
     extent = Input(int)
     region = RegionDeclaration(family="test.emit", version="1", construct=_region, extent=extent)
@@ -100,7 +96,7 @@ class OneSegment(DataflowDesign):
     version = "1"
 
     extent = Input(int)
-    only = KernelChoice(Subspace(EmitKernel, extent=extent), computation=EMIT)
+    only = KernelChoice(Subspace(EmitKernel, extent=extent))
     result = NetworkBoundary(only.output("output"))
 
 
@@ -192,7 +188,7 @@ def test_a_class_body_may_not_replace_the_network() -> None:
             version = "1"
             extent = Input(int)
             network = SelectedNetwork()
-            only = KernelChoice(Subspace(EmitKernel, extent=extent), computation=EMIT)
+            only = KernelChoice(Subspace(EmitKernel, extent=extent))
 
 
 @pytest.mark.parametrize("name", sorted(RESERVED_DESIGN_NAMES - {"network"}))
@@ -226,7 +222,7 @@ def test_an_abstract_intermediate_with_no_segments_is_left_alone() -> None:
     class Concrete(Abstract):
         id = "concrete"
         version = "1"
-        only = KernelChoice(Subspace(EmitKernel, extent=Abstract.extent), computation=EMIT)
+        only = KernelChoice(Subspace(EmitKernel, extent=Abstract.extent))
         result = NetworkBoundary(only.output("output"))
 
     assert isinstance(Concrete.__dict__["dataflow"], Projection)

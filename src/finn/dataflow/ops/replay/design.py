@@ -11,7 +11,6 @@ path, so nothing may assume a matrix.
 
 from __future__ import annotations
 
-from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.designs.design import NetworkBoundary, DataflowDesign, KernelChoice
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.space.declarations import Decision, Input, Subspace, divisors_of
@@ -42,7 +41,6 @@ class ActivationReplayDesign(DataflowDesign):
             pe=pe,
             simd=simd,
         ),
-        computation=ACTIVATION_REPLAY_COMPUTATION,
     )
 
     activation = NetworkBoundary(replay.input("activation_in"))

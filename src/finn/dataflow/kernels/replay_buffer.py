@@ -36,7 +36,6 @@ from finn.dataflow.artifacts.abi import (
     StandardProtocol,
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
-from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Input, derived
 from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration
@@ -52,7 +51,6 @@ class ReplayBufferKernel(Kernel):
 
     id = "replay_buffer"
     version = "1"
-    computation = ACTIVATION_REPLAY_COMPUTATION
 
     repetitions = Input(int)
     matrix_width = Input(int)
@@ -139,7 +137,6 @@ class ReplayBufferKernel(Kernel):
 
 
 __all__ = [
-    "ACTIVATION_REPLAY_COMPUTATION",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
     "ReplayBufferKernel",
