@@ -13,6 +13,7 @@ import pytest
 
 import gzip
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -426,3 +427,46 @@ def test_publish_still_reads_the_tag_from_the_nfs_provenance_file():
     assert "json.load(open('${provenance}'))['tag']" in body
 
 
+def build_and_publish_body():
+    """The source of buildAndPublishDockerImage(), with `+` continuations joined."""
+    body = JENKINSFILE.read_text()
+    start = body.index("void buildAndPublishDockerImage()")
+    end = body.index("// Build-scoped image directory", start)
+    return re.sub(r"\+\s*\n\s*", "", body[start:end])
+
+
+def test_jenkins_archives_deterministic_workspace_paths():
+    fn = build_and_publish_body()
+    assert "${CI_IMAGE_METADATA_DIR}" in fn
+    # Exact paths, no recursive wildcard: a workspace-relative `**/` glob over
+    # files that build-images.sh wrote to NFS matched nothing, and
+    # allowEmptyArchive turned archiving nothing into a silent success.
+    code = [line for line in fn.splitlines() if not line.strip().startswith("//")]
+    assert not any("**/finn-image" in line for line in code), code
+    archive = [line for line in code if "archiveArtifacts" in line]
+    assert len(archive) == 1, archive
+    assert "finn-image-provenance.json" in archive[0]
+    assert "finn-image-digest.txt" in archive[0]
+    # The build step immediately above is required to have written both files,
+    # so an empty archive here is a container integration failure.
+    assert "allowEmptyArchive" not in archive[0]
+
+
+def test_jenkins_copies_both_metadata_files_to_the_nfs_image_dir():
+    fn = build_and_publish_body()
+    copy = [line for line in fn.splitlines() if "cp " in line]
+    assert len(copy) == 1, copy
+    assert "finn-image-provenance.json" in copy[0]
+    assert "finn-image-digest.txt" in copy[0]
+    assert "${shellQuote(imageDir)}/" in copy[0]
+    # The copy has to land before the publisher, which reads the tag back out
+    # of the provenance file in the image directory.
+    assert fn.index("cp ") < fn.index("publishSharedDockerImage(imageDir)")
+
+
+def test_local_fallback_archives_metadata_without_an_nfs_path():
+    fn = build_and_publish_body()
+    # Archival happens before the NFS branch, so local fallback mode still
+    # produces build artifacts.
+    assert fn.index("archiveArtifacts") < fn.index("if (imageDir)"), fn
+    assert "local fallback mode, skipping image publish" in fn

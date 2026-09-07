@@ -90,6 +90,12 @@ int finnCiMinFreeGB() {
 @Field
 static final String FINN_BUILD_LABEL = 'finn-build'
 
+// Workspace-relative directory build-images.sh writes its provenance and digest
+// into. archiveArtifacts globs are resolved against the workspace, so metadata
+// destined for Jenkins has to land here first and be copied out to NFS second.
+@Field
+static final String CI_IMAGE_METADATA_DIR = 'ci-image-metadata'
+
 // The commit every stage checks out. Resolved once from the branch tip on the
 // first checkoutPinned() call (Validate) and reused unchanged for the rest of
 // the build, so every stage tests the same mounted FINN source even if the
@@ -404,14 +410,34 @@ void buildAndPublishDockerImage() {
   // assumed single-tenant so this will not evict another job's images.
   sh 'docker system prune -a -f'
   String imageDir = buildDockerImageDir()
-  // Build via bake and emit the provenance tuple. The image digest alone does
-  // NOT identify what was tested: FINN source is mounted rather than baked, so
-  // the digest describes the environment and the finn_commit + resolved
-  // dependency commits describe the code. Shards need all of it.
-  sh "ci/scripts/build-images.sh ${shellQuote(ciBakeTarget())} ${shellQuote(imageDir ?: '')}"
+  // Build via bake and emit the provenance tuple into the WORKSPACE, then copy
+  // it out to NFS. It used to be written straight to imageDir, which lives
+  // under FINN_CI_NFS_ROOT and therefore outside the workspace -- so the
+  // workspace-relative `**/finn-image-provenance.json` glob below matched
+  // nothing on every NFS-enabled build, and allowEmptyArchive turned archiving
+  // nothing into a silent success. No build has ever carried this artifact.
+  //
+  // The image digest alone does NOT identify what was tested: FINN source is
+  // mounted rather than baked, so the digest describes the environment and the
+  // finn_commit + resolved dependency commits describe the code. Shards need
+  // all of it, which is why it is worth archiving at all.
+  sh "rm -rf ${shellQuote(CI_IMAGE_METADATA_DIR)} && mkdir -p ${shellQuote(CI_IMAGE_METADATA_DIR)}"
+  sh "ci/scripts/build-images.sh ${shellQuote(ciBakeTarget())} ${shellQuote(CI_IMAGE_METADATA_DIR)}"
+  // Exact paths, no recursive wildcard, and deliberately no allowEmptyArchive:
+  // the step directly above is required to have written both files, so an
+  // empty archive here means the container build did not produce its declared
+  // metadata. That is a container integration failure, not an optional report.
+  archiveArtifacts artifacts: "${CI_IMAGE_METADATA_DIR}/finn-image-provenance.json," +
+                              "${CI_IMAGE_METADATA_DIR}/finn-image-digest.txt"
   if (imageDir) {
+    // The published NFS layout is unchanged: the same two filenames land in
+    // the same build-scoped directory, next to the archive and tag that
+    // publishSharedDockerImage writes.
+    sh "mkdir -p ${shellQuote(imageDir)}"
+    sh "cp ${shellQuote(CI_IMAGE_METADATA_DIR)}/finn-image-provenance.json " +
+       "${shellQuote(CI_IMAGE_METADATA_DIR)}/finn-image-digest.txt " +
+       "${shellQuote(imageDir)}/"
     publishSharedDockerImage(imageDir)
-    archiveArtifacts artifacts: "**/finn-image-provenance.json", allowEmptyArchive: true
   } else {
     echo "buildAndPublishDockerImage: local fallback mode, skipping image publish"
   }

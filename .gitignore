@@ -80,6 +80,10 @@ docs/_build/*
 cover/*
 MANIFEST
 
+# Jenkins workspace copy of the image provenance/digest that build-images.sh
+# emits, staged here so archiveArtifacts can see it before it is copied to NFS.
+/ci-image-metadata/
+
 # Per-project virtualenvs
 .venv*/
 
