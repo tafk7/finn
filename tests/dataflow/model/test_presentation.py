@@ -15,8 +15,12 @@ unpresented -- but the converse fails, and the partial-presentation case below
 is the counterexample: a ported input fed by an edge can still leave a residue.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 
+from finn.dataflow.model import network_validation, presentation
 from finn.dataflow.model.network import (
     DataflowNetwork,
     Edge,
@@ -37,7 +41,6 @@ from finn.dataflow.model.refs import NetworkOperandError, RegionInputRef
 from finn.dataflow.model.region import (
     DataflowRegion,
     InputInterface,
-    InternalInput,
     LogicalSchedule,
     OutputInterface,
     Port,
@@ -217,22 +220,26 @@ def test_presentation_queries_refuse_an_endpoint_owned_twice():
         edge_presented_positions(doubly_owned, RegionInputRef("compute", "W"))
 
 
-# -- the precondition, stated as tests -----------------------------------------
+# -- the precondition, and who discharges it ----------------------------------
 #
 # These queries are pure over a Network `validate_network` has already accepted.
-# They are not a validator, and the two cases below are the honest record of what
-# that costs: given an invalid Network they answer from the consumer side, and
-# the answer looks exactly like a good one.  Pinning that here means a later
-# reader learns the contract from the suite rather than from a surprise, and a
-# future change that quietly starts revalidating has to come past these.
+# The tests below establish two halves of that arrangement: that validation
+# really does catch the defects the precondition excludes, so the precondition is
+# discharged rather than merely asserted; and that the queries do not quietly
+# re-run it, which is the performance claim the split exists for.
+#
+# Deliberately absent: any assertion about what a query *returns* for an invalid
+# Network. The contract says that is undefined, and a test pinning today's answer
+# would make undefined behaviour normative -- a future implementation that cheaply
+# detected one of these defects and raised would be legal under the precondition
+# and would read as a regression.
 
 
-def test_an_edge_with_no_source_is_validations_business_not_presentations():
-    """`edge.source_missing_or_not_output`, and the query still answers.
+def test_validation_catches_an_edge_with_no_source():
+    """The precondition is discharged by `validate_network`, not by hope.
 
-    The sink endpoint is owned exactly once, which is all `_owned_endpoint`
-    re-checks, so the edge-fed arm is selected and the consumer's own presented
-    positions come back.  Nothing here looks at the far end of the edge.
+    Presentation does not look at the far end of an edge, so a dangling source
+    has to be caught before these queries are asked. It is.
     """
 
     consumer = compute(InputInterface(Port("w_in", WEIGHT, WHOLE), WHOLE_MATRIX))
@@ -241,24 +248,16 @@ def test_an_edge_with_no_source_is_validations_business_not_presentations():
         RegionEndpoint("absent", "w_out"),
         (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(WHOLE.image)),),
     )
-    network = framed(consumer, extra_edges=(dangling,))
-    reference = RegionInputRef("compute", "W")
 
     assert "edge.source_missing_or_not_output" in {
-        issue.code for issue in validate_network(network)
+        issue.code for issue in validate_network(framed(consumer, extra_edges=(dangling,)))
     }
-    assert edge_presented_positions(network, reference) == WHOLE_MATRIX.required_positions
-    assert unpresented_positions(network, reference) == frozenset()
 
 
-def test_an_edge_whose_sides_disagree_is_also_validations_business():
-    """Element counts and position map disagree, and the query still answers.
-
-    The supplier emits the upper column and the consumer's port declares the
-    whole matrix.  A caller that skipped `validate_network` gets "the whole
-    matrix is edge-presented", which is a statement about the consumer's port and
-    not about what the edge can carry.
-    """
+def test_validation_catches_an_edge_whose_sides_disagree():
+    """The supplier emits the upper column; the consumer's port declares the whole
+    matrix. Presentation compares neither side against the other, so this too has
+    to be caught first."""
 
     consumer = compute(InputInterface(Port("w_in", WEIGHT, WHOLE), WHOLE_MATRIX))
     mismatched = Edge(
@@ -271,34 +270,52 @@ def test_an_edge_whose_sides_disagree_is_also_validations_business():
         extra_nodes=(NetworkNode("memory", supplier(UPPER)),),
         extra_edges=(mismatched,),
     )
-    reference = RegionInputRef("compute", "W")
 
     assert {issue.code for issue in validate_network(network)} == {
         "edge.element_count_mismatch",
         "position_map.source_domain_mismatch",
     }
-    assert edge_presented_positions(network, reference) == WHOLE_MATRIX.required_positions
 
 
-def test_an_internal_input_is_answered_without_consulting_the_network_at_all():
-    """No endpoint means no topology question, so nothing topological is read.
+def test_presentation_does_not_revalidate_the_network(monkeypatch):
+    """Ask validation once, then ask these as often as you like.
 
-    The Network below is invalid -- its one edge has no source -- and the answer
-    for the internal input is unaffected, because an internal input's
-    presentation is a property of the Region alone.
+    The whole reason presentation carries a precondition instead of checking for
+    itself is that it is asked many times -- per qualified reference in S2-A
+    correspondence, per obligation in U6 -- while validity is a whole-Network
+    property established once. This is that claim as a test: break
+    `validate_network` outright, then run every query over a Network that is in
+    fact valid. If any of them reached for it, this fails.
     """
 
-    region = compute(InternalInput(WEIGHT, WHOLE_MATRIX))
-    dangling = Edge(
-        "nowhere",
-        RegionEndpoint("absent", "w_out"),
-        (SinkContract(RegionEndpoint("absent", "w_in"), PositionMap.identity(WHOLE.image)),),
-    )
-    network = framed(region, extra_edges=(dangling,))
-    reference = RegionInputRef("compute", "W")
+    def refuse(*args, **kwargs):
+        raise AssertionError("presentation must not call validate_network")
 
-    assert "edge.source_missing_or_not_output" in {
-        issue.code for issue in validate_network(network)
+    monkeypatch.setattr(network_validation, "validate_network", refuse)
+
+    network = decoupled_network()
+    consumer = RegionInputRef("compute", "W")
+    memory = RegionInputRef("memory", "W")
+
+    assert exposing_ports(network, consumer)
+    assert exposing_boundaries(network, RegionInputRef("compute", "X"))
+    assert edge_presented_positions(network, consumer) == WHOLE_MATRIX.required_positions
+    assert boundary_presented_positions(network, consumer) == frozenset()
+    assert unpresented_positions(network, memory) == frozenset(WHOLE.image)
+
+
+def test_presentation_names_no_validator_at_all():
+    """The static half of the same claim, immune to how the import is spelled.
+
+    A monkeypatched module attribute only proves the call did not go through
+    *that* name. This proves the module never mentions validation, so there is no
+    other name it could have gone through.
+    """
+
+    source = Path(presentation.__file__).read_text()
+    imported = {
+        node.module
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module
     }
-    assert exposing_ports(network, reference) == ()
-    assert unpresented_positions(network, reference) == WHOLE_MATRIX.required_positions
+    assert not any("validation" in name for name in imported)

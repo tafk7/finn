@@ -470,9 +470,19 @@ So these functions do not check that an edge's source exists or is an output,
 that its position map is total, that element types or beat sequences agree across
 it, that the referenced Region is valid, or that the Network is acyclic. Given a
 Network carrying one of those defects they answer from the consumer side, and the
-answer looks authoritative. Three tests in `test_presentation` pin exactly that,
-including the codes `validate_network` raises for the same Networks, so the cost
-of the contract is recorded in the suite rather than discovered later.
+answer looks authoritative.
+
+The evidence establishes the two halves of that arrangement without freezing the
+undefined part. `test_presentation` proves that `validate_network` catches the
+defects the precondition excludes — a dangling edge source, and an edge whose
+sides disagree — so the precondition is discharged rather than merely asserted;
+and it proves the queries do not re-run it, by breaking `validate_network`
+outright and then running every query over a Network that is in fact valid, plus
+a static check that the module names no validator under any spelling. What it
+deliberately does *not* do is assert what a query returns for an invalid
+Network. That is undefined by contract, and pinning today's answer would make it
+normative: an implementation that later detected one of these defects cheaply and
+raised would be legal under the precondition and would read as a regression.
 
 The one condition `_owned_endpoint` re-checks locally is endpoint ownership,
 because that single fact is what selects between the edge and boundary arms.
