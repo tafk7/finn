@@ -32,7 +32,7 @@
 # `-u` is deliberately omitted: optional FINN_SKIP_BOARD_FILES flag may be unset.
 set -eo pipefail
 
-QONNX_COMMIT="106941a231cdea6a4201a4cf035fecf1d6f2cc71"
+QONNX_COMMIT="e71f1c32ec1cd38e0bd27c3b7be7cb8469a35513"
 FINN_EXP_COMMIT="0724be21111a21f0d81a072fccc1c446e053f851"
 BREVITAS_COMMIT="aad4d5a293db6f2ec622a92a5d3278e47072453e"
 HLSLIB_COMMIT="8d979e2bdced486dd25d26607d1ff5ae327ed6a8"
