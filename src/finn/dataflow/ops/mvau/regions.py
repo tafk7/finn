@@ -16,8 +16,6 @@ layer turns into a rejecting absence rather than a crash.
 
 from __future__ import annotations
 
-from enum import Enum
-
 from finn.dataflow.model.region import (
     BeatSequence,
     Coordinate,
@@ -38,17 +36,6 @@ from finn.dataflow.model.region import (
     is_element_type,
 )
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
-
-
-class MVAURegionDeclaration(str, Enum):
-    """Stable identities for the initial complete MVAU region declarations."""
-
-    STANDARD_EMBEDDED = "standard.embedded"
-    STANDARD_STREAMED = "standard.streamed"
-    BATCH_INTERLEAVED_STREAMED = "batch_interleaved.streamed"
-    #: The two halves the standard streamed form decomposes into.
-    ACTIVATION_REPLAY = "activation_replay"
-    DOT_PRODUCT_STREAMED = "dot_product.streamed"
 
 
 def _positive_integer(value: object) -> bool:
@@ -810,7 +797,6 @@ def construct_weight_stream_region(
 
 
 __all__ = [
-    "MVAURegionDeclaration",
     "construct_activation_replay_region",
     "construct_batch_interleaved_mvau_weight_port",
     "construct_batch_interleaved_streamed_mvau_region",

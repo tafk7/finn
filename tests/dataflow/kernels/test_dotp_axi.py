@@ -124,7 +124,7 @@ def _configure(
     return kernel_physical(engine, kernel, point).accepted_answer
 
 
-def test_dotp_region_matches_the_previous_authority() -> None:
+def test_dotp_kernel_binds_the_region_constructor_inputs() -> None:
     configured = _configure(pe=2, simd=4)
     assert isinstance(configured, Decided)
     expected = baseline_region(

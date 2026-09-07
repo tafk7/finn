@@ -9,10 +9,13 @@ free to carry ``producer.Y`` into ``consumer.X``.  So the identity a caller
 holds across a Network is the *qualified* one -- a node and an operand together
 -- and that is all these references are.
 
-Resolution is the whole of this module's job.  What an interface *presents* is
-next door in ``model.presentation``, which is a separate question asked of the
-same reference: this module says which region value a name denotes, that one
-says which of its positions arrive over a port.
+Resolution is the whole of this module's job, and the exports say so: the
+reference values, the two resolution functions, and the shared error type.  What
+an interface *presents* is next door in ``model.presentation``, which is a
+separate question asked of the same reference: this module says which region
+value a name denotes, that one says which of its positions arrive over a port.
+Endpoint ownership -- whether an edge or a boundary feeds a resolved port -- is
+presentation's, and is private to it.
 
 It answers nothing about source identity.  Nothing here can tell whether two
 region-local ``W``\\ s are the same tensor, and inferring that from a bare
@@ -26,8 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.dataflow.model.network import DataflowNetwork, RegionEndpoint
-from finn.dataflow.model.region import InputInterface, OutputInterface, RegionInput
+from finn.dataflow.model.network import DataflowNetwork
+from finn.dataflow.model.region import OutputInterface, RegionInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,43 +107,11 @@ def resolve_output(network: DataflowNetwork, ref: RegionOutputRef) -> OutputInte
     return matches[0]
 
 
-def owned_endpoint(
-    network: DataflowNetwork, ref: RegionInputRef
-) -> tuple[RegionEndpoint | None, bool]:
-    """Resolve a referenced input's endpoint and say whether an edge feeds it.
-
-    Enforces the one obligation the presentation queries depend on: a ported
-    input's endpoint is either the sink of exactly one edge or exposed by
-    exactly one boundary, never both and never neither.  ``validate_network``
-    checks that for every endpoint; this checks it for the one endpoint being
-    asked about, so a query over a malformed Network refuses instead of
-    returning three sets that look authoritative and are not.
-
-    ``None`` for an internal input, which has no endpoint at all -- not an
-    endpoint that happens to be fed by nothing.
-    """
-
-    item = resolve_input(network, ref)
-    if not isinstance(item, InputInterface):
-        return None, False
-    endpoint = RegionEndpoint(ref.node_id, item.port.id)
-    sinks = sum(1 for edge in network.edges for sink in edge.sinks if sink.endpoint == endpoint)
-    exposures = sum(1 for boundary in network.boundaries if boundary.endpoint == endpoint)
-    if sinks + exposures != 1:
-        raise NetworkOperandError(
-            f"endpoint {endpoint.node_id!r}.{endpoint.port_id!r} is consumed by {sinks} edges "
-            f"and exposed by {exposures} boundaries; exactly one is required before its "
-            "presentation can be described"
-        )
-    return endpoint, sinks == 1
-
-
 __all__ = [
     "DataflowOperandRef",
     "NetworkOperandError",
     "RegionInputRef",
     "RegionOutputRef",
-    "owned_endpoint",
     "resolve_input",
     "resolve_output",
 ]

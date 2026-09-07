@@ -123,7 +123,7 @@ MATRIX = (
 @pytest.mark.parametrize(
     ("repetitions", "matrix_width", "matrix_height", "activation", "pe", "simd"), MATRIX
 )
-def test_replay_region_matches_the_previous_authority(
+def test_replay_kernel_binds_the_region_constructor_inputs(
     repetitions: int,
     matrix_width: int,
     matrix_height: int,

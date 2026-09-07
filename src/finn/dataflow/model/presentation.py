@@ -39,8 +39,8 @@ from __future__ import annotations
 from finn.dataflow.model.network import BoundaryContract, DataflowNetwork, RegionEndpoint
 from finn.dataflow.model.refs import (
     DataflowOperandRef,
+    NetworkOperandError,
     RegionInputRef,
-    owned_endpoint,
     resolve_input,
     resolve_output,
 )
@@ -77,12 +77,49 @@ def exposing_boundaries(
     return tuple(boundary for boundary in network.boundaries if boundary.endpoint in endpoints)
 
 
+def _owned_endpoint(
+    network: DataflowNetwork, ref: RegionInputRef
+) -> tuple[RegionEndpoint | None, bool]:
+    """Resolve a referenced input's endpoint and say whether an edge feeds it.
+
+    Enforces the one obligation the presentation queries depend on: a ported
+    input's endpoint is either the sink of exactly one edge or exposed by
+    exactly one boundary, never both and never neither.  ``validate_network``
+    checks that for every endpoint; this checks it for the one endpoint being
+    asked about, so a query over a malformed Network refuses instead of
+    returning three sets that look authoritative and are not.
+
+    ``None`` for an internal input, which has no endpoint at all -- not an
+    endpoint that happens to be fed by nothing.
+
+    Private on purpose.  The Boolean is a step in computing the position sets
+    below, not an answer: "fed by an edge" reads as a disposition, and a caller
+    that took it as one would miss exactly the case
+    ``test_an_edge_fed_port_can_still_present_only_part_of_its_requirement``
+    exists for.  Ask the position-granular queries.
+    """
+
+    item = resolve_input(network, ref)
+    if not isinstance(item, InputInterface):
+        return None, False
+    endpoint = RegionEndpoint(ref.node_id, item.port.id)
+    sinks = sum(1 for edge in network.edges for sink in edge.sinks if sink.endpoint == endpoint)
+    exposures = sum(1 for boundary in network.boundaries if boundary.endpoint == endpoint)
+    if sinks + exposures != 1:
+        raise NetworkOperandError(
+            f"endpoint {endpoint.node_id!r}.{endpoint.port_id!r} is consumed by {sinks} edges "
+            f"and exposed by {exposures} boundaries; exactly one is required before its "
+            "presentation can be described"
+        )
+    return endpoint, sinks == 1
+
+
 def edge_presented_positions(
     network: DataflowNetwork, ref: RegionInputRef
 ) -> frozenset[Coordinate]:
     """Required positions a port presents that a Network edge feeds."""
 
-    endpoint, fed_by_edge = owned_endpoint(network, ref)
+    endpoint, fed_by_edge = _owned_endpoint(network, ref)
     if endpoint is None or not fed_by_edge:
         return frozenset()
     item = resolve_input(network, ref)
@@ -94,7 +131,7 @@ def boundary_presented_positions(
 ) -> frozenset[Coordinate]:
     """Required positions a port presents that a Network boundary exposes."""
 
-    endpoint, fed_by_edge = owned_endpoint(network, ref)
+    endpoint, fed_by_edge = _owned_endpoint(network, ref)
     if endpoint is None or fed_by_edge:
         return frozenset()
     item = resolve_input(network, ref)
@@ -111,7 +148,7 @@ def unpresented_positions(network: DataflowNetwork, ref: RegionInputRef) -> froz
     generation or another supported service, none of which this model names.
     """
 
-    owned_endpoint(network, ref)
+    _owned_endpoint(network, ref)
     item = resolve_input(network, ref)
     return item.requirements.required_positions - _presented(item)
 

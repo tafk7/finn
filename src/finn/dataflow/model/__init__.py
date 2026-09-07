@@ -20,6 +20,12 @@ model/refs                qualified RegionInputRef / RegionOutputRef resolution
 model/presentation        exposure and edge/boundary/unpresented queries
 ```
 
+The facade is deliberately small: the values and the operations over them, and
+nothing that only the engine bridge needs.  ``QONNX_DATATYPE_TOKEN`` and
+``DATATYPE_PAYLOAD_KEY`` stay in ``model.datatypes`` for that reason -- they are
+codec plumbing that ``space.dataflow_value_semantics`` imports directly, not
+vocabulary a Region author uses.
+
 The package imports the Python standard library, QONNX datatype identity through
 ``model.datatypes``, and its own siblings.  It imports no Space, no ``_engine``,
 no Kernel, Design, operation, ONNX wrapper, physical value or artifact
@@ -33,8 +39,6 @@ Kernel's recipe; ``DataflowRegion`` is what the recipe yields.
 """
 
 from finn.dataflow.model.datatypes import (
-    DATATYPE_PAYLOAD_KEY,
-    QONNX_DATATYPE_TOKEN,
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -116,8 +120,6 @@ from finn.dataflow.model.presentation import (
 
 __all__ = [
     # the datatype boundary
-    "DATATYPE_PAYLOAD_KEY",
-    "QONNX_DATATYPE_TOKEN",
     "DatatypeError",
     "QONNXDataType",
     "canonical_qonnx_datatype",

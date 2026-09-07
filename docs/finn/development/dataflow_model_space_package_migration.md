@@ -247,11 +247,18 @@ the boundary without opening it.
 | `finn.dataflow.network_validation` | `finn.dataflow.model.network_validation` |
 | refs in `finn.dataflow.network_operands` | `finn.dataflow.model.refs` |
 | presentation queries in `finn.dataflow.network_operands` | `finn.dataflow.model.presentation` |
+| endpoint-ownership helper | `finn.dataflow.model.presentation`, private |
 | `RegionRefused` from `finn.dataflow.kernels.kernel` | `finn.dataflow.model.region` |
 
 `network_operands` was the C1 successor to `input_service`; both names are
 retired, because the reference and presentation responsibilities now live
-separately. `NetworkOperandError` lives with the resolution half in `model.refs`.
+separately. `NetworkOperandError` lives with the resolution half in `model.refs`,
+which exports the reference values, the two resolution functions and that error
+and nothing else. Endpoint ownership -- whether an edge or a boundary feeds a
+resolved port -- is presentation logic and is private to `model.presentation`:
+the Boolean is a step in computing the position sets, not an answer, and a caller
+treating "fed by an edge" as a disposition would miss the partial-presentation
+case exactly.
 
 `RegionRefused` moved because the constructors that raise it are pure model
 functions. `ops.mvau.regions` is the one MVAU constructor authority and must stay
@@ -284,7 +291,10 @@ The facade was decided by auditing what each module already declared public
 rather than from an illustrative list: the datatype helpers, `is_element_type`,
 `element_width` and `EdgeTransport` are exported although the pre-migration root
 facade omitted them, because dropping them would have made `model.<module>` a
-second path for part of the surface.
+second path for part of the surface. `QONNX_DATATYPE_TOKEN` and
+`DATATYPE_PAYLOAD_KEY` are deliberately *not* exported: they are codec plumbing
+that `space.dataflow_value_semantics` imports from `model.datatypes` directly,
+not vocabulary a Region author uses.
 
 `finn.dataflow.space.__init__` exports the generic contributor surface: `Space`,
 `Problem`, `Input`, `Decision`, `Derived`, constraints, readiness, projections,
@@ -541,7 +551,7 @@ and no physical storage, interface, timing or artifact field in a Region.
 
 ## 16. Completion statement
 
-The codebase has one visible semantic center:
+The codebase has one visible dataflow-model center:
 
 ```text
 finn.dataflow.model
@@ -557,7 +567,7 @@ ops.mvau.regions
     is the one authority for the MVAU Region families
 
 finn.dataflow.ops.mapping
-    will own source-to-qualified-semantic correspondence
+    will own source-to-qualified-model correspondence
 
 physical composition
     will bind semantic obligations without changing them
