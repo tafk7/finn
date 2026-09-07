@@ -24,16 +24,16 @@ from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.projection import content_digest
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Decision, Input, Problem, Space
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import Decision, Input, Problem, Space
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, kernel_physical
+from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration, kernel_physical
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
     resolve_kernel_contributions,
 )
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 from dataflow.kernels.test_kernel import _region
 from dataflow.kernels.test_dotp_axi import _configure as _configure_dotp
@@ -47,7 +47,7 @@ class ArtifactKernel(Kernel):
     extent = Input(int)
     lanes = Input(int)
 
-    region = Region(
+    region = RegionDeclaration(
         family="test.artifact",
         version="1",
         construct=_region,

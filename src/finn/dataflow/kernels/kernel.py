@@ -53,8 +53,8 @@ from finn.dataflow.artifacts.contributions import (
 )
 from finn.dataflow.artifacts.derivation import Scalar
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.compiler import _CompiledSpace, _Ref
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.compiler import _CompiledSpace, _Ref
+from finn.dataflow.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,
@@ -71,10 +71,10 @@ from finn.dataflow.model.declarations import (
     resolve_declared_value,
     semantics_for,
 )
-from finn.dataflow.model.occurrence import ProjectionAssessment, evaluate_projection
-from finn.dataflow.model.semantics import DATAFLOW_REGION_SEMANTICS
-from finn.dataflow.region import DataflowRegion
-from finn.dataflow.region_validation import validate_region
+from finn.dataflow.space.occurrence import ProjectionAssessment, evaluate_projection
+from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_REGION_SEMANTICS
+from finn.dataflow.model.region import DataflowRegion, RegionRefused
+from finn.dataflow.model.region_validation import validate_region
 
 T = TypeVar("T")
 K = TypeVar("K", bound="Kernel")
@@ -96,23 +96,6 @@ RESERVED_KERNEL_NAMES: frozenset[str] = frozenset(
         "physical",
     }
 )
-
-
-class RegionRefused(ValueError):
-    """A canonical Region constructor refuses the facts it was given.
-
-    Deliberately distinct from a bare ``ValueError``.  A constructor that
-    refuses infeasible folding is telling its supplier something, and the point
-    should hear it as a rejecting absence.  A constructor that indexes past the
-    end of a tuple is a defect, and turning that into an ordinary infeasible
-    point would hide it: the Design would simply look unsatisfiable at that
-    configuration and nobody would look further.  Only this exception is caught;
-    anything else stays an ``EvaluationError``.
-
-    It subclasses ``ValueError`` so a caller invoking the constructor directly --
-    a fixture, or the canonical model's own tests -- still catches what it always
-    caught.
-    """
 
 
 class PhysicallyUnsupported(ValueError):
@@ -169,11 +152,17 @@ class KernelPhysicalResult:
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
-class Region(Derived[DataflowRegion]):
+class RegionDeclaration(Derived[DataflowRegion]):
     """The one canonical Region a Kernel promises to realize.
 
-    ``Region`` is an ordinary ``Derived`` that also carries the semantic family
-    it belongs to.  The generic decorator is mechanically sufficient, but it
+    A *declaration*, and the name says so.  ``RegionDeclaration`` is the
+    authoring recipe -- a family, a version, a constructor and the facts it is
+    fed; ``DataflowRegion`` is the detached normalized value that recipe
+    produces.  The two used to share the word ``Region``, which made every
+    sentence about the lifecycle need a clarifying clause.
+
+    It is an ordinary ``Derived`` that also carries the semantic family it
+    belongs to.  The generic decorator is mechanically sufficient, but it
     cannot say *which* compact semantic family produced the resolved value, and
     a family field parked beside a separate ``@derived`` can drift away from the
     value it labels.  Keeping both in one declaration also gives the Kernel
@@ -325,7 +314,7 @@ class _KernelCompilation(Generic[K]):
     kernel_id: str
     kernel_version: str
     region: _Ref[DataflowRegion]
-    region_template: Region
+    region_template: RegionDeclaration
     region_family: str
     region_version: str
     computation: ComputationContract
@@ -419,7 +408,7 @@ def _physical_names(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[obj
     return tuple(resolved)
 
 
-def _region_valid(region: Region) -> Constraint:
+def _region_valid(region: RegionDeclaration) -> Constraint:
     """The one constraint every Kernel gets: its Region is canonically valid.
 
     Generated rather than asked for.  A Kernel that had to remember to validate
@@ -447,7 +436,7 @@ def _region_valid(region: Region) -> Constraint:
 
 def _physical_result_property(
     kernel_type: type[Kernel],
-    region: Region,
+    region: RegionDeclaration,
     parameters: tuple[tuple[str, Parameter[object], str], ...],
     decisions: tuple[tuple[str, Decision[object]], ...],
 ) -> Derived[KernelPhysicalResult]:
@@ -568,7 +557,7 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
 
     declarations = dict(declared_members(kernel_type))
     region = declarations.get("region")
-    if not isinstance(region, Region):
+    if not isinstance(region, RegionDeclaration):
         return
 
     parameters = _physical_names(kernel_type)
@@ -794,7 +783,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
             "a value a peer Kernel needs is a Design-owned semantic fact"
         )
     region_template = declarations.get("region")
-    if not isinstance(region_template, Region):
+    if not isinstance(region_template, RegionDeclaration):
         raise AuthoringError(
             f"{kernel_type.__name__} must declare exactly one Region member named 'region'"
         )
@@ -976,8 +965,7 @@ __all__ = [
     "KernelPhysicalResult",
     "Parameter",
     "PhysicallyUnsupported",
-    "Region",
-    "RegionRefused",
+    "RegionDeclaration",
     "kernel_dataflow",
     "kernel_physical",
 ]

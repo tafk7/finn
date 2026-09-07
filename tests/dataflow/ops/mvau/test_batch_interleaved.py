@@ -30,18 +30,18 @@ from finn.dataflow.kernels.dotp_axi import (
     DotpAxiKernel,
     DspBlock,
 )
-from finn.dataflow.model.compiler import _compile_space
-from finn.dataflow.model.declarations import Problem, Space, Subspace, ValueSource
-from finn.dataflow.model.occurrence import (
+from finn.dataflow.space.compiler import _compile_space
+from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
+from finn.dataflow.space.occurrence import (
     occurrence_commit_paths,
     occurrence_persistable,
 )
-from finn.dataflow.model.semantics import (
+from finn.dataflow.space.dataflow_value_semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
-from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.network_validation import validate_network
+from finn.dataflow.model.network import DataflowNetwork
+from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.ops.association import BoundaryDestination
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.mvau.computation import (
@@ -55,7 +55,7 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import (
     BatchInterleavedDesign,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
-from finn.dataflow.model.declarations import derived
+from finn.dataflow.space.declarations import derived
 from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, InputTensor, OutputTensor
 from finn.dataflow.ops.state import decode_dataflow_state
 from finn.dataflow.ops.mvau.regions import (

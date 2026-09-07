@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
     BeatSequence,
     Coordinate,
     DataflowRegion,

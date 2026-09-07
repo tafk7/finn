@@ -19,13 +19,13 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.memstream import MemstreamKernel
-from finn.dataflow.model.declarations import Problem, Space, Subspace
+from finn.dataflow.space.declarations import Problem, Space, Subspace
 from finn.dataflow.ops.mvau.computation import (
     AccumulationMode,
     ActivationMode,
     MvauComputationProfile,
 )
-from finn.dataflow.model.semantics import (
+from finn.dataflow.space.dataflow_value_semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )

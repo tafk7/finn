@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
     DataflowRegion,
     LogicalSchedule,
     OutputInterface,

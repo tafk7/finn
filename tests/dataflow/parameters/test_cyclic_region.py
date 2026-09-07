@@ -8,7 +8,7 @@ from finn.dataflow.ops.mvau.regions import (
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     LogicalSchedule,
@@ -18,7 +18,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.region_validation import RegionValidationReport, validate_region
+from finn.dataflow.model.region_validation import RegionValidationReport, validate_region
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]

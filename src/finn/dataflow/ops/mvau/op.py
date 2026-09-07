@@ -22,7 +22,7 @@ from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import ABSENT, Answer, Decided
 from finn.dataflow.kernels.dotp_axi import DspBlock
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Space,
     Subspace,
@@ -32,8 +32,8 @@ from finn.dataflow.model.declarations import (
     derived,
     reject,
 )
-from finn.dataflow.model.occurrence import ChoiceView, ProjectionAssessment
-from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.space.occurrence import ChoiceView, ProjectionAssessment
+from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.ops.association import (
     BoundaryDestination,
     CoordinateMapping,

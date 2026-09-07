@@ -34,7 +34,7 @@ from __future__ import annotations
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.designs.design import Boundary, Kernels
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
     Subspace,

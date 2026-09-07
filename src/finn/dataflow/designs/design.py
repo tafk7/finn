@@ -42,8 +42,8 @@ from finn.dataflow._engine import (
     Unresolved,
 )
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.semantics import DATAFLOW_NETWORK_SEMANTICS
-from finn.dataflow.model.compiler import (
+from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_NETWORK_SEMANTICS
+from finn.dataflow.space.compiler import (
     _CompiledBranch,
     _CompiledSpace,
     _Ref,
@@ -51,7 +51,7 @@ from finn.dataflow.model.compiler import (
     imported_decisions,
     resolve_value_source,
 )
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Constraint as DeclaredConstraint,
@@ -74,14 +74,14 @@ from finn.dataflow.kernels.kernel import (
     Kernel,
     _KernelCompilation,
 )
-from finn.dataflow.model.occurrence import (
+from finn.dataflow.space.occurrence import (
     ProjectionAssessment,
     ChoiceView,
     evaluate_projection,
     layer_runtime,
     occurrence_choice,
 )
-from finn.dataflow.network import (
+from finn.dataflow.model.network import (
     BoundaryContract,
     DataflowNetwork,
     Edge,
@@ -90,8 +90,8 @@ from finn.dataflow.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.network_validation import validate_network
-from finn.dataflow.region import BeatSequence, DataflowRegion, Port
+from finn.dataflow.model.network_validation import validate_network
+from finn.dataflow.model.region import BeatSequence, DataflowRegion, Port
 
 D = TypeVar("D", bound="DataflowDesign")
 

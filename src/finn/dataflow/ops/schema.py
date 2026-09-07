@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
 from finn.dataflow._engine import ValueSemantics
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     AuthoringError,
     CanonicalValue,
     CanonicalValueCodec,
@@ -67,7 +67,7 @@ from finn.dataflow.model.declarations import (
     reject,
     semantics_for,
 )
-from finn.dataflow.model.semantics import (
+from finn.dataflow.space.dataflow_value_semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )

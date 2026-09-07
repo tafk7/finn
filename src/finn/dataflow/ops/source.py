@@ -23,7 +23,7 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from finn.dataflow.datatypes import QONNXDataType, canonical_qonnx_datatype
+from finn.dataflow.model.datatypes import QONNXDataType, canonical_qonnx_datatype
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from onnx import NodeProto  # type: ignore[import-not-found]

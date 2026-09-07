@@ -5,13 +5,27 @@ stack: the experimental authoring, Kernel, Design and operation APIs it
 replaces were removed in U1.5 and survive only as behavior oracles in their own
 worktrees.
 
-Four packages, one frontend, one flat spec:
+Five packages, one frontend, one flat spec:
 
 ```text
-finn.dataflow.model     the generic Space language, compiler and occurrences
+finn.dataflow.model     the canonical DataflowRegion and DataflowNetwork model
+finn.dataflow.space     the generic Space language, compiler and occurrences
 finn.dataflow.kernels   the Kernel contract and the reusable Kernels
 finn.dataflow.designs   the generic Design contract and topology
 finn.dataflow.ops       DataflowOps and their own Design inventories
+```
+
+The first two names say what they own and nothing else. `model` is the detached
+semantic value -- what a Region and a Network *are*; `space` is the language a
+contributor authors a design space in. The dependency runs one way: `space` may
+import `model`, and `model` imports neither `space` nor the engine. Nothing is
+re-exported from `finn.dataflow` itself, so every value has one import path.
+
+The distinction has a vocabulary consequence worth stating once:
+
+```text
+RegionDeclaration   a Kernel's authoring recipe, in finn.dataflow.kernels
+DataflowRegion      the detached normalized value it produces, in .model
 ```
 
 Four layers share that frontend and lower to one flat spec:
@@ -21,7 +35,7 @@ Space                  ordinary declarations, direct Subspace composition,
                        and SubspaceChoice structural choice
    |
 Kernel(Space)          semantic Inputs, physical-only Decisions,
-                       one Region(family, version, construct, **deps)
+                       one RegionDeclaration(family, version, construct, **deps)
    |
 DataflowDesign(Space)  semantic Decisions, Kernels segments,
                        explicit Connections and Boundaries,
@@ -36,7 +50,7 @@ DataflowOp             one ONNX node, frozen source facts, a closed set of
 
 `DesignSpaceSpec`, `Engine`, and `DesignPoint` remain the normalized IR and
 runtime. They are private implementation details of the occurrence API for
-ordinary contributors; the model package remains a source-language frontend,
+ordinary contributors; the space package remains a source-language frontend,
 not another design-space evaluator.
 
 ## A closed Space
@@ -45,7 +59,7 @@ A root `Space` may declare problem fields and decisions directly on its class.
 Derived values and constraints name their dependencies explicitly.
 
 ```python
-from finn.dataflow.model import Decision, Problem, Space, compile_space, derived
+from finn.dataflow.space import Decision, Problem, Space, compile_space, derived
 
 
 class Folding(Space):
@@ -78,7 +92,7 @@ returns instances of the authored child classes, all backed by the root's one
 private immutable point:
 
 ```python
-from finn.dataflow.model import ConstraintGroup, Projection, Readiness, constraint
+from finn.dataflow.space import ConstraintGroup, Projection, Readiness, constraint
 
 
 class Tile(Space):
@@ -252,7 +266,7 @@ Reusable spaces use `Input`, not `Problem`. `Subspace` binds each child input
 to a typed value in the parent and flattens the child beneath a fresh namespace.
 
 ```python
-from finn.dataflow.model import Decision, Input, Problem, Space, Subspace, derived
+from finn.dataflow.space import Decision, Input, Problem, Space, Subspace, derived
 
 
 class Tile(Space):
@@ -305,7 +319,7 @@ same class under several namespaces is deterministic and thread-safe.
 
 - a stable `id` and `version`;
 - one `ComputationContract`;
-- exactly one `Region(...)` member named `region`;
+- exactly one `RegionDeclaration(...)` member named `region`;
 - physical-only decisions and its feasibility constraints;
 - scalar physical `Parameter`s;
 - an exact `ComponentABI`; and
@@ -316,8 +330,9 @@ from typing_extensions import Self
 
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model import Decision, Input, Kernel, Parameter, Region, RegionRefused
-from finn.dataflow.region import DataflowRegion
+from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
+from finn.dataflow.model import DataflowRegion, RegionRefused
+from finn.dataflow.space import Decision, Input
 
 
 def build_region(extent: int, lanes: int) -> DataflowRegion: ...
@@ -332,7 +347,7 @@ class ExampleKernel(Kernel):
     lanes = Input(int)
     pipelined = Decision(bool, values=(False, True))
 
-    region = Region(
+    region = RegionDeclaration(
         family="example.copy",
         version="1",
         construct=build_region,
@@ -373,7 +388,7 @@ MVAU/VVA custom operations consume that one source. FINN's
 `finn-rtllib/mvu/mvu_vvu_axi.sv` continues to instantiate the unchanged module
 ABI, but FINN no longer carries a second editable module definition.
 
-`Region(...)` is one ordinary `DerivedProperty` that also names the compact
+`RegionDeclaration(...)` is one ordinary `DerivedProperty` that also names the compact
 semantic family the resolved value belongs to. `@derived` is mechanically
 sufficient but cannot say which family produced a Region, and a family field
 parked beside a separate `@derived` drifts away from the value it labels. The
@@ -473,7 +488,7 @@ they form. It consumes external facts only through `Input`, never `Problem`.
 
 ```python
 from finn.dataflow.designs import Boundary, Connection, DataflowDesign, Kernels, Sink
-from finn.dataflow.model import Decision, Input, Subspace, divisors_of
+from finn.dataflow.space import Decision, Input, Subspace, divisors_of
 
 
 class ExampleDesign(DataflowDesign):
@@ -626,7 +641,7 @@ is not MVAU to use it unchanged.
 Physical composition is a contract, not an implementation: there is no
 `DesignPhysicalResult`, no wrapper generation and no composed packaging here.
 Nor is there a specialization policy, ONNX lowering, or a Region CustomOp.
-`Region.family`/`version` and the Design's role-to-node metadata preserve the
+`RegionDeclaration.family`/`version` and the Design's role-to-node metadata preserve the
 seam a future annotated-ONNX carrier would need; no ONNX object reaches the
 engine.
 

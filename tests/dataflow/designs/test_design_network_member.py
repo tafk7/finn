@@ -29,8 +29,8 @@ from finn.dataflow.designs.design import (
     SelectedNetwork,
     design_dataflow,
 )
-from finn.dataflow.model.compiler import _compile_space
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.compiler import _compile_space
+from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Derived,
@@ -46,10 +46,10 @@ from finn.dataflow.model.declarations import (
     reject,
     reject_all,
 )
-from finn.dataflow.model.semantics import DATAFLOW_NETWORK_SEMANTICS
-from finn.dataflow.kernels.kernel import Kernel, Region
-from finn.dataflow.network import DataflowNetwork
-from finn.dataflow.region import (
+from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_NETWORK_SEMANTICS
+from finn.dataflow.kernels.kernel import Kernel, RegionDeclaration
+from finn.dataflow.model.network import DataflowNetwork
+from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     LogicalSchedule,
@@ -59,7 +59,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
@@ -84,7 +84,7 @@ class EmitKernel(Kernel):
     computation = EMIT
 
     extent = Input(int)
-    region = Region(family="test.emit", version="1", construct=_region, extent=extent)
+    region = RegionDeclaration(family="test.emit", version="1", construct=_region, extent=extent)
 
     @classmethod
     def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:

@@ -61,7 +61,7 @@ from json import dumps, loads
 from types import MappingProxyType
 from typing import Any, cast
 
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     AuthoringError,
     CanonicalValue,
     PersistentCodec,
@@ -81,7 +81,7 @@ class DecodeError(ValueError):
 
 
 #: The layer's name for a Decision's persistence codec.  It *is*
-#: :class:`~finn.dataflow.model.declarations.PersistentCodec`, because a
+#: :class:`~finn.dataflow.space.declarations.PersistentCodec`, because a
 #: Decision declares it and a Decision lives in ``model/`` -- two types would
 #: mean a declaration could carry one the persistence layer did not accept.
 DecisionCodec = PersistentCodec

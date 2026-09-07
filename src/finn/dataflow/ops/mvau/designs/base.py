@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from finn.dataflow.designs.design import DataflowDesign
 from finn.dataflow.kernels.dotp_axi import DspBlock
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,
@@ -23,7 +23,7 @@ from finn.dataflow.model.declarations import (
     divisors_of,
     reject,
 )
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.ops.mvau.computation import MvauComputationProfile
 
 

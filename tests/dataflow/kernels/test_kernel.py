@@ -22,11 +22,11 @@ from finn.dataflow._engine import (
     Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.model.occurrence import is_attached_occurrence
+from finn.dataflow.space.occurrence import is_attached_occurrence
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.semantics import DATAFLOW_REGION_SEMANTICS
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_REGION_SEMANTICS
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Decision,
@@ -44,12 +44,12 @@ from finn.dataflow.kernels.kernel import (
     KernelPhysicalResult,
     Parameter,
     PhysicallyUnsupported,
-    Region,
+    RegionDeclaration,
     RegionRefused,
     kernel_dataflow,
     kernel_physical,
 )
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -61,7 +61,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 #: What ``component_abi`` is handed: the resolved physical parameter table.
 Scalars = Mapping[str, bool | int | float | str]
@@ -106,7 +106,7 @@ class ToyKernel(Kernel):
     lanes = Input(int)
     pumped = Decision(bool, values=(False, True))
 
-    region = Region(
+    region = RegionDeclaration(
         family="test.copy",
         version="1",
         construct=_region,
@@ -262,8 +262,8 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
     class TwoRegions(Kernel):
         id = "two"
         computation = COMPUTATION
-        region = Region(family="test.copy", version="1", construct=_degenerate)
-        another = Region(family="test.other", version="1", construct=_degenerate)
+        region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
+        another = RegionDeclaration(family="test.other", version="1", construct=_degenerate)
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
@@ -281,7 +281,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         id = "nested"
         computation = COMPUTATION
         fragment = Subspace(RegionFragment)
-        region = Region(family="test.copy", version="1", construct=_degenerate)
+        region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
@@ -292,7 +292,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
     class NoComputation(Kernel):
         id = "no_computation"
-        region = Region(family="test.copy", version="1", construct=_degenerate)
+        region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
@@ -304,7 +304,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
     class NoAbi(Kernel):
         id = "no_abi"
         computation = COMPUTATION
-        region = Region(family="test.copy", version="1", construct=_degenerate)
+        region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
     with pytest.raises(AuthoringError, match=r"declare a component_abi\(\)"):
         _compile_space(NoAbi, "no_abi", {}, _allow_problem=False)
@@ -313,7 +313,7 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         id = "owns_problem"
         computation = COMPUTATION
         extent = Problem(int)
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -339,15 +339,15 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
 def test_region_needs_a_non_empty_family_and_version() -> None:
     with pytest.raises(AuthoringError, match="non-empty family"):
-        Region(family="", version="1", construct=_degenerate)
+        RegionDeclaration(family="", version="1", construct=_degenerate)
     with pytest.raises(AuthoringError, match="non-empty version"):
-        Region(family="test.copy", version="", construct=_degenerate)
+        RegionDeclaration(family="test.copy", version="", construct=_degenerate)
 
 
 @pytest.mark.parametrize("name", ["", "a.b", "white space", "non_ascii_é", 7])
 def test_region_name_is_one_local_path_segment(name) -> None:
     with pytest.raises(AuthoringError, match="name must be one"):
-        Region(family="test.copy", version="1", construct=_degenerate, name=name)
+        RegionDeclaration(family="test.copy", version="1", construct=_degenerate, name=name)
 
 
 @pytest.mark.parametrize("name", ["", "a.b", "white space", "non_ascii_é", 7])
@@ -361,7 +361,10 @@ def test_parameter_name_is_one_local_path_segment(name, constant) -> None:
 
 
 def test_none_is_the_only_specialized_kernel_name_fallback() -> None:
-    assert Region(family="test.copy", version="1", construct=_degenerate).stable_name is None
+    assert (
+        RegionDeclaration(family="test.copy", version="1", construct=_degenerate).stable_name
+        is None
+    )
     assert Parameter(Input(int)).stable_name is None
     assert Parameter.constant(1, why="test constant").stable_name is None
 
@@ -369,9 +372,9 @@ def test_none_is_the_only_specialized_kernel_name_fallback() -> None:
 def test_region_constructor_signature_must_match_its_dependencies() -> None:
     extent = Input(int)
     with pytest.raises(AuthoringError, match="unbound parameters \\['lanes'\\]"):
-        Region(family="test.copy", version="1", construct=_region, extent=extent)
+        RegionDeclaration(family="test.copy", version="1", construct=_region, extent=extent)
     with pytest.raises(AuthoringError, match="unused dependencies \\['depth'\\]"):
-        Region(
+        RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -380,9 +383,9 @@ def test_region_constructor_signature_must_match_its_dependencies() -> None:
             depth=extent,
         )
     with pytest.raises(AuthoringError, match="only named parameters"):
-        Region(family="test.copy", version="1", construct=lambda **kwargs: _degenerate())
+        RegionDeclaration(family="test.copy", version="1", construct=lambda **kwargs: _degenerate())
     with pytest.raises(AuthoringError, match="callable constructor"):
-        Region(family="test.copy", version="1", construct=None)  # type: ignore[arg-type]
+        RegionDeclaration(family="test.copy", version="1", construct=None)  # type: ignore[arg-type]
 
 
 def test_region_family_and_version_survive_onto_the_configured_kernel() -> None:
@@ -407,7 +410,7 @@ def test_a_region_constructor_returning_the_wrong_type_is_rejected() -> None:
     class WrongResult(Kernel):
         id = "wrong_result"
         computation = COMPUTATION
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=cast("Callable[[], DataflowRegion]", lambda: 1),
@@ -433,7 +436,7 @@ def test_a_kernel_local_decision_may_not_reach_its_region() -> None:
         computation = COMPUTATION
         extent = Input(int)
         lanes = Decision(int, values=(1, 2))
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -466,7 +469,7 @@ def test_a_transitive_kernel_local_decision_may_not_reach_its_region() -> None:
         def widened(*, lanes: int) -> int:
             return lanes
 
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -498,7 +501,7 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
         computation = COMPUTATION
         extent = Input(int)
         folding = Subspace(Folding)
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -532,7 +535,7 @@ def test_a_kernel_may_not_publish_exports_besides_its_region() -> None:
         computation = COMPUTATION
         extent = Input(int)
         pumped = Decision(bool, values=(False, True))
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -624,7 +627,7 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
         id = "composite"
         computation = COMPUTATION
         pipeline = Subspace(Pipeline)
-        region = Region(family="test.copy", version="1", construct=_degenerate)
+        region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
         STAGES = Parameter(pipeline.stages)
 
@@ -670,7 +673,7 @@ def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
         lanes = Input(int)
         enabled = Decision(bool, values=(False, True))
         folding = Subspace(Folding, supplied=lanes, when=enabled)
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -699,7 +702,7 @@ def test_a_local_decision_may_not_gate_the_region_property_itself() -> None:
         def widened(*, lanes: int) -> int:
             return lanes
 
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy",
             version="1",
             construct=_region,
@@ -742,7 +745,9 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
         id = "refusing"
         computation = COMPUTATION
         extent = Input(int)
-        region = Region(family="test.copy", version="1", construct=refusing, extent=extent)
+        region = RegionDeclaration(
+            family="test.copy", version="1", construct=refusing, extent=extent
+        )
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
@@ -752,7 +757,9 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
         id = "defective"
         computation = COMPUTATION
         extent = Input(int)
-        region = Region(family="test.copy", version="1", construct=defective, extent=extent)
+        region = RegionDeclaration(
+            family="test.copy", version="1", construct=defective, extent=extent
+        )
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
@@ -877,7 +884,7 @@ def _classified(*, shared: bool, physical: bool) -> frozenset[QualifiedPath]:
         computation = COMPUTATION
         extent = Input(int)
         lanes = Input(int)
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy", version="1", construct=_region, extent=extent, lanes=lanes
         )
 
@@ -925,7 +932,7 @@ def test_a_shared_constraint_still_gates_both_of_the_kernels_own_projections() -
         computation = COMPUTATION
         extent = Input(int)
         lanes = Input(int)
-        region = Region(
+        region = RegionDeclaration(
             family="test.copy", version="1", construct=_region, extent=extent, lanes=lanes
         )
 

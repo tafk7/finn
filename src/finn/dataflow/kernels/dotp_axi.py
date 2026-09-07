@@ -25,8 +25,8 @@ from finn.dataflow.artifacts.abi import (
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,
@@ -39,10 +39,10 @@ from finn.dataflow.kernels.kernel import (
     Kernel,
     Parameter,
     PhysicallyUnsupported,
-    Region,
-    RegionRefused,
+    RegionDeclaration,
 )
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
+    RegionRefused,
     BeatSequence,
     Coordinate,
     DataflowRegion,
@@ -273,7 +273,7 @@ def construct_embedded_dot_product_region(
     return DataflowRegion(
         streamed.schedule,
         # Mechanical adaptation only.  The weight interface is still dropped
-        # rather than turned into an ``UnportedInput`` carrying the same
+        # rather than turned into an ``InternalInput`` carrying the same
         # requirements; that is a semantic change to this Kernel and belongs to
         # its owner, not to the dataflow-core migration.
         tuple(
@@ -602,7 +602,7 @@ class DotpAxiKernel(Kernel):
     #: Physical only: pumping preserves the Region exactly.
     compute_pumping = Decision(bool, values=(False, True))
 
-    region = Region(
+    region = RegionDeclaration(
         family="mvau.dot_product",
         version="1",
         construct=construct_dot_product_region,
@@ -820,7 +820,7 @@ class EmbeddedDotpAxiKernel(DotpAxiKernel):
 
     id = "dotp_axi_embedded"
 
-    region = Region(
+    region = RegionDeclaration(
         family="mvau.dot_product.embedded",
         version="1",
         construct=construct_embedded_dot_product_region,
@@ -867,7 +867,7 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
     #: Region-visible, and therefore the Design's to own.
     interleave = Input(int)
 
-    region = Region(
+    region = RegionDeclaration(
         family="mvau.dot_product.batch_interleaved",
         version="1",
         construct=construct_batch_interleaved_dot_product_region,

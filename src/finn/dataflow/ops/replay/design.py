@@ -14,8 +14,8 @@ from __future__ import annotations
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.designs.design import Boundary, DataflowDesign, Kernels
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.model.declarations import Decision, Input, Subspace, divisors_of
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.declarations import Decision, Input, Subspace, divisors_of
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 
 class ActivationReplayDesign(DataflowDesign):

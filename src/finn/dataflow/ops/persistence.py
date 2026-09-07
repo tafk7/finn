@@ -39,7 +39,7 @@ from typing import Any
 from uuid import uuid4
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.model.occurrence import ProjectionAssessment
+from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.base import SCOPE_ID_ATTRIBUTE, DataflowOpError
 from finn.dataflow.ops.state import STATE_ATTRIBUTE, decode_dataflow_state
 

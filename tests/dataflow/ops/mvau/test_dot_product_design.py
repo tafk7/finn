@@ -22,24 +22,24 @@ from finn.dataflow.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.model.semantics import (
+from finn.dataflow.space.dataflow_value_semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Problem, Space, Subspace, ValueSource
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
 from finn.dataflow.designs.design import design_dataflow
 from finn.dataflow.ops.mvau.designs.dot_product import DESIGN_INPUTS, DotProductDesign
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.kernel import KernelPhysicalResult, kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.network import (
+from finn.dataflow.model.network import (
     DataflowNetwork,
     DirectConnection,
     FanoutMode,
     PassCorrespondence,
 )
-from finn.dataflow.network_validation import validate_network
+from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region as baseline_replay,
 )
@@ -52,7 +52,7 @@ from finn.dataflow.ops.mvau.computation import (
     ActivationMode,
     MvauComputationProfile,
 )
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 CLOCK_PERIOD_NS = 4.0
 

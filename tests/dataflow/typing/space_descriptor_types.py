@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing_extensions import assert_type
 
-from finn.dataflow.model import (
+from finn.dataflow.space import (
     Decision,
     Input,
     Problem,
@@ -26,7 +26,7 @@ from finn.dataflow.model import (
     compile_space_model,
     derived,
 )
-from finn.dataflow.model.compiler import SpaceModel
+from finn.dataflow.space.compiler import SpaceModel
 
 
 class FixedImplementation(Space):

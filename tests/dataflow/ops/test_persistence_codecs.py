@@ -30,8 +30,8 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow.model import PersistentCodec
-from finn.dataflow.model.declarations import AuthoringError, Decision
+from finn.dataflow.space import PersistentCodec
+from finn.dataflow.space.declarations import AuthoringError, Decision
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.persistence import apply_graph_effects, assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import InputTensor, OutputTensor

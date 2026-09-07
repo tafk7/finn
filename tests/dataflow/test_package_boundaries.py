@@ -53,6 +53,38 @@ RETIRED_MODULES = (
     "finn.transformation.fpgadataflow.select_dataflow_design",
 )
 
+#: Every module path the C1.5 model/space migration retired.
+#:
+#: Two groups, and they moved in opposite directions.  The root-level modules
+#: went *into* ``finn.dataflow.model``, which is now the canonical Region and
+#: Network model; the generic declaration/compiler/occurrence modules that used
+#: to occupy that name went out to ``finn.dataflow.space``.  Both directions are
+#: destructive: no forwarding module, no alias, no second import path.
+#:
+#: ``input_service`` and its successor ``network_operands`` are here because the
+#: reference and presentation halves they held now live separately under
+#: ``model.refs`` and ``model.presentation``.  ``finn.dataflow.semantic`` never
+#: existed and must not appear: the model package is the semantic authority, and
+#: an intermediate package would be a third name for the same thing.
+MIGRATED_MODULES = (
+    "finn.dataflow.datatypes",
+    "finn.dataflow.input_service",
+    "finn.dataflow.model.branching",
+    "finn.dataflow.model.compiler",
+    "finn.dataflow.model.declarations",
+    "finn.dataflow.model.domains",
+    "finn.dataflow.model.occurrence",
+    "finn.dataflow.model.semantics",
+    "finn.dataflow.model.spec_algebra",
+    "finn.dataflow.network",
+    "finn.dataflow.network_operands",
+    "finn.dataflow.network_validation",
+    "finn.dataflow.region",
+    "finn.dataflow.region_profiles",
+    "finn.dataflow.region_validation",
+    "finn.dataflow.semantic",
+)
+
 
 def _imported_modules(path: Path) -> set[str]:
     """Absolute module names any import statement in ``path`` names."""
@@ -110,6 +142,28 @@ def test_every_retired_module_is_gone_and_unreferenced() -> None:
     assert {path: names for path, names in offenders.items() if names} == {}
 
 
+def test_every_migrated_module_is_gone_and_unreferenced() -> None:
+    """C1.5 moved these, and moved means moved."""
+
+    for module in MIGRATED_MODULES:
+        try:
+            import_module(module)
+        except ImportError:
+            pass
+        else:  # pragma: no cover - the assertion below is the report
+            raise AssertionError(f"{module} is still importable")
+
+    offenders = {
+        str(path.relative_to(ROOT)): sorted(
+            name
+            for name in _imported_modules(path)
+            if any(name == retired for retired in MIGRATED_MODULES)
+        )
+        for path in SOURCE.rglob("*.py")
+    }
+    assert {path: names for path, names in offenders.items() if names} == {}
+
+
 def test_no_forwarding_alias_survives_the_reset() -> None:
     """A retired package must not come back as a one-line re-export module."""
 
@@ -128,8 +182,7 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "KernelPhysicalResult",
         "Parameter",
         "PhysicallyUnsupported",
-        "Region",
-        "RegionRefused",
+        "RegionDeclaration",
         "kernel_dataflow",
         "kernel_physical",
         "kernel_source_derivation",
@@ -151,12 +204,58 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
 
 
 def test_the_generic_substrate_does_not_import_a_layer() -> None:
-    """``model`` is layer-neutral: it names no Kernel, Design or operation."""
+    """``space`` is layer-neutral: it names no Kernel, Design or operation.
+
+    ``dataflow_value_semantics`` is the one declared exception and is checked
+    separately: it is the bridge, and teaching the engine about canonical model
+    values is the whole of its job.
+    """
 
     layers = ("finn.dataflow.kernels", "finn.dataflow.designs", "finn.dataflow.ops")
-    for path in (DATAFLOW / "model").rglob("*.py"):
+    bridge = DATAFLOW / "space" / "dataflow_value_semantics.py"
+    for path in (DATAFLOW / "space").rglob("*.py"):
         named = _imported_modules(path)
         assert not any(_within(name, layer) for name in named for layer in layers), path
+        if path != bridge:
+            assert not any(_within(name, "finn.dataflow.model") for name in named), path
+
+
+def test_the_canonical_model_imports_nothing_above_or_beside_it() -> None:
+    """``model`` is the bottom of the dataflow stack, and depends on none of it.
+
+    The reverse direction is what makes the model a *value* layer: a Region can
+    be constructed, compared and validated with no compiler, no engine, no
+    Kernel and no graph in the process.  ``space`` may import ``model``; this is
+    the claim that it never runs the other way.
+    """
+
+    forbidden = (
+        "finn.dataflow.space",
+        "finn.dataflow._engine",
+        "finn.dataflow.kernels",
+        "finn.dataflow.designs",
+        "finn.dataflow.ops",
+        "finn.dataflow.parameters",
+        "finn.dataflow.artifacts",
+        "onnx",
+    )
+    for path in (DATAFLOW / "model").rglob("*.py"):
+        named = _imported_modules(path)
+        assert not any(_within(name, package) for name in named for package in forbidden), path
+
+
+def test_neither_package_is_re_exported_from_the_dataflow_root() -> None:
+    """One import path per concept: ``finn.dataflow`` itself exports nothing.
+
+    A value reachable as both ``finn.dataflow.X`` and ``finn.dataflow.model.X``
+    reads as a value with two owners, which is exactly what the model/space
+    split exists to end.
+    """
+
+    root = import_module("finn.dataflow")
+    assert not hasattr(root, "__all__")
+    for name in ("DataflowRegion", "DataflowNetwork", "Space", "Problem", "Decision"):
+        assert not hasattr(root, name), name
 
 
 def test_artifact_projection_stays_one_way() -> None:
@@ -175,14 +274,34 @@ def test_artifact_projection_stays_one_way() -> None:
 
 
 def test_canonical_values_stay_importable_without_the_engine() -> None:
-    _assert_fresh_import_avoids("finn.dataflow.region", ("finn.dataflow._engine",))
-    _assert_fresh_import_avoids("finn.dataflow.network", ("finn.dataflow._engine",))
+    _assert_fresh_import_avoids("finn.dataflow.model.region", ("finn.dataflow._engine",))
+    _assert_fresh_import_avoids("finn.dataflow.model.network", ("finn.dataflow._engine",))
     _assert_fresh_import_avoids(
-        "finn.dataflow.network_operands",
+        "finn.dataflow.model.refs",
         ("finn.dataflow._engine", "finn.dataflow.ops", "finn.dataflow.designs"),
+    )
+    _assert_fresh_import_avoids(
+        "finn.dataflow.model",
+        (
+            "finn.dataflow.space",
+            "finn.dataflow._engine",
+            "finn.dataflow.kernels",
+            "finn.dataflow.designs",
+            "finn.dataflow.ops",
+            "finn.dataflow.artifacts",
+        ),
     )
     _assert_fresh_import_avoids("finn.dataflow.ops.mvau.regions", ("finn.dataflow._engine",))
     _assert_fresh_import_avoids("finn.dataflow.ops.mvau.networks", ("finn.dataflow._engine",))
+
+
+def test_the_space_facade_does_not_drag_in_the_dataflow_model() -> None:
+    """The bridge is opt-in.  ``space.__init__`` does not import it."""
+
+    _assert_fresh_import_avoids(
+        "finn.dataflow.space",
+        ("finn.dataflow.space.dataflow_value_semantics", "finn.dataflow.model"),
+    )
 
 
 def test_layer_facades_do_not_eagerly_load_their_implementations() -> None:

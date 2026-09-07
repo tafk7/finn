@@ -16,8 +16,8 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import (
     AuthoringError,
     Decision,
     Input,
@@ -35,9 +35,9 @@ from finn.dataflow.designs.design import (
     SelectedNetwork,
     Sink,
 )
-from finn.dataflow.model.occurrence import ChoiceView
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
-from finn.dataflow.region import (
+from finn.dataflow.space.occurrence import ChoiceView
+from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
+from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -49,7 +49,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 COPY = ComputationContract("test.copy")
 SCALE = ComputationContract("test.scale")
@@ -83,7 +83,7 @@ class CopyKernel(Kernel):
     lanes = Input(int)
     pumped = Decision(bool, values=(False, True))
 
-    region = Region(
+    region = RegionDeclaration(
         family="test.copy",
         version="1",
         construct=_region,
@@ -109,7 +109,7 @@ class WideCopyKernel(Kernel):
     parallel_lanes = Input(int)
     stages = Decision(int, values=(1, 2))
 
-    region = Region(
+    region = RegionDeclaration(
         family="test.copy",
         version="1",
         construct=_region,
@@ -132,7 +132,7 @@ class ScaleKernel(Kernel):
     extent = Input(int)
     lanes = Input(int)
 
-    region = Region(
+    region = RegionDeclaration(
         family="test.scale",
         version="1",
         construct=_region,

@@ -69,7 +69,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Answer, Decided, RequestError, Unresolved
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     AuthoringError,
     Constraint as DeclaredConstraint,
     ConstraintGroup,
@@ -79,14 +79,14 @@ from finn.dataflow.model.declarations import (
     Space,
     check_canonical,
 )
-from finn.dataflow.model.occurrence import (
+from finn.dataflow.space.occurrence import (
     PersistableChoice,
     ProjectionAssessment,
     occurrence_answer_at,
     occurrence_commit_paths,
     occurrence_persistable,
 )
-from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.ops.association import SourceAssociation
 from finn.dataflow.ops.schema import (
     SOURCE_DECLARATION_TYPES,
@@ -1053,7 +1053,7 @@ def _root_projection(operation: DataflowOp) -> ProjectionAssessment[DataflowNetw
     slightly different things in two places.
     """
 
-    from finn.dataflow.model.occurrence import (  # noqa: PLC0415 - see graph_effects
+    from finn.dataflow.space.occurrence import (  # noqa: PLC0415 - see graph_effects
         combine_assessments,
     )
 
@@ -1229,7 +1229,7 @@ def _raw_attribute(node: Any, name: str) -> Any | None:
 
 
 def _datatype_attribute(node: Any, member_name: str, declaration: DatatypeAttribute) -> object:
-    from finn.dataflow.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
+    from finn.dataflow.model.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
     from qonnx.core.datatype import DataType  # type: ignore[import-not-found] # noqa: PLC0415
 
     raw = _raw_attribute(node, attribute_name(member_name, declaration))

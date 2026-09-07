@@ -6,7 +6,7 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow.ops.mvau.regions import MVAUWeightInterface, construct_mvau_compute_region
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -14,7 +14,7 @@ from finn.dataflow.region import (
     Port,
     ScheduledOutputAvailability,
 )
-from finn.dataflow.region_validation import validate_region
+from finn.dataflow.model.region_validation import validate_region
 
 
 def _mvau_region(

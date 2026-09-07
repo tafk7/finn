@@ -28,10 +28,10 @@ from finn.dataflow.kernels.replay_buffer import (
     ReplayBufferKernel,
     construct_activation_replay_region,
 )
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Decision, Input, Problem, Space, divisors_of
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import Decision, Input, Problem, Space, divisors_of
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 
 class Supplier(Space):

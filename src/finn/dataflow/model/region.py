@@ -1,0 +1,746 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Immutable normalized values for one logical dataflow region.
+
+Concrete maps are represented by canonical tuples rather than callables. This
+was chosen over named rule objects for the first model increment because it
+makes equality, inspection, and diagnostics independent of Python allocation
+identity. Requirements remain sparse: the representative ``MW=MH=64``,
+``SIMD=PE=8`` MVAU stores 512 activation and 4096 weight requirement entries,
+instead of the much larger schedule-by-position zero-filled domains. Named
+rules remain useful future construction metadata, but are not needed in the
+normalized concrete value.
+"""
+
+from bisect import bisect_left
+from dataclasses import dataclass
+from itertools import product
+from math import prod
+from typing import Iterable, Iterator, Mapping, Optional, Tuple
+
+from finn.dataflow.model.datatypes import (
+    DatatypeError,
+    QONNXDataType,
+    canonical_qonnx_datatype,
+    qonnx_datatype_width,
+)
+
+Coordinate = Tuple[int, ...]
+RequirementKey = Tuple[Coordinate, Coordinate]
+RequirementEntry = Tuple[RequirementKey, int]
+AvailabilityEntry = Tuple[Coordinate, Coordinate]
+
+
+class RegionRefused(ValueError):
+    """A canonical Region constructor refuses the facts it was given.
+
+    Deliberately distinct from a bare ``ValueError``.  A constructor that
+    refuses infeasible folding is telling its supplier something, and the point
+    should hear it as a rejecting absence.  A constructor that indexes past the
+    end of a tuple is a defect, and turning that into an ordinary infeasible
+    point would hide it: the Design would simply look unsatisfiable at that
+    configuration and nobody would look further.  ``RegionDeclaration`` catches
+    only this exception; anything else stays an ``EvaluationError``.
+
+    It lives with the Region rather than with the Kernel layer because the
+    constructors that raise it are pure model functions.  ``ops.mvau.regions``
+    is the one authority for the MVAU families and must stay importable without
+    the engine, which the Kernel package is not; a refusal type reachable only
+    through ``kernels.kernel`` would have forced every semantic constructor to
+    drag the compiler in behind it.
+
+    It subclasses ``ValueError`` so a caller invoking the constructor directly --
+    a fixture, or the canonical model's own tests -- still catches what it always
+    caught.
+    """
+
+
+def _require_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    return value
+
+
+def _require_int(value: object, field_name: str) -> int:
+    if type(value) is not int:
+        raise TypeError(f"{field_name} must be an integer")
+    return value
+
+
+def _coordinate(value: Iterable[int], field_name: str) -> Coordinate:
+    try:
+        result = tuple(value)
+    except TypeError as exc:
+        raise TypeError(f"{field_name} must be an iterable of integers") from exc
+    for component in result:
+        _require_int(component, field_name)
+    return result
+
+
+def _coordinate_in_extents(coordinate: Coordinate, extents: Tuple[int, ...]) -> bool:
+    return len(coordinate) == len(extents) and all(
+        type(index) is int and type(extent) is int and 0 <= index < extent
+        for index, extent in zip(coordinate, extents)
+    )
+
+
+def _checked_extents(extents: Tuple[int, ...], owner: str) -> None:
+    if any(type(extent) is not int or extent <= 0 for extent in extents):
+        raise ValueError(f"{owner} extents must be positive integers")
+
+
+def _rank(coordinate: Coordinate, extents: Tuple[int, ...], owner: str) -> int:
+    _checked_extents(extents, owner)
+    if not _coordinate_in_extents(coordinate, extents):
+        raise ValueError(f"{coordinate!r} is not a valid {owner} coordinate")
+    result = 0
+    for index, extent in zip(coordinate, extents):
+        result = result * extent + index
+    return result
+
+
+def _coordinate_at_rank(rank: int, extents: Tuple[int, ...], owner: str) -> Coordinate:
+    _require_int(rank, "rank")
+    _checked_extents(extents, owner)
+    count = prod(extents)
+    if rank < 0 or rank >= count:
+        raise ValueError(f"rank {rank} is outside [0, {count})")
+    components = [0] * len(extents)
+    remaining = rank
+    for index in range(len(extents) - 1, -1, -1):
+        components[index] = remaining % extents[index]
+        remaining //= extents[index]
+    return tuple(components)
+
+
+def _coordinates(extents: Tuple[int, ...]) -> Iterator[Coordinate]:
+    _checked_extents(extents, "coordinate")
+    yield from product(*(range(extent) for extent in extents))
+
+
+#: A logical numeric scalar type is a QONNX datatype.
+#:
+#: There is no FINN-local datatype value.  The name is kept as an alias because
+#: it is what the canon calls the concept and what several hundred annotations
+#: already say; ``finn.dataflow.model.datatypes`` owns the identity, the recognition,
+#: and the canonicalization.
+NumericElementType = QONNXDataType
+
+
+# -- element-type accessors ---------------------------------------------------
+#
+# Every read of an element type goes through one of these rather than touching
+# the datatype's own methods.  Introduced while the representation was still
+# ``(type_id, bit_width)`` so that switching it edited three functions instead
+# of sixty-two call sites; two of the three are now thin, and the third is the
+# list of questions that still need rewriting.
+
+
+def is_element_type(value: object) -> bool:
+    """Whether ``value`` is a usable element type.
+
+    The condition three separate validators had spelled out identically, now
+    delegated to the datatype boundary plus the one thing a Region additionally
+    requires: a positive width, so a degenerate ``INT0`` -- which QONNX will
+    happily resolve -- cannot describe a beat.
+
+    The width is read from the *canonical* value rather than from ``value``,
+    via ``qonnx_datatype_width``.  ``value`` here is untrusted and is not what a
+    Region would end up holding -- ``_canonical_element_type`` re-resolves it --
+    so measuring the caller's instance would answer for an object that is about
+    to be discarded, and would let a raising ``bitwidth()`` escape a predicate
+    that is supposed to be total.
+    """
+
+    try:
+        return qonnx_datatype_width(value) > 0
+    except DatatypeError:
+        return False
+
+
+def element_width(element_type: NumericElementType) -> int:
+    """The element's width in bits."""
+
+    return element_type.bitwidth()
+
+
+def _canonical_element_type(value: object) -> NumericElementType:
+    """Re-resolve an element type on the way into a Region value.
+
+    Validating and then keeping the caller's object would not be enough.  QONNX
+    datatypes carry writable private state and are not interned, so a Region
+    holding the caller's instance can be renamed underneath -- and because
+    identity and hash both derive from the canonical name, the same mutation
+    also loses that Region from any mapping keyed on it.  Re-resolving here
+    means a Region's element type is always the registered value, whatever the
+    caller does with theirs afterwards.
+
+    This is the Region half of the ingestion discipline; the engine's value
+    semantics do the same on its side.
+    """
+
+    try:
+        return canonical_qonnx_datatype(value)
+    except DatatypeError as error:
+        raise TypeError(f"element_type must be a QONNX datatype: {error}") from error
+
+
+@dataclass(frozen=True)
+class Operand:
+    """Logical numeric tensor operand."""
+
+    id: str
+    element_type: NumericElementType
+    shape: Tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        _require_string(self.id, "operand id")
+        object.__setattr__(self, "element_type", _canonical_element_type(self.element_type))
+        shape = tuple(self.shape)
+        for extent in shape:
+            _require_int(extent, "operand shape extent")
+        object.__setattr__(self, "shape", shape)
+
+    @property
+    def rank(self) -> int:
+        """Return the tensor rank."""
+        return len(self.shape)
+
+    @property
+    def position_count(self) -> int:
+        """Return the number of logical positions."""
+        _checked_extents(self.shape, "operand")
+        return prod(self.shape)
+
+    def contains_position(self, position: Iterable[int]) -> bool:
+        """Return whether ``position`` belongs to the derived position set."""
+        try:
+            candidate = tuple(position)
+        except TypeError:
+            return False
+        return _coordinate_in_extents(candidate, self.shape)
+
+    def iter_positions(self) -> Iterator[Coordinate]:
+        """Iterate positions in canonical mixed-radix order."""
+        yield from _coordinates(self.shape)
+
+    @property
+    def positions(self) -> Tuple[Coordinate, ...]:
+        """Return the finite logical position set in canonical order."""
+        return tuple(self.iter_positions())
+
+    def position_rank(self, position: Iterable[int]) -> int:
+        """Return the canonical mixed-radix rank of ``position``."""
+        return _rank(_coordinate(position, "position"), self.shape, "operand")
+
+    def position_at_rank(self, rank: int) -> Coordinate:
+        """Return the position with canonical mixed-radix ``rank``."""
+        return _coordinate_at_rank(rank, self.shape, "operand")
+
+
+@dataclass(frozen=True)
+class ScheduleLevel:
+    """One named level of a logical schedule."""
+
+    name: str
+    extent: int
+
+    def __post_init__(self) -> None:
+        _require_string(self.name, "schedule level name")
+        _require_int(self.extent, "schedule level extent")
+
+
+@dataclass(frozen=True)
+class LogicalSchedule:
+    """Finite lexicographic schedule for one region pass."""
+
+    levels: Tuple[ScheduleLevel, ...]
+
+    def __post_init__(self) -> None:
+        levels = []
+        for level in self.levels:
+            if isinstance(level, ScheduleLevel):
+                levels.append(level)
+            else:
+                try:
+                    name, extent = level
+                except (TypeError, ValueError) as exc:
+                    raise TypeError(
+                        "schedule levels must be ScheduleLevel values or pairs"
+                    ) from exc
+                levels.append(ScheduleLevel(name, extent))
+        object.__setattr__(self, "levels", tuple(levels))
+
+    @property
+    def depth(self) -> int:
+        """Return the number of schedule levels."""
+        return len(self.levels)
+
+    @property
+    def level_names(self) -> Tuple[str, ...]:
+        """Return level names in schedule order."""
+        return tuple(level.name for level in self.levels)
+
+    @property
+    def extents(self) -> Tuple[int, ...]:
+        """Return level extents in schedule order."""
+        return tuple(level.extent for level in self.levels)
+
+    @property
+    def iteration_count(self) -> int:
+        """Return the number of iteration points in one pass."""
+        _checked_extents(self.extents, "schedule")
+        return prod(self.extents)
+
+    def contains_point(self, point: Iterable[int]) -> bool:
+        """Return whether ``point`` belongs to the schedule index set."""
+        try:
+            candidate = tuple(point)
+        except TypeError:
+            return False
+        return _coordinate_in_extents(candidate, self.extents)
+
+    def iter_points(self) -> Iterator[Coordinate]:
+        """Iterate points in schedule order."""
+        yield from _coordinates(self.extents)
+
+    @property
+    def iteration_points(self) -> Tuple[Coordinate, ...]:
+        """Return the finite iteration set in schedule order."""
+        return tuple(self.iter_points())
+
+    def rank(self, point: Iterable[int]) -> int:
+        """Return the lexicographic schedule rank of ``point``."""
+        return _rank(_coordinate(point, "iteration point"), self.extents, "schedule")
+
+    def point_at_rank(self, rank: int) -> Coordinate:
+        """Return the iteration point with schedule ``rank``."""
+        return _coordinate_at_rank(rank, self.extents, "schedule")
+
+
+@dataclass(frozen=True)
+class BeatType:
+    """Derived logical type of one boundary beat."""
+
+    element_type: NumericElementType
+    elements_per_beat: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "element_type", _canonical_element_type(self.element_type))
+        _require_int(self.elements_per_beat, "elements_per_beat")
+
+    @property
+    def logical_bit_width(self) -> int:
+        """Return the logical number of bits in one beat."""
+        return element_width(self.element_type) * self.elements_per_beat
+
+
+@dataclass(frozen=True)
+class BeatSequence:
+    """Ordered concrete beat sequence for one interface pass."""
+
+    elements_per_beat: int
+    beats: Tuple[Tuple[Coordinate, ...], ...]
+
+    def __post_init__(self) -> None:
+        _require_int(self.elements_per_beat, "elements_per_beat")
+        beats = tuple(
+            tuple(_coordinate(position, "beat position") for position in beat)
+            for beat in self.beats
+        )
+        object.__setattr__(self, "beats", beats)
+
+    @property
+    def beat_count(self) -> int:
+        """Return the number of beats in one pass."""
+        return len(self.beats)
+
+    @property
+    def field_ordinals(self) -> Tuple[int, ...]:
+        """Return the derived ordered beat-field domain."""
+        return tuple(range(max(0, self.elements_per_beat)))
+
+    def beat(self, ordinal: int) -> Tuple[Coordinate, ...]:
+        """Return one beat by ordinal."""
+        _require_int(ordinal, "beat ordinal")
+        if ordinal < 0 or ordinal >= self.beat_count:
+            raise ValueError(f"beat ordinal {ordinal} is outside [0, {self.beat_count})")
+        return self.beats[ordinal]
+
+    def position_at(self, ordinal: int, field_ordinal: int) -> Coordinate:
+        """Return the operand position at one beat ordinal and field."""
+        beat = self.beat(ordinal)
+        _require_int(field_ordinal, "field ordinal")
+        if field_ordinal < 0 or field_ordinal >= self.elements_per_beat:
+            raise ValueError(
+                f"field ordinal {field_ordinal} is outside [0, {self.elements_per_beat})"
+            )
+        if field_ordinal >= len(beat):
+            raise ValueError(f"beat {ordinal} does not define canonical field {field_ordinal}")
+        return beat[field_ordinal]
+
+    @property
+    def image(self) -> frozenset[Coordinate]:
+        """Return the set image of all beat positions."""
+        return frozenset(position for beat in self.beats for position in beat)
+
+    @property
+    def delivered_field_count(self) -> int:
+        """Return the number of declared field occurrences."""
+        return sum(len(beat) for beat in self.beats)
+
+
+@dataclass(frozen=True, init=False)
+class ScheduledInputRequirements:
+    """Sparse concrete total input-requirement function.
+
+    Omitted domain entries have multiplicity zero. Explicit zero entries are
+    rejected as non-canonical sparse syntax, ensuring that equal requirement
+    values always expose the same entries to structural validation.
+    """
+
+    _nonzero_entries: Tuple[RequirementEntry, ...]
+
+    def __init__(
+        self,
+        entries: Mapping[RequirementKey, int] | Iterable[RequirementEntry] = (),
+    ) -> None:
+        items = entries.items() if isinstance(entries, Mapping) else entries
+        declared: dict[RequirementKey, int] = {}
+        for raw_key, multiplicity in items:
+            try:
+                raw_iteration, raw_position = raw_key
+            except (TypeError, ValueError) as exc:
+                raise TypeError("requirement keys must be (iteration, position) pairs") from exc
+            key = (
+                _coordinate(raw_iteration, "requirement iteration"),
+                _coordinate(raw_position, "requirement position"),
+            )
+            _require_int(multiplicity, "requirement multiplicity")
+            if multiplicity == 0:
+                raise ValueError(
+                    f"requirement key {key!r} has explicit zero multiplicity; omit it instead"
+                )
+            if key in declared and declared[key] != multiplicity:
+                raise ValueError(f"requirement key {key!r} has conflicting multiplicities")
+            declared[key] = multiplicity
+        object.__setattr__(self, "_nonzero_entries", tuple(sorted(declared.items())))
+
+    @property
+    def entries(self) -> Tuple[RequirementEntry, ...]:
+        """Return all explicitly declared sparse entries in stable order."""
+        return self._nonzero_entries
+
+    @property
+    def nonzero_entries(self) -> Tuple[RequirementEntry, ...]:
+        """Return normalized nonzero entries in stable order."""
+        return self._nonzero_entries
+
+    def required(self, iteration: Iterable[int], position: Iterable[int]) -> int:
+        """Return the requirement multiplicity, using zero as the sparse default."""
+        key = (
+            _coordinate(iteration, "requirement iteration"),
+            _coordinate(position, "requirement position"),
+        )
+        keys = tuple(entry_key for entry_key, _ in self._nonzero_entries)
+        index = bisect_left(keys, key)
+        if index < len(keys) and keys[index] == key:
+            return self._nonzero_entries[index][1]
+        return 0
+
+    @property
+    def occurrences(self) -> Tuple[Tuple[Coordinate, Coordinate, int], ...]:
+        """Return canonical occurrence identities in deterministic enumeration order.
+
+        The returned order is for inspection only; multiplicity index ``m`` has
+        no execution order in the region semantics.
+        """
+        return tuple(
+            (iteration, position, multiplicity_index)
+            for (iteration, position), multiplicity in self._nonzero_entries
+            for multiplicity_index in range(max(0, multiplicity))
+        )
+
+    @property
+    def occurrence_count(self) -> int:
+        """Return the total number of validly non-negative declared uses."""
+        return sum(max(0, multiplicity) for _, multiplicity in self._nonzero_entries)
+
+    @property
+    def required_positions(self) -> frozenset[Coordinate]:
+        """Return the operand positions required at one or more iterations.
+
+        The *set* of positions, with the iteration points and multiplicities
+        collapsed.  Presentation questions are answered against this rather than
+        against the occurrence count: a position presented once can serve
+        several scheduled uses through binding-owned replay, and ``REGION.md``
+        3.7 refuses any required-versus-presented equality for inputs for
+        exactly that reason.
+        """
+
+        return frozenset(
+            position
+            for (_iteration, position), multiplicity in self._nonzero_entries
+            if multiplicity > 0
+        )
+
+
+@dataclass(frozen=True, init=False)
+class ScheduledOutputAvailability:
+    """Concrete partial map from output positions to iteration points."""
+
+    _entries: Tuple[AvailabilityEntry, ...]
+
+    def __init__(
+        self,
+        entries: Mapping[Coordinate, Coordinate] | Iterable[AvailabilityEntry] = (),
+    ) -> None:
+        items = entries.items() if isinstance(entries, Mapping) else entries
+        declared: dict[Coordinate, Coordinate] = {}
+        for raw_position, raw_iteration in items:
+            position = _coordinate(raw_position, "availability position")
+            iteration = _coordinate(raw_iteration, "availability iteration")
+            if position in declared and declared[position] != iteration:
+                raise ValueError(f"output position {position!r} has conflicting availability")
+            declared[position] = iteration
+        object.__setattr__(self, "_entries", tuple(sorted(declared.items())))
+
+    @property
+    def entries(self) -> Tuple[AvailabilityEntry, ...]:
+        """Return availability entries in stable position order."""
+        return self._entries
+
+    @property
+    def domain(self) -> frozenset[Coordinate]:
+        """Return the partial function's position domain."""
+        return frozenset(position for position, _ in self._entries)
+
+    def available_at(self, position: Iterable[int]) -> Optional[Coordinate]:
+        """Return a position's availability point, or ``None`` if absent."""
+        candidate = _coordinate(position, "availability position")
+        keys = tuple(entry_position for entry_position, _ in self._entries)
+        index = bisect_left(keys, candidate)
+        if index < len(keys) and keys[index] == candidate:
+            return self._entries[index][1]
+        return None
+
+
+@dataclass(frozen=True)
+class Port:
+    """Direction-neutral logical region port."""
+
+    id: str
+    operand: Operand
+    beat_sequence: BeatSequence
+
+    def __post_init__(self) -> None:
+        _require_string(self.id, "port id")
+        if not isinstance(self.operand, Operand):
+            raise TypeError("operand must be an Operand")
+        if not isinstance(self.beat_sequence, BeatSequence):
+            raise TypeError("beat_sequence must be a BeatSequence")
+
+    @property
+    def beat_type(self) -> BeatType:
+        """Return the beat type derived from this port."""
+        return BeatType(self.operand.element_type, self.beat_sequence.elements_per_beat)
+
+    @property
+    def logical_beat_bits(self) -> int:
+        """Return the port's derived logical beat width."""
+        return self.beat_type.logical_bit_width
+
+
+@dataclass(frozen=True)
+class InputInterface:
+    """Input port and its region-local scheduled requirements."""
+
+    port: Port
+    requirements: ScheduledInputRequirements
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.port, Port):
+            raise TypeError("port must be a Port")
+        if not isinstance(self.requirements, ScheduledInputRequirements):
+            raise TypeError("requirements must be ScheduledInputRequirements")
+
+    @property
+    def operand(self) -> Operand:
+        """The operand this input requires.
+
+        A property over the port rather than a second field, so a ported input
+        cannot declare one operand and present another.  It is what makes the
+        sibling :class:`InternalInput` a *sum* rather than a nullable port: the
+        two cases answer ``.operand`` and ``.requirements`` alike, and differ
+        only in whether there is a channel to ask about.
+        """
+
+        return self.port.operand
+
+
+@dataclass(frozen=True)
+class InternalInput:
+    """An operand the region requires and exposes no stream port for.
+
+    One dataflow statement and no more:
+
+        this region requires this operand according to this scheduled
+        requirement map, and this region exposes no input dataflow port for it.
+
+    "Internal" is relative to the *region's dataflow boundary* and to nothing
+    else.  It does not say module-local storage, embedded RAM or ROM, private
+    rather than shared, initializer-owned, compile-time constant, a ``DataSlot``,
+    or independent of an external memory system.  Which service covers the
+    positions no port presents is the binding's obligation under ``REGION.md``
+    5.2, and a physical choice can neither add nor remove one of these: an MLO
+    realization may serve several of them from shared off-chip storage, and an
+    embedded core may serve one from private state, without either changing a
+    Region.
+
+    Do not read the independent Network-topology axis through this word.  A
+    port's positions are *edge-presented* or *boundary-presented*; positions no
+    port carries are *unpresented*.  An ``InternalInput`` has no endpoint, so it
+    is neither edge- nor boundary-presented -- but "unpresented" is a claim about
+    ports, not about locality, and a ported input can have unpresented positions
+    too.
+
+    ``requirements`` is mandatory, exactly as it is for a ported input.  An
+    internal input is not a weaker statement about the computation than a ported
+    one -- it says which positions are required, at which iteration points, how
+    often -- it is a weaker statement about *transport*.
+    """
+
+    operand: Operand
+    requirements: ScheduledInputRequirements
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operand, Operand):
+            raise TypeError("operand must be an Operand")
+        if not isinstance(self.requirements, ScheduledInputRequirements):
+            raise TypeError("requirements must be ScheduledInputRequirements")
+
+
+#: One region input: presented by a stream port, or not presented at all.
+#:
+#: Requirements live on both arms.  Before this union they lived only on the
+#: ported one, so a region that consumed an operand no port carried said nothing
+#: about it -- the embedded dot product dropped its weight interface entirely,
+#: and the parameter source emitted a matrix it never declared requiring.
+RegionInput = InputInterface | InternalInput
+
+
+@dataclass(frozen=True)
+class OutputInterface:
+    """Output port and its region-local final-result availability."""
+
+    port: Port
+    availability: ScheduledOutputAvailability
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.port, Port):
+            raise TypeError("port must be a Port")
+        if not isinstance(self.availability, ScheduledOutputAvailability):
+            raise TypeError("availability must be ScheduledOutputAvailability")
+
+
+def _interface_sort_key(interface: InputInterface | OutputInterface) -> Tuple[str, str]:
+    return (interface.port.id, repr(interface))
+
+
+def _input_sort_key(item: RegionInput) -> Tuple[int, str, str]:
+    """Ported inputs first in port-id order, then internal in operand-id order.
+
+    Not one key over both arms.  Sorting the whole tuple by operand id would
+    reorder every region that already exists -- the MVAU compute region's ports
+    are ``activation`` before ``weight`` and its operands are ``W`` before ``X``
+    -- and two regions that mean the same thing would stop comparing equal
+    across this change.  Grouping the arms keeps every ported-only region's
+    value, ordering and hash exactly what they were, and leaves ``inputs[:n]``
+    equal to ``input_interfaces`` for all of them.
+
+    ``repr`` still breaks ties, for the same reason it did before: duplicate
+    identities are a validation issue, not a construction error, and the value
+    must still sort deterministically while carrying one.
+    """
+
+    return (
+        (0, item.port.id, repr(item))
+        if isinstance(item, InputInterface)
+        else (1, item.operand.id, repr(item))
+    )
+
+
+@dataclass(frozen=True)
+class DataflowRegion:
+    """One complete, not necessarily validated, logical dataflow region."""
+
+    schedule: LogicalSchedule
+    inputs: Tuple[RegionInput, ...]
+    outputs: Tuple[OutputInterface, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.schedule, LogicalSchedule):
+            raise TypeError("schedule must be a LogicalSchedule")
+        inputs = tuple(self.inputs)
+        outputs = tuple(self.outputs)
+        if not all(isinstance(item, (InputInterface, InternalInput)) for item in inputs):
+            raise TypeError("inputs must contain only InputInterface or InternalInput values")
+        if not all(isinstance(interface, OutputInterface) for interface in outputs):
+            raise TypeError("outputs must contain only OutputInterface values")
+        object.__setattr__(self, "inputs", tuple(sorted(inputs, key=_input_sort_key)))
+        object.__setattr__(self, "outputs", tuple(sorted(outputs, key=_interface_sort_key)))
+
+    @property
+    def input_interfaces(self) -> Tuple[InputInterface, ...]:
+        """Return the inputs a stream port presents, in port-id order."""
+        return tuple(item for item in self.inputs if isinstance(item, InputInterface))
+
+    @property
+    def internal_inputs(self) -> Tuple[InternalInput, ...]:
+        """Return the inputs no stream port presents, in operand-id order."""
+        return tuple(item for item in self.inputs if isinstance(item, InternalInput))
+
+    @property
+    def interfaces(self) -> Tuple[InputInterface | OutputInterface, ...]:
+        """Return every port-bearing interface, input then output.
+
+        Internal inputs are deliberately absent: every caller of this property
+        reads ``.port`` off what it yields, and an internal input has none.  It
+        is the collection of things a network can name as an endpoint, which is
+        what it always was.
+        """
+        return self.input_interfaces + self.outputs
+
+    @property
+    def ports(self) -> Tuple[Port, ...]:
+        """Return every port the region actually has, input then output."""
+        return tuple(interface.port for interface in self.interfaces)
+
+    def input(self, operand_id: str) -> RegionInput:
+        """Return the uniquely identified region input, ported or not."""
+        matches = tuple(item for item in self.inputs if item.operand.id == operand_id)
+        if len(matches) != 1:
+            raise KeyError(f"expected one input operand {operand_id!r}, found {len(matches)}")
+        return matches[0]
+
+    def input_interface(self, port_id: str) -> InputInterface:
+        """Return the uniquely identified input interface.
+
+        Unchanged in signature and meaning: a port lookup can only ever find an
+        input that has a port, so this keeps returning an ``InputInterface`` and
+        every existing caller keeps compiling.
+        """
+        matches = tuple(
+            interface for interface in self.input_interfaces if interface.port.id == port_id
+        )
+        if len(matches) != 1:
+            raise KeyError(f"expected one input port {port_id!r}, found {len(matches)}")
+        return matches[0]
+
+    def output_interface(self, port_id: str) -> OutputInterface:
+        """Return the uniquely identified output interface."""
+        matches = tuple(interface for interface in self.outputs if interface.port.id == port_id)
+        if len(matches) != 1:
+            raise KeyError(f"expected one output port {port_id!r}, found {len(matches)}")
+        return matches[0]

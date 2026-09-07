@@ -25,7 +25,7 @@ from finn.dataflow.computation import (
     ACTIVATION_REPLAY_COMPUTATION,
     DOT_PRODUCT_COMPUTATION,
 )
-from finn.dataflow.model.declarations import Subspace
+from finn.dataflow.space.declarations import Subspace
 from finn.dataflow.designs.design import (
     Boundary,
     Connection,

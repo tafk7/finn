@@ -19,12 +19,12 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataflow.rtlsim.rtl_transport import drive
 from finn.dataflow._engine import Decided, Engine
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.kernels.dotp_axi import DspBlock, DotpAxiKernel, FINNLIB_SOURCES
 from finn.dataflow.kernels.kernel import kernel_physical
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 PASS, FAIL = 0, 1
 CLOCK_PERIOD_NS = 4.0

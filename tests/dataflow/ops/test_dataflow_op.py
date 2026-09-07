@@ -27,14 +27,14 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Problem,
     constraint,
     declared_members,
 )
-from finn.dataflow.model.occurrence import ProjectionAssessment
+from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.association import (
     BoundaryDestination,
     CoordinateMapping,

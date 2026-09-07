@@ -24,14 +24,14 @@ from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.kernels.kernel import (
     Kernel,
     PhysicallyUnsupported,
-    Region,
-    RegionRefused,
+    RegionDeclaration,
 )
-from finn.dataflow.model.declarations import Input
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.declarations import Input
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
+    RegionRefused,
     BeatSequence,
     Coordinate,
     DataflowRegion,
@@ -127,7 +127,7 @@ class MemstreamKernel(Kernel):
     pe = Input(int)
     simd = Input(int)
 
-    region = Region(
+    region = RegionDeclaration(
         family="parameter.cyclic_delivery",
         version="1",
         construct=construct_weight_stream_region,

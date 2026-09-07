@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import Answer, Decided
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Space,
     Subspace,
@@ -23,8 +23,8 @@ from finn.dataflow.model.declarations import (
     derived,
     reject,
 )
-from finn.dataflow.model.occurrence import ProjectionAssessment
-from finn.dataflow.network import DataflowNetwork
+from finn.dataflow.space.occurrence import ProjectionAssessment
+from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.ops.association import (
     BoundaryDestination,
     CoordinateMapping,

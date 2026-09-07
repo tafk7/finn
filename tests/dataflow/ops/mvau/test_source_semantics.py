@@ -35,7 +35,7 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow._engine import Decided
 from finn.dataflow.kernels.dotp_axi import DspBlock
-from finn.dataflow.model.declarations import AuthoringError
+from finn.dataflow.space.declarations import AuthoringError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.mvau.computation import (
     AccumulationMode,

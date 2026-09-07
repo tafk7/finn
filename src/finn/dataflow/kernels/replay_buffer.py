@@ -37,10 +37,11 @@ from finn.dataflow.artifacts.abi import (
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.declarations import Input, derived
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region, RegionRefused
-from finn.dataflow.region import (
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.declarations import Input, derived
+from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
+from finn.dataflow.model.region import (
+    RegionRefused,
     BeatSequence,
     Coordinate,
     DataflowRegion,
@@ -173,7 +174,7 @@ class ReplayBufferKernel(Kernel):
     pe = Input(int)
     simd = Input(int)
 
-    region = Region(
+    region = RegionDeclaration(
         family="mvau.activation_replay",
         version="1",
         construct=construct_activation_replay_region,

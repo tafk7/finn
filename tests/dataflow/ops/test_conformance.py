@@ -326,7 +326,7 @@ def test_the_replay_association_reads_the_ports_a_region_actually_has() -> None:
 
     ``association`` looks a shape up by port id -- on the ported inputs for the
     activation and on the outputs for the expanded stream.  Since a region input
-    may now be unported, that lookup ranges over ``input_interfaces`` rather than
+    may now be internal, that lookup ranges over ``input_interfaces`` rather than
     over every input, and nothing else in this operation moved.  No other test
     reaches this property, so without this one the migrated line would be
     unexecuted.

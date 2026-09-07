@@ -25,12 +25,12 @@ import numpy as np  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Decided, Engine
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.kernels.replay_buffer import FINNLIB_SOURCES, ReplayBufferKernel
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 from dataflow.rtlsim.rtl_transport import drive
 

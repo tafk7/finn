@@ -17,9 +17,9 @@ from finn.dataflow.artifacts.derivation import ArtifactRef, build_key
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
-from finn.dataflow.model.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.declarations import Decision, Problem, Space, divisors_of
+from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
@@ -35,8 +35,8 @@ from finn.dataflow.kernels.replay_buffer import (
 from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region as baseline_region,
 )
-from finn.dataflow.region_validation import validate_region
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.model.region_validation import validate_region
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 BOUND_NAMES = (
     "repetitions",

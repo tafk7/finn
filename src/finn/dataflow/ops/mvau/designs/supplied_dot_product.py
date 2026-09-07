@@ -49,7 +49,7 @@ from finn.dataflow.designs.design import (
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
 from finn.dataflow.kernels.memstream import CYCLIC_PARAMETER_DELIVERY, MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,

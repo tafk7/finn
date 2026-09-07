@@ -34,8 +34,7 @@ if TYPE_CHECKING:
         KernelPhysicalResult,
         Parameter,
         PhysicallyUnsupported,
-        Region,
-        RegionRefused,
+        RegionDeclaration,
         kernel_dataflow,
         kernel_physical,
     )
@@ -48,8 +47,7 @@ _LAZY_EXPORTS = {
         "KernelPhysicalResult",
         "Parameter",
         "PhysicallyUnsupported",
-        "Region",
-        "RegionRefused",
+        "RegionDeclaration",
         "kernel_dataflow",
         "kernel_physical",
     )
@@ -90,8 +88,7 @@ __all__ = [
     "Kernel",
     "Parameter",
     "PhysicallyUnsupported",
-    "Region",
-    "RegionRefused",
+    "RegionDeclaration",
     # the two projections, and the detached value the physical one produces
     "KernelPhysicalResult",
     "kernel_dataflow",

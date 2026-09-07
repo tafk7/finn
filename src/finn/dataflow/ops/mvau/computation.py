@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.model.datatypes import QONNXDataType
 
 
 class AccumulationMode(str, Enum):

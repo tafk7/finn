@@ -18,10 +18,10 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow._engine import Absent, Decided, Engine, QualifiedPath, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.model.semantics import POSITION_MAP_SEMANTICS
-from finn.dataflow.model.compiler import _Ref, _compile_space
-from finn.dataflow.model.occurrence import is_attached_occurrence
-from finn.dataflow.model.declarations import (
+from finn.dataflow.space.dataflow_value_semantics import POSITION_MAP_SEMANTICS
+from finn.dataflow.space.compiler import _Ref, _compile_space
+from finn.dataflow.space.occurrence import is_attached_occurrence
+from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Decision,
@@ -42,15 +42,15 @@ from finn.dataflow.designs.design import (
     Sink,
     design_dataflow,
 )
-from finn.dataflow.model.occurrence import ChoiceView
-from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
-from finn.dataflow.network import (
+from finn.dataflow.space.occurrence import ChoiceView
+from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
+from finn.dataflow.model.network import (
     BoundaryContract,
     DataflowNetwork,
     PositionMap,
     RegionEndpoint,
 )
-from finn.dataflow.region import (
+from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -62,7 +62,7 @@ from finn.dataflow.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.spec_algebra import assemble_specs
+from finn.dataflow.space.spec_algebra import assemble_specs
 
 PRODUCE = ComputationContract("test.produce")
 CONSUME = ComputationContract("test.consume")
@@ -131,7 +131,7 @@ class ProducerKernel(Kernel):
     computation = PRODUCE
     extent = Input(int)
     lanes = Input(int)
-    region = Region(
+    region = RegionDeclaration(
         family="test.produce", version="1", construct=_producer_region, extent=extent, lanes=lanes
     )
 
@@ -145,7 +145,7 @@ class ConsumerKernel(Kernel):
     computation = CONSUME
     extent = Input(int)
     lanes = Input(int)
-    region = Region(
+    region = RegionDeclaration(
         family="test.consume", version="1", construct=_consumer_region, extent=extent, lanes=lanes
     )
 
@@ -162,7 +162,7 @@ class PipelinedConsumerKernel(Kernel):
     extent = Input(int)
     lanes = Input(int)
     stages = Decision(int, values=(1, 2))
-    region = Region(
+    region = RegionDeclaration(
         family="test.consume", version="1", construct=_consumer_region, extent=extent, lanes=lanes
     )
 
@@ -662,7 +662,7 @@ def test_a_beat_count_mismatch_across_an_edge_is_refused() -> None:
         def halved(*, lanes: int) -> int:
             return max(1, lanes // 2)
 
-        region = Region(
+        region = RegionDeclaration(
             family="test.consume",
             version="1",
             construct=_consumer_region,
@@ -1181,7 +1181,7 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         extent = Input(int)
         lanes = Input(int)
         choice = SubspaceChoice({"only": Subspace(Chooser, extent=extent)}, outputs=("depth",))
-        region = Region(
+        region = RegionDeclaration(
             family="test.consume",
             version="1",
             construct=_consumer_region,
@@ -1245,7 +1245,7 @@ def _consumer_with(name: str, verdict: bool, *, physical: bool):
         computation = CONSUME
         extent = Input(int)
         lanes = Input(int)
-        region = Region(
+        region = RegionDeclaration(
             family="test.consume",
             version="1",
             construct=_consumer_region,
