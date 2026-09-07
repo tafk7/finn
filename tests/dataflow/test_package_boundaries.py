@@ -265,7 +265,20 @@ def test_neither_package_is_re_exported_from_the_dataflow_root() -> None:
 
     root = import_module("finn.dataflow")
     assert not hasattr(root, "__all__")
-    for name in ("DataflowRegion", "DataflowNetwork", "Space", "Problem", "Decision"):
+    for name in (
+        "DataflowRegion",
+        "DataflowNetwork",
+        "Space",
+        "Problem",
+        "Decision",
+        "Kernel",
+        "KernelChoice",
+        "ModuleParameter",
+        "ModuleBuildSpec",
+        "RegionDeclaration",
+        "NetworkEdge",
+        "NetworkBoundary",
+    ):
         assert not hasattr(root, name), name
 
 
@@ -274,14 +287,18 @@ def test_artifact_projection_stays_one_way() -> None:
 
     upstream = (
         "finn.dataflow.model",
+        "finn.dataflow.space",
         "finn.dataflow.kernels",
         "finn.dataflow.designs",
         "finn.dataflow.ops",
         "finn.dataflow._engine",
+        "onnx",
+        "qonnx.core.modelwrapper",
     )
     for path in (DATAFLOW / "artifacts").rglob("*.py"):
         named = _imported_modules(path)
         assert not any(_within(name, package) for name in named for package in upstream), path
+    _assert_fresh_import_avoids("finn.dataflow.artifacts.packaging", upstream)
 
 
 def test_canonical_values_stay_importable_without_the_engine() -> None:
