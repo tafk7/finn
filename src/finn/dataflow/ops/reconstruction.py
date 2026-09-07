@@ -3,10 +3,12 @@
 
 """Model-level, in-memory source analysis and operation reconstruction.
 
-Use one source_analysis context around model-wide QONNX inference/execution
-passes. bind_operations and analyze_sources establish that context themselves.
-Nested readers consult its single result; no result is serialized or retained
-on the model. A later pass always observes current initializer contents.
+Use source_analysis for read passes on one ModelWrapper. For inference, use
+ops.inference's pass owners: an outer context cannot cover a wrapper that
+ModelWrapper.transform copies or preprocesses before callbacks. bind_operations
+and analyze_sources establish their own context. Nested readers consult its
+single result; no result is serialized or retained on the model. A later pass
+always observes current initializer contents.
 """
 
 from __future__ import annotations

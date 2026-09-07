@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TYPE_CHECKING
 
-from finn.dataflow._engine import Decided, RequestError
+from finn.dataflow._engine import Decided, QualifiedPath, RequestError
 from finn.dataflow.space.declarations import AuthoringError, PersistentCodec
 from finn.dataflow.space.occurrence import (
     PersistableChoice,
@@ -263,9 +263,11 @@ def read_attributes(node: Any) -> dict[str, NativeAttribute]:
         AttributeProto.STRINGS: "strings",
     }
     result = {}
+    seen: set[str] = set()
     for item in node.attribute:
-        if item.name in result:
+        if item.name in seen:
             raise DecodeError(f"duplicate node attribute {item.name!r}")
+        seen.add(item.name)
         kind = kinds.get(item.type)
         if kind is None:
             # Other ONNX source attributes remain outside this choice schema.
@@ -321,16 +323,23 @@ def hydrate(operation: Any) -> Any:
                 raise DecodeError(
                     "node stores choices made against a different problem; reconstruct explicitly"
                 )
-        for item in schema:  # outer selectors first, including nested selectors
+        values: dict[QualifiedPath, object] = {}
+        for item in schema:
             if item.name not in present_names:
                 continue
             if item.name not in written:
                 raise DecodeError(f"unsupported ONNX kind for {item.name}")
             try:
-                value = item.decode(written[item.name])
-                operation = occurrence_commit_paths(operation, {item.choice.reference.path: value})
-            except (ValueError, TypeError, RequestError) as error:
-                raise DecodeError(f"cannot decode/replay {item.name}: {error}") from error
+                values[item.choice.reference.path] = item.decode(written[item.name])
+            except (ValueError, TypeError) as error:
+                raise DecodeError(f"cannot decode {item.name}: {error}") from error
+        # The declaration walk is an inventory, not an assignment order. The
+        # engine orders this compatible batch by its dependency graph, including
+        # selectors, applicability and domains that read child exports.
+        try:
+            operation = occurrence_commit_paths(operation, values)
+        except (ValueError, TypeError, RequestError) as error:
+            raise DecodeError(f"cannot replay recorded Decisions: {error}") from error
         # Catch attributes on unreachable branches even if the engine accepted
         # an inapplicable assignment provisionally while a selector was open.
         reachable = serialize_choices(operation)

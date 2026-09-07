@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -184,12 +184,19 @@ def _stages_through(require: CommitmentStage) -> tuple[CommitmentStage, ...]:
 
 
 def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
-    """Verify every precondition, then apply the whole change or none of it.
+    """Apply the whole change or none of it, returning the addressed live node."""
+
+    return _apply_graph_effects(model, effects, lambda: find_node(model, effects.scope_id))
+
+
+def _apply_graph_effects(model: Any, effects: GraphEffects, finish: Callable[[], Any]) -> Any:
+    """Keep writes and their completion step inside one rollback boundary.
 
     Restoration is by serialized snapshot rather than by undoing each write:
     an undo list is a second description of the change and can disagree with
-    the first.  Not an ``assert`` anywhere, because ``python -O`` strips those
-    and this is the guarantee a production build most needs.
+    the first. DataflowOp.commit supplies its post-write reconstruction as the
+    completion step, so a hydration failure restores output repairs and native
+    attributes together. No assertion carries this guarantee.
     """
 
     node = find_node(model, effects.scope_id)
@@ -236,10 +243,10 @@ def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
             model.set_tensor_datatype(tensor, datatype)
         for tensor, shape in effects.tensor_shapes.items():
             model.set_tensor_shape(tensor, list(shape))
+        return finish()
     except Exception:
         model.model.ParseFromString(snapshot)
         raise
-    return find_node(model, effects.scope_id)
 
 
 def _text(value: object) -> str:
