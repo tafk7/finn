@@ -42,7 +42,7 @@ from finn.dataflow.space.declarations import (
 from finn.dataflow.kernels.kernel import (
     Kernel,
     KernelPhysicalResult,
-    Parameter,
+    ModuleParameter,
     PhysicallyUnsupported,
     RegionDeclaration,
     RegionRefused,
@@ -122,9 +122,9 @@ class ToyKernel(Kernel):
     def width_supported(*, width: int) -> bool:
         return width <= 32
 
-    LANES = Parameter(lanes)
-    WIDTH = Parameter(width)
-    FLAG = Parameter.constant(1, why="the test RTL fixes this mode")
+    LANES = ModuleParameter(lanes)
+    WIDTH = ModuleParameter(width)
+    FLAG = ModuleParameter.constant(1, why="the test RTL fixes this mode")
 
     physical_support = ConstraintGroup(width_supported, name="realizable")
 
@@ -355,9 +355,9 @@ def test_region_name_is_one_local_path_segment(name) -> None:
 def test_parameter_name_is_one_local_path_segment(name, constant) -> None:
     with pytest.raises(AuthoringError, match="name must be one"):
         if constant:
-            Parameter.constant(1, why="test constant", name=name)
+            ModuleParameter.constant(1, why="test constant", name=name)
         else:
-            Parameter(Input(int), name=name)
+            ModuleParameter(Input(int), name=name)
 
 
 def test_none_is_the_only_specialized_kernel_name_fallback() -> None:
@@ -365,8 +365,8 @@ def test_none_is_the_only_specialized_kernel_name_fallback() -> None:
         RegionDeclaration(family="test.copy", version="1", construct=_degenerate).stable_name
         is None
     )
-    assert Parameter(Input(int)).stable_name is None
-    assert Parameter.constant(1, why="test constant").stable_name is None
+    assert ModuleParameter(Input(int)).stable_name is None
+    assert ModuleParameter.constant(1, why="test constant").stable_name is None
 
 
 def test_region_constructor_signature_must_match_its_dependencies() -> None:
@@ -596,7 +596,7 @@ def test_parameter_source_must_belong_to_the_kernel_class() -> None:
 
     class Broken(ToyKernel):
         id = "broken"
-        OTHER = Parameter(outside)
+        OTHER = ModuleParameter(outside)
 
     harness, _kernel = _compiled()
     with pytest.raises(AuthoringError, match="references a value outside its declarations"):
@@ -629,7 +629,7 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
         pipeline = Subspace(Pipeline)
         region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
-        STAGES = Parameter(pipeline.stages)
+        STAGES = ModuleParameter(pipeline.stages)
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:

@@ -36,14 +36,14 @@ from finn.dataflow.space.declarations import (
     divisors_of,
 )
 from finn.dataflow.designs.design import (
-    Boundary,
-    Connection,
+    NetworkBoundary,
+    NetworkEdge,
     DataflowDesign,
-    Kernels,
-    Sink,
+    KernelChoice,
+    EdgeSink,
     design_dataflow,
 )
-from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration, kernel_physical
+from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration, kernel_physical
 from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
@@ -124,7 +124,7 @@ class BufferedConsumerKernel(Kernel):
     """Same computation and Region, different everything physical.
 
     Candidate-specific Input names, one Kernel-local physical Decision, an extra
-    physical Parameter, an extra source contribution, and its own configured
+    physical ModuleParameter, an extra source contribution, and its own configured
     type -- which is the whole set of things an alternative is allowed to differ
     in without touching the Region a peer reads.
     """
@@ -155,8 +155,8 @@ class BufferedConsumerKernel(Kernel):
     def cost(*, lanes: int) -> int:
         return 2 * lanes
 
-    LANES = Parameter(parallel_lanes)
-    DEPTH = Parameter(depth)
+    LANES = ModuleParameter(parallel_lanes)
+    DEPTH = ModuleParameter(depth)
 
     sources = (
         CopiedSource("fixture", "buffer.sv", provides=("module:buffer",)),
@@ -226,17 +226,19 @@ class Alternatives(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-    consume = Kernels(
+    produce = KernelChoice(
+        Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
+    )
+    consume = KernelChoice(
         Subspace(ConsumerKernel, extent=extent, lanes=lanes),
         Subspace(BufferedConsumerKernel, width=extent, parallel_lanes=lanes),
         Subspace(MisportedConsumerKernel, extent=extent, lanes=lanes),
         computation=CONSUME,
     )
 
-    stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
-    source = Boundary(produce.input("source"))
-    result = Boundary(consume.output("result"))
+    stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
+    source = NetworkBoundary(produce.input("source"))
+    result = NetworkBoundary(consume.output("result"))
 
 
 SELECTOR = QualifiedPath("root.design.consume.kernel")
@@ -349,10 +351,10 @@ def test_an_incompatible_computation_is_refused_at_authoring() -> None:
             version = "1"
             extent = Input(int)
             lanes = Input(int)
-            produce = Kernels(
+            produce = KernelChoice(
                 Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
             )
-            consume = Kernels(
+            consume = KernelChoice(
                 Subspace(ConsumerKernel, extent=extent, lanes=lanes),
                 Subspace(ProducingKernel, extent=extent, lanes=lanes),
                 computation=CONSUME,
@@ -401,15 +403,17 @@ def test_a_design_wide_feasibility_algorithm_rejects_the_misported_candidate() -
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = Kernels(Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE)
-        consume = Kernels(
+        produce = KernelChoice(
+            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
+        )
+        consume = KernelChoice(
             Subspace(MisportedConsumerKernel, extent=extent, lanes=lanes),
             Subspace(ConsumerKernel, extent=extent, lanes=lanes),
             computation=CONSUME,
         )
-        stream = Connection(produce.output("stream"), Sink(consume.input("stream")))
-        source = Boundary(produce.input("source"))
-        result = Boundary(consume.output("result"))
+        stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
+        source = NetworkBoundary(produce.input("source"))
+        result = NetworkBoundary(consume.output("result"))
 
     class MisportedRoot(Space):
         extent = Problem(int)

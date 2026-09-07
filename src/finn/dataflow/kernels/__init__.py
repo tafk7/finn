@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from finn.dataflow.kernels.kernel import (
         Kernel,
         KernelPhysicalResult,
-        Parameter,
+        ModuleParameter,
         PhysicallyUnsupported,
         RegionDeclaration,
         kernel_dataflow,
@@ -45,7 +45,7 @@ _LAZY_EXPORTS = {
     for name in (
         "Kernel",
         "KernelPhysicalResult",
-        "Parameter",
+        "ModuleParameter",
         "PhysicallyUnsupported",
         "RegionDeclaration",
         "kernel_dataflow",
@@ -86,7 +86,7 @@ def __getattr__(name: str) -> object:
 __all__ = [
     # the generic Kernel contract
     "Kernel",
-    "Parameter",
+    "ModuleParameter",
     "PhysicallyUnsupported",
     "RegionDeclaration",
     # the two projections, and the detached value the physical one produces

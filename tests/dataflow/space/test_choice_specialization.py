@@ -11,7 +11,7 @@ compiler owns them.  Every test here therefore checks a specialization against
 the generic machinery rather than against a second copy of it.
 
 The synthetic ``Tagged`` specialization below stands in for the real one
-(``Kernels``, and the physical-strategy choice U6 will add) so this package
+(``KernelChoice``, and the physical-strategy choice U6 will add) so this package
 stays layer-neutral: nothing in ``finn.dataflow.model`` may know what a Kernel
 is, including its tests.
 """

@@ -19,7 +19,7 @@ physical realization -- an unavailable target is not a broken Region.
 Both projections are synthesized per concrete subclass, because their output is
 that subclass's own ``region`` member and the base class has no such
 declaration to name.  A subclass therefore writes the parts and gets the
-projections: the Region, the physical ``Parameter`` table, and at most two
+projections: the Region, the physical ``ModuleParameter`` table, and at most two
 ``ConstraintGroup`` members saying which of its constraints gate which
 question.
 """
@@ -242,7 +242,7 @@ def _check_constructor(
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class Parameter(Generic[T]):
+class ModuleParameter(Generic[T]):
     """One scalar physical parameter sourced from a declaration or constant."""
 
     source: ValueSource[T] | None
@@ -254,7 +254,7 @@ class Parameter(Generic[T]):
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "fixed_value", _MISSING)
         object.__setattr__(self, "why", "")
-        object.__setattr__(self, "stable_name", _declaration_name(name, "a Parameter"))
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a ModuleParameter"))
 
     @classmethod
     def constant(
@@ -263,20 +263,20 @@ class Parameter(Generic[T]):
         *,
         why: str,
         name: str | None = None,
-    ) -> Parameter[T]:
+    ) -> ModuleParameter[T]:
         if not why:
             raise AuthoringError("a constant physical parameter must say why it is constant")
         built = object.__new__(cls)
         object.__setattr__(built, "source", None)
         object.__setattr__(built, "fixed_value", value)
         object.__setattr__(built, "why", why)
-        object.__setattr__(built, "stable_name", _declaration_name(name, "a Parameter"))
+        object.__setattr__(built, "stable_name", _declaration_name(name, "a ModuleParameter"))
         return built
 
     def __get__(self, instance: object | None, owner: type[object]) -> object:
         """Class access is the declaration; instance access is the resolved scalar.
 
-        A constant answers from the declaration itself.  A sourced Parameter is
+        A constant answers from the declaration itself.  A sourced ModuleParameter is
         a *view* on the declaration it names rather than a value of its own, so
         it resolves through the same dispatcher every other value descriptor
         uses -- which is what makes ``kernel.PE`` mean the same thing on an
@@ -294,7 +294,7 @@ class Parameter(Generic[T]):
 class _CompiledParameter:
     member_name: str
     physical_name: str
-    template: Parameter[object]
+    template: ModuleParameter[object]
     source: ValueSource[object] | None
     constant: object = _MISSING
     why: str = ""
@@ -379,24 +379,28 @@ class Kernel(Space):
         return _finalize_kernel(cls, cast("_CompiledSpace[Kernel]", compiled))
 
 
-def _parameter_members(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[object]], ...]:
-    ordered: dict[str, Parameter[object]] = {}
+def _parameter_members(
+    kernel_type: type[Kernel],
+) -> tuple[tuple[str, ModuleParameter[object]], ...]:
+    ordered: dict[str, ModuleParameter[object]] = {}
     for base in reversed(kernel_type.__mro__):
         if not issubclass(base, Kernel) or base is Kernel:
             continue
         for name, value in base.__dict__.items():
-            if isinstance(value, Parameter):
-                ordered[name] = cast("Parameter[object]", value)
+            if isinstance(value, ModuleParameter):
+                ordered[name] = cast("ModuleParameter[object]", value)
             elif name in ordered:
                 raise AuthoringError(
-                    f"{base.__name__}.{name} replaces a Parameter with {type(value).__name__}"
+                    f"{base.__name__}.{name} replaces a ModuleParameter with {type(value).__name__}"
                 )
     return tuple(ordered.items())
 
 
-def _physical_names(kernel_type: type[Kernel]) -> tuple[tuple[str, Parameter[object], str], ...]:
+def _physical_names(
+    kernel_type: type[Kernel],
+) -> tuple[tuple[str, ModuleParameter[object], str], ...]:
     seen: set[str] = set()
-    resolved: list[tuple[str, Parameter[object], str]] = []
+    resolved: list[tuple[str, ModuleParameter[object], str]] = []
     for member_name, template in _parameter_members(kernel_type):
         physical_name = member_name if template.stable_name is None else template.stable_name
         if physical_name in seen:
@@ -437,7 +441,7 @@ def _region_valid(region: RegionDeclaration) -> Constraint:
 def _physical_result_property(
     kernel_type: type[Kernel],
     region: RegionDeclaration,
-    parameters: tuple[tuple[str, Parameter[object], str], ...],
+    parameters: tuple[tuple[str, ModuleParameter[object], str], ...],
     decisions: tuple[tuple[str, Decision[object]], ...],
 ) -> Derived[KernelPhysicalResult]:
     """Assemble the detached build unit from resolved values and nothing else.
@@ -552,7 +556,7 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
     if shadowed:
         raise AuthoringError(
             f"{kernel_type.__name__} declares {shadowed[0]!r}, which the Kernel layer "
-            "synthesizes from the Region, the Parameter table and the support groups"
+            "synthesizes from the Region, the ModuleParameter table and the support groups"
         )
 
     declarations = dict(declared_members(kernel_type))
@@ -963,7 +967,7 @@ def kernel_physical(
 __all__ = [
     "Kernel",
     "KernelPhysicalResult",
-    "Parameter",
+    "ModuleParameter",
     "PhysicallyUnsupported",
     "RegionDeclaration",
     "kernel_dataflow",

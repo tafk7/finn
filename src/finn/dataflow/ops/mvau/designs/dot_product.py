@@ -11,7 +11,7 @@ activation boundary -> replay -> activation_replay -> compute -> output boundary
 The Design owns PE and SIMD once.  They change the replay Region, the
 dot-product Region, and the beat contract on the edge between them, so no single
 Kernel can own them and no export or equality constraint has to connect the two.
-Both Kernels consume the same engine decision handles as ordinary Inputs.
+Both KernelChoice consume the same engine decision handles as ordinary Inputs.
 
 DotpAxi keeps pumping and its own physical feasibility.  Each Kernel declares
 exactly one Region.  The Design constructs neither, and calls no historical
@@ -27,10 +27,10 @@ from finn.dataflow.computation import (
 )
 from finn.dataflow.space.declarations import Subspace
 from finn.dataflow.designs.design import (
-    Boundary,
-    Connection,
-    Kernels,
-    Sink,
+    NetworkBoundary,
+    NetworkEdge,
+    KernelChoice,
+    EdgeSink,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
@@ -62,7 +62,7 @@ class DotProductDesign(WeightedDotProductDesign):
     pe = WeightedDotProductDesign.pe
     simd = WeightedDotProductDesign.simd
 
-    replay = Kernels(
+    replay = KernelChoice(
         Subspace(
             ReplayBufferKernel,
             repetitions=repetitions,
@@ -75,7 +75,7 @@ class DotProductDesign(WeightedDotProductDesign):
         computation=ACTIVATION_REPLAY_COMPUTATION,
     )
 
-    compute = Kernels(
+    compute = KernelChoice(
         Subspace(
             DotpAxiKernel,
             repetitions=repetitions,
@@ -94,14 +94,14 @@ class DotProductDesign(WeightedDotProductDesign):
         computation=DOT_PRODUCT_COMPUTATION,
     )
 
-    activation_replay = Connection(
+    activation_replay = NetworkEdge(
         replay.output("activation_out"),
-        Sink(compute.input("activation")),
+        EdgeSink(compute.input("activation")),
     )
 
-    activation = Boundary(replay.input("activation_in"))
-    weight = Boundary(compute.input("weight"))
-    output = Boundary(compute.output("output"))
+    activation = NetworkBoundary(replay.input("activation_in"))
+    weight = NetworkBoundary(compute.input("weight"))
+    output = NetworkBoundary(compute.output("output"))
 
 
 #: Every Input the Design consumes, for a caller assembling the bindings.

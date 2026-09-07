@@ -12,7 +12,7 @@ path, so nothing may assume a matrix.
 from __future__ import annotations
 
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
-from finn.dataflow.designs.design import Boundary, DataflowDesign, Kernels
+from finn.dataflow.designs.design import NetworkBoundary, DataflowDesign, KernelChoice
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.space.declarations import Decision, Input, Subspace, divisors_of
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -32,7 +32,7 @@ class ActivationReplayDesign(DataflowDesign):
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
 
-    replay = Kernels(
+    replay = KernelChoice(
         Subspace(
             ReplayBufferKernel,
             repetitions=repetitions,
@@ -45,8 +45,8 @@ class ActivationReplayDesign(DataflowDesign):
         computation=ACTIVATION_REPLAY_COMPUTATION,
     )
 
-    activation = Boundary(replay.input("activation_in"))
-    expanded = Boundary(replay.output("activation_out"))
+    activation = NetworkBoundary(replay.input("activation_in"))
+    expanded = NetworkBoundary(replay.output("activation_out"))
 
 
 DESIGN_INPUTS = ("repetitions", "matrix_width", "matrix_height", "activation_type")

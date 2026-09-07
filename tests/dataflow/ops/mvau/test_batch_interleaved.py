@@ -24,7 +24,7 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
-from finn.dataflow.designs.design import Boundary, Kernels
+from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
     DotpAxiKernel,
@@ -518,7 +518,7 @@ class _AliasedDesign(WeightedDotProductDesign):
     simd = WeightedDotProductDesign.simd
     interleave = BatchInterleavedDesign.interleave
 
-    compute = Kernels(
+    compute = KernelChoice(
         Subspace(
             BatchInterleavedDotpAxiKernel,
             name="first_slot",
@@ -556,9 +556,9 @@ class _AliasedDesign(WeightedDotProductDesign):
         computation=DOT_PRODUCT_COMPUTATION,
     )
 
-    activation = Boundary(compute.input("activation"))
-    weight = Boundary(compute.input("weight"))
-    output = Boundary(compute.output("output"))
+    activation = NetworkBoundary(compute.input("activation"))
+    weight = NetworkBoundary(compute.input("weight"))
+    output = NetworkBoundary(compute.output("output"))
 
 
 class _PlacedAliased(Problem_):

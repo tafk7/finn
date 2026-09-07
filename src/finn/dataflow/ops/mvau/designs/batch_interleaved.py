@@ -16,8 +16,8 @@ once, uncompacted and unreplayed.
 
 **It places one node, and that is the finding rather than a simplification.**
 There is no replay Region to compose with, because interleaving removes the
-thing replay existed to supply.  A Design is a composition of Kernels, not
-necessarily of *several* Kernels, and the shape of the composition follows the
+thing replay existed to supply.  A Design is a composition of KernelChoice, not
+necessarily of *several* KernelChoice, and the shape of the composition follows the
 arithmetic rather than the other way round.
 
 **``interleave`` is an ordinary Design-owned Decision.**  It is in the compute
@@ -32,7 +32,7 @@ anything here declared how to store it.
 from __future__ import annotations
 
 from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
-from finn.dataflow.designs.design import Boundary, Kernels
+from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -69,7 +69,7 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
     #: final batch that the Region has no schedule level for.
     interleave = Decision(int, domain=divisors_of(repetitions))
 
-    compute = Kernels(
+    compute = KernelChoice(
         Subspace(
             BatchInterleavedDotpAxiKernel,
             repetitions=repetitions,
@@ -89,9 +89,9 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
         computation=DOT_PRODUCT_COMPUTATION,
     )
 
-    activation = Boundary(compute.input("activation"))
-    weight = Boundary(compute.input("weight"))
-    output = Boundary(compute.output("output"))
+    activation = NetworkBoundary(compute.input("activation"))
+    weight = NetworkBoundary(compute.input("weight"))
+    output = NetworkBoundary(compute.output("output"))
 
     @constraint(interleave=interleave)
     def interleaving_is_more_than_one(*, interleave: int) -> object:

@@ -180,7 +180,7 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
     assert set(import_module("finn.dataflow.kernels").__all__) == {
         "Kernel",
         "KernelPhysicalResult",
-        "Parameter",
+        "ModuleParameter",
         "PhysicallyUnsupported",
         "RegionDeclaration",
         "kernel_dataflow",
@@ -193,11 +193,11 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "ReplayBufferKernel",
     }
     assert set(import_module("finn.dataflow.designs").__all__) == {
-        "Boundary",
-        "Connection",
+        "NetworkBoundary",
+        "NetworkEdge",
         "DataflowDesign",
-        "Kernels",
-        "Sink",
+        "KernelChoice",
+        "EdgeSink",
         "SelectedNetwork",
         "design_dataflow",
     }
