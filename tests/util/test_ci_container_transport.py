@@ -265,8 +265,83 @@ def test_load_is_serialised_on_the_historical_lock_path(transport):
 
 
 # ---------------------------------------------------------------------------
-# Load outcomes: optional cache vs authoritative prebuilt
+# Digest verification
 # ---------------------------------------------------------------------------
+
+
+def test_absent_digest_warns_and_keeps_the_historical_path(transport):
+    transport.publish("xilinx/finn:abc123")
+    proc = transport.run("xilinx/finn:abc123")
+    assert proc.returncode == 0, proc.stderr
+    assert "legacy" in proc.stdout.lower()
+    # Nothing is verified, so nothing claims to be.
+    assert "Verified" not in proc.stdout
+
+
+def test_matching_digest_verifies(transport):
+    transport.publish("xilinx/finn:abc123", digest=ID_A + "\n")
+    proc = transport.run("xilinx/finn:abc123", loads=("xilinx/finn:abc123", ID_A))
+    assert proc.returncode == 0, proc.stderr
+    assert "Verified" in proc.stdout
+    assert ID_A in proc.stdout
+
+
+def test_mismatching_digest_fails_before_the_container_runs(transport):
+    transport.publish("xilinx/finn:abc123", digest=ID_A + "\n")
+    proc = transport.run("xilinx/finn:abc123", loads=("xilinx/finn:abc123", ID_B))
+    assert proc.returncode == 1
+    assert "image identity mismatch" in proc.stderr.lower()
+    assert ID_A in proc.stderr and ID_B in proc.stderr
+
+
+def test_empty_digest_file_fails(transport):
+    transport.publish("xilinx/finn:abc123", digest="")
+    proc = transport.run("xilinx/finn:abc123")
+    assert proc.returncode == 1
+    assert "finn-image-digest.txt" in proc.stderr
+
+
+def test_multiple_digest_lines_fail(transport):
+    transport.publish("xilinx/finn:abc123", digest="%s\n%s\n" % (ID_A, ID_B))
+    proc = transport.run("xilinx/finn:abc123")
+    assert proc.returncode == 1
+    assert "exactly one" in proc.stderr
+
+
+def test_malformed_digest_fails(transport):
+    for bad in ("not-a-digest\n", "sha256:zzzz\n", "a1" * 32 + "\n", "sha256:" + "a1" * 31 + "\n"):
+        transport.publish("xilinx/finn:abc123", digest=bad)
+        proc = transport.run("xilinx/finn:abc123")
+        assert proc.returncode == 1, bad
+        assert "sha256:" in proc.stderr, bad
+
+
+def test_malformed_digest_fails_before_the_load(transport):
+    # A malformed sidecar is a publisher bug. Detect it without first pulling
+    # several gigabytes off NFS.
+    transport.publish("xilinx/finn:abc123", digest="not-a-digest\n")
+    proc = transport.run("xilinx/finn:abc123")
+    assert proc.returncode == 1
+    assert not any(call.startswith("load") for call in transport.docker_calls())
+
+
+def test_inspect_failure_after_a_successful_load_fails(transport):
+    transport.publish("xilinx/finn:abc123", digest=ID_A + "\n")
+    proc = transport.run("xilinx/finn:abc123", FAKE_DOCKER_INSPECT_FORMAT_FAIL=1)
+    assert proc.returncode == 1
+    assert "could not read the image ID" in proc.stderr
+
+
+def test_compatibility_retag_is_verified_through_the_requested_tag(transport):
+    # The published tag differs from the tag Compose will use, so the re-tag
+    # runs first and verification must follow the tag the container actually
+    # references.
+    transport.publish("xilinx/finn:published", digest=ID_A + "\n")
+    proc = transport.run("xilinx/finn:requested", loads=("xilinx/finn:published", ID_A))
+    assert proc.returncode == 0, proc.stderr
+    assert "Tagging xilinx/finn:published as xilinx/finn:requested" in proc.stdout
+    assert "Verified" in proc.stdout
+    assert "tag xilinx/finn:published xilinx/finn:requested" in transport.docker_calls()
 
 
 def test_verification_reads_the_requested_tag_not_the_recorded_one(transport):

@@ -27,6 +27,30 @@ FINN_DOCKER_TAG="${1:?usage: $0 <tag>}"
 : "${FINN_DOCKER_PREBUILT:=0}"
 : "${FINN_DOCKER_SHARED_IMAGE_DIR:=}"
 
+# Echo the single image ID recorded by build-images.sh, or fail with a reason.
+# Called BEFORE the load: a malformed sidecar is a publisher bug, and there is
+# no point pulling several gigabytes off NFS to discover it.
+read_expected_image_id () {
+  local file="$1" recorded lines
+  # `grep .` drops the trailing newline printf leaves behind. Any other line is
+  # not a single recorded ID, whatever it looks like.
+  recorded=$(grep . "$file")
+  if [ -z "$recorded" ]; then
+    recho "$file is empty; expected one image ID in sha256:<hex> form"
+    return 1
+  fi
+  lines=$(printf '%s\n' "$recorded" | wc -l)
+  if [ "$lines" -ne 1 ]; then
+    recho "$file records $lines image IDs; expected exactly one"
+    return 1
+  fi
+  if ! [[ "$recorded" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    recho "$file does not record a Docker image ID in sha256:<hex> form: $recorded"
+    return 1
+  fi
+  printf '%s\n' "$recorded"
+}
+
 # fail fast on PREBUILT=1 with no usable image source: with no shared dir
 # configured and no local image, docker run further down would fail with
 # a generic "Unable to find image" much later in the pipeline.
@@ -45,12 +69,23 @@ if [ -n "$FINN_DOCKER_SHARED_IMAGE_DIR" ] && \
   SHARED_LOADED="0"
   SHARED_IMG="$SHARED_DIR/finn-docker-image.tar.gz"
   SHARED_TAG_FILE="$SHARED_DIR/finn-docker-tag.txt"
+  SHARED_DIGEST_FILE="$SHARED_DIR/finn-image-digest.txt"
+  EXPECTED_ID=""
   if [ -f "$SHARED_IMG" ] && [ -f "$SHARED_TAG_FILE" ]; then
     gecho "Loading Docker image from shared storage ($SHARED_DIR)..."
     SHARED_TAG=$(cat "$SHARED_TAG_FILE")
     if [ "$FINN_DOCKER_PREBUILT" = "1" ] && [ "$SHARED_TAG" != "$FINN_DOCKER_TAG" ]; then
       recho "Shared Docker tag $SHARED_TAG does not match requested tag $FINN_DOCKER_TAG"
       exit 1
+    fi
+    # The digest sidecar is what makes the tag more than a promise. It is
+    # optional only for backwards compatibility: archives published before
+    # build-images.sh recorded an image ID have the archive and the tag alone,
+    # and Jenkins must keep loading those.
+    if [ -f "$SHARED_DIGEST_FILE" ]; then
+      EXPECTED_ID=$(read_expected_image_id "$SHARED_DIGEST_FILE") || exit 1
+    else
+      gecho "WARNING: no finn-image-digest.txt in $SHARED_DIR. This is a legacy, tag-only archive; its image identity cannot be verified"
     fi
     # local /tmp lock to serialise concurrent loads on the same host
     # $1 is intentionally expanded by the inner bash.
@@ -64,6 +99,29 @@ if [ -n "$FINN_DOCKER_SHARED_IMAGE_DIR" ] && \
       fi
     else
       gecho "WARNING: Failed to load Docker image from shared storage ($SHARED_DIR)"
+    fi
+    # Verify what the requested tag now references, not what the archive
+    # claimed: the re-tag above is the last thing that moves it, and the
+    # requested tag is what Compose will run.
+    #
+    # This proves the identity immediately after the load. It does NOT stop
+    # another concurrent build from reassigning the same mutable tag before the
+    # container starts. Closing that interval needs run-by-image-ID,
+    # build-specific tags or a registry, and is deferred.
+    if [ "$SHARED_LOADED" = "1" ] && [ -n "$EXPECTED_ID" ]; then
+      if ! ACTUAL_ID=$(docker image inspect --format '{{.Id}}' "$FINN_DOCKER_TAG") \
+         || [ -z "$ACTUAL_ID" ]; then
+        recho "loaded $SHARED_IMG but could not read the image ID of $FINN_DOCKER_TAG"
+        exit 1
+      fi
+      if [ "$ACTUAL_ID" != "$EXPECTED_ID" ]; then
+        recho "image identity mismatch after loading $SHARED_IMG"
+        recho "  $SHARED_DIGEST_FILE records $EXPECTED_ID"
+        recho "  $FINN_DOCKER_TAG resolves to  $ACTUAL_ID"
+        recho "Refusing to run tests against an image that is not the published one."
+        exit 1
+      fi
+      gecho "Verified $FINN_DOCKER_TAG against recorded image ID $EXPECTED_ID"
     fi
   fi
   if [ "$SHARED_LOADED" != "1" ] && [ "$FINN_DOCKER_PREBUILT" != "1" ]; then
