@@ -241,9 +241,13 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         space.__all__
     )
     # No layer specialization either: those are exported by their own package.
-    assert not {"DataflowDesign", "DotpAxiKernel", "Kernel", "Kernels", "RegionDeclaration"} & set(
-        space.__all__
-    )
+    assert not {
+        "DataflowDesign",
+        "DotpAxiKernel",
+        "Kernel",
+        "KernelChoice",
+        "RegionDeclaration",
+    } & set(space.__all__)
     assert all(not name.startswith("_") for name in space.__all__)
 
 
@@ -256,7 +260,7 @@ def test_every_layer_names_its_own_specialization() -> None:
     """A Kernel author declaring a `RegionDeclaration` reaches for the Kernel package."""
 
     assert kernels.RegionDeclaration is kernel.RegionDeclaration
-    for name in ("Kernel", "Parameter", "RegionDeclaration", "kernel_physical"):
+    for name in ("Kernel", "ModuleParameter", "RegionDeclaration", "kernel_physical"):
         assert name in kernels.__all__
-    for name in ("Boundary", "Connection", "DataflowDesign", "Kernels", "Sink"):
+    for name in ("NetworkBoundary", "NetworkEdge", "DataflowDesign", "KernelChoice", "EdgeSink"):
         assert name in designs.__all__

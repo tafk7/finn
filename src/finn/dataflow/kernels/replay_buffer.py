@@ -39,7 +39,7 @@ from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Input, derived
-from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
+from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration
 from finn.dataflow.model.region import NumericElementType, element_width
 from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
 
@@ -85,9 +85,9 @@ class ReplayBufferKernel(Kernel):
     def data_width(*, activation_type: NumericElementType, simd: int) -> int:
         return simd * element_width(activation_type)
 
-    LEN = Parameter(sequence_length)
-    REP = Parameter(replay_count)
-    W = Parameter(data_width)
+    LEN = ModuleParameter(sequence_length)
+    REP = ModuleParameter(replay_count)
+    W = ModuleParameter(data_width)
 
     sources = (
         CopiedSource(

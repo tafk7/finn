@@ -37,7 +37,7 @@ Space                  ordinary declarations, direct Subspace composition,
 Kernel(Space)          semantic Inputs, physical-only Decisions,
                        one RegionDeclaration(family, version, construct, **deps)
    |
-DataflowDesign(Space)  semantic Decisions, Kernels segments,
+DataflowDesign(Space)  semantic Decisions, KernelChoice segments,
                        explicit Connections and Boundaries,
                        one selected canonical DataflowNetwork
    |
@@ -321,7 +321,7 @@ same class under several namespaces is deterministic and thread-safe.
 - one `ComputationContract`;
 - exactly one `RegionDeclaration(...)` member named `region`;
 - physical-only decisions and its feasibility constraints;
-- scalar physical `Parameter`s;
+- scalar physical `ModuleParameter`s;
 - an exact `ComponentABI`; and
 - an ordered source closure.
 
@@ -330,7 +330,7 @@ from typing_extensions import Self
 
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
-from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration
+from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration
 from finn.dataflow.model import DataflowRegion, RegionRefused
 from finn.dataflow.space import Decision, Input
 
@@ -355,7 +355,7 @@ class ExampleKernel(Kernel):
         lanes=lanes,
     )
 
-    LANES = Parameter(lanes)
+    LANES = ModuleParameter(lanes)
 
     @classmethod
     def component_abi(cls, configured: Self) -> ComponentABI:
@@ -375,7 +375,7 @@ It does not retain an `Engine`, `DesignPoint`, Network, node, edge, filesystem,
 tool, or artifact store.
 
 The ABI parameter table must exactly match the Kernel's resolved physical
-parameter table. A physical constant uses `Parameter.constant(value, why=...)`
+parameter table. A physical constant uses `ModuleParameter.constant(value, why=...)`
 so the reason it is not a design-space value is explicit.
 
 ### RTL source ownership
@@ -487,7 +487,13 @@ selector like any other decision. Nothing about that is Kernel-specific.
 they form. It consumes external facts only through `Input`, never `Problem`.
 
 ```python
-from finn.dataflow.designs import Boundary, Connection, DataflowDesign, Kernels, Sink
+from finn.dataflow.designs import (
+    NetworkBoundary,
+    NetworkEdge,
+    DataflowDesign,
+    KernelChoice,
+    EdgeSink,
+)
 from finn.dataflow.space import Decision, Input, Subspace, divisors_of
 
 
@@ -498,22 +504,22 @@ class ExampleDesign(DataflowDesign):
     extent = Input(int)
     lanes = Decision(int, domain=divisors_of(extent))
 
-    produce = Kernels(
+    produce = KernelChoice(
         Subspace(ProducerKernel, extent=extent, lanes=lanes),
         computation=PRODUCE,
     )
-    consume = Kernels(
+    consume = KernelChoice(
         Subspace(ExampleKernel, extent=extent, lanes=lanes),
         Subspace(AlternativeKernel, width=extent, parallel_lanes=lanes),
         computation=CONSUME,
     )
 
-    stream = Connection(produce.output("stream"), Sink(consume.input("input")))
-    source = Boundary(produce.input("source"))
-    result = Boundary(consume.output("output"))
+    stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("input")))
+    source = NetworkBoundary(produce.input("source"))
+    result = NetworkBoundary(consume.output("output"))
 ```
 
-`Kernels` is a thin `SubspaceChoice` specialization written through the
+`KernelChoice` is a thin `SubspaceChoice` specialization written through the
 three-method seam -- `candidate_id`, `validate_candidate`, `default_outputs` --
 and nothing else. It adds the required `ComputationContract` that every
 candidate must declare, the implicit selected Region output, and the stable
@@ -523,8 +529,8 @@ stable `id`, and that id *is* the alternative id; `Subspace(..., name=...)`
 aliases it, which is what lets one Kernel class fill two candidate slots. Roles,
 node ids, and candidate ids are single path segments.
 
-`Connection` and `Boundary` generate one ordinary property,
-`semantic.<design>.network`, from the exact selected Regions. A `Sink` owns its
+`NetworkEdge` and `NetworkBoundary` generate one ordinary property,
+`semantic.<design>.network`, from the exact selected Regions. An `EdgeSink` owns its
 position map because a canonical fan-out is one Edge with several sink
 contracts; omitting the map means the identity over the selected source port's
 image. Endpoints carry only segment, port id, and expected direction -- the
@@ -532,7 +538,7 @@ Region owns the real port list -- so a claim the Region cannot honour is named
 by canonical `validate_network` with the canon's own issue code. The one
 Design-specific supplement is `segments_match_network`.
 
-`when=` on a segment, a Connection, or a Boundary makes it conditional.
+`when=` on a segment, a NetworkEdge, or a NetworkBoundary makes it conditional.
 Complementarity is not proved syntactically; canonical endpoint ownership
 rejects both-active and neither-active at every point.
 

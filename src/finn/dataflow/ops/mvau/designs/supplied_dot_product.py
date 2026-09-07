@@ -41,10 +41,10 @@ from finn.dataflow.computation import (
     DOT_PRODUCT_COMPUTATION,
 )
 from finn.dataflow.designs.design import (
-    Boundary,
-    Connection,
-    Kernels,
-    Sink,
+    NetworkBoundary,
+    NetworkEdge,
+    KernelChoice,
+    EdgeSink,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
 from finn.dataflow.kernels.memstream import CYCLIC_PARAMETER_DELIVERY, MemstreamKernel
@@ -112,7 +112,7 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
     def keeps_weights_locally(*, supply: WeightSupply) -> bool:
         return supply is not WeightSupply.EXTERNAL
 
-    replay = Kernels(
+    replay = KernelChoice(
         Subspace(
             ReplayBufferKernel,
             repetitions=repetitions,
@@ -127,7 +127,7 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
 
     #: Two candidates and one selector.  The embedded core is a different
     #: Region, so it is a different candidate rather than a mode of the first.
-    compute = Kernels(
+    compute = KernelChoice(
         Subspace(
             DotpAxiKernel,
             repetitions=repetitions,
@@ -161,7 +161,7 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
         computation=DOT_PRODUCT_COMPUTATION,
     )
 
-    memory = Kernels(
+    memory = KernelChoice(
         Subspace(
             MemstreamKernel,
             repetitions=repetitions,
@@ -175,24 +175,24 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
         when=decouples_weights,
     )
 
-    activation_replay = Connection(
+    activation_replay = NetworkEdge(
         replay.output("activation_out"),
-        Sink(compute.input("activation")),
+        EdgeSink(compute.input("activation")),
     )
 
     #: The decoupled case's second edge.  Present exactly when the memory node
     #: is, so a Network never carries an edge from a node that is not there.
-    weight_supply_edge = Connection(
+    weight_supply_edge = NetworkEdge(
         memory.output("weight"),
-        Sink(compute.input("weight")),
+        EdgeSink(compute.input("weight")),
         when=decouples_weights,
     )
 
-    activation = Boundary(replay.input("activation_in"))
+    activation = NetworkBoundary(replay.input("activation_in"))
     #: Substituted, not suppressed: external streaming is the only mode in which
     #: the matrix crosses this Design's boundary.
-    weight = Boundary(compute.input("weight"), when=streams_weights)
-    output = Boundary(compute.output("output"))
+    weight = NetworkBoundary(compute.input("weight"), when=streams_weights)
+    output = NetworkBoundary(compute.output("output"))
 
     @constraint(supply=weight_supply, present=initializer_present)
     def local_weights_need_an_initializer(*, supply: WeightSupply, present: bool) -> object:

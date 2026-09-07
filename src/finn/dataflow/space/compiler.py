@@ -1094,12 +1094,12 @@ def resolve_value_source(
 ) -> _Ref[object]:
     """Resolve any class-body value declaration to its compiled handle.
 
-    A specialization -- a Kernel ``Parameter``, a Design ``when=`` or position
+    A specialization -- a Kernel ``ModuleParameter``, a Design ``when=`` or position
     map -- reads values the generic compiler has already bound, so it resolves
     them here rather than reimplementing the walk.  Each partial copy of this
     was a place where one kind of source silently stopped composing: both
     handled ``ChildValue`` and neither handled ``BranchOutput``, so a value
-    selected by a ``SubspaceChoice`` could not reach a Parameter or a topology condition
+    selected by a ``SubspaceChoice`` could not reach a ModuleParameter or a topology condition
     even though the generic compiler understood it perfectly well.
     """
 

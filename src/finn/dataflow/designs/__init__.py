@@ -5,7 +5,7 @@
 
 A ``DataflowDesign`` owns every decision that changes its selected logical
 Regions or the Network they form.  It places named segments of candidate Kernel
-``Subspace`` alternatives and declares explicit ``Connection`` and ``Boundary``
+``Subspace`` alternatives and declares explicit ``NetworkEdge`` and ``NetworkBoundary``
 topology; the Network it publishes is generated from the exact selected Regions.
 
 This package holds the *generic* mechanism only.  A Design that exists to
@@ -18,24 +18,24 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from finn.dataflow.designs.design import (
-        Boundary,
-        Connection,
+        NetworkBoundary,
+        NetworkEdge,
         DataflowDesign,
-        Kernels,
+        KernelChoice,
         SelectedNetwork,
-        Sink,
+        EdgeSink,
         design_dataflow,
     )
 
 _LAZY_EXPORTS = {
     name: ("finn.dataflow.designs.design", name)
     for name in (
-        "Boundary",
-        "Connection",
+        "NetworkBoundary",
+        "NetworkEdge",
         "DataflowDesign",
-        "Kernels",
+        "KernelChoice",
         "SelectedNetwork",
-        "Sink",
+        "EdgeSink",
         "design_dataflow",
     )
 }
@@ -54,11 +54,11 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "Boundary",
-    "Connection",
+    "NetworkBoundary",
+    "NetworkEdge",
     "DataflowDesign",
-    "Kernels",
+    "KernelChoice",
     "SelectedNetwork",
-    "Sink",
+    "EdgeSink",
     "design_dataflow",
 ]

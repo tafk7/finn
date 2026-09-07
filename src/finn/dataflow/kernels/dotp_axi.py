@@ -37,7 +37,7 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.kernels.kernel import (
     Kernel,
-    Parameter,
+    ModuleParameter,
     PhysicallyUnsupported,
     RegionDeclaration,
 )
@@ -378,21 +378,21 @@ class DotpAxiKernel(Kernel):
         name="realizable",
     )
 
-    PE = Parameter(pe)
-    SIMD = Parameter(simd)
-    PUMPED_COMPUTE = Parameter(compute_pumping)
-    ACTIVATION_WIDTH = Parameter(activation_width)
-    WEIGHT_WIDTH = Parameter(weight_width)
-    ACCU_WIDTH = Parameter(accumulator_width)
-    VERSION = Parameter(dsp_version)
-    SIGNED_ACTIVATIONS = Parameter(signed_activations)
-    SEGMENTLEN = Parameter(segment_length)
-    NARROW_WEIGHTS = Parameter(narrow_weights)
-    ACTIVATION_BROADCASTING = Parameter.constant(
+    PE = ModuleParameter(pe)
+    SIMD = ModuleParameter(simd)
+    PUMPED_COMPUTE = ModuleParameter(compute_pumping)
+    ACTIVATION_WIDTH = ModuleParameter(activation_width)
+    WEIGHT_WIDTH = ModuleParameter(weight_width)
+    ACCU_WIDTH = ModuleParameter(accumulator_width)
+    VERSION = ModuleParameter(dsp_version)
+    SIGNED_ACTIVATIONS = ModuleParameter(signed_activations)
+    SEGMENTLEN = ModuleParameter(segment_length)
+    NARROW_WEIGHTS = ModuleParameter(narrow_weights)
+    ACTIVATION_BROADCASTING = ModuleParameter.constant(
         1,
         why="this implementation broadcasts one activation vector across its PE lanes",
     )
-    FORCE_BEHAVIORAL = Parameter.constant(
+    FORCE_BEHAVIORAL = ModuleParameter.constant(
         0,
         why="the production implementation uses inferred DSP logic",
     )

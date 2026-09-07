@@ -27,7 +27,7 @@ from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Input, Problem, Space
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.kernel import Kernel, Parameter, RegionDeclaration, kernel_physical
+from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration, kernel_physical
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
@@ -55,7 +55,7 @@ class ArtifactKernel(Kernel):
         lanes=lanes,
     )
 
-    LANES = Parameter(lanes)
+    LANES = ModuleParameter(lanes)
     sources = (
         CopiedSource("fixture", "helper.sv", provides=("module:helper",)),
         CopiedSource(

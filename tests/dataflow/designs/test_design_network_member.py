@@ -23,9 +23,9 @@ from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.computation import ComputationContract
 from finn.dataflow.designs.design import (
     RESERVED_DESIGN_NAMES,
-    Boundary,
+    NetworkBoundary,
     DataflowDesign,
-    Kernels,
+    KernelChoice,
     SelectedNetwork,
     design_dataflow,
 )
@@ -100,8 +100,8 @@ class OneSegment(DataflowDesign):
     version = "1"
 
     extent = Input(int)
-    only = Kernels(Subspace(EmitKernel, extent=extent), computation=EMIT)
-    result = Boundary(only.output("output"))
+    only = KernelChoice(Subspace(EmitKernel, extent=extent), computation=EMIT)
+    result = NetworkBoundary(only.output("output"))
 
 
 def _compiled(design_type: type[DataflowDesign]):
@@ -192,7 +192,7 @@ def test_a_class_body_may_not_replace_the_network() -> None:
             version = "1"
             extent = Input(int)
             network = SelectedNetwork()
-            only = Kernels(Subspace(EmitKernel, extent=extent), computation=EMIT)
+            only = KernelChoice(Subspace(EmitKernel, extent=extent), computation=EMIT)
 
 
 @pytest.mark.parametrize("name", sorted(RESERVED_DESIGN_NAMES - {"network"}))
@@ -226,8 +226,8 @@ def test_an_abstract_intermediate_with_no_segments_is_left_alone() -> None:
     class Concrete(Abstract):
         id = "concrete"
         version = "1"
-        only = Kernels(Subspace(EmitKernel, extent=Abstract.extent), computation=EMIT)
-        result = Boundary(only.output("output"))
+        only = KernelChoice(Subspace(EmitKernel, extent=Abstract.extent), computation=EMIT)
+        result = NetworkBoundary(only.output("output"))
 
     assert isinstance(Concrete.__dict__["dataflow"], Projection)
     engine, point, design = _started(Concrete)

@@ -327,7 +327,7 @@ def _atomic(what: str, value: str | None) -> None:
         raise AuthoringError(f"{what} must be one path segment; {value!r} contains a dot")
 
 
-class Kernels(SubspaceChoice):
+class KernelChoice(SubspaceChoice):
     """One stable Design segment holding exactly one selected Kernel.
 
     A thin ``SubspaceChoice`` specialization written entirely through the
@@ -441,7 +441,7 @@ class SegmentEndpoint:
     maintained as a second port schema that can drift.
     """
 
-    segment: Kernels
+    segment: KernelChoice
     port_id: str
     output: bool
 
@@ -451,8 +451,8 @@ class SegmentEndpoint:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
-class Sink:
-    """One consuming endpoint of a Connection and its source-to-sink map.
+class EdgeSink:
+    """One consuming endpoint of a NetworkEdge and its source-to-sink map.
 
     Per-sink rather than per-edge because a canonical fan-out is one Edge with
     several sink contracts, and each contract owns its own position map.  An
@@ -464,48 +464,49 @@ class Sink:
 
     def __post_init__(self) -> None:
         if not isinstance(self.endpoint, SegmentEndpoint):
-            raise AuthoringError("a Sink consumes a segment endpoint")
+            raise AuthoringError("an EdgeSink consumes a segment endpoint")
         if self.endpoint.output:
             raise AuthoringError(
-                f"a Sink must name an input port; {self.endpoint.port_id!r} is declared as output"
+                "an EdgeSink must name an input port; "
+                f"{self.endpoint.port_id!r} is declared as output"
             )
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class Connection:
+class NetworkEdge:
     """One canonical Edge: one source endpoint replicated to ordered sinks."""
 
     source: SegmentEndpoint
-    sinks: tuple[Sink, ...]
+    sinks: tuple[EdgeSink, ...]
     stable_name: str | None
     when: ValueSource[bool] | None
 
     def __init__(
         self,
         source: SegmentEndpoint,
-        *sinks: Sink,
+        *sinks: EdgeSink,
         name: str | None = None,
         when: ValueSource[bool] | None = None,
     ) -> None:
         if not isinstance(source, SegmentEndpoint):
-            raise AuthoringError("a Connection starts at a segment endpoint")
+            raise AuthoringError("a NetworkEdge starts at a segment endpoint")
         if not source.output:
             raise AuthoringError(
-                f"a Connection source must name an output port; "
+                f"a NetworkEdge source must name an output port; "
                 f"{source.port_id!r} is declared as input"
             )
         if not sinks:
-            raise AuthoringError("a Connection needs at least one Sink")
-        if any(not isinstance(sink, Sink) for sink in sinks):
-            raise AuthoringError("a Connection takes Sink declarations after its source")
+            raise AuthoringError("a NetworkEdge needs at least one EdgeSink")
+        if any(not isinstance(sink, EdgeSink) for sink in sinks):
+            raise AuthoringError("a NetworkEdge takes EdgeSink declarations after its source")
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "sinks", tuple(sinks))
-        object.__setattr__(self, "stable_name", _declaration_name(name, "a Connection"))
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a NetworkEdge"))
         object.__setattr__(self, "when", when)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
-class Boundary:
+class NetworkBoundary:
     """One externally visible endpoint of the selected Network."""
 
     endpoint: SegmentEndpoint
@@ -520,22 +521,22 @@ class Boundary:
         when: ValueSource[bool] | None = None,
     ) -> None:
         if not isinstance(endpoint, SegmentEndpoint):
-            raise AuthoringError("a Boundary exposes a segment endpoint")
+            raise AuthoringError("a NetworkBoundary exposes a segment endpoint")
         object.__setattr__(self, "endpoint", endpoint)
-        object.__setattr__(self, "stable_name", _declaration_name(name, "a Boundary"))
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a NetworkBoundary"))
         object.__setattr__(self, "when", when)
 
 
-TopologyDeclaration = Connection | Boundary
+TopologyDeclaration = NetworkEdge | NetworkBoundary
 
 #: Class-body values the Design compiler recognizes beyond the generic set.
-TOPOLOGY_TYPES: tuple[type, ...] = (Connection, Boundary)
+TOPOLOGY_TYPES: tuple[type, ...] = (NetworkEdge, NetworkBoundary)
 
 
 def topology_members(
     design_type: type[DataflowDesign],
 ) -> tuple[tuple[str, TopologyDeclaration], ...]:
-    """Collect Connection and Boundary members in deterministic inherited order."""
+    """Collect NetworkEdge and NetworkBoundary members in deterministic inherited order."""
 
     ordered: dict[str, TopologyDeclaration] = {}
     for base in reversed(design_type.__mro__):
@@ -578,7 +579,7 @@ class _CompiledKernelSegment:
     """One stable Design role and the Kernel branch that fills it."""
 
     member_name: str
-    declaration: Kernels
+    declaration: KernelChoice
     role: str
     node_id: str
     required_computation: ComputationContract
@@ -660,7 +661,7 @@ class _DesignCompilation(Generic[D]):
 def _segment(
     design_type: type[DataflowDesign],
     member_name: str,
-    declaration: Kernels,
+    declaration: KernelChoice,
     branch: _CompiledBranch,
 ) -> _CompiledKernelSegment:
     # Taken from the declaration, not split back out of the namespace it was
@@ -735,13 +736,13 @@ def _position_map_property(
     source: _Ref[object],
     gate: EvaluatorSpec[Answer[bool]] | None,
 ) -> DerivedProperty:
-    """Forward one declared position map, under the Connection's own condition.
+    """Forward one declared position map, under the NetworkEdge's own condition.
 
     The Network cannot depend on the author's map value directly.  A dependency
-    is demanded before the evaluator runs, so an inactive Connection whose map
+    is demanded before the evaluator runs, so an inactive NetworkEdge whose map
     reads an uncommitted Decision would leave the whole Network unresolved --
     an inactive topology declaration that is not actually inactive.  Routing the
-    map through a property that carries the Connection's gate makes absence the
+    map through a property that carries the NetworkEdge's gate makes absence the
     answer, because applicability is decided before dependencies are prepared.
     """
 
@@ -769,7 +770,11 @@ def _topology(
         id(declaration): segment
         for segment, declaration in zip(
             segments,
-            (value for _name, value in declared_members(design_type) if isinstance(value, Kernels)),
+            (
+                value
+                for _name, value in declared_members(design_type)
+                if isinstance(value, KernelChoice)
+            ),
         )
     }
     connections: list[_CompiledConnection] = []
@@ -779,7 +784,7 @@ def _topology(
         identity = member_name if declaration.stable_name is None else declaration.stable_name
         what = f"topology {identity!r}"
         active = _boolean_ref(design_type, compiled, declaration.when, what)
-        if isinstance(declaration, Connection):
+        if isinstance(declaration, NetworkEdge):
             gate = _gate(active, f"{compiled.namespace}.{identity}")
             sinks: list[_CompiledSink] = []
             for index, sink in enumerate(declaration.sinks):
@@ -991,7 +996,7 @@ def _network_property(
 
 def _declared_segments(
     design_type: type[DataflowDesign],
-) -> tuple[tuple[str, str, Kernels], ...]:
+) -> tuple[tuple[str, str, KernelChoice], ...]:
     """Every Kernel segment's role and node id, read from the class body alone.
 
     The same derivation ``_segment`` performs during lowering, available before
@@ -1001,9 +1006,9 @@ def _declared_segments(
     Design that does not exist.
     """
 
-    resolved: list[tuple[str, str, Kernels]] = []
+    resolved: list[tuple[str, str, KernelChoice]] = []
     for member_name, declaration in declared_members(design_type):
-        if not isinstance(declaration, Kernels):
+        if not isinstance(declaration, KernelChoice):
             continue
         # The candidate check the compiler would run later, run now.  Synthesis
         # is about to ask each alternative for its exported Region, and a
@@ -1016,10 +1021,10 @@ def _declared_segments(
     return tuple(resolved)
 
 
-def _segment_region(declaration: Kernels) -> ValueSource[object]:
+def _segment_region(declaration: KernelChoice) -> ValueSource[object]:
     """One segment's selected-Region handle, past mypy's descriptor rule.
 
-    ``Kernels.region`` returns a ``ValueSource``, and a type checker applies the
+    ``KernelChoice.region`` returns a ``ValueSource``, and a type checker applies the
     descriptor protocol to any attribute whose declared type defines
     ``__get__`` -- so the handle types as the resolved Region it would produce
     on an attached occurrence.  Here it is a declaration being wired into
@@ -1139,7 +1144,7 @@ def _synthesize_design_projection(design_type: type[DataflowDesign]) -> None:
     reason: the output of the projection is this class's Network over this
     class's segments, and a base class has neither.
 
-    An abstract intermediate -- a Design with no ``Kernels`` segment yet -- is
+    An abstract intermediate -- a Design with no ``KernelChoice`` segment yet -- is
     left alone.  ``_finalize_design`` is where a class that is actually compiled
     is required to be complete, so an incomplete base is an ordinary thing to
     write and not an error until someone tries to use it.
@@ -1232,7 +1237,7 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
     segments = tuple(
         _segment(design_type, name, declaration, design.branch(name))
         for name, declaration in declarations.items()
-        if isinstance(declaration, Kernels)
+        if isinstance(declaration, KernelChoice)
     )
     if not segments:
         raise AuthoringError(f"{design_type.__name__} must declare at least one Kernel segment")
@@ -1466,13 +1471,13 @@ def design_dataflow(
 __all__ = [
     "RESERVED_DESIGN_NAMES",
     "TOPOLOGY_TYPES",
-    "Boundary",
-    "Connection",
+    "NetworkBoundary",
+    "NetworkEdge",
     "DataflowDesign",
-    "Kernels",
+    "KernelChoice",
     "SegmentEndpoint",
     "SelectedNetwork",
-    "Sink",
+    "EdgeSink",
     "TopologyDeclaration",
     "design_dataflow",
     "topology_members",
