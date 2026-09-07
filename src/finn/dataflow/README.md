@@ -38,7 +38,7 @@ Kernel(Space)          semantic Inputs, physical-only Decisions,
                        one RegionDeclaration(family, version, construct, **deps)
    |
 DataflowDesign(Space)  semantic Decisions, KernelChoice segments,
-                       explicit Connections and Boundaries,
+                       explicit NetworkEdge and NetworkBoundary declarations,
                        one selected canonical DataflowNetwork
    |
 DataflowOp             one ONNX node, frozen source facts, a closed set of
@@ -318,7 +318,6 @@ same class under several namespaces is deterministic and thread-safe.
 `Kernel` is the first specialization of `Space`. A Kernel class declares:
 
 - a stable `id` and `version`;
-- one `ComputationContract`;
 - exactly one `RegionDeclaration(...)` member named `region`;
 - physical-only decisions and its feasibility constraints;
 - scalar physical `ModuleParameter`s;
@@ -326,10 +325,9 @@ same class under several namespaces is deterministic and thread-safe.
 - an ordered source closure.
 
 ```python
-from typing_extensions import Self
+from collections.abc import Mapping
 
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration
 from finn.dataflow.model import DataflowRegion, RegionRefused
 from finn.dataflow.space import Decision, Input
@@ -341,7 +339,6 @@ def build_region(extent: int, lanes: int) -> DataflowRegion: ...
 class ExampleKernel(Kernel):
     id = "example"
     version = "1"
-    computation = ComputationContract("example.copy")
 
     extent = Input(int)
     lanes = Input(int)
@@ -358,21 +355,24 @@ class ExampleKernel(Kernel):
     LANES = ModuleParameter(lanes)
 
     @classmethod
-    def component_abi(cls, configured: Self) -> ComponentABI:
+    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
         return ComponentABI(
             "example",
             (),
-            (("LANES", str(configured.LANES)),),
+            (("LANES", str(parameters["LANES"])),),
         )
 ```
 
-Kernel compilation automatically adds structural Region validation, a
-whole-Kernel feasibility set, and a readiness profile. Configuration succeeds
-only after all owned decisions, derived physical parameters, and constraints
-resolve. The configured object retains its Region, local assignments, imported
-decision provenance, physical parameter table, ABI, and source contributions.
-It does not retain an `Engine`, `DesignPoint`, Network, node, edge, filesystem,
-tool, or artifact store.
+Kernel compilation generates separate `dataflow` and `physical` projections.
+`dataflow.accepted_answer` yields the Region after its semantic constraints
+pass. `physical.accepted_answer` yields a detached `ModuleBuildSpec` after the
+physical parameters, Decisions and constraints resolve. The spec carries the
+implementation id/version, Region witness, scalar parameter table, ABI, source
+contributions, scalar render context, and root-relative imported Decision names.
+Both mappings are frozen snapshots. Artifacts receive this spec and declared
+source roots; the ABI and render helpers receive only the resolved parameter
+table. Region family/version remain on `RegionDeclaration`; local assignments
+remain on the Space occurrence.
 
 The ABI parameter table must exactly match the Kernel's resolved physical
 parameter table. A physical constant uses `ModuleParameter.constant(value, why=...)`
@@ -506,12 +506,10 @@ class ExampleDesign(DataflowDesign):
 
     produce = KernelChoice(
         Subspace(ProducerKernel, extent=extent, lanes=lanes),
-        computation=PRODUCE,
     )
     consume = KernelChoice(
         Subspace(ExampleKernel, extent=extent, lanes=lanes),
         Subspace(AlternativeKernel, width=extent, parallel_lanes=lanes),
-        computation=CONSUME,
     )
 
     stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("input")))
@@ -521,9 +519,8 @@ class ExampleDesign(DataflowDesign):
 
 `KernelChoice` is a thin `SubspaceChoice` specialization written through the
 three-method seam -- `candidate_id`, `validate_candidate`, `default_outputs` --
-and nothing else. It adds the required `ComputationContract` that every
-candidate must declare, the implicit selected Region output, and the stable
-Design role and Network node id. Its alternatives
+and nothing else. It admits explicitly listed Kernel candidates, forwards the
+selected Region, and supplies stable Design role and Network node identities. Its alternatives
 are positional rather than a mapping because a Kernel already carries its own
 stable `id`, and that id *is* the alternative id; `Subspace(..., name=...)`
 aliases it, which is what lets one Kernel class fill two candidate slots. Roles,
@@ -552,7 +549,6 @@ design.dataflow  # ProjectionAssessment[DataflowNetwork]
 design.roles  # ("replay", "compute")
 design.region(role)  # Answer[DataflowRegion]
 design.region_family(role)  # Answer[(family, version)]
-design.computation(role)  # ComputationContract
 design.node_id(role)  # the stable Network node
 design.is_active(role)  # Answer[bool]
 design.selected(role)  # Answer[str], the candidate id
@@ -586,11 +582,11 @@ engine point and tests its RTL numerically and through OOC synthesis.
 
 The artifact substrate remains downstream and does not import this package.
 The one-way helpers in `kernels/artifacts.py` take a **detached**
-`KernelPhysicalResult` -- never an occurrence -- and turn it into
+`ModuleBuildSpec` -- never an occurrence -- and turn it into
 artifact-native values:
 
 ```text
-kernel.physical -> KernelPhysicalResult + declared source roots
+kernel.physical -> ModuleBuildSpec + declared source roots
     -> ResolvedContributions
     -> Derivation for the reusable source closure
     -> PortableComponent carrying source ArtifactRef + ComponentABI

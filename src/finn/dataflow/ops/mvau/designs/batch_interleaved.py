@@ -31,7 +31,6 @@ anything here declared how to store it.
 
 from __future__ import annotations
 
-from finn.dataflow.computation import DOT_PRODUCT_COMPUTATION
 from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel
 from finn.dataflow.space.declarations import (
@@ -86,7 +85,6 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
             simd=simd,
             interleave=interleave,
         ),
-        computation=DOT_PRODUCT_COMPUTATION,
     )
 
     activation = NetworkBoundary(compute.input("activation"))

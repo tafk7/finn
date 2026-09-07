@@ -29,7 +29,6 @@ from finn.dataflow.kernels.kernel import (
 from finn.dataflow.space.declarations import Input
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.ops.mvau.regions import construct_weight_stream_region
-from finn.dataflow.parameters.cyclic.computation import CYCLIC_PARAMETER_DELIVERY
 
 
 class MemstreamKernel(Kernel):
@@ -48,7 +47,6 @@ class MemstreamKernel(Kernel):
 
     id = "finn_rtl_memstream"
     version = "1"
-    computation = CYCLIC_PARAMETER_DELIVERY
 
     repetitions = Input(int)
     matrix_width = Input(int)
@@ -77,6 +75,5 @@ class MemstreamKernel(Kernel):
 
 
 __all__ = [
-    "CYCLIC_PARAMETER_DELIVERY",
     "MemstreamKernel",
 ]

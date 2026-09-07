@@ -15,7 +15,6 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import (
     AuthoringError,
@@ -51,9 +50,6 @@ from finn.dataflow.model.region import (
 )
 from finn.dataflow.space.spec_algebra import assemble_specs
 
-COPY = ComputationContract("test.copy")
-SCALE = ComputationContract("test.scale")
-
 
 def _region(extent: int, lanes: int) -> DataflowRegion:
     folds = extent // lanes
@@ -77,7 +73,6 @@ def _region(extent: int, lanes: int) -> DataflowRegion:
 class CopyKernel(Kernel):
     id = "copy"
     version = "1"
-    computation = COPY
 
     extent = Input(int)
     lanes = Input(int)
@@ -103,7 +98,6 @@ class WideCopyKernel(Kernel):
 
     id = "wide_copy"
     version = "1"
-    computation = COPY
 
     width = Input(int)
     parallel_lanes = Input(int)
@@ -127,7 +121,6 @@ class WideCopyKernel(Kernel):
 class ScaleKernel(Kernel):
     id = "scale"
     version = "1"
-    computation = SCALE
 
     extent = Input(int)
     lanes = Input(int)
@@ -154,8 +147,8 @@ class TwoSegments(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    first = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes), computation=COPY)
-    second = KernelChoice(Subspace(ScaleKernel, extent=extent, lanes=lanes), computation=SCALE)
+    first = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes))
+    second = KernelChoice(Subspace(ScaleKernel, extent=extent, lanes=lanes))
 
 
 class Alternatives(DataflowDesign):
@@ -170,7 +163,6 @@ class Alternatives(DataflowDesign):
     compute = KernelChoice(
         Subspace(CopyKernel, extent=extent, lanes=lanes),
         Subspace(WideCopyKernel, width=extent, parallel_lanes=lanes),
-        computation=COPY,
     )
 
 
@@ -310,8 +302,8 @@ def test_a_repeated_kernel_class_rebases_independently() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        left = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes), computation=COPY)
-        right = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes), computation=COPY)
+        left = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes))
+        right = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes))
 
     _harness, design = _compiled(Twice)
     assert [str(item.path) for item in design.spec.decisions] == [
@@ -328,7 +320,6 @@ def test_a_segment_may_override_its_role_and_node_id() -> None:
         lanes = Input(int)
         member = KernelChoice(
             Subspace(CopyKernel, extent=extent, lanes=lanes),
-            computation=COPY,
             role="compute",
             node_id="compute_node",
         )
@@ -348,7 +339,7 @@ def test_a_design_may_not_declare_a_problem() -> None:
         version = "1"
         extent = Problem(int)
         lanes = Input(int)
-        compute = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes), computation=COPY)
+        compute = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes))
 
     with pytest.raises(AuthoringError, match="external facts through Input"):
         _compile_space(
@@ -373,7 +364,7 @@ def test_a_design_needs_an_id_a_version_and_a_segment() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        compute = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes), computation=COPY)
+        compute = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes))
 
     with pytest.raises(AuthoringError, match="non-empty id"):
         _compiled(NoId)
@@ -397,27 +388,30 @@ def test_a_non_kernel_case_is_rejected() -> None:
             version = "1"
             extent = Input(int)
             lanes = Input(int)
-            compute = KernelChoice(Subspace(Helper, name="helper", extent=extent), computation=COPY)
+            compute = KernelChoice(Subspace(Helper, name="helper", extent=extent))
 
 
-def test_a_candidate_computation_must_equal_the_segment_requirement() -> None:
-    with pytest.raises(AuthoringError, match="requires computation test.copy"):
+def test_candidate_admission_is_explicit_without_a_nominal_computation_tag() -> None:
+    class Admitted(DataflowDesign):
+        id = "admitted"
+        extent = Input(int)
+        lanes = Input(int)
+        compute = KernelChoice(
+            Subspace(CopyKernel, extent=extent, lanes=lanes),
+            Subspace(ScaleKernel, extent=extent, lanes=lanes),
+        )
+        source = NetworkBoundary(compute.input("input"))
+        result = NetworkBoundary(compute.output("output"))
 
-        class Mismatched(DataflowDesign):
-            id = "mismatched"
-            version = "1"
-            extent = Input(int)
-            lanes = Input(int)
-            compute = KernelChoice(
-                Subspace(CopyKernel, extent=extent, lanes=lanes),
-                Subspace(ScaleKernel, extent=extent, lanes=lanes),
-                computation=COPY,
-            )
+    for candidate in ("copy", "scale"):
+        design = _occurrence(Admitted, select={"compute": candidate})
+        assert isinstance(design.dataflow.accepted_answer, Decided)
+        assert not hasattr(design, "computation")
 
 
-def test_a_segment_needs_a_computation_contract() -> None:
-    with pytest.raises(AuthoringError, match="one ComputationContract"):
-        KernelChoice(Subspace(CopyKernel), computation="test.copy")  # type: ignore[arg-type]
+def test_kernel_choice_does_not_accept_the_removed_computation_keyword() -> None:
+    with pytest.raises(TypeError, match="computation"):
+        KernelChoice(Subspace(CopyKernel), computation="test.copy")  # type: ignore[call-arg]
 
 
 def test_duplicate_kernel_ids_in_one_segment_are_rejected() -> None:
@@ -429,7 +423,6 @@ def test_duplicate_kernel_ids_in_one_segment_are_rejected() -> None:
         compute = KernelChoice(
             Subspace(CopyKernel, extent=extent, lanes=lanes),
             Subspace(CopyKernel, extent=extent, lanes=lanes),
-            computation=COPY,
         )
 
     with pytest.raises(AuthoringError, match="alternative id 'copy' twice"):
@@ -442,12 +435,8 @@ def test_duplicate_segment_roles_and_node_ids_are_rejected() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        first = KernelChoice(
-            Subspace(CopyKernel, extent=extent, lanes=lanes), computation=COPY, node_id="shared"
-        )
-        second = KernelChoice(
-            Subspace(ScaleKernel, extent=extent, lanes=lanes), computation=SCALE, node_id="shared"
-        )
+        first = KernelChoice(Subspace(CopyKernel, extent=extent, lanes=lanes), node_id="shared")
+        second = KernelChoice(Subspace(ScaleKernel, extent=extent, lanes=lanes), node_id="shared")
 
     with pytest.raises(AuthoringError, match="segment node id 'shared' twice"):
         _compiled(SameNode)
@@ -459,7 +448,7 @@ def test_case_input_binding_is_exact() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        compute = KernelChoice(Subspace(CopyKernel, extent=extent), computation=COPY)
+        compute = KernelChoice(Subspace(CopyKernel, extent=extent))
 
     with pytest.raises(AuthoringError, match="Input binding is not exact"):
         _compiled(Incomplete)
@@ -490,7 +479,7 @@ def test_one_external_algorithm_selects_a_kernel_through_generic_branch_info() -
     )
 
 
-def test_kernels_reuses_generic_branch_compilation() -> None:
+def test_kernel_choice_reuses_generic_branch_compilation() -> None:
     """No second candidate catalog, no coverage object, no binding object."""
 
     assert issubclass(KernelChoice, SubspaceChoice)
@@ -513,7 +502,6 @@ def test_an_aliased_kernel_case_configures_under_its_alias() -> None:
         compute = KernelChoice(
             Subspace(CopyKernel, name="fast", extent=extent, lanes=lanes),
             Subspace(CopyKernel, name="slow", extent=extent, lanes=lanes),
-            computation=COPY,
         )
         source = NetworkBoundary(compute.input("input"))
         result = NetworkBoundary(compute.output("output"))
@@ -545,9 +533,7 @@ def test_a_singleton_aliased_case_configures() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        compute = KernelChoice(
-            Subspace(CopyKernel, name="only", extent=extent, lanes=lanes), computation=COPY
-        )
+        compute = KernelChoice(Subspace(CopyKernel, name="only", extent=extent, lanes=lanes))
         source = NetworkBoundary(compute.input("input"))
         result = NetworkBoundary(compute.output("output"))
 
@@ -558,14 +544,14 @@ def test_a_singleton_aliased_case_configures() -> None:
 
 def test_roles_node_ids_and_case_ids_must_be_atomic_path_segments() -> None:
     with pytest.raises(AuthoringError, match="must be one path segment"):
-        KernelChoice(Subspace(CopyKernel), computation=COPY, role="outer.inner")
+        KernelChoice(Subspace(CopyKernel), role="outer.inner")
     with pytest.raises(AuthoringError, match="must be one path segment"):
-        KernelChoice(Subspace(CopyKernel), computation=COPY, node_id="outer.inner")
+        KernelChoice(Subspace(CopyKernel), node_id="outer.inner")
 
     # A Kernel candidate id is the segment's own vocabulary, so it is checked
     # where the segment is written rather than deferred to compilation.
     with pytest.raises(AuthoringError, match="contains a dot"):
-        KernelChoice(Subspace(CopyKernel, name="a.b"), computation=COPY)
+        KernelChoice(Subspace(CopyKernel, name="a.b"))
 
 
 @pytest.mark.parametrize("name", ["", "a.b", "white space", "non_ascii_é", 7])

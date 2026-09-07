@@ -7,7 +7,7 @@ A ``Kernel`` answers exactly two questions about itself, and they are asked
 separately::
 
     kernel.dataflow   -> ProjectionAssessment[DataflowRegion]
-    kernel.physical   -> ProjectionAssessment[KernelPhysicalResult]
+    kernel.physical   -> ProjectionAssessment[ModuleBuildSpec]
 
 The separation is the point.  The Region is the logical contract a peer or an
 enclosing Design reads, and it must resolve from semantic facts alone: no
@@ -28,10 +28,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from enum import Enum
 from functools import wraps
 from inspect import Parameter as _SignatureParameter, Signature, signature
 from types import MappingProxyType
-from typing import ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     Answer,
@@ -52,7 +53,6 @@ from finn.dataflow.artifacts.contributions import (
     RenderedSource,
 )
 from finn.dataflow.artifacts.derivation import Scalar
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.compiler import _CompiledSpace, _Ref
 from finn.dataflow.space.declarations import (
     AuthoringError,
@@ -112,8 +112,8 @@ class PhysicallyUnsupported(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class KernelPhysicalResult:
-    """The detached build unit one configured Kernel hands to artifact code.
+class ModuleBuildSpec:
+    """The complete detached input to module artifact derivation.
 
     Detached means what it says: no Engine, no point, no ``_Ref``, no compiled
     record and no attached occurrence.  Everything here is a resolved value, so
@@ -125,30 +125,35 @@ class KernelPhysicalResult:
     attributable to the exact logical contract it realizes -- and for nothing
     else.  Artifact code reads identity, parameters, ABI and contributions.
 
-    ``imported_decisions`` is provenance: the outside Decision paths this
-    Kernel's own values depend on.  It is computed from the compiled fragment
-    rather than from what happens to be committed, so it does not change as a
-    point is filled in.
+    ``imported_decisions`` contains stable root-relative declaration names.
+    These strings are provenance, never Engine references or query handles.
+    Both scalar mappings are copied and frozen at construction, so a helper
+    retaining its render-context dictionary cannot change this spec later.
     """
 
-    kernel_id: str
-    kernel_version: str
-    computation: ComputationContract
-    region_family: str
-    region_version: str
+    implementation_id: str
+    implementation_version: str
     region: DataflowRegion
-    assignments: Mapping[str, object]
-    parameters: Mapping[str, bool | int | float | str]
+    parameters: Mapping[str, Scalar]
     abi: ComponentABI
     contributions: tuple[Contribution, ...]
     render_context: Mapping[str, Scalar]
-    imported_decisions: tuple[QualifiedPath, ...] = ()
+    imported_decisions: tuple[str, ...] = ()
 
-    @property
-    def build_unit(self) -> str:
-        """The one externally addressable module this Kernel builds."""
-
-        return self.abi.entry_point
+    def __post_init__(self) -> None:
+        for name in ("parameters", "render_context"):
+            table = dict(getattr(self, name))
+            if any(
+                type(key) is not str
+                or not (type(value) in (bool, int, float, str) or isinstance(value, Enum))
+                for key, value in table.items()
+            ):
+                raise TypeError(f"ModuleBuildSpec.{name} must map strings to scalars")
+            object.__setattr__(self, name, MappingProxyType(table))
+        if any(type(name) is not str for name in self.imported_decisions):
+            raise TypeError("ModuleBuildSpec.imported_decisions must contain declaration names")
+        object.__setattr__(self, "imported_decisions", tuple(self.imported_decisions))
+        object.__setattr__(self, "contributions", tuple(self.contributions))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
@@ -317,10 +322,9 @@ class _KernelCompilation(Generic[K]):
     region_template: RegionDeclaration
     region_family: str
     region_version: str
-    computation: ComputationContract
     parameters: tuple[_CompiledParameter, ...]
     contributions: tuple[Contribution, ...]
-    physical_result: _Ref[KernelPhysicalResult]
+    physical_result: _Ref[ModuleBuildSpec]
     #: Local Decisions inside the Region's value/applicability closure.  Always
     #: empty while the ownership refusal stands; kept because "the rule held"
     #: and "the rule was never tested" are different facts.
@@ -341,11 +345,19 @@ class Kernel(Space):
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
-    computation: ClassVar[ComputationContract]
     sources: ClassVar[tuple[Contribution, ...]] = ()
 
     #: The Region is the one automatic Kernel output to a containing Design.
     _implicit_exports = ("region",)
+
+    if TYPE_CHECKING:
+        dataflow: Projection[DataflowRegion]
+        physical: Projection[ModuleBuildSpec]
+        physical_result: Derived[ModuleBuildSpec]
+        region_structurally_valid: Constraint
+        dataflow_accepts: ConstraintGroup
+        dataflow_ready: Readiness
+        physical_ready: Readiness
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -442,8 +454,7 @@ def _physical_result_property(
     kernel_type: type[Kernel],
     region: RegionDeclaration,
     parameters: tuple[tuple[str, ModuleParameter[object], str], ...],
-    decisions: tuple[tuple[str, Decision[object]], ...],
-) -> Derived[KernelPhysicalResult]:
+) -> Derived[ModuleBuildSpec]:
     """Assemble the detached build unit from resolved values and nothing else.
 
     Every input is an ordinary dependency, so the property is ``Unresolved``
@@ -459,8 +470,6 @@ def _physical_result_property(
     for member_name, template, _physical_name in parameters:
         if template.source is not None:
             dependencies.append((f"parameter_{member_name}", template.source))
-    for member_name, declaration in decisions:
-        dependencies.append((f"decision_{member_name}", cast("ValueSource[object]", declaration)))
 
     def evaluate(**values: object) -> object:
         table: dict[str, bool | int | float | str] = {}
@@ -500,16 +509,10 @@ def _physical_result_property(
                 f"{kernel_type.__name__}.component_abi() must expose its exact resolved "
                 "physical parameter table"
             )
-        return KernelPhysicalResult(
+        return ModuleBuildSpec(
             kernel_type.id,
             kernel_type.version,
-            kernel_type.computation,
-            region.family,
-            region.version,
             cast(DataflowRegion, values["region"]),
-            MappingProxyType(
-                {member_name: values[f"decision_{member_name}"] for member_name, _ in decisions}
-            ),
             frozen_table,
             abi,
             tuple(kernel_type.sources),
@@ -529,7 +532,7 @@ def _physical_result_property(
         ]
     )
     return Derived(
-        semantics_for(KernelPhysicalResult),
+        semantics_for(ModuleBuildSpec),
         None,
         tuple(dependencies),
         evaluate,
@@ -592,7 +595,7 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         properties=(cast("ValueSource[object]", region),),
         constraints=dataflow_accepts,
     )
-    physical_result = _physical_result_property(kernel_type, region, parameters, decisions)
+    physical_result = _physical_result_property(kernel_type, region, parameters)
     physical_ready = Readiness(
         decisions=tuple(declaration for _name, declaration in decisions),
         properties=(cast("ValueSource[object]", physical_result),),
@@ -628,7 +631,7 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         kernel_type,
         "physical",
         Projection(
-            cast("ValueSource[KernelPhysicalResult]", physical_result),
+            cast("ValueSource[ModuleBuildSpec]", physical_result),
             readiness=physical_ready,
             constraints=projection_constraints,
             name="physical",
@@ -740,7 +743,7 @@ def _external_decisions(compiled: _CompiledSpace[K]) -> tuple[QualifiedPath, ...
 
 def _with_provenance(
     specification: EvaluatorSpec[Answer[object]],
-    provenance: tuple[QualifiedPath, ...],
+    provenance: tuple[str, ...],
 ) -> EvaluatorSpec[Answer[object]]:
     """Stamp the compiled fragment's import provenance onto the physical result.
 
@@ -753,11 +756,27 @@ def _with_provenance(
 
     def evaluate(values: DependencyView) -> Answer[object]:
         answer = inner(values)
-        if isinstance(answer, Decided) and isinstance(answer.value, KernelPhysicalResult):
+        if isinstance(answer, Decided) and isinstance(answer.value, ModuleBuildSpec):
             return Decided(replace(answer.value, imported_decisions=provenance))
         return answer
 
     return EvaluatorSpec(specification.dependencies, evaluate)
+
+
+def _module_provenance(
+    compiled: _CompiledSpace[K], paths: tuple[QualifiedPath, ...]
+) -> tuple[str, ...]:
+    """Translate compiler paths to the same root-relative names persistence uses.
+
+    Input references retain their supplier's root for direct fragment compilation.
+    A composed tree shares one root, including a multi-segment occurrence namespace.
+    No occurrence or point is needed to name an imported declaration.
+    """
+
+    roots = {reference.path: reference.root_namespace for _name, reference in compiled.inputs}
+    return tuple(
+        str(path).removeprefix(f"{roots.get(path) or compiled.root_namespace}.") for path in paths
+    )
 
 
 def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
@@ -765,9 +784,6 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         raise AuthoringError(f"{kernel_type.__name__} must declare a non-empty id")
     if not kernel_type.version:
         raise AuthoringError(f"{kernel_type.__name__} must declare a non-empty version")
-    computation = getattr(kernel_type, "computation", None)
-    if not isinstance(computation, ComputationContract):
-        raise AuthoringError(f"{kernel_type.__name__} must declare one ComputationContract")
     abi_owner = next(base for base in kernel_type.__mro__ if "component_abi" in base.__dict__)
     if abi_owner is Kernel:
         raise AuthoringError(f"{kernel_type.__name__} must declare a component_abi()")
@@ -820,13 +836,18 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
     ):
         raise AuthoringError(f"{kernel_type.__name__}.sources contains a non-Contribution")
 
-    physical_ref = cast("_Ref[KernelPhysicalResult]", compiled.member("physical_result"))
+    physical_ref = cast("_Ref[ModuleBuildSpec]", compiled.member("physical_result"))
     physical_only = _physical_only_constraints(declarations, compiled)
     provenance = _external_decisions(compiled)
     specification = replace(
         compiled.spec,
         properties=tuple(
-            replace(declaration, evaluator=_with_provenance(declaration.evaluator, provenance))
+            replace(
+                declaration,
+                evaluator=_with_provenance(
+                    declaration.evaluator, _module_provenance(compiled, provenance)
+                ),
+            )
             if declaration.path == physical_ref.path
             else declaration
             for declaration in compiled.spec.properties
@@ -840,7 +861,6 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
         region_template,
         region_template.family,
         region_template.version,
-        computation,
         tuple(
             _CompiledParameter(
                 member_name,
@@ -955,18 +975,18 @@ def kernel_physical(
     engine: Engine,
     compiled: _CompiledSpace[K],
     point: DesignPoint,
-) -> ProjectionAssessment[KernelPhysicalResult]:
+) -> ProjectionAssessment[ModuleBuildSpec]:
     """Ask one compiled Kernel fragment for its detached build unit at one point."""
 
     return cast(
-        "ProjectionAssessment[KernelPhysicalResult]",
+        "ProjectionAssessment[ModuleBuildSpec]",
         evaluate_projection(engine, point, compiled.projection("physical")),
     )
 
 
 __all__ = [
     "Kernel",
-    "KernelPhysicalResult",
+    "ModuleBuildSpec",
     "ModuleParameter",
     "PhysicallyUnsupported",
     "RegionDeclaration",

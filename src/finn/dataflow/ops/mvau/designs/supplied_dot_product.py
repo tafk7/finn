@@ -36,10 +36,6 @@ from __future__ import annotations
 
 from enum import Enum
 
-from finn.dataflow.computation import (
-    ACTIVATION_REPLAY_COMPUTATION,
-    DOT_PRODUCT_COMPUTATION,
-)
 from finn.dataflow.designs.design import (
     NetworkBoundary,
     NetworkEdge,
@@ -47,7 +43,7 @@ from finn.dataflow.designs.design import (
     EdgeSink,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
-from finn.dataflow.kernels.memstream import CYCLIC_PARAMETER_DELIVERY, MemstreamKernel
+from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -122,7 +118,6 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
-        computation=ACTIVATION_REPLAY_COMPUTATION,
     )
 
     #: Two candidates and one selector.  The embedded core is a different
@@ -158,7 +153,6 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
-        computation=DOT_PRODUCT_COMPUTATION,
     )
 
     memory = KernelChoice(
@@ -171,7 +165,6 @@ class SuppliedDotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
-        computation=CYCLIC_PARAMETER_DELIVERY,
         when=decouples_weights,
     )
 

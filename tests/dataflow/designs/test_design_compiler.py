@@ -17,7 +17,6 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Engine, QualifiedPath, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.dataflow_value_semantics import POSITION_MAP_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.occurrence import is_attached_occurrence
@@ -63,9 +62,6 @@ from finn.dataflow.model.region import (
     ScheduleLevel,
 )
 from finn.dataflow.space.spec_algebra import assemble_specs
-
-PRODUCE = ComputationContract("test.produce")
-CONSUME = ComputationContract("test.consume")
 
 
 def _sequence(extent: int, lanes: int) -> BeatSequence:
@@ -128,7 +124,6 @@ def _consumer_region(extent: int, lanes: int) -> DataflowRegion:
 
 class ProducerKernel(Kernel):
     id = "producer"
-    computation = PRODUCE
     extent = Input(int)
     lanes = Input(int)
     region = RegionDeclaration(
@@ -142,7 +137,6 @@ class ProducerKernel(Kernel):
 
 class ConsumerKernel(Kernel):
     id = "consumer"
-    computation = CONSUME
     extent = Input(int)
     lanes = Input(int)
     region = RegionDeclaration(
@@ -158,7 +152,6 @@ class PipelinedConsumerKernel(Kernel):
     """Same computation and Region, one extra physical decision of its own."""
 
     id = "pipelined_consumer"
-    computation = CONSUME
     extent = Input(int)
     lanes = Input(int)
     stages = Decision(int, values=(1, 2))
@@ -180,12 +173,8 @@ class Chain(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = KernelChoice(
-        Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-    )
-    consume = KernelChoice(
-        Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-    )
+    produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+    consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
 
     stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
 
@@ -313,12 +302,8 @@ def test_an_explicit_position_map_is_used_verbatim() -> None:
         def reversed_map(*, extent: int) -> PositionMap:
             return PositionMap(((index,), (extent - 1 - index,)) for index in range(extent))
 
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"),
             EdgeSink(consume.input("stream"), position_map=reversed_map),
@@ -341,15 +326,9 @@ def test_a_fan_out_edge_carries_one_contract_per_sink() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        left = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="left"
-        )
-        right = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="right"
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        left = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes), role="left")
+        right = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes), role="right")
         stream = NetworkEdge(
             produce.output("stream"),
             EdgeSink(left.input("stream")),
@@ -383,12 +362,9 @@ def test_complementary_conditions_swap_an_edge_for_a_boundary() -> None:
 
         produce = KernelChoice(
             Subspace(ProducerKernel, extent=extent, lanes=lanes),
-            computation=PRODUCE,
             when=supplied,
         )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"), EdgeSink(consume.input("stream")), when=supplied
         )
@@ -426,12 +402,8 @@ def test_an_unknown_port_is_refused_by_canonical_validation() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("absent"), EdgeSink(consume.input("stream")))
         source = NetworkBoundary(produce.input("source"))
         result = NetworkBoundary(consume.output("result"))
@@ -445,12 +417,8 @@ def test_a_reversed_direction_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("source"), EdgeSink(consume.input("stream")))
         result = NetworkBoundary(consume.output("result"))
         produced = NetworkBoundary(produce.output("stream"))
@@ -464,12 +432,8 @@ def test_an_unaccounted_endpoint_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         result = NetworkBoundary(consume.output("result"))
 
@@ -482,15 +446,9 @@ def test_implicit_fan_in_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        left = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE, role="left"
-        )
-        right = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE, role="right"
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        left = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes), role="left")
+        right = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes), role="right")
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         from_left = NetworkEdge(left.output("stream"), EdgeSink(consume.input("stream")))
         from_right = NetworkEdge(right.output("stream"), EdgeSink(consume.input("stream")))
         left_source = NetworkBoundary(left.input("source"))
@@ -506,12 +464,8 @@ def test_an_endpoint_used_by_both_an_edge_and_a_boundary_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         also_external = NetworkBoundary(consume.input("stream"))
         source = NetworkBoundary(produce.input("source"))
@@ -526,12 +480,8 @@ def test_a_cyclic_topology_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         forward = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         backward = NetworkEdge(consume.output("result"), EdgeSink(produce.input("source")))
 
@@ -547,12 +497,9 @@ def test_active_topology_over_an_inactive_segment_is_refused() -> None:
         present = Decision(bool, values=(False, True))
         produce = KernelChoice(
             Subspace(ProducerKernel, extent=extent, lanes=lanes),
-            computation=PRODUCE,
             when=present,
         )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         source = NetworkBoundary(produce.input("source"), when=present)
         result = NetworkBoundary(consume.output("result"))
@@ -571,7 +518,6 @@ def test_a_point_with_no_active_segment_is_refused() -> None:
         present = Decision(bool, values=(False, True))
         produce = KernelChoice(
             Subspace(ProducerKernel, extent=extent, lanes=lanes),
-            computation=PRODUCE,
             when=present,
         )
         source = NetworkBoundary(produce.input("source"), when=present)
@@ -589,12 +535,8 @@ def test_duplicate_edge_and_boundary_ids_are_authoring_errors() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         other = NetworkEdge(
             produce.output("stream"), EdgeSink(consume.input("stream")), name="stream"
@@ -608,9 +550,7 @@ def test_duplicate_edge_and_boundary_ids_are_authoring_errors() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
         source = NetworkBoundary(produce.input("source"))
         again = NetworkBoundary(produce.output("stream"), name="source")
 
@@ -624,9 +564,7 @@ def test_endpoint_direction_is_checked_where_it_is_declared() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
 
     with pytest.raises(AuthoringError, match="NetworkEdge source must name an output port"):
         NetworkEdge(Segment.produce.input("source"), EdgeSink(Segment.produce.input("source")))
@@ -642,18 +580,14 @@ def test_an_endpoint_from_another_design_is_rejected() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
 
     class Borrower(DataflowDesign):
         id = "borrower"
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(Other.produce.output("stream"), EdgeSink(consume.input("stream")))
 
     with pytest.raises(AuthoringError, match="Kernel segment outside the class"):
@@ -666,12 +600,8 @@ def test_a_repeated_sink_on_one_edge_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"),
             EdgeSink(consume.input("stream")),
@@ -694,12 +624,8 @@ def test_a_non_bijective_position_map_is_refused() -> None:
         def collapsed(*, extent: int) -> PositionMap:
             return PositionMap(((index,), (0,)) for index in range(extent))
 
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"), EdgeSink(consume.input("stream"), position_map=collapsed)
         )
@@ -714,7 +640,6 @@ def test_a_beat_count_mismatch_across_an_edge_is_refused() -> None:
 
     class MisfoldedKernel(Kernel):
         id = "misfolded"
-        computation = CONSUME
         extent = Input(int)
         lanes = Input(int)
 
@@ -739,12 +664,8 @@ def test_a_beat_count_mismatch_across_an_edge_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(MisfoldedKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(MisfoldedKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         source = NetworkBoundary(produce.input("source"))
         result = NetworkBoundary(consume.output("result"))
@@ -760,15 +681,9 @@ def test_a_multiply_authored_fan_out_is_refused() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        left = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="left"
-        )
-        right = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME, role="right"
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        left = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes), role="left")
+        right = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes), role="right")
         to_left = NetworkEdge(produce.output("stream"), EdgeSink(left.input("stream")))
         to_right = NetworkEdge(produce.output("stream"), EdgeSink(right.input("stream")))
         source = NetworkBoundary(produce.input("source"))
@@ -785,12 +700,8 @@ def test_a_both_active_conditional_edge_and_boundary_is_refused() -> None:
         extent = Input(int)
         lanes = Input(int)
         supplied = Decision(bool, values=(False, True))
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"), EdgeSink(consume.input("stream")), when=supplied
         )
@@ -870,13 +781,10 @@ class Selectable(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = KernelChoice(
-        Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-    )
+    produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
     consume = KernelChoice(
         Subspace(ConsumerKernel, extent=extent, lanes=lanes),
         Subspace(PipelinedConsumerKernel, extent=extent, lanes=lanes),
-        computation=CONSUME,
     )
 
     stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
@@ -920,7 +828,6 @@ def test_each_role_reports_its_own_region_node_and_computation() -> None:
         region = design.region(role)
         assert isinstance(region, Decided)
         assert network.value.node(design.node_id(role)).region == region.value
-        assert design.computation(role) is (PRODUCE if role == "produce" else CONSUME)
     assert design.region_family("produce") == Decided(("test.produce", "1"))
 
 
@@ -967,9 +874,7 @@ def test_an_uncommitted_design_decision_leaves_the_network_unresolved() -> None:
         extent = Input(int)
         lanes = Input(int)
         spare = Decision(int, values=(1, 2))
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
         source = NetworkBoundary(produce.input("source"))
         stream = NetworkBoundary(produce.output("stream"))
 
@@ -992,12 +897,9 @@ def test_an_inactive_segment_contributes_no_node() -> None:
 
         produce = KernelChoice(
             Subspace(ProducerKernel, extent=extent, lanes=lanes),
-            computation=PRODUCE,
             when=present,
         )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"), EdgeSink(consume.input("stream")), when=present
         )
@@ -1035,12 +937,8 @@ def test_a_structurally_invalid_topology_refuses_the_network() -> None:
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         result = NetworkBoundary(consume.output("result"))
 
@@ -1092,12 +990,8 @@ class NestedOwnership(DataflowDesign):
 
     fold = Subspace(Folding, extent=extent)
 
-    produce = KernelChoice(
-        Subspace(ProducerKernel, extent=extent, lanes=fold.lanes), computation=PRODUCE
-    )
-    consume = KernelChoice(
-        Subspace(PipelinedConsumerKernel, extent=extent, lanes=fold.lanes), computation=CONSUME
-    )
+    produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=fold.lanes))
+    consume = KernelChoice(Subspace(PipelinedConsumerKernel, extent=extent, lanes=fold.lanes))
 
     stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
     source = NetworkBoundary(produce.input("source"))
@@ -1130,12 +1024,13 @@ def test_a_contained_kernels_decision_is_neither_retained_nor_imported() -> None
     stages = QualifiedPath("root.design.consume.pipelined_consumer.stages")
     assert stages not in design.assignments
     assert stages not in design.imported_decisions
-    # It belongs to the Kernel that owns it, and is carried in its build unit.
+    # It belongs to the Kernel occurrence; the module spec carries no assignment ledger.
     consume = design.kernel("consume")
     assert isinstance(consume, Decided)
     built = consume.value.physical.accepted_answer
     assert isinstance(built, Decided)
-    assert dict(built.value.assignments) == {"stages": 2}
+    assert cast(PipelinedConsumerKernel, consume.value).stages == 2
+    assert not hasattr(built.value, "assignments")
 
 
 def test_a_selector_is_a_design_assignment_not_imported_provenance() -> None:
@@ -1180,12 +1075,9 @@ def test_an_inactive_connection_does_not_demand_its_position_map() -> None:
 
         produce = KernelChoice(
             Subspace(ProducerKernel, extent=extent, lanes=lanes),
-            computation=PRODUCE,
             when=supplied,
         )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"),
             EdgeSink(consume.input("stream"), position_map=chosen_map),
@@ -1222,12 +1114,8 @@ def test_a_declared_position_map_is_forwarded_through_its_own_property() -> None
         def identity_map(*, extent: int) -> PositionMap:
             return PositionMap(((index,), (index,)) for index in range(extent))
 
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(ConsumerKernel, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(ConsumerKernel, extent=extent, lanes=lanes))
         stream = NetworkEdge(
             produce.output("stream"), EdgeSink(consume.input("stream"), position_map=identity_map)
         )
@@ -1265,7 +1153,6 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
 
     class Parameterized(Kernel):
         id = "parameterized"
-        computation = CONSUME
         extent = Input(int)
         lanes = Input(int)
         choice = SubspaceChoice({"only": Subspace(Chooser, extent=extent)}, outputs=("depth",))
@@ -1288,12 +1175,8 @@ def test_a_branch_output_reaches_a_boundary_condition_and_a_kernel_parameter() -
         extent = Input(int)
         lanes = Input(int)
         policy = SubspaceChoice({"always": Subspace(Always, extent=extent)}, outputs=("flag",))
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
-        consume = KernelChoice(
-            Subspace(Parameterized, extent=extent, lanes=lanes), computation=CONSUME
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
+        consume = KernelChoice(Subspace(Parameterized, extent=extent, lanes=lanes))
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         source = NetworkBoundary(produce.input("source"))
         result = NetworkBoundary(consume.output("result"), when=policy.flag)
@@ -1334,7 +1217,6 @@ def _consumer_with(name: str, verdict: bool, *, physical: bool):
 
     class Classified(Kernel):
         id = name
-        computation = CONSUME
         extent = Input(int)
         lanes = Input(int)
         region = RegionDeclaration(
@@ -1379,9 +1261,8 @@ def _chain_over(*candidates: type[Kernel]) -> type[DataflowDesign]:
 
         produce = KernelChoice(
             Subspace(ProducerKernel, extent=declared_extent, lanes=declared_lanes),
-            computation=PRODUCE,
         )
-        consume = KernelChoice(*cases, computation=CONSUME)
+        consume = KernelChoice(*cases)
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         source = NetworkBoundary(produce.input("source"))
         result = NetworkBoundary(consume.output("result"))

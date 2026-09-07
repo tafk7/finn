@@ -34,6 +34,8 @@ DATAFLOW = SOURCE / "dataflow"
 #: what they now contain rather than for absence, because "this name exists
 #: again" and "the old implementation came back" are different claims.
 RETIRED_MODULES = (
+    "finn.dataflow.computation",
+    "finn.dataflow.parameters.cyclic.computation",
     "finn.dataflow.authoring",
     "finn.dataflow.design",
     "finn.dataflow.op",
@@ -179,7 +181,7 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
     assert tuple(import_module("finn.dataflow.ops.mvau.designs").__all__) == ()
     assert set(import_module("finn.dataflow.kernels").__all__) == {
         "Kernel",
-        "KernelPhysicalResult",
+        "ModuleBuildSpec",
         "ModuleParameter",
         "PhysicallyUnsupported",
         "RegionDeclaration",
@@ -201,6 +203,15 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "SelectedNetwork",
         "design_dataflow",
     }
+
+
+def test_s2b_removes_the_old_declarations_without_aliases() -> None:
+    for module in ("finn.dataflow.designs", "finn.dataflow.designs.design"):
+        for name in ("Kernels", "Boundary", "Connection", "Sink", "ComputationContract"):
+            assert not hasattr(import_module(module), name), (module, name)
+    for module in ("finn.dataflow.kernels", "finn.dataflow.kernels.kernel"):
+        for name in ("KernelPhysicalResult", "Parameter", "ComputationContract"):
+            assert not hasattr(import_module(module), name), (module, name)
 
 
 def test_the_generic_substrate_does_not_import_a_layer() -> None:

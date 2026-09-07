@@ -23,7 +23,6 @@ from finn.dataflow._engine import (
 )
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.space.occurrence import is_attached_occurrence
-from finn.dataflow.computation import ComputationContract
 from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import (
@@ -41,7 +40,7 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.kernels.kernel import (
     Kernel,
-    KernelPhysicalResult,
+    ModuleBuildSpec,
     ModuleParameter,
     PhysicallyUnsupported,
     RegionDeclaration,
@@ -65,8 +64,6 @@ from finn.dataflow.space.spec_algebra import assemble_specs
 
 #: What ``component_abi`` is handed: the resolved physical parameter table.
 Scalars = Mapping[str, bool | int | float | str]
-
-COMPUTATION = ComputationContract("test.copy")
 
 
 def _region(extent: int, lanes: int) -> DataflowRegion:
@@ -100,7 +97,6 @@ def _region(extent: int, lanes: int) -> DataflowRegion:
 class ToyKernel(Kernel):
     id = "toy"
     version = "1"
-    computation = COMPUTATION
 
     extent = Input(int)
     lanes = Input(int)
@@ -156,7 +152,7 @@ def _compiled():
     )
 
 
-def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> KernelPhysicalResult:
+def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> ModuleBuildSpec:
     harness, kernel = _compiled()
     engine = Engine()
     point = engine.start(
@@ -175,15 +171,10 @@ def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> Ker
 def test_kernel_configures_its_own_region_and_parameters() -> None:
     configured = _configured()
     assert configured.region == _region(8, 2)
-    assert configured.region_family == "test.copy"
-    assert configured.region_version == "1"
-    assert configured.computation == COMPUTATION
-    assert dict(configured.assignments) == {"pumped": False}
     assert dict(configured.parameters) == {"LANES": 2, "WIDTH": 16, "FLAG": 1}
     assert configured.abi.entry_point == "toy"
-    assert configured.build_unit == "toy"
-    assert configured.kernel_id == "toy"
-    assert configured.kernel_version == "1"
+    assert configured.implementation_id == "toy"
+    assert configured.implementation_version == "1"
 
 
 def test_region_dependency_closure_distinguishes_semantic_and_physical_decisions() -> None:
@@ -221,7 +212,7 @@ def test_kernel_feasibility_is_automatic() -> None:
 
 def test_the_detached_physical_result_retains_no_engine_point_or_network() -> None:
     configured = _configured()
-    values = {name: getattr(configured, name) for name in KernelPhysicalResult.__slots__}
+    values = {name: getattr(configured, name) for name in ModuleBuildSpec.__slots__}
     assert not any(isinstance(value, Engine) for value in values.values())
     assert not any(hasattr(value, "design_space") for value in values.values())
     assert not any(isinstance(value, Space) for value in values.values())
@@ -232,10 +223,9 @@ def _degenerate() -> DataflowRegion:
     return _region(1, 1)
 
 
-def test_kernel_requires_exactly_one_region_and_computation() -> None:
+def test_kernel_requires_exactly_one_region_and_an_implementation() -> None:
     class NoRegion(Kernel):
         id = "none"
-        computation = COMPUTATION
 
         @classmethod
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
@@ -246,7 +236,6 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
     class GenericRegion(Kernel):
         id = "generic"
-        computation = COMPUTATION
 
         @derived(DATAFLOW_REGION_SEMANTICS)
         def region() -> DataflowRegion:
@@ -261,7 +250,6 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
     class TwoRegions(Kernel):
         id = "two"
-        computation = COMPUTATION
         region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
         another = RegionDeclaration(family="test.other", version="1", construct=_degenerate)
 
@@ -279,7 +267,6 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
     class NestedRegion(Kernel):
         id = "nested"
-        computation = COMPUTATION
         fragment = Subspace(RegionFragment)
         region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
@@ -298,12 +285,10 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("no_computation", ())
 
-    with pytest.raises(AuthoringError, match="ComputationContract"):
-        _compile_space(NoComputation, "no_computation", {}, _allow_problem=False)
+    _compile_space(NoComputation, "no_computation", {}, _allow_problem=False)
 
     class NoAbi(Kernel):
         id = "no_abi"
-        computation = COMPUTATION
         region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
     with pytest.raises(AuthoringError, match=r"declare a component_abi\(\)"):
@@ -311,7 +296,6 @@ def test_kernel_requires_exactly_one_region_and_computation() -> None:
 
     class OwnsProblem(Kernel):
         id = "owns_problem"
-        computation = COMPUTATION
         extent = Problem(int)
         region = RegionDeclaration(
             family="test.copy",
@@ -388,10 +372,11 @@ def test_region_constructor_signature_must_match_its_dependencies() -> None:
         RegionDeclaration(family="test.copy", version="1", construct=None)  # type: ignore[arg-type]
 
 
-def test_region_family_and_version_survive_onto_the_configured_kernel() -> None:
+def test_region_family_and_version_belong_to_the_declaration() -> None:
+    assert (ToyKernel.region.family, ToyKernel.region.version) == ("test.copy", "1")
     configured = _configured()
-    assert (configured.region_family, configured.region_version) == ("test.copy", "1")
-    assert "toy" not in configured.region_family
+    assert configured.region == _region(8, 2)
+    assert not hasattr(configured, "region_family")
 
 
 def test_a_refusing_region_constructor_is_a_refusal_not_a_crash() -> None:
@@ -409,7 +394,6 @@ def test_a_refusing_region_constructor_is_a_refusal_not_a_crash() -> None:
 def test_a_region_constructor_returning_the_wrong_type_is_rejected() -> None:
     class WrongResult(Kernel):
         id = "wrong_result"
-        computation = COMPUTATION
         region = RegionDeclaration(
             family="test.copy",
             version="1",
@@ -433,7 +417,6 @@ def test_a_region_constructor_returning_the_wrong_type_is_rejected() -> None:
 def test_a_kernel_local_decision_may_not_reach_its_region() -> None:
     class DirectDependence(Kernel):
         id = "direct"
-        computation = COMPUTATION
         extent = Input(int)
         lanes = Decision(int, values=(1, 2))
         region = RegionDeclaration(
@@ -461,7 +444,6 @@ def test_a_kernel_local_decision_may_not_reach_its_region() -> None:
 def test_a_transitive_kernel_local_decision_may_not_reach_its_region() -> None:
     class TransitiveDependence(Kernel):
         id = "transitive"
-        computation = COMPUTATION
         extent = Input(int)
         lanes = Decision(int, values=(1, 2))
 
@@ -498,7 +480,6 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
 
     class NestedDependence(Kernel):
         id = "nested_dependence"
-        computation = COMPUTATION
         extent = Input(int)
         folding = Subspace(Folding)
         region = RegionDeclaration(
@@ -526,13 +507,12 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
 def test_a_supplied_decision_reaching_the_region_stays_valid() -> None:
     configured = _configured(lanes=2)
     assert configured.region == _region(8, 2)
-    assert configured.imported_decisions == (QualifiedPath("test.lanes"),)
+    assert configured.imported_decisions == ("lanes",)
 
 
 def test_a_kernel_may_not_publish_exports_besides_its_region() -> None:
     class Publishes(Kernel):
         id = "publishes"
-        computation = COMPUTATION
         extent = Input(int)
         pumped = Decision(bool, values=(False, True))
         region = RegionDeclaration(
@@ -625,7 +605,6 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
 
     class CompositeKernel(Kernel):
         id = "composite"
-        computation = COMPUTATION
         pipeline = Subspace(Pipeline)
         region = RegionDeclaration(family="test.copy", version="1", construct=_degenerate)
 
@@ -650,7 +629,6 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
     assert configured.value.parameters["STAGES"] == 2
     # A Decision inside a helper Space the Kernel owns is the Kernel's, so it is
     # an assignment it carries and not an import it depends on.
-    assert dict(configured.value.assignments) == {}
     assert configured.value.imported_decisions == ()
 
 
@@ -668,7 +646,6 @@ def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
 
     class GatedHelper(Kernel):
         id = "gated_helper"
-        computation = COMPUTATION
         extent = Input(int)
         lanes = Input(int)
         enabled = Decision(bool, values=(False, True))
@@ -693,7 +670,6 @@ def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
 def test_a_local_decision_may_not_gate_the_region_property_itself() -> None:
     class GatedRegion(Kernel):
         id = "gated_region"
-        computation = COMPUTATION
         extent = Input(int)
         lanes = Input(int)
         enabled = Decision(bool, values=(False, True))
@@ -743,7 +719,6 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
 
     class Refusing(Kernel):
         id = "refusing"
-        computation = COMPUTATION
         extent = Input(int)
         region = RegionDeclaration(
             family="test.copy", version="1", construct=refusing, extent=extent
@@ -755,7 +730,6 @@ def test_only_a_deliberate_refusal_becomes_a_rejecting_absence() -> None:
 
     class Defective(Kernel):
         id = "defective"
-        computation = COMPUTATION
         extent = Input(int)
         region = RegionDeclaration(
             family="test.copy", version="1", construct=defective, extent=extent
@@ -839,8 +813,8 @@ def test_a_valid_region_does_not_oblige_a_realizable_kernel() -> None:
 
 def test_the_physical_result_carries_its_import_provenance() -> None:
     configured = _configured()
-    assert QualifiedPath("test.lanes") in configured.imported_decisions
-    assert QualifiedPath("test.toy.pumped") not in configured.imported_decisions
+    assert "lanes" in configured.imported_decisions
+    assert "toy.pumped" not in configured.imported_decisions
 
 
 def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
@@ -862,7 +836,7 @@ def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
     assert isinstance(occurrence.physical.accepted_answer, Unresolved)
     built = occurrence.assign(ToyKernel.pumped, True).physical.accepted_answer
     assert isinstance(built, Decided)
-    assert built.value.kernel_id == "toy"
+    assert built.value.implementation_id == "toy"
 
 
 # -- which projection each constraint gates -----------------------------------
@@ -881,7 +855,6 @@ def _classified(*, shared: bool, physical: bool) -> frozenset[QualifiedPath]:
 
     class Classified(Kernel):
         id = f"classified_{int(shared)}{int(physical)}"
-        computation = COMPUTATION
         extent = Input(int)
         lanes = Input(int)
         region = RegionDeclaration(
@@ -929,7 +902,6 @@ def test_a_shared_constraint_still_gates_both_of_the_kernels_own_projections() -
 
     class Shared(Kernel):
         id = "shared_gate"
-        computation = COMPUTATION
         extent = Input(int)
         lanes = Input(int)
         region = RegionDeclaration(

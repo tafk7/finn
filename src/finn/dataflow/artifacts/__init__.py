@@ -19,6 +19,6 @@ depend on the semantic stack it is meant to be portable across.
 The rule is checked, not merely stated: ``test_package_boundaries`` walks every
 module in this package and refuses an import of ``model``, ``kernels``,
 ``designs``, ``ops`` or ``_engine``.  What crosses *into* it is a detached
-value -- ``KernelPhysicalResult`` today, and whatever U5's composition
+value -- ``ModuleBuildSpec`` today, and whatever U5's composition
 contract settles on for a Design -- never an occurrence.
 """

@@ -26,7 +26,6 @@ from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.space.branching import BranchCatalog
 from finn.dataflow.space.compiler import _Ref, _compile_space, compile_space_model
 from finn.dataflow.space.declarations import (
-    AuthoringError,
     Decision,
     Input,
     Problem,
@@ -70,13 +69,10 @@ from dataflow.space.test_branch_inspection import (
     resolve_recursively,
 )
 from dataflow.designs.test_design_compiler import (
-    CONSUME,
-    PRODUCE,
     ConsumerKernel,
     Harness,
     ProducerKernel,
     _consumer_region,
-    _producer_region,
 )
 
 # -- the alternatives ---------------------------------------------------------
@@ -131,7 +127,6 @@ class BufferedConsumerKernel(Kernel):
 
     id = "buffered_consumer"
     version = "1"
-    computation = CONSUME
 
     width = Input(int)
     parallel_lanes = Input(int)
@@ -177,31 +172,10 @@ class BufferedConsumerKernel(Kernel):
         )
 
 
-class ProducingKernel(Kernel):
-    """A candidate offering the wrong computation for a consumer segment."""
-
-    id = "producing"
-    computation = PRODUCE
-    extent = Input(int)
-    lanes = Input(int)
-    region = RegionDeclaration(
-        family="test.produce",
-        version="1",
-        construct=_producer_region,
-        extent=extent,
-        lanes=lanes,
-    )
-
-    @classmethod
-    def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
-        return ComponentABI("producing", ())
-
-
 class MisportedConsumerKernel(Kernel):
     """Right computation, but a Region the declared topology cannot wire."""
 
     id = "misported_consumer"
-    computation = CONSUME
     extent = Input(int)
     lanes = Input(int)
     region = RegionDeclaration(
@@ -226,14 +200,11 @@ class Alternatives(DataflowDesign):
     extent = Input(int)
     lanes = Input(int)
 
-    produce = KernelChoice(
-        Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-    )
+    produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
     consume = KernelChoice(
         Subspace(ConsumerKernel, extent=extent, lanes=lanes),
         Subspace(BufferedConsumerKernel, width=extent, parallel_lanes=lanes),
         Subspace(MisportedConsumerKernel, extent=extent, lanes=lanes),
-        computation=CONSUME,
     )
 
     stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
@@ -341,26 +312,6 @@ def test_an_alternative_may_use_candidate_specific_input_names() -> None:
     assert branch.case("consumer").decision_paths == ()
 
 
-def test_an_incompatible_computation_is_refused_at_authoring() -> None:
-    """At authoring means at the class statement, which is where it is written."""
-
-    with pytest.raises(AuthoringError, match="requires computation test.consume"):
-
-        class WrongOffer(DataflowDesign):
-            id = "wrong_offer"
-            version = "1"
-            extent = Input(int)
-            lanes = Input(int)
-            produce = KernelChoice(
-                Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-            )
-            consume = KernelChoice(
-                Subspace(ConsumerKernel, extent=extent, lanes=lanes),
-                Subspace(ProducingKernel, extent=extent, lanes=lanes),
-                computation=CONSUME,
-            )
-
-
 def test_a_candidate_whose_region_breaks_the_topology_is_selectable_but_infeasible() -> None:
     engine, point, design = _started()
     broken = engine.commit_assignments(point, {SELECTOR: "misported_consumer"}).point
@@ -403,13 +354,10 @@ def test_a_design_wide_feasibility_algorithm_rejects_the_misported_candidate() -
         version = "1"
         extent = Input(int)
         lanes = Input(int)
-        produce = KernelChoice(
-            Subspace(ProducerKernel, extent=extent, lanes=lanes), computation=PRODUCE
-        )
+        produce = KernelChoice(Subspace(ProducerKernel, extent=extent, lanes=lanes))
         consume = KernelChoice(
             Subspace(MisportedConsumerKernel, extent=extent, lanes=lanes),
             Subspace(ConsumerKernel, extent=extent, lanes=lanes),
-            computation=CONSUME,
         )
         stream = NetworkEdge(produce.output("stream"), EdgeSink(consume.input("stream")))
         source = NetworkBoundary(produce.input("source"))

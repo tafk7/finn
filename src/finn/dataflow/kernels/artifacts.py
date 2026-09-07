@@ -3,7 +3,7 @@
 
 """One-way projection from a detached Kernel build unit to artifact values.
 
-Every function here takes a :class:`KernelPhysicalResult` and never a Kernel
+Every function here takes a :class:`ModuleBuildSpec` and never a Kernel
 occurrence.  That is the boundary: an artifact stage reads resolved identity,
 parameters, ABI and contributions, and has no handle through which it could
 reach an Engine, a point, or the design space the Kernel was configured in.
@@ -32,13 +32,13 @@ from finn.dataflow.artifacts.derivation import (
 )
 from finn.dataflow.artifacts.packaging import PortableComponent, Realization
 from finn.dataflow.artifacts.sources import SourceFile
-from finn.dataflow.kernels.kernel import KernelPhysicalResult
+from finn.dataflow.kernels.kernel import ModuleBuildSpec
 
 KERNEL_SOURCE_SCHEMA = "kernel-source-v1"
 
 
 def resolve_kernel_contributions(
-    kernel: KernelPhysicalResult,
+    kernel: ModuleBuildSpec,
     *,
     roots: Mapping[str, Path],
     template_roots: Sequence[Path] = (),
@@ -50,7 +50,7 @@ def resolve_kernel_contributions(
         roots=roots,
         template_roots=template_roots,
         context=kernel.render_context,
-        origin=f"kernel:{kernel.kernel_id}:{kernel.kernel_version}",
+        origin=f"kernel:{kernel.implementation_id}:{kernel.implementation_version}",
     )
 
 
@@ -75,7 +75,7 @@ def _source_options(index: int, source: SourceFile) -> tuple[tuple[str, Scalar],
     return options
 
 
-def _declared_paths(kernel: KernelPhysicalResult) -> tuple[str, ...]:
+def _declared_paths(kernel: ModuleBuildSpec) -> tuple[str, ...]:
     return tuple(
         contribution.path if isinstance(contribution, CopiedSource) else contribution.name
         for contribution in kernel.contributions
@@ -83,23 +83,25 @@ def _declared_paths(kernel: KernelPhysicalResult) -> tuple[str, ...]:
     )
 
 
-def _check_resolved_shape(kernel: KernelPhysicalResult, resolved: ResolvedContributions) -> None:
+def _check_resolved_shape(kernel: ModuleBuildSpec, resolved: ResolvedContributions) -> None:
     expected_paths = _declared_paths(kernel)
     actual_paths = tuple(source.path for source in resolved.definition.files)
     if actual_paths != expected_paths:
         raise ValueError(
-            f"{kernel.kernel_id} declared source order {expected_paths!r} "
+            f"{kernel.implementation_id} declared source order {expected_paths!r} "
             f"and resolved {actual_paths!r}"
         )
     expected_slots = tuple(
         contribution for contribution in kernel.contributions if isinstance(contribution, DataSlot)
     )
     if resolved.slots != expected_slots:
-        raise ValueError(f"{kernel.kernel_id} resolved data slots do not match its declaration")
+        raise ValueError(
+            f"{kernel.implementation_id} resolved data slots do not match its declaration"
+        )
 
 
 def kernel_source_derivation(
-    kernel: KernelPhysicalResult,
+    kernel: ModuleBuildSpec,
     resolved: ResolvedContributions,
 ) -> Derivation:
     """Describe the reusable source closure using only inputs the stage reads."""
@@ -127,7 +129,9 @@ def kernel_source_derivation(
     return Derivation(
         kind="kernel-source",
         schema_version=KERNEL_SOURCE_SCHEMA,
-        producer=ProducerIdentity(f"finn.kernel.{kernel.kernel_id}", kernel.kernel_version),
+        producer=ProducerIdentity(
+            f"finn.kernel.{kernel.implementation_id}", kernel.implementation_version
+        ),
         inputs=inputs,
         options=options,
         outputs=OutputLayout(tuple(source.path for source in resolved.definition.files)),
@@ -135,7 +139,7 @@ def kernel_source_derivation(
 
 
 def portable_kernel_component(
-    kernel: KernelPhysicalResult,
+    kernel: ModuleBuildSpec,
     source_artifact: ArtifactRef,
     resolved: ResolvedContributions,
 ) -> PortableComponent:

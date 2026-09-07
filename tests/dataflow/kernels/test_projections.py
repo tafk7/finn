@@ -19,7 +19,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow._engine import Absent, Decided, Engine, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.kernel import (
-    KernelPhysicalResult,
+    ModuleBuildSpec,
     _KernelCompilation,
     kernel_dataflow,
     kernel_physical,
@@ -170,12 +170,12 @@ def test_the_detached_build_unit_holds_no_handle_into_the_design_space() -> None
     assert isinstance(answer, Decided)
     result = answer.value
 
-    for name in KernelPhysicalResult.__slots__:
+    for name in ModuleBuildSpec.__slots__:
         value = getattr(result, name)
         assert not isinstance(value, (Engine, Space))
         assert not hasattr(value, "design_space")
         assert not hasattr(value, "_occurrence_state")
-    assert result.build_unit == "replay_buffer"
+    assert result.abi.entry_point == "replay_buffer"
 
 
 def test_the_kernel_layer_classifies_its_decisions_without_relaxing_ownership() -> None:

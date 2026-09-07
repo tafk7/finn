@@ -16,7 +16,6 @@ from finn.dataflow._engine import Decided, Engine, QualifiedPath
 from finn.dataflow.artifacts.derivation import ArtifactRef, build_key
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.computation import ACTIVATION_REPLAY_COMPUTATION
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
@@ -174,19 +173,16 @@ def test_replay_parameters_restate_the_folding(
 
 def test_replay_owns_no_decision_at_all() -> None:
     configured = _configure()
-    assert dict(configured.assignments) == {}
-    assert {path.value for path in configured.imported_decisions} == {
-        "replay_test.pe",
-        "replay_test.simd",
+    assert set(configured.imported_decisions) == {
+        "pe",
+        "simd",
     }
     _harness, kernel = _compile()
     assert kernel.spec.decisions == ()  # type: ignore[attr-defined]
 
 
 def test_replay_declares_one_region_family() -> None:
-    configured = _configure()
-    assert configured.computation == ACTIVATION_REPLAY_COMPUTATION
-    assert (configured.region_family, configured.region_version) == (
+    assert (ReplayBufferKernel.region.family, ReplayBufferKernel.region.version) == (
         "mvau.activation_replay",
         "1",
     )
