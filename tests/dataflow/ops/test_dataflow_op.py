@@ -1135,7 +1135,7 @@ def test_qonnx_shape_inference_runs_on_the_unbound_wrapper() -> None:
     have nothing to decide.
     """
 
-    from qonnx.transformation.infer_shapes import InferShapes  # noqa: PLC0415
+    from finn.dataflow.ops.inference import InferShapes  # noqa: PLC0415
 
     model = _chained_mvau_model()
 
@@ -1145,7 +1145,7 @@ def test_qonnx_shape_inference_runs_on_the_unbound_wrapper() -> None:
 
 
 def test_qonnx_datatype_inference_runs_on_the_unbound_wrapper() -> None:
-    from qonnx.transformation.infer_datatypes import InferDataTypes  # noqa: PLC0415
+    from finn.dataflow.ops.inference import InferDataTypes  # noqa: PLC0415
 
     model = _mvau_model()
     model.set_tensor_datatype("output", DataType["FLOAT32"])
@@ -1156,7 +1156,7 @@ def test_qonnx_datatype_inference_runs_on_the_unbound_wrapper() -> None:
 
 
 def test_the_replay_operation_infers_through_the_same_passes() -> None:
-    from qonnx.transformation.infer_shapes import InferShapes  # noqa: PLC0415
+    from finn.dataflow.ops.inference import InferShapes  # noqa: PLC0415
 
     model = _chained_replay_model()
 

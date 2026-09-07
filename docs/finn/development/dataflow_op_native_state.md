@@ -75,8 +75,11 @@ names are preserved by this mechanical migration.
 
 Missing means unassigned. Only reachable decided choices are written. Committing
 a partial point or switching branches removes all known choice attributes that
-are absent from the new point. Selectors hydrate before ordinary Decisions,
-with enclosing selectors before nested ones. Unsupported kinds, unreachable
+are absent from the new point. Hydration decodes all assignments before
+submitting one compatible batch to the engine. The engine's dependency graph
+orders selectors, applicability dependencies and Decision domains, including
+parent domains that depend on child exports. Declaration-walk order is not a
+replay order. Unsupported kinds, unreachable
 assignments, stale fingerprints, duplicate attributes and unknown schema
 versions are refused. Legacy JSON state is refused without a migration parser.
 
@@ -111,13 +114,38 @@ with source_analysis(model):
     operations = [wrapper.bind(model, build) for wrapper in wrappers]
 ```
 
-Nested calls reuse the one result. The context also supports model-wide QONNX
-source queries and inference calls on that same ModelWrapper. A pass is a read
+Nested calls reuse the one result for that exact ModelWrapper. A pass is a read
 snapshot: after changing initializer values, exit it and begin a new pass.
 `verify_nodes` establishes one such context around all DataflowOps. A later pass
 always analyzes current values; no implicit model cache survives the context.
 The commit precondition explicitly starts a fresh analysis even when called
 inside an older context.
+
+For model-wide inference, use FINN's explicit pass owners:
+
+```python
+from finn.dataflow.ops.inference import InferDataTypes, InferShapes
+
+model = model.transform(InferShapes())
+model = model.transform(InferDataTypes())
+# Direct InferDataTypes().apply(model) also owns exactly one analysis.
+```
+
+These adapters establish a fresh `source_analysis` inside `apply`, around the
+actual wrapper processed by QONNX's callbacks. Default `ModelWrapper.transform`
+deepcopies its argument and may preprocess float64 initializers before `apply`;
+an analysis context around the original wrapper cannot cover those callbacks.
+Each `apply` iteration owns one bulk analysis, irrespective of operation count.
+QONNX's repeat-until-unchanged behavior is preserved, so a changing datatype
+pass followed by its unchanged check performs two analyses for two passes.
+Graphs without DataflowOps use the original inference behavior without analysis.
+
+This is an explicit FINN integration boundary, not a change to the accepted
+QONNX revision: neither `ModelWrapper` nor QONNX's transformation classes are
+patched. Raw QONNX inference classes have no FINN pass owner. Callers requiring
+the one-pass guarantee must import the FINN adapters; wrapping a default-copy
+`model.transform(...)` call in `source_analysis(model)` is not sufficient.
+The DataflowOp inference fixtures now use these pass owners.
 
 Every `OpInput` generates a separate optional `value_summary` Problem with the
 explicit versioned `TENSOR_VALUE_SUMMARY_CODEC` (`finn.dataflow.tensor_value_summary@1`).
@@ -145,8 +173,12 @@ be applied to an output that has since been retargeted.
 
 The applier rechecks actual source facts, including initializer contents, before
 writing. A concurrent choice change refuses the plan. Display-name changes and
-unrelated node metadata do not. Any failure during writes restores the complete
-serialized model. The plan reports `dataflow.implementation` invalidation when
+unrelated node metadata do not. The write transaction includes the final rebind
+returned by `commit`: a failure in hydration restores the complete serialized
+model, including native attributes and output repairs, just as a write failure
+does. Duplicate attribute names are rejected before filtering ONNX kinds,
+including duplicates involving TENSOR attributes. The plan reports
+`dataflow.implementation` invalidation when
 native state changes; downstream artifact owners must act on that report.
 Commitment stage is an in-memory planning check, never a node attribute.
 
@@ -205,17 +237,21 @@ with these results:
 
 | Check | Result |
 | --- | --- |
-| `tests/dataflow` with parity required | 1,626 passed, no skips |
+| `tests/dataflow` with parity required | 1,643 passed, no skips |
 | `tests/fpgadataflow/test_mvau_cycle_estimate.py` | 1 passed |
-| `mypy --strict -p finn.dataflow -p finn.custom_op.dataflow` | 86 source files clean |
+| `mypy --strict -p finn.dataflow -p finn.custom_op.dataflow` | 87 source files clean |
 | Gate script's explicit typed-test/source file set | 29 source files clean |
-| Ruff format and lint over the gate file set | 192 formatted files; lint clean |
+| Ruff format and lint over the gate file set | 195 formatted files; lint clean |
 | Diff over model, Space, engine, Design, Kernel contracts and root facade | Empty |
 | Five independent pinned dependency clones | Clean, no symlinks or Git alternates |
 
 The dataflow suite includes operation/conformance, real save/reload, inference,
 summary fingerprint, scan-count, mapping, transaction, package-boundary and
-parity evidence. Runtime tests used Python 3.10.12 in Docker
+parity evidence. Review regressions cover parent Decisions whose domains read
+child exports, rollback after a post-write hydration failure, duplicate names
+with unsupported ONNX kinds, and three real Replay callbacks per inference
+pass. Inference coverage includes default deepcopies, optional float64
+preprocessing, repeated fixed-point passes, and ordinary QONNX datatype options. Runtime tests used Python 3.10.12 in Docker
 `xilinx/finn:env-CONFORMANCE`, with `FINN_SKIP_DEP_REPOS=1`, the target worktree
 mounted, and its own QONNX checkout first on the runtime import path. The image
 entrypoint was bypassed so no dependency checkout was installed or rewritten.

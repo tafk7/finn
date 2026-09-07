@@ -553,7 +553,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         )
 
     def commit(self, model: Any, build: Any = None, *, require: Any = None) -> Any:
-        from finn.dataflow.ops.persistence import apply_graph_effects  # noqa: PLC0415
+        from finn.dataflow.ops.persistence import _apply_graph_effects  # noqa: PLC0415
 
         if build is not None:
             offered = self._build_values(build)
@@ -568,8 +568,9 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 raise DataflowOpError(
                     f"build facts differ at commit ({', '.join(names)}); rebind first"
                 )
-        apply_graph_effects(model, self.graph_effects(require=require))
-        return self.rebind(model)
+        return _apply_graph_effects(
+            model, self.graph_effects(require=require), lambda: self.rebind(model)
+        )
 
     def recorded(self) -> Mapping[str, object]:
         if not self.is_bound:
