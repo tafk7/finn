@@ -3,7 +3,7 @@
 
 """Class-centered occurrence views over the private design-space runtime.
 
-An authored :class:`~finn.dataflow.model.Space` subclass is both the family
+An authored :class:`~finn.dataflow.space.Space` subclass is both the family
 declaration and the public type of each occurrence.  The objects constructed
 here deliberately contain no public Engine, point, reference, or path access.
 One root owns those capabilities privately; children are exact namespace-bound
