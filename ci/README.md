@@ -202,6 +202,55 @@ This guards conservatively against under-provisioning while bounding how long an
 
 To inspect timing state, open `reports/ci_timings_master.json` from any archived build.
 
+### Shared Docker image transport
+
+There is no registry, so "Build Docker Image" saves the built image to NFS and
+every test shard `docker load`s it instead of rebuilding. The build-scoped
+image directory holds four files:
+
+```
+${FINN_CI_NFS_ROOT}/docker_images/<jobKey>/<BUILD>/
+      finn-docker-image.tar.gz    the gzipped `docker save` archive
+      finn-docker-tag.txt         the tag it was saved under
+      finn-image-digest.txt       the image ID that tag resolved to at build time
+      finn-image-provenance.json  target, tag, digest, finn_commit, resolved deps
+```
+
+The first two are the historical transport contract. The second two come from
+`ci/scripts/build-images.sh` and are what makes the transport checkable.
+
+`ci/scripts/load-shared-image.sh`, invoked by the launcher on each shard,
+behaves as follows:
+
+- **Digest present.** The sidecar must hold exactly one image ID in
+  `sha256:<hex>` form; an empty, multi-line or malformed file fails the shard
+  *before* the multi-gigabyte load. After the load and any compatibility
+  re-tag, the loader reads back the image ID of the tag it was asked for and
+  fails if it is not the recorded one, printing `Verified <tag> against
+  recorded image ID <id>` when it matches. Either way the shard never reaches
+  pytest with an image whose identity does not match what was published.
+- **Digest absent.** Archives published before the sidecar existed still load.
+  The loader prints one `WARNING: no finn-image-digest.txt ... legacy, tag-only
+  archive` line and follows the historical path. A missing sidecar is never on
+  its own a failure.
+
+The distinction between the two load modes is unchanged. With
+`FINN_DOCKER_PREBUILT=1` the shared image is authoritative and a failed load is
+fatal; without it the shared directory is an optional cache and a failed load
+warns and falls back.
+
+What this does **not** do: the shard still runs the image by tag, so nothing
+stops a concurrent build from reassigning that tag between the load and the
+container starting. Verification narrows the window to that interval rather
+than closing it. Closing it needs run-by-image-ID, build-specific tags or a
+registry, all of which change concurrency behavior and need team agreement.
+
+`finn-image-provenance.json` and `finn-image-digest.txt` are also archived as
+Jenkins build artifacts. The build stage writes them into a `ci-image-metadata/`
+directory in the agent workspace, archives those two exact paths, and then
+copies them to the NFS image directory above. Archival happens before the NFS
+branch, so a build with `FINN_CI_NFS_ROOT` unset still carries them.
+
 ### Build-to-HW zip handoff
 
 The build pipeline stages board deployment directories per shard, then "Check Stage Results" aggregates those staged deployments into one board bitstream zip plus a `.READY` marker in the per-build directory.
@@ -261,6 +310,7 @@ The "Validate" stage rotates the image, artifact, and timing-snapshot trees via 
 - `reports/shard_map.txt` and `reports/shard_map.json` merged across all shards.
 - `reports/ci_timings_master.json` archived timing preview from this build. Its `last_update` field records the observed group count and whether the shared master was updated.
 - `reports/<stash>.empty-shard` per shard that collected zero items. Useful for distinguishing "shard had no work" from "shard crashed".
+- `ci-image-metadata/finn-image-provenance.json` and `ci-image-metadata/finn-image-digest.txt` from "Build Docker Image". Together they identify the container environment every shard ran in and the FINN commit that was mounted into it. Unlike the report artifacts these are not `allowEmptyArchive`: the build step is required to have produced them.
 - `coverage_combined/` one merged HTML report across all rows with `coverage: true`. Per-shard pytest runs write raw `.coverage` data files (one per shard, named via `COVERAGE_FILE=<stash>.coverage`), `aggregateReports` runs `coverage combine` and `coverage html` on the union, and the merged result is archived. Skipped silently when no row opted in.
 - `${FINN_CI_NFS_ROOT}/artifacts/ci_runs/<jobKey>/<BUILD_NUMBER>/zips/<hwTestType>/<board>.zip` per row with a `zipArtifacts` entry. `aggregateReports()` runs `assertZipArtifactsEmitted()` which marks the build UNSTABLE (non-fatal) when an active row declared `zipArtifacts` but no `.READY` was written.
 - `${FINN_CI_NFS_ROOT}/artifacts/ci_runs/<jobKey>/<BUILD_NUMBER>/zips/<hwTestType>/<board>.zip.READY` per-board handshake marker, touched only after the zip is in place. Publishing is idempotent for same-build retries.
