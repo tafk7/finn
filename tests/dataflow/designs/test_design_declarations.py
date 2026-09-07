@@ -27,7 +27,14 @@ from finn.dataflow.model.declarations import (
     SubspaceChoice,
     divisors_of,
 )
-from finn.dataflow.designs.design import Boundary, DataflowDesign, Kernels
+from finn.dataflow.designs.design import (
+    Boundary,
+    Connection,
+    DataflowDesign,
+    Kernels,
+    SelectedNetwork,
+    Sink,
+)
 from finn.dataflow.model.occurrence import ChoiceView
 from finn.dataflow.kernels.kernel import Kernel, Parameter, Region
 from finn.dataflow.region import (
@@ -559,3 +566,34 @@ def test_roles_node_ids_and_case_ids_must_be_atomic_path_segments() -> None:
     # where the segment is written rather than deferred to compilation.
     with pytest.raises(AuthoringError, match="contains a dot"):
         Kernels(Subspace(CopyKernel, name="a.b"), computation=COPY)
+
+
+@pytest.mark.parametrize("name", ["", "a.b", "white space", "non_ascii_é", 7])
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda name: SelectedNetwork(name=name),
+        lambda name: Connection(
+            TwoSegments.first.output("output"),
+            Sink(TwoSegments.second.input("input")),
+            name=name,
+        ),
+        lambda name: Boundary(TwoSegments.first.input("input"), name=name),
+    ],
+    ids=["selected-network", "connection", "boundary"],
+)
+def test_specialized_design_name_is_one_local_path_segment(factory, name) -> None:
+    with pytest.raises(AuthoringError, match="name must be one"):
+        factory(name)
+
+
+def test_none_is_the_only_specialized_design_name_fallback() -> None:
+    assert SelectedNetwork().stable_name is None
+    assert (
+        Connection(
+            TwoSegments.first.output("output"),
+            Sink(TwoSegments.second.input("input")),
+        ).stable_name
+        is None
+    )
+    assert Boundary(TwoSegments.first.input("input")).stable_name is None

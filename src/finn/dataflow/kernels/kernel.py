@@ -65,6 +65,7 @@ from finn.dataflow.model.declarations import (
     Readiness,
     Space,
     ValueSource,
+    _declaration_name,
     declared_members,
     reject,
     resolve_declared_value,
@@ -220,7 +221,7 @@ class Region(Derived[DataflowRegion]):
                 )
 
         object.__setattr__(self, "value_semantics", semantics_for(DATAFLOW_REGION_SEMANTICS))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Region"))
         object.__setattr__(self, "dependencies", tuple(dependencies.items()))
         object.__setattr__(self, "evaluate", evaluate)
         object.__setattr__(self, "family", family)
@@ -264,7 +265,7 @@ class Parameter(Generic[T]):
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "fixed_value", _MISSING)
         object.__setattr__(self, "why", "")
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Parameter"))
 
     @classmethod
     def constant(
@@ -280,7 +281,7 @@ class Parameter(Generic[T]):
         object.__setattr__(built, "source", None)
         object.__setattr__(built, "fixed_value", value)
         object.__setattr__(built, "why", why)
-        object.__setattr__(built, "stable_name", name)
+        object.__setattr__(built, "stable_name", _declaration_name(name, "a Parameter"))
         return built
 
     def __get__(self, instance: object | None, owner: type[object]) -> object:

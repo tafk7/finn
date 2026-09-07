@@ -344,6 +344,28 @@ def test_region_needs_a_non_empty_family_and_version() -> None:
         Region(family="test.copy", version="", construct=_degenerate)
 
 
+@pytest.mark.parametrize("name", ["", "a.b", "white space", "non_ascii_é", 7])
+def test_region_name_is_one_local_path_segment(name) -> None:
+    with pytest.raises(AuthoringError, match="name must be one"):
+        Region(family="test.copy", version="1", construct=_degenerate, name=name)
+
+
+@pytest.mark.parametrize("name", ["", "a.b", "white space", "non_ascii_é", 7])
+@pytest.mark.parametrize("constant", [False, True], ids=["sourced", "constant"])
+def test_parameter_name_is_one_local_path_segment(name, constant) -> None:
+    with pytest.raises(AuthoringError, match="name must be one"):
+        if constant:
+            Parameter.constant(1, why="test constant", name=name)
+        else:
+            Parameter(Input(int), name=name)
+
+
+def test_none_is_the_only_specialized_kernel_name_fallback() -> None:
+    assert Region(family="test.copy", version="1", construct=_degenerate).stable_name is None
+    assert Parameter(Input(int)).stable_name is None
+    assert Parameter.constant(1, why="test constant").stable_name is None
+
+
 def test_region_constructor_signature_must_match_its_dependencies() -> None:
     extent = Input(int)
     with pytest.raises(AuthoringError, match="unbound parameters \\['lanes'\\]"):

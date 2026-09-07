@@ -63,6 +63,7 @@ from finn.dataflow.model.declarations import (
     Subspace,
     ValueSource,
     SubspaceChoice,
+    _declaration_name,
     allow_absent,
     declared_members,
     reject,
@@ -116,7 +117,7 @@ class SelectedNetwork(Derived[DataflowNetwork]):
 
     def __init__(self, *, name: str | None = None) -> None:
         object.__setattr__(self, "value_semantics", semantics_for(DATAFLOW_NETWORK_SEMANTICS))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a SelectedNetwork"))
         object.__setattr__(self, "dependencies", ())
         object.__setattr__(self, "evaluate", _unbuilt_network)
 
@@ -497,11 +498,9 @@ class Connection:
             raise AuthoringError("a Connection needs at least one Sink")
         if any(not isinstance(sink, Sink) for sink in sinks):
             raise AuthoringError("a Connection takes Sink declarations after its source")
-        if name is not None and not name:
-            raise AuthoringError("a Connection name must be non-empty")
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "sinks", tuple(sinks))
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Connection"))
         object.__setattr__(self, "when", when)
 
 
@@ -522,10 +521,8 @@ class Boundary:
     ) -> None:
         if not isinstance(endpoint, SegmentEndpoint):
             raise AuthoringError("a Boundary exposes a segment endpoint")
-        if name is not None and not name:
-            raise AuthoringError("a Boundary name must be non-empty")
         object.__setattr__(self, "endpoint", endpoint)
-        object.__setattr__(self, "stable_name", name)
+        object.__setattr__(self, "stable_name", _declaration_name(name, "a Boundary"))
         object.__setattr__(self, "when", when)
 
 
