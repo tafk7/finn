@@ -12,11 +12,13 @@ from finn.dataflow.model.region import (
     Coordinate,
     DataflowRegion,
     InputInterface,
+    InternalInput,
     LogicalSchedule,
     NumericElementType,
     Operand,
     OutputInterface,
     Port,
+    RegionInput,
     RequirementKey,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
@@ -469,25 +471,38 @@ def _standard_region(
         if expanded_activation
         else _compact_activation_beats(repetitions, synapse_folds, simd)
     )
-    inputs = [
+    inputs: list[RegionInput] = [
         InputInterface(
             Port("activation", activation, BeatSequence(simd, activation_beats)),
             _standard_activation_requirements(repetitions, neuron_folds, synapse_folds, simd),
         )
     ]
+    # The weight requirement is the same statement about the computation either
+    # way, derived once.  Streaming or not is a claim about *transport*: the
+    # streamed form gives it a port, the embedded form does not, and nothing
+    # else about the Region differs.
+    weight_requirements = _standard_weight_requirements(
+        repetitions, neuron_folds, synapse_folds, pe, simd
+    )
     if streamed_weights:
-        weight_port = construct_standard_mvau_weight_port(
-            repetitions,
-            matrix_width,
-            matrix_height,
-            weight_element_type,
-            pe,
-            simd,
-        )
         inputs.append(
             InputInterface(
-                weight_port,
-                _standard_weight_requirements(repetitions, neuron_folds, synapse_folds, pe, simd),
+                construct_standard_mvau_weight_port(
+                    repetitions,
+                    matrix_width,
+                    matrix_height,
+                    weight_element_type,
+                    pe,
+                    simd,
+                ),
+                weight_requirements,
+            )
+        )
+    else:
+        inputs.append(
+            InternalInput(
+                _weight_operand(matrix_height, matrix_width, weight_element_type),
+                weight_requirements,
             )
         )
     output_interface = OutputInterface(
@@ -511,7 +526,14 @@ def construct_standard_embedded_mvau_region(
     pe: int,
     simd: int,
 ) -> DataflowRegion:
-    """Construct the standard folded MVAU region with binding-local weights."""
+    """Construct the standard folded MVAU region with no weight port.
+
+    The matrix is still an operand and still required, position for position and
+    iteration for iteration, exactly as the streamed sibling requires it.  What
+    the embedded form withholds is the *port*: there is no weight endpoint, so a
+    Network placing it has no weight edge and no weight boundary.  Where the
+    values come from is a physical question this Region does not answer.
+    """
     return _standard_region(
         repetitions,
         matrix_width,

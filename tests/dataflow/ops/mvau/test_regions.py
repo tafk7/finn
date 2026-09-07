@@ -10,6 +10,7 @@ from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
+    InternalInput,
     OutputInterface,
     Port,
     ScheduledOutputAvailability,
@@ -127,7 +128,14 @@ def test_small_streamed_weight_mvau_region_matches_authoring_semantics():
     assert output.availability.domain == output.port.beat_sequence.image
 
 
-def test_embedded_weight_mvau_region_omits_only_the_weight_interface():
+def test_embedded_weight_mvau_region_withholds_only_the_weight_port():
+    """Everything but transport is equal, and the weight requirement survives.
+
+    The embedded form used to delete the weight input outright, which left the
+    Region saying nothing about a matrix it demonstrably consumes.  It now says
+    the same requirement the streamed form does and withholds only the port.
+    """
+
     element_type = DataType["INT8"]
     streamed = construct_mvau_compute_region(
         2,
@@ -151,16 +159,29 @@ def test_embedded_weight_mvau_region_omits_only_the_weight_interface():
         2,
         MVAUWeightInterface.EMBEDDED,
     )
+    streamed_weight = streamed.input("W")
+    embedded_weight = embedded.input("W")
 
     assert validate_region(streamed).issues == ()
     assert validate_region(embedded).issues == ()
-    assert tuple(interface.port.id for interface in streamed.inputs) == (
+    assert streamed.schedule == embedded.schedule
+    assert streamed.outputs == embedded.outputs
+    assert streamed.input("X") == embedded.input("X")
+
+    # Same operand, same identity, same datatype, same shape, same requirements.
+    assert isinstance(streamed_weight, InputInterface)
+    assert isinstance(embedded_weight, InternalInput)
+    assert streamed_weight.operand == embedded_weight.operand
+    assert streamed_weight.requirements == embedded_weight.requirements
+
+    # The sole difference is the port.
+    assert tuple(interface.port.id for interface in streamed.input_interfaces) == (
         "activation",
         "weight",
     )
-    assert tuple(interface.port.id for interface in embedded.inputs) == ("activation",)
-    assert streamed.schedule == embedded.schedule
-    assert streamed.outputs == embedded.outputs
+    assert tuple(interface.port.id for interface in embedded.input_interfaces) == ("activation",)
+    assert embedded.internal_inputs == (embedded_weight,)
+    assert streamed.internal_inputs == ()
 
 
 def test_mvau_field_bijections_change_sequences_without_changing_widths_or_shapes():

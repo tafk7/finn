@@ -18,6 +18,14 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.model.presentation import (
+    boundary_presented_positions,
+    edge_presented_positions,
+    exposing_ports,
+    unpresented_positions,
+)
+from finn.dataflow.model.refs import RegionInputRef
+from finn.dataflow.model.region import InputInterface, InternalInput
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.space.declarations import Problem, Space, Subspace
 from finn.dataflow.ops.mvau.computation import (
@@ -144,9 +152,19 @@ def test_embedded_supply_gives_the_compute_region_no_weight_port_at_all() -> Non
     # No boundary to substitute, because there is nothing to substitute for.
     assert {item.id for item in network.boundaries} == {"activation", "output"}
     compute = network.node("compute")
-    assert {item.port.id for item in compute.region.inputs} == {"activation"}
+    assert {item.port.id for item in compute.region.input_interfaces} == {"activation"}
     assert design.selected("compute") == Decided("dotp_axi_embedded")
     assert design.region_family("compute") == Decided(("mvau.dot_product.embedded", "1"))
+
+    # The matrix is still required, and still has no endpoint anywhere.
+    weight = RegionInputRef("compute", "W")
+    assert isinstance(compute.region.input("W"), InternalInput)
+    assert exposing_ports(network, weight) == ()
+    assert edge_presented_positions(network, weight) == frozenset()
+    assert boundary_presented_positions(network, weight) == frozenset()
+    assert unpresented_positions(network, weight) == (
+        compute.region.input("W").requirements.required_positions
+    )
 
 
 def test_decoupled_supply_gives_the_matrix_its_own_node_and_edge() -> None:
@@ -164,6 +182,34 @@ def test_decoupled_supply_gives_the_matrix_its_own_node_and_edge() -> None:
     assert isinstance(memory.value, MemstreamKernel)
 
 
+def test_decoupled_supply_makes_both_qualified_weight_requirements_real() -> None:
+    """``memory.W`` is unpresented; ``compute.W`` is edge-presented.
+
+    The corrected decoupled evidence, and the reason the supplier needed an
+    internal input of its own: before it had one, the Network could show the
+    matrix arriving at ``compute`` and say nothing at all about the node it
+    arrived from.  Nothing here relates the two ``W``\\ s -- they are two
+    region-local operands at two nodes, and source correspondence is S2-A's.
+    """
+
+    network = _network(_occurrence(WeightSupply.DECOUPLED))
+    memory = RegionInputRef("memory", "W")
+    compute = RegionInputRef("compute", "W")
+    supplied = network.node("memory").region.input("W")
+    consumed = network.node("compute").region.input("W")
+
+    assert isinstance(supplied, InternalInput)
+    assert exposing_ports(network, memory) == ()
+    assert unpresented_positions(network, memory) == supplied.requirements.required_positions
+    assert edge_presented_positions(network, memory) == frozenset()
+    assert boundary_presented_positions(network, memory) == frozenset()
+
+    assert isinstance(consumed, InputInterface)
+    assert edge_presented_positions(network, compute) == consumed.requirements.required_positions
+    assert unpresented_positions(network, compute) == frozenset()
+    assert boundary_presented_positions(network, compute) == frozenset()
+
+
 def test_the_compute_region_is_identical_in_external_and_decoupled_supply() -> None:
     """Where the matrix comes from does not change what the arithmetic means."""
 
@@ -175,6 +221,10 @@ def test_the_compute_region_is_identical_in_external_and_decoupled_supply() -> N
     assert embedded != external
     assert embedded.schedule == external.schedule
     assert embedded.outputs == external.outputs
+    assert embedded.input("X") == external.input("X")
+    # Same weight operand and the same requirement of it; only the port differs.
+    assert embedded.input("W").operand == external.input("W").operand
+    assert embedded.input("W").requirements == external.input("W").requirements
 
 
 def test_the_supplier_produces_exactly_what_the_consumer_requires() -> None:

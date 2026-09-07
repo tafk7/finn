@@ -11,6 +11,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
+    InternalInput,
     LogicalSchedule,
     Operand,
     OutputInterface,
@@ -39,6 +40,51 @@ def test_delivery_exactly_preserves_standard_and_interleaved_weight_sequences() 
             (position, ()) for position in expected.beat_sequence.image
         }
         assert validate_region(delivery) == RegionValidationReport()
+
+
+def test_delivery_declares_an_internal_input_for_what_it_presents() -> None:
+    """A source that emits a matrix requires one, and says so.
+
+    Declaring an output and no input was a claim to produce the matrix out of
+    nothing.  The requirement is at the one rank-zero point ``()``, once per
+    position in the output image -- and the output side is untouched.
+    """
+
+    compute = construct_standard_streamed_mvau_region(2, 4, 4, INT8, INT8, INT16, 2, 2)
+    expected = compute.input_interface("weight").port
+    delivery = construct_cyclic_parameter_region(expected)
+    required = delivery.input("W")
+    image = expected.beat_sequence.image
+
+    assert delivery.internal_inputs == (required,)
+    assert delivery.input_interfaces == ()
+    assert isinstance(required, InternalInput)
+    assert required.operand == expected.operand
+    assert required.requirements.required_positions == image
+    assert set(required.requirements.entries) == {(((), position), 1) for position in image}
+    assert required.requirements.occurrence_count == len(image)
+    # Untouched: the port, its exact order, and the availability map.
+    assert delivery.output_interface("weight").port == expected
+    assert validate_region(delivery) == RegionValidationReport()
+
+
+def test_repeated_output_presentation_does_not_repeat_the_internal_requirement() -> None:
+    """One retained position may be emitted several times.
+
+    Three beats over two positions, and two requirement occurrences -- not
+    three.  Requirement multiplicity is about the computation; how many times a
+    binding re-presents a retained position is not.
+    """
+
+    operand = Operand("W", INT8, (1, 2))
+    port = Port("requested", operand, BeatSequence(1, (((0, 0),), ((0, 1),), ((0, 0),))))
+    delivery = construct_cyclic_parameter_region(port)
+    required = delivery.input("W")
+
+    assert port.beat_sequence.delivered_field_count == 3
+    assert required.requirements.occurrence_count == 2
+    assert required.requirements.required_positions == frozenset({(0, 0), (0, 1)})
+    assert delivery.output_interface("weight").port.beat_sequence == port.beat_sequence
 
 
 def test_rank_zero_delivery_keeps_beat_order_independent_of_availability() -> None:

@@ -47,6 +47,7 @@ from finn.dataflow.model.region import (
     Coordinate,
     DataflowRegion,
     InputInterface,
+    InternalInput,
     LogicalSchedule,
     NumericElementType,
     Operand,
@@ -256,8 +257,12 @@ def construct_embedded_dot_product_region(
     the boundary contract depend on a physical choice, which is the thing the
     Region exists to be independent of.
 
-    The matrix itself is not an operand here.  It is not traffic; it is state
-    the realization carries, and U6 owns how it gets there.
+    The matrix *is* an operand here, and is required exactly as the streamed
+    sibling requires it -- same operand id, datatype, shape, iteration points and
+    multiplicities.  What it is not is traffic at this boundary.  Deleting the
+    input entirely was the older reading, and it made the embedded Region say
+    nothing at all about a matrix it demonstrably consumes; an ``InternalInput``
+    says the requirement and withholds only the port.
     """
 
     streamed = construct_dot_product_region(
@@ -270,16 +275,14 @@ def construct_embedded_dot_product_region(
         pe,
         simd,
     )
+    weight = streamed.input_interface("weight")
     return DataflowRegion(
         streamed.schedule,
-        # Mechanical adaptation only.  The weight interface is still dropped
-        # rather than turned into an ``InternalInput`` carrying the same
-        # requirements; that is a semantic change to this Kernel and belongs to
-        # its owner, not to the dataflow-core migration.
         tuple(
-            item
+            InternalInput(weight.operand, weight.requirements)
+            if isinstance(item, InputInterface) and item.port.id == "weight"
+            else item
             for item in streamed.inputs
-            if not isinstance(item, InputInterface) or item.port.id != "weight"
         ),
         streamed.outputs,
     )
