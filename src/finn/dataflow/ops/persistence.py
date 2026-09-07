@@ -1,47 +1,22 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One planner, one applier, and no other way to write a dataflow node.
-
-A bound operation is frozen, which is the point of binding -- and it means an
-operation cannot write to the graph through itself.  That is not an obstacle to
-work around; it is the shape the write path should have had all along::
-
-    bound     = unbound.bind(model, build)
-    chosen    = bound.assign(SomeDesign.pe, 2)
-    effects   = chosen.graph_effects(require=CommitmentStage.DATAFLOW)
-    apply_graph_effects(model, effects)
-
-``graph_effects`` reads a point and produces a value.  ``apply_graph_effects``
-takes that value and writes.  Nothing else calls ``set_nodeattr`` -- not scope
-allocation, not datatype inference, not the operation itself -- because a second
-writer is a second place for a partially applied change to come from.
-
-**Preconditions travel with the plan.**  A plan is made against one node in one
-state and may be applied later, so it carries what it assumed: the scope id it
-was planned for, the family and version, the source fingerprint, and a digest
-of the node it read.  The applier verifies all of them, then applies everything
-or nothing.
-
-**Validation is parameterised by what the caller is committing to.**  Freezing a
-semantic choice and freezing a physical one are different promises, and
-hard-wiring the first would let an unbuildable configuration persist with the
-dataflow projection Decided and the physical one refusing.
-"""
+"""Transactional native Decision writes with narrow source preconditions."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.space.occurrence import ProjectionAssessment
-from finn.dataflow.ops.base import SCOPE_ID_ATTRIBUTE, DataflowOpError
-from finn.dataflow.ops.state import STATE_ATTRIBUTE, decode_dataflow_state
+from finn.dataflow.ops.base import SCOPE_ID_ATTRIBUTE, DataflowOp, DataflowOpError
+from finn.dataflow.space.declarations import Problem
+from finn.dataflow.ops.native import NativeAttribute
+from finn.dataflow.ops.reconstruction import source_analysis
 
 
 class CommitmentStage(Enum):
@@ -71,29 +46,19 @@ class GraphEffects:
     """
 
     scope_id: str
-    family: str
-    family_version: str
-    #: Renamed from ``validated_stage``: a partial point may be saved, so
-    #: "validated" overstated the guarantee.  This means only that no required
-    #: projection at or below this stage was *finally rejected* when the state
-    #: was written.  It does not say every Decision was made.
     commitment_stage: CommitmentStage
-    #: What the plan assumed about the node it was made against.
     expected_source_fingerprint: str
-    expected_node_digest: str
-    #: The canonical design-state document, written whole.
-    state_document: str = ""
+    expected_attributes: Mapping[str, bytes | None]
+    remove_attributes: tuple[str, ...]
+    set_attributes: Mapping[str, NativeAttribute]
+    operation_type: type[DataflowOp]
+    opset_version: int
+    build_facts: Mapping[Problem[Any], object]
+    expected_operator: tuple[str, str]
+    expected_outputs: tuple[str, ...]
     tensor_datatypes: Mapping[str, Any] = field(default_factory=dict)
     tensor_shapes: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
-    #: Downstream products this change invalidates, named for a caller that
-    #: caches them.  Carried, never acted on here.
     invalidates: tuple[str, ...] = ()
-
-
-def node_digest(node: Any) -> str:
-    """A deterministic digest of one node's serialized form."""
-
-    return sha256(node.SerializeToString(deterministic=True)).hexdigest()
 
 
 def allocate_scope_id() -> str:
@@ -228,28 +193,33 @@ def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
     """
 
     node = find_node(model, effects.scope_id)
-    recorded = decode_dataflow_state(node)
-    if recorded is not None:
-        for what, present, expected in (
-            ("family", recorded.family, effects.family),
-            ("family version", recorded.family_version, effects.family_version),
-            (
-                "problem fingerprint",
-                recorded.problem_fingerprint,
-                effects.expected_source_fingerprint,
-            ),
-        ):
-            if present and present != expected:
-                raise DataflowOpError(
-                    f"node {node.name!r} records {what} {present!r} and this change was "
-                    f"planned for {expected!r}; rebind and plan again"
-                )
-    actual = node_digest(node)
-    if actual != effects.expected_node_digest:
+    if (node.domain, node.op_type) != effects.expected_operator:
+        raise DataflowOpError("source operator changed since this change was planned")
+    if tuple(node.output) != effects.expected_outputs:
+        raise DataflowOpError("output tensor identities changed since this change was planned")
+    current: dict[str, bytes] = {}
+    for item in node.attribute:
+        if item.name in current:
+            raise DataflowOpError(f"duplicate node attribute {item.name!r}")
+        current[item.name] = item.SerializeToString(deterministic=True)
+    for name, expected in effects.expected_attributes.items():
+        if current.get(name) != expected:
+            raise DataflowOpError(
+                f"Decision attribute {name!r} changed since this change was planned; "
+                "rebind and plan again"
+            )
+    # Re-read graph facts, including initializer content, before any mutation.
+    # The plan carries detached build Problems, never an occurrence or model.
+    with source_analysis(model, fresh=True) as summaries:
+        fresh = effects.operation_type(node, effects.opset_version)._bind_with(
+            model,
+            effects.build_facts,
+            summaries,
+            recorded=False,
+        )
+    if fresh.problem_fingerprint != effects.expected_source_fingerprint:
         raise DataflowOpError(
-            f"node {node.name!r} changed since this change was planned "
-            f"(planned against {effects.expected_node_digest[:12]}, found {actual[:12]}); "
-            "rebind and plan again"
+            "source facts now describe a different problem; rebind and plan again"
         )
 
     # The *whole* model, not just the node.  Tensor datatypes live in graph
@@ -258,12 +228,10 @@ def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
     # the node looking untouched, which is worse than an obvious failure.
     snapshot = model.model.SerializeToString(deterministic=True)
     try:
-        # One attribute, written whole.  This is what makes switching a
-        # structural alternative safe: the document *replaces* the previous
-        # one, so a choice belonging to the alternative left behind cannot
-        # survive as a leftover attribute nobody rewrote.
-        _write_string(node, STATE_ATTRIBUTE, effects.state_document)
-        _write_string(node, SCOPE_ID_ATTRIBUTE, effects.scope_id)
+        for name in (*effects.remove_attributes, *effects.set_attributes):
+            _drop(node, name)
+        for name, attribute in sorted(effects.set_attributes.items()):
+            node.attribute.append(attribute.proto(name))
         for tensor, datatype in effects.tensor_datatypes.items():
             model.set_tensor_datatype(tensor, datatype)
         for tensor, shape in effects.tensor_shapes.items():
@@ -307,5 +275,4 @@ __all__ = [
     "assign_dataflow_scope_ids",
     "check_commitment",
     "find_node",
-    "node_digest",
 ]

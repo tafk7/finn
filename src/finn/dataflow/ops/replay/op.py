@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, cast
 
-from finn.dataflow._engine import Answer, Decided
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Space,
@@ -25,16 +24,12 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.model.network import DataflowNetwork
-from finn.dataflow.ops.association import (
-    BoundaryDestination,
-    CoordinateMapping,
-    OperandAssociation,
-    SourceAssociation,
-)
+from finn.dataflow.ops.mapping import CoordinateMapping
+from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
-from finn.dataflow.ops.schema import Attribute, InputTensor, OutputTensor
+from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
 
 def _design(root: Space) -> ActivationReplayDesign:
@@ -47,8 +42,8 @@ class ActivationReplayOp(DataflowOp):
     family: ClassVar[str] = "finn.dataflow.activation_replay"
     family_version: ClassVar[str] = "1"
 
-    activation = InputTensor(index=0)
-    expanded = OutputTensor(index=0)
+    activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
+    expanded = OpOutput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
 
     neuron_folds = Attribute(int, default=1)
 
@@ -126,51 +121,13 @@ class ActivationReplayOp(DataflowOp):
 
         return _design(self).dataflow
 
-    @property
-    def association(self) -> Answer[SourceAssociation]:
-        answer = self.network
-        if not isinstance(answer, Decided):
-            return cast("Answer[SourceAssociation]", answer)
-        network = answer.value
-        boundaries = {item.id: item for item in network.boundaries}
-        operands: list[OperandAssociation] = []
-        for operand_id in ("activation", "expanded"):
-            operand = self.source.operand(operand_id)
-            boundary = boundaries[operand_id]
-            destination = BoundaryDestination(
-                operand_id, boundary.endpoint.node_id, boundary.endpoint.port_id
-            )
-            node = network.node(destination.node_id)
-            interfaces = (
-                node.region.input_interfaces if operand_id == "activation" else node.region.outputs
-            )
-            selected = next(
-                (
-                    tuple(item.port.operand.shape)
-                    for item in interfaces
-                    if item.port.id == destination.port_id
-                ),
-                None,
-            )
-            operands.append(
-                OperandAssociation(
-                    operand_id,
-                    operand.tensor,
-                    destination,
-                    CoordinateMapping.FLATTEN_LEADING,
-                    operand.shape,
-                    selected,
-                )
-            )
-        return Decided(
-            SourceAssociation(
-                self.binding.node_identity,
-                self.source.node_name,
-                type(self).family,
-                type(self).family_version,
-                tuple(operands),
-            )
-        )
+    def operand_references(
+        self, network: DataflowNetwork
+    ) -> dict[str, tuple[DataflowOperandRef, ...]]:
+        return {
+            "activation": (RegionInputRef("replay", "X"),),
+            "expanded": (RegionOutputRef("replay", "X"),),
+        }
 
     def execute_node(self, context: Any, graph: Any) -> None:
         """Repeat each activation row once per neuron fold.

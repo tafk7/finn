@@ -12,7 +12,6 @@ separately rather than pretending the difference away.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from dataclasses import dataclass, replace
@@ -35,16 +34,9 @@ from finn.dataflow.space.declarations import (
     declared_members,
 )
 from finn.dataflow.space.occurrence import ProjectionAssessment
-from finn.dataflow.ops.association import (
-    BoundaryDestination,
-    CoordinateMapping,
-    RegionStateDestination,
-    StreamDestination,
-)
+from finn.dataflow.ops.mapping import CoordinateMapping, External, Internal
 from finn.dataflow.ops.base import (
     DATAFLOW_DOMAIN,
-    FAMILY_ATTRIBUTE,
-    FAMILY_VERSION_ATTRIBUTE,
     FINGERPRINT_ATTRIBUTE,
     SCOPE_ID_ATTRIBUTE,
     DataflowOp,
@@ -65,14 +57,13 @@ from finn.dataflow.ops.persistence import (
 )
 from finn.dataflow.ops.replay.design import ActivationReplayDesign
 from finn.dataflow.ops.replay.op import ActivationReplayOp
-from finn.dataflow.ops.schema import InputTensor, OutputTensor
-from finn.dataflow.ops.state import (
-    STATE_ATTRIBUTE,
-    DecodeError,
-    decode_dataflow_state,
-    decode_state,
-    format_dataflow_state,
+from finn.dataflow.ops.schema import OpInput, OpOutput
+from finn.dataflow.ops.native import (
+    NativeAttribute,
+    SCHEMA_VERSION_ATTRIBUTE,
+    read_attributes,
 )
+
 from finn.dataflow.ops.source import SourceError
 
 
@@ -102,6 +93,7 @@ def _mvau_model(
         ["output"],
         domain=DATAFLOW_DOMAIN,
         name="mvau0",
+        outputDataType="INT32",
         narrow_weights=int(narrow),
     )
     graph = helper.make_graph(
@@ -162,6 +154,7 @@ def _chained_mvau_model() -> ModelWrapper:
         ["hidden"],
         domain=DATAFLOW_DOMAIN,
         name="mvau0",
+        outputDataType="INT32",
         narrow_weights=0,
     )
     tail = helper.make_node("Identity", ["hidden"], ["output"], name="tail")
@@ -330,7 +323,7 @@ def test_a_successor_carries_the_same_frozen_binding() -> None:
 
     assert type(successor) is MvauDataflowOp
     assert successor is not bound
-    assert successor.binding is bound.binding
+    assert successor.problem_snapshot is bound.problem_snapshot
     assert successor.problem_fingerprint == bound.problem_fingerprint
 
 
@@ -410,7 +403,6 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
         "binary_xnor",
         "activation_bias",
         "accumulator_type",
-        "weight_excludes_minimum",
         "output_type",
         "source_nodes",
         "target_dsp",
@@ -437,7 +429,8 @@ def test_a_tensor_lowers_to_explicit_named_facets() -> None:
     assert "weight__initializer_present" in declarations
     # Only where the declaration asked for it.
     assert "weight__initializer_digest" in declarations
-    assert "activation__initializer_digest" not in declarations
+    assert "activation__initializer_digest" in declarations
+    assert "activation__value_summary" in declarations
     # Only for an optional operand.
     assert "weight__present" not in declarations
 
@@ -452,7 +445,7 @@ def test_a_facet_accessor_returns_the_generated_declaration() -> None:
 
 
 def test_an_optional_operand_gets_a_presence_facet_and_absent_facets_refuse() -> None:
-    optional = InputTensor(index=3, optional=True)
+    optional = OpInput(index=3, optional=True)
 
     assert "present" in optional.facets
     assert optional.required is False
@@ -472,8 +465,8 @@ def test_an_output_observation_never_reaches_the_point() -> None:
     writes.
     """
 
-    assert isinstance(InputTensor(index=0), Problem)
-    assert not isinstance(OutputTensor(index=0), Problem)
+    assert isinstance(OpInput(index=0), Problem)
+    assert not isinstance(OpOutput(index=0), Problem)
     assert "output" not in dict(declared_members(MvauDataflowOp))
     assert isinstance(dict(declared_members(MvauDataflowOp))["accumulator_type"], Problem)
 
@@ -511,8 +504,8 @@ def test_a_generated_facet_name_may_not_be_shadowed() -> None:
 
         class Shadowing(DataflowOp):
             family = "test.shadowing"
-            weight = InputTensor(index=0)
-            weight__shape = InputTensor(index=1)
+            weight = OpInput(index=0)
+            weight__shape = OpInput(index=1)
 
 
 # -- U4c: the projections ------------------------------------------------------
@@ -674,9 +667,9 @@ def test_a_structural_choice_can_be_changed_without_touching_the_node() -> None:
     assert "design.supplied.weight_supply" not in dict(final.recorded())
     # Read from the node itself, which is what an unbound wrapper can honestly
     # answer: the document's canonical values, not decoded ones.
-    document = decode_dataflow_state(model.graph.node[0])
+    document = read_attributes(model.graph.node[0])
     assert document is not None
-    assert "design.supplied.weight_supply" not in document.assignments
+    assert "design__supplied__weight_supply" not in document
     # And it rebinds cleanly: nothing left over refuses to replay.
     assert _unbound(model, "mvau0").bind(model, Build()).recorded()["design.case"] == (
         "dot_product"
@@ -711,15 +704,17 @@ def test_a_refused_point_may_not_be_saved() -> None:
         chosen.design.alternative("dot_product").assign(WeightedDotProductDesign.pe, 3)
 
 
-def test_a_stale_plan_is_refused_rather_than_applied() -> None:
-    model = _mvau_model()
-    _model, operation = _configured_mvau(model)
+def test_source_change_refuses_a_plan_but_node_rename_does_not() -> None:
+    model, operation = _configured_mvau()
     effects = operation.graph_effects()
-
     model.graph.node[0].name = "renamed"
-
-    with pytest.raises(DataflowOpError, match="changed since this change was planned"):
+    apply_graph_effects(model, effects)
+    effects = operation.rebind(model).graph_effects()
+    model.set_initializer("weight", np.ones((8, 4), dtype=np.float32))
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="different problem"):
         apply_graph_effects(model, effects)
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_a_plan_addressed_to_another_graph_is_refused() -> None:
@@ -731,73 +726,40 @@ def test_a_plan_addressed_to_another_graph_is_refused() -> None:
         apply_graph_effects(other, effects)
 
 
-def test_the_design_state_is_one_canonical_document() -> None:
-    """One authority, and no flat copy of any value that could disagree with it."""
-
+def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
-    node = model.graph.node[0]
-
-    names = {item.name for item in node.attribute}
-    assert {SCOPE_ID_ATTRIBUTE, STATE_ATTRIBUTE} <= names
-    # The source-semantic attributes stay their own thing; they define the
-    # mathematical operation, not the implementation chosen for it.
-    assert "narrow_weights" in names
-    # No flat copy of a Decision.
-    assert not ({"PE", "SIMD", "dataflow_design", "weight_supply"} & names)
-    # Family, version and fingerprint moved into the document, so they stop
-    # having two persisted homes.
-    assert not ({FAMILY_ATTRIBUTE, FAMILY_VERSION_ATTRIBUTE, FINGERPRINT_ATTRIBUTE} & names)
-
-    state = decode_dataflow_state(node)
-    assert state is not None
-    assert state.family == "finn.dataflow.mvau"
-    assert state.problem_fingerprint == operation.problem_fingerprint
-    assert state.assignments["design.dot_product.pe"].value == 2
-    assert state.assignments["design.dot_product.simd"].value == 4
+    attrs = read_attributes(model.graph.node[0])
+    assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.problem_fingerprint
+    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 2)
+    assert attrs["design__case"] == NativeAttribute("s", "dot_product")
+    assert attrs["design__dot_product__pe"] == NativeAttribute("i", 2)
+    assert attrs["design__dot_product__simd"] == NativeAttribute("i", 4)
+    assert not {"dataflow_state", "dataflow_family", "dataflow_family_version"} & attrs.keys()
 
 
-def test_the_document_is_canonical_and_readable() -> None:
-    """Two equal points produce equal bytes, and a human can read them."""
-
-    left = _configured_mvau(pe=2, simd=4)[0]
-    right = _configured_mvau(_mvau_model(), pe=2, simd=4)[0]
-
-    def document(model: ModelWrapper) -> str:
-        return next(
-            item.s.decode("utf-8")
-            for item in model.graph.node[0].attribute
-            if item.name == STATE_ATTRIBUTE
-        )
-
-    assert document(left) == document(right)
-    assert '"schema":"finn.dataflow.state/1"' in document(left)
-
-    rendered = format_dataflow_state(left.graph.node[0])
-    assert "design.dot_product.pe = 2" in rendered
-    assert "finn.dataflow.mvau" in rendered
+def test_equal_points_have_equal_native_choice_attributes() -> None:
+    left = read_attributes(_configured_mvau(pe=2, simd=4)[0].graph.node[0])
+    right = read_attributes(_configured_mvau(pe=2, simd=4)[0].graph.node[0])
+    left.pop(SCOPE_ID_ATTRIBUTE)
+    right.pop(SCOPE_ID_ATTRIBUTE)
+    assert left == right
 
 
-def test_a_state_document_this_build_does_not_know_is_refused() -> None:
-    """Not reinterpreted: an unknown schema is a refusal, not a best effort."""
-
+def test_an_unknown_native_schema_version_is_refused() -> None:
     model, _operation = _configured_mvau()
-    node = model.graph.node[0]
-    for item in node.attribute:
-        if item.name == STATE_ATTRIBUTE:
-            item.s = b'{"schema":"finn.dataflow.state/99","assignments":{}}'
-
+    _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 99)
     with pytest.raises(DataflowOpError, match="this build writes"):
         _unbound(model, "mvau0").bind(model, Build())
 
 
 def test_reconstruct_keeps_the_identity_and_drops_every_choice() -> None:
     model, operation = _configured_mvau()
-    scope = operation.binding.node_identity
+    scope = operation.recorded_scope_id()
 
     fresh = operation.reconstruct()
 
     assert fresh.recorded() == {}
-    assert fresh.binding.node_identity == scope
+    assert fresh.recorded_scope_id() == scope
     assert fresh.problem_fingerprint == operation.problem_fingerprint
 
 
@@ -821,16 +783,13 @@ def test_a_changed_problem_makes_the_recorded_choices_stale() -> None:
         _unbound(model, "mvau0").bind(model, Build())
 
 
-def test_a_saved_family_that_this_build_does_not_offer_is_refused() -> None:
+def test_an_incomplete_native_metadata_envelope_is_refused() -> None:
     model, _operation = _configured_mvau()
     node = model.graph.node[0]
-    for item in node.attribute:
-        if item.name == STATE_ATTRIBUTE:
-            document = json.loads(item.s.decode("utf-8"))
-            document["family"] = "finn.dataflow.something_else"
-            item.s = json.dumps(document, sort_keys=True).encode("utf-8")
-
-    with pytest.raises(DataflowOpError, match="stores choices for family"):
+    kept = [item for item in node.attribute if item.name != FINGERPRINT_ATTRIBUTE]
+    del node.attribute[:]
+    node.attribute.extend(kept)
+    with pytest.raises(DataflowOpError, match="different problem"):
         _unbound(model, "mvau0").bind(model, Build())
 
 
@@ -868,41 +827,30 @@ def test_commit_returns_a_bound_operation_over_the_committed_graph() -> None:
     assert dict(committed.recorded())["design.case"] == "dot_product"
 
 
-def test_the_commitment_stage_is_recorded_with_the_plan() -> None:
+def test_commitment_stage_is_only_in_the_plan() -> None:
     model, operation = _configured_mvau()
-
     effects = operation.graph_effects(require=CommitmentStage.DATAFLOW)
-
     assert effects.commitment_stage is CommitmentStage.DATAFLOW
     assert effects.expected_source_fingerprint == operation.problem_fingerprint
-    # Recorded, and named for what it actually promises: no required projection
-    # was finally rejected.  Not that every Decision was made.
-    state = decode_dataflow_state(model.graph.node[0])
-    assert state is not None and state.commitment_stage == "dataflow"
+    assert "commitment_stage" not in read_attributes(model.graph.node[0])
 
 
 # -- U4e: source association ---------------------------------------------------
 
 
-def test_every_source_operand_is_associated_with_where_its_data_crosses() -> None:
+def test_every_source_operand_maps_to_a_qualified_region_operand() -> None:
     _model, operation = _configured_mvau()
-
-    answer = operation.association
-
+    answer = operation.operand_mapping
     assert isinstance(answer, Decided)
-    association = answer.value
-    assert association.family == "finn.dataflow.mvau"
-    assert {item.operand for item in association.operands} == {"activation", "weight", "output"}
-    activation = association.operand("activation")
-    assert activation.boundary == "activation"
-    assert (activation.node_id, activation.port_id) == ("replay", "activation_in")
+    assert {item.source_operand for item in answer.value} == {"activation", "weight", "output"}
+    activation = next(item for item in answer.value if item.source_operand == "activation")
+    assert activation.placement == External("activation", "replay", "activation_in")
     assert activation.correspondence is CoordinateMapping.FLATTEN_LEADING
-    assert isinstance(activation.destination, BoundaryDestination)
 
 
 def test_an_association_names_no_kernel_component_or_artifact() -> None:
     _model, operation = _configured_mvau()
-    answer = operation.association
+    answer = operation.operand_mapping
     assert isinstance(answer, Decided)
 
     rendered = repr(answer.value)
@@ -911,72 +859,43 @@ def test_an_association_names_no_kernel_component_or_artifact() -> None:
         assert forbidden not in rendered
 
 
-def test_a_decoupled_matrix_is_traffic_and_an_embedded_one_is_state() -> None:
-    """Three destinations, because they are three different facts.
-
-    Reporting embedded state as a port named ``"embedded"`` names a port that
-    does not exist: a consumer resolving it finds nothing, and the empty shape
-    that came with it reads as a zero-element tensor.
-    """
-
-    external = _configured_mvau(design="supplied", supply=WeightSupply.EXTERNAL)[1]
-    decoupled = _configured_mvau(_mvau_model(), design="supplied", supply=WeightSupply.DECOUPLED)[1]
-    embedded = _configured_mvau(_mvau_model(), design="supplied", supply=WeightSupply.EMBEDDED)[1]
-
-    outside = external.association
-    inside = decoupled.association
-    baked = embedded.association
-    assert isinstance(outside, Decided) and isinstance(inside, Decided)
-    assert isinstance(baked, Decided)
-
-    assert isinstance(outside.value.operand("weight").destination, BoundaryDestination)
-    assert isinstance(inside.value.operand("weight").destination, StreamDestination)
-    assert isinstance(baked.value.operand("weight").destination, RegionStateDestination)
-
-    assert inside.value.operand("weight").boundary is None
-    assert inside.value.operand("weight").node_id == "compute"
-    assert inside.value.operand("weight").port_id == "weight"
-    # No port at all, and no fabricated shape to go with one.
-    assert baked.value.operand("weight").port_id is None
-    assert baked.value.operand("weight").selected_shape is None
+def test_weight_mapping_names_the_supplier_input_in_the_decoupled_form() -> None:
+    placements = {}
+    for supply in WeightSupply:
+        operation = _configured_mvau(design="supplied", supply=supply)[1]
+        answer = operation.operand_mapping
+        assert isinstance(answer, Decided)
+        weight = next(item for item in answer.value if item.source_operand == "weight")
+        placements[supply] = weight.placement
+        assert weight.semantic_shape == (4, 8)
+        assert weight.semantic_operand.operand_id == "W"
+    assert placements[WeightSupply.EXTERNAL] == External("weight", "compute", "weight")
+    assert placements[WeightSupply.DECOUPLED] == Internal("memory", "W")
+    assert placements[WeightSupply.EMBEDDED] == Internal("compute", "W")
 
 
-def test_a_physical_choice_does_not_change_the_association() -> None:
-    plain = _configured_mvau(simd=4)[1].association
-    pumped = _configured_mvau(_mvau_model(), simd=4, pumped=True)[1].association
-
-    assert isinstance(plain, Decided) and isinstance(pumped, Decided)
-    assert [item.boundary for item in plain.value.operands] == [
-        item.boundary for item in pumped.value.operands
-    ]
-    assert [item.node_id for item in plain.value.operands] == [
-        item.node_id for item in pumped.value.operands
-    ]
+def test_a_physical_choice_does_not_change_operand_mapping() -> None:
+    plain = _configured_mvau(simd=4)[1].operand_mapping
+    pumped = _configured_mvau(simd=4, pumped=True)[1].operand_mapping
+    assert plain == pumped
 
 
-def test_the_second_operation_associates_its_own_two_operands() -> None:
+def test_replay_maps_its_own_two_operands() -> None:
     _model, operation = _configured_replay()
-
-    answer = operation.association
-
+    answer = operation.operand_mapping
     assert isinstance(answer, Decided)
-    assert {item.operand for item in answer.value.operands} == {"activation", "expanded"}
-    assert answer.value.family == "finn.dataflow.activation_replay"
-    assert answer.value.operand("expanded").node_id == "replay"
+    assert {item.source_operand for item in answer.value} == {"activation", "expanded"}
+    assert all(item.semantic_operand.node_id == "replay" for item in answer.value)
 
 
 def test_the_scope_id_survives_a_rename_of_the_node() -> None:
     model, operation = _configured_mvau()
-    scope = operation.binding.node_identity
-
+    scope = operation.recorded_scope_id()
     model.graph.node[0].name = "renamed"
-    renamed = _unbound(model, "renamed").bind(model, Build())
-
-    assert renamed.binding.node_identity == scope
-    answer = renamed.association
-    assert isinstance(answer, Decided)
-    assert answer.value.scope_id == scope
-    assert answer.value.source_node == "renamed"
+    renamed = operation.rebind(model)
+    assert renamed.recorded_scope_id() == scope
+    assert renamed.source.node_name == "renamed"
+    assert operation.operand_mapping == renamed.operand_mapping
 
 
 # -- U4f: the two operations do not share an implementation --------------------
@@ -1016,63 +935,25 @@ def test_persistence_is_discovered_from_the_model_not_declared_by_the_operation(
     assert "design.supplied.compute.kernel" in set(supplied.recorded())
 
 
-def test_a_choice_the_model_no_longer_declares_is_a_refusal() -> None:
-    """A renamed declaration is a schema change, not an assignment to discard."""
-
+def test_an_unreachable_recorded_choice_is_refused() -> None:
     model, _operation = _configured_mvau()
-    node = model.graph.node[0]
-    for item in node.attribute:
-        if item.name == STATE_ATTRIBUTE:
-            document = json.loads(item.s.decode("utf-8"))
-            document["assignments"]["design.dot_product.renamed_away"] = {
-                "codec": "dataflow.int@1",
-                "value": 4,
-            }
-            item.s = json.dumps(document, sort_keys=True).encode("utf-8")
-
-    with pytest.raises(DataflowOpError, match="has no declaration for"):
+    _replace_attribute(model, "design__supplied__weight_supply", "embedded")
+    with pytest.raises(DataflowOpError):
         _unbound(model, "mvau0").bind(model, Build())
 
 
-def test_a_changed_codec_is_a_refusal_not_a_reinterpretation() -> None:
+def test_a_wrong_native_attribute_kind_is_refused() -> None:
     model, _operation = _configured_mvau()
-    node = model.graph.node[0]
-    for item in node.attribute:
-        if item.name == STATE_ATTRIBUTE:
-            document = json.loads(item.s.decode("utf-8"))
-            document["assignments"]["design.dot_product.pe"]["codec"] = "dataflow.int@99"
-            item.s = json.dumps(document, sort_keys=True).encode("utf-8")
-
-    with pytest.raises(DataflowOpError, match="changed encoding is not reinterpreted"):
+    _replace_attribute(model, "design__dot_product__pe", "2")
+    with pytest.raises(DataflowOpError, match="expected native"):
         _unbound(model, "mvau0").bind(model, Build())
 
 
-@pytest.mark.parametrize(
-    "document",
-    [
-        '{"schema":"finn.dataflow.state/1"}',
-        (
-            '{"schema":"finn.dataflow.state/1","family":"f","family_version":"1",'
-            '"problem_fingerprint":"x","commitment_stage":"nonsense","assignments":{}}'
-        ),
-        (
-            '{"schema":"finn.dataflow.state/1","family":"f","family_version":"1",'
-            '"problem_fingerprint":"x","commitment_stage":"dataflow","assignments":{},'
-            '"surprise":1}'
-        ),
-        (
-            '{"schema":"finn.dataflow.state/1","family":"f","family_version":"1",'
-            '"problem_fingerprint":"x","commitment_stage":"dataflow",'
-            '"assignments":{"a.b":2}}'
-        ),
-    ],
-    ids=["incomplete", "unknown-stage", "unknown-member", "untagged-value"],
-)
-def test_state_decoding_is_strict(document: str) -> None:
-    """A permissive reader turns a schema change into a silently lost design."""
-
-    with pytest.raises(DecodeError):
-        decode_state(document)
+def test_legacy_json_state_is_refused_without_a_migration_reader() -> None:
+    model = _mvau_model()
+    _replace_attribute(model, "dataflow_state", "{}")
+    with pytest.raises(DataflowOpError, match="legacy JSON"):
+        _unbound(model, "mvau0").bind(model, Build())
 
 
 def test_both_operations_use_the_same_persistence_authority(tmp_path: Path) -> None:
@@ -1099,7 +980,8 @@ def test_every_refusal_survives_python_o() -> None:
         "from finn.dataflow.ops.persistence import apply_graph_effects\n"
         "model, operation = _configured_mvau()\n"
         "effects = operation.graph_effects()\n"
-        "model.graph.node[0].name = 'renamed'\n"
+        "from qonnx.core.datatype import DataType\n"
+        "model.set_tensor_datatype('activation', DataType['INT4'])\n"
         "before = model.graph.node[0].SerializeToString(deterministic=True)\n"
         "try:\n"
         "    apply_graph_effects(model, effects)\n"
@@ -1222,9 +1104,9 @@ def test_declared_operand_indices_must_be_contiguous() -> None:
 
         class Sparse(DataflowOp):
             family = "test.sparse"
-            first = InputTensor(index=0)
-            third = InputTensor(index=2)
-            out = OutputTensor(index=0)
+            first = OpInput(index=0)
+            third = OpInput(index=2)
+            out = OpOutput(index=0)
 
 
 def _strip_scope(node: Any) -> None:
@@ -1472,8 +1354,8 @@ def test_an_operation_constraint_must_be_classified() -> None:
 
         class Unclassified(DataflowOp):
             family = "test.unclassified"
-            activation = InputTensor(index=0)
-            result = OutputTensor(index=0)
+            activation = OpInput(index=0)
+            result = OpOutput(index=0)
 
             @constraint(shape=activation.shape)
             def rank_is_two(*, shape: tuple[int, ...]) -> object:
@@ -1483,8 +1365,8 @@ def test_an_operation_constraint_must_be_classified() -> None:
 def test_a_classified_operation_constraint_is_accepted() -> None:
     class Classified(DataflowOp):
         family = "test.classified"
-        activation = InputTensor(index=0)
-        result = OutputTensor(index=0)
+        activation = OpInput(index=0)
+        result = OpOutput(index=0)
 
         @constraint(shape=activation.shape)
         def rank_is_two(*, shape: tuple[int, ...]) -> object:
@@ -1500,8 +1382,8 @@ def test_source_accepts_must_be_a_constraint_group() -> None:
 
         class Broken(DataflowOp):
             family = "test.broken-group"
-            activation = InputTensor(index=0)
-            result = OutputTensor(index=0)
+            activation = OpInput(index=0)
+            result = OpOutput(index=0)
             source_accepts = "everything"
 
 
@@ -1515,6 +1397,7 @@ def _rank_one_mvau_model(*, matrix_width: int = 8, matrix_height: int = 4) -> Mo
         ["output"],
         domain=DATAFLOW_DOMAIN,
         name="mvau0",
+        outputDataType="INT32",
     )
     graph = helper.make_graph(
         [node],
@@ -1556,22 +1439,50 @@ def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() 
     assert operation.reconciliation() == ()
 
 
-def test_recorded_is_a_bound_api_and_the_node_is_read_as_a_document() -> None:
-    """One mapping, one meaning.
-
-    ``recorded()`` used to answer on an unbound wrapper by handing back the
-    document's canonical values, so the same key was an Enum through one path
-    and a string through the other.  Decoding needs the declaration the codec
-    lives on; a raw node has no declarations, so it is read as what it is.
-    """
-
+def test_recorded_is_a_bound_api_and_native_values_are_inspectable() -> None:
     model, operation = _configured_mvau(design="supplied", supply=WeightSupply.EMBEDDED)
-
-    assert dict(operation.recorded())["design.supplied.weight_supply"] is WeightSupply.EMBEDDED
-
+    assert operation.recorded()["design.supplied.weight_supply"] is WeightSupply.EMBEDDED
     with pytest.raises(DataflowOpError, match="not bound"):
         _unbound(model, "mvau0").recorded()
+    assert (
+        read_attributes(model.graph.node[0])["design__supplied__weight_supply"].value == "embedded"
+    )
 
-    document = decode_dataflow_state(model.graph.node[0])
-    assert document is not None
-    assert document.assignments["design.supplied.weight_supply"].value == "embedded"
+
+def _replace_attribute(model: Any, name: str, value: Any) -> None:
+    node = model.graph.node[0]
+    kept = [item for item in node.attribute if item.name != name]
+    del node.attribute[:]
+    node.attribute.extend(kept)
+    node.attribute.append(helper.make_attribute(name, value))
+
+
+def test_a_concurrent_decision_change_refuses_commit_without_writes() -> None:
+    model, operation = _configured_mvau()
+    effects = operation.graph_effects()
+    _replace_attribute(model, "design__dot_product__pe", 4)
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="Decision attribute"):
+        apply_graph_effects(model, effects)
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_unrelated_node_metadata_does_not_stale_a_plan() -> None:
+    model, operation = _configured_mvau()
+    effects = operation.graph_effects()
+    node = model.graph.node[0]
+    node.doc_string = "A reviewer added this description."
+    node.attribute.append(helper.make_attribute("unrelated_tool_hint", "preserve me"))
+    apply_graph_effects(model, effects)
+    assert model.graph.node[0].doc_string == node.doc_string
+    assert read_attributes(model.graph.node[0])["unrelated_tool_hint"].value == "preserve me"
+
+
+def test_retargeted_outputs_refuse_a_plan_that_would_repair_the_old_tensor() -> None:
+    model, operation = _configured_mvau()
+    effects = operation.graph_effects()
+    model.graph.node[0].output[0] = "renamed_output"
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="output tensor identities"):
+        apply_graph_effects(model, effects)
+    assert model.model.SerializeToString(deterministic=True) == before

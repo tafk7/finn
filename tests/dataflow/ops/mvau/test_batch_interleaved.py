@@ -41,7 +41,7 @@ from finn.dataflow.space.dataflow_value_semantics import (
 )
 from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.model.network_validation import validate_network
-from finn.dataflow.ops.association import BoundaryDestination
+from finn.dataflow.ops.mapping import External
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.mvau.computation import (
     AccumulationMode,
@@ -55,8 +55,8 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import (
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.space.declarations import derived
-from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, InputTensor, OutputTensor
-from finn.dataflow.ops.state import decode_dataflow_state
+from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, OpInput, OpOutput
+from finn.dataflow.ops.native import read_attributes
 from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port as baseline_weight_port,
 )
@@ -354,6 +354,7 @@ def _mvau_model(*, repetitions: int = 4, matrix_width: int = 8, matrix_height: i
         ["output"],
         domain=DATAFLOW_DOMAIN,
         name="mvau0",
+        outputDataType="INT32",
     )
     graph = helper.make_graph(
         [node],
@@ -462,12 +463,12 @@ def test_the_association_reports_the_interleaved_weight_boundary() -> None:
 
     model = _mvau_model()
     operation = _interleaved_operation(model, interleave=2)
-    answer = operation.association
+    answer = operation.operand_mapping
     assert isinstance(answer, Decided)
-    weight = next(item for item in answer.value.operands if item.operand == "weight")
-    assert isinstance(weight.destination, BoundaryDestination)
-    assert weight.destination.boundary == "weight"
-    assert weight.destination.node_id == "compute"
+    weight = next(item for item in answer.value if item.source_operand == "weight")
+    assert isinstance(weight.placement, External)
+    assert weight.placement.boundary_id == "weight"
+    assert weight.placement.node_id == "compute"
 
     # And the boundary it names carries the chunked contract, which is the part
     # interleaving actually changes: PE * SIMD / interleave elements per beat.
@@ -638,9 +639,9 @@ class _AliasedOp(DataflowOp):
     family = "test.aliased_mvau"
     family_version = "1"
 
-    activation = InputTensor(index=0)
-    weight = InputTensor(index=1)
-    output = OutputTensor(index=0)
+    activation = OpInput(index=0)
+    weight = OpInput(index=1)
+    output = OpOutput(index=0)
 
     accumulator_type = DatatypeAttribute(default="INT32", onnx="accDataType")
     target_dsp = BuildFact(DspBlock, accessor=lambda build: build.target_dsp)
@@ -769,10 +770,10 @@ def test_an_aliased_slot_survives_a_real_save_and_reload(slot: str, tmp_path: Pa
     # And nothing came back under the alias that was not chosen -- neither in
     # the replayed point nor in the document on the node.
     assert not any(name.startswith(f"aliased.compute.{other}.") for name in returned)
-    document = decode_dataflow_state(reloaded.graph.node[0])
+    document = read_attributes(reloaded.graph.node[0])
     assert document is not None
-    assert not any(name.startswith(f"aliased.compute.{other}.") for name in document.assignments)
-    assert document.assignments["aliased.compute.kernel"].value == slot
+    assert not any(name.startswith(f"aliased__compute__{other}__") for name in document)
+    assert document["aliased__compute__kernel"].value == slot
 
 
 def test_switching_the_alias_leaves_the_other_slots_decision_behind() -> None:

@@ -58,6 +58,7 @@ def _mvau_model(*, repetitions: int = 4, matrix_width: int = 8, matrix_height: i
         ["output"],
         domain=DATAFLOW_DOMAIN,
         name="mvau0",
+        outputDataType="INT32",
     )
     graph = helper.make_graph(
         [node],
@@ -335,12 +336,18 @@ def test_the_replay_association_reads_the_ports_a_region_actually_has() -> None:
     model = _replay_model()
     node = next(item for item in model.graph.node if item.name == "replay0")
     chosen = _configure_replay(model.get_customop_wrapper(node).bind(model, Build()))
-    answer = chosen.association
+    answer = chosen.operand_mapping
 
     assert isinstance(answer, Decided)
-    activation = answer.value.operand("activation")
-    expanded = answer.value.operand("expanded")
-    assert (activation.node_id, activation.port_id) == ("replay", "activation_in")
-    assert (expanded.node_id, expanded.port_id) == ("replay", "activation_out")
-    assert activation.selected_shape == (2, 8)
-    assert expanded.selected_shape == (2, 8)
+    activation = next(item for item in answer.value if item.source_operand == "activation")
+    expanded = next(item for item in answer.value if item.source_operand == "expanded")
+    assert (activation.semantic_operand.node_id, activation.placement.port_id) == (
+        "replay",
+        "activation_in",
+    )
+    assert (expanded.semantic_operand.node_id, expanded.placement.port_id) == (
+        "replay",
+        "activation_out",
+    )
+    assert activation.semantic_shape == (2, 8)
+    assert expanded.semantic_shape == (2, 8)

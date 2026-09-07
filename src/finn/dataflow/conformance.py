@@ -54,7 +54,7 @@ from typing import Any
 from finn.dataflow._engine import Decided
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError
-from finn.dataflow.ops.state import decode_dataflow_state
+from finn.dataflow.ops.native import read_attributes, FINGERPRINT_ATTRIBUTE
 
 
 @dataclass(frozen=True)
@@ -131,7 +131,10 @@ def assert_dataflow_op_conforms(
     bound = unbound.bind(model, case.build)
     _require(type(bound) is type(unbound), "binding preserves the operation class")
     _require(bound.is_bound, "a bound occurrence says so")
-    _require(bound.binding.node_bytes, "the occurrence froze the bytes it read")
+    _require(
+        bound.onnx_node.SerializeToString(deterministic=True),
+        "the occurrence froze the bytes it read",
+    )
 
     assessment = bound.dataflow
     _require(
@@ -142,7 +145,7 @@ def assert_dataflow_op_conforms(
     configured = case.configure(bound)
     _require(type(configured) is type(bound), "specializing produces the same class")
     _require(
-        configured.binding is bound.binding,
+        configured.problem_snapshot is bound.problem_snapshot,
         "specializing does not re-read the graph; the binding is the same frozen one",
     )
     _require(
@@ -157,8 +160,8 @@ def assert_dataflow_op_conforms(
     committed = configured.commit(model, case.build)
     _require(committed.is_bound, "commit returns a bound occurrence")
     _require(
-        decode_dataflow_state(_node(model, case.node_name)) is not None,
-        "the commit wrote a state document to the node",
+        FINGERPRINT_ATTRIBUTE in read_attributes(_node(model, case.node_name)),
+        "the commit wrote native attributes to the node",
     )
     _the_committed_occurrence_describes_the_post_commit_node(case, model, committed)
 
@@ -178,7 +181,7 @@ def _a_fresh_rebind_reads_the_graph_again(case: DataflowOpConformanceCase, bound
     So the bound occurrence keeps its snapshot across an edit, and the
     explicitly rebound successor observes the edit.
 
-    Run *before* the commit, deliberately: after one, a document written against
+    Run *before* the commit, deliberately: after one, native choices written against
     the old problem is refused on the way in — which is a different promise, and
     is checked separately.
     """
@@ -194,7 +197,7 @@ def _a_fresh_rebind_reads_the_graph_again(case: DataflowOpConformanceCase, bound
     rebound = bound.rebind(edited, case.build)
 
     _require(
-        bound.source is frozen,
+        bound.source == frozen,
         "the original occurrence still holds the source it froze",
     )
     _require(
@@ -202,7 +205,9 @@ def _a_fresh_rebind_reads_the_graph_again(case: DataflowOpConformanceCase, bound
         "an explicit rebind over a changed graph observes a changed problem",
     )
     _require(
-        rebound.binding.node_bytes != bound.binding.node_bytes or rebound.source != bound.source,
+        rebound.onnx_node.SerializeToString(deterministic=True)
+        != bound.onnx_node.SerializeToString(deterministic=True)
+        or rebound.source != bound.source,
         "the rebound occurrence read the graph again rather than reusing the snapshot",
     )
 
@@ -220,7 +225,8 @@ def _the_committed_occurrence_describes_the_post_commit_node(
 
     node = _node(model, case.node_name)
     _require(
-        committed.binding.node_bytes == node.SerializeToString(deterministic=True),
+        committed.onnx_node.SerializeToString(deterministic=True)
+        == node.SerializeToString(deterministic=True),
         "the returned occurrence froze the bytes of the node the commit produced",
     )
     _require(
@@ -234,7 +240,7 @@ def _recorded_refuses_on_an_unbound_wrapper(unbound: Any) -> None:
         unbound.recorded()
     except DataflowOpError as error:
         _require(
-            "decode_dataflow_state" in str(error),
+            "read_attributes" in str(error),
             "the refusal names the function that reads a raw node",
         )
         return
@@ -339,7 +345,7 @@ def _staleness_is_reported_and_a_stale_plan_changes_nothing(
         "an occurrence whose graph changed under it reports itself stale",
     )
 
-    # And a document written against the old problem is refused on the way in,
+    # And native choices written against the old problem is refused on the way in,
     # with the graph untouched -- a stale plan does not half-apply.
     before = stale_model.model.SerializeToString(deterministic=True)
     try:
@@ -350,7 +356,7 @@ def _staleness_is_reported_and_a_stale_plan_changes_nothing(
             f"the refusal says the problem changed, got {error}",
         )
     else:
-        raise ConformanceFailure("binding refuses a document made against another problem")
+        raise ConformanceFailure("binding refuses native choices made against another problem")
     _require(
         stale_model.model.SerializeToString(deterministic=True) == before,
         "the refused binding left the graph byte-identical",

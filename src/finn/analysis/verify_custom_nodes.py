@@ -39,11 +39,17 @@ def verify_nodes(model: ModelWrapper) -> dict[str, object]:
 
     * info_messages: is list of strings about the result of the verification."""
 
+    from contextlib import nullcontext  # noqa: PLC0415
+    from finn.dataflow.ops.base import DATAFLOW_DOMAIN  # noqa: PLC0415
+    from finn.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
+
     verification_dict = {}
-    for node in model.graph.node:
-        if is_custom_op(node.domain):
-            op_type = node.op_type
-            inst = model.get_customop_wrapper(node)
-            verification_dict[op_type] = inst.verify_node()
+    dataflow = any(node.domain == DATAFLOW_DOMAIN for node in model.graph.node)
+    with source_analysis(model) if dataflow else nullcontext():
+        for node in model.graph.node:
+            if is_custom_op(node.domain):
+                op_type = node.op_type
+                inst = model.get_customop_wrapper(node)
+                verification_dict[op_type] = inst.verify_node()
 
     return verification_dict
