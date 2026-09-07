@@ -14,10 +14,17 @@ from __future__ import annotations
 
 from typing import cast
 
+import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Engine, Unresolved
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.dotp_axi import (
+    BatchInterleavedDotpAxiKernel,
+    DotpAxiKernel,
+    DspBlock,
+    EmbeddedDotpAxiKernel,
+)
+from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.kernel import (
     ModuleBuildSpec,
     _KernelCompilation,
@@ -30,7 +37,14 @@ from finn.dataflow.ops.mvau.regions import (
     construct_dot_product_region,
 )
 from finn.dataflow.space.compiler import _Ref, _compile_space
-from finn.dataflow.space.declarations import Decision, Input, Problem, Space, divisors_of
+from finn.dataflow.space.declarations import (
+    Decision,
+    Input,
+    Problem,
+    Space,
+    declared_members,
+    divisors_of,
+)
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.spec_algebra import assemble_specs
 
@@ -48,6 +62,7 @@ class Supplier(Space):
     narrow_weights = Problem(bool)
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
+    interleave = Problem(int)
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
 
@@ -63,13 +78,16 @@ PROBLEM = {
     "problem.u2.narrow_weights": False,
     "problem.u2.target_dsp": DspBlock.DSP58,
     "problem.u2.clock_period_ns": 5.0,
+    "problem.u2.interleave": 2,
 }
 
 
 def _compiled(kernel_type: type[Space], namespace: str) -> tuple[object, object]:
     supplier = _compile_space(Supplier, "u2", problem_namespace="problem.u2")
     names = {
-        name for name, declaration in vars(kernel_type).items() if isinstance(declaration, Input)
+        name
+        for name, declaration in declared_members(kernel_type)
+        if isinstance(declaration, Input)
     }
     bindings = {
         name: cast("_Ref[object]", supplier.member(name))
@@ -187,3 +205,22 @@ def test_the_kernel_layer_classifies_its_decisions_without_relaxing_ownership() 
     assert metadata.region_closure_decisions == ()
     assert [path.value for path in metadata.physical_decisions] == ["u2.compute.compute_pumping"]
     assert {path.value for path in metadata.imported_decisions} == {"u2.pe", "u2.simd"}
+
+
+@pytest.mark.parametrize(
+    "kernel_type", [EmbeddedDotpAxiKernel, BatchInterleavedDotpAxiKernel, MemstreamKernel]
+)
+def test_unavailable_implementations_need_only_semantic_choices_for_their_region(
+    kernel_type,
+) -> None:
+    supplier, compiled = _compiled(kernel_type, "u2.compute")
+    engine = Engine()
+    point = engine.start(
+        engine.validate(assemble_specs((supplier.spec, compiled.spec))),
+        PROBLEM,
+    )
+    point = engine.commit_assignments(point, {"u2.pe": 2, "u2.simd": 4}).point
+    assert isinstance(kernel_dataflow(engine, compiled, point).accepted_answer, Decided)
+    physical = kernel_physical(engine, compiled, point).accepted_answer
+    assert isinstance(physical, Absent)
+    assert {finding.code for finding in physical.findings} == {"kernel-physically-unsupported"}

@@ -18,9 +18,8 @@ physical projection says so.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from typing import ClassVar
 
-from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.kernels.kernel import (
     Kernel,
     PhysicallyUnsupported,
@@ -67,11 +66,9 @@ class MemstreamKernel(Kernel):
         simd=simd,
     )
 
-    @classmethod
-    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
-        raise PhysicallyUnsupported(
-            "memstream realization arrives in U6 with its data slot, loader and RAM style"
-        )
+    physical_unavailable: ClassVar[PhysicallyUnsupported | None] = PhysicallyUnsupported(
+        "memstream realization arrives in U6 with its data slot, loader and RAM style"
+    )
 
 
 __all__ = [

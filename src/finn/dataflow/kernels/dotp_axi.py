@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from math import ceil, floor
 from collections.abc import Mapping
-from typing import cast
+from typing import ClassVar, cast
 
 from finn.dataflow.artifacts.abi import (
     Bus,
@@ -493,11 +493,9 @@ class EmbeddedDotpAxiKernel(DotpAxiKernel):
         simd=DotpAxiKernel.simd,
     )
 
-    @classmethod
-    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
-        raise PhysicallyUnsupported(
-            "embedded weight realization arrives in U6 with its data slot and loader"
-        )
+    physical_unavailable: ClassVar[PhysicallyUnsupported | None] = PhysicallyUnsupported(
+        "embedded weight realization arrives in U6 with its data slot and loader"
+    )
 
 
 class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
@@ -541,12 +539,10 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
         interleave=interleave,
     )
 
-    @classmethod
-    def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
-        raise PhysicallyUnsupported(
-            "no FinnLib core accepts a chunked weight stream; the interleaved build unit "
-            "does not exist yet"
-        )
+    physical_unavailable: ClassVar[PhysicallyUnsupported | None] = PhysicallyUnsupported(
+        "no FinnLib core accepts a chunked weight stream; the interleaved build unit "
+        "does not exist yet"
+    )
 
 
 __all__ = [

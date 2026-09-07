@@ -101,7 +101,9 @@ RESERVED_KERNEL_NAMES: frozenset[str] = frozenset(
 class PhysicallyUnsupported(ValueError):
     """This Kernel cannot realize the configuration its Region already accepts.
 
-    Raised by ``component_abi``.  Its existence is the concrete form of the rule
+    Raised by ``component_abi``, or declared as ``physical_unavailable`` when no
+    point of the implementation can supply a standalone module. Its existence
+    is the concrete form of the rule
     that a valid dataflow projection does not oblige a valid physical one: an
     implementation that has no wiring for a resolved Region says so here and the
     physical projection becomes a rejecting absence, while the Region carries on
@@ -346,6 +348,9 @@ class Kernel(Space):
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
     sources: ClassVar[tuple[Contribution, ...]] = ()
+    #: A permanent refusal has no parameter or Decision dependencies. Subclasses
+    #: that add an implementation explicitly reset this to None and supply an ABI.
+    physical_unavailable: ClassVar[PhysicallyUnsupported | None] = None
 
     #: The Region is the one automatic Kernel output to a containing Design.
     _implicit_exports = ("region",)
@@ -464,6 +469,16 @@ def _physical_result_property(
     is unrealizable does so by raising, which becomes a rejecting absence.
     """
 
+    if kernel_type.physical_unavailable is not None:
+        # Capture the reason at compilation; even inherited physical parameters,
+        # Decisions and support rules are irrelevant to an unavailable module.
+        reason = str(kernel_type.physical_unavailable)
+
+        def unavailable() -> object:
+            return _physical_refusal(kernel_type.id, reason)
+
+        return Derived(semantics_for(ModuleBuildSpec), None, (), unavailable)
+
     dependencies: list[tuple[str, ValueSource[object]]] = [
         ("region", cast("ValueSource[object]", region))
     ]
@@ -489,11 +504,7 @@ def _physical_result_property(
         try:
             abi = kernel_type.component_abi(frozen_table)
         except PhysicallyUnsupported as error:
-            return reject(
-                "kernel-physically-unsupported",
-                f"{kernel_type.id} has no realization for this configuration: {error}",
-                values={"kernel": kernel_type.id},
-            )
+            return _physical_refusal(kernel_type.id, str(error))
         if not isinstance(abi, ComponentABI):
             raise AuthoringError(
                 f"{kernel_type.__name__}.component_abi() did not return ComponentABI"
@@ -539,6 +550,14 @@ def _physical_result_property(
     )
 
 
+def _physical_refusal(implementation_id: str, reason: str) -> object:
+    return reject(
+        "kernel-physically-unsupported",
+        f"{implementation_id} has no realization for this configuration: {reason}",
+        values={"kernel": implementation_id},
+    )
+
+
 def _synthesize_projections(kernel_type: type[Kernel]) -> None:
     """Write the two projections and their parts onto one concrete Kernel class.
 
@@ -560,6 +579,12 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         raise AuthoringError(
             f"{kernel_type.__name__} declares {shadowed[0]!r}, which the Kernel layer "
             "synthesizes from the Region, the ModuleParameter table and the support groups"
+        )
+
+    unavailable = kernel_type.physical_unavailable
+    if unavailable is not None and not isinstance(unavailable, PhysicallyUnsupported):
+        raise AuthoringError(
+            f"{kernel_type.__name__}.physical_unavailable must be PhysicallyUnsupported or None"
         )
 
     declarations = dict(declared_members(kernel_type))
@@ -596,20 +621,31 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         constraints=dataflow_accepts,
     )
     physical_result = _physical_result_property(kernel_type, region, parameters)
-    physical_ready = Readiness(
-        decisions=tuple(declaration for _name, declaration in decisions),
-        properties=(cast("ValueSource[object]", physical_result),),
-        constraints=(
+    physical_constraints = (
+        ()
+        if unavailable is not None
+        else (
             *dataflow_accepts.constraints,
             *(
                 physical_support.constraints
                 if isinstance(physical_support, ConstraintGroup)
                 else ()
             ),
-        ),
+        )
     )
-    projection_constraints: tuple[ConstraintGroup, ...] = (dataflow_accepts,)
-    if isinstance(physical_support, ConstraintGroup):
+    physical_ready = Readiness(
+        decisions=(
+            ()
+            if unavailable is not None
+            else tuple(declaration for _name, declaration in decisions)
+        ),
+        properties=(cast("ValueSource[object]", physical_result),),
+        constraints=physical_constraints,
+    )
+    projection_constraints: tuple[ConstraintGroup, ...] = (
+        () if unavailable is not None else (dataflow_accepts,)
+    )
+    if unavailable is None and isinstance(physical_support, ConstraintGroup):
         projection_constraints = (*projection_constraints, physical_support)
 
     setattr(kernel_type, "region_structurally_valid", region_valid)
@@ -785,7 +821,7 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
     if not kernel_type.version:
         raise AuthoringError(f"{kernel_type.__name__} must declare a non-empty version")
     abi_owner = next(base for base in kernel_type.__mro__ if "component_abi" in base.__dict__)
-    if abi_owner is Kernel:
+    if abi_owner is Kernel and kernel_type.physical_unavailable is None:
         raise AuthoringError(f"{kernel_type.__name__} must declare a component_abi()")
 
     declarations = dict(declared_members(kernel_type))
