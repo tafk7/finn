@@ -32,6 +32,31 @@ an empty ``unpresented_positions`` does not mean the region's requirements are
 satisfiable -- that is the realizability obligation in section 5.2.  Nor does a
 non-empty one name a storage technology: unpresented is a statement about ports,
 not about where the data lives.
+
+**Precondition: a structurally valid Network.**  Every function here is a pure
+query over a Network that ``validate_network`` has already accepted.  They do
+not revalidate, and they are not a validator wearing another name.  Ask
+``validate_network`` once and then ask these as often as you like; asking them of
+a Network that has not been validated is a caller error, and the answers are
+undefined rather than false.
+
+That split is deliberate.  Presentation is meant to be cheap and to be asked
+many times -- once per qualified reference during S2-A correspondence, and again
+per obligation in U6 -- while validity is a whole-Network property that is
+established once.  Folding validation into each query would make the common case
+pay for it repeatedly and would still not be a validator, because a query is
+scoped to one reference and validity is not.
+
+Concretely, these functions do **not** check that an edge's source exists or is
+an output, that its position map is total, that element types or beat sequences
+agree across it, that the referenced Region is itself valid, or that the Network
+is acyclic.  ``validate_network`` checks all of those, with codes such as
+``edge.source_missing_or_not_output``, ``edge.beat_sequence_mismatch`` and
+``network.cycle``.  Given a Network carrying one of those defects, a query here
+will answer from the consumer side and the answer will look authoritative.  The
+one condition ``_owned_endpoint`` re-checks locally is endpoint ownership, and it
+does so because that single fact is what selects between the edge and boundary
+arms -- not as a substitute for validation.
 """
 
 from __future__ import annotations
@@ -52,6 +77,8 @@ def exposing_ports(network: DataflowNetwork, ref: DataflowOperandRef) -> tuple[R
 
     Empty for an internal input, which is the whole point of the case: there is
     no endpoint, rather than an endpoint with an empty sequence.
+
+    Requires a Network ``validate_network`` has accepted.
     """
 
     if isinstance(ref, RegionInputRef):
@@ -71,6 +98,8 @@ def exposing_boundaries(
     The canonical ``BoundaryContract`` values, not a derived record restating
     their fields: a caller that wants the external beat sequence, the endpoint
     or the pass correspondence already has them.
+
+    Requires a Network ``validate_network`` has accepted.
     """
 
     endpoints = set(exposing_ports(network, ref))
@@ -82,12 +111,15 @@ def _owned_endpoint(
 ) -> tuple[RegionEndpoint | None, bool]:
     """Resolve a referenced input's endpoint and say whether an edge feeds it.
 
-    Enforces the one obligation the presentation queries depend on: a ported
-    input's endpoint is either the sink of exactly one edge or exposed by
-    exactly one boundary, never both and never neither.  ``validate_network``
-    checks that for every endpoint; this checks it for the one endpoint being
-    asked about, so a query over a malformed Network refuses instead of
-    returning three sets that look authoritative and are not.
+    Re-checks the one condition the *arm selection* depends on: a ported input's
+    endpoint is either the sink of exactly one edge or exposed by exactly one
+    boundary, never both and never neither.  Without exactly one owner there is
+    no edge-versus-boundary answer to give, so this refuses rather than picking.
+
+    That is arm selection, not validation.  ``validate_network`` checks this for
+    every endpoint along with everything else, and callers are required to have
+    run it (see the module docstring).  A Network that violates any *other*
+    structural rule will still be answered here, from the consumer side.
 
     ``None`` for an internal input, which has no endpoint at all -- not an
     endpoint that happens to be fed by nothing.
@@ -117,7 +149,12 @@ def _owned_endpoint(
 def edge_presented_positions(
     network: DataflowNetwork, ref: RegionInputRef
 ) -> frozenset[Coordinate]:
-    """Required positions a port presents that a Network edge feeds."""
+    """Required positions a port presents that a Network edge feeds.
+
+    Requires a Network ``validate_network`` has accepted.  In particular this
+    does not check that the feeding edge has a source, that the source is an
+    output, or that the two sides agree on element type and beat sequence.
+    """
 
     endpoint, fed_by_edge = _owned_endpoint(network, ref)
     if endpoint is None or not fed_by_edge:
@@ -129,7 +166,10 @@ def edge_presented_positions(
 def boundary_presented_positions(
     network: DataflowNetwork, ref: RegionInputRef
 ) -> frozenset[Coordinate]:
-    """Required positions a port presents that a Network boundary exposes."""
+    """Required positions a port presents that a Network boundary exposes.
+
+    Requires a Network ``validate_network`` has accepted.
+    """
 
     endpoint, fed_by_edge = _owned_endpoint(network, ref)
     if endpoint is None or fed_by_edge:
@@ -146,6 +186,8 @@ def unpresented_positions(network: DataflowNetwork, ref: RegionInputRef) -> froz
     binding-owned.  A position no port presents has not arrived, and the binding
     must account for it -- through embedded state, a parameter memory, constant
     generation or another supported service, none of which this model names.
+
+    Requires a Network ``validate_network`` has accepted.
     """
 
     _owned_endpoint(network, ref)

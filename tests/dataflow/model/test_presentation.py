@@ -37,6 +37,7 @@ from finn.dataflow.model.refs import NetworkOperandError, RegionInputRef
 from finn.dataflow.model.region import (
     DataflowRegion,
     InputInterface,
+    InternalInput,
     LogicalSchedule,
     OutputInterface,
     Port,
@@ -214,3 +215,90 @@ def test_presentation_queries_refuse_an_endpoint_owned_twice():
 
     with pytest.raises(NetworkOperandError, match="exactly one is required"):
         edge_presented_positions(doubly_owned, RegionInputRef("compute", "W"))
+
+
+# -- the precondition, stated as tests -----------------------------------------
+#
+# These queries are pure over a Network `validate_network` has already accepted.
+# They are not a validator, and the two cases below are the honest record of what
+# that costs: given an invalid Network they answer from the consumer side, and
+# the answer looks exactly like a good one.  Pinning that here means a later
+# reader learns the contract from the suite rather than from a surprise, and a
+# future change that quietly starts revalidating has to come past these.
+
+
+def test_an_edge_with_no_source_is_validations_business_not_presentations():
+    """`edge.source_missing_or_not_output`, and the query still answers.
+
+    The sink endpoint is owned exactly once, which is all `_owned_endpoint`
+    re-checks, so the edge-fed arm is selected and the consumer's own presented
+    positions come back.  Nothing here looks at the far end of the edge.
+    """
+
+    consumer = compute(InputInterface(Port("w_in", WEIGHT, WHOLE), WHOLE_MATRIX))
+    dangling = Edge(
+        "weight_supply",
+        RegionEndpoint("absent", "w_out"),
+        (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(WHOLE.image)),),
+    )
+    network = framed(consumer, extra_edges=(dangling,))
+    reference = RegionInputRef("compute", "W")
+
+    assert "edge.source_missing_or_not_output" in {
+        issue.code for issue in validate_network(network)
+    }
+    assert edge_presented_positions(network, reference) == WHOLE_MATRIX.required_positions
+    assert unpresented_positions(network, reference) == frozenset()
+
+
+def test_an_edge_whose_sides_disagree_is_also_validations_business():
+    """Element counts and position map disagree, and the query still answers.
+
+    The supplier emits the upper column and the consumer's port declares the
+    whole matrix.  A caller that skipped `validate_network` gets "the whole
+    matrix is edge-presented", which is a statement about the consumer's port and
+    not about what the edge can carry.
+    """
+
+    consumer = compute(InputInterface(Port("w_in", WEIGHT, WHOLE), WHOLE_MATRIX))
+    mismatched = Edge(
+        "weight_supply",
+        RegionEndpoint("memory", "w_out"),
+        (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(WHOLE.image)),),
+    )
+    network = framed(
+        consumer,
+        extra_nodes=(NetworkNode("memory", supplier(UPPER)),),
+        extra_edges=(mismatched,),
+    )
+    reference = RegionInputRef("compute", "W")
+
+    assert {issue.code for issue in validate_network(network)} == {
+        "edge.element_count_mismatch",
+        "position_map.source_domain_mismatch",
+    }
+    assert edge_presented_positions(network, reference) == WHOLE_MATRIX.required_positions
+
+
+def test_an_internal_input_is_answered_without_consulting_the_network_at_all():
+    """No endpoint means no topology question, so nothing topological is read.
+
+    The Network below is invalid -- its one edge has no source -- and the answer
+    for the internal input is unaffected, because an internal input's
+    presentation is a property of the Region alone.
+    """
+
+    region = compute(InternalInput(WEIGHT, WHOLE_MATRIX))
+    dangling = Edge(
+        "nowhere",
+        RegionEndpoint("absent", "w_out"),
+        (SinkContract(RegionEndpoint("absent", "w_in"), PositionMap.identity(WHOLE.image)),),
+    )
+    network = framed(region, extra_edges=(dangling,))
+    reference = RegionInputRef("compute", "W")
+
+    assert "edge.source_missing_or_not_output" in {
+        issue.code for issue in validate_network(network)
+    }
+    assert exposing_ports(network, reference) == ()
+    assert unpresented_positions(network, reference) == WHOLE_MATRIX.required_positions

@@ -199,7 +199,7 @@ def test_none_remains_the_only_member_name_fallback(_label, factory) -> None:
     assert factory(None).stable_name is None
 
 
-def test_public_model_facade_exposes_only_generic_vocabulary() -> None:
+def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
     assert set(space.__all__) == {
         "AuthoringError",
         "RESERVED_LIFECYCLE_NAMES",

@@ -440,12 +440,45 @@ and QONNX datatype identity through `model.datatypes`. It may not import
 `finn.dataflow.space`, `finn.dataflow._engine`, `kernels`, `designs`, `ops`,
 `parameters`, `artifacts` or ONNX graph types.
 
+`tests/dataflow/model/test_facade.py` pins `model.__all__` exactly, in both
+directions: an accidental export and an accidentally dropped one both show up as
+a set difference. It is the counterpart of the `space` facade test that has
+existed since U1.5, and it exists because C1.5 made this facade permanent and
+deliberately decided what it does *not* carry -- a decision that lives only in a
+commit message is one that quietly erodes.
+
 `tests/dataflow/test_package_boundaries.py` asserts this statically over every
 file in the package, asserts the reverse direction for the generic `space` core
 with the bridge module as the one declared exception, asserts that
 `finn.dataflow` itself exports nothing, and asserts by fresh subprocess import
 that `finn.dataflow.model` loads none of the forbidden packages and that
 `finn.dataflow.space` loads neither the bridge nor the model.
+
+### 11.1 Presentation's precondition
+
+The presentation queries are pure over a Network that `validate_network` has
+already accepted. They do not revalidate, and the docstrings now say so on each
+function rather than implying a guarantee the code does not make.
+
+The contract is deliberate: validity is a whole-Network property established
+once, while presentation is scoped to one reference and is meant to be asked many
+times -- per qualified reference during S2-A correspondence, per obligation in
+U6. Folding validation into each query would make the common case pay for it
+repeatedly and still not be a validator.
+
+So these functions do not check that an edge's source exists or is an output,
+that its position map is total, that element types or beat sequences agree across
+it, that the referenced Region is valid, or that the Network is acyclic. Given a
+Network carrying one of those defects they answer from the consumer side, and the
+answer looks authoritative. Three tests in `test_presentation` pin exactly that,
+including the codes `validate_network` raises for the same Networks, so the cost
+of the contract is recorded in the suite rather than discovered later.
+
+The one condition `_owned_endpoint` re-checks locally is endpoint ownership,
+because that single fact is what selects between the edge and boundary arms.
+Without exactly one owner there is no edge-versus-boundary answer to give, so it
+refuses rather than picking. That is arm selection, not validation, and the
+docstring no longer claims otherwise.
 
 ## 12. Canonical equality and validation
 
@@ -491,6 +524,7 @@ tests/dataflow/model/
     test_network_validation.py
     test_refs.py             resolution only
     test_presentation.py     exposure and edge/boundary/unpresented
+    test_facade.py           the exact public surface of the package
 ```
 
 The refs/presentation split follows the module split: `test_refs` asks which
