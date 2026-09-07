@@ -60,7 +60,9 @@ def _declaration_name(name: str | None, what: str) -> str | None:
 
     if name is None:
         return None
-    if not isinstance(name, str) or "." in name:
+    if isinstance(name, str) and "." in name:
+        raise AuthoringError(f"{what} name must be one path segment; {name!r} contains a dot")
+    if not isinstance(name, str):
         raise AuthoringError(
             f"{what} name must be one non-empty QualifiedPath segment using only "
             f"ASCII letters, digits, '_' and '-', got {name!r}"

@@ -190,7 +190,7 @@ def _named_declaration_factories():
 @pytest.mark.parametrize("label,factory", _named_declaration_factories())
 @pytest.mark.parametrize("name", ["", "nested.name", "not a segment", "non_ascii_é"])
 def test_every_explicit_declaration_name_is_one_nonempty_path_segment(label, factory, name) -> None:
-    with pytest.raises(AuthoringError, match="one non-empty QualifiedPath segment"):
+    with pytest.raises(AuthoringError, match="name must be one"):
         factory(name)
 
 

@@ -210,5 +210,5 @@ def test_an_empty_name_is_refused_rather_than_falling_back_to_the_member() -> No
 
 
 def test_a_local_name_cannot_inject_structural_path_segments() -> None:
-    with pytest.raises(AuthoringError, match="one non-empty QualifiedPath segment"):
+    with pytest.raises(AuthoringError, match="one path segment"):
         Decision(int, values=(1, 2), name="outer.inner")
