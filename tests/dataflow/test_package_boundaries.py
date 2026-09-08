@@ -49,6 +49,7 @@ RETIRED_MODULES = (
     "finn.dataflow.ops.mvau.problem",
     "finn.dataflow.ops.mvau.semantics",
     "finn.dataflow.ops.mvau.source",
+    "finn.dataflow.ops.mvau.designs.supplied_dot_product",
     "finn.dataflow.resolution",
     "finn.dataflow.selection",
     "finn.dataflow.spec_algebra",

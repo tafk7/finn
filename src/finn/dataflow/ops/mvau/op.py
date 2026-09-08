@@ -48,9 +48,6 @@ from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
-from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
-    SuppliedDotProductDesign,
-)
 from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
@@ -179,6 +176,7 @@ class MvauDataflowOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
+    schema_version: ClassVar[int] = 3
 
     # -- the source schema ----------------------------------------------------
 
@@ -451,20 +449,6 @@ class MvauDataflowOp(DataflowOp):
                 computation_profile=profile,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
-            ),
-            "supplied": Subspace(
-                SuppliedDotProductDesign,
-                repetitions=repetitions,
-                matrix_width=matrix_width,
-                matrix_height=matrix_height,
-                activation_type=activation.datatype,
-                weight_type=weight.datatype,
-                accumulator_type=accumulator_type,
-                output_type=output_type,
-                narrow_weights=effective_narrow_weights,
-                computation_profile=profile,
-                target_dsp=target_dsp,
-                clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
             ),
             "batch_interleaved": Subspace(
@@ -496,7 +480,7 @@ class MvauDataflowOp(DataflowOp):
     def operand_references(
         self, network: DataflowNetwork
     ) -> dict[str, tuple[DataflowOperandRef, ...]]:
-        # Roles are operation-owned. In the supplied form the source matrix
+        # Roles are operation-owned. In decoupled supply the source matrix
         # enters memory.W, not the downstream compute.W stream.
         nodes = {node.id for node in network.nodes}
         return {

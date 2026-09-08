@@ -6,7 +6,7 @@
 ```text
 regions.py   the one authority for MVAU Region construction
 networks.py  the decomposed Network they form
-designs/     base, dot_product, supplied_dot_product
+designs/     shared base, dot_product, batch_interleaved
 op.py        the source node and its two Design alternatives
 ```
 

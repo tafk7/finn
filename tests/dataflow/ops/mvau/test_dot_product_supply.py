@@ -11,13 +11,9 @@ resolves a complete Network anyway -- which is the thing U3 is for.
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.model.presentation import (
     boundary_presented_positions,
     edge_presented_positions,
@@ -27,109 +23,14 @@ from finn.dataflow.model.presentation import (
 from finn.dataflow.model.refs import RegionInputRef
 from finn.dataflow.model.region import InputInterface, InternalInput
 from finn.dataflow.kernels.memstream import MemstreamKernel
-from finn.dataflow.space.declarations import Problem, Space, Subspace
-from finn.dataflow.ops.mvau.computation import (
-    AccumulationMode,
-    ActivationMode,
-    MvauComputationProfile,
-)
-from finn.dataflow.space.dataflow_value_semantics import (
-    QONNX_DATATYPE_CODEC,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-)
-from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
-    SuppliedDotProductDesign,
+from finn.dataflow.ops.mvau.designs.dot_product import (
+    DotProductDesign,
     WeightSupply,
 )
-
-CLOCK_PERIOD_NS = 4.0
-
-
-class Source(Space):
-    """The graph-side facts, including whether the matrix is a constant."""
-
-    repetitions = Problem(int)
-    matrix_width = Problem(int)
-    matrix_height = Problem(int)
-    activation_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    weight_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    accumulator_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    output_type = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    narrow_weights = Problem(bool)
-    computation_profile = Problem(MvauComputationProfile)
-    target_dsp = Problem(DspBlock)
-    clock_period_ns = Problem(float)
-    initializer_present = Problem(bool)
-
-    design = Subspace(
-        SuppliedDotProductDesign,
-        name="supplied",
-        repetitions=repetitions,
-        matrix_width=matrix_width,
-        matrix_height=matrix_height,
-        activation_type=activation_type,
-        weight_type=weight_type,
-        accumulator_type=accumulator_type,
-        output_type=output_type,
-        narrow_weights=narrow_weights,
-        computation_profile=computation_profile,
-        target_dsp=target_dsp,
-        clock_period_ns=clock_period_ns,
-        initializer_present=initializer_present,
-    )
+from dataflow.ops.mvau.test_dot_product_design import _occurrence, _unconfigured
 
 
-_CANDIDATE = {
-    WeightSupply.EXTERNAL: "dotp_axi",
-    WeightSupply.EMBEDDED: "dotp_axi_embedded",
-    WeightSupply.DECOUPLED: "dotp_axi",
-}
-
-
-def _occurrence(
-    supply: WeightSupply,
-    *,
-    initializer: bool = True,
-    pe: int = 2,
-    simd: int = 2,
-) -> SuppliedDotProductDesign:
-    root = Source.start(
-        {
-            Source.repetitions: 2,
-            Source.matrix_width: 8,
-            Source.matrix_height: 4,
-            Source.activation_type: DataType["INT8"],
-            Source.weight_type: DataType["INT8"],
-            Source.accumulator_type: DataType["INT32"],
-            Source.output_type: DataType["INT32"],
-            Source.narrow_weights: False,
-            Source.computation_profile: MvauComputationProfile(
-                AccumulationMode.INTEGER, ActivationMode.NONE
-            ),
-            Source.target_dsp: DspBlock.DSP58,
-            Source.clock_period_ns: CLOCK_PERIOD_NS,
-            Source.initializer_present: initializer,
-        },
-        namespace="mvau",
-    )
-    design = cast(SuppliedDotProductDesign, root.design)
-    design = (
-        design.assign(SuppliedDotProductDesign.pe, pe)
-        .assign(SuppliedDotProductDesign.simd, simd)
-        .assign(SuppliedDotProductDesign.weight_supply, supply)
-    )
-    view = design.compute
-    design = cast(SuppliedDotProductDesign, view.select(_CANDIDATE[supply]).root.design)
-    # Pumping is the compute Kernel's own physical Decision either way; the
-    # embedded candidate inherits it along with the rest of DotpAxi.
-    compute = cast(DotpAxiKernel, design.compute.alternative(_CANDIDATE[supply]))
-    return cast(
-        SuppliedDotProductDesign,
-        compute.assign(DotpAxiKernel.compute_pumping, False).root.design,
-    )
-
-
-def _network(design: SuppliedDotProductDesign):
+def _network(design: DotProductDesign):
     answer = design.dataflow.accepted_answer
     assert isinstance(answer, Decided), answer
     return answer.value
@@ -279,31 +180,45 @@ def test_an_initializer_neither_forces_nor_forbids_external_streaming() -> None:
 
 
 def test_the_mode_is_uncommitted_until_it_is_chosen() -> None:
-    root = Source.start(
-        {
-            Source.repetitions: 2,
-            Source.matrix_width: 8,
-            Source.matrix_height: 4,
-            Source.activation_type: DataType["INT8"],
-            Source.weight_type: DataType["INT8"],
-            Source.accumulator_type: DataType["INT32"],
-            Source.output_type: DataType["INT32"],
-            Source.narrow_weights: False,
-            Source.computation_profile: MvauComputationProfile(
-                AccumulationMode.INTEGER, ActivationMode.NONE
-            ),
-            Source.target_dsp: DspBlock.DSP58,
-            Source.clock_period_ns: CLOCK_PERIOD_NS,
-            Source.initializer_present: True,
-        },
-        namespace="mvau",
-    )
-    design = cast(SuppliedDotProductDesign, root.design)
-    design = design.assign(SuppliedDotProductDesign.pe, 2).assign(SuppliedDotProductDesign.simd, 2)
+    design = _unconfigured()
+    design = design.assign(DotProductDesign.pe, 2).assign(DotProductDesign.simd, 2)
     assert isinstance(design.dataflow.accepted_answer, Unresolved)
     assert design.is_active("memory") == Decided(False) or isinstance(
         design.is_active("memory"), Unresolved
     )
+
+
+def test_supply_without_a_compute_candidate_is_unresolved() -> None:
+    design = _unconfigured()
+    design = (
+        design.assign(DotProductDesign.pe, 2)
+        .assign(DotProductDesign.simd, 2)
+        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+    )
+    assert isinstance(design.dataflow.accepted_answer, Unresolved)
+
+
+@pytest.mark.parametrize(
+    ("supply", "candidate"),
+    [
+        (WeightSupply.EXTERNAL, "dotp_axi_embedded"),
+        (WeightSupply.EMBEDDED, "dotp_axi"),
+        (WeightSupply.DECOUPLED, "dotp_axi_embedded"),
+    ],
+)
+def test_inconsistent_supply_and_compute_candidates_are_refused(
+    supply: WeightSupply, candidate: str
+) -> None:
+    design = _unconfigured()
+    design = (
+        design.assign(DotProductDesign.pe, 2)
+        .assign(DotProductDesign.simd, 2)
+        .assign(DotProductDesign.weight_supply, supply)
+    )
+    design = design.compute.select(candidate).root.design
+    answer = design.dataflow.accepted_answer
+    assert isinstance(answer, Absent)
+    assert answer.findings
 
 
 @pytest.mark.parametrize("supply", list(WeightSupply))

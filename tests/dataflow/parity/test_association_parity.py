@@ -103,11 +103,21 @@ def test_the_association_carries_the_same_identities_where_a_network_resolves() 
 
     from finn.dataflow.kernels.dotp_axi import DotpAxiKernel  # noqa: PLC0415
     from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign  # noqa: PLC0415
+    from finn.dataflow.ops.mvau.designs.dot_product import (  # noqa: PLC0415
+        DotProductDesign,
+        WeightSupply,
+    )
     from finn.dataflow._engine import Decided  # noqa: PLC0415
 
     spec = next(item for item in SPECS if item["name"] == "fused_provenance")
     _model, occurrence = bound(spec, BUILD)
     chosen = occurrence.design.select("dot_product").root
+    chosen = (
+        chosen.design.alternative("dot_product")
+        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+        .root
+    )
+    chosen = chosen.design.alternative("dot_product").compute.select("dotp_axi").root
     for declaration, value in (
         (WeightedDotProductDesign.pe, 2),
         (WeightedDotProductDesign.simd, 2),

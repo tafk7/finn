@@ -1,49 +1,70 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The real two-Kernel Design: activation replay feeding a folded dot product.
+"""The three ways a matrix can reach the production dot-product Design.
 
 ```text
-activation boundary -> replay -> activation_replay -> compute -> output boundary
-                                                  weight boundary -^
+external    activation -> replay -> compute -> output
+                          weight boundary --^
+
+embedded    activation -> replay -> compute -> output
+                          (weight is an InternalInput; there is no weight port)
+
+decoupled   activation -> replay -> compute -> output
+                          memory --weight-->  ^
 ```
 
-The Design owns PE and SIMD once.  They change the replay Region, the
-dot-product Region, and the beat contract on the edge between them, so no single
-Kernel can own them and no export or equality constraint has to connect the two.
-Both KernelChoice consume the same engine decision handles as ordinary Inputs.
+All three differences are semantic. External and decoupled place the same
+compute Region and differ in what presents its weight input. Embedded places a
+different compute Region whose weight remains required as an ``InternalInput``
+but has no dataflow port. Physical availability is separate: the embedded core
+and memstream currently have no standalone module, while their Networks still
+resolve.
 
-DotpAxi keeps pumping and its own physical feasibility.  Each Kernel declares
-exactly one Region.  The Design constructs neither, and calls no historical
-Region or Network helper: the Network it publishes is generated from the exact
-selected Regions and the topology declared here.
+Initializer presence does not choose the mode. ``initializer_present`` is a
+source fact used only by this Design's admission policy: modes that keep the
+matrix locally require an initializer. External supply remains available with
+or without one.
 """
 
 from __future__ import annotations
 
-from finn.dataflow.space.declarations import Subspace
+from enum import Enum
+
 from finn.dataflow.designs.design import (
+    EdgeSink,
+    KernelChoice,
     NetworkBoundary,
     NetworkEdge,
-    KernelChoice,
-    EdgeSink,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
+from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
+from finn.dataflow.space.declarations import (
+    ConstraintGroup,
+    Decision,
+    Input,
+    Subspace,
+    constraint,
+    derived,
+    reject,
+)
+
+
+class WeightSupply(str, Enum):
+    """How the matrix reaches the compute Region."""
+
+    EXTERNAL = "external"
+    EMBEDDED = "embedded"
+    DECOUPLED = "decoupled"
 
 
 class DotProductDesign(WeightedDotProductDesign):
-    """Matrix-vector arithmetic decomposed into replay and dot product.
-
-    The matrix arrives from outside, always.  ``SuppliedDotProductDesign`` is
-    the same composition with the weight path as a declared choice; this one is
-    the simplest thing that works and stays the reference the composed hardware
-    evidence is written against.
-    """
+    """Replay and dot product with an explicitly selected weight supply."""
 
     id = "dot_product"
-    version = "1"
+    version = "2"
 
     repetitions = WeightedDotProductDesign.repetitions
     matrix_width = WeightedDotProductDesign.matrix_width
@@ -57,6 +78,17 @@ class DotProductDesign(WeightedDotProductDesign):
     clock_period_ns = WeightedDotProductDesign.clock_period_ns
     pe = WeightedDotProductDesign.pe
     simd = WeightedDotProductDesign.simd
+
+    initializer_present = Input(bool)
+    weight_supply = Decision(WeightSupply, values=tuple(WeightSupply))
+
+    @derived(bool, supply=weight_supply)
+    def streams_weights(*, supply: WeightSupply) -> bool:
+        return supply is WeightSupply.EXTERNAL
+
+    @derived(bool, supply=weight_supply)
+    def decouples_weights(*, supply: WeightSupply) -> bool:
+        return supply is WeightSupply.DECOUPLED
 
     replay = KernelChoice(
         Subspace(
@@ -86,19 +118,70 @@ class DotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
+        Subspace(
+            EmbeddedDotpAxiKernel,
+            repetitions=repetitions,
+            matrix_width=matrix_width,
+            matrix_height=matrix_height,
+            activation_type=activation_type,
+            weight_type=weight_type,
+            accumulator_type=accumulator_type,
+            output_type=output_type,
+            narrow_weights=narrow_weights,
+            target_dsp=target_dsp,
+            clock_period_ns=clock_period_ns,
+            pe=pe,
+            simd=simd,
+        ),
+    )
+
+    memory = KernelChoice(
+        Subspace(
+            MemstreamKernel,
+            repetitions=repetitions,
+            matrix_width=matrix_width,
+            matrix_height=matrix_height,
+            weight_type=weight_type,
+            pe=pe,
+            simd=simd,
+        ),
+        when=decouples_weights,
     )
 
     activation_replay = NetworkEdge(
         replay.output("activation_out"),
         EdgeSink(compute.input("activation")),
     )
+    weight_supply_edge = NetworkEdge(
+        memory.output("weight"),
+        EdgeSink(compute.input("weight")),
+        when=decouples_weights,
+    )
 
     activation = NetworkBoundary(replay.input("activation_in"))
-    weight = NetworkBoundary(compute.input("weight"))
+    weight = NetworkBoundary(compute.input("weight"), when=streams_weights)
     output = NetworkBoundary(compute.output("output"))
 
+    @constraint(supply=weight_supply, present=initializer_present)
+    def local_weights_need_an_initializer(*, supply: WeightSupply, present: bool) -> object:
+        """Embedded and decoupled supply require a source initializer."""
 
-#: Every Input the Design consumes, for a caller assembling the bindings.
-DESIGN_INPUTS = SHARED_INPUTS
+        if supply is not WeightSupply.EXTERNAL and not present:
+            return reject(
+                "mvau-local-weights-need-an-initializer",
+                f"{supply.value} weight supply holds the matrix locally, "
+                "and this source node supplies none",
+                values={"supply": supply.value},
+            )
+        return True
 
-__all__ = ["DESIGN_INPUTS", "DotProductDesign"]
+    dataflow_support = ConstraintGroup(
+        *WeightedDotProductDesign.dataflow_support.constraints,
+        local_weights_need_an_initializer,
+        name="supply_available",
+    )
+
+
+DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present")
+
+__all__ = ["DESIGN_INPUTS", "DotProductDesign", "WeightSupply"]

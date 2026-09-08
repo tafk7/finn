@@ -1,13 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""G7: a third Design, authored against the layer as it stands.
+"""G7: the distinct batch-interleaved Design against the layer as it stands.
 
 The point of this module is not that batch interleaving works -- the Region
 mathematics was retained from U1.5 and is compared against here, not rewritten.
-It is that adding a third alternative, with a Decision of its own, needed no new
-persistence code, no new Design mechanism, and no change to the operation beyond
-one entry in its SubspaceChoice.  Every claim below is a claim about *that*.
+Its Design-owned interleave Decision needs no special persistence code or new
+Design mechanism. Every claim below is a claim about that retained alternative.
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ from finn.dataflow.space.dataflow_value_semantics import (
 from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.ops.mapping import External
-from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
+from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.mvau.computation import (
     AccumulationMode,
     ActivationMode,
@@ -53,10 +52,11 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import (
     DESIGN_INPUTS,
     BatchInterleavedDesign,
 )
+from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.space.declarations import derived
 from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, OpInput, OpOutput
-from finn.dataflow.ops.native import read_attributes
+from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE, read_attributes
 from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_mvau_weight_port as baseline_weight_port,
 )
@@ -319,7 +319,7 @@ def test_the_build_unit_is_honestly_unavailable() -> None:
 
 
 def test_interleave_is_a_design_decision_and_the_kernel_imports_it() -> None:
-    """Region-visible, therefore not the Kernel's to own."""
+    """The deliberate Design-owned lift remains explicit and imported."""
 
     root = _compile_space(Problem_, "mvau", problem_namespace="problem.mvau")
     design = _compile_space(
@@ -340,7 +340,7 @@ def test_interleave_is_a_design_decision_and_the_kernel_imports_it() -> None:
     }
 
 
-# -- the operation: a third alternative, and nothing else --------------------
+# -- the operation: the second alternative, and nothing else -----------------
 
 
 def _tensor(name: str, shape: tuple[int, ...]) -> Any:
@@ -397,10 +397,10 @@ def _interleaved_operation(model: ModelWrapper, *, interleave: int = 2) -> MvauD
     return committed
 
 
-def test_the_operation_offers_three_alternatives() -> None:
+def test_the_operation_offers_two_alternatives() -> None:
     model = _mvau_model()
     view = _unbound(model).bind(model, Build()).design  # type: ignore[attr-defined]
-    assert set(view.alternatives) == {"dot_product", "supplied", "batch_interleaved"}
+    assert view.alternatives == ("dot_product", "batch_interleaved")
 
 
 def test_the_interleave_decision_persists_without_any_new_persistence_code() -> None:
@@ -431,8 +431,21 @@ def test_the_interleaved_choice_survives_a_save_and_reload(tmp_path: Path) -> No
     assert after.value == before.value
 
 
-def test_switching_among_three_alternatives_leaves_nothing_behind() -> None:
-    """The reachability prune, now over three branches rather than two."""
+def test_an_old_schema_two_batch_record_is_refused_without_writes() -> None:
+    model = _mvau_model()
+    _interleaved_operation(model, interleave=2)
+    schema = next(
+        item for item in model.graph.node[0].attribute if item.name == SCHEMA_VERSION_ATTRIBUTE
+    )
+    schema.i = 2
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="writes schema version 3"):
+        _unbound(model).bind(model, Build())
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_switching_between_design_families_leaves_nothing_behind() -> None:
+    """Changing Design families prunes every choice under the old branch."""
 
     model = _mvau_model()
     operation = _interleaved_operation(model, interleave=2)
@@ -440,9 +453,22 @@ def test_switching_among_three_alternatives_leaves_nothing_behind() -> None:
 
     switched = _unbound(model).bind(model, Build()).reconstruct()
     switched = switched.design.select("dot_product").root
+    dot_product = switched.design.alternative("dot_product")
+    for declaration, value in (
+        (WeightedDotProductDesign.pe, 2),
+        (WeightedDotProductDesign.simd, 2),
+        (DotProductDesign.weight_supply, WeightSupply.EXTERNAL),
+    ):
+        switched = dot_product.assign(declaration, value).root
+        dot_product = switched.design.alternative("dot_product")
+    switched = dot_product.compute.select("dotp_axi").root
+    kernel = switched.design.alternative("dot_product").kernel("compute")
+    assert isinstance(kernel, Decided)
+    switched = kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
     final = switched.commit(model, Build())
     recorded = dict(final.recorded())
     assert recorded["design.case"] == "dot_product"
+    assert recorded["design.dot_product.weight_supply"] is WeightSupply.EXTERNAL
     assert not any(name.startswith("design.batch_interleaved.") for name in recorded)
 
     back = _unbound(model).bind(model, Build()).reconstruct()

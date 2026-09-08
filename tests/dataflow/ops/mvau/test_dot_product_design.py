@@ -24,8 +24,13 @@ from finn.dataflow.space.dataflow_value_semantics import (
 )
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
+from finn.dataflow.space.occurrence import occurrence_persistable
 from finn.dataflow.designs.design import design_dataflow
-from finn.dataflow.ops.mvau.designs.dot_product import DESIGN_INPUTS, DotProductDesign
+from finn.dataflow.ops.mvau.designs.dot_product import (
+    DESIGN_INPUTS,
+    DotProductDesign,
+    WeightSupply,
+)
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.kernels.kernel import ModuleBuildSpec, kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
@@ -67,6 +72,7 @@ class Problem_(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
     computation_profile = Problem(MvauComputationProfile)
+    initializer_present = Problem(bool)
 
 
 class Placed(Problem_):
@@ -96,7 +102,7 @@ def _compile(namespace: str = "mvau.dot_product"):
     return root, design
 
 
-def _occurrence(
+def _unconfigured(
     *,
     repetitions: int = 2,
     matrix_width: int = 8,
@@ -106,11 +112,9 @@ def _occurrence(
     accumulator: str = "INT32",
     narrow: bool = False,
     target: DspBlock = DspBlock.DSP58,
-    pe: int = 2,
-    simd: int = 2,
-    pumping: bool = False,
+    initializer: bool = True,
 ) -> DotProductDesign:
-    """One attached DotProductDesign, specialized through the public API."""
+    """One attached DotProductDesign before any Design choices are made."""
 
     root = Placed.start(
         {
@@ -127,12 +131,50 @@ def _occurrence(
             ),
             Placed.target_dsp: target,
             Placed.clock_period_ns: CLOCK_PERIOD_NS,
+            Placed.initializer_present: initializer,
         },
         namespace="mvau",
     )
-    design = cast(DotProductDesign, root.design)
-    design = design.assign(DotProductDesign.pe, pe).assign(DotProductDesign.simd, simd)
-    compute = cast(DotpAxiKernel, design.compute.alternative("dotp_axi"))
+    return cast(DotProductDesign, root.design)
+
+
+def _occurrence(
+    supply: WeightSupply = WeightSupply.EXTERNAL,
+    *,
+    repetitions: int = 2,
+    matrix_width: int = 8,
+    matrix_height: int = 4,
+    activation: str = "INT8",
+    weight: str = "INT8",
+    accumulator: str = "INT32",
+    narrow: bool = False,
+    target: DspBlock = DspBlock.DSP58,
+    pe: int = 2,
+    simd: int = 2,
+    pumping: bool = False,
+    initializer: bool = True,
+) -> DotProductDesign:
+    """One attached DotProductDesign, specialized through the public API."""
+
+    design = _unconfigured(
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation=activation,
+        weight=weight,
+        accumulator=accumulator,
+        narrow=narrow,
+        target=target,
+        initializer=initializer,
+    )
+    design = (
+        design.assign(DotProductDesign.pe, pe)
+        .assign(DotProductDesign.simd, simd)
+        .assign(DotProductDesign.weight_supply, supply)
+    )
+    candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
+    design = cast(DotProductDesign, design.compute.select(candidate).root.design)
+    compute = cast(DotpAxiKernel, design.compute.alternative(candidate))
     return cast(
         DotProductDesign,
         compute.assign(DotpAxiKernel.compute_pumping, pumping).root.design,
@@ -251,11 +293,12 @@ def test_the_selected_network_has_exactly_two_nodes_one_edge_three_boundaries() 
     assert frozenset(left for left, _right in entries) == source.beat_sequence.image
 
 
-def test_the_design_reports_two_roles_and_what_fills_each() -> None:
+def test_the_design_reports_its_roles_and_active_candidates() -> None:
     design = _occurrence()
-    assert set(design.roles) == {"replay", "compute"}
+    assert set(design.roles) == {"replay", "compute", "memory"}
     assert design.selected("replay") == Decided("replay_buffer")
     assert design.selected("compute") == Decided("dotp_axi")
+    assert design.is_active("memory") == Decided(False)
     assert design.region_family("replay") == Decided(("mvau.activation_replay", "1"))
     assert design.region_family("compute") == Decided(("mvau.dot_product", "1"))
     assert design.node_id("replay") == "replay"
@@ -270,7 +313,10 @@ def test_pe_and_simd_appear_only_at_design_scope() -> None:
     assert paths == {
         "mvau.dot_product.pe",
         "mvau.dot_product.simd",
+        "mvau.dot_product.weight_supply",
+        "mvau.dot_product.compute.kernel",
         "mvau.dot_product.compute.dotp_axi.compute_pumping",
+        "mvau.dot_product.compute.dotp_axi_embedded.compute_pumping",
     }
     for path in paths:
         assert ".replay." not in path
@@ -281,6 +327,8 @@ def test_the_design_owns_pe_and_simd_and_the_kernels_import_them() -> None:
     assert dict(design.assignments) == {
         QualifiedPath("mvau.dot_product.pe"): 2,
         QualifiedPath("mvau.dot_product.simd"): 4,
+        QualifiedPath("mvau.dot_product.weight_supply"): WeightSupply.EXTERNAL,
+        QualifiedPath("mvau.dot_product.compute.kernel"): "dotp_axi",
     }
     for role in ("compute", "replay"):
         built = _built(role, pe=2, simd=4)
@@ -289,6 +337,22 @@ def test_the_design_owns_pe_and_simd_and_the_kernels_import_them() -> None:
             "dot_product.pe",
             "dot_product.simd",
         }
+
+
+def test_module_provenance_uses_the_converged_persistable_paths() -> None:
+    design = _occurrence(pe=2, simd=4)
+    persistable = {item.path for item in occurrence_persistable(design.root)}
+    replay = _built("replay", pe=2, simd=4)
+    compute = _built("compute", pe=2, simd=4)
+    assert isinstance(replay, Decided) and isinstance(compute, Decided)
+    assert replay.value.imported_decisions == ("dot_product.pe", "dot_product.simd")
+    assert compute.value.imported_decisions == (
+        "dot_product.compute.kernel",
+        "dot_product.pe",
+        "dot_product.simd",
+    )
+    assert set(replay.value.imported_decisions) <= persistable
+    assert set(compute.value.imported_decisions) <= persistable
 
 
 def test_the_physical_parameter_tables_stay_kernel_local() -> None:
@@ -333,6 +397,7 @@ def test_an_incomplete_or_infeasible_point_refuses() -> None:
             ),
             "problem.mvau.target_dsp": DspBlock.DSP58,
             "problem.mvau.clock_period_ns": CLOCK_PERIOD_NS,
+            "problem.mvau.initializer_present": True,
         },
     )
     assert isinstance(design_dataflow(engine, design, point).accepted_answer, Unresolved)
@@ -377,6 +442,7 @@ def test_two_occurrences_of_the_design_stay_independent() -> None:
             ),
             "problem.mvau.target_dsp": DspBlock.DSP58,
             "problem.mvau.clock_period_ns": CLOCK_PERIOD_NS,
+            "problem.mvau.initializer_present": True,
         },
     )
     point = engine.commit_assignments(
@@ -384,9 +450,13 @@ def test_two_occurrences_of_the_design_stay_independent() -> None:
         {
             "mvau.left.pe": 2,
             "mvau.left.simd": 2,
+            "mvau.left.weight_supply": WeightSupply.EXTERNAL,
+            "mvau.left.compute.kernel": "dotp_axi",
             "mvau.left.compute.dotp_axi.compute_pumping": False,
             "mvau.right.pe": 4,
             "mvau.right.simd": 4,
+            "mvau.right.weight_supply": WeightSupply.EXTERNAL,
+            "mvau.right.compute.kernel": "dotp_axi",
             "mvau.right.compute.dotp_axi.compute_pumping": False,
         },
     ).point

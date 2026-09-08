@@ -44,8 +44,8 @@ from finn.dataflow.ops.base import (
     source_declarations,
 )
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
-    SuppliedDotProductDesign,
+from finn.dataflow.ops.mvau.designs.dot_product import (
+    DotProductDesign,
     WeightSupply,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
@@ -212,11 +212,35 @@ def _unbound(model: ModelWrapper, name: str) -> DataflowOp:
     return operation
 
 
+def _configure_mvau_point(
+    bound: MvauDataflowOp,
+    *,
+    supply: WeightSupply = WeightSupply.EXTERNAL,
+    pe: int = 2,
+    simd: int = 2,
+    pumped: bool = False,
+) -> MvauDataflowOp:
+    """Select an explicit supply and compatible compute candidate."""
+
+    chosen = bound.design.select("dot_product").root
+    design = chosen.design.alternative("dot_product")
+    chosen = design.assign(DotProductDesign.weight_supply, supply).root
+    candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
+    chosen = chosen.design.alternative("dot_product").compute.select(candidate).root
+    for declaration, value in (
+        (WeightedDotProductDesign.pe, pe),
+        (WeightedDotProductDesign.simd, simd),
+    ):
+        chosen = chosen.design.alternative("dot_product").assign(declaration, value).root
+    kernel = chosen.design.alternative("dot_product").kernel("compute")
+    assert isinstance(kernel, Decided)
+    return kernel.value.assign(DotpAxiKernel.compute_pumping, pumped).root
+
+
 def _configured_mvau(
     model: ModelWrapper | None = None,
     *,
-    design: str = "dot_product",
-    supply: WeightSupply | None = None,
+    supply: WeightSupply = WeightSupply.EXTERNAL,
     pe: int = 2,
     simd: int = 2,
     pumped: bool = False,
@@ -224,28 +248,9 @@ def _configured_mvau(
     """Bind, choose, and record -- the whole lifecycle a caller actually runs."""
 
     model = model or _mvau_model()
-    operation = _unbound(model, "mvau0")
-    chosen = operation.bind(model, Build())
-    chosen = chosen.design.select(design).root
-    if design == "supplied":
-        chosen = (
-            chosen.design.alternative(design)
-            .assign(SuppliedDotProductDesign.weight_supply, supply or WeightSupply.EXTERNAL)
-            .root
-        )
-        chosen = (
-            chosen.design.alternative(design)
-            .compute.select("dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi")
-            .root
-        )
-    for declaration, value in (
-        (WeightedDotProductDesign.pe, pe),
-        (WeightedDotProductDesign.simd, simd),
-    ):
-        chosen = chosen.design.alternative(design).assign(declaration, value).root
-    kernel = chosen.design.alternative(design).kernel("compute")
-    assert isinstance(kernel, Decided)
-    chosen = kernel.value.assign(DotpAxiKernel.compute_pumping, pumped).root
+    operation = _unbound(model, "mvau0").bind(model, Build())
+    assert isinstance(operation, MvauDataflowOp)
+    chosen = _configure_mvau_point(operation, supply=supply, pe=pe, simd=simd, pumped=pumped)
     committed = chosen.commit(model, Build())
     assert isinstance(committed, MvauDataflowOp)
     return model, committed
@@ -332,7 +337,8 @@ def test_a_child_design_and_kernel_cannot_reach_the_binding() -> None:
 
     model = _mvau_model()
     bound = _unbound(model, "mvau0").bind(model, Build())
-    chosen = bound.design.select("dot_product").root
+    assert isinstance(bound, MvauDataflowOp)
+    chosen = _configure_mvau_point(bound)
 
     design = chosen.design.alternative("dot_product")
     kernel = design.kernel("compute")
@@ -599,9 +605,9 @@ def test_a_repairable_output_annotation_is_a_difference_not_a_rejection() -> Non
 
     model = _mvau_model()
     model.set_tensor_shape("output", [2, 99])
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
-    chosen = chosen.design.alternative("dot_product").assign(WeightedDotProductDesign.pe, 2).root
-    chosen = chosen.design.alternative("dot_product").assign(WeightedDotProductDesign.simd, 2).root
+    bound = _unbound(model, "mvau0").bind(model, Build())
+    assert isinstance(bound, MvauDataflowOp)
+    chosen = _configure_mvau_point(bound)
 
     assert isinstance(chosen.dataflow.accepted_answer, Decided)
     assert any("output" in item for item in chosen.reconciliation())
@@ -614,7 +620,15 @@ def test_a_repairable_output_annotation_is_a_difference_not_a_rejection() -> Non
 
 def test_an_uncommitted_folding_leaves_the_network_unresolved() -> None:
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    bound = _unbound(model, "mvau0").bind(model, Build())
+    assert isinstance(bound, MvauDataflowOp)
+    chosen = bound.design.select("dot_product").root
+    chosen = (
+        chosen.design.alternative("dot_product")
+        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+        .root
+    )
+    chosen = chosen.design.alternative("dot_product").compute.select("dotp_axi").root
 
     assert isinstance(chosen.network, Unresolved)
 
@@ -638,42 +652,36 @@ def test_choices_survive_a_save_and_reload_exactly(tmp_path: Path) -> None:
     assert after.value == before.value
 
 
-def test_a_structural_choice_can_be_changed_without_touching_the_node() -> None:
-    """bind, commit supplied+embedded, rebind, switch, commit, rebind -- no clearing.
+def test_weight_supply_and_compute_choices_can_be_switched_without_stale_state() -> None:
+    """All three modes commit through immutable successors and prune old candidates.
 
-    An immutable point does not rebase a committed selector, so switching
-    alternatives means a point that never had the first one.  ``reconstruct()``
-    is that point: the same frozen binding and therefore the same problem
-    identity, with no assignments.  Nothing reaches into the node.
+    ``reconstruct()`` preserves the frozen source identity while dropping the
+    prior assignments, so each explicit supply/candidate pair starts clean.
     """
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
-    supplied = bound.design.select("supplied").root
-    supplied = (
-        supplied.design.alternative("supplied")
-        .assign(SuppliedDotProductDesign.weight_supply, WeightSupply.EMBEDDED)
-        .root
-    )
-    committed = supplied.commit(model, Build())
-    assert dict(committed.recorded())["design.supplied.weight_supply"] is WeightSupply.EMBEDDED
+    previous_candidate: str | None = None
+    for supply in (WeightSupply.EMBEDDED, WeightSupply.DECOUPLED, WeightSupply.EXTERNAL):
+        rebound = _unbound(model, "mvau0").bind(model, Build())
+        assert isinstance(rebound, MvauDataflowOp)
+        chosen = _configure_mvau_point(rebound.reconstruct(), supply=supply)
+        committed = chosen.commit(model, Build())
+        recorded = dict(committed.recorded())
+        candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
+        assert recorded["design.case"] == "dot_product"
+        assert recorded["design.dot_product.weight_supply"] is supply
+        assert recorded["design.dot_product.compute.kernel"] == candidate
+        assert f"design.dot_product.compute.{candidate}.compute_pumping" in recorded
+        if previous_candidate is not None and previous_candidate != candidate:
+            assert (
+                f"design.dot_product.compute.{previous_candidate}.compute_pumping" not in recorded
+            )
+        previous_candidate = candidate
 
-    reloaded = _unbound(model, "mvau0").bind(model, Build())
-    switched = reloaded.reconstruct().design.select("dot_product").root
-    final = switched.commit(model, Build())
-
-    assert dict(final.recorded())["design.case"] == "dot_product"
-    # Nothing belonging to the alternative left behind survived.
-    assert "design.supplied.weight_supply" not in dict(final.recorded())
-    # Read from the node itself, which is what an unbound wrapper can honestly
-    # answer: the document's canonical values, not decoded ones.
     document = read_attributes(model.graph.node[0])
-    assert document is not None
-    assert "design__supplied__weight_supply" not in document
-    # And it rebinds cleanly: nothing left over refuses to replay.
-    assert _unbound(model, "mvau0").bind(model, Build()).recorded()["design.case"] == (
-        "dot_product"
-    )
+    assert document["design__dot_product__weight_supply"].value == "external"
+    assert document["design__dot_product__compute__kernel"].value == "dotp_axi"
+    assert "design__dot_product__compute__dotp_axi_embedded__compute_pumping" not in document
 
 
 def test_a_partial_point_may_be_saved(tmp_path: Path) -> None:
@@ -686,9 +694,8 @@ def test_a_partial_point_may_be_saved(tmp_path: Path) -> None:
     reloaded = ModelWrapper(str(path))
     restored = _unbound(reloaded, "mvau0").bind(reloaded, Build())
 
-    # A singleton segment generates no selector, so there is nothing to record
-    # for it -- adding a second candidate later adds a path, it does not rename
-    # an existing one.
+    # Only the Design family is chosen; supply, candidate and folding remain
+    # deliberately unresolved and therefore absent from native state.
     assert set(restored.recorded()) == {"design.case"}
     assert isinstance(restored.network, Unresolved)
 
@@ -730,10 +737,12 @@ def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
     attrs = read_attributes(model.graph.node[0])
     assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.problem_fingerprint
-    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 2)
+    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 3)
     assert attrs["design__case"] == NativeAttribute("s", "dot_product")
     assert attrs["design__dot_product__pe"] == NativeAttribute("i", 2)
     assert attrs["design__dot_product__simd"] == NativeAttribute("i", 4)
+    assert attrs["design__dot_product__weight_supply"] == NativeAttribute("s", "external")
+    assert attrs["design__dot_product__compute__kernel"] == NativeAttribute("s", "dotp_axi")
     assert not {"dataflow_state", "dataflow_family", "dataflow_family_version"} & attrs.keys()
 
 
@@ -750,6 +759,15 @@ def test_an_unknown_native_schema_version_is_refused() -> None:
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 99)
     with pytest.raises(DataflowOpError, match="this build writes"):
         _unbound(model, "mvau0").bind(model, Build())
+
+
+def test_old_mvau_schema_two_is_refused_without_writes() -> None:
+    model, _operation = _configured_mvau()
+    _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 2)
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="writes schema version 3"):
+        _unbound(model, "mvau0").bind(model, Build())
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_reconstruct_keeps_the_identity_and_drops_every_choice() -> None:
@@ -862,7 +880,7 @@ def test_an_association_names_no_kernel_component_or_artifact() -> None:
 def test_weight_mapping_names_the_supplier_input_in_the_decoupled_form() -> None:
     placements = {}
     for supply in WeightSupply:
-        operation = _configured_mvau(design="supplied", supply=supply)[1]
+        operation = _configured_mvau(supply=supply)[1]
         answer = operation.operand_mapping
         assert isinstance(answer, Decided)
         weight = next(item for item in answer.value if item.source_operand == "weight")
@@ -929,15 +947,13 @@ def test_persistence_is_discovered_from_the_model_not_declared_by_the_operation(
     assert "design.dot_product.compute.dotp_axi.compute_pumping" in mvau_paths
 
     # And a segment with a real choice does contribute its selector.
-    _third, supplied = _configured_mvau(
-        _mvau_model(), design="supplied", supply=WeightSupply.EMBEDDED
-    )
-    assert "design.supplied.compute.kernel" in set(supplied.recorded())
+    _third, embedded = _configured_mvau(_mvau_model(), supply=WeightSupply.EMBEDDED)
+    assert "design.dot_product.compute.kernel" in set(embedded.recorded())
 
 
 def test_an_unreachable_recorded_choice_is_refused() -> None:
     model, _operation = _configured_mvau()
-    _replace_attribute(model, "design__supplied__weight_supply", "embedded")
+    _replace_attribute(model, "design__dot_product__compute__dotp_axi_embedded__compute_pumping", 0)
     with pytest.raises(DataflowOpError):
         _unbound(model, "mvau0").bind(model, Build())
 
@@ -1440,12 +1456,13 @@ def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() 
 
 
 def test_recorded_is_a_bound_api_and_native_values_are_inspectable() -> None:
-    model, operation = _configured_mvau(design="supplied", supply=WeightSupply.EMBEDDED)
-    assert operation.recorded()["design.supplied.weight_supply"] is WeightSupply.EMBEDDED
+    model, operation = _configured_mvau(supply=WeightSupply.EMBEDDED)
+    assert operation.recorded()["design.dot_product.weight_supply"] is WeightSupply.EMBEDDED
     with pytest.raises(DataflowOpError, match="not bound"):
         _unbound(model, "mvau0").recorded()
     assert (
-        read_attributes(model.graph.node[0])["design__supplied__weight_supply"].value == "embedded"
+        read_attributes(model.graph.node[0])["design__dot_product__weight_supply"].value
+        == "embedded"
     )
 
 

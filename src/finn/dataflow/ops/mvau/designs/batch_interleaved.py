@@ -20,11 +20,12 @@ thing replay existed to supply.  A Design is a composition of KernelChoice, not
 necessarily of *several* KernelChoice, and the shape of the composition follows the
 arithmetic rather than the other way round.
 
-**``interleave`` is an ordinary Design-owned Decision.**  It is in the compute
-Region's dependency closure -- it changes the schedule, the weight beat
-sequence, and therefore the Network's weight boundary -- so it cannot be a
-Kernel-local Decision, by the same rule that puts PE and SIMD here.  It needs no
-new persistence: the recorded document names
+**``interleave`` remains a Design-owned Decision as a deliberate lift.** It
+changes the compute schedule and the Network's weight boundary, but Region
+visibility alone does not settle ownership. A later audit must consider Kernel
+reuse, forwarding cost, shared-axis duplication and the weight-delivery model
+before any local-semantic-Decision rule moves it. It needs no new persistence:
+the recorded document names
 ``design.batch_interleaved.interleave`` because the walk found it, not because
 anything here declared how to store it.
 """

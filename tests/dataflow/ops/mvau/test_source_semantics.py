@@ -48,7 +48,13 @@ from finn.dataflow.ops.mvau.op import origin_nodes, MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
-from dataflow.ops.test_dataflow_op import Build, _configured_mvau, _replay_model, _unbound
+from dataflow.ops.test_dataflow_op import (
+    Build,
+    _configured_mvau,
+    _configure_mvau_point,
+    _replay_model,
+    _unbound,
+)
 
 MATRIX_WIDTH = 8
 MATRIX_HEIGHT = 4
@@ -324,7 +330,7 @@ def test_a_fused_threshold_node_is_valid_and_has_no_applicable_design() -> None:
 
     assert _accepts(operation)
 
-    chosen = operation.design.select("dot_product").root
+    chosen = _configure_mvau_point(operation)
     assert "mvau-design-fuses-no-activation" in _findings(chosen.dataflow.accepted_answer)
 
 

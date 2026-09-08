@@ -3,12 +3,12 @@
 
 """What every MVAU Design agrees about before it disagrees about supply.
 
-The folding and the operand facts are the same question whichever weight path a
-Design takes, and stating them once has a consequence beyond tidiness: ``pe``
-and ``simd`` are then *one* declaration object shared by every alternative, so
-an operation persisting them names one Decision rather than one per Design.
-Two declarations that had to be kept in step would be two ways for a saved
-choice to land on the wrong one.
+The folding and operand facts are authored once and reused by each concrete
+Design. Compilation still gives every occurrence its own root-relative
+coordinates: ``design.dot_product.pe`` and ``design.batch_interleaved.pe`` are
+distinct persisted Decisions even though both come from the same Python
+declaration object. The shared definition prevents duplicated authoring; it
+does not merge choices across alternatives.
 """
 
 from __future__ import annotations

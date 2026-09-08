@@ -30,8 +30,8 @@ from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.ops.mvau.designs.supplied_dot_product import (
-    SuppliedDotProductDesign,
+from finn.dataflow.ops.mvau.designs.dot_product import (
+    DotProductDesign,
     WeightSupply,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
@@ -119,8 +119,13 @@ def _widen_the_activation(model: Any) -> None:
     model.set_tensor_shape("activation", [4, 8])
 
 
-def _configure_dot_product(bound: Any) -> Any:
+def _configure_dot_product(bound: Any, supply: WeightSupply = WeightSupply.EXTERNAL) -> Any:
     chosen = bound.design.select("dot_product").root
+    chosen = (
+        chosen.design.alternative("dot_product").assign(DotProductDesign.weight_supply, supply).root
+    )
+    candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
+    chosen = chosen.design.alternative("dot_product").compute.select(candidate).root
     for declaration, value in (
         (WeightedDotProductDesign.pe, 2),
         (WeightedDotProductDesign.simd, 2),
@@ -131,22 +136,16 @@ def _configure_dot_product(bound: Any) -> Any:
     return kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
 
 
-def _configure_supplied(bound: Any) -> Any:
-    chosen = bound.design.select("supplied").root
-    chosen = (
-        chosen.design.alternative("supplied")
-        .assign(SuppliedDotProductDesign.weight_supply, WeightSupply.EXTERNAL)
-        .root
-    )
-    chosen = chosen.design.alternative("supplied").compute.select("dotp_axi").root
-    for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
-    ):
-        chosen = chosen.design.alternative("supplied").assign(declaration, value).root
-    kernel = chosen.design.alternative("supplied").kernel("compute")
-    assert isinstance(kernel, Decided)
-    return kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
+def _configure_external(bound: Any) -> Any:
+    return _configure_dot_product(bound, WeightSupply.EXTERNAL)
+
+
+def _configure_embedded(bound: Any) -> Any:
+    return _configure_dot_product(bound, WeightSupply.EMBEDDED)
+
+
+def _configure_decoupled(bound: Any) -> Any:
+    return _configure_dot_product(bound, WeightSupply.DECOUPLED)
 
 
 def _configure_batch_interleaved(bound: Any) -> Any:
@@ -181,14 +180,17 @@ def _mvau_execution_context() -> dict[str, Any]:
 
 
 ALTERNATIVES = (
-    ("dot_product", _configure_dot_product),
-    ("supplied", _configure_supplied),
-    ("batch_interleaved", _configure_batch_interleaved),
+    ("external", "dot_product", _configure_external),
+    ("embedded", "dot_product", _configure_embedded),
+    ("decoupled", "dot_product", _configure_decoupled),
+    ("batch_interleaved", "batch_interleaved", _configure_batch_interleaved),
 )
 
 
-@pytest.mark.parametrize(("label", "configure"), ALTERNATIVES)
-def test_every_mvau_design_alternative_conforms(label: str, configure: Any, tmp_path: Path) -> None:
+@pytest.mark.parametrize(("label", "design", "configure"), ALTERNATIVES)
+def test_every_mvau_design_alternative_conforms(
+    label: str, design: str, configure: Any, tmp_path: Path
+) -> None:
     result = assert_dataflow_op_conforms(
         DataflowOpConformanceCase(
             model=_mvau_model(),
@@ -202,7 +204,7 @@ def test_every_mvau_design_alternative_conforms(label: str, configure: Any, tmp_
             execution_context=_mvau_execution_context(),
         )
     )
-    assert dict(result.committed.recorded())["design.case"] == label
+    assert dict(result.committed.recorded())["design.case"] == design
     assert dict(result.restored.recorded()) == dict(result.committed.recorded())
 
 
@@ -237,7 +239,7 @@ def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:
         node_name="mvau0",
         operation_type=MvauDataflowOp,
         build=Build(),
-        configure=_configure_dot_product,
+        configure=_configure_external,
         reload_path=tmp_path / "broken.onnx",
     )
     node = case.model.graph.node[0]
@@ -279,7 +281,7 @@ def test_verification_does_not_replay_recorded_choices(tmp_path: Path) -> None:
 
     model = _mvau_model()
     bound = _unbound_mvau(model).bind(model, Build())
-    _configure_dot_product(bound).commit(model, Build())
+    _configure_external(bound).commit(model, Build())
     model.save(str(tmp_path / "recorded.onnx"))
 
     stale = ModelWrapper(str(tmp_path / "recorded.onnx"))
@@ -313,7 +315,7 @@ def test_replacing_the_case_build_does_not_disturb_the_frozen_one(tmp_path: Path
         node_name="mvau0",
         operation_type=MvauDataflowOp,
         build=Build(),
-        configure=_configure_dot_product,
+        configure=_configure_external,
         reload_path=tmp_path / "builds.onnx",
         other_build=Build(synth_clk_period_ns=2.5),
     )
