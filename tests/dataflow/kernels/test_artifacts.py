@@ -26,7 +26,13 @@ from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Input, Problem, Space
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration, kernel_physical
+from finn.dataflow.kernels.kernel import (
+    Kernel,
+    ModuleBuildSpec,
+    ModuleParameter,
+    RegionDeclaration,
+    kernel_physical,
+)
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
@@ -78,7 +84,7 @@ class Harness(Space):
     lanes = Decision(int, values=(1, 2))
 
 
-def _configured(namespace: str, lanes: int) -> ArtifactKernel:
+def _configured(namespace: str, lanes: int) -> ModuleBuildSpec:
     harness = _compile_space(Harness, "root", problem_namespace="problem.root")
     compiled = _compile_space(
         ArtifactKernel,

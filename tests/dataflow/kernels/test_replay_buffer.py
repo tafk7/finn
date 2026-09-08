@@ -19,7 +19,7 @@ from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
-from finn.dataflow.kernels.kernel import kernel_physical
+from finn.dataflow.kernels.kernel import ModuleBuildSpec, kernel_physical
 from finn.dataflow.kernels.artifacts import (
     kernel_source_derivation,
     portable_kernel_component,
@@ -78,7 +78,7 @@ def _configure(
     activation: str = "INT8",
     pe: int = 2,
     simd: int = 2,
-) -> ReplayBufferKernel:
+) -> ModuleBuildSpec:
     harness, kernel = _compile()
     engine = Engine()
     point = engine.start(
@@ -93,7 +93,7 @@ def _configure(
     point = engine.commit_assignments(point, {"replay_test.pe": pe, "replay_test.simd": simd}).point
     answer = kernel_physical(engine, kernel, point).accepted_answer  # type: ignore[arg-type]
     assert isinstance(answer, Decided), answer
-    return cast(ReplayBufferKernel, answer.value)
+    return answer.value
 
 
 def _finnlib_root() -> Path:

@@ -17,8 +17,10 @@ finn.dataflow.ops       DataflowOps and their own Design inventories
 
 The first two names say what they own and nothing else. `model` is the detached
 semantic value -- what a Region and a Network *are*; `space` is the language a
-contributor authors a design space in. The dependency runs one way: `space` may
-import `model`, and `model` imports neither `space` nor the engine. Nothing is
+contributor authors a design space in. Generic `space` does not import `model`.
+Its sole model-aware bridge is the private implementation module
+`space.dataflow_value_semantics`, and that bridge is excluded from the public
+`space` facade. `model` imports neither `space` nor the engine. Nothing is
 re-exported from `finn.dataflow` itself, so every value has one import path.
 
 The distinction has a vocabulary consequence worth stating once:
@@ -41,8 +43,8 @@ DataflowDesign(Space)  semantic Decisions, KernelChoice segments,
                        explicit NetworkEdge and NetworkBoundary declarations,
                        one selected canonical DataflowNetwork
    |
-DataflowOp             one ONNX node, frozen source facts, a closed set of
-   (holds a root)      Designs, and the choices that survive a save
+DataflowOp             the root occurrence for one ONNX node: frozen source
+                       facts, a closed set of Designs, and persisted choices
    |
    -> flat DesignSpaceSpec -> _engine validation and evaluation
    -> two projections per layer: what it *means*, and what it *builds*
@@ -626,29 +628,36 @@ the engine's own cache operations is U7 work, and U1 deliberately changes no
 
 ## Operations
 
-`finn.dataflow.ops.base.DataflowOp` is a QONNX `CustomOp` that *wraps* a root
-occurrence rather than being one:
+`finn.dataflow.ops.base.DataflowOp` is both a QONNX `CustomOp` and the root
+occurrence for its implementation choices:
 
 ```text
 NodeProto + ModelWrapper + build config
+    -> FINN InferShapes / InferDataTypes adapters
     -> read once   SourceNode        (frozen; the graph is not reread)
-    -> freeze      Problem snapshot  + fingerprint
-    -> start       root occurrence
-    -> hydrate     node attributes replayed as ordinary assignments
-    -> ask         network(), association()
+    -> start       DataflowOp root    + Problem snapshot + fingerprint
+    -> hydrate     schema-v2 native attributes as ordinary assignments
+    -> ask         accepted Network, then OperandMapping
+    -> rebind      explicitly read a changed graph or build
 ```
 
-Persistence is one authority, on the node: scope id, family, version, problem
-fingerprint, and one attribute per persistent Decision. A persisted Decision
-declares its *route* -- a navigator from the root plus the declaration object --
-so it survives the root being started under another namespace. A changed
-problem is refused, never rebased.
+Persistence is one authority, on the node: scope id, problem fingerprint,
+schema version 2, and one native attribute per reachable persistent Decision.
+Compiled root-relative declaration names own that spelling (`design.pe` becomes
+`design__pe`), so the same declaration survives a different root namespace. A
+changed problem is refused, never rebased; `rebind(model, build)` is the explicit
+way to read new source facts.
 
-`SourceAssociation` is logical only. It records the tensor, the Network
-boundary (or none), the node and port reached, and the coordinate
-correspondence; it carries no Kernel identity, component id or artifact key,
-and it is read off the resolved Network, so a matrix produced internally
-reports no boundary while a pumped core and an unpumped one associate the same.
+`OperandMapping` is logical only. It records the source tensor, a qualified
+Region operand reference, its boundary or internal placement, and coordinate
+correspondence. It carries no Kernel identity, component id or artifact key,
+and is derived only after the operation's full semantic Network assessment is
+accepted.
+
+The native-state and detached-artifact details are recorded in
+[`dataflow_op_native_state.md`](../../../docs/finn/development/dataflow_op_native_state.md)
+and
+[`dataflow_design_kernel_artifact_migration.md`](../../../docs/finn/development/dataflow_design_kernel_artifact_migration.md).
 
 MVAU and ActivationReplay are the two operations, deliberately unalike -- two
 Design alternatives against one fixed `Subspace`, three operands against two --

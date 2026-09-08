@@ -36,6 +36,8 @@ DATAFLOW = SOURCE / "dataflow"
 RETIRED_MODULES = (
     "finn.dataflow.computation",
     "finn.dataflow.parameters.cyclic.computation",
+    "finn.dataflow.ops.association",
+    "finn.dataflow.ops.state",
     "finn.dataflow.authoring",
     "finn.dataflow.design",
     "finn.dataflow.op",
