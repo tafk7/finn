@@ -97,6 +97,7 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     tests/dataflow/typing \
     tests/dataflow/kernels/test_module_build_spec.py \
     tests/dataflow/designs/test_projection_boundary.py \
+    tests/dataflow/ops/test_joint_lifecycle.py \
     tests/dataflow/space/test_value_semantics.py \
     tests/dataflow/model/test_datatypes.py \
     tests/dataflow/model/test_facade.py \
