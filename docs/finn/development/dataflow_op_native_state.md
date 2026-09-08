@@ -4,6 +4,11 @@ S2-A replaces the JSON state document with individual native ONNX attributes.
 ONNX and build configuration remain the complete reconstruction authority.
 There is no summary sidecar, persisted Space, or serialized operand mapping.
 
+S3 subsequently converged MVAU on one flexible `DotProductDesign`. The generic
+encoding algorithm and ActivationReplay remain schema 2; MVAU alone is schema
+3 because its persisted inventory and qualified paths changed. See
+[`dataflow_mvau_convergence.md`](dataflow_mvau_convergence.md).
+
 Base FINN: `dfcede68be390338d7ede718b68995f79ed0b27d`.
 QONNX: `e71f1c32ec1cd38e0bd27c3b7be7cb8469a35513`.
 
@@ -40,7 +45,7 @@ The generic model, its pinned facade, Space, engine, Design and Kernel contracts
 are unchanged. The operation specialization uses the existing compilation hook
 and compiled choice walk to validate its native attribute schema.
 
-## Attribute schema, version 2
+## Attribute schema: generic and Replay version 2, MVAU version 3
 
 Only three generic metadata attributes are written:
 
@@ -48,7 +53,7 @@ Only three generic metadata attributes are written:
 | --- | --- | --- |
 | `dataflow_scope_id` | STRING | Stable node addressing identity |
 | `dataflow_problem_fingerprint` | STRING | Identity of the root Problems |
-| `dataflow_schema_version` | INT | Operation attribute encoding version (2) |
+| `dataflow_schema_version` | INT | Concrete operation attribute encoding version |
 
 The operation-local schema includes every compiled selector and Decision.
 `name=` overrides a declaration's local path segment. The full root-relative
@@ -59,19 +64,28 @@ other legal segment characters. For example, `design.dot_product.pe` becomes
 this spelling: compilation refuses the collision, including collisions with
 source attributes and generic metadata. There is no second persistence name.
 
-Current mechanically migrated MVAU examples:
+The S3 MVAU schema is:
 
 | Compiled path | Native attribute | Kind |
 | --- | --- | --- |
 | `design.case` | `design__case` | STRING |
 | `design.dot_product.pe` | `design__dot_product__pe` | INT |
 | `design.dot_product.simd` | `design__dot_product__simd` | INT |
-| `design.supplied.weight_supply` | `design__supplied__weight_supply` | STRING |
-| `design.supplied.compute.kernel` | `design__supplied__compute__kernel` | STRING |
+| `design.dot_product.weight_supply` | `design__dot_product__weight_supply` | STRING |
+| `design.dot_product.compute.kernel` | `design__dot_product__compute__kernel` | STRING |
 | `design.dot_product.compute.dotp_axi.compute_pumping` | `design__dot_product__compute__dotp_axi__compute_pumping` | INT |
+| `design.batch_interleaved.interleave` | `design__batch_interleaved__interleave` | INT |
 
-Replay has `design__pe` and `design__simd` and no selector. Existing declaration
-names are preserved by this mechanical migration.
+MVAU writes `dataflow_schema_version = 3` for both Design alternatives. Replay
+has `design__pe` and `design__simd`, no selector, and continues to write schema
+2. The generic `DataflowOp.schema_version` also remains 2.
+
+At the revision-pinned S2/C2 baseline, MVAU schema 2 mechanically used
+`design.supplied.weight_supply` / `design__supplied__weight_supply` and
+`design.supplied.compute.kernel` / `design__supplied__compute__kernel`. Those
+are historical evidence paths, not aliases. Schema-2 MVAU records, including
+old `dot_product` and batch-interleaved records, are refused and must be
+recreated from source ONNX and build configuration.
 
 Missing means unassigned. Only reachable decided choices are written. Committing
 a partial point or switching branches removes all known choice attributes that
@@ -215,7 +229,7 @@ qualified reference. Reused bare operand ids never establish lineage. Replay
 uses its explicit `replay.X` input/output references. Provenance remains the
 operation's source attribute, available through `origin_nodes(source)`.
 
-For the subsequent concrete MVAU migration:
+The S3 concrete MVAU migration preserves these rules:
 
 1. Preserve required `outputDataType`; every accumulator-width transformation
    in no-activation mode must update it together with `accDataType`.
@@ -224,11 +238,11 @@ For the subsequent concrete MVAU migration:
    smallest-lossless-integer analysis; FINN owns implementation decisions.
 3. Supply qualified references when Design roles change. Derive placement from
    the accepted Network, preserving unpresented residue.
-4. Use existing `name=` for durable declaration names. Bump the operation schema
-   when changing compiled paths or codecs. Regenerate pre-release native
-   fixtures; do not introduce a JSON migration reader.
-5. Keep the current Design inventory/topology migration in its owning workstream.
-   S2-A does not converge the three MVAU alternatives or alter Kernel contracts.
+4. Use existing `name=` for durable declaration names. MVAU's compiled-path
+   change is represented by schema 3; there is no alias or migration reader.
+5. The final inventory is `dot_product` and `batch_interleaved`. Dot product
+   supply and compute candidate are explicit choices; initializer presence
+   does not select either one.
 
 ## Software evidence
 

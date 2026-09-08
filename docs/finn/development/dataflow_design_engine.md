@@ -120,13 +120,15 @@ MVAU declares one operation-owned weight-supply policy and two designs:
 
 ```text
 design = dot_product | batch_interleaved
-weight supply = external | finn_rtl_memstream
+dot_product.weight_supply = external | embedded | decoupled
 ```
 
-`dot_product` is the production replay-plus-dot-product Network. Its compute and
-replay placements use the shared DotpAxi and ReplayBuffer Kernels. Selecting
-`finn_rtl_memstream` conditionally adds the cyclic parameter-delivery Region,
-edge, boundary changes, local-state association, and memstream placement.
+`dot_product@2` is the production replay-plus-dot-product Design. External
+supply presents `compute.W` at a boundary, embedded supply retains `compute.W`
+as an unpresented `InternalInput`, and decoupled supply admits an unpresented
+`memory.W` plus an edge-presented, distinct `compute.W`. Supply and compute
+candidate are both explicit choices; initializer presence only constrains the
+two modes that retain weights locally.
 
 `batch_interleaved` is a valid semantic singleton-Network design without a
 production physical candidate. It may be selected for modeling, but automatic
@@ -139,9 +141,10 @@ candidates.
 
 ## Persistence and identities
 
-MVAU persistence is v6 at the node-attribute layer and v11 at the source
-envelope layer. v5/v10 is rejected explicitly. Regions, Networks, configured
-Kernels, and artifacts are recomputed rather than serialized into ONNX.
+Current DataflowOp persistence writes native Decision attributes. The generic
+default and Replay schema remain 2; MVAU is schema 3 after the Design inventory
+and qualified-path migration. Regions, Networks, configured Kernels, and
+artifacts are recomputed rather than serialized into ONNX.
 
 Artifact identity excludes source occurrence and placement. Stable encoded
 tokens preserve pre-move identities such as

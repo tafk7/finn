@@ -589,12 +589,17 @@ for a caller holding a compiled fragment.
 
 ## The production slice
 
-`DotProductDesign` -- MVAU's own, under `ops/mvau/designs/` -- composes
-`ReplayBufferKernel` and `DotpAxiKernel`. The Design
-owns PE and SIMD once, because each changes both Regions and the beat contract on
-the edge between them; DotpAxi keeps pumping, which preserves its Region exactly.
-Neither Kernel imports a DataflowOp, a Design, or an MVAU operation
-implementation. Direct evidence configures each from a flat
+MVAU has exactly two production Designs under `ops/mvau/designs/`.
+`DotProductDesign@2` composes replay and compute while explicitly selecting
+external, embedded or decoupled weight supply and a compatible compute
+candidate. `BatchInterleavedDesign@1` retains its distinct schedule and its
+deliberately Design-owned `interleave` choice. PE and SIMD are shared authored
+definitions but have occurrence-local persisted coordinates in each Design.
+
+Embedded `compute.W` remains a required `InternalInput`; only its port is
+absent. Initializer admission is a policy of `DotProductDesign`, not a generic
+meaning of `InternalInput`. Neither Kernel imports a DataflowOp, a Design, or an
+MVAU operation implementation. Direct evidence configures each from a flat
 engine point and tests its RTL numerically and through OOC synthesis.
 
 ## Artifact boundary
@@ -636,17 +641,22 @@ NodeProto + ModelWrapper + build config
     -> FINN InferShapes / InferDataTypes adapters
     -> read once   SourceNode        (frozen; the graph is not reread)
     -> start       DataflowOp root    + Problem snapshot + fingerprint
-    -> hydrate     schema-v2 native attributes as ordinary assignments
+    -> hydrate     native attributes as ordinary assignments
     -> ask         accepted Network, then OperandMapping
     -> rebind      explicitly read a changed graph or build
 ```
 
 Persistence is one authority, on the node: scope id, problem fingerprint,
-schema version 2, and one native attribute per reachable persistent Decision.
+an operation schema version, and one native attribute per reachable persistent Decision.
 Compiled root-relative declaration names own that spelling (`design.pe` becomes
 `design__pe`), so the same declaration survives a different root namespace. A
 changed problem is refused, never rebased; `rebind(model, build)` is the explicit
 way to read new source facts.
+
+The generic default and ActivationReplay use schema 2. MVAU uses schema 3 after
+its S3 Design convergence; old MVAU schema-2 records are recreated rather than
+hydrated through aliases. See
+[`dataflow_mvau_convergence.md`](../../../docs/finn/development/dataflow_mvau_convergence.md).
 
 `OperandMapping` is logical only. It records the source tensor, a qualified
 Region operand reference, its boundary or internal placement, and coordinate
