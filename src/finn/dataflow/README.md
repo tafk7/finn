@@ -611,8 +611,12 @@ definitions but have occurrence-local persisted coordinates in each Design.
 Embedded `compute.W` remains a required `InternalInput`; only its port is
 absent. Initializer admission is a policy of `DotProductDesign`, not a generic
 meaning of `InternalInput`. Neither Kernel imports a DataflowOp, a Design, or an
-MVAU operation implementation. Direct evidence configures each from a flat
-engine point and tests its RTL numerically and through OOC synthesis.
+MVAU operation implementation. They do import the pure Region constructors in
+`ops.mvau.regions` — C1.5 made that the one MVAU Region-constructor authority
+rather than have each Kernel restate the same canonical construction — which is
+a dependency on a function over scalars and datatypes, not on an occurrence or a
+graph. Direct evidence configures each from a flat engine point and tests its
+RTL numerically and through OOC synthesis.
 
 ## Artifact boundary
 

@@ -20,7 +20,7 @@ finn.dataflow.kernels            finn.dataflow.designs
               |                                  |
               +---------------+------------------+
                               |
-ONNX/QONNX --> finn.dataflow.ops.DataflowOp  (root Space *and* CustomOp)
+ONNX/QONNX --> ops.base.DataflowOp  (root Space *and* CustomOp)
                               |
                               v
                   finn.dataflow.artifacts   (detached; one-way)
@@ -57,10 +57,12 @@ nothing, so every value has exactly one import path.
   `SelectedNetwork`. MVAU-specific Designs do not live here.
 
 `finn.dataflow.ops`
-: `DataflowOp` — simultaneously a QONNX `CustomOp` and the root Space for one
-  ONNX node — plus the source schema, native persistence, reconstruction,
-  `OperandMapping` and the FINN inference adapters. `ops.mvau` and `ops.replay`
-  are the two production operations and own their Design inventories.
+: `ops.base.DataflowOp` — simultaneously a QONNX `CustomOp` and the root Space
+  for one ONNX node — plus the source schema, native persistence,
+  reconstruction, `OperandMapping` and the FINN inference adapters. The package
+  `__init__` re-exports nothing (`__all__` is empty), so import from the leaf
+  that owns the value. `ops.mvau` and `ops.replay` are the two production
+  operations and own their Design inventories.
 
 `finn.dataflow.artifacts`
 : Generic artifact identity, contributions, derivation, packaging and checked
@@ -116,13 +118,22 @@ physical projection.
 ## Kernel candidates and admission
 
 A `KernelChoice` segment owns its candidate Kernel classes explicitly. There is
-no global Kernel registry. Admission answers three separate questions:
+no global Kernel registry — and, equally, **no graph-stage candidate-elimination
+pass**. Admission is two things and no more:
 
-1. **Semantic recognition:** does the graph describe the source operation?
-2. **Graph-stage build admission:** does every active segment retain at least
-   one candidate after evaluating all graph-answerable constraints?
-3. **Resolved physical feasibility:** after target/build/Design/Kernel choices
-   are known, do the selected Kernel's physical constraints pass?
+1. **Authoring-time membership.** A candidate is admitted because it is listed
+   in a `KernelChoice`, checked by `KernelChoice.validate_candidate` when the
+   Design class is compiled. Nothing filters candidates against graph facts, and
+   nothing scores or ranks them.
+2. **Validation of what was selected.** Once the selector is committed, the
+   selected candidate's constraints are evaluated as part of the enclosing
+   projection — semantic ones through `design.dataflow`, physical ones through
+   `kernel.physical`.
+
+Choosing among candidates is a specialization policy, and no such service exists
+here; U7 owns it. Until then a candidate is selected by an explicit assignment
+like any other Decision, and `finn.dataflow.ops.inference` supplies only FINN's
+shape and datatype adapters — it admits nothing and eliminates nothing.
 
 The Design's Network constraint set holds the Design's own constraints **and
 every candidate constraint that is not physical-only**, where physical-only is
@@ -136,9 +147,18 @@ A permanently unrealizable implementation declares
 projection is `Absent` immediately, without a dummy ABI and without first
 resolving inherited physical Decisions. Its semantic projection still runs.
 
-DotpAxi, ReplayBuffer and the RTL memstream are reusable concrete Kernels.
-Neither imports a `DataflowOp`, a Design or an MVAU implementation; direct
-evidence configures each from a flat engine point.
+DotpAxi, ReplayBuffer and the RTL memstream are reusable concrete Kernels. None
+imports a `DataflowOp`, a `DataflowDesign` or an MVAU operation implementation,
+and direct evidence configures each from a flat engine point.
+
+They do each import one thing from `ops.mvau`: the pure Region constructors in
+`finn.dataflow.ops.mvau.regions`
+(`construct_activation_replay_region`, `construct_weight_stream_region`, and the
+dot-product constructors). That is deliberate — C1.5 established one MVAU
+Region-constructor authority rather than letting each Kernel restate the same
+canonical construction — and it is a dependency on a pure function over
+scalars and datatypes, not on an operation, an occurrence or a graph. A Kernel
+that needed a *different* Region would declare its own constructor.
 
 ## MVAU design inventory
 
