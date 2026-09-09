@@ -1,126 +1,155 @@
 # Dataflow design architecture
 
-FINN's dataflow stack separates semantic models, declaration-time authoring,
-evaluation, physical Kernels, and artifacts.
+*Current as of FINN `f0e06a96bbd4a05b913a1e6f33d34844115d3947`, the C1.5–S3
+simplification checkpoint. Sections that describe a migration are dated and
+name the revision they record.*
+
+FINN's dataflow stack separates the semantic model, the generic design-space
+language, physical Kernels, Designs, operations, and artifacts.
 
 ```text
-Region / Network model -----------+
-                                   |
-private design engine ------------+--> declaration-time authoring
-                                         |
-                                         +--> flat DesignSpaceSpec
-                                         +--> DataflowDesign inventory
-                                                   |
-ONNX/QONNX integration --> DataflowOp -------------+
-                                                   |
-                                                   v
-                              DesignPoint / NetworkRef / realization
-                                                   |
-                                                   v
-                                   elaboration --> artifacts
+finn.dataflow.model      detached DataflowRegion / DataflowNetwork values
+finn.dataflow.space      the generic Space language, compiler and occurrences
+                              |
+              +---------------+---------------+
+              |                               |
+finn.dataflow.kernels            finn.dataflow.designs
+    Kernel, RegionDeclaration,       DataflowDesign, KernelChoice,
+    ModuleParameter,                 NetworkEdge, NetworkBoundary
+    detached ModuleBuildSpec                     |
+              |                                  |
+              +---------------+------------------+
+                              |
+ONNX/QONNX --> finn.dataflow.ops.DataflowOp  (root Space *and* CustomOp)
+                              |
+                              v
+                  finn.dataflow.artifacts   (detached; one-way)
 ```
 
-The Region/Network model and the private engine are independent inputs to the
-authoring layer. Neither depends on the other.
+`model` and `space` are independent. Generic `space` does not import `model`;
+its one model-aware bridge is the private `space.dataflow_value_semantics`,
+which the public `space` facade excludes. `finn.dataflow` itself re-exports
+nothing, so every value has exactly one import path.
 
 ## Canonical packages
 
-`finn.dataflow`
-: Semantic Region and Network values plus validation. Importing these values
-  does not load the engine, authoring, Kernels, or operations.
+`finn.dataflow.model`
+: The canonical `DataflowRegion` and `DataflowNetwork` values, their datatype
+  boundary, construction profiles, validation and presentation queries. It
+  imports neither `space` nor the engine.
 
-`finn.dataflow.authoring`
-: Declaration-time API for `DataflowOp`, `DataflowDesign`, scopes, typed
-  `Ref` values, domains, rejection/unresolved helpers, and conditional input
-  supply.
-
-`finn.dataflow.design`
-: Evaluation-time API for `Engine`, `DesignPoint`, answers, findings,
-  requests, diagnostics, `NetworkRef`, and `ResolvedDataflowOp`.
+`finn.dataflow.space`
+: The generic Space declaration language, compiler and occurrence runtime:
+  `Problem`, `Input`, `Decision`, `@derived`, `@constraint`, `ConstraintGroup`,
+  `Readiness`, `Projection`, `ProjectionAssessment`, `Subspace`,
+  `SubspaceChoice`, `ChoiceView`, `BranchCatalog` and `compile_space_model`.
   `finn.dataflow._engine` remains private and domain-neutral.
 
 `finn.dataflow.kernels`
-: Physical `Kernel`, `KernelScope`, coverage, configured bindings, components,
-  and source manifests. Compiled declarations and candidate-selection records
-  are private implementation details.
+: The `Kernel` contract — one `RegionDeclaration`, physical-only Decisions,
+  `ModuleParameter`, `ComponentABI`, an ordered source closure — the two
+  projections, the detached `ModuleBuildSpec` they hand downstream, and the
+  reusable `DotpAxiKernel`, `ReplayBufferKernel` and `MemstreamKernel`.
+
+`finn.dataflow.designs`
+: The generic `DataflowDesign` contract and topology vocabulary: `KernelChoice`,
+  `NetworkEdge`, `EdgeSink`, `NetworkBoundary` and the synthesized
+  `SelectedNetwork`. MVAU-specific Designs do not live here.
+
+`finn.dataflow.ops`
+: `DataflowOp` — simultaneously a QONNX `CustomOp` and the root Space for one
+  ONNX node — plus the source schema, native persistence, reconstruction,
+  `OperandMapping` and the FINN inference adapters. `ops.mvau` and `ops.replay`
+  are the two production operations and own their Design inventories.
 
 `finn.dataflow.artifacts`
-: Generic artifact identities and checked storage. Operation-specific payload
-  rendering and tool-stage state remain with the operation that owns them.
+: Generic artifact identity, contributions, derivation, packaging and checked
+  storage. It imports nothing from `space`, `model`, `kernels`, `designs` or
+  `ops`, and receives detached specifications only.
 
-`finn.dataflow.ops.mvau`
-: The public MVAU `DataflowOp` and build-context façade. Internal declarations,
-  projection, persistence, realization, elaboration, and artifact payloads live
-  in precise leaves beneath this package.
-
-`finn.dataflow.testing`
-: Reusable contributor conformance checks, including the Network-only
-  operation lifecycle and fresh-import/declaration-boundary helpers.
+`finn.dataflow.conformance`
+: One lifecycle check every `DataflowOp` must pass, written so that a *third*
+  operation would pass it.
 
 ## Authoring boundary
 
-Operation-specific authoring may declare domain decisions, properties,
-constraints, and explicit dependencies. It may not:
+A contributor authors ordinary Python classes. Declarations name their
+dependencies explicitly and callbacks receive resolved declared values only.
+No public operation returns an `Engine`, a `DesignPoint`, a `_Ref`, a compiled
+record or an unrestricted path lookup, and contributor code may not:
 
 - construct raw engine `Decision`, `DerivedProperty`, `Constraint`,
-  `ProblemField`, `DependencyRef`, or `EvaluatorSpec` values;
-- reconstruct a `Ref` from a path/kind/semantics triple;
-- inspect `spec.decisions` or `spec.constraints` to recover handles;
-- manually aggregate constraints, readiness, or selected Kernel metadata that
-  the design inventory already owns; or
-- call `assemble_specs` to rebuild generic inventory structure.
+  `ProblemField`, `DependencyRef` or `EvaluatorSpec` values;
+- reconstruct a qualified path from a path/kind/semantics triple;
+- inspect the flat spec's declarations to recover handles; or
+- re-aggregate constraints, readiness or selected-Kernel metadata that the
+  Design occurrence already owns.
 
-`DataflowDesignInventory` is authoritative for its design-selection handle,
-selected Network, active placements, configured Kernel identities, active
-decision metadata, constraint aggregation, and realization readiness.
-Structural metadata is available before physical choices such as compute
-pumping are committed; fully configured parameters remain realization/artifact
-facts.
+`assign`, `answer`, `assess` and `project` accept declarations, never path
+strings. The generic implementation still compiles class bodies into one
+ordinary flat `DesignSpaceSpec`; no new engine primitive is introduced.
 
-The generic authoring implementation may use raw engine declarations internally
-to compile the contributor-facing scopes into one ordinary flat
-`DesignSpaceSpec`. No new engine primitive is introduced.
+A choice that changes any selected Region belongs to the enclosing Design and
+reaches a Kernel as a typed `Input`. A Kernel-local `Decision` may only change
+physical realization, and the compiler refuses one that appears in the Region
+property's transitive closure. That refusal is a migration guard against
+duplicating one shared folding axis across sibling Kernels; relaxing it needs a
+Design-level shared-axis ownership contract that does not exist yet.
 
 ## Network-only operation results
 
-Every production `DataflowOp` resolves to `finn.dataflow.design.NetworkRef`.
-A design with one Region returns a singleton Network. `RegionRef` and the old
-`RegionRef | NetworkRef` operation boundary do not exist.
+Every production `DataflowOp` resolves to a `DataflowNetwork`. A Design with one
+Region returns the canonical singleton Network; there is no Region-or-Network
+result alternative.
+
+Consumers use `design.dataflow.accepted_answer` (or `op.network`, which is that
+answer). `design.network` and a projection's raw `output` are construction and
+diagnostic values: they do not establish semantic acceptance. Presentation and
+operand-correspondence queries run on the already-validated Network and do not
+repeat whole-Network validation.
 
 The Network is semantic and flat: nodes are Regions, edges carry exact
 position/beat correspondence, and boundaries expose logical interfaces.
-Physical components, clocks, buses, and tool state are introduced only after a
-design point is resolved.
+Physical components, clocks, buses and tool state appear only in the separate
+physical projection.
 
 ## Kernel candidates and admission
 
-A design placement owns its candidate Kernel classes. There is no global
-Kernel registry. Candidate-backed admission answers three separate questions:
+A `KernelChoice` segment owns its candidate Kernel classes explicitly. There is
+no global Kernel registry. Admission answers three separate questions:
 
 1. **Semantic recognition:** does the graph describe the source operation?
-2. **Graph-stage build admission:** does every active placement retain at least
-   one candidate after evaluating all graph-answerable coverage constraints?
-3. **Resolved physical feasibility:** after target/build/design/Kernel choices
-   are known, do all selected Kernel constraints pass?
+2. **Graph-stage build admission:** does every active segment retain at least
+   one candidate after evaluating all graph-answerable constraints?
+3. **Resolved physical feasibility:** after target/build/Design/Kernel choices
+   are known, do the selected Kernel's physical constraints pass?
 
-Constraint classification follows transitive problem provenance. A graph-pure
-rejection eliminates a candidate. Missing graph-owned information is
-unresolved. Target/build-dependent constraints are explicitly deferred during
-inference and must later return a positive verdict. Both stages invoke the same
-Kernel-owned predicates.
+The Design's Network constraint set holds the Design's own constraints **and
+every candidate constraint that is not physical-only**, where physical-only is
+the difference `physical_support − dataflow_support`. A Kernel refusing its
+Region therefore refuses the Network, while one that merely cannot be *built*
+at this configuration still contributes a Region. An unselected candidate's
+constraints report as not applicable, not as refusals.
 
-DotpAxi, ReplayBuffer, and FINN RTL memstream are reusable concrete Kernels.
-Their input records contain computation/interface, target, and physical facts,
-not MVAU node roles, source policy, decision paths, or persisted attributes.
-Synthetic non-MVAU designs bind all three as promotion conformance cases.
+A permanently unrealizable implementation declares
+`physical_unavailable = PhysicallyUnsupported("reason")`; its physical
+projection is `Absent` immediately, without a dummy ABI and without first
+resolving inherited physical Decisions. Its semantic projection still runs.
+
+DotpAxi, ReplayBuffer and the RTL memstream are reusable concrete Kernels.
+Neither imports a `DataflowOp`, a Design or an MVAU implementation; direct
+evidence configures each from a flat engine point.
 
 ## MVAU design inventory
 
-MVAU declares one operation-owned weight-supply policy and two designs:
+After S3, MVAU has exactly two production Designs, and weight supply is a
+Design-owned choice on the dot-product one:
 
 ```text
-design = dot_product | batch_interleaved
-dot_product.weight_supply = external | embedded | decoupled
+design.case                            = dot_product | batch_interleaved
+design.dot_product.weight_supply       = external | embedded | decoupled
+design.dot_product.compute.kernel      = dotp_axi | dotp_axi_embedded
+design.dot_product.pe, .simd
 ```
 
 `dot_product@2` is the production replay-plus-dot-product Design. External
@@ -134,10 +163,10 @@ two modes that retain weights locally.
 production physical candidate. It may be selected for modeling, but automatic
 build admission does not claim it is physically realizable.
 
-Inactive supplier Regions and placements are `Absent`. Active placement
-realization validates exact node coverage, absorbed edges (including complete
-fan-out), unabsorbed connection obligations, boundaries, and configured Kernel
-candidates.
+Inactive supplier Regions and segments are `Absent`. `BatchInterleavedDesign`
+retains its deliberately Design-owned `interleave` choice; the audit of that
+placement — Region locality, independent Kernel reuse, forwarding cost and
+shared-axis duplication — is recorded and deferred, not discharged.
 
 ## Persistence and identities
 
@@ -146,38 +175,49 @@ default and Replay schema remain 2; MVAU is schema 3 after the Design inventory
 and qualified-path migration. Regions, Networks, configured Kernels, and
 artifacts are recomputed rather than serialized into ONNX.
 
-Artifact identity excludes source occurrence and placement. Stable encoded
-tokens preserve pre-move identities such as
-`finn.dataflow.mvau_problem.MVAUDspBlock`; Python package cleanup does not move
-v6 fingerprints or artifact keys.
+Artifact keys contain only values the corresponding artifact stage reads.
+Occurrence namespaces, source-node identity and filesystem locations do not
+enter portable identity. Root-relative imported-Decision provenance travels on
+`ModuleBuildSpec` but is deliberately excluded from those keys, because no
+artifact stage consumes it; S3's provenance rename therefore changed no key.
 
-MVAU's artifact implementation has explicit modules for wrapper rendering,
-source staging, packaged-unit state, OOC synthesis, IP-XACT packaging, and
-memstream-specific payloads. Prepared and completed tool states are distinct
-types, and every completed artifact is checked against its declared layout.
+## Deliberate boundary
 
-## Compatibility boundary
+Physical composition is a contract, not an implementation. There is no
+`DesignPhysicalResult`, no `ModuleInstance`, no wrapper generation and no
+composed packaging in this tree, and no specialization policy, ONNX lowering or
+Region CustomOp either. `RegionDeclaration.family`/`version` and the Design's
+role-to-node metadata preserve the seam a future annotated-ONNX carrier needs;
+no ONNX object reaches the engine.
 
-The internal Provider/semantic-Kernel framework, old MVAU compatibility tree,
-old supply Kernels, and Region-or-Network result alternative are deleted. The
-`finn.dataflow.kernels` name now means physical Kernels only.
+The internal Provider/semantic-Kernel framework, the old MVAU compatibility
+tree, the old supply Kernels and the Region-or-Network result alternative are
+deleted without aliases, and package-boundary tests pin the retired module
+paths as unimportable and unreferenced.
 
 External legacy FINN `MVAU_hls`/`MVAU_rtl` HWCustomOps remain available as
 independent comparison oracles. They are not a production compatibility path
-for the new `DataflowOp` stack. The fused `MvuVvuAxiKernel` remains test-only.
+for the `DataflowOp` stack.
 
 ## Verification
 
-Run the focused software gate with:
+Run the software gate with:
 
 ```bash
-./scripts/check-dataflow-design.sh
+scripts/check-dataflow-design.sh                    # developer run
+scripts/check-dataflow-design.sh --require-parity   # gate evidence
 ```
 
-Physical or artifact-stage changes additionally require sequential Vivado
-fixtures 5–9 and both memstream gates. Closure evidence records one clean FINN
-revision, the pinned FinnLib revision, Python/pytest/Ruff/mypy versions, and
-Vivado 2025.2.
+Without `--require-parity` the oracle-parity tests skip and the script says so;
+with it, an absent or wrong-revision oracle is a failure rather than a silent
+pass. The gate runs `tests/dataflow`, the MVAU cycle regression, Ruff
+format/lint and strict mypy over the production packages and a focused test set.
+
+Changes to consumed RTL source, module parameters, an ABI, a source derivation
+or numeric behaviour additionally require the standalone Vivado XSI and
+out-of-context synthesis matrices; see `CLAUDE.md` for how to run them. Closure
+evidence records one clean FINN revision, the pinned FinnLib revision,
+Python/pytest/Ruff/mypy versions and the Vivado version.
 
 ## Engine migration provenance
 

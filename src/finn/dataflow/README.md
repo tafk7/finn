@@ -23,6 +23,18 @@ Its sole model-aware bridge is the private implementation module
 `space` facade. `model` imports neither `space` nor the engine. Nothing is
 re-exported from `finn.dataflow` itself, so every value has one import path.
 
+The package-level architecture, admission rules and verification commands are in
+[`dataflow_design_engine.md`](../../../docs/finn/development/dataflow_design_engine.md);
+the dated migration records that produced this shape are
+[`dataflow_model_space_package_migration.md`](../../../docs/finn/development/dataflow_model_space_package_migration.md)
+(C1.5),
+[`dataflow_op_native_state.md`](../../../docs/finn/development/dataflow_op_native_state.md)
+and
+[`dataflow_design_kernel_artifact_migration.md`](../../../docs/finn/development/dataflow_design_kernel_artifact_migration.md)
+(S2), and
+[`dataflow_mvau_convergence.md`](../../../docs/finn/development/dataflow_mvau_convergence.md)
+(S3).
+
 The distinction has a vocabulary consequence worth stating once:
 
 ```text
