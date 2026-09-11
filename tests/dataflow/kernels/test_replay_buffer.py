@@ -13,7 +13,9 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Decided, Engine, QualifiedPath
+from finn.dataflow.artifacts.abi import Reset, Signal
 from finn.dataflow.artifacts.derivation import ArtifactRef, build_key
+from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -233,6 +235,20 @@ def test_replay_sources_and_abi_are_exact() -> None:
     assert widths["idat"] == 16
     assert widths["odat"] == 16
     assert configured.abi.parameters == (("LEN", "4"), ("REP", "2"), ("W", "16"))
+
+
+@pytest.mark.parametrize(("matrix_height", "pe"), ((4, 4), (4, 2)))
+def test_replay_reset_is_synchronous_in_identity_and_buffered_descriptors(
+    matrix_height: int, pe: int
+) -> None:
+    configured = _configure(matrix_height=matrix_height, pe=pe)
+    reset = next(
+        port for port in configured.abi.ports if isinstance(port, Signal) and port.name == "rst"
+    )
+    assert reset.role == Reset(active_low=False, synchronous=True)
+    encoded = _descriptor.encode(configured.abi)
+    assert b'"synchronous":true' in encoded
+    assert _descriptor.decode(encoded) == configured.abi
 
 
 def test_replay_abi_agrees_with_the_selected_finnlib_rtl() -> None:

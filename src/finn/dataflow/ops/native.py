@@ -338,7 +338,12 @@ def hydrate(operation: Any) -> Any:
         # selectors, applicability and domains that read child exports.
         try:
             operation = occurrence_commit_paths(operation, values)
-        except (ValueError, TypeError, RequestError) as error:
+        except RequestError as error:
+            detail = "; ".join(
+                f"{finding.path}: {finding.message} [{finding.code}]" for finding in error.findings
+            )
+            raise DecodeError(f"cannot replay recorded Decisions: {detail}") from error
+        except (ValueError, TypeError) as error:
             raise DecodeError(f"cannot replay recorded Decisions: {error}") from error
         # Catch attributes on unreachable branches even if the engine accepted
         # an inapplicable assignment provisionally while a selector was open.

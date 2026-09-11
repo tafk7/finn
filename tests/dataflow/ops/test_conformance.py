@@ -164,7 +164,7 @@ def _configure_batch_interleaved(bound: Any) -> Any:
 def _configure_replay(bound: Any) -> Any:
     chosen = bound
     for declaration, value in (
-        (ActivationReplayDesign.pe, 2),
+        (ActivationReplayDesign.pe, 1),
         (ActivationReplayDesign.simd, 4),
     ):
         chosen = chosen.design.assign(declaration, value).root
@@ -222,7 +222,7 @@ def test_the_replay_operation_conforms(tmp_path: Path) -> None:
             mutate_problem=_widen_the_activation,
         )
     )
-    assert set(result.committed.recorded()) == {"design.pe", "design.simd"}
+    assert dict(result.committed.recorded()) == {"design.pe": 1, "design.simd": 4}
 
 
 def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:

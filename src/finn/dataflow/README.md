@@ -618,6 +618,14 @@ a dependency on a function over scalars and datatypes, not on an occurrence or a
 graph. Direct evidence configures each from a flat engine point and tests its
 RTL numerically and through OOC synthesis.
 
+The separate `ActivationReplayOp` uses `ActivationReplayDesign` to implement an
+explicit source repeat count. Its persisted `design.pe` Decision admits only
+`1`, so the Kernel's `REP` equals the source `neuron_folds`; SIMD remains a
+packing choice. Explicit or saved PE values greater than one are rejected with
+a reason during assignment/hydration. Replay stays on native schema 2. This
+restriction does not apply to MVAU's `DotProductDesign`, whose Replay and compute
+children retain the same real matrix dimensions and PE/SIMD folding.
+
 ## Artifact boundary
 
 The artifact substrate remains downstream and does not import this package.
@@ -636,10 +644,22 @@ A build unit therefore holds no handle back into the design space, and an
 implementation with no realization for a configuration its Region accepts says
 so by raising `PhysicallyUnsupported` rather than by inventing an ABI.
 
+`portable_kernel_component` recomputes the source derivation from the supplied
+build spec and resolved contributions, then checks the source artifact's kind
+and key. A stale reference paired with changed source contents is rejected
+before packaging; callers cannot substitute a reference for another closure.
+
 Artifact keys contain only values read by the corresponding artifact stage.
 Occurrence namespaces and filesystem locations do not enter portable
 identity. Stores, packaging formats, tool requests, and synthesis stay outside
 the Kernel object.
+
+DotpAxi and ReplayBuffer explicitly declare their RTL resets synchronous,
+retaining their active-low and active-high polarities respectively. Correcting
+this ABI metadata changes descriptor/package identity while leaving source
+closure identity unchanged when source inputs are unchanged. The current reset
+description is still Boolean; plural clock-domain association and reset-domain
+binding validation remain physical-composition work.
 
 Evaluator callbacks currently run under that lineage lock. Re-entry from the
 same thread is safe because the lock is re-entrant; a callback that hands work

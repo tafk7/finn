@@ -29,6 +29,7 @@ from finn.dataflow.artifacts.derivation import (
     OutputLayout,
     ProducerIdentity,
     Scalar,
+    build_key,
 )
 from finn.dataflow.artifacts.packaging import PortableComponent, Realization
 from finn.dataflow.artifacts.sources import SourceFile
@@ -145,7 +146,14 @@ def portable_kernel_component(
 ) -> PortableComponent:
     """Pair a realized source artifact with the build unit's resolved ABI."""
 
-    _check_resolved_shape(kernel, resolved)
+    source_derivation = kernel_source_derivation(kernel, resolved)
+    expected = ArtifactRef(source_derivation.kind, build_key(source_derivation))
+    if source_artifact != expected:
+        raise ValueError(
+            f"{kernel.implementation_id} source artifact {source_artifact.kind}:"
+            f"{source_artifact.key} does not identify its resolved source closure; "
+            f"expected {expected.kind}:{expected.key}"
+        )
     return PortableComponent(
         source_artifact,
         kernel.abi,

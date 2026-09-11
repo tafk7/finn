@@ -173,7 +173,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
 
     saved = ModelWrapper(str(reload_path))
     attributes = read_attributes(saved.graph.node[0])
-    assert attributes["design__pe"] == NativeAttribute("i", 2)
+    assert attributes["design__pe"] == NativeAttribute("i", 1)
     assert attributes["design__simd"] == NativeAttribute("i", 4)
     assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 2)
     assert set(attributes) == {
@@ -185,7 +185,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
         "design__simd",
     }
     assert "dataflow_state" not in attributes
-    assert dict(result.committed.recorded()) == {"design.pe": 2, "design.simd": 4}
+    assert dict(result.committed.recorded()) == {"design.pe": 1, "design.simd": 4}
     assert result.committed.problem_fingerprint == result.restored.problem_fingerprint
 
     restored_model = saved.transform(InferShapes())
@@ -232,7 +232,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
 
     spec = _replay_spec(restored)
     assert spec.region == network.node("replay").region
-    assert dict(spec.parameters) == {"LEN": 2, "REP": 2, "W": 32}
+    assert dict(spec.parameters) == {"LEN": 2, "REP": 4, "W": 32}
     assert spec.abi.entry_point == "replay_buffer"
     assert set(spec.imported_decisions) == {"design.pe", "design.simd"}
     persisted = {item.path for item in occurrence_persistable(restored)}

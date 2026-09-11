@@ -13,8 +13,28 @@ from __future__ import annotations
 
 from finn.dataflow.designs.design import NetworkBoundary, DataflowDesign, KernelChoice
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.space.declarations import Decision, Input, Subspace, divisors_of
+from finn.dataflow.space.declarations import (
+    Decision,
+    Input,
+    Subspace,
+    divisors_of,
+    domain,
+    reject,
+)
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+
+
+def _standalone_pe(*, candidate: object) -> object:
+    if type(candidate) is int and candidate == 1:
+        return True
+    return reject(
+        "activation-replay-pe-not-one",
+        "standalone activation replay requires PE=1",
+    )
+
+
+def _standalone_pe_candidates() -> tuple[object, ...]:
+    return (1,)
 
 
 class ActivationReplayDesign(DataflowDesign):
@@ -28,7 +48,14 @@ class ActivationReplayDesign(DataflowDesign):
     matrix_height = Input(int)
     activation_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
 
-    pe = Decision(int, domain=divisors_of(matrix_height))
+    # The standalone operation's matrix height is the requested replay count,
+    # not an MVAU output height to fold across processing elements.  Keeping
+    # this Decision in the persisted shape preserves the existing path while
+    # making every accepted point spell that contract exactly.
+    pe = Decision(
+        int,
+        domain=domain(accepts=_standalone_pe, candidates=_standalone_pe_candidates),
+    )
     simd = Decision(int, domain=divisors_of(matrix_width))
 
     replay = KernelChoice(

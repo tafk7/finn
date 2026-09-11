@@ -313,10 +313,12 @@ def _standard_output_availability(
 def _replay_output_availability(
     repetitions: int, synapse_folds: int, simd: int
 ) -> ScheduledOutputAvailability:
-    """When each activation position first becomes available on the output.
+    """A guaranteed logical completion point for each output position.
 
-    A position occurs ``NF`` times in the expanded sequence; availability is
-    keyed by position, so it records the first occurrence -- at ``nf = 0``.
+    A position is presented ``NF`` times in the expanded sequence, but those
+    presentations do not create several values or several availability entries
+    for that final operand position.  The existing map guarantees completion
+    by ``nf = 0``; earlier completion and exact physical emission are unspecified.
     """
 
     availability: dict[Coordinate, Coordinate] = {}

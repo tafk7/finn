@@ -8,9 +8,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Engine
+from finn.dataflow.artifacts.abi import Reset, Signal
+from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
@@ -220,6 +223,23 @@ def test_dotp_sources_and_abi_are_exact() -> None:
     assert widths["s_axis_weights_tdata"] == 64
     assert widths["s_axis_input_tdata"] == 32
     assert widths["m_axis_output_tdata"] == 64
+
+
+@pytest.mark.parametrize("pumping", (False, True))
+def test_dotp_reset_is_synchronous_in_ordinary_and_pumped_descriptors(
+    pumping: bool,
+) -> None:
+    configured = _configure(pe=2, simd=4, pumping=pumping)
+    assert isinstance(configured, Decided)
+    reset = next(
+        port
+        for port in configured.value.abi.ports
+        if isinstance(port, Signal) and port.name == "ap_rst_n"
+    )
+    assert reset.role == Reset(active_low=True, synchronous=True)
+    encoded = _descriptor.encode(configured.value.abi)
+    assert b'"synchronous":true' in encoded
+    assert _descriptor.decode(encoded) == configured.value.abi
 
 
 def test_dotp_abi_agrees_with_pinned_finnlib() -> None:

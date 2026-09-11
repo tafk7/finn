@@ -14,8 +14,8 @@ buffer that picked its own depth would be picking a fold.  It is kept even at on
 neuron fold, where it is an identity: eliding the physical buffer is a choice for
 this Kernel's own realization to make, not a reason for the Region to disappear.
 
-The core predates FINN's AXI naming and takes ``clk`` with an active-high
-``rst``, so the ABI says so rather than smoothing it over.
+The core predates FINN's AXI naming and takes ``clk`` with a synchronous,
+active-high ``rst``, so the ABI says so rather than smoothing it over.
 """
 
 from __future__ import annotations
@@ -102,7 +102,12 @@ class ReplayBufferKernel(Kernel):
             "replay_buffer",
             (
                 Signal("clk", Direction.IN, 1, Clock(Free())),
-                Signal("rst", Direction.IN, 1, Reset(active_low=False)),
+                Signal(
+                    "rst",
+                    Direction.IN,
+                    1,
+                    Reset(active_low=False, synchronous=True),
+                ),
                 Bus(
                     "in0",
                     StandardProtocol.AXIS,

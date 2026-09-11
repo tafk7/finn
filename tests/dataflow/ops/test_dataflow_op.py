@@ -24,7 +24,7 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Decided, Unresolved
+from finn.dataflow._engine import Decided, RequestError, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.space.declarations import (
     AuthoringError,
@@ -257,7 +257,7 @@ def _configured_mvau(
 
 
 def _configured_replay(
-    model: ModelWrapper | None = None, *, pe: int = 2, simd: int = 4
+    model: ModelWrapper | None = None, *, pe: int = 1, simd: int = 4
 ) -> tuple[ModelWrapper, ActivationReplayOp]:
     model = model or _replay_model()
     chosen = _unbound(model, "replay0").bind(model, Build())
@@ -269,6 +269,103 @@ def _configured_replay(
     committed = chosen.commit(model, Build())
     assert isinstance(committed, ActivationReplayOp)
     return model, committed
+
+
+def _replay_build_spec(operation: ActivationReplayOp) -> Any:
+    kernel = operation.design.kernel("replay")
+    assert isinstance(kernel, Decided)
+    physical = kernel.value.physical.accepted_answer
+    assert isinstance(physical, Decided)
+    return physical.value
+
+
+@pytest.mark.parametrize(
+    ("repetitions", "matrix_width", "folds", "simd"),
+    (
+        (1, 4, 1, 1),
+        (2, 8, 2, 4),
+        (3, 12, 4, 3),
+    ),
+)
+def test_standalone_replay_preserves_every_requested_copy_across_reload(
+    repetitions: int,
+    matrix_width: int,
+    folds: int,
+    simd: int,
+    tmp_path: Path,
+) -> None:
+    model = _replay_model(
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        folds=folds,
+    )
+    model, operation = _configured_replay(model, simd=simd)
+    activation = np.arange(repetitions * matrix_width, dtype=np.float32).reshape(
+        repetitions, matrix_width
+    )
+    context: dict[str, Any] = {"activation": activation}
+    operation.execute_node(context, model.graph)
+
+    network = operation.network
+    assert isinstance(network, Decided)
+    region = network.value.node("replay").region
+    input_port = region.input_interface("activation_in").port
+    output_port = region.output_interface("activation_out").port
+    assert input_port.operand == output_port.operand
+    region_values = np.asarray(
+        [activation[position] for beat in output_port.beat_sequence.beats for position in beat]
+    )
+    assert np.array_equal(region_values, context["expanded"].reshape(-1))
+
+    spec = _replay_build_spec(operation)
+    assert spec.parameters["REP"] == folds
+    assert spec.parameters["LEN"] == matrix_width // simd
+    assert dict(operation.recorded()) == {"design.pe": 1, "design.simd": simd}
+
+    path = tmp_path / f"replay-r{repetitions}-w{matrix_width}-f{folds}-s{simd}.onnx"
+    model.save(str(path))
+    restored_model = ModelWrapper(str(path))
+    restored = _unbound(restored_model, "replay0").bind(restored_model, Build())
+    assert isinstance(restored, ActivationReplayOp)
+    assert dict(restored.recorded()) == dict(operation.recorded())
+    restored_spec = _replay_build_spec(restored)
+    assert restored_spec.parameters == spec.parameters
+    restored_network = restored.network
+    assert isinstance(restored_network, Decided)
+    assert (
+        restored_network.value.node("replay")
+        .region.output_interface("activation_out")
+        .port.beat_sequence
+        == output_port.beat_sequence
+    )
+
+
+def test_standalone_replay_refuses_an_explicit_pe_greater_than_one() -> None:
+    model = _replay_model(folds=4)
+    bound = _unbound(model, "replay0").bind(model, Build())
+
+    with pytest.raises(RequestError) as caught:
+        bound.design.assign(ActivationReplayDesign.pe, 2)
+
+    finding = caught.value.findings[0]
+    assert finding.code == "activation-replay-pe-not-one"
+    assert finding.message == "standalone activation replay requires PE=1"
+
+
+def test_a_saved_standalone_replay_pe_greater_than_one_is_not_reinterpreted(
+    tmp_path: Path,
+) -> None:
+    model, _operation = _configured_replay()
+    _replace_attribute(model, "design__pe", 2)
+    path = tmp_path / "old-invalid-replay.onnx"
+    model.save(str(path))
+    restored = ModelWrapper(str(path))
+    before = restored.model.SerializeToString(deterministic=True)
+
+    with pytest.raises(DataflowOpError, match="standalone activation replay requires PE=1"):
+        _unbound(restored, "replay0").bind(restored, Build())
+
+    assert restored.model.SerializeToString(deterministic=True) == before
 
 
 # -- U4a: the operation is the root Space --------------------------------------

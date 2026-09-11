@@ -438,7 +438,12 @@ class DotpAxiKernel(Kernel):
             (
                 Signal("ap_clk", Direction.IN, 1, Clock(Free())),
                 Signal("ap_clk2x", Direction.IN, 1, Clock(DerivedClock("ap_clk", 2))),
-                Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
+                Signal(
+                    "ap_rst_n",
+                    Direction.IN,
+                    1,
+                    Reset(active_low=True, synchronous=True),
+                ),
                 _axis(
                     "s_axis_weights",
                     width=_byte_aligned(pe * simd * weight_width),
