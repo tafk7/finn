@@ -270,7 +270,7 @@ def test_an_omitted_sink_map_is_the_identity_over_the_source_image() -> None:
     engine, point, _design = _started(Chain)
     source = _producer_region(8, 2).output_interface("stream").port
     assert _network(engine, point).edges[0].sinks[0].position_map == PositionMap.identity(
-        source.beat_sequence.image
+        source.beat_sequence.image_set
     )
 
 
@@ -313,9 +313,11 @@ def test_an_explicit_position_map_is_used_verbatim() -> None:
 
     engine, point, _design = _started(Remapped)
     network = _network(engine, point)
-    assert network.edges[0].sinks[0].position_map == PositionMap(
-        ((index,), (7 - index,)) for index in range(8)
-    )
+    declared = PositionMap(((index,), (7 - index,)) for index in range(8))
+    stored = network.edges[0].sinks[0].position_map
+    assert stored != declared
+    assert stored.materialize_entries(max_entries=8) == declared.entries
+    assert stored.source_set.cardinality == stored.sink_set.cardinality == 8
     # A reversal does not agree with the sink's beat order, and the canon says so.
     assert "design-network-edge.beat_sequence_mismatch" in _findings(engine, point)
 

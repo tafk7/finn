@@ -77,18 +77,20 @@ def compute(weight_input):
 def supplier(sequence):
     """A rank-zero source that requires what it emits and exposes no input port."""
 
+    port = Port("w_out", WEIGHT, sequence)
+    image = port.beat_sequence.image_set.materialize(max_points=WEIGHT.position_count)
     return DataflowRegion(
         LogicalSchedule(()),
         (
             InternalInput(
                 WEIGHT,
-                ScheduledInputRequirements({((), position): 1 for position in sequence.image}),
+                ScheduledInputRequirements({((), position): 1 for position in image}),
             ),
         ),
         (
             OutputInterface(
-                Port("w_out", WEIGHT, sequence),
-                ScheduledOutputAvailability({position: () for position in sequence.image}),
+                port,
+                ScheduledOutputAvailability({position: () for position in image}),
             ),
         ),
     )
@@ -128,10 +130,16 @@ def internal_input_network():
 
 def supplied_network(sequence):
     consumer = compute(InputInterface(Port("w_in", WEIGHT, sequence), WHOLE_MATRIX))
+    sink_port = consumer.input_interface("w_in").port
     edge = Edge(
         "weight_supply",
         RegionEndpoint("memory", "w_out"),
-        (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(sequence.image)),),
+        (
+            SinkContract(
+                RegionEndpoint("compute", "w_in"),
+                PositionMap.identity(sink_port.beat_sequence.image_set),
+            ),
+        ),
     )
     return framed(
         consumer,

@@ -16,6 +16,11 @@ from finn.dataflow.model.region import (
     RegionInput,
     element_width,
 )
+from finn.dataflow.model.maps import (
+    CoordinateSet,
+    InvalidMapError,
+    SeparableAffineRequirements,
+)
 
 
 @dataclass(frozen=True)
@@ -210,32 +215,60 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
     for item in region.inputs:
         path = _input_path(item)
         operand = item.operand
-        for entry_index, ((iteration, position), multiplicity) in enumerate(
-            item.requirements.entries
-        ):
-            entry_path = f"{path}.requirements.entries[{entry_index}]"
-            if not schedule.contains_point(iteration):
-                issues.append(
-                    RegionValidationIssue(
-                        "requirement.iteration_out_of_domain",
-                        f"{entry_path}.iteration",
-                        f"requirement iteration {iteration!r} is outside the schedule",
+        if item.requirements.is_explicit:
+            for entry_index, ((iteration, position), multiplicity) in enumerate(
+                item.requirements.entries
+            ):
+                entry_path = f"{path}.requirements.entries[{entry_index}]"
+                if not schedule.contains_point(iteration):
+                    issues.append(
+                        RegionValidationIssue(
+                            "requirement.iteration_out_of_domain",
+                            f"{entry_path}.iteration",
+                            f"requirement iteration {iteration!r} is outside the schedule",
+                        )
                     )
-                )
-            if not operand.contains_position(position):
-                issues.append(
-                    RegionValidationIssue(
-                        "requirement.position_out_of_domain",
-                        f"{entry_path}.position",
-                        f"requirement position {position!r} is outside operand {operand.id!r}",
+                if not operand.contains_position(position):
+                    issues.append(
+                        RegionValidationIssue(
+                            "requirement.position_out_of_domain",
+                            f"{entry_path}.position",
+                            f"requirement position {position!r} is outside operand {operand.id!r}",
+                        )
                     )
-                )
-            if multiplicity < 0:
+                if multiplicity < 0:
+                    issues.append(
+                        RegionValidationIssue(
+                            "requirement.multiplicity_negative",
+                            f"{entry_path}.multiplicity",
+                            f"requirement multiplicity must be non-negative, got {multiplicity}",
+                        )
+                    )
+            continue
+
+        rule = item.requirements.compact_rule
+        if isinstance(rule, SeparableAffineRequirements):
+            if rule.multiplicity < 0:
                 issues.append(
                     RegionValidationIssue(
                         "requirement.multiplicity_negative",
-                        f"{entry_path}.multiplicity",
-                        f"requirement multiplicity must be non-negative, got {multiplicity}",
+                        f"{path}.requirements.multiplicity",
+                        f"requirement multiplicity must be non-negative, got {rule.multiplicity}",
+                    )
+                )
+            bounds = rule.position_bounds
+            if bounds is not None and any(
+                minimum < 0 or maximum >= extent
+                for (minimum, maximum), extent in zip(bounds, operand.shape)
+            ):
+                issues.append(
+                    RegionValidationIssue(
+                        "requirement.position_out_of_domain",
+                        f"{path}.requirements.affine_range",
+                        "requirement affine range is outside operand "
+                        f"{operand.id!r}: bounds={bounds!r}, base={rule.base!r}, "
+                        f"iteration_coefficients={rule.iteration_coefficients!r}, "
+                        f"occurrences={rule.occurrences!r}",
                     )
                 )
 
@@ -244,22 +277,39 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
     for interface in region.outputs:
         path = _interface_path(interface)
         operand = interface.port.operand
-        for entry_index, (position, iteration) in enumerate(interface.availability.entries):
-            entry_path = f"{path}.availability.entries[{entry_index}]"
-            if not operand.contains_position(position):
-                issues.append(
-                    RegionValidationIssue(
-                        "availability.position_out_of_domain",
-                        f"{entry_path}.position",
-                        f"availability position {position!r} is outside operand {operand.id!r}",
+        if interface.availability.is_explicit:
+            for entry_index, (position, iteration) in enumerate(interface.availability.entries):
+                entry_path = f"{path}.availability.entries[{entry_index}]"
+                if not operand.contains_position(position):
+                    issues.append(
+                        RegionValidationIssue(
+                            "availability.position_out_of_domain",
+                            f"{entry_path}.position",
+                            f"availability position {position!r} is outside operand {operand.id!r}",
+                        )
                     )
-                )
-            if not schedule.contains_point(iteration):
+                if not schedule.contains_point(iteration):
+                    issues.append(
+                        RegionValidationIssue(
+                            "availability.iteration_out_of_domain",
+                            f"{entry_path}.iteration",
+                            f"availability point {iteration!r} is outside the schedule",
+                        )
+                    )
+        else:
+            affine_map = interface.availability.affine_map
+            assert affine_map is not None
+            availability_bounds = affine_map.rank_bounds
+            if availability_bounds is not None and (
+                availability_bounds[0] < 0
+                or availability_bounds[1] >= affine_map.target.cardinality
+            ):
                 issues.append(
                     RegionValidationIssue(
                         "availability.iteration_out_of_domain",
-                        f"{entry_path}.iteration",
-                        f"availability point {iteration!r} is outside the schedule",
+                        f"{path}.availability.affine_range",
+                        "availability affine target ranks are outside the schedule: "
+                        f"bounds={availability_bounds!r}",
                     )
                 )
 
@@ -269,44 +319,89 @@ def validate_region(region: DataflowRegion) -> RegionValidationReport:
         path = _interface_path(interface)
         operand = interface.port.operand
         beat_sequence = interface.port.beat_sequence
-        for ordinal, beat in enumerate(beat_sequence.beats):
-            beat_path = f"{path}.port.beat_sequence.beats[{ordinal}]"
-            if len(beat) != beat_sequence.elements_per_beat:
-                issues.append(
-                    RegionValidationIssue(
-                        "beat.field_count_mismatch",
-                        beat_path,
-                        "beat field count "
-                        f"{len(beat)} does not equal elements_per_beat "
-                        f"{beat_sequence.elements_per_beat}",
-                    )
-                )
-            for field_index, position in enumerate(beat):
-                if not operand.contains_position(position):
+        if beat_sequence.is_explicit:
+            for ordinal, beat in enumerate(beat_sequence.beats):
+                beat_path = f"{path}.port.beat_sequence.beats[{ordinal}]"
+                if len(beat) != beat_sequence.elements_per_beat:
                     issues.append(
                         RegionValidationIssue(
-                            "beat.position_out_of_domain",
-                            f"{beat_path}[{field_index}]",
-                            f"beat position {position!r} is outside operand {operand.id!r}",
+                            "beat.field_count_mismatch",
+                            beat_path,
+                            "beat field count "
+                            f"{len(beat)} does not equal elements_per_beat "
+                            f"{beat_sequence.elements_per_beat}",
                         )
                     )
+                for field_index, position in enumerate(beat):
+                    if not operand.contains_position(position):
+                        issues.append(
+                            RegionValidationIssue(
+                                "beat.position_out_of_domain",
+                                f"{beat_path}[{field_index}]",
+                                f"beat position {position!r} is outside operand {operand.id!r}",
+                            )
+                        )
+        else:
+            affine_map = beat_sequence.affine_map
+            assert affine_map is not None
+            beat_bounds = affine_map.rank_bounds
+            if beat_bounds is not None and (
+                beat_bounds[0] < 0 or beat_bounds[1] >= affine_map.target.cardinality
+            ):
+                issues.append(
+                    RegionValidationIssue(
+                        "beat.position_out_of_domain",
+                        f"{path}.port.beat_sequence.affine_range",
+                        f"beat affine target ranks are outside the operand: bounds={beat_bounds!r}",
+                    )
+                )
 
     # Condition 8: output equality is set-valued, so repeated output delivery
     # is valid. Sort difference details to keep diagnostics deterministic.
     for interface in region.outputs:
         path = _interface_path(interface)
-        availability_domain = interface.availability.domain
-        beat_image = interface.port.beat_sequence.image
-        missing_availability = tuple(sorted(beat_image - availability_domain))
-        omitted_from_sequence = tuple(sorted(availability_domain - beat_image))
-        if missing_availability or omitted_from_sequence:
+        try:
+            availability_domain = interface.availability.domain_set
+            beat_image = interface.port.beat_sequence.image_set
+        except (InvalidMapError, ValueError):
+            if not (
+                interface.availability.is_explicit
+                and interface.port.beat_sequence.is_explicit
+                and all(
+                    type(extent) is int and extent >= 0 for extent in interface.port.operand.shape
+                )
+            ):
+                continue
+            ambient = interface.port.operand.position_domain
+            availability_domain = CoordinateSet.explicit(
+                ambient,
+                (
+                    position
+                    for position, _iteration in interface.availability.entries
+                    if interface.port.operand.contains_position(position)
+                ),
+            )
+            beat_image = CoordinateSet.explicit(
+                ambient,
+                (
+                    position
+                    for beat in interface.port.beat_sequence.beats
+                    for position in beat
+                    if interface.port.operand.contains_position(position)
+                ),
+            )
+        if availability_domain != beat_image:
+            missing_availability = beat_image.difference(availability_domain)
+            omitted_from_sequence = availability_domain.difference(beat_image)
             issues.append(
                 RegionValidationIssue(
                     "output.domain_image_mismatch",
                     path,
                     "output availability domain and beat image differ: "
-                    f"missing availability={missing_availability!r}, "
-                    f"omitted from sequence={omitted_from_sequence!r}",
+                    f"missing availability rank intervals="
+                    f"{missing_availability.rank_intervals!r}, "
+                    f"omitted from sequence rank intervals="
+                    f"{omitted_from_sequence.rank_intervals!r}",
                 )
             )
 

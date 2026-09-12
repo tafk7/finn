@@ -5,6 +5,9 @@ from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_streamed_mvau_region,
 )
+import pytest
+
+from finn.dataflow.model.maps import CoordinateSet, MapCapabilityError, RectangularDomain
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
@@ -34,11 +37,14 @@ def test_delivery_exactly_preserves_standard_and_interleaved_weight_sequences() 
         expected = compute.input_interface("weight").port
         delivery = construct_cyclic_parameter_region(expected)
         assert delivery.schedule.levels == ()
-        assert delivery.schedule.iteration_points == ((),)
+        assert delivery.schedule.materialize_points(max_points=1) == ((),)
         assert delivery.output_interface("weight").port == expected
-        assert set(delivery.output_interface("weight").availability.entries) == {
-            (position, ()) for position in expected.beat_sequence.image
-        }
+        image = expected.beat_sequence.image_set
+        assert set(
+            delivery.output_interface("weight").availability.materialize_entries(
+                max_entries=image.cardinality
+            )
+        ) == {(position, ()) for position in image.iter_coordinates()}
         assert validate_region(delivery) == RegionValidationReport()
 
 
@@ -54,15 +60,17 @@ def test_delivery_declares_an_internal_input_for_what_it_presents() -> None:
     expected = compute.input_interface("weight").port
     delivery = construct_cyclic_parameter_region(expected)
     required = delivery.input("W")
-    image = expected.beat_sequence.image
+    image = expected.beat_sequence.image_set
 
     assert delivery.internal_inputs == (required,)
     assert delivery.input_interfaces == ()
     assert isinstance(required, InternalInput)
     assert required.operand == expected.operand
-    assert required.requirements.required_positions == image
-    assert set(required.requirements.entries) == {(((), position), 1) for position in image}
-    assert required.requirements.occurrence_count == len(image)
+    assert required.requirements.required_position_set == image
+    assert set(required.requirements.materialize_entries(max_entries=image.cardinality)) == {
+        (((), position), 1) for position in image.iter_coordinates()
+    }
+    assert required.requirements.occurrence_count == image.cardinality
     # Untouched: the port, its exact order, and the availability map.
     assert delivery.output_interface("weight").port == expected
     assert validate_region(delivery) == RegionValidationReport()
@@ -83,7 +91,7 @@ def test_repeated_output_presentation_does_not_repeat_the_internal_requirement()
 
     assert port.beat_sequence.delivered_field_count == 3
     assert required.requirements.occurrence_count == 2
-    assert required.requirements.required_positions == frozenset({(0, 0), (0, 1)})
+    assert required.requirements.required_position_set.is_full
     assert delivery.output_interface("weight").port.beat_sequence == port.beat_sequence
 
 
@@ -97,7 +105,7 @@ def test_rank_zero_delivery_keeps_beat_order_independent_of_availability() -> No
     region = construct_cyclic_parameter_region(port)
     output = region.output_interface("weight")
 
-    assert output.availability.entries == (
+    assert output.availability.materialize_entries(max_entries=4) == (
         ((0, 0), ()),
         ((0, 1), ()),
         ((0, 2), ()),
@@ -111,7 +119,7 @@ def test_repeated_output_positions_remain_structurally_consistent() -> None:
     port = Port("requested", operand, BeatSequence(1, (((0, 0),), ((0, 1),), ((0, 0),))))
     region = construct_cyclic_parameter_region(port)
 
-    assert region.output_interface("weight").availability.domain == frozenset({(0, 0), (0, 1)})
+    assert region.output_interface("weight").availability.domain_set.is_full
     assert validate_region(region) == RegionValidationReport()
 
 
@@ -120,11 +128,12 @@ def test_rank_zero_and_finite_delivery_schedules_are_both_structural_candidates(
     port = compute.input_interface("weight").port
     rank_zero = construct_cyclic_parameter_region(port)
     finite_schedule = LogicalSchedule((ScheduleLevel("delivery", port.beat_sequence.beat_count),))
+    beats = port.beat_sequence.materialize_beats(
+        max_fields=port.beat_sequence.delivered_field_count
+    )
     first_ordinal = {
-        position: next(
-            ordinal for ordinal, beat in enumerate(port.beat_sequence.beats) if position in beat
-        )
-        for position in port.beat_sequence.image
+        position: next(ordinal for ordinal, beat in enumerate(beats) if position in beat)
+        for position in port.beat_sequence.image_set.iter_coordinates()
     }
     finite = DataflowRegion(
         finite_schedule,
@@ -144,3 +153,26 @@ def test_rank_zero_and_finite_delivery_schedules_are_both_structural_candidates(
     assert rank_zero.output_interface("weight").port == finite.output_interface("weight").port
     assert rank_zero.schedule.iteration_count == 1
     assert finite.schedule.iteration_count == port.beat_sequence.beat_count
+
+
+def test_compact_partial_image_cyclic_delivery_refuses_without_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    domain = RectangularDomain((1_000_001,))
+    sequence = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=1_000_000,
+        view_extents=(1_000_000, 1),
+        offset=1,
+        coefficients=(1, 0),
+    )
+    port = Port("partial", Operand("W", INT8, domain.extents), sequence)
+
+    monkeypatch.setattr(
+        CoordinateSet,
+        "iter_coordinates",
+        lambda *_args, **_kwargs: pytest.fail("partial compact image was enumerated"),
+    )
+    with pytest.raises(MapCapabilityError, match="compact partial image"):
+        construct_cyclic_parameter_region(port)

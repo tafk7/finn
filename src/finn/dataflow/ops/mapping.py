@@ -9,14 +9,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
+from finn.dataflow.model.maps import CoordinateSet, MaterializationRequired
 from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.presentation import (
-    boundary_presented_positions,
-    edge_presented_positions,
+    boundary_presented_position_set,
+    edge_presented_position_set,
     exposing_boundaries,
     exposing_ports,
-    unpresented_positions,
+    unpresented_position_set,
 )
 from finn.dataflow.model.refs import (
     DataflowOperandRef,
@@ -25,7 +26,7 @@ from finn.dataflow.model.refs import (
     resolve_input,
     resolve_output,
 )
-from finn.dataflow.model.region import Coordinate
+from finn.dataflow.model.region import Coordinate, InputInterface
 from finn.dataflow.ops.source import SourceNode
 
 
@@ -68,9 +69,46 @@ class OperandMapping:
     correspondence: CoordinateMapping
     source_shape: tuple[int, ...]
     semantic_shape: tuple[int, ...]
-    edge_presented: frozenset[Coordinate] = frozenset()
-    boundary_presented: frozenset[Coordinate] = frozenset()
-    unpresented: frozenset[Coordinate] = frozenset()
+    edge_presented_set: CoordinateSet
+    boundary_presented_set: CoordinateSet
+    unpresented_set: CoordinateSet
+    _presentation_is_explicit: bool = False
+
+    @property
+    def edge_presented(self) -> frozenset[Coordinate]:
+        return self._legacy_set(self.edge_presented_set, "edge_presented")
+
+    @property
+    def boundary_presented(self) -> frozenset[Coordinate]:
+        return self._legacy_set(self.boundary_presented_set, "boundary_presented")
+
+    @property
+    def unpresented(self) -> frozenset[Coordinate]:
+        return self._legacy_set(self.unpresented_set, "unpresented")
+
+    def _legacy_set(self, value: CoordinateSet, field_name: str) -> frozenset[Coordinate]:
+        if not self._presentation_is_explicit:
+            raise MaterializationRequired(
+                f"OperandMapping.{field_name} requires materialize_presentation("
+                "max_positions_per_set=...)"
+            )
+        return frozenset(value.materialize(max_points=value.cardinality))
+
+    def materialize_presentation(
+        self, *, max_positions_per_set: int
+    ) -> MaterializedOperandPresentation:
+        return MaterializedOperandPresentation(
+            frozenset(self.edge_presented_set.materialize(max_points=max_positions_per_set)),
+            frozenset(self.boundary_presented_set.materialize(max_points=max_positions_per_set)),
+            frozenset(self.unpresented_set.materialize(max_points=max_positions_per_set)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedOperandPresentation:
+    edge_presented: frozenset[Coordinate]
+    boundary_presented: frozenset[Coordinate]
+    unpresented: frozenset[Coordinate]
 
 
 def derive_operand_mappings(
@@ -120,11 +158,23 @@ def _derive_operand_mappings(
                 placement = InternalStream(ref.node_id, ports[0].port_id)
             else:
                 placement = Internal(ref.node_id, ref.operand_id)
-            shape = (
-                resolve_input(network, ref).operand.shape
-                if isinstance(ref, RegionInputRef)
-                else resolve_output(network, ref).port.operand.shape
-            )
+            if isinstance(ref, RegionInputRef):
+                item = resolve_input(network, ref)
+                shape = item.operand.shape
+                edge_presented = edge_presented_position_set(network, ref)
+                boundary_presented = boundary_presented_position_set(network, ref)
+                unpresented = unpresented_position_set(network, ref)
+                presentation_is_explicit = item.requirements.is_explicit and (
+                    not isinstance(item, InputInterface) or item.port.beat_sequence.is_explicit
+                )
+            else:
+                output = resolve_output(network, ref)
+                shape = output.port.operand.shape
+                empty = CoordinateSet.empty(output.port.operand.position_domain)
+                edge_presented = empty
+                boundary_presented = empty
+                unpresented = empty
+                presentation_is_explicit = True
             result.append(
                 OperandMapping(
                     name,
@@ -134,15 +184,10 @@ def _derive_operand_mappings(
                     correspondences[name],
                     operand.shape,
                     tuple(shape),
-                    edge_presented_positions(network, ref)
-                    if isinstance(ref, RegionInputRef)
-                    else frozenset(),
-                    boundary_presented_positions(network, ref)
-                    if isinstance(ref, RegionInputRef)
-                    else frozenset(),
-                    unpresented_positions(network, ref)
-                    if isinstance(ref, RegionInputRef)
-                    else frozenset(),
+                    edge_presented,
+                    boundary_presented,
+                    unpresented,
+                    presentation_is_explicit,
                 )
             )
     return tuple(result)
@@ -153,6 +198,7 @@ __all__ = [
     "External",
     "Internal",
     "InternalStream",
+    "MaterializedOperandPresentation",
     "OperandMapping",
     "OperandPlacement",
     "derive_operand_mappings",

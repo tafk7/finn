@@ -9,11 +9,11 @@ from itertools import product
 from math import prod
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar
 
+from finn.dataflow.model.maps import MaterializationRequired, OccurrenceAxis, RectangularDomain
 from finn.dataflow.model.region import (
     BeatSequence,
     Coordinate,
     LogicalSchedule,
-    RequirementKey,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
     ScheduleLevel,
@@ -381,14 +381,26 @@ class CanonicalExtentProfile:
         return self._position_unchecked(iteration, occurrence)
 
     def _requirements_unchecked(self) -> ScheduledInputRequirements:
-        entries: dict[RequirementKey, int] = {}
         schedule = self._schedule_unchecked()
-        occurrences = _coordinate_set(self.spatial_extents)
-        for iteration in schedule.iter_points():
-            for occurrence in occurrences:
-                key = (iteration, self._position_unchecked(iteration, occurrence))
-                entries[key] = entries.get(key, 0) + 1
-        return ScheduledInputRequirements(entries)
+        level_indices = {name: index for index, name in enumerate(schedule.level_names)}
+        coefficients = []
+        for dimension in range(self.rank):
+            row = [0] * schedule.depth
+            row[level_indices[self.block_level_names[dimension]]] = self.block_extents[dimension]
+            row[level_indices[self.within_block_level_names[dimension]]] = self.spatial_extents[
+                dimension
+            ]
+            coefficients.append(tuple(row))
+        return ScheduledInputRequirements.affine(
+            schedule.iteration_domain,
+            RectangularDomain(self.tensor_extents),
+            base=(0,) * self.rank,
+            iteration_coefficients=coefficients,
+            occurrences=tuple(
+                OccurrenceAxis(dimension, extent, 1)
+                for dimension, extent in enumerate(self.spatial_extents)
+            ),
+        )
 
     def construct_requirements(self) -> ScheduledInputRequirements:
         """Construct the canonical input-requirement lift."""
@@ -396,21 +408,33 @@ class CanonicalExtentProfile:
         return self._requirements_unchecked()
 
     def _availability_unchecked(self) -> ScheduledOutputAvailability:
-        entries = {}
         schedule = self._schedule_unchecked()
-        occurrences = _coordinate_set(self.spatial_extents)
-        for iteration in schedule.iter_points():
-            for occurrence in occurrences:
-                position = self._position_unchecked(iteration, occurrence)
-                if position in entries:
-                    issue = ProfileCertificationIssue(
-                        "profile.position_map_not_injective",
-                        "position_map",
-                        f"position {position!r} has more than one occurrence",
-                    )
-                    raise ProfileCertificationError((issue,))
-                entries[position] = iteration
-        return ScheduledOutputAvailability(entries)
+        schedule_strides = []
+        running = 1
+        for extent in reversed(schedule.extents):
+            schedule_strides.append(running)
+            running *= extent
+        stride_by_level = dict(zip(schedule.level_names, reversed(schedule_strides)))
+        view_extents: list[int] = []
+        coefficients: list[int] = []
+        for dimension in range(self.rank):
+            block_count = self.tensor_extents[dimension] // self.block_extents[dimension]
+            within_count = self.block_extents[dimension] // self.spatial_extents[dimension]
+            view_extents.extend((block_count, within_count, self.spatial_extents[dimension]))
+            coefficients.extend(
+                (
+                    stride_by_level[self.block_level_names[dimension]],
+                    stride_by_level[self.within_block_level_names[dimension]],
+                    0,
+                )
+            )
+        return ScheduledOutputAvailability.affine(
+            RectangularDomain(self.tensor_extents),
+            schedule.iteration_domain,
+            view_extents=view_extents,
+            offset=0,
+            coefficients=coefficients,
+        )
 
     def construct_availability(self) -> ScheduledOutputAvailability:
         """Construct the injective canonical output-availability lift."""
@@ -424,6 +448,33 @@ class CanonicalExtentProfile:
             coordinate
             for coordinate, _ in sorted(self.occurrence_to_field, key=lambda item: item[1])
         )
+        lexicographic = _coordinate_set(self.spatial_extents)
+        if occurrence_by_field == lexicographic:
+            schedule = self._schedule_unchecked()
+            level_indices = {name: index for index, name in enumerate(schedule.level_names)}
+            target_strides = []
+            running = 1
+            for extent in reversed(self.tensor_extents):
+                target_strides.append(running)
+                running *= extent
+            coefficients = [0] * schedule.depth
+            occurrence_coefficients = []
+            for dimension, target_stride in enumerate(reversed(target_strides)):
+                coefficients[level_indices[self.block_level_names[dimension]]] += (
+                    self.block_extents[dimension] * target_stride
+                )
+                coefficients[level_indices[self.within_block_level_names[dimension]]] += (
+                    self.spatial_extents[dimension] * target_stride
+                )
+                occurrence_coefficients.append(target_stride)
+            return BeatSequence.affine(
+                RectangularDomain(self.tensor_extents),
+                elements_per_beat=prod(self.spatial_extents),
+                beat_count=schedule.iteration_count,
+                view_extents=schedule.extents + self.spatial_extents,
+                offset=0,
+                coefficients=tuple(coefficients) + tuple(occurrence_coefficients),
+            )
         beats = tuple(
             tuple(
                 self._position_unchecked(iteration, occurrence)
@@ -462,10 +513,35 @@ class CanonicalExtentProfile:
         constructed_schedule = self._schedule_unchecked()
         constructed_requirements = self._requirements_unchecked()
         constructed_availability = self._availability_unchecked()
+        position_domain = RectangularDomain(self.tensor_extents)
+        normalized_requirements = requirements
+        normalized_availability = availability
+        normalized_beat_sequence = beat_sequence
+        if normalized_requirements is not None:
+            try:
+                normalized_requirements = normalized_requirements.bind_domains(
+                    constructed_schedule.iteration_domain, position_domain
+                )
+            except ValueError:
+                pass
+        if normalized_availability is not None:
+            try:
+                normalized_availability = normalized_availability.bind_domains(
+                    position_domain, constructed_schedule.iteration_domain
+                )
+            except ValueError:
+                pass
+        if normalized_beat_sequence is not None:
+            try:
+                normalized_beat_sequence = normalized_beat_sequence.bind_position_domain(
+                    position_domain
+                )
+            except ValueError:
+                pass
         comparisons = (
             ("schedule", schedule, constructed_schedule),
-            ("requirements", requirements, constructed_requirements),
-            ("availability", availability, constructed_availability),
+            ("requirements", normalized_requirements, constructed_requirements),
+            ("availability", normalized_availability, constructed_availability),
         )
         for name, declared, constructed in comparisons:
             if declared is not None and declared != constructed:
@@ -476,9 +552,9 @@ class CanonicalExtentProfile:
                         f"declared {name} does not equal the profile construction",
                     )
                 )
-        if beat_sequence is not None:
+        if normalized_beat_sequence is not None:
             constructed_beat_sequence = self._beat_sequence_unchecked()
-            if beat_sequence != constructed_beat_sequence:
+            if normalized_beat_sequence != constructed_beat_sequence:
                 issues.append(
                     ProfileCertificationIssue(
                         "profile.normalized_value_mismatch",
@@ -549,6 +625,8 @@ def direct_output_availability(
     complete_at: (
         Mapping[int, Iterable[int]] | Sequence[Iterable[int]] | Callable[[int], Iterable[int]]
     ),
+    *,
+    max_fields: Optional[int] = None,
 ) -> ScheduledOutputAvailability:
     """Construct output availability from an injective beat map.
 
@@ -562,7 +640,18 @@ def direct_output_availability(
         raise TypeError("beat_sequence must be a BeatSequence")
 
     issues = []
-    flat_positions = tuple(position for beat in beat_sequence.beats for position in beat)
+    if not beat_sequence.is_explicit and max_fields is None:
+        raise MaterializationRequired(
+            "direct_output_availability over compact beats requires max_fields"
+        )
+    if max_fields is None:
+        max_fields = 0
+    beats = (
+        beat_sequence.beats
+        if beat_sequence.is_explicit
+        else beat_sequence.materialize_beats(max_fields=max_fields)
+    )
+    flat_positions = tuple(position for beat in beats for position in beat)
     if len(flat_positions) != len(set(flat_positions)):
         issues.append(
             ProfileCertificationIssue(
@@ -585,7 +674,7 @@ def direct_output_availability(
         raise ProfileCertificationError(issues)
 
     entries = {}
-    for ordinal, beat in enumerate(beat_sequence.beats):
+    for ordinal, beat in enumerate(beats):
         for position in beat:
             entries[position] = completion_points[ordinal]
     return ScheduledOutputAvailability(entries)

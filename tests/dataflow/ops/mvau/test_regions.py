@@ -127,7 +127,7 @@ def test_small_streamed_weight_mvau_region_matches_authoring_semantics():
             else:
                 assert output.availability.available_at(position) != iteration
 
-    assert output.availability.domain == output.port.beat_sequence.image
+    assert output.availability.domain_set == output.port.beat_sequence.image_set
 
 
 def test_embedded_weight_mvau_region_withholds_only_the_weight_port():
@@ -198,9 +198,12 @@ def test_mvau_field_bijections_change_sequences_without_changing_widths_or_shape
 def test_corrupting_mvau_output_availability_is_a_structural_failure():
     region = _mvau_region(2, 4, 4, 2, 2)
     output = region.output_interface("output")
+    entries = output.availability.materialize_entries(
+        max_entries=output.port.operand.position_count
+    )
     corrupt = OutputInterface(
         output.port,
-        ScheduledOutputAvailability(dict(output.availability.entries[:-1])),
+        ScheduledOutputAvailability(dict(entries[:-1])),
     )
     malformed = DataflowRegion(region.schedule, region.inputs, (corrupt,))
 
@@ -216,7 +219,7 @@ def test_corrupting_mvau_output_availability_is_a_structural_failure():
         (1, 64, 64, 8, 8, 512, 4096),
     ],
 )
-def test_mvau_concrete_storage_scales_with_occurrences(
+def test_mvau_compact_requirement_counts_match_occurrences(
     repetitions,
     matrix_width,
     matrix_height,
@@ -228,5 +231,7 @@ def test_mvau_concrete_storage_scales_with_occurrences(
     region = _mvau_region(repetitions, matrix_width, matrix_height, simd, pe)
 
     assert validate_region(region).issues == ()
-    assert len(region.input_interface("activation").requirements.entries) == expected_activation
-    assert len(region.input_interface("weight").requirements.entries) == expected_weight
+    assert (
+        region.input_interface("activation").requirements.nonzero_entry_count == expected_activation
+    )
+    assert region.input_interface("weight").requirements.nonzero_entry_count == expected_weight

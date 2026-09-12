@@ -7,6 +7,7 @@ from dataclasses import FrozenInstanceError
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
+from finn.dataflow.model.maps import RectangularDomain
 from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
@@ -23,8 +24,9 @@ from finn.dataflow.model.region import (
 def test_operand_position_enumeration_and_rank_round_trip(shape):
     operand = Operand("x", DataType["INT8"], shape)
 
-    assert len(operand.positions) == operand.position_count
-    for expected_rank, position in enumerate(operand.positions):
+    positions = operand.materialize_positions(max_points=operand.position_count)
+    assert len(positions) == operand.position_count
+    for expected_rank, position in enumerate(positions):
         assert operand.position_rank(position) == expected_rank
         assert operand.position_at_rank(expected_rank) == position
 
@@ -33,8 +35,9 @@ def test_operand_position_enumeration_and_rank_round_trip(shape):
 def test_schedule_enumeration_and_rank_round_trip(levels):
     schedule = LogicalSchedule(levels)
 
-    assert len(schedule.iteration_points) == schedule.iteration_count
-    for expected_rank, point in enumerate(schedule.iteration_points):
+    points = schedule.materialize_points(max_points=schedule.iteration_count)
+    assert len(points) == schedule.iteration_count
+    for expected_rank, point in enumerate(points):
         assert schedule.rank(point) == expected_rank
         assert schedule.point_at_rank(expected_rank) == point
 
@@ -43,19 +46,26 @@ def test_rank_zero_operand_and_schedule_have_one_empty_coordinate():
     operand = Operand("scalar", DataType["FIXED<12,6>"], ())
     schedule = LogicalSchedule(())
 
-    assert operand.positions == ((),)
-    assert schedule.iteration_points == ((),)
+    assert operand.materialize_positions(max_points=1) == ((),)
+    assert schedule.materialize_points(max_points=1) == ((),)
 
 
 def test_beat_field_order_and_repeated_positions_are_preserved():
-    sequence = BeatSequence(3, (((2,), (0,), (2,)), ((1,), (3,), (1,))))
+    sequence = BeatSequence(3, (((2,), (0,), (2,)), ((1,), (3,), (1,)))).bind_position_domain(
+        RectangularDomain((4,))
+    )
 
     assert sequence.beat_count == 2
     assert sequence.field_ordinals == (0, 1, 2)
     assert sequence.beat(0) == ((2,), (0,), (2,))
     assert sequence.position_at(1, 1) == (3,)
     assert sequence.delivered_field_count == 6
-    assert sequence.image == frozenset({(0,), (1,), (2,), (3,)})
+    assert set(sequence.image_set.materialize(max_points=4)) == {
+        (0,),
+        (1,),
+        (2,),
+        (3,),
+    }
 
 
 @pytest.mark.parametrize(
@@ -81,12 +91,14 @@ def test_requirement_multiplicity_and_occurrences_are_exact():
         {
             ((1,), (0,)): 1,
             ((0,), (1,)): 3,
-        }
+        },
+        schedule_domain=RectangularDomain((2,)),
+        position_domain=RectangularDomain((2,)),
     )
 
     assert requirements.required((0,), (0,)) == 0
     assert requirements.required((0,), (1,)) == 3
-    assert requirements.occurrences == (
+    assert requirements.materialize_occurrences(max_occurrences=4) == (
         ((0,), (1,), 0),
         ((0,), (1,), 1),
         ((0,), (1,), 2),
@@ -124,7 +136,11 @@ def test_mutable_inputs_are_snapshotted_and_values_are_frozen():
     requirement_map = {((0,), (0,)): 1}
     operand = Operand("x", DataType["UINT4"], shape)
     sequence = BeatSequence(1, beats)
-    requirements = ScheduledInputRequirements(requirement_map)
+    requirements = ScheduledInputRequirements(
+        requirement_map,
+        schedule_domain=RectangularDomain((1,)),
+        position_domain=RectangularDomain((2,)),
+    )
 
     shape[0] = 99
     beats[0][0] = (99,)
@@ -201,9 +217,9 @@ def test_internal_inputs_follow_the_ported_ones_in_operand_order():
     right = DataflowRegion(LogicalSchedule(()), (ported, second_internal, first_internal), ())
 
     assert left == right
-    assert left.inputs == (ported, second_internal, first_internal)
-    assert left.input_interfaces == (ported,)
-    assert left.internal_inputs == (second_internal, first_internal)
+    assert tuple(item.operand.id for item in left.inputs) == ("x", "a", "b")
+    assert tuple(item.port.id for item in left.input_interfaces) == ("z_port",)
+    assert tuple(item.operand.id for item in left.internal_inputs) == ("a", "b")
     assert left.inputs[: len(left.input_interfaces)] == left.input_interfaces
 
 
@@ -226,10 +242,10 @@ def test_a_region_input_is_reachable_by_operand_and_a_port_by_its_id():
     internal = InternalInput(Operand("w", DataType["INT8"], (1,)), ScheduledInputRequirements())
     region = DataflowRegion(LogicalSchedule(()), (ported, internal), ())
 
-    assert region.input("x") is ported
-    assert region.input("w") is internal
-    assert region.input_interface("in") is ported
-    assert region.interfaces == (ported,)
+    assert region.input("x").operand == ported.operand
+    assert region.input("w").operand == internal.operand
+    assert region.input_interface("in").port == ported.port
+    assert tuple(item.port.id for item in region.interfaces) == ("in",)
     with pytest.raises(KeyError):
         region.input_interface("w")
     with pytest.raises(KeyError):
@@ -238,8 +254,10 @@ def test_a_region_input_is_reachable_by_operand_and_a_port_by_its_id():
 
 def test_required_positions_collapse_iterations_and_multiplicity():
     requirements = ScheduledInputRequirements(
-        {((step, visit), (step,)): 1 for step in range(2) for visit in range(3)}
+        {((step, visit), (step,)): 1 for step in range(2) for visit in range(3)},
+        schedule_domain=RectangularDomain((2, 3)),
+        position_domain=RectangularDomain((2,)),
     )
 
     assert requirements.occurrence_count == 6
-    assert requirements.required_positions == frozenset({(0,), (1,)})
+    assert requirements.required_position_set.materialize(max_points=2) == ((0,), (1,))

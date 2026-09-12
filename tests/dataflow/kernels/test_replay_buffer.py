@@ -206,7 +206,7 @@ def test_several_neuron_folds_multiply_the_output_beats() -> None:
     expanded = region.output_interface("activation_out").port.beat_sequence
     assert compact.beat_count == 2 * 4
     assert expanded.beat_count == 2 * 3 * 4
-    assert compact.image == expanded.image
+    assert compact.image_set == expanded.image_set
 
 
 def test_replay_sources_and_abi_are_exact() -> None:

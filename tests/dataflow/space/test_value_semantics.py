@@ -26,8 +26,23 @@ from finn.dataflow.space.dataflow_value_semantics import (
     DATAFLOW_REGION_SEMANTICS,
     REGION_VALIDATION_REPORT_SEMANTICS,
 )
-from finn.dataflow.model.region import DataflowRegion, LogicalSchedule, ScheduleLevel
+from finn.dataflow.model.region import (
+    BeatSequence,
+    DataflowRegion,
+    InputInterface,
+    LogicalSchedule,
+    Operand,
+    OutputInterface,
+    Port,
+    Coordinate,
+    RequirementKey,
+    ScheduledInputRequirements,
+    ScheduledOutputAvailability,
+    ScheduleLevel,
+)
 from finn.dataflow.model.region_validation import RegionValidationReport, validate_region
+from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 
 class DataflowRegionSubclass(DataflowRegion):
@@ -58,6 +73,59 @@ def test_region_value_semantics_are_exact_immutable_and_model_equal() -> None:
     assert validate_region(left) == validate_region(right)
     with pytest.raises(FrozenInstanceError):
         setattr(left, "schedule", LogicalSchedule(()))
+
+
+def test_explicit_and_compact_replay_regions_are_engine_equal() -> None:
+    compact = construct_activation_replay_region(1, 2, 2, DataType["INT8"], 1, 1)
+    schedule = LogicalSchedule(
+        (ScheduleLevel("rep", 1), ScheduleLevel("nf", 2), ScheduleLevel("sf", 2))
+    )
+    operand = Operand("X", DataType["INT8"], (1, 2))
+    requirements: dict[RequirementKey, int] = {
+        ((0, neuron_fold, synapse_fold), (0, synapse_fold)): 1
+        for neuron_fold in range(2)
+        for synapse_fold in range(2)
+    }
+    availability: dict[Coordinate, Coordinate] = {
+        (0, 0): (0, 0, 0),
+        (0, 1): (0, 0, 1),
+    }
+    explicit = DataflowRegion(
+        schedule,
+        (
+            InputInterface(
+                Port(
+                    "activation_in",
+                    operand,
+                    BeatSequence(1, (((0, 0),), ((0, 1),))),
+                ),
+                ScheduledInputRequirements(requirements),
+            ),
+        ),
+        (
+            OutputInterface(
+                Port(
+                    "activation_out",
+                    operand,
+                    BeatSequence(
+                        1,
+                        (
+                            ((0, 0),),
+                            ((0, 1),),
+                            ((0, 0),),
+                            ((0, 1),),
+                        ),
+                    ),
+                ),
+                ScheduledOutputAvailability(availability),
+            ),
+        ),
+    )
+
+    assert explicit == compact
+    assert hash(explicit) == hash(compact)
+    assert DATAFLOW_REGION_SEMANTICS.values_equal(explicit, compact)
+    assert DATAFLOW_REGION_SEMANTICS.freeze(compact) is compact
 
 
 def test_validation_report_semantics_are_nominal_and_immutable() -> None:

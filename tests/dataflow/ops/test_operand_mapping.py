@@ -47,16 +47,17 @@ def test_all_three_supply_forms_derive_from_qualified_references():
     assert embedded.placement == Internal("compute", "W")
     assert supplied[0].placement == Internal("memory", "W")
     assert supplied[1].placement == InternalStream("compute", "w_in")
-    assert supplied[0].unpresented == supplied[1].edge_presented
-    assert external.boundary_presented == embedded.unpresented
+    assert supplied[0].unpresented_set == supplied[1].edge_presented_set
+    assert external.boundary_presented_set == embedded.unpresented_set
     assert supplied[0].tensor == supplied[1].tensor == "source_weights"
 
 
 def test_a_port_can_have_edge_presented_and_unpresented_positions():
     result = derive(partly_supplied_network(), RegionInputRef("compute", "W"))[0]
-    assert result.edge_presented == frozenset({(0, 1), (1, 1)})
-    assert result.unpresented == frozenset({(0, 0), (1, 0)})
-    assert result.boundary_presented == frozenset()
+    materialized = result.materialize_presentation(max_positions_per_set=2)
+    assert materialized.edge_presented == frozenset({(0, 1), (1, 1)})
+    assert materialized.unpresented == frozenset({(0, 0), (1, 0)})
+    assert materialized.boundary_presented == frozenset()
     assert isinstance(result.placement, InternalStream)
 
 

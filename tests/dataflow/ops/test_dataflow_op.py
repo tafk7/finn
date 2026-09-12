@@ -312,9 +312,10 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     input_port = region.input_interface("activation_in").port
     output_port = region.output_interface("activation_out").port
     assert input_port.operand == output_port.operand
-    region_values = np.asarray(
-        [activation[position] for beat in output_port.beat_sequence.beats for position in beat]
+    output_beats = output_port.beat_sequence.materialize_beats(
+        max_fields=output_port.beat_sequence.delivered_field_count
     )
+    region_values = np.asarray([activation[position] for beat in output_beats for position in beat])
     assert np.array_equal(region_values, context["expanded"].reshape(-1))
 
     spec = _replay_build_spec(operation)

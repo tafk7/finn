@@ -15,6 +15,7 @@ from finn.dataflow.model.region import (
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
+from finn.dataflow.model.maps import MapCapabilityError, OccurrenceAxis
 
 
 def construct_cyclic_parameter_region(output_port: Port) -> DataflowRegion:
@@ -44,12 +45,40 @@ def construct_cyclic_parameter_region(output_port: Port) -> DataflowRegion:
     if not isinstance(output_port, Port):
         raise TypeError("output_port must be a Port")
     port = Port("weight", output_port.operand, output_port.beat_sequence)
-    image = port.beat_sequence.image
-    requirements: dict[RequirementKey, int] = {((), position): 1 for position in image}
-    availability = ScheduledOutputAvailability({position: () for position in image})
+    image = port.beat_sequence.image_set
+    schedule = LogicalSchedule(())
+    if image.is_full:
+        requirements = ScheduledInputRequirements.affine(
+            schedule.iteration_domain,
+            port.operand.position_domain,
+            base=(0,) * port.operand.rank,
+            iteration_coefficients=((),) * port.operand.rank,
+            occurrences=tuple(
+                OccurrenceAxis(axis, extent, 1) for axis, extent in enumerate(port.operand.shape)
+            ),
+        )
+        availability = ScheduledOutputAvailability.affine(
+            port.operand.position_domain,
+            schedule.iteration_domain,
+            view_extents=port.operand.shape,
+            offset=0,
+            coefficients=(0,) * port.operand.rank,
+        )
+    else:
+        if not port.beat_sequence.is_explicit:
+            raise MapCapabilityError(
+                "cyclic delivery of a compact partial image requires a supported "
+                "partial requirement rule or an explicit caller-bounded conversion"
+            )
+        requirements_table: dict[RequirementKey, int] = {
+            ((), position): 1 for position in image.iter_coordinates()
+        }
+        availability_table = {position: () for position in image.iter_coordinates()}
+        requirements = ScheduledInputRequirements(requirements_table)
+        availability = ScheduledOutputAvailability(availability_table)
     return DataflowRegion(
-        LogicalSchedule(()),
-        (InternalInput(port.operand, ScheduledInputRequirements(requirements)),),
+        schedule,
+        (InternalInput(port.operand, requirements),),
         (OutputInterface(port, availability),),
     )
 

@@ -77,7 +77,7 @@ def test_an_internal_input_resolves_exactly_like_a_ported_one():
 
     assert isinstance(resolved, InternalInput)
     assert resolved.operand == WEIGHT
-    assert resolved.requirements == WHOLE_MATRIX
+    assert resolved.requirements.entries == WHOLE_MATRIX.entries
 
 
 def test_one_operand_id_may_mean_two_different_tensors_in_one_network():

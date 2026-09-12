@@ -15,10 +15,10 @@ import pytest
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.model.presentation import (
-    boundary_presented_positions,
-    edge_presented_positions,
+    boundary_presented_position_set,
+    edge_presented_position_set,
     exposing_ports,
-    unpresented_positions,
+    unpresented_position_set,
 )
 from finn.dataflow.model.refs import RegionInputRef
 from finn.dataflow.model.region import InputInterface, InternalInput
@@ -61,11 +61,9 @@ def test_embedded_supply_gives_the_compute_region_no_weight_port_at_all() -> Non
     weight = RegionInputRef("compute", "W")
     assert isinstance(compute.region.input("W"), InternalInput)
     assert exposing_ports(network, weight) == ()
-    assert edge_presented_positions(network, weight) == frozenset()
-    assert boundary_presented_positions(network, weight) == frozenset()
-    assert unpresented_positions(network, weight) == (
-        compute.region.input("W").requirements.required_positions
-    )
+    assert edge_presented_position_set(network, weight).is_empty
+    assert boundary_presented_position_set(network, weight).is_empty
+    assert unpresented_position_set(network, weight).is_full
 
 
 def test_decoupled_supply_gives_the_matrix_its_own_node_and_edge() -> None:
@@ -101,14 +99,14 @@ def test_decoupled_supply_makes_both_qualified_weight_requirements_real() -> Non
 
     assert isinstance(supplied, InternalInput)
     assert exposing_ports(network, memory) == ()
-    assert unpresented_positions(network, memory) == supplied.requirements.required_positions
-    assert edge_presented_positions(network, memory) == frozenset()
-    assert boundary_presented_positions(network, memory) == frozenset()
+    assert unpresented_position_set(network, memory).is_full
+    assert edge_presented_position_set(network, memory).is_empty
+    assert boundary_presented_position_set(network, memory).is_empty
 
     assert isinstance(consumed, InputInterface)
-    assert edge_presented_positions(network, compute) == consumed.requirements.required_positions
-    assert unpresented_positions(network, compute) == frozenset()
-    assert boundary_presented_positions(network, compute) == frozenset()
+    assert edge_presented_position_set(network, compute).is_full
+    assert unpresented_position_set(network, compute).is_empty
+    assert boundary_presented_position_set(network, compute).is_empty
 
 
 def test_the_compute_region_is_identical_in_external_and_decoupled_supply() -> None:

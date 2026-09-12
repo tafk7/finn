@@ -61,6 +61,7 @@ arms -- not as a substitute for validation.
 
 from __future__ import annotations
 
+from finn.dataflow.model.maps import CoordinateSet, MaterializationRequired
 from finn.dataflow.model.network import BoundaryContract, DataflowNetwork, RegionEndpoint
 from finn.dataflow.model.refs import (
     DataflowOperandRef,
@@ -156,11 +157,16 @@ def edge_presented_positions(
     output, or that the two sides agree on element type and beat sequence.
     """
 
-    endpoint, fed_by_edge = _owned_endpoint(network, ref)
-    if endpoint is None or not fed_by_edge:
-        return frozenset()
     item = resolve_input(network, ref)
-    return item.requirements.required_positions & _presented(item)
+    if not item.requirements.is_explicit or (
+        isinstance(item, InputInterface) and not item.port.beat_sequence.is_explicit
+    ):
+        raise MaterializationRequired(
+            "edge_presented_positions requires edge_presented_position_set or "
+            "explicit bounded materialization"
+        )
+    result = edge_presented_position_set(network, ref)
+    return frozenset(result.materialize(max_points=result.cardinality))
 
 
 def boundary_presented_positions(
@@ -171,11 +177,16 @@ def boundary_presented_positions(
     Requires a Network ``validate_network`` has accepted.
     """
 
-    endpoint, fed_by_edge = _owned_endpoint(network, ref)
-    if endpoint is None or fed_by_edge:
-        return frozenset()
     item = resolve_input(network, ref)
-    return item.requirements.required_positions & _presented(item)
+    if not item.requirements.is_explicit or (
+        isinstance(item, InputInterface) and not item.port.beat_sequence.is_explicit
+    ):
+        raise MaterializationRequired(
+            "boundary_presented_positions requires boundary_presented_position_set or "
+            "explicit bounded materialization"
+        )
+    result = boundary_presented_position_set(network, ref)
+    return frozenset(result.materialize(max_points=result.cardinality))
 
 
 def unpresented_positions(network: DataflowNetwork, ref: RegionInputRef) -> frozenset[Coordinate]:
@@ -190,19 +201,61 @@ def unpresented_positions(network: DataflowNetwork, ref: RegionInputRef) -> froz
     Requires a Network ``validate_network`` has accepted.
     """
 
+    item = resolve_input(network, ref)
+    if not item.requirements.is_explicit or (
+        isinstance(item, InputInterface) and not item.port.beat_sequence.is_explicit
+    ):
+        raise MaterializationRequired(
+            "unpresented_positions requires unpresented_position_set or "
+            "explicit bounded materialization"
+        )
+    result = unpresented_position_set(network, ref)
+    return frozenset(result.materialize(max_points=result.cardinality))
+
+
+def edge_presented_position_set(network: DataflowNetwork, ref: RegionInputRef) -> CoordinateSet:
+    """Return the exact required-position set presented by a feeding edge."""
+
+    endpoint, fed_by_edge = _owned_endpoint(network, ref)
+    item = resolve_input(network, ref)
+    if endpoint is None or not fed_by_edge:
+        return CoordinateSet.empty(item.operand.position_domain)
+    return item.requirements.required_position_set.intersection(_presented_set(item))
+
+
+def boundary_presented_position_set(network: DataflowNetwork, ref: RegionInputRef) -> CoordinateSet:
+    """Return the exact required-position set presented at a boundary."""
+
+    endpoint, fed_by_edge = _owned_endpoint(network, ref)
+    item = resolve_input(network, ref)
+    if endpoint is None or fed_by_edge:
+        return CoordinateSet.empty(item.operand.position_domain)
+    return item.requirements.required_position_set.intersection(_presented_set(item))
+
+
+def unpresented_position_set(network: DataflowNetwork, ref: RegionInputRef) -> CoordinateSet:
+    """Return the exact required-position set not presented by an input port."""
+
     _owned_endpoint(network, ref)
     item = resolve_input(network, ref)
-    return item.requirements.required_positions - _presented(item)
+    return item.requirements.required_position_set.difference(_presented_set(item))
 
 
-def _presented(item: RegionInput) -> frozenset[Coordinate]:
-    return item.port.beat_sequence.image if isinstance(item, InputInterface) else frozenset()
+def _presented_set(item: RegionInput) -> CoordinateSet:
+    return (
+        item.port.beat_sequence.image_set
+        if isinstance(item, InputInterface)
+        else CoordinateSet.empty(item.operand.position_domain)
+    )
 
 
 __all__ = [
+    "boundary_presented_position_set",
     "boundary_presented_positions",
+    "edge_presented_position_set",
     "edge_presented_positions",
     "exposing_boundaries",
     "exposing_ports",
+    "unpresented_position_set",
     "unpresented_positions",
 ]

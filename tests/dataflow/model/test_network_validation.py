@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataclasses import replace
@@ -25,8 +27,19 @@ from finn.dataflow.model.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.model.network_validation import NetworkValidationReport, validate_network
+from finn.dataflow.model.network_validation import (
+    NetworkValidationBudget,
+    NetworkValidationReport,
+    validate_network,
+)
+from finn.dataflow.model.maps import (
+    CoordinateSet,
+    ExplicitCoordinateMap,
+    RectangularDomain,
+    ValidationCapabilityError,
+)
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
+from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_NETWORK_SEMANTICS
 from finn.dataflow.model.region import (
     BeatSequence,
     Coordinate,
@@ -64,7 +77,7 @@ def _network(*, interleaved: bool, source_port: Port | None = None) -> DataflowN
     weight = compute.input_interface("weight").port
     delivery = construct_cyclic_parameter_region(source_port or weight)
     position_map = PositionMap.identity(
-        delivery.output_interface("weight").port.beat_sequence.image
+        delivery.output_interface("weight").port.beat_sequence.image_set
     )
     return DataflowNetwork(
         (
@@ -119,7 +132,12 @@ def test_equal_width_with_wrong_field_order_is_rejected() -> None:
         weight.operand,
         BeatSequence(
             weight.beat_sequence.elements_per_beat,
-            tuple(tuple(reversed(beat)) for beat in weight.beat_sequence.beats),
+            tuple(
+                tuple(reversed(beat))
+                for beat in weight.beat_sequence.materialize_beats(
+                    max_fields=weight.beat_sequence.delivered_field_count
+                )
+            ),
         ),
     )
     report = validate_network(_network(interleaved=False, source_port=reversed_port))
@@ -237,7 +255,9 @@ def test_empty_and_duplicate_sink_lists_are_reported() -> None:
 def test_non_functional_and_non_bijective_position_maps_are_reported() -> None:
     network = _network(interleaved=False)
     edge = network.edges[0]
-    entries = edge.sinks[0].position_map.entries
+    entries = edge.sinks[0].position_map.materialize_entries(
+        max_entries=weight_position_count(network)
+    )
     non_functional = PositionMap((*entries, (entries[0][0], entries[1][1])))
     non_bijective = PositionMap(
         tuple(
@@ -273,7 +293,12 @@ def test_element_type_and_beat_order_mismatches_are_both_reported() -> None:
         Operand("W", DataType["UINT8"], weight.operand.shape),
         BeatSequence(
             weight.beat_sequence.elements_per_beat,
-            tuple(tuple(reversed(beat)) for beat in weight.beat_sequence.beats),
+            tuple(
+                tuple(reversed(beat))
+                for beat in weight.beat_sequence.materialize_beats(
+                    max_fields=weight.beat_sequence.delivered_field_count
+                )
+            ),
         ),
     )
     codes = {
@@ -286,9 +311,10 @@ def test_element_type_and_beat_order_mismatches_are_both_reported() -> None:
 def test_boundary_pass_and_sequence_mismatches_are_reported() -> None:
     network = _network(interleaved=False)
     boundary = network.boundaries[0]
-    wrong_sequence = replace(
-        boundary.external_beat_sequence,
-        beats=tuple(reversed(boundary.external_beat_sequence.beats)),
+    sequence = boundary.external_beat_sequence
+    wrong_sequence = BeatSequence(
+        sequence.elements_per_beat,
+        tuple(reversed(sequence.materialize_beats(max_fields=sequence.delivered_field_count))),
     )
     invalid = replace(
         boundary,
@@ -310,6 +336,301 @@ def test_invalid_ordered_channel_contract_is_reported() -> None:
     )
     report = validate_network(DataflowNetwork(network.nodes, (invalid_edge,), network.boundaries))
     assert "channel.contract_unsupported" in {issue.code for issue in report.issues}
+
+
+def weight_position_count(network: DataflowNetwork) -> int:
+    return network.node("compute").region.input_interface("weight").port.operand.position_count
+
+
+def _compact_edge_network(
+    source_sequence: BeatSequence,
+    sink_sequence: BeatSequence,
+    position_map: PositionMap,
+) -> DataflowNetwork:
+    source_affine = source_sequence.affine_map
+    sink_affine = sink_sequence.affine_map
+    assert source_affine is not None and sink_affine is not None
+    source_operand = Operand("source", INT8, source_affine.target.extents)
+    sink_operand = Operand("sink", INT8, sink_affine.target.extents)
+    source_schedule = LogicalSchedule(())
+    source_region = DataflowRegion(
+        source_schedule,
+        (),
+        (
+            OutputInterface(
+                Port("output", source_operand, source_sequence),
+                ScheduledOutputAvailability.affine(
+                    source_operand.position_domain,
+                    source_schedule.iteration_domain,
+                    view_extents=source_operand.shape,
+                    offset=0,
+                    coefficients=(0,) * source_operand.rank,
+                ),
+            ),
+        ),
+    )
+    sink_region = DataflowRegion(
+        LogicalSchedule(()),
+        (
+            InputInterface(
+                Port("input", sink_operand, sink_sequence),
+                ScheduledInputRequirements(),
+            ),
+        ),
+        (),
+    )
+    return DataflowNetwork(
+        (NetworkNode("source", source_region), NetworkNode("sink", sink_region)),
+        (
+            Edge(
+                "edge",
+                RegionEndpoint("source", "output"),
+                (SinkContract(RegionEndpoint("sink", "input"), position_map),),
+            ),
+        ),
+        (),
+    )
+
+
+def test_explicit_reversal_map_over_million_compact_occurrences_is_algebraic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    domain = RectangularDomain((2,))
+    beat_count = 1_000_000
+    source = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=beat_count,
+        view_extents=(beat_count // 2, 2, 1),
+        offset=0,
+        coefficients=(0, 1, 0),
+    )
+    sink = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=beat_count,
+        view_extents=(beat_count // 2, 2, 1),
+        offset=1,
+        coefficients=(0, -1, 0),
+    )
+    network = _compact_edge_network(
+        source,
+        sink,
+        PositionMap((((0,), (1,)), ((1,), (0,)))),
+    )
+
+    monkeypatch.setattr(
+        BeatSequence,
+        "position_at",
+        lambda *_args, **_kwargs: pytest.fail("algebraic dispatch enumerated beats"),
+    )
+    assert validate_network(network) == NetworkValidationReport()
+
+
+def test_unrecognized_compact_edge_requires_an_explicit_budget() -> None:
+    domain = RectangularDomain((2, 2))
+    source = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=4,
+        view_extents=(4, 1),
+        offset=0,
+        coefficients=(1, 0),
+    )
+    sink = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=4,
+        view_extents=(2, 2, 1),
+        offset=0,
+        coefficients=(1, 2, 0),
+    )
+    transpose = PositionMap.affine(
+        domain,
+        view_extents=(2, 2),
+        sink=domain,
+        offset=0,
+        coefficients=(1, 2),
+    )
+    network = _compact_edge_network(source, sink, transpose)
+
+    with pytest.raises(ValidationCapabilityError):
+        validate_network(network)
+    with pytest.raises(ValidationCapabilityError):
+        validate_network(
+            network,
+            expansion_budget=NetworkValidationBudget(max_generated_fields=3),
+        )
+    assert (
+        validate_network(
+            network,
+            expansion_budget=NetworkValidationBudget(max_generated_fields=4),
+        )
+        == NetworkValidationReport()
+    )
+
+
+def _explicit_edge_network(
+    count: int,
+    position_map: PositionMap,
+    *,
+    sink_extent: int | None = None,
+) -> tuple[DataflowNetwork, BeatSequence]:
+    sink_extent = count if sink_extent is None else sink_extent
+    sequence = BeatSequence(1, tuple(((index,),) for index in range(count)))
+    source_operand = Operand("source", INT8, (count,))
+    sink_operand = Operand("sink", INT8, (sink_extent,))
+    availability: dict[Coordinate, Coordinate] = {(index,): () for index in range(count)}
+    source = DataflowRegion(
+        LogicalSchedule(()),
+        (),
+        (
+            OutputInterface(
+                Port("output", source_operand, sequence),
+                ScheduledOutputAvailability(availability),
+            ),
+        ),
+    )
+    sink = DataflowRegion(
+        LogicalSchedule(()),
+        (InputInterface(Port("input", sink_operand, sequence), ScheduledInputRequirements()),),
+        (),
+    )
+    return (
+        DataflowNetwork(
+            (NetworkNode("source", source), NetworkNode("sink", sink)),
+            (
+                Edge(
+                    "edge",
+                    RegionEndpoint("source", "output"),
+                    (SinkContract(RegionEndpoint("sink", "input"), position_map),),
+                ),
+            ),
+            (),
+        ),
+        sequence,
+    )
+
+
+def test_network_construction_persistently_binds_explicit_maps_for_equality() -> None:
+    domain = RectangularDomain((2,))
+    explicit, _ = _explicit_edge_network(2, PositionMap((((0,), (0,)), ((1,), (1,)))))
+    compact, _ = _explicit_edge_network(2, PositionMap.identity(CoordinateSet.full(domain)))
+
+    assert validate_network(explicit) == NetworkValidationReport()
+    assert validate_network(compact) == NetworkValidationReport()
+    assert explicit == compact
+    assert DATAFLOW_NETWORK_SEMANTICS.values_equal(explicit, compact)
+    assert explicit.edges[0].sinks[0].position_map.source_set.cardinality == 2
+
+
+def test_duplicate_explicit_map_network_is_not_equal_to_a_valid_compact_network() -> None:
+    domain = RectangularDomain((2,))
+    malformed, _ = _explicit_edge_network(2, PositionMap((((0,), (0,)), ((0,), (0,)))))
+    valid, _ = _explicit_edge_network(2, PositionMap.identity(CoordinateSet.full(domain)))
+
+    malformed_codes = {issue.code for issue in validate_network(malformed)}
+    assert "position_map.source_not_function" in malformed_codes
+    assert "position_map.source_domain_mismatch" in malformed_codes
+    assert validate_network(valid) == NetworkValidationReport()
+    assert malformed != valid
+    assert not DATAFLOW_NETWORK_SEMANTICS.values_equal(malformed, valid)
+    assert len({malformed, valid}) == len({valid, malformed}) == 2
+
+
+def test_network_construction_binds_an_external_explicit_boundary_sequence() -> None:
+    network, unbound_sequence = _explicit_edge_network(2, PositionMap((((0,), (0,)), ((1,), (1,)))))
+    source = network.node("source").region
+    boundary = BoundaryContract(
+        "source",
+        RegionEndpoint("source", "output"),
+        unbound_sequence,
+    )
+    exposed = DataflowNetwork(
+        network.nodes,
+        (),
+        (
+            boundary,
+            BoundaryContract(
+                "sink",
+                RegionEndpoint("sink", "input"),
+                network.node("sink").region.input_interface("input").port.beat_sequence,
+            ),
+        ),
+    )
+
+    assert validate_network(exposed) == NetworkValidationReport()
+    assert (
+        exposed.boundaries[1].external_beat_sequence
+        == source.output_interface("output").port.beat_sequence
+    )
+
+
+def test_compact_identity_is_typed_against_both_different_operand_ambients() -> None:
+    source_domain = RectangularDomain((2,))
+    explicit, _ = _explicit_edge_network(
+        2,
+        PositionMap((((0,), (0,)), ((1,), (1,)))),
+        sink_extent=3,
+    )
+    compact, _ = _explicit_edge_network(
+        2,
+        PositionMap.identity(CoordinateSet.full(source_domain)),
+        sink_extent=3,
+    )
+
+    assert validate_network(explicit) == NetworkValidationReport()
+    assert validate_network(compact) == NetworkValidationReport()
+    assert explicit == compact
+    assert compact.edges[0].sinks[0].position_map.sink_set.ambient == RectangularDomain((3,))
+
+
+def test_all_explicit_validation_uses_one_lookup_not_linear_map_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 2_000
+    network, _ = _explicit_edge_network(
+        count,
+        PositionMap(tuple(((index,), (index,)) for index in range(count))),
+    )
+
+    monkeypatch.setattr(
+        ExplicitCoordinateMap,
+        "mapped",
+        lambda *_args, **_kwargs: pytest.fail("explicit validation rescanned map entries"),
+    )
+    assert validate_network(network) == NetworkValidationReport()
+
+
+def test_algebraic_mismatch_without_a_witness_uses_a_map_level_path() -> None:
+    domain = RectangularDomain((4,))
+    ordered = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=4,
+        view_extents=(4,),
+        offset=0,
+        coefficients=(1,),
+    )
+    transposed = BeatSequence.affine(
+        domain,
+        elements_per_beat=1,
+        beat_count=4,
+        view_extents=(2, 2),
+        offset=0,
+        coefficients=(1, 2),
+    )
+    network = _compact_edge_network(
+        ordered,
+        transposed,
+        PositionMap.identity(CoordinateSet.full(domain)),
+    )
+
+    mismatches = [
+        issue for issue in validate_network(network) if issue.code == "edge.beat_sequence_mismatch"
+    ]
+    assert len(mismatches) == 1
+    assert mismatches[0].path == "edge['edge'].sinks[0].beat_sequence"
 
 
 def _identity_region() -> DataflowRegion:

@@ -3,9 +3,11 @@
 
 import pytest
 
+from finn.dataflow.model.maps import RectangularDomain
 from finn.dataflow.model.region import (
     BeatSequence,
     LogicalSchedule,
+    ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
 from finn.dataflow.model.region_profiles import (
@@ -44,12 +46,18 @@ def test_canonical_containment_requirements_availability_and_stream(tensor, bloc
     ]
     assert len(positions) == len(set(positions))
     assert len(positions) == profile.field_count * schedule.iteration_count
-    assert all(multiplicity == 1 for _, multiplicity in requirements.entries)
+    assert all(
+        multiplicity == 1
+        for _, multiplicity in requirements.materialize_entries(max_entries=len(positions))
+    )
     assert requirements.occurrence_count == len(positions)
-    assert availability.domain == frozenset(positions)
+    assert set(availability.domain_set.materialize(max_points=len(positions))) == set(positions)
     assert sequence.beat_count == schedule.iteration_count
     assert sequence.elements_per_beat == profile.field_count
-    assert all(len(beat) == profile.field_count for beat in sequence.beats)
+    assert all(
+        len(beat) == profile.field_count
+        for beat in sequence.materialize_beats(max_fields=len(positions))
+    )
 
 
 def test_level_order_changes_beat_order():
@@ -71,8 +79,12 @@ def test_level_order_changes_beat_order():
     )
 
     assert default.construct_beat_sequence() != permuted.construct_beat_sequence()
-    assert set(default.construct_beat_sequence().beats) == set(
-        permuted.construct_beat_sequence().beats
+    default_sequence = default.construct_beat_sequence()
+    permuted_sequence = permuted.construct_beat_sequence()
+    assert set(
+        default_sequence.materialize_beats(max_fields=default_sequence.delivered_field_count)
+    ) == set(
+        permuted_sequence.materialize_beats(max_fields=permuted_sequence.delivered_field_count)
     )
 
 
@@ -96,7 +108,7 @@ def test_occurrence_bijection_changes_field_order():
     )
 
     assert default.schedule == reversed_fields.schedule
-    assert default.construct_beat_sequence().beats[0] == ((0,), (1,))
+    assert default.construct_beat_sequence().beat(0) == ((0,), (1,))
     assert reversed_fields.construct_beat_sequence().beats[0] == ((1,), (0,))
     assert default.construct_beat_sequence() != reversed_fields.construct_beat_sequence()
 
@@ -146,7 +158,7 @@ def test_partial_spatial_group_is_rejected_instead_of_padded():
     assert "profile.spatial_not_divisor" in tuple(issue.code for issue in error.value.issues)
 
 
-def test_profile_values_equal_direct_declarations_and_metadata_is_separate():
+def test_profile_binds_direct_declarations_before_semantic_comparison():
     profile = CanonicalExtentProfile(
         (4,),
         (4,),
@@ -156,9 +168,11 @@ def test_profile_values_equal_direct_declarations_and_metadata_is_separate():
     )
     direct_schedule = LogicalSchedule((("channel_block", 1), ("channel_within", 2)))
     direct_beats = explicit_beat_sequence(2, (((0,), (1,)), ((2,), (3,))))
+    constructed = profile.construct_beat_sequence()
 
     assert profile.schedule == direct_schedule
-    assert profile.construct_beat_sequence() == direct_beats
+    assert constructed != direct_beats
+    assert constructed == direct_beats.bind_position_domain(RectangularDomain((4,)))
     profile.certify(schedule=direct_schedule, beat_sequence=direct_beats)
 
 
@@ -175,12 +189,22 @@ def test_profile_certification_detects_claimed_normalized_value_mismatch():
     assert tuple(issue.code for issue in issues) == ("profile.normalized_value_mismatch",)
 
 
+def test_profile_certification_binds_equivalent_explicit_requirements() -> None:
+    profile = CanonicalExtentProfile((2,), (1,), (1,))
+    compact = profile.construct_requirements()
+    declared = ScheduledInputRequirements(
+        compact.materialize_entries(max_entries=compact.nonzero_entry_count)
+    )
+
+    assert profile.certification_issues(requirements=declared) == ()
+
+
 def test_extent_lifts_do_not_require_a_field_bijection():
     profile = CanonicalExtentProfile((4,), (4,), (2,))
 
     assert profile.schedule.iteration_count == 2
     assert profile.construct_requirements().occurrence_count == 4
-    assert len(profile.construct_availability().entries) == 4
+    assert profile.construct_availability().domain_set.cardinality == 4
     profile.certify()
 
 

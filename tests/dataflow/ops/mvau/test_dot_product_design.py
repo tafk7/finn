@@ -288,9 +288,15 @@ def test_the_selected_network_has_exactly_two_nodes_one_edge_three_boundaries() 
     assert edge.pass_correspondence is PassCorrespondence.ONE_TO_ONE
     assert edge.transport == DirectConnection()
     source = network.node("replay").region.output_interface("activation_out").port
-    entries = edge.sinks[0].position_map.entries
+    entries = edge.sinks[0].position_map.materialize_entries(
+        max_entries=source.beat_sequence.image_set.cardinality
+    )
     assert all(left == right for left, right in entries)
-    assert frozenset(left for left, _right in entries) == source.beat_sequence.image
+    assert set(left for left, _right in entries) == set(
+        source.beat_sequence.image_set.materialize(
+            max_points=source.beat_sequence.image_set.cardinality
+        )
+    )
 
 
 def test_the_design_reports_its_roles_and_active_candidates() -> None:

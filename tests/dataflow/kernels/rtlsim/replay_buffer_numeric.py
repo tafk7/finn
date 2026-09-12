@@ -176,10 +176,22 @@ def run_one(case: Case) -> int:
     )
 
     stimulus = _pack(
-        region.input_interface("activation_in").port.beat_sequence.beats, activations, width
+        region.input_interface("activation_in").port.beat_sequence.materialize_beats(
+            max_fields=region.input_interface(
+                "activation_in"
+            ).port.beat_sequence.delivered_field_count
+        ),
+        activations,
+        width,
     )
     expected = _pack(
-        region.output_interface("activation_out").port.beat_sequence.beats, activations, width
+        region.output_interface("activation_out").port.beat_sequence.materialize_beats(
+            max_fields=region.output_interface(
+                "activation_out"
+            ).port.beat_sequence.delivered_field_count
+        ),
+        activations,
+        width,
     )
     if len(stimulus) != case.repetitions * case.synapse_folds:
         print(f"{case.label}: compact beat count disagrees with the folding")

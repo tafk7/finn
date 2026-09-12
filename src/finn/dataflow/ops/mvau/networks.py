@@ -50,7 +50,7 @@ def construct_decomposed_mvau_network(
                 (
                     SinkContract(
                         RegionEndpoint(DOT_PRODUCT_NODE, "activation"),
-                        PositionMap.identity(produced.beat_sequence.image),
+                        PositionMap.identity(produced.beat_sequence.image_set),
                     ),
                 ),
             ),

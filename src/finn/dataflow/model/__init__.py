@@ -11,6 +11,7 @@ what will be built from it.
 
 ```text
 model/datatypes           QONNX datatype identity at the model boundary
+model/maps                detached finite domains and compact map algebra
 model/region              operands, schedules, requirements, ports, inputs
 model/region_profiles     construction profiles contributors build Regions from
 model/region_validation   Region semantic validation
@@ -47,6 +48,30 @@ from finn.dataflow.model.datatypes import (
     is_qonnx_datatype,
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
+)
+from finn.dataflow.model.maps import (
+    AffineRankMap,
+    Coordinate,
+    CoordinateSet,
+    ExplicitCoordinateMap,
+    FiniteCoordinateSet,
+    IdentityCoordinateMap,
+    InvalidMapError,
+    MapCapabilityError,
+    MaterializationLimitError,
+    MaterializationRequired,
+    OccurrenceAxis,
+    RectangularDomain,
+    SeparableAffineRequirements,
+    UnboundDomainError,
+    UnsupportedMapEncoding,
+    ValidationCapabilityError,
+    decode_coordinate_map,
+    decode_coordinate_set,
+    decode_requirement_rule,
+    encode_coordinate_map,
+    encode_coordinate_set,
+    encode_requirement_rule,
 )
 from finn.dataflow.model.region import (
     BeatSequence,
@@ -97,6 +122,7 @@ from finn.dataflow.model.network import (
     SinkContract,
 )
 from finn.dataflow.model.network_validation import (
+    NetworkValidationBudget,
     NetworkValidationIssue,
     NetworkValidationReport,
     is_network_structurally_well_formed,
@@ -111,10 +137,13 @@ from finn.dataflow.model.refs import (
     resolve_output,
 )
 from finn.dataflow.model.presentation import (
+    boundary_presented_position_set,
     boundary_presented_positions,
+    edge_presented_position_set,
     edge_presented_positions,
     exposing_boundaries,
     exposing_ports,
+    unpresented_position_set,
     unpresented_positions,
 )
 
@@ -129,21 +158,43 @@ __all__ = [
     "qonnx_datatype_width",
     "resolve_qonnx_datatype_name",
     # the Region model
+    "AffineRankMap",
     "BeatSequence",
     "BeatType",
+    "Coordinate",
+    "CoordinateSet",
     "DataflowRegion",
     "InputInterface",
     "InternalInput",
+    "ExplicitCoordinateMap",
+    "FiniteCoordinateSet",
+    "IdentityCoordinateMap",
+    "InvalidMapError",
     "LogicalSchedule",
     "NumericElementType",
+    "MapCapabilityError",
+    "MaterializationLimitError",
+    "MaterializationRequired",
+    "OccurrenceAxis",
     "Operand",
     "OutputInterface",
     "Port",
     "RegionInput",
     "RegionRefused",
+    "RectangularDomain",
     "ScheduleLevel",
     "ScheduledInputRequirements",
     "ScheduledOutputAvailability",
+    "SeparableAffineRequirements",
+    "UnboundDomainError",
+    "UnsupportedMapEncoding",
+    "ValidationCapabilityError",
+    "decode_coordinate_map",
+    "decode_coordinate_set",
+    "decode_requirement_rule",
+    "encode_coordinate_map",
+    "encode_coordinate_set",
+    "encode_requirement_rule",
     "element_width",
     "is_element_type",
     # construction profiles
@@ -173,6 +224,7 @@ __all__ = [
     "RegionEndpoint",
     "SinkContract",
     # Network validation
+    "NetworkValidationBudget",
     "NetworkValidationIssue",
     "NetworkValidationReport",
     "is_network_structurally_well_formed",
@@ -185,9 +237,12 @@ __all__ = [
     "resolve_input",
     "resolve_output",
     # exposure and presentation
+    "boundary_presented_position_set",
     "boundary_presented_positions",
+    "edge_presented_position_set",
     "edge_presented_positions",
     "exposing_boundaries",
     "exposing_ports",
+    "unpresented_position_set",
     "unpresented_positions",
 ]

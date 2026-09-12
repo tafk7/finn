@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from finn.dataflow.model import network_validation, presentation
+from finn.dataflow.model.maps import CoordinateSet
 from finn.dataflow.model.network import (
     DataflowNetwork,
     Edge,
@@ -31,11 +32,11 @@ from finn.dataflow.model.network import (
 )
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.presentation import (
-    boundary_presented_positions,
-    edge_presented_positions,
+    boundary_presented_position_set,
+    edge_presented_position_set,
     exposing_boundaries,
     exposing_ports,
-    unpresented_positions,
+    unpresented_position_set,
 )
 from finn.dataflow.model.refs import NetworkOperandError, RegionInputRef
 from finn.dataflow.model.region import (
@@ -75,9 +76,9 @@ def test_a_boundary_exposed_matrix_is_presented_at_the_boundary():
     reference = RegionInputRef("compute", "W")
 
     assert not validate_network(network)
-    assert boundary_presented_positions(network, reference) == WHOLE_MATRIX.required_positions
-    assert edge_presented_positions(network, reference) == frozenset()
-    assert unpresented_positions(network, reference) == frozenset()
+    assert boundary_presented_position_set(network, reference).is_full
+    assert edge_presented_position_set(network, reference).is_empty
+    assert unpresented_position_set(network, reference).is_empty
     assert tuple(item.id for item in exposing_boundaries(network, reference)) == ("weight",)
 
 
@@ -92,9 +93,9 @@ def test_an_internal_matrix_is_required_and_presented_nowhere():
     reference = RegionInputRef("compute", "W")
 
     assert not validate_network(network)
-    assert unpresented_positions(network, reference) == WHOLE_MATRIX.required_positions
-    assert edge_presented_positions(network, reference) == frozenset()
-    assert boundary_presented_positions(network, reference) == frozenset()
+    assert unpresented_position_set(network, reference).is_full
+    assert edge_presented_position_set(network, reference).is_empty
+    assert boundary_presented_position_set(network, reference).is_empty
     assert exposing_ports(network, reference) == ()
     assert exposing_boundaries(network, reference) == ()
 
@@ -112,13 +113,13 @@ def test_a_matrix_supplied_over_an_edge_is_edge_presented():
     memory = RegionInputRef("memory", "W")
 
     assert not validate_network(network)
-    assert edge_presented_positions(network, consumer) == WHOLE_MATRIX.required_positions
-    assert unpresented_positions(network, consumer) == frozenset()
-    assert boundary_presented_positions(network, consumer) == frozenset()
+    assert edge_presented_position_set(network, consumer).is_full
+    assert unpresented_position_set(network, consumer).is_empty
+    assert boundary_presented_position_set(network, consumer).is_empty
     # The supplier requires the matrix too, and nothing presents it there.
-    assert unpresented_positions(network, memory) == frozenset(WHOLE.image)
-    assert edge_presented_positions(network, memory) == frozenset()
-    assert boundary_presented_positions(network, memory) == frozenset()
+    assert unpresented_position_set(network, memory).is_full
+    assert edge_presented_position_set(network, memory).is_empty
+    assert boundary_presented_position_set(network, memory).is_empty
     assert exposing_ports(network, memory) == ()
 
 
@@ -134,9 +135,15 @@ def test_an_edge_fed_port_can_still_present_only_part_of_its_requirement():
     consumer = RegionInputRef("compute", "W")
 
     assert not validate_network(network)
-    assert edge_presented_positions(network, consumer) == frozenset(UPPER.image)
-    assert unpresented_positions(network, consumer) == frozenset({(0, 0), (1, 0)})
-    assert boundary_presented_positions(network, consumer) == frozenset()
+    assert edge_presented_position_set(network, consumer).materialize(max_points=2) == (
+        (0, 1),
+        (1, 1),
+    )
+    assert unpresented_position_set(network, consumer).materialize(max_points=2) == (
+        (0, 0),
+        (1, 0),
+    )
+    assert boundary_presented_position_set(network, consumer).is_empty
 
 
 def test_one_presentation_can_serve_several_scheduled_occurrences():
@@ -175,8 +182,8 @@ def test_one_presentation_can_serve_several_scheduled_occurrences():
     assert not validate_region(region)
     assert thrice.occurrence_count == 6
     assert region.input_interface("x_in").port.beat_sequence.delivered_field_count == 2
-    assert unpresented_positions(network, reference) == frozenset()
-    assert boundary_presented_positions(network, reference) == thrice.required_positions
+    assert unpresented_position_set(network, reference).is_empty
+    assert boundary_presented_position_set(network, reference).is_full
 
 
 # -- malformed endpoint ownership is refused, not described -------------------
@@ -199,7 +206,7 @@ def test_presentation_queries_refuse_an_endpoint_no_one_owns():
 
     assert validate_network(unowned)
     with pytest.raises(NetworkOperandError, match="exactly one is required"):
-        unpresented_positions(unowned, reference)
+        unpresented_position_set(unowned, reference)
 
 
 def test_presentation_queries_refuse_an_endpoint_owned_twice():
@@ -207,7 +214,12 @@ def test_presentation_queries_refuse_an_endpoint_owned_twice():
     edge = Edge(
         "weight_supply",
         RegionEndpoint("memory", "w_out"),
-        (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(WHOLE.image)),),
+        (
+            SinkContract(
+                RegionEndpoint("compute", "w_in"),
+                PositionMap.identity(CoordinateSet.full(WEIGHT.position_domain)),
+            ),
+        ),
     )
     doubly_owned = framed(
         consumer,
@@ -217,7 +229,7 @@ def test_presentation_queries_refuse_an_endpoint_owned_twice():
     )
 
     with pytest.raises(NetworkOperandError, match="exactly one is required"):
-        edge_presented_positions(doubly_owned, RegionInputRef("compute", "W"))
+        edge_presented_position_set(doubly_owned, RegionInputRef("compute", "W"))
 
 
 # -- the precondition, and who discharges it ----------------------------------
@@ -246,7 +258,12 @@ def test_validation_catches_an_edge_with_no_source():
     dangling = Edge(
         "weight_supply",
         RegionEndpoint("absent", "w_out"),
-        (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(WHOLE.image)),),
+        (
+            SinkContract(
+                RegionEndpoint("compute", "w_in"),
+                PositionMap.identity(CoordinateSet.full(WEIGHT.position_domain)),
+            ),
+        ),
     )
 
     assert "edge.source_missing_or_not_output" in {
@@ -263,7 +280,12 @@ def test_validation_catches_an_edge_whose_sides_disagree():
     mismatched = Edge(
         "weight_supply",
         RegionEndpoint("memory", "w_out"),
-        (SinkContract(RegionEndpoint("compute", "w_in"), PositionMap.identity(WHOLE.image)),),
+        (
+            SinkContract(
+                RegionEndpoint("compute", "w_in"),
+                PositionMap.identity(CoordinateSet.full(WEIGHT.position_domain)),
+            ),
+        ),
     )
     network = framed(
         consumer,
@@ -299,9 +321,9 @@ def test_presentation_does_not_revalidate_the_network(monkeypatch):
 
     assert exposing_ports(network, consumer)
     assert exposing_boundaries(network, RegionInputRef("compute", "X"))
-    assert edge_presented_positions(network, consumer) == WHOLE_MATRIX.required_positions
-    assert boundary_presented_positions(network, consumer) == frozenset()
-    assert unpresented_positions(network, memory) == frozenset(WHOLE.image)
+    assert edge_presented_position_set(network, consumer).is_full
+    assert boundary_presented_position_set(network, consumer).is_empty
+    assert unpresented_position_set(network, memory).is_full
 
 
 def test_presentation_names_no_validator_at_all():

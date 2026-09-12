@@ -925,7 +925,7 @@ def _network_property(
             identity = (
                 PositionMap(())
                 if source_port is None
-                else PositionMap.identity(source_port.beat_sequence.image)
+                else PositionMap.identity(source_port.beat_sequence.image_set)
             )
             sinks: list[SinkContract] = []
             for index, sink in enumerate(connection.sinks):

@@ -214,9 +214,9 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     assert activation.correspondence is CoordinateMapping.FLATTEN_LEADING
     assert activation.source_shape == (2, 8)
     assert activation.semantic_shape == (2, 8)
-    assert not activation.edge_presented
-    assert activation.boundary_presented
-    assert not activation.unpresented
+    assert activation.edge_presented_set.is_empty
+    assert not activation.boundary_presented_set.is_empty
+    assert activation.unpresented_set.is_empty
     assert expanded.tensor == "expanded"
     assert expanded.semantic_operand == RegionOutputRef("replay", "X")
     assert expanded.placement == External("expanded", "replay", "activation_out")
@@ -331,9 +331,9 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
     for name in (
         "exposing_ports",
         "exposing_boundaries",
-        "edge_presented_positions",
-        "boundary_presented_positions",
-        "unpresented_positions",
+        "edge_presented_position_set",
+        "boundary_presented_position_set",
+        "unpresented_position_set",
     ):
         monkeypatch.setattr(mapping_module, name, unexpected_presentation)
 

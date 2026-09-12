@@ -3,6 +3,9 @@
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
+import pytest
+
+from finn.dataflow.model.maps import MapCapabilityError, RectangularDomain
 from finn.dataflow.model.region import (
     BeatSequence,
     DataflowRegion,
@@ -47,7 +50,7 @@ def test_s1_rank_zero_scalar_pass_is_structurally_valid():
         (_output("out", scalar_out, (((),),), {(): ()}),),
     )
 
-    assert region.schedule.iteration_points == ((),)
+    assert region.schedule.materialize_points(max_points=1) == ((),)
     assert validate_region(region).issues == ()
 
 
@@ -84,7 +87,7 @@ def test_s4_locally_supplied_input_position_is_structurally_valid():
         (),
     )
 
-    assert (1,) not in region.input_interface("in").port.beat_sequence.image
+    assert not region.input_interface("in").port.beat_sequence.image_set.contains((1,))
     assert validate_region(region).issues == ()
 
 
@@ -329,3 +332,75 @@ def test_an_internal_input_is_not_a_port_and_collides_with_no_port_id():
     )
     assert "port.id_duplicate" not in _codes(region)
     assert tuple(port.id for port in region.ports) == ("shared",)
+
+
+def test_compact_zero_field_sequence_reaches_the_region_validator():
+    operand = Operand("x", ELEMENT_TYPE, (1,))
+    sequence = BeatSequence.affine(
+        operand.position_domain,
+        elements_per_beat=0,
+        beat_count=1,
+        view_extents=(0,),
+        offset=0,
+        coefficients=(0,),
+    )
+    region = DataflowRegion(
+        LogicalSchedule(()),
+        (InputInterface(Port("in", operand, sequence), ScheduledInputRequirements()),),
+        (),
+    )
+
+    assert "beat.elements_per_beat_not_positive" in _codes(region)
+
+
+def test_out_of_bounds_affine_requirement_reaches_the_region_validator():
+    schedule = LogicalSchedule((("o", 4), ("k", 3)))
+    operand = Operand("x", ELEMENT_TYPE, (6,))
+    requirements = ScheduledInputRequirements.affine(
+        schedule.iteration_domain,
+        operand.position_domain,
+        base=(1000,),
+        iteration_coefficients=((1, 1),),
+    )
+    region = DataflowRegion(
+        schedule,
+        (InternalInput(operand, requirements),),
+        (),
+    )
+
+    assert _codes(region) == ("requirement.position_out_of_domain",)
+
+
+def test_requirement_zero_and_negative_multiplicity_have_distinct_boundaries():
+    schedule = LogicalSchedule((("i", 2),))
+    operand = Operand("x", ELEMENT_TYPE, (2,))
+    zero = ScheduledInputRequirements.affine(
+        schedule.iteration_domain,
+        operand.position_domain,
+        base=(0,),
+        iteration_coefficients=((1,),),
+        multiplicity=0,
+    )
+    negative = ScheduledInputRequirements.affine(
+        schedule.iteration_domain,
+        operand.position_domain,
+        base=(0,),
+        iteration_coefficients=((1,),),
+        multiplicity=-1,
+    )
+
+    assert zero.nonzero_entry_count == zero.occurrence_count == 0
+    assert zero.required_position_set.is_empty
+    assert "requirement.multiplicity_negative" in _codes(
+        DataflowRegion(schedule, (InternalInput(operand, negative),), ())
+    )
+
+
+def test_in_bounds_correlated_requirement_is_a_constructor_capability_refusal():
+    with pytest.raises(MapCapabilityError):
+        ScheduledInputRequirements.affine(
+            RectangularDomain((2,)),
+            RectangularDomain((2, 2)),
+            base=(0, 0),
+            iteration_coefficients=((1,), (1,)),
+        )

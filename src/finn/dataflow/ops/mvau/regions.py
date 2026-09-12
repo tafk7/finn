@@ -16,6 +16,7 @@ layer turns into a rejecting absence rather than a crash.
 
 from __future__ import annotations
 
+from finn.dataflow.model.maps import OccurrenceAxis, RectangularDomain
 from finn.dataflow.model.region import (
     BeatSequence,
     Coordinate,
@@ -140,14 +141,13 @@ def _canonical_output_beats(
 def _standard_activation_requirements(
     repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
 ) -> ScheduledInputRequirements:
-    requirements: dict[RequirementKey, int] = {}
-    for repetition in range(repetitions):
-        for neuron_fold in range(neuron_folds):
-            for synapse_fold in range(synapse_folds):
-                iteration = (repetition, neuron_fold, synapse_fold)
-                for lane in range(simd):
-                    requirements[(iteration, (repetition, synapse_fold * simd + lane))] = 1
-    return ScheduledInputRequirements(requirements)
+    return ScheduledInputRequirements.affine(
+        RectangularDomain((repetitions, neuron_folds, synapse_folds)),
+        RectangularDomain((repetitions, synapse_folds * simd)),
+        base=(0, 0),
+        iteration_coefficients=((1, 0, 0), (0, 0, simd)),
+        occurrences=(OccurrenceAxis(1, simd, 1),),
+    )
 
 
 def _standard_weight_requirements(
@@ -157,19 +157,16 @@ def _standard_weight_requirements(
     pe: int,
     simd: int,
 ) -> ScheduledInputRequirements:
-    requirements: dict[RequirementKey, int] = {}
-    for repetition in range(repetitions):
-        for neuron_fold in range(neuron_folds):
-            for synapse_fold in range(synapse_folds):
-                iteration = (repetition, neuron_fold, synapse_fold)
-                for pe_index in range(pe):
-                    for lane in range(simd):
-                        position = (
-                            neuron_fold * pe + pe_index,
-                            synapse_fold * simd + lane,
-                        )
-                        requirements[(iteration, position)] = 1
-    return ScheduledInputRequirements(requirements)
+    return ScheduledInputRequirements.affine(
+        RectangularDomain((repetitions, neuron_folds, synapse_folds)),
+        RectangularDomain((neuron_folds * pe, synapse_folds * simd)),
+        base=(0, 0),
+        iteration_coefficients=((0, pe, 0), (0, 0, simd)),
+        occurrences=(
+            OccurrenceAxis(0, pe, 1),
+            OccurrenceAxis(1, simd, 1),
+        ),
+    )
 
 
 def _standard_weight_beats(
@@ -239,12 +236,17 @@ def construct_standard_mvau_weight_port(
     )
     neuron_folds = matrix_height // pe
     synapse_folds = matrix_width // simd
+    weight = _weight_operand(matrix_height, matrix_width, weight_element_type)
     return Port(
         "weight",
-        _weight_operand(matrix_height, matrix_width, weight_element_type),
-        BeatSequence(
-            pe * simd,
-            _standard_weight_beats(repetitions, neuron_folds, synapse_folds, pe, simd),
+        weight,
+        BeatSequence.affine(
+            weight.position_domain,
+            elements_per_beat=pe * simd,
+            beat_count=repetitions * neuron_folds * synapse_folds,
+            view_extents=(repetitions, neuron_folds, synapse_folds, pe, simd),
+            offset=0,
+            coefficients=(0, pe * matrix_width, simd, matrix_width, 1),
         ),
     )
 
@@ -298,20 +300,17 @@ def construct_batch_interleaved_mvau_weight_port(
 def _standard_output_availability(
     repetitions: int, neuron_folds: int, synapse_folds: int, pe: int
 ) -> ScheduledOutputAvailability:
-    availability: dict[Coordinate, Coordinate] = {}
-    for repetition in range(repetitions):
-        for neuron_fold in range(neuron_folds):
-            for pe_index in range(pe):
-                availability[(repetition, neuron_fold * pe + pe_index)] = (
-                    repetition,
-                    neuron_fold,
-                    synapse_folds - 1,
-                )
-    return ScheduledOutputAvailability(availability)
+    return ScheduledOutputAvailability.affine(
+        RectangularDomain((repetitions, neuron_folds * pe)),
+        RectangularDomain((repetitions, neuron_folds, synapse_folds)),
+        view_extents=(repetitions, neuron_folds, pe),
+        offset=synapse_folds - 1,
+        coefficients=(neuron_folds * synapse_folds, synapse_folds, 0),
+    )
 
 
 def _replay_output_availability(
-    repetitions: int, synapse_folds: int, simd: int
+    repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
 ) -> ScheduledOutputAvailability:
     """A guaranteed logical completion point for each output position.
 
@@ -321,13 +320,13 @@ def _replay_output_availability(
     by ``nf = 0``; earlier completion and exact physical emission are unspecified.
     """
 
-    availability: dict[Coordinate, Coordinate] = {}
-    for repetition in range(repetitions):
-        for synapse_fold in range(synapse_folds):
-            for lane in range(simd):
-                position = (repetition, synapse_fold * simd + lane)
-                availability[position] = (repetition, 0, synapse_fold)
-    return ScheduledOutputAvailability(availability)
+    return ScheduledOutputAvailability.affine(
+        RectangularDomain((repetitions, synapse_folds * simd)),
+        RectangularDomain((repetitions, neuron_folds, synapse_folds)),
+        view_extents=(repetitions, synapse_folds, simd),
+        offset=0,
+        coefficients=(neuron_folds * synapse_folds, 1, 0),
+    )
 
 
 def construct_activation_replay_region(
@@ -367,6 +366,22 @@ def construct_activation_replay_region(
         )
     )
     activation = _activation_operand(repetitions, matrix_width, activation_element_type)
+    input_beats = BeatSequence.affine(
+        activation.position_domain,
+        elements_per_beat=simd,
+        beat_count=repetitions * synapse_folds,
+        view_extents=(repetitions, synapse_folds, simd),
+        offset=0,
+        coefficients=(matrix_width, simd, 1),
+    )
+    output_beats = BeatSequence.affine(
+        activation.position_domain,
+        elements_per_beat=simd,
+        beat_count=repetitions * neuron_folds * synapse_folds,
+        view_extents=(repetitions, neuron_folds, synapse_folds, simd),
+        offset=0,
+        coefficients=(matrix_width, 0, simd, 1),
+    )
     return DataflowRegion(
         schedule,
         (
@@ -374,7 +389,7 @@ def construct_activation_replay_region(
                 Port(
                     "activation_in",
                     activation,
-                    BeatSequence(simd, _compact_activation_beats(repetitions, synapse_folds, simd)),
+                    input_beats,
                 ),
                 _standard_activation_requirements(repetitions, neuron_folds, synapse_folds, simd),
             ),
@@ -384,12 +399,9 @@ def construct_activation_replay_region(
                 Port(
                     "activation_out",
                     activation,
-                    BeatSequence(
-                        simd,
-                        _expanded_activation_beats(repetitions, neuron_folds, synapse_folds, simd),
-                    ),
+                    output_beats,
                 ),
-                _replay_output_availability(repetitions, synapse_folds, simd),
+                _replay_output_availability(repetitions, neuron_folds, synapse_folds, simd),
             ),
         ),
     )
@@ -461,14 +473,27 @@ def _standard_region(
     )
     activation = _activation_operand(repetitions, matrix_width, activation_element_type)
     output = _output_operand(repetitions, matrix_height, output_element_type)
-    activation_beats = (
-        _expanded_activation_beats(repetitions, neuron_folds, synapse_folds, simd)
-        if expanded_activation
-        else _compact_activation_beats(repetitions, synapse_folds, simd)
+    activation_beats = BeatSequence.affine(
+        activation.position_domain,
+        elements_per_beat=simd,
+        beat_count=(
+            repetitions * neuron_folds * synapse_folds
+            if expanded_activation
+            else repetitions * synapse_folds
+        ),
+        view_extents=(
+            (repetitions, neuron_folds, synapse_folds, simd)
+            if expanded_activation
+            else (repetitions, synapse_folds, simd)
+        ),
+        offset=0,
+        coefficients=(
+            (matrix_width, 0, simd, 1) if expanded_activation else (matrix_width, simd, 1)
+        ),
     )
     inputs: list[RegionInput] = [
         InputInterface(
-            Port("activation", activation, BeatSequence(simd, activation_beats)),
+            Port("activation", activation, activation_beats),
             _standard_activation_requirements(repetitions, neuron_folds, synapse_folds, simd),
         )
     ]
@@ -504,7 +529,14 @@ def _standard_region(
         Port(
             "output",
             output,
-            BeatSequence(pe, _canonical_output_beats(repetitions, neuron_folds, pe)),
+            BeatSequence.affine(
+                output.position_domain,
+                elements_per_beat=pe,
+                beat_count=repetitions * neuron_folds,
+                view_extents=(repetitions, neuron_folds, pe),
+                offset=0,
+                coefficients=(matrix_height, pe, 1),
+            ),
         ),
         _standard_output_availability(repetitions, neuron_folds, synapse_folds, pe),
     )
@@ -786,13 +818,18 @@ def construct_weight_stream_region(
     )
     neuron_folds = matrix_height // pe
     synapse_folds = matrix_width // simd
+    weight = _weight_operand(matrix_height, matrix_width, weight_element_type)
     return construct_cyclic_parameter_region(
         Port(
             "weight",
-            _weight_operand(matrix_height, matrix_width, weight_element_type),
-            BeatSequence(
-                pe * simd,
-                _supplied_weight_beats(repetitions, neuron_folds, synapse_folds, pe, simd),
+            weight,
+            BeatSequence.affine(
+                weight.position_domain,
+                elements_per_beat=pe * simd,
+                beat_count=repetitions * neuron_folds * synapse_folds,
+                view_extents=(repetitions, neuron_folds, synapse_folds, pe, simd),
+                offset=0,
+                coefficients=(0, pe * matrix_width, simd, matrix_width, 1),
             ),
         )
     )

@@ -6,9 +6,18 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
+from finn.dataflow.model.maps import (
+    AffineRankMap,
+    IdentityCoordinateMap,
+    InvalidMapError,
+    MapCapabilityError,
+    ValidationCapabilityError,
+    rank_transform_affine,
+    require_int,
+)
 from finn.dataflow.model.network import (
     BoundaryContract,
     DataflowNetwork,
@@ -18,6 +27,7 @@ from finn.dataflow.model.network import (
     NetworkNode,
     OrderedChannel,
     PassCorrespondence,
+    PositionMap,
     RegionEndpoint,
 )
 from finn.dataflow.model.region import InputInterface, OutputInterface, Port
@@ -52,6 +62,24 @@ class NetworkValidationReport:
         return bool(self.issues)
 
 
+@dataclass(frozen=True, slots=True)
+class NetworkValidationBudget:
+    """Explicit limit for generated beat fields in an exact fallback."""
+
+    max_generated_fields: int
+
+    def __post_init__(self) -> None:
+        value = require_int(self.max_generated_fields, "max_generated_fields")
+        if value < 0:
+            raise ValueError("max_generated_fields must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class _OrderedAgreementMismatch:
+    ordinal: int | None = None
+    field: int | None = None
+
+
 def _duplicates(values: tuple[str, ...]) -> tuple[str, ...]:
     counts = Counter(values)
     return tuple(sorted(value for value, count in counts.items() if count > 1))
@@ -81,32 +109,82 @@ def _validate_position_map(
     sink_index: int,
     source: Port,
     sink: Port,
+    expansion_budget: NetworkValidationBudget | None,
 ) -> list[NetworkValidationIssue]:
     path = f"edge[{edge.id!r}].sinks[{sink_index}]"
     issues = []
-    entries = edge.sinks[sink_index].position_map.entries
-    source_positions = tuple(position for position, _mapped in entries)
-    sink_positions = tuple(mapped for _position, mapped in entries)
-    position_map_usable = True
-    if len(source_positions) != len(set(source_positions)):
-        position_map_usable = False
-        issues.append(
-            NetworkValidationIssue(
-                "position_map.source_not_function",
-                f"{path}.position_map",
-                "a source position is mapped more than once",
-            )
+    declared_map = edge.sinks[sink_index].position_map
+    try:
+        position_map = declared_map.bind_domains(
+            source.operand.position_domain, sink.operand.position_domain
         )
-    if len(sink_positions) != len(set(sink_positions)):
-        position_map_usable = False
-        issues.append(
-            NetworkValidationIssue(
-                "position_map.not_injective",
-                f"{path}.position_map",
-                "more than one source position maps to the same sink position",
+        domains_usable = True
+    except MapCapabilityError as exc:
+        raise ValidationCapabilityError(
+            "position-map domains cannot be compared by the compact validator"
+        ) from exc
+    except ValueError:
+        position_map = declared_map
+        domains_usable = False
+    position_map_usable = domains_usable
+    entries = position_map.entries if position_map.is_explicit else None
+    explicit_lookup: Mapping[tuple[int, ...], tuple[int, ...]] | None = None
+    if entries is not None:
+        source_positions = tuple(position for position, _mapped in entries)
+        sink_positions = tuple(mapped for _position, mapped in entries)
+        if len(source_positions) != len(set(source_positions)):
+            position_map_usable = False
+            issues.append(
+                NetworkValidationIssue(
+                    "position_map.source_not_function",
+                    f"{path}.position_map",
+                    "a source position is mapped more than once",
+                )
             )
-        )
-    if frozenset(source_positions) != source.beat_sequence.image:
+        else:
+            explicit_lookup = dict(entries)
+        if len(sink_positions) != len(set(sink_positions)):
+            position_map_usable = False
+            issues.append(
+                NetworkValidationIssue(
+                    "position_map.not_injective",
+                    f"{path}.position_map",
+                    "more than one source position maps to the same sink position",
+                )
+            )
+        if not all(source.operand.contains_position(position) for position in source_positions):
+            position_map_usable = False
+        if not all(sink.operand.contains_position(position) for position in sink_positions):
+            position_map_usable = False
+    else:
+        coordinate_map = position_map.coordinate_map
+        if isinstance(coordinate_map, AffineRankMap) and not coordinate_map.is_injective:
+            position_map_usable = False
+            issues.append(
+                NetworkValidationIssue(
+                    "position_map.not_injective",
+                    f"{path}.position_map",
+                    "compact position map is not injective on its typed source domain",
+                )
+            )
+
+    if domains_usable:
+        try:
+            source_set = position_map.source_set
+            sink_set = position_map.sink_set
+            source_image = source.beat_sequence.image_set
+            sink_image = sink.beat_sequence.image_set
+            source_matches = source_set == source_image
+            sink_matches = sink_set == sink_image
+        except (InvalidMapError, MapCapabilityError, ValueError):
+            position_map_usable = False
+            source_matches = False
+            sink_matches = False
+    else:
+        source_matches = False
+        sink_matches = False
+
+    if not source_matches:
         position_map_usable = False
         issues.append(
             NetworkValidationIssue(
@@ -115,7 +193,7 @@ def _validate_position_map(
                 "position-map domain does not equal the source beat image",
             )
         )
-    if frozenset(sink_positions) != sink.beat_sequence.image:
+    if not sink_matches:
         position_map_usable = False
         issues.append(
             NetworkValidationIssue(
@@ -153,23 +231,125 @@ def _validate_position_map(
             )
         )
     if position_map_usable and equal_field_count and equal_beat_count:
-        mapping = dict(entries)
-        for ordinal, source_beat in enumerate(source.beat_sequence.beats):
-            sink_beat = sink.beat_sequence.beats[ordinal]
-            for field, source_position in enumerate(source_beat):
-                if mapping[source_position] != sink_beat[field]:
-                    issues.append(
-                        NetworkValidationIssue(
-                            "edge.beat_sequence_mismatch",
-                            f"{path}.beat[{ordinal}].field[{field}]",
-                            "mapped source position does not equal the sink position",
-                        )
-                    )
+        mismatch = _ordered_agreement_mismatch(
+            position_map,
+            source,
+            sink,
+            expansion_budget,
+            explicit_lookup=explicit_lookup,
+        )
+        if mismatch is not None:
+            issue_path = (
+                f"{path}.beat_sequence"
+                if mismatch.ordinal is None
+                else f"{path}.beat[{mismatch.ordinal}].field[{mismatch.field}]"
+            )
+            issues.append(
+                NetworkValidationIssue(
+                    "edge.beat_sequence_mismatch",
+                    issue_path,
+                    "mapped source position does not equal the sink position",
+                )
+            )
     return issues
 
 
+def _recognized_rank_form(position_map: PositionMap, source: Port, sink: Port) -> str | None:
+    coordinate_map = position_map.coordinate_map
+    if isinstance(coordinate_map, IdentityCoordinateMap):
+        return "identity"
+    if isinstance(coordinate_map, AffineRankMap):
+        if coordinate_map.is_rank_identity:
+            return "identity"
+        if coordinate_map.is_rank_reversal:
+            return "reversal"
+        return None
+    entries = position_map.entries
+    cardinality = source.operand.position_domain.cardinality
+    if len(entries) != cardinality:
+        return None
+    source_domain = source.operand.position_domain
+    sink_domain = sink.operand.position_domain
+    if all(
+        sink_domain.rank_of(target) == source_domain.rank_of(origin) for origin, target in entries
+    ):
+        return "identity"
+    if all(
+        sink_domain.rank_of(target) == cardinality - 1 - source_domain.rank_of(origin)
+        for origin, target in entries
+    ):
+        return "reversal"
+    return None
+
+
+def _ordered_agreement_mismatch(
+    position_map: PositionMap,
+    source: Port,
+    sink: Port,
+    expansion_budget: NetworkValidationBudget | None,
+    *,
+    explicit_lookup: Mapping[tuple[int, ...], tuple[int, ...]] | None,
+) -> _OrderedAgreementMismatch | None:
+    source_beats = source.beat_sequence
+    sink_beats = sink.beat_sequence
+
+    def mapped(position: tuple[int, ...]) -> tuple[int, ...]:
+        return (
+            explicit_lookup[position]
+            if explicit_lookup is not None
+            else position_map.mapped(position)
+        )
+
+    if source_beats.is_explicit:
+        for ordinal, beat in enumerate(source_beats.beats):
+            for field, source_position in enumerate(beat):
+                if mapped(source_position) != sink_beats.position_at(ordinal, field):
+                    return _OrderedAgreementMismatch(ordinal, field)
+        return None
+    if sink_beats.is_explicit:
+        for ordinal, beat in enumerate(sink_beats.beats):
+            for field, sink_position in enumerate(beat):
+                source_position = source_beats.position_at(ordinal, field)
+                if mapped(source_position) != sink_position:
+                    return _OrderedAgreementMismatch(ordinal, field)
+        return None
+
+    rank_form = _recognized_rank_form(position_map, source, sink)
+    source_affine = source_beats.affine_map
+    sink_affine = sink_beats.affine_map
+    assert source_affine is not None and sink_affine is not None
+    if rank_form is not None:
+        composed = rank_transform_affine(
+            source_affine,
+            target=sink.operand.position_domain,
+            reverse=rank_form == "reversal",
+        )
+        return None if composed == sink_affine else _OrderedAgreementMismatch()
+
+    field_count = source_beats.delivered_field_count
+    if expansion_budget is None:
+        raise ValidationCapabilityError(
+            "compact edge agreement is unsupported without NetworkValidationBudget"
+        )
+    if field_count > expansion_budget.max_generated_fields:
+        raise ValidationCapabilityError(
+            "compact edge agreement requires "
+            f"{field_count} generated fields, exceeding budget "
+            f"{expansion_budget.max_generated_fields}"
+        )
+    for ordinal in range(source_beats.beat_count):
+        for field in range(source_beats.elements_per_beat):
+            if mapped(source_beats.position_at(ordinal, field)) != (
+                sink_beats.position_at(ordinal, field)
+            ):
+                return _OrderedAgreementMismatch(ordinal, field)
+    return None
+
+
 def _validate_edge(
-    edge: Edge, nodes: dict[str, NetworkNode]
+    edge: Edge,
+    nodes: dict[str, NetworkNode],
+    expansion_budget: NetworkValidationBudget | None,
 ) -> tuple[list[NetworkValidationIssue], list[RegionEndpoint], list[RegionEndpoint]]:
     issues = []
     used_outputs = [edge.source]
@@ -246,7 +426,7 @@ def _validate_edge(
                 )
             )
         if source is not None and sink is not None:
-            issues.extend(_validate_position_map(edge, sink_index, source, sink))
+            issues.extend(_validate_position_map(edge, sink_index, source, sink, expansion_budget))
     return issues, used_inputs, used_outputs
 
 
@@ -310,10 +490,16 @@ def _has_cycle(network: DataflowNetwork) -> bool:
     return visited != len(adjacency)
 
 
-def validate_network(network: DataflowNetwork) -> NetworkValidationReport:
+def validate_network(
+    network: DataflowNetwork,
+    *,
+    expansion_budget: NetworkValidationBudget | None = None,
+) -> NetworkValidationReport:
     """Return all independently detectable ``NETWORK.md`` §11.2.1 issues."""
     if not isinstance(network, DataflowNetwork):
         raise TypeError("network must be a DataflowNetwork")
+    if expansion_budget is not None and not isinstance(expansion_budget, NetworkValidationBudget):
+        raise TypeError("expansion_budget must be a NetworkValidationBudget")
     issues = []
     for identity, label in (
         (tuple(node.id for node in network.nodes), "node"),
@@ -342,7 +528,7 @@ def validate_network(network: DataflowNetwork) -> NetworkValidationReport:
     input_uses: list[RegionEndpoint] = []
     output_uses: list[RegionEndpoint] = []
     for edge in network.edges:
-        edge_issues, inputs, outputs = _validate_edge(edge, nodes)
+        edge_issues, inputs, outputs = _validate_edge(edge, nodes, expansion_budget)
         issues.extend(edge_issues)
         input_uses.extend(inputs)
         output_uses.extend(outputs)
@@ -407,6 +593,7 @@ def is_network_structurally_well_formed(network: DataflowNetwork) -> bool:
 
 
 __all__ = [
+    "NetworkValidationBudget",
     "NetworkValidationIssue",
     "NetworkValidationReport",
     "is_network_structurally_well_formed",
