@@ -95,10 +95,18 @@ def record_identity() -> None:
     root = Path(os.environ["FINN_ROOT"])
     finnlib = Path(os.environ["FINNLIB_ROOT"])
     head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     dirty = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     library = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -172,7 +180,9 @@ def run_one(case: Case) -> int:
     width = datatype.bitwidth()
     generator = np.random.RandomState(zlib.crc32(case.label.encode()) % (2**31))
     activations = generator.randint(
-        int(datatype.min()), int(datatype.max()) + 1, size=(case.repetitions, case.matrix_width)
+        int(datatype.min()),
+        int(datatype.max()) + 1,
+        size=(case.repetitions, case.matrix_width),
     )
 
     stimulus = _pack(
@@ -184,13 +194,14 @@ def run_one(case: Case) -> int:
         activations,
         width,
     )
+    expanded_activations = np.repeat(activations, case.neuron_folds, axis=0)
     expected = _pack(
         region.output_interface("activation_out").port.beat_sequence.materialize_beats(
             max_fields=region.output_interface(
                 "activation_out"
             ).port.beat_sequence.delivered_field_count
         ),
-        activations,
+        expanded_activations,
         width,
     )
     if len(stimulus) != case.repetitions * case.synapse_folds:

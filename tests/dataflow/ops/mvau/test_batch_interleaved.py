@@ -133,7 +133,8 @@ def _occurrence(
     design = design.assign(BatchInterleavedDesign.pe, pe)
     design = design.assign(BatchInterleavedDesign.simd, simd)
     return cast(
-        BatchInterleavedDesign, design.assign(BatchInterleavedDesign.interleave, interleave)
+        BatchInterleavedDesign,
+        design.assign(BatchInterleavedDesign.interleave, interleave),
     )
 
 
@@ -156,7 +157,16 @@ MATRIX = (
 
 
 @pytest.mark.parametrize(
-    ("label", "repetitions", "matrix_width", "matrix_height", "pe", "simd", "interleave", "target"),
+    (
+        "label",
+        "repetitions",
+        "matrix_width",
+        "matrix_height",
+        "pe",
+        "simd",
+        "interleave",
+        "target",
+    ),
     MATRIX,
 )
 def test_the_interleaved_region_matches_the_retained_authority(
@@ -201,7 +211,16 @@ def test_the_interleaved_region_matches_the_retained_authority(
 
 
 @pytest.mark.parametrize(
-    ("label", "repetitions", "matrix_width", "matrix_height", "pe", "simd", "interleave", "target"),
+    (
+        "label",
+        "repetitions",
+        "matrix_width",
+        "matrix_height",
+        "pe",
+        "simd",
+        "interleave",
+        "target",
+    ),
     MATRIX,
 )
 def test_the_weight_boundary_is_the_chunked_one(
@@ -241,7 +260,11 @@ def test_the_network_places_one_node_with_no_edge_and_three_boundaries() -> None
     network = answer.value
     assert tuple(node.id for node in network.nodes) == ("compute",)
     assert network.edges == ()
-    assert tuple(item.id for item in network.boundaries) == ("activation", "output", "weight")
+    assert tuple(item.id for item in network.boundaries) == (
+        "activation",
+        "output",
+        "weight",
+    )
 
 
 def test_a_degenerate_interleave_is_refused_rather_than_tied() -> None:
@@ -366,7 +389,10 @@ def _mvau_model(*, repetitions: int = 4, matrix_width: int = 8, matrix_height: i
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])
@@ -439,7 +465,7 @@ def test_an_old_schema_two_batch_record_is_refused_without_writes() -> None:
     )
     schema.i = 2
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 3"):
+    with pytest.raises(DataflowOpError, match="writes schema version 4"):
         _unbound(model).bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -737,7 +763,10 @@ def _aliased_model() -> Any:
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])

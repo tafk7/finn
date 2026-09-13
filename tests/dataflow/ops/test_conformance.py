@@ -70,7 +70,10 @@ def _mvau_model(*, repetitions: int = 4, matrix_width: int = 8, matrix_height: i
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])
@@ -99,7 +102,10 @@ def _replay_model(*, repetitions: int = 2, matrix_width: int = 8, folds: int = 4
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])
@@ -303,11 +309,19 @@ def test_the_case_is_the_only_operation_specific_input() -> None:
     """The harness names no operation, no Design and no Decision."""
 
     source = Path("src/finn/dataflow/conformance.py").read_text()
-    for forbidden in ("Mvau", "mvau", "ActivationReplay", "dot_product", "weight_supply"):
+    for forbidden in (
+        "Mvau",
+        "mvau",
+        "ActivationReplay",
+        "dot_product",
+        "weight_supply",
+    ):
         assert forbidden not in source, forbidden
 
 
-def test_replacing_the_case_build_does_not_disturb_the_frozen_one(tmp_path: Path) -> None:
+def test_replacing_the_case_build_does_not_disturb_the_frozen_one(
+    tmp_path: Path,
+) -> None:
     """``other_build`` is genuinely different, so the refusal it checks is real."""
 
     case = DataflowOpConformanceCase(
@@ -352,4 +366,4 @@ def test_the_replay_association_reads_the_ports_a_region_actually_has() -> None:
         "activation_out",
     )
     assert activation.semantic_shape == (2, 8)
-    assert expanded.semantic_shape == (2, 8)
+    assert expanded.semantic_shape == (8, 8)

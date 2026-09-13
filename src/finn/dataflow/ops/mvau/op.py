@@ -176,7 +176,7 @@ class MvauDataflowOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
-    schema_version: ClassVar[int] = 3
+    schema_version: ClassVar[int] = 4
 
     # -- the source schema ----------------------------------------------------
 
@@ -417,7 +417,8 @@ class MvauDataflowOp(DataflowOp):
     ) -> object:
         if no_activation and output != accumulator:
             return reject(
-                "output-accumulator-mismatch", "noActivation requires outputDataType == accDataType"
+                "output-accumulator-mismatch",
+                "noActivation requires outputDataType == accDataType",
             )
         return True
 
@@ -450,6 +451,7 @@ class MvauDataflowOp(DataflowOp):
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
+                weight_initializer=allow_absent(weight.initializer_value),
             ),
             "batch_interleaved": Subspace(
                 BatchInterleavedDesign,
@@ -476,6 +478,49 @@ class MvauDataflowOp(DataflowOp):
         if not isinstance(chosen, Decided):
             return None
         return cast(WeightedDotProductDesign, view.alternative(chosen.value)).dataflow
+
+    def selected_design(self) -> object:
+        return _selected_design(self)
+
+    def selected_source_semantics(self) -> object:
+        from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415
+            MvauSourceSemantics,
+            encode_mvau_source_semantics,
+        )
+
+        profile = mvau_profile(self.source)
+        accumulator = cast(Any, self.source.attributes["accumulator_type"])
+        output = cast(Any, self.source.attributes["output_type"])
+        bias = (
+            None
+            if profile.activation.value == "none"
+            else int(cast(int, self.source.attributes["activation_bias"]))
+        )
+        return encode_mvau_source_semantics(
+            MvauSourceSemantics(
+                profile.accumulation,
+                profile.activation,
+                accumulator.name,
+                output.name,
+                bias,
+            )
+        )
+
+    def selected_construction_identity(self, semantics: object) -> object:
+        from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415
+            MVAU_CONSTRUCTION_FAMILY,
+            MVAU_CONSTRUCTION_VERSION,
+            MvauSourceSemantics,
+        )
+        from finn.dataflow.ops.selected import ConstructionIdentity  # noqa: PLC0415
+
+        if not isinstance(semantics, MvauSourceSemantics):
+            raise TypeError("MVAU selected semantics have the wrong type")
+        return ConstructionIdentity(
+            MVAU_CONSTRUCTION_FAMILY,
+            MVAU_CONSTRUCTION_VERSION,
+            "canonical",
+        )
 
     def operand_references(
         self, network: DataflowNetwork

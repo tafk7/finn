@@ -29,18 +29,26 @@ or without one.
 
 from __future__ import annotations
 
-from enum import Enum
-
+from dataclasses import replace
 from finn.dataflow.designs.design import (
     EdgeSink,
     KernelChoice,
     NetworkBoundary,
     NetworkEdge,
+    SelectedGraph,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
+from finn.dataflow.ops.mvau.designs.supply import WeightSupply
+from finn.dataflow.ops.mvau.selected import (
+    MVAU_SELECTED_CONSTRUCTION,
+    WEIGHT_KEY,
+    MvauSelectionParameters,
+)
+from finn.dataflow.ops.selected import SelectedInitializerInput, SelectionFacts
+from finn.dataflow.ops.tensor_summary import FrozenInitializer
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
@@ -52,19 +60,11 @@ from finn.dataflow.space.declarations import (
 )
 
 
-class WeightSupply(str, Enum):
-    """How the matrix reaches the compute Region."""
-
-    EXTERNAL = "external"
-    EMBEDDED = "embedded"
-    DECOUPLED = "decoupled"
-
-
 class DotProductDesign(WeightedDotProductDesign):
     """Replay and dot product with an explicitly selected weight supply."""
 
     id = "dot_product"
-    version = "2"
+    version = "3"
 
     repetitions = WeightedDotProductDesign.repetitions
     matrix_width = WeightedDotProductDesign.matrix_width
@@ -80,6 +80,7 @@ class DotProductDesign(WeightedDotProductDesign):
     simd = WeightedDotProductDesign.simd
 
     initializer_present = Input(bool)
+    weight_initializer = Input(FrozenInitializer, allow_absent=True)
     weight_supply = Decision(WeightSupply, values=tuple(WeightSupply))
 
     @derived(bool, supply=weight_supply)
@@ -182,6 +183,26 @@ class DotProductDesign(WeightedDotProductDesign):
     )
 
 
-DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present")
+DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present", "weight_initializer")
+
+
+def _local_weight_required(facts: SelectionFacts[object, object]) -> bool:
+    if not isinstance(facts.parameters, MvauSelectionParameters):
+        raise TypeError("MVAU initializer predicate received the wrong parameters")
+    return facts.parameters.weight_supply is not WeightSupply.EXTERNAL
+
+
+DotProductDesign.selected_graph = SelectedGraph(
+    replace(
+        MVAU_SELECTED_CONSTRUCTION,
+        initializer_inputs=(
+            SelectedInitializerInput(
+                WEIGHT_KEY,
+                DotProductDesign.weight_initializer,
+                _local_weight_required,
+            ),
+        ),
+    )
+)
 
 __all__ = ["DESIGN_INPUTS", "DotProductDesign", "WeightSupply"]

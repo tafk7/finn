@@ -27,7 +27,9 @@ from finn.dataflow.kernels.dotp_axi import (
 )
 from finn.dataflow.kernels.kernel import kernel_physical
 from finn.dataflow.ops.mvau import regions as mvau_regions
-from finn.dataflow.ops.mvau.regions import construct_dot_product_region as baseline_region
+from finn.dataflow.ops.mvau.regions import (
+    construct_dot_product_region as baseline_region,
+)
 from finn.dataflow.space.spec_algebra import assemble_specs
 
 
@@ -175,7 +177,10 @@ def test_dotp_region_family_is_inspectable_without_the_kernel_id() -> None:
     configured = _configure()
     assert isinstance(configured, Decided)
     assert configured.value.implementation_id == "dotp_axi"
-    assert (DotpAxiKernel.region.family, DotpAxiKernel.region.version) == ("mvau.dot_product", "1")
+    assert (DotpAxiKernel.region.family, DotpAxiKernel.region.version) == (
+        "mvau.dot_product",
+        "2",
+    )
 
 
 def test_dotp_feasibility_rejects_numeric_pumping_and_packing_failures() -> None:

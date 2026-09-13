@@ -50,7 +50,7 @@ class ReplayBufferKernel(Kernel):
     """Present each activation row once per neuron fold."""
 
     id = "replay_buffer"
-    version = "1"
+    version = "2"
 
     repetitions = Input(int)
     matrix_width = Input(int)
@@ -61,7 +61,7 @@ class ReplayBufferKernel(Kernel):
 
     region = RegionDeclaration(
         family="mvau.activation_replay",
-        version="1",
+        version="2",
         construct=construct_activation_replay_region,
         repetitions=repetitions,
         matrix_width=matrix_width,

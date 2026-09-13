@@ -20,7 +20,8 @@ from finn.dataflow.ops import reconstruction
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids, apply_graph_effects
 from finn.dataflow.ops.schema import OpInput
-from finn.dataflow.ops.tensor_summary import TENSOR_VALUE_SUMMARY_CODEC
+from finn.dataflow.ops.selected import set_frozen_initializer
+from finn.dataflow.ops.tensor_summary import FrozenInitializer, TENSOR_VALUE_SUMMARY_CODEC
 from finn.dataflow.space import Problem, Space
 from finn.dataflow._engine import Decided
 
@@ -139,13 +140,13 @@ def test_model_level_binding_analysis_and_reconstruction_each_use_one_bulk_pass(
     model = model_with(np.array([1.0, 2.0], dtype=np.float32), count=3)
     model.set_initializer("unused", np.array([3.0], dtype=np.float32))
     calls = []
-    real = reconstruction.initializer_value_summaries
+    real = reconstruction.initializer_facts
 
     def counted(current):
         calls.append(current)
         return real(current)
 
-    monkeypatch.setattr(reconstruction, "initializer_value_summaries", counted)
+    monkeypatch.setattr(reconstruction, "initializer_facts", counted)
     monkeypatch.setattr(model, "get_customop_wrapper", lambda node: SummaryOp(node))
     monkeypatch.setattr(
         model, "get_initializer", lambda *_: pytest.fail("array lookup during reconstruction")
@@ -169,6 +170,40 @@ def test_model_level_binding_analysis_and_reconstruction_each_use_one_bulk_pass(
     assert changed[0].problem_fingerprint != bound[0].problem_fingerprint
 
 
+def test_initializer_payload_is_frozen_with_the_same_one_pass_source_analysis():
+    values = np.array([[3.0, -2.0], [7.0, 5.0]], dtype=np.float32)
+    model = model_with(values)
+    op = SummaryOp(model.graph.node[0]).bind(model, None)
+    answer = op.answer(SummaryOp.value.initializer_value)
+    assert isinstance(answer, Decided)
+    frozen = answer.value
+    assert isinstance(frozen, FrozenInitializer)
+    assert np.array_equal(frozen.array_copy(), values)
+    assert frozen.summary == summarize_tensor_values(values)
+    model.set_initializer("value", np.zeros_like(values))
+    assert np.array_equal(frozen.array_copy(), values)
+    assert op.answer(SummaryOp.value.initializer_value) == Decided(frozen)
+
+
+def test_scalar_initializer_rank_survives_capture_copy_and_selected_round_trip():
+    values = np.array(7, dtype=np.int64)
+    model = model_with(values)
+    op = SummaryOp(model.graph.node[0]).bind(model, None)
+    answer = op.answer(SummaryOp.value.initializer_value)
+    assert isinstance(answer, Decided)
+    frozen = answer.value
+    assert frozen.shape == ()
+    assert frozen.array_copy().shape == ()
+    assert int(frozen.array_copy()) == 7
+
+    selected = ModelWrapper(helper.make_model(helper.make_graph([], "selected", [], [])))
+    set_frozen_initializer(selected, "scalar", frozen)
+    restored = selected.get_initializer("scalar")
+    assert restored is not None
+    assert restored.shape == ()
+    assert int(restored) == 7
+
+
 def test_model_analysis_refuses_an_unsupported_present_initializer_even_if_unused():
     model = model_with(np.ones(2, dtype=np.float32))
     model.set_initializer("unused", np.array([1 + 2j], dtype=np.complex64))
@@ -183,6 +218,6 @@ def test_commit_rechecks_current_values_even_inside_an_earlier_analysis_pass():
         effects = op.graph_effects()
         model.set_initializer("value", np.zeros(2, dtype=np.float32))
         before = model.model.SerializeToString(deterministic=True)
-        with pytest.raises(ValueError, match="different problem"):
+        with pytest.raises(ValueError, match="initializer_content|different problem"):
             apply_graph_effects(model, effects)
     assert model.model.SerializeToString(deterministic=True) == before

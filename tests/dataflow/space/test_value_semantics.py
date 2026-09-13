@@ -40,7 +40,10 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.region_validation import RegionValidationReport, validate_region
+from finn.dataflow.model.region_validation import (
+    RegionValidationReport,
+    validate_region,
+)
 from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
@@ -81,6 +84,7 @@ def test_explicit_and_compact_replay_regions_are_engine_equal() -> None:
         (ScheduleLevel("rep", 1), ScheduleLevel("nf", 2), ScheduleLevel("sf", 2))
     )
     operand = Operand("X", DataType["INT8"], (1, 2))
+    expanded_operand = Operand("XR", DataType["INT8"], (2, 2))
     requirements: dict[RequirementKey, int] = {
         ((0, neuron_fold, synapse_fold), (0, synapse_fold)): 1
         for neuron_fold in range(2)
@@ -89,6 +93,8 @@ def test_explicit_and_compact_replay_regions_are_engine_equal() -> None:
     availability: dict[Coordinate, Coordinate] = {
         (0, 0): (0, 0, 0),
         (0, 1): (0, 0, 1),
+        (1, 0): (0, 1, 0),
+        (1, 1): (0, 1, 1),
     }
     explicit = DataflowRegion(
         schedule,
@@ -106,14 +112,14 @@ def test_explicit_and_compact_replay_regions_are_engine_equal() -> None:
             OutputInterface(
                 Port(
                     "activation_out",
-                    operand,
+                    expanded_operand,
                     BeatSequence(
                         1,
                         (
                             ((0, 0),),
                             ((0, 1),),
-                            ((0, 0),),
-                            ((0, 1),),
+                            ((1, 0),),
+                            ((1, 1),),
                         ),
                     ),
                 ),

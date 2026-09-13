@@ -11,7 +11,12 @@ path, so nothing may assume a matrix.
 
 from __future__ import annotations
 
-from finn.dataflow.designs.design import NetworkBoundary, DataflowDesign, KernelChoice
+from finn.dataflow.designs.design import (
+    DataflowDesign,
+    KernelChoice,
+    NetworkBoundary,
+    SelectedGraph,
+)
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.space.declarations import (
     Decision,
@@ -22,6 +27,7 @@ from finn.dataflow.space.declarations import (
     reject,
 )
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.ops.replay.selected import REPLAY_SELECTED_CONSTRUCTION
 
 
 def _standalone_pe(*, candidate: object) -> object:
@@ -41,7 +47,7 @@ class ActivationReplayDesign(DataflowDesign):
     """Present each activation row once per neuron fold, and nothing else."""
 
     id = "activation_replay"
-    version = "1"
+    version = "2"
 
     repetitions = Input(int)
     matrix_width = Input(int)
@@ -72,6 +78,9 @@ class ActivationReplayDesign(DataflowDesign):
 
     activation = NetworkBoundary(replay.input("activation_in"))
     expanded = NetworkBoundary(replay.output("activation_out"))
+
+
+ActivationReplayDesign.selected_graph = SelectedGraph(REPLAY_SELECTED_CONSTRUCTION)
 
 
 DESIGN_INPUTS = ("repetitions", "matrix_width", "matrix_height", "activation_type")

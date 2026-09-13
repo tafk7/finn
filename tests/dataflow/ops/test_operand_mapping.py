@@ -18,7 +18,12 @@ from finn.dataflow._engine import Decided, Unresolved
 from finn.dataflow.model.network import RegionEndpoint
 from finn.dataflow.model.refs import NetworkOperandError, RegionInputRef
 from finn.dataflow.ops import mapping
-from finn.dataflow.ops.mapping import CoordinateMapping, External, Internal, InternalStream
+from finn.dataflow.ops.mapping import (
+    CoordinateMapping,
+    External,
+    Internal,
+    InternalStream,
+)
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from qonnx.core.datatype import DataType
 
@@ -41,7 +46,9 @@ def test_all_three_supply_forms_derive_from_qualified_references():
     external = derive(external_network(), RegionInputRef("compute", "W"))[0]
     embedded = derive(internal_input_network(), RegionInputRef("compute", "W"))[0]
     supplied = derive(
-        decoupled_network(), RegionInputRef("memory", "W"), RegionInputRef("compute", "W")
+        decoupled_network(),
+        RegionInputRef("memory", "W"),
+        RegionInputRef("compute", "W"),
     )
     assert external.placement == External("weight", "compute", "w_in")
     assert embedded.placement == Internal("compute", "W")
@@ -70,14 +77,19 @@ def test_direct_caller_validates_once_for_several_references(monkeypatch):
         return validate(network)
 
     monkeypatch.setattr(mapping, "validate_network", counted)
-    derive(decoupled_network(), RegionInputRef("memory", "W"), RegionInputRef("compute", "W"))
+    derive(
+        decoupled_network(),
+        RegionInputRef("memory", "W"),
+        RegionInputRef("compute", "W"),
+    )
     assert len(calls) == 1
 
 
 def test_invalid_network_is_refused_before_any_presentation_query(monkeypatch):
     network = decoupled_network()
     broken = replace(
-        network, edges=(replace(network.edges[0], source=RegionEndpoint("missing", "w_out")),)
+        network,
+        edges=(replace(network.edges[0], source=RegionEndpoint("missing", "w_out")),),
     )
     monkeypatch.setattr(
         mapping, "exposing_ports", lambda *_: pytest.fail("queried an invalid Network")
@@ -107,3 +119,27 @@ def test_unresolved_operation_never_queries_presentation(monkeypatch):
         mapping, "exposing_ports", lambda *_: pytest.fail("queried unresolved Network")
     )
     assert isinstance(op.operand_mapping, Unresolved)
+
+
+@pytest.mark.parametrize(
+    ("kind", "source_shape", "semantic_shape"),
+    (
+        (CoordinateMapping.IDENTITY, (2, 3), (3, 2)),
+        (CoordinateMapping.FLATTEN_LEADING, (2, 3, 4), (4, 6)),
+        (CoordinateMapping.TRANSPOSE_2D, (2, 3), (2, 3)),
+    ),
+)
+def test_legacy_correspondence_labels_do_not_accept_wrong_domains(
+    kind, source_shape, semantic_shape
+):
+    with pytest.raises(NetworkOperandError):
+        mapping._checked_coordinate_map(kind, source_shape, semantic_shape)
+
+
+def test_legacy_correspondence_builds_the_claimed_executable_map():
+    direct = mapping._checked_coordinate_map(CoordinateMapping.IDENTITY, (2, 3), (2, 3))
+    flatten = mapping._checked_coordinate_map(CoordinateMapping.FLATTEN_LEADING, (2, 3, 4), (6, 4))
+    transpose = mapping._checked_coordinate_map(CoordinateMapping.TRANSPOSE_2D, (2, 3), (3, 2))
+    assert direct.mapped((1, 2)) == (1, 2)
+    assert flatten.mapped((1, 2, 3)) == (5, 3)
+    assert transpose.mapped((1, 2)) == (2, 1)

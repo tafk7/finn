@@ -13,14 +13,20 @@ from finn.dataflow.model.maps import (
     RectangularDomain,
     encode_coordinate_map,
 )
-from finn.dataflow.model.network_validation import NetworkValidationReport, validate_network
+from finn.dataflow.model.network_validation import (
+    NetworkValidationReport,
+    validate_network,
+)
 from finn.dataflow.model.presentation import (
     boundary_presented_position_set,
     unpresented_position_set,
 )
 from finn.dataflow.model.refs import RegionInputRef
 from finn.dataflow.model.region import BeatSequence
-from finn.dataflow.model.region_validation import RegionValidationReport, validate_region
+from finn.dataflow.model.region_validation import (
+    RegionValidationReport,
+    validate_region,
+)
 from finn.dataflow.ops.mvau.networks import construct_decomposed_mvau_network
 from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region,
@@ -84,7 +90,7 @@ def test_large_replay_and_connected_network_never_enter_expansion(monkeypatch) -
     output_sequence = replay.output_interface("activation_out").port.beat_sequence
     assert input_sequence.position_at(1, 2) == (1, 2)
     middle = output_sequence.beat_count // 2
-    assert output_sequence.position_at(middle, 1) == (1, 1)
+    assert output_sequence.position_at(middle, 1) == (matrix_height, 1)
     assert input_sequence.image_set.cardinality == repetitions * matrix_width
     assert (
         replay.input("X").requirements.required_position_set.cardinality

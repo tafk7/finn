@@ -87,6 +87,15 @@ def _activation_operand(
     return Operand("X", element_type, (repetitions, matrix_width))
 
 
+def _expanded_activation_operand(
+    repetitions: int,
+    neuron_folds: int,
+    matrix_width: int,
+    element_type: NumericElementType,
+) -> Operand:
+    return Operand("XR", element_type, (repetitions * neuron_folds, matrix_width))
+
+
 def _weight_operand(
     matrix_height: int, matrix_width: int, element_type: NumericElementType
 ) -> Operand:
@@ -121,9 +130,15 @@ def _expanded_activation_beats(
     """
 
     return tuple(
-        tuple((repetition, synapse_fold * simd + lane) for lane in range(simd))
+        tuple(
+            (
+                repetition * neuron_folds + neuron_fold,
+                synapse_fold * simd + lane,
+            )
+            for lane in range(simd)
+        )
         for repetition in range(repetitions)
-        for _neuron_fold in range(neuron_folds)
+        for neuron_fold in range(neuron_folds)
         for synapse_fold in range(synapse_folds)
     )
 
@@ -146,6 +161,18 @@ def _standard_activation_requirements(
         RectangularDomain((repetitions, synapse_folds * simd)),
         base=(0, 0),
         iteration_coefficients=((1, 0, 0), (0, 0, simd)),
+        occurrences=(OccurrenceAxis(1, simd, 1),),
+    )
+
+
+def _expanded_activation_requirements(
+    repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
+) -> ScheduledInputRequirements:
+    return ScheduledInputRequirements.affine(
+        RectangularDomain((repetitions, neuron_folds, synapse_folds)),
+        RectangularDomain((repetitions * neuron_folds, synapse_folds * simd)),
+        base=(0, 0),
+        iteration_coefficients=((neuron_folds, 1, 0), (0, 0, simd)),
         occurrences=(OccurrenceAxis(1, simd, 1),),
     )
 
@@ -312,20 +339,14 @@ def _standard_output_availability(
 def _replay_output_availability(
     repetitions: int, neuron_folds: int, synapse_folds: int, simd: int
 ) -> ScheduledOutputAvailability:
-    """A guaranteed logical completion point for each output position.
-
-    A position is presented ``NF`` times in the expanded sequence, but those
-    presentations do not create several values or several availability entries
-    for that final operand position.  The existing map guarantees completion
-    by ``nf = 0``; earlier completion and exact physical emission are unspecified.
-    """
+    """The completion point of each distinct copied Replay output position."""
 
     return ScheduledOutputAvailability.affine(
-        RectangularDomain((repetitions, synapse_folds * simd)),
+        RectangularDomain((repetitions * neuron_folds, synapse_folds * simd)),
         RectangularDomain((repetitions, neuron_folds, synapse_folds)),
-        view_extents=(repetitions, synapse_folds, simd),
+        view_extents=(repetitions, neuron_folds, synapse_folds, simd),
         offset=0,
-        coefficients=(neuron_folds * synapse_folds, 1, 0),
+        coefficients=(neuron_folds * synapse_folds, synapse_folds, 1, 0),
     )
 
 
@@ -337,14 +358,7 @@ def construct_activation_replay_region(
     pe: int,
     simd: int,
 ) -> DataflowRegion:
-    """Expand a compact activation sequence to one presentation per neuron fold.
-
-    ``R x SF`` beats in, ``R x NF x SF`` beats out, same operand, same position
-    image, same elements per beat.  This is the replay the monolithic MVAU
-    Region performed implicitly by scheduling its activation input across
-    ``nf``; naming it as a Region makes it a composable unit and leaves the
-    dot-product half with nothing but arithmetic.
-    """
+    """Expand compact ``X`` into distinct ``XR`` copies, one per neuron fold."""
 
     _validate_common_arguments(
         repetitions,
@@ -366,6 +380,9 @@ def construct_activation_replay_region(
         )
     )
     activation = _activation_operand(repetitions, matrix_width, activation_element_type)
+    expanded = _expanded_activation_operand(
+        repetitions, neuron_folds, matrix_width, activation_element_type
+    )
     input_beats = BeatSequence.affine(
         activation.position_domain,
         elements_per_beat=simd,
@@ -375,12 +392,12 @@ def construct_activation_replay_region(
         coefficients=(matrix_width, simd, 1),
     )
     output_beats = BeatSequence.affine(
-        activation.position_domain,
+        expanded.position_domain,
         elements_per_beat=simd,
         beat_count=repetitions * neuron_folds * synapse_folds,
         view_extents=(repetitions, neuron_folds, synapse_folds, simd),
         offset=0,
-        coefficients=(matrix_width, 0, simd, 1),
+        coefficients=(neuron_folds * matrix_width, matrix_width, simd, 1),
     )
     return DataflowRegion(
         schedule,
@@ -398,7 +415,7 @@ def construct_activation_replay_region(
             OutputInterface(
                 Port(
                     "activation_out",
-                    activation,
+                    expanded,
                     output_beats,
                 ),
                 _replay_output_availability(repetitions, neuron_folds, synapse_folds, simd),
@@ -471,7 +488,13 @@ def _standard_region(
             ScheduleLevel("sf", synapse_folds),
         )
     )
-    activation = _activation_operand(repetitions, matrix_width, activation_element_type)
+    activation = (
+        _expanded_activation_operand(
+            repetitions, neuron_folds, matrix_width, activation_element_type
+        )
+        if expanded_activation
+        else _activation_operand(repetitions, matrix_width, activation_element_type)
+    )
     output = _output_operand(repetitions, matrix_height, output_element_type)
     activation_beats = BeatSequence.affine(
         activation.position_domain,
@@ -488,13 +511,21 @@ def _standard_region(
         ),
         offset=0,
         coefficients=(
-            (matrix_width, 0, simd, 1) if expanded_activation else (matrix_width, simd, 1)
+            (neuron_folds * matrix_width, matrix_width, simd, 1)
+            if expanded_activation
+            else (matrix_width, simd, 1)
         ),
     )
     inputs: list[RegionInput] = [
         InputInterface(
             Port("activation", activation, activation_beats),
-            _standard_activation_requirements(repetitions, neuron_folds, synapse_folds, simd),
+            (
+                _expanded_activation_requirements(repetitions, neuron_folds, synapse_folds, simd)
+                if expanded_activation
+                else _standard_activation_requirements(
+                    repetitions, neuron_folds, synapse_folds, simd
+                )
+            ),
         )
     ]
     # The weight requirement is the same statement about the computation either

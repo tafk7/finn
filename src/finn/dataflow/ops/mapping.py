@@ -9,7 +9,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.dataflow.model.maps import CoordinateSet, MaterializationRequired
+from finn.dataflow.model.maps import (
+    AffineRankMap,
+    CoordinateMap,
+    CoordinateSet,
+    IdentityCoordinateMap,
+    MaterializationRequired,
+    RectangularDomain,
+)
 from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.presentation import (
@@ -69,6 +76,7 @@ class OperandMapping:
     correspondence: CoordinateMapping
     source_shape: tuple[int, ...]
     semantic_shape: tuple[int, ...]
+    coordinate_map: CoordinateMap
     edge_presented_set: CoordinateSet
     boundary_presented_set: CoordinateSet
     unpresented_set: CoordinateSet
@@ -109,6 +117,48 @@ class MaterializedOperandPresentation:
     edge_presented: frozenset[Coordinate]
     boundary_presented: frozenset[Coordinate]
     unpresented: frozenset[Coordinate]
+
+
+def _checked_coordinate_map(
+    correspondence: CoordinateMapping,
+    source_shape: tuple[int, ...],
+    semantic_shape: tuple[int, ...],
+) -> CoordinateMap:
+    source = RectangularDomain(source_shape)
+    target = RectangularDomain(semantic_shape)
+    if correspondence is CoordinateMapping.IDENTITY:
+        if source != target:
+            raise NetworkOperandError(
+                f"identity correspondence requires equal shapes, got {source_shape} and "
+                f"{semantic_shape}"
+            )
+        return IdentityCoordinateMap(CoordinateSet.full(source), target)
+    if correspondence is CoordinateMapping.FLATTEN_LEADING:
+        if not source_shape:
+            raise NetworkOperandError("flatten-leading correspondence requires rank at least one")
+        rows = 1
+        for extent in source_shape[:-1]:
+            rows *= extent
+        expected = (rows, source_shape[-1])
+        if semantic_shape != expected:
+            raise NetworkOperandError(
+                "flatten-leading correspondence requires semantic shape "
+                f"{expected}, got {semantic_shape}"
+            )
+        return AffineRankMap.row_major_reshape(source, target)
+    if len(source_shape) != 2 or semantic_shape != tuple(reversed(source_shape)):
+        raise NetworkOperandError(
+            "two-dimensional transpose correspondence requires reversed rank-two shapes, "
+            f"got {source_shape} and {semantic_shape}"
+        )
+    rows, columns = source_shape
+    return AffineRankMap.from_mixed_radix(
+        source,
+        view_extents=(rows, columns),
+        target=target,
+        offset=0,
+        coefficients=(1, rows),
+    )
 
 
 def derive_operand_mappings(
@@ -184,6 +234,7 @@ def _derive_operand_mappings(
                     correspondences[name],
                     operand.shape,
                     tuple(shape),
+                    _checked_coordinate_map(correspondences[name], operand.shape, tuple(shape)),
                     edge_presented,
                     boundary_presented,
                     unpresented,

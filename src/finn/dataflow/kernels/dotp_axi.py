@@ -125,7 +125,10 @@ def _operand_widths_supported(activation: NumericElementType, weight: NumericEle
         return reject(
             "dotp-axi-operands-too-narrow",
             "the dot-product core needs at least two bits of each operand",
-            values={"activation": element_width(activation), "weight": element_width(weight)},
+            values={
+                "activation": element_width(activation),
+                "weight": element_width(weight),
+            },
         )
     return True
 
@@ -239,7 +242,7 @@ class DotpAxiKernel(Kernel):
     """FinnLib folded dot product as one Region and one physical module."""
 
     id = "dotp_axi"
-    version = "1"
+    version = "2"
 
     repetitions = Input(int)
     matrix_width = Input(int)
@@ -263,7 +266,7 @@ class DotpAxiKernel(Kernel):
 
     region = RegionDeclaration(
         family="mvau.dot_product",
-        version="1",
+        version="2",
         construct=construct_dot_product_region,
         repetitions=repetitions,
         matrix_width=matrix_width,
@@ -486,7 +489,7 @@ class EmbeddedDotpAxiKernel(DotpAxiKernel):
 
     region = RegionDeclaration(
         family="mvau.dot_product.embedded",
-        version="1",
+        version="2",
         construct=construct_embedded_dot_product_region,
         repetitions=DotpAxiKernel.repetitions,
         matrix_width=DotpAxiKernel.matrix_width,
@@ -525,6 +528,7 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
     """
 
     id = "dotp_axi_batch_interleaved"
+    version = "1"
 
     #: Region-visible, and therefore the Design's to own.
     interleave = Input(int)

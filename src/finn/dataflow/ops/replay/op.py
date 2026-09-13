@@ -40,10 +40,11 @@ class ActivationReplayOp(DataflowOp):
     """Repeat each activation row once per neuron fold."""
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
-    family_version: ClassVar[str] = "1"
+    family_version: ClassVar[str] = "2"
+    schema_version: ClassVar[int] = 3
 
     activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
-    expanded = OpOutput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
+    expanded = OpOutput(index=0, operand="XR", correspondence=CoordinateMapping.IDENTITY)
 
     neuron_folds = Attribute(int, default=1)
 
@@ -121,12 +122,39 @@ class ActivationReplayOp(DataflowOp):
 
         return _design(self).dataflow
 
+    def selected_design(self) -> object:
+        return _design(self)
+
+    def selected_source_semantics(self) -> object:
+        from finn.dataflow.ops.replay.selected import (  # noqa: PLC0415
+            ReplaySourceSemantics,
+            encode_replay_source_semantics,
+        )
+
+        return encode_replay_source_semantics(
+            ReplaySourceSemantics(int(cast(int, self.source.attributes["neuron_folds"])))
+        )
+
+    def selected_construction_identity(self, semantics: object) -> object:
+        del semantics
+        from finn.dataflow.ops.replay.selected import (  # noqa: PLC0415
+            REPLAY_CONSTRUCTION_FAMILY,
+            REPLAY_CONSTRUCTION_VERSION,
+        )
+        from finn.dataflow.ops.selected import ConstructionIdentity  # noqa: PLC0415
+
+        return ConstructionIdentity(
+            REPLAY_CONSTRUCTION_FAMILY,
+            REPLAY_CONSTRUCTION_VERSION,
+            "canonical",
+        )
+
     def operand_references(
         self, network: DataflowNetwork
     ) -> dict[str, tuple[DataflowOperandRef, ...]]:
         return {
             "activation": (RegionInputRef("replay", "X"),),
-            "expanded": (RegionOutputRef("replay", "X"),),
+            "expanded": (RegionOutputRef("replay", "XR"),),
         }
 
     def execute_node(self, context: Any, graph: Any) -> None:

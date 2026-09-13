@@ -12,8 +12,22 @@ from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
-from finn.dataflow.ops.native import AttributeCodec, NativeAttribute, read_attributes
+from finn.dataflow._engine import Decided
+from finn.dataflow.ops.native import (
+    AttributeCodec,
+    NativeAttribute,
+    choice_subset,
+    operation_choice_schema,
+    read_attributes,
+    resolve_choice_subset,
+)
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
+from finn.dataflow.ops.selected import (
+    RecordedChoice,
+    SelectedGraphError,
+    decode_selected_choices,
+    encode_selected_choices,
+)
 from finn.dataflow.space import Decision, Subspace, Space
 from finn.dataflow.ops.schema import Attribute
 from finn.dataflow.space.declarations import AuthoringError
@@ -110,6 +124,49 @@ def test_native_values_round_trip_through_onnx(declaration, value, kind, encoded
     assert restored.recorded()[key] == value
     assert type(restored.recorded()[key]) is type(value)
     assert not any("codec" in item.name for item in model.graph.node[0].attribute)
+
+
+def test_selected_values_share_compiled_nominal_and_custom_codecs() -> None:
+    model = _model()
+    operation = NativeOp(model.graph.node[0]).bind(model, None)
+    for declaration, value in (
+        (NativeOp.colour, Colour.BLUE),
+        (NativeOp.enum_fraction, Fraction.QUARTER),
+        (NativeOp.tile, Tile(2, 4)),
+    ):
+        operation = operation.assign(declaration, value)
+    paths = ("colour", "enum_fraction", "tile")
+    schema = choice_subset(operation_choice_schema(NativeOp), paths)
+    resolved = resolve_choice_subset(operation, choice_subset(tuple(schema), paths))
+    choices = tuple(
+        RecordedChoice(item.choice.path, answer.value)
+        for item, answer in resolved
+        if isinstance(answer, Decided)
+    )
+
+    encoded = encode_selected_choices(schema, choices)
+    assert tuple(item.encoding for item in encoded) == (
+        "blue",
+        (0.25).hex(),
+        (2, 4),
+    )
+    decoded = decode_selected_choices(schema, encoded)
+    assert tuple(item.value for item in decoded) == (
+        Colour.BLUE,
+        Fraction.QUARTER,
+        Tile(2, 4),
+    )
+    assert tuple(type(item.value) for item in decoded) == (Colour, Fraction, Tile)
+
+    with pytest.raises(SelectedGraphError, match="ordered choice_paths"):
+        decode_selected_choices(schema, tuple(reversed(encoded)))
+
+
+@pytest.mark.parametrize("encoded", ([1, True], [1.0, float("inf")], [1, 2.0]))
+def test_selected_tuple_codec_refuses_values_native_persistence_cannot_represent(encoded) -> None:
+    schema = choice_subset(operation_choice_schema(NativeOp), ("shape",))
+    with pytest.raises(SelectedGraphError, match="homogeneous|finite"):
+        decode_selected_choices(schema, (RecordedChoice("shape", encoded),))
 
 
 @pytest.mark.parametrize(

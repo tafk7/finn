@@ -25,6 +25,7 @@ wrong silently, so one declaration lowers to explicit members::
         activation__present              Derived[bool]   (optional operands)
         activation__initializer_digest   Derived[str]
         activation__value_summary        Problem[TensorValueSummary] (initializer present)
+        activation__initializer_value    Derived[FrozenInitializer] (initializer present)
 
 The author writes none of the generated names.  ``activation.shape`` returns
 the generated declaration, so ``@derived(..., shape=activation.shape)``
@@ -75,13 +76,17 @@ from finn.dataflow.space.dataflow_value_semantics import (
 )
 from finn.dataflow.ops.source import SourceOperand
 from finn.dataflow.ops.mapping import CoordinateMapping
-from finn.dataflow.ops.tensor_summary import TENSOR_VALUE_SUMMARY_CODEC
+from finn.dataflow.ops.tensor_summary import (
+    FrozenInitializer,
+    TENSOR_VALUE_SUMMARY_CODEC,
+)
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 
 T = TypeVar("T")
 
 #: Derived facets plus the optional summary Problem. Only ``present`` is
-#: conditional on the operand declaration; the summary is absent without an initializer.
+#: conditional on the operand declaration; summary/payload facts are absent
+#: without an initializer.
 TENSOR_FACETS: tuple[str, ...] = (
     "shape",
     "rank",
@@ -90,6 +95,7 @@ TENSOR_FACETS: tuple[str, ...] = (
     "present",
     "initializer_digest",
     "value_summary",
+    "initializer_value",
 )
 
 
@@ -111,13 +117,15 @@ def _encode_operand(value: object) -> CanonicalValue:
         "operand": operand.id,
         "shape": list(operand.shape),
         "datatype": operand.datatype.name,
+        "datatype_annotated": operand.datatype_annotated,
+        "carrier_dtype": operand.carrier_dtype,
         "initializer": operand.initializer,
         "digest": operand.initializer_digest,
     }
 
 
 SOURCE_OPERAND_CODEC: CanonicalValueCodec[object] = CanonicalValueCodec(
-    "finn.dataflow.source_operand", 2, _encode_operand
+    "finn.dataflow.source_operand", 3, _encode_operand
 )
 
 SOURCE_OPERAND_SEMANTICS = semantics_for(SourceOperand)
@@ -404,6 +412,19 @@ def _tensor_facets(declaration: OpInput) -> dict[str, Derived[Any]]:
         facets["present"] = Derived(semantics_for(bool), None, (("operand", tolerant),), present)
     facets["initializer_digest"] = facet(
         "initializer_digest", str, lambda operand: operand.initializer_digest or ""
+    )
+    facets["initializer_value"] = facet(
+        "initializer_value",
+        FrozenInitializer,
+        lambda operand: (
+            operand.initializer_value
+            if operand.initializer_value is not None
+            else reject(
+                "source-initializer-absent",
+                f"{declaration.described} has no initializer value",
+                values={"operand": declaration.described},
+            )
+        ),
     )
     return facets
 

@@ -44,6 +44,7 @@ from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.ops.mvau.regions import (
     construct_activation_replay_region as baseline_replay,
 )
+from finn.dataflow.ops.tensor_summary import FrozenInitializer
 from finn.dataflow.ops.mvau.regions import (
     construct_dot_product_region as baseline_dot_product,
 )
@@ -73,6 +74,7 @@ class Problem_(Space):
     clock_period_ns = Problem(float)
     computation_profile = Problem(MvauComputationProfile)
     initializer_present = Problem(bool)
+    weight_initializer = Problem(FrozenInitializer, required=False)
 
 
 class Placed(Problem_):
@@ -282,7 +284,11 @@ def test_the_selected_network_has_exactly_two_nodes_one_edge_three_boundaries() 
     network = answer.value
     assert tuple(node.id for node in network.nodes) == ("compute", "replay")
     assert tuple(edge.id for edge in network.edges) == ("activation_replay",)
-    assert tuple(item.id for item in network.boundaries) == ("activation", "output", "weight")
+    assert tuple(item.id for item in network.boundaries) == (
+        "activation",
+        "output",
+        "weight",
+    )
     edge = network.edges[0]
     assert edge.fanout is FanoutMode.REPLICATE
     assert edge.pass_correspondence is PassCorrespondence.ONE_TO_ONE
@@ -305,8 +311,8 @@ def test_the_design_reports_its_roles_and_active_candidates() -> None:
     assert design.selected("replay") == Decided("replay_buffer")
     assert design.selected("compute") == Decided("dotp_axi")
     assert design.is_active("memory") == Decided(False)
-    assert design.region_family("replay") == Decided(("mvau.activation_replay", "1"))
-    assert design.region_family("compute") == Decided(("mvau.dot_product", "1"))
+    assert design.region_family("replay") == Decided(("mvau.activation_replay", "2"))
+    assert design.region_family("compute") == Decided(("mvau.dot_product", "2"))
     assert design.node_id("replay") == "replay"
     replay = design.kernel("replay")
     assert isinstance(replay, Decided)

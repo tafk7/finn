@@ -52,14 +52,14 @@ def _replay_chain(*, stale_types=False):
 
 def _count_analyses(monkeypatch):
     calls = []
-    original = reconstruction.initializer_value_summaries
+    original = reconstruction.initializer_facts
 
     def counted(model):
         result = original(model)
         calls.append((model, result))
         return result
 
-    monkeypatch.setattr(reconstruction, "initializer_value_summaries", counted)
+    monkeypatch.setattr(reconstruction, "initializer_facts", counted)
     return calls
 
 

@@ -81,6 +81,22 @@ class PositionMap:
         object.__setattr__(result, "_explicit_map", None)
         return result
 
+    @classmethod
+    def from_coordinate_map(
+        cls, value: ExplicitCoordinateMap | IdentityCoordinateMap | AffineRankMap
+    ) -> PositionMap:
+        """Construct from one decoded map without losing its declared domains."""
+
+        if isinstance(value, ExplicitCoordinateMap):
+            result = object.__new__(cls)
+            object.__setattr__(result, "_explicit_map", value)
+            object.__setattr__(result, "_identity_map", None)
+            object.__setattr__(result, "_affine_map", None)
+            return result
+        if isinstance(value, (IdentityCoordinateMap, AffineRankMap)):
+            return cls._from_compact(value)
+        raise TypeError("value must be a supported coordinate map")
+
     @property
     def is_explicit(self) -> bool:
         return self._explicit_map is not None

@@ -24,7 +24,10 @@ from finn.dataflow.artifacts.formats import RtlModuleDirectory
 from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.projection import content_digest
-from finn.dataflow.conformance import DataflowOpConformanceCase, assert_dataflow_op_conforms
+from finn.dataflow.conformance import (
+    DataflowOpConformanceCase,
+    assert_dataflow_op_conforms,
+)
 from finn.dataflow.designs import DataflowDesign
 from finn.dataflow.kernels import ModuleBuildSpec
 from finn.dataflow.kernels.artifacts import (
@@ -175,7 +178,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     attributes = read_attributes(saved.graph.node[0])
     assert attributes["design__pe"] == NativeAttribute("i", 1)
     assert attributes["design__simd"] == NativeAttribute("i", 4)
-    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 2)
+    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 3)
     assert set(attributes) == {
         "neuron_folds",
         SCOPE_ID_ATTRIBUTE,
@@ -218,11 +221,11 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     assert not activation.boundary_presented_set.is_empty
     assert activation.unpresented_set.is_empty
     assert expanded.tensor == "expanded"
-    assert expanded.semantic_operand == RegionOutputRef("replay", "X")
+    assert expanded.semantic_operand == RegionOutputRef("replay", "XR")
     assert expanded.placement == External("expanded", "replay", "activation_out")
-    assert expanded.correspondence is CoordinateMapping.FLATTEN_LEADING
+    assert expanded.correspondence is CoordinateMapping.IDENTITY
     assert expanded.source_shape == (8, 8)
-    assert expanded.semantic_shape == (2, 8)
+    assert expanded.semantic_shape == (8, 8)
     committed_mapping = result.committed.operand_mapping
     assert isinstance(committed_mapping, Decided)
     assert mapping.value == committed_mapping.value
@@ -314,7 +317,10 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
     model = ModelWrapper(
         helper.make_model(
             helper.make_graph([node], "boundary", [], []),
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     assign_dataflow_scope_ids(model, domain=DATAFLOW_DOMAIN)

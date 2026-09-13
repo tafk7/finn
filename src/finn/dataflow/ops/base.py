@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Answer, Decided, Unresolved
+from finn.dataflow._engine import (
+    Answer,
+    Decided,
+    Unresolved,
+)
 from finn.dataflow.space.declarations import (
     AuthoringError,
     Constraint as DeclaredConstraint,
@@ -42,10 +46,12 @@ from finn.dataflow.ops.native import (
     SCHEMA_VERSION_ATTRIBUTE,
     RESERVED_ATTRIBUTES,
     NativeAttribute,
+    capture_decided_choices,
     choice_schema,
     compiled_choice_schema,
     hydrate,
     serialize_choices,
+    serialize_choice_values,
 )
 from finn.dataflow.ops.schema import (
     SOURCE_DECLARATION_TYPES,
@@ -58,11 +64,27 @@ from finn.dataflow.ops.schema import (
     attribute_name,
     lower_source_schema,
 )
-from finn.dataflow.ops.source import SourceError, SourceNode, SourceOperand, read_source_node
-from finn.dataflow.ops.reconstruction import bind_operations, source_analysis
+from finn.dataflow.ops.source import (
+    SourceError,
+    SourceNode,
+    SourceOperand,
+    read_source_node,
+)
+from finn.dataflow.ops.reconstruction import (
+    SourceAnalysis,
+    bind_operations,
+    source_analysis,
+)
 
 if TYPE_CHECKING:
     from onnx import NodeProto  # type: ignore[import-not-found]
+
+    from finn.dataflow.ops.selected import (
+        RecordedChoice,
+        SelectedConstruction,
+        SelectedGraphSnapshot,
+        SelectionFacts,
+    )
 
 DATAFLOW_DOMAIN = "finn.custom_op.dataflow"
 
@@ -78,7 +100,10 @@ class _BoundNode:
     node_bytes: bytes
     scope_id: str
     opset_version: int
+    source_opset_import: int | None
     outputs: tuple[SourceOperand, ...]
+    output_value_info: tuple[bytes | None, ...]
+    output_annotations: tuple[bytes | None, ...]
 
     def materialize(self) -> Any:
         from onnx import NodeProto  # noqa: PLC0415
@@ -190,7 +215,17 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             node.SerializeToString(deterministic=True),
             self.recorded_scope_id() or "",
             int(self.onnx_opset_version),
+            next(
+                (
+                    int(item.version)
+                    for item in model.model.opset_import
+                    if item.domain == node.domain
+                ),
+                None,
+            ),
             source.outputs,
+            tuple(_value_info_bytes(model, item.tensor) for item in source.outputs),
+            tuple(_annotation_bytes(model, item.tensor) for item in source.outputs),
         )
         values = dict(facts)
         for name, declaration in source_declarations(type(self)):
@@ -314,6 +349,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             optional_inputs=optional,
             attributes=attributes,
             summaries=summaries,
+            initializers=summaries.initializers if isinstance(summaries, SourceAnalysis) else None,
         )
 
     def read_source(self, model: Any) -> SourceNode:
@@ -363,7 +399,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                     if declaration.value_type is float
                     else "i"
                 )
-                result[attribute_name(name, declaration)] = (kind, False, declaration.default)
+                result[attribute_name(name, declaration)] = (
+                    kind,
+                    False,
+                    declaration.default,
+                )
         if self.is_bound:
             for name, attribute in serialize_choices(self).items():
                 result[name] = (attribute.kind, False, attribute.value)
@@ -433,6 +473,152 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
         raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
 
+    def selected_design(self) -> object:
+        """The concrete Design occurrence that owns selected construction."""
+
+        raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
+
+    def selected_source_semantics(self) -> object:
+        """Encode the operation's normalized source meaning for reconstruction."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not define selected source semantics"
+        )
+
+    def selected_construction_identity(self, semantics: object) -> object:
+        """Name the selected construction profile and admitted graph form."""
+
+        del semantics
+        raise NotImplementedError(
+            f"{type(self).__name__} does not define a selected construction identity"
+        )
+
+    def selected_source_provenance(self, semantics: object) -> object:
+        """Freeze the source facts a selected artifact retains."""
+
+        from finn.dataflow.ops.selected import (  # noqa: PLC0415
+            EncodedSourceSemantics,
+            SourceDirection,
+            SourceOperandKey,
+            SourceProvenance,
+            SourceValueRef,
+        )
+
+        if not isinstance(semantics, EncodedSourceSemantics):
+            raise TypeError("selected_source_semantics must return EncodedSourceSemantics")
+        declarations = {
+            name: declaration
+            for name, declaration in source_declarations(type(self))
+            if isinstance(declaration, (OpInput, OpOutput))
+        }
+        expected_outputs = self.expected_outputs()
+        operands = []
+        for name, declaration in declarations.items():
+            if not self.source.has(name):
+                continue
+            operand = self.source.operand(name)
+            if not declaration.output and not operand.datatype_annotated:
+                raise ValueError(
+                    f"selected source input {name!r} has no explicit logical datatype annotation"
+                )
+            expected_shape, expected_datatype = expected_outputs.get(name, (None, None))
+            shape = (
+                tuple(expected_shape)
+                if declaration.output and expected_shape is not None
+                else operand.shape
+            )
+            datatype = (
+                expected_datatype
+                if declaration.output and expected_datatype is not None
+                else operand.datatype
+            )
+            operands.append(
+                SourceValueRef(
+                    SourceOperandKey(
+                        name,
+                        SourceDirection.OUTPUT if declaration.output else SourceDirection.INPUT,
+                        declaration.index,
+                    ),
+                    shape,
+                    operand.carrier_dtype,
+                    datatype.name,
+                    operand.initializer_digest,
+                )
+            )
+        return SourceProvenance.create(
+            family=type(self).family,
+            family_version=type(self).family_version,
+            schema_version=type(self).schema_version,
+            problem_fingerprint=self.problem_fingerprint,
+            scope_id=self.recorded_scope_id(),
+            operands=operands,
+            semantics=semantics,
+        )
+
+    def selected_facts(
+        self,
+        construction: SelectedConstruction[Any, Any],
+        choices: tuple[RecordedChoice, ...],
+    ) -> SelectionFacts[Any, Any]:
+        """Derive reconstructible construction facts from the frozen source."""
+
+        from finn.dataflow.ops.selected import (  # noqa: PLC0415
+            ConstructionIdentity,
+            EncodedSourceSemantics,
+            SelectionFacts,
+            SourceProvenance,
+        )
+
+        encoded = self.selected_source_semantics()
+        if not isinstance(encoded, EncodedSourceSemantics):
+            raise TypeError("selected source semantics have the wrong type")
+        source = self.selected_source_provenance(encoded)
+        if not isinstance(source, SourceProvenance):
+            raise TypeError("selected source provenance has the wrong type")
+        semantics = construction.decode_source_semantics(encoded)
+        identity = self.selected_construction_identity(semantics)
+        if not isinstance(identity, ConstructionIdentity):
+            raise TypeError("selected construction identity has the wrong type")
+        facts = construction.derive_facts(identity, source, semantics, choices)
+        if not isinstance(facts, SelectionFacts):
+            raise TypeError("selected construction derived the wrong facts type")
+        return facts
+
+    @property
+    def selected_graph(self) -> ProjectionAssessment[SelectedGraphSnapshot]:
+        """The selected-graph projection with source and Design obligations."""
+
+        from finn.dataflow.designs.design import selected_graph_for  # noqa: PLC0415
+
+        return selected_graph_for(cast("Any", self.selected_design()))
+
+    @property
+    def selected_snapshot(self) -> Answer[SelectedGraphSnapshot]:
+        return self.selected_graph.accepted_answer
+
+    def plan_selected_publication(self) -> Any:
+        """Freeze a detached selected candidate and atomic source update plan."""
+
+        from finn.dataflow.ops.persistence import plan_selected_publication  # noqa: PLC0415
+
+        return plan_selected_publication(self)
+
+    def publish_selected(self, model: Any) -> Any:
+        """Plan and atomically publish this operation's current selection."""
+
+        from finn.dataflow.ops.persistence import (  # noqa: PLC0415
+            apply_selected_publication,
+        )
+
+        return apply_selected_publication(model, self.plan_selected_publication())
+
+    def rebind_selected(self, snapshot: SelectedGraphSnapshot) -> Any:
+        """Validate a detached selected artifact against this current source."""
+
+        from finn.dataflow.ops.reconstruction import rebind_selected_graph  # noqa: PLC0415
+
+        return rebind_selected_graph(self, snapshot)
+
     def operand_references(
         self, network: DataflowNetwork
     ) -> Mapping[str, tuple[DataflowOperandRef, ...]]:
@@ -497,15 +683,27 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 )
         return tuple(differences)
 
-    def graph_effects(self, *, require: Any = None) -> Any:
+    def graph_effects(
+        self,
+        *,
+        require: Any = None,
+        _captured_choices: tuple[tuple[Any, object], ...] | None = None,
+    ) -> Any:
         """Plan native attribute replacement and output repairs without writing."""
-        from finn.dataflow.ops.persistence import CommitmentStage, GraphEffects, check_commitment  # noqa: PLC0415
+        from finn.dataflow.ops.persistence import (  # noqa: PLC0415
+            CommitmentStage,
+            GraphEffects,
+            check_commitment,
+            freeze_build_facts,
+            source_read_set,
+        )
 
         state = self._bound_node()
         stage = CommitmentStage.DATAFLOW if require is None else require
         check_commitment({CommitmentStage.DATAFLOW: self.dataflow}, stage)
         schema = choice_schema(self)
-        written = serialize_choices(self)
+        captured = capture_decided_choices(self) if _captured_choices is None else _captured_choices
+        written = serialize_choice_values(captured)
         written.update(
             {
                 SCOPE_ID_ATTRIBUTE: NativeAttribute("s", state.scope_id),
@@ -517,11 +715,12 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         node = state.materialize()
         current = {item.name: item.SerializeToString(deterministic=True) for item in node.attribute}
         source = self.source
+        expected_attributes = MappingProxyType({name: current.get(name) for name in names})
         return GraphEffects(
             scope_id=state.scope_id,
             commitment_stage=stage,
             expected_source_fingerprint=self.problem_fingerprint,
-            expected_attributes=MappingProxyType({name: current.get(name) for name in names}),
+            expected_attributes=expected_attributes,
             remove_attributes=tuple(sorted(names - written.keys())),
             set_attributes=MappingProxyType(written),
             tensor_datatypes=MappingProxyType(
@@ -540,16 +739,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             ),
             operation_type=type(self),
             opset_version=state.opset_version,
-            build_facts=self._frozen_build_values(),
+            build_facts=freeze_build_facts(self),
             expected_operator=(node.domain, node.op_type),
             expected_outputs=tuple(node.output),
-            invalidates=("dataflow.implementation",)
-            if any(
-                current.get(name) != value.proto(name).SerializeToString(deterministic=True)
-                for name, value in written.items()
-            )
-            or names - written.keys() & current.keys()
-            else (),
+            expected_choices=tuple((item.choice.path, value) for item, value in captured),
+            read_set=source_read_set(self, expected_attributes=expected_attributes),
         )
 
     def commit(self, model: Any, build: Any = None, *, require: Any = None) -> Any:
@@ -569,7 +763,9 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                     f"build facts differ at commit ({', '.join(names)}); rebind first"
                 )
         return _apply_graph_effects(
-            model, self.graph_effects(require=require), lambda: self.rebind(model)
+            model,
+            self.graph_effects(require=require),
+            lambda current: self.rebind(current),
         )
 
     def recorded(self) -> Mapping[str, object]:
@@ -796,6 +992,25 @@ def _attribute(node: Any, name: str) -> Any | None:
         if attribute.name == name:
             return attribute
     return None
+
+
+def _value_info_bytes(model: Any, tensor: str) -> bytes | None:
+    matches = [
+        item
+        for values in (model.graph.input, model.graph.output, model.graph.value_info)
+        for item in values
+        if item.name == tensor
+    ]
+    if len(matches) > 1:
+        raise SourceError(f"tensor {tensor!r} has duplicate value information")
+    return None if not matches else bytes(matches[0].SerializeToString(deterministic=True))
+
+
+def _annotation_bytes(model: Any, tensor: str) -> bytes | None:
+    matches = [item for item in model.graph.quantization_annotation if item.tensor_name == tensor]
+    if len(matches) > 1:
+        raise SourceError(f"tensor {tensor!r} has duplicate quantization annotations")
+    return None if not matches else bytes(matches[0].SerializeToString(deterministic=True))
 
 
 def _string_attribute(node: Any, name: str) -> str:

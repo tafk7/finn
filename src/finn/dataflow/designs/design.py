@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from inspect import Parameter as _SignatureParameter, Signature
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
@@ -39,6 +39,7 @@ from finn.dataflow._engine import (
     Finding,
     FindingKind,
     QualifiedPath,
+    ReadinessAssessment,
     Unresolved,
 )
 from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_NETWORK_SEMANTICS
@@ -92,6 +93,9 @@ from finn.dataflow.model.network import (
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.region import BeatSequence, DataflowRegion, Port
 
+if TYPE_CHECKING:
+    from finn.dataflow.ops.selected import SelectedConstruction, SelectedGraphSnapshot
+
 D = TypeVar("D", bound="DataflowDesign")
 
 
@@ -124,6 +128,20 @@ class SelectedNetwork(Derived[DataflowNetwork]):
         object.__setattr__(self, "stable_name", _declaration_name(name, "a SelectedNetwork"))
         object.__setattr__(self, "dependencies", ())
         object.__setattr__(self, "evaluate", _unbuilt_network)
+
+
+@dataclass(frozen=True, slots=True)
+class SelectedGraph:
+    """One source-bound selected construction declared by a concrete Design.
+
+    Unlike a normal ``Derived``, final evaluation needs the bound root
+    operation's frozen source provenance and problem fingerprint. The
+    declaration remains typed and Design-owned; :func:`selected_graph_for`
+    supplies the occurrence-bound projection boundary without putting a live
+    model or operation into an engine value.
+    """
+
+    construction: SelectedConstruction[Any, Any]
 
 
 def _unbuilt_network() -> object:
@@ -181,6 +199,7 @@ class DataflowDesign(Space):
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
+    selected_graph: ClassVar[SelectedGraph | None] = None
 
     #: The Network is the one automatic Design output to a containing Space.
     #: This is what lets an operation compose a Design exactly as a Design
@@ -774,7 +793,8 @@ def _topology(
                 if sink.position_map is None:
                     sinks.append(
                         _CompiledSink(
-                            _endpoint(design_type, by_declaration, sink.endpoint, what), None
+                            _endpoint(design_type, by_declaration, sink.endpoint, what),
+                            None,
                         )
                     )
                     continue
@@ -1071,7 +1091,10 @@ def _correspondence_constraint(
         if declaration.when is not None:
             active_key = f"active_{index}"
             dependencies.append(
-                (active_key, allow_absent(cast("ValueSource[object]", declaration.when)))
+                (
+                    active_key,
+                    allow_absent(cast("ValueSource[object]", declaration.when)),
+                )
             )
         plan.append((role, node_id, region_key, active_key))
 
@@ -1451,6 +1474,138 @@ def design_dataflow(
     )
 
 
+def selected_graph_for(
+    design: DataflowDesign,
+    *,
+    captured_choices: Mapping[str, object] | None = None,
+) -> ProjectionAssessment[SelectedGraphSnapshot]:
+    """Resolve one concrete Design's typed selected construction declaration."""
+
+    from finn.dataflow.ops.base import DataflowOp  # noqa: PLC0415 - operation/design cycle
+    from finn.dataflow.ops.selected import (  # noqa: PLC0415 - compiler adapter boundary
+        ConstructionInputs,
+        RecordedChoice,
+        SelectedConstruction,
+        SelectedGraphError,
+        SelectedInitializerInput,
+        SelectionFacts,
+        construct_selected_graph,
+        encode_selected_choices,
+    )
+    from finn.dataflow.ops.native import (  # noqa: PLC0415 - compiler adapter boundary
+        choice_schema,
+        choice_subset,
+        resolve_choice_subset,
+    )
+    from finn.dataflow.ops.tensor_summary import FrozenInitializer  # noqa: PLC0415
+
+    root = design.root
+    base = root.dataflow if isinstance(root, DataflowOp) else design.dataflow
+
+    def assessment(answer: Answer[object]) -> ProjectionAssessment[SelectedGraphSnapshot]:
+        readiness = base.readiness
+        if isinstance(answer, Unresolved) and readiness.ready is True:
+            answers = dict(readiness.answers)
+            answers[QualifiedPath("selected_graph.dependency")] = answer
+            readiness = ReadinessAssessment(
+                "selected_graph",
+                MappingProxyType(answers),
+                None,
+            )
+        return ProjectionAssessment(
+            "selected_graph",
+            readiness,
+            base.constraints,
+            cast("Answer[SelectedGraphSnapshot]", answer),
+            cast("Answer[SelectedGraphSnapshot]", answer),
+        )
+
+    if not isinstance(base.accepted_answer, Decided):
+        return assessment(cast("Answer[object]", base.accepted_answer))
+    declaration = type(design).selected_graph
+    if declaration is None or not isinstance(declaration.construction, SelectedConstruction):
+        return assessment(
+            Absent(
+                (
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "selected-graph-unsupported-design",
+                        QualifiedPath("selected_graph"),
+                        f"Design {type(design).__name__} has no selected-graph construction",
+                    ),
+                )
+            )
+        )
+    if not isinstance(root, DataflowOp):
+        raise AuthoringError("selected graph construction requires a DataflowOp root")
+    construction = declaration.construction
+    selected_schema = choice_subset(choice_schema(root), construction.choice_paths)
+    choices: list[RecordedChoice] = []
+    if captured_choices is None:
+        for item, answer in resolve_choice_subset(root, selected_schema):
+            if not isinstance(answer, Decided):
+                return assessment(cast("Answer[object]", answer))
+            choices.append(RecordedChoice(item.choice.path, answer.value))
+    else:
+        for item in selected_schema:
+            if item.choice.path not in captured_choices:
+                return assessment(
+                    Unresolved(
+                        (
+                            Finding(
+                                FindingKind.BLOCKER,
+                                "selected-choice-unresolved",
+                                item.choice.reference.path,
+                                "a selected construction choice is not committed",
+                            ),
+                        )
+                    )
+                )
+            choices.append(RecordedChoice(item.choice.path, captured_choices[item.choice.path]))
+    try:
+        encoded_choices = encode_selected_choices(selected_schema, tuple(choices))
+        facts = root.selected_facts(construction, encoded_choices)
+        if not isinstance(facts, SelectionFacts):
+            raise AuthoringError("selected source facts have the wrong type")
+        payloads = []
+        for declared_input in construction.initializer_inputs:
+            if not isinstance(declared_input, SelectedInitializerInput):
+                raise AuthoringError("selected initializer inputs must use typed declarations")
+            if not declared_input.required(facts):
+                continue
+            if not isinstance(declared_input.source, ValueSource):
+                raise AuthoringError("selected initializer input source must be a ValueSource")
+            answer = design.answer(declared_input.source)
+            if not isinstance(answer, Decided):
+                return assessment(cast("Answer[object]", answer))
+            if not isinstance(answer.value, FrozenInitializer):
+                raise AuthoringError("selected initializer input did not resolve a frozen value")
+            payloads.append((declared_input.key, answer.value))
+        source = facts.source
+        snapshot = construct_selected_graph(
+            construction,
+            facts,
+            ConstructionInputs(tuple(payloads)),
+            expected_network=base.accepted_answer.value,
+            expected_source=source,
+            choice_schema=selected_schema,
+        )
+    except (SelectedGraphError, TypeError, ValueError) as error:
+        return assessment(
+            Absent(
+                (
+                    Finding(
+                        FindingKind.REJECTION,
+                        "selected-graph-construction-refused",
+                        QualifiedPath("selected_graph"),
+                        str(error),
+                    ),
+                )
+            )
+        )
+    return assessment(Decided(snapshot))
+
+
 __all__ = [
     "RESERVED_DESIGN_NAMES",
     "TOPOLOGY_TYPES",
@@ -1459,9 +1614,11 @@ __all__ = [
     "DataflowDesign",
     "KernelChoice",
     "SegmentEndpoint",
+    "SelectedGraph",
     "SelectedNetwork",
     "EdgeSink",
     "TopologyDeclaration",
     "design_dataflow",
+    "selected_graph_for",
     "topology_members",
 ]

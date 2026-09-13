@@ -106,7 +106,10 @@ def _mvau_model(
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])
@@ -136,7 +139,10 @@ def _replay_model(*, repetitions: int = 2, matrix_width: int = 8, folds: int = 4
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])
@@ -168,7 +174,10 @@ def _chained_mvau_model() -> ModelWrapper:
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     for name, kind in (("activation", "INT8"), ("weight", "INT8")):
@@ -197,7 +206,10 @@ def _chained_replay_model() -> ModelWrapper:
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     model.set_tensor_datatype("activation", DataType["INT8"])
@@ -311,11 +323,16 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     region = network.value.node("replay").region
     input_port = region.input_interface("activation_in").port
     output_port = region.output_interface("activation_out").port
-    assert input_port.operand == output_port.operand
+    assert input_port.operand.id == "X"
+    assert input_port.operand.shape == (repetitions, matrix_width)
+    assert output_port.operand.id == "XR"
+    assert output_port.operand.shape == (repetitions * folds, matrix_width)
     output_beats = output_port.beat_sequence.materialize_beats(
         max_fields=output_port.beat_sequence.delivered_field_count
     )
-    region_values = np.asarray([activation[position] for beat in output_beats for position in beat])
+    region_values = np.asarray(
+        [context["expanded"][position] for beat in output_beats for position in beat]
+    )
     assert np.array_equal(region_values, context["expanded"].reshape(-1))
 
     spec = _replay_build_spec(operation)
@@ -535,6 +552,7 @@ def test_a_tensor_lowers_to_explicit_named_facets() -> None:
     assert "weight__initializer_digest" in declarations
     assert "activation__initializer_digest" in declarations
     assert "activation__value_summary" in declarations
+    assert "activation__initializer_value" in declarations
     # Only for an optional operand.
     assert "weight__present" not in declarations
 
@@ -636,7 +654,11 @@ def test_the_mvau_source_projects_folding_facts_from_its_tensors() -> None:
 
     assert isinstance(network, Decided), network
     assert {node.id for node in network.value.nodes} == {"replay", "compute"}
-    assert {item.id for item in network.value.boundaries} == {"activation", "weight", "output"}
+    assert {item.id for item in network.value.boundaries} == {
+        "activation",
+        "weight",
+        "output",
+    }
 
 
 def test_the_replay_source_projects_one_node_and_no_selector() -> None:
@@ -759,7 +781,11 @@ def test_weight_supply_and_compute_choices_can_be_switched_without_stale_state()
 
     model = _mvau_model()
     previous_candidate: str | None = None
-    for supply in (WeightSupply.EMBEDDED, WeightSupply.DECOUPLED, WeightSupply.EXTERNAL):
+    for supply in (
+        WeightSupply.EMBEDDED,
+        WeightSupply.DECOUPLED,
+        WeightSupply.EXTERNAL,
+    ):
         rebound = _unbound(model, "mvau0").bind(model, Build())
         assert isinstance(rebound, MvauDataflowOp)
         chosen = _configure_mvau_point(rebound.reconstruct(), supply=supply)
@@ -817,7 +843,7 @@ def test_source_change_refuses_a_plan_but_node_rename_does_not() -> None:
     effects = operation.rebind(model).graph_effects()
     model.set_initializer("weight", np.ones((8, 4), dtype=np.float32))
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="different problem"):
+    with pytest.raises(DataflowOpError, match="initializer_content|different problem"):
         apply_graph_effects(model, effects)
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -827,7 +853,9 @@ def test_a_plan_addressed_to_another_graph_is_refused() -> None:
     effects = operation.graph_effects()
     other = _mvau_model()
 
-    with pytest.raises(DataflowOpError, match="no node in this graph carries"):
+    with pytest.raises(
+        DataflowOpError, match="unknown stable node id|no node in this graph carries"
+    ):
         apply_graph_effects(other, effects)
 
 
@@ -835,7 +863,7 @@ def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
     attrs = read_attributes(model.graph.node[0])
     assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.problem_fingerprint
-    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 3)
+    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 4)
     assert attrs["design__case"] == NativeAttribute("s", "dot_product")
     assert attrs["design__dot_product__pe"] == NativeAttribute("i", 2)
     assert attrs["design__dot_product__simd"] == NativeAttribute("i", 4)
@@ -863,7 +891,7 @@ def test_old_mvau_schema_two_is_refused_without_writes() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 2)
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 3"):
+    with pytest.raises(DataflowOpError, match="writes schema version 4"):
         _unbound(model, "mvau0").bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -958,7 +986,11 @@ def test_every_source_operand_maps_to_a_qualified_region_operand() -> None:
     _model, operation = _configured_mvau()
     answer = operation.operand_mapping
     assert isinstance(answer, Decided)
-    assert {item.source_operand for item in answer.value} == {"activation", "weight", "output"}
+    assert {item.source_operand for item in answer.value} == {
+        "activation",
+        "weight",
+        "output",
+    }
     activation = next(item for item in answer.value if item.source_operand == "activation")
     assert activation.placement == External("activation", "replay", "activation_in")
     assert activation.correspondence is CoordinateMapping.FLATTEN_LEADING
@@ -971,7 +1003,13 @@ def test_an_association_names_no_kernel_component_or_artifact() -> None:
 
     rendered = repr(answer.value)
 
-    for forbidden in ("dotp_axi", "replay_buffer", "ComponentABI", "Derivation", "ArtifactRef"):
+    for forbidden in (
+        "dotp_axi",
+        "replay_buffer",
+        "ComponentABI",
+        "Derivation",
+        "ArtifactRef",
+    ):
         assert forbidden not in rendered
 
 
@@ -1107,7 +1145,10 @@ def test_every_refusal_survives_python_o() -> None:
         "raise SystemExit(0 if after == before else 'the node changed')\n"
     )
     result = subprocess.run(
-        [sys.executable, "-O", "-c", script], capture_output=True, text=True, check=False
+        [sys.executable, "-O", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr or result.stdout
 
@@ -1523,7 +1564,10 @@ def _rank_one_mvau_model(*, matrix_width: int = 8, matrix_height: int = 4) -> Mo
     model = ModelWrapper(
         helper.make_model(
             graph,
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid(DATAFLOW_DOMAIN, 1),
+            ],
         )
     )
     for name in ("activation", "weight"):
@@ -1577,7 +1621,7 @@ def test_a_concurrent_decision_change_refuses_commit_without_writes() -> None:
     effects = operation.graph_effects()
     _replace_attribute(model, "design__dot_product__pe", 4)
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="Decision attribute"):
+    with pytest.raises(DataflowOpError, match="source graph effects differ"):
         apply_graph_effects(model, effects)
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -1598,6 +1642,6 @@ def test_retargeted_outputs_refuse_a_plan_that_would_repair_the_old_tensor() -> 
     effects = operation.graph_effects()
     model.graph.node[0].output[0] = "renamed_output"
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="output tensor identities"):
+    with pytest.raises(DataflowOpError, match="source graph effects differ"):
         apply_graph_effects(model, effects)
     assert model.model.SerializeToString(deterministic=True) == before

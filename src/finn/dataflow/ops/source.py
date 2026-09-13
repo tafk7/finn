@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from finn.dataflow.model.datatypes import QONNXDataType, canonical_qonnx_datatype
+from finn.dataflow.model.datatypes import (
+    QONNXDataType,
+    canonical_qonnx_datatype,
+    resolve_qonnx_datatype_name,
+)
+from finn.dataflow.ops.tensor_summary import FrozenInitializer
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from onnx import NodeProto  # type: ignore[import-not-found]
@@ -49,6 +54,7 @@ class SourceOperand:
     datatype: QONNXDataType
     initializer: bool = False
     initializer_digest: str | None = None
+    initializer_value: FrozenInitializer | None = None
     #: Whether the graph actually annotates this operand's shape.  ``False``
     #: for an output the operation has not written a shape for yet, which is
     #: the ordinary state *before* shape inference -- and shape inference is
@@ -56,6 +62,31 @@ class SourceOperand:
     #: Refusing there would make the operation require the annotation it exists
     #: to produce.
     annotated: bool = True
+    #: The ONNX tensor carrier is independent of the QONNX logical datatype.
+    carrier_dtype: int = 1
+    #: Whether the QONNX logical datatype came from one explicit canonical
+    #: finn_datatype annotation rather than ModelWrapper's carrier fallback.
+    datatype_annotated: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.datatype_annotated) is not bool:
+            raise ValueError("datatype_annotated must be bool")
+        if type(self.carrier_dtype) is not int or self.carrier_dtype <= 0:
+            raise ValueError("carrier_dtype must be a positive ONNX TensorProto enum")
+        if self.initializer != (self.initializer_digest is not None):
+            raise ValueError("initializer presence and digest must agree")
+        if self.initializer != (self.initializer_value is not None):
+            raise ValueError("initializer presence and frozen payload must agree")
+        if (
+            self.initializer_value is not None
+            and self.initializer_digest != self.initializer_value.summary.content_digest
+        ):
+            raise ValueError("initializer digest and frozen payload must agree")
+        if (
+            self.initializer_value is not None
+            and self.carrier_dtype != self.initializer_value.carrier_dtype
+        ):
+            raise ValueError("initializer and source operand carrier dtypes must agree")
 
     @property
     def elements(self) -> int:
@@ -99,6 +130,7 @@ def read_source_node(
     inputs: Sequence[str],
     outputs: Sequence[str],
     summaries: Mapping[str, Any],
+    initializers: Mapping[str, FrozenInitializer] | None = None,
     optional_inputs: Sequence[str] = (),
     attributes: Mapping[str, object] | None = None,
 ) -> SourceNode:
@@ -117,7 +149,32 @@ def read_source_node(
         shape = model.get_tensor_shape(tensor)
         if shape is None and not output:
             raise SourceError(f"{node.name} operand {operand_id!r} has no shape")
-        datatype = model.get_tensor_datatype(tensor)
+        datatype_annotations = [
+            entry.value
+            for annotation in model.graph.quantization_annotation
+            if annotation.tensor_name == tensor
+            for entry in annotation.quant_parameter_tensor_names
+            if entry.key == "finn_datatype"
+        ]
+        if len(datatype_annotations) > 1:
+            raise SourceError(
+                f"{node.name} operand {operand_id!r} has duplicate logical datatype annotations"
+            )
+        datatype_annotated = len(datatype_annotations) == 1
+        if datatype_annotated:
+            try:
+                datatype = resolve_qonnx_datatype_name(datatype_annotations[0])
+            except Exception as error:
+                raise SourceError(
+                    f"{node.name} operand {operand_id!r} has an invalid logical datatype annotation"
+                ) from error
+            if datatype.name != datatype_annotations[0]:
+                raise SourceError(
+                    f"{node.name} operand {operand_id!r} has a noncanonical logical "
+                    "datatype annotation"
+                )
+        else:
+            datatype = model.get_tensor_datatype(tensor)
         if datatype is None:
             if not output:
                 raise SourceError(f"{node.name} operand {operand_id!r} has no annotated datatype")
@@ -127,14 +184,30 @@ def read_source_node(
 
             datatype = DataType["FLOAT32"]
         summary = None if output else summaries.get(tensor)
+        initializer_value = None if output or initializers is None else initializers.get(tensor)
+        value_info = model.get_tensor_valueinfo(tensor)
+        carrier_dtype = (
+            initializer_value.carrier_dtype
+            if initializer_value is not None
+            else int(value_info.type.tensor_type.elem_type)
+            if value_info is not None
+            else 1
+            if output
+            else 0
+        )
+        if carrier_dtype <= 0:
+            raise SourceError(f"{node.name} operand {operand_id!r} has no ONNX carrier type")
         return SourceOperand(
-            operand_id,
-            tensor,
-            () if shape is None else tuple(int(extent) for extent in shape),
-            canonical_qonnx_datatype(datatype),
-            summary is not None,
-            None if summary is None else summary.content_digest,
-            shape is not None,
+            id=operand_id,
+            tensor=tensor,
+            shape=() if shape is None else tuple(int(extent) for extent in shape),
+            datatype=canonical_qonnx_datatype(datatype),
+            initializer=summary is not None,
+            initializer_digest=None if summary is None else summary.content_digest,
+            initializer_value=initializer_value,
+            annotated=shape is not None,
+            carrier_dtype=carrier_dtype,
+            datatype_annotated=datatype_annotated,
         )
 
     read_inputs: list[SourceOperand] = []

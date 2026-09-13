@@ -186,7 +186,7 @@ def test_replay_owns_no_decision_at_all() -> None:
 def test_replay_declares_one_region_family() -> None:
     assert (ReplayBufferKernel.region.family, ReplayBufferKernel.region.version) == (
         "mvau.activation_replay",
-        "1",
+        "2",
     )
 
 
@@ -206,7 +206,10 @@ def test_several_neuron_folds_multiply_the_output_beats() -> None:
     expanded = region.output_interface("activation_out").port.beat_sequence
     assert compact.beat_count == 2 * 4
     assert expanded.beat_count == 2 * 3 * 4
-    assert compact.image_set == expanded.image_set
+    assert compact.image_set.cardinality == 2 * 8
+    assert expanded.image_set.cardinality == 2 * 3 * 8
+    assert region.input("X").operand.shape == (2, 8)
+    assert region.output_interface("activation_out").port.operand.shape == (6, 8)
 
 
 def test_replay_sources_and_abi_are_exact() -> None:

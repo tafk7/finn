@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from itertools import permutations
 
+from qonnx.core.datatype import DataType
+
 from finn.dataflow.model.maps import (
     CoordinateSet,
     OccurrenceAxis,
@@ -17,9 +19,15 @@ from finn.dataflow.model.maps import (
 from finn.dataflow.model.network import PositionMap
 from finn.dataflow.model.region import (
     BeatSequence,
+    DataflowRegion,
+    InternalInput,
+    LogicalSchedule,
+    Operand,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
+    ScheduleLevel,
 )
+from finn.dataflow.model.region_validation import validate_region
 from finn.dataflow.space.dataflow_value_semantics import POSITION_MAP_SEMANTICS
 
 
@@ -94,6 +102,36 @@ def test_requirement_bound_unbound_and_compact_equality_is_transitive() -> None:
     assert bound_two != compact_three
     assert bound_three == compact_three
     _assert_equivalence_laws((bound_two, unbound, compact_three, bound_three))
+
+
+def test_requirement_from_rule_preserves_canonical_zero_and_region_equality() -> None:
+    domain = RectangularDomain((2,))
+    raw = SeparableAffineRequirements(
+        domain,
+        domain,
+        base=(0,),
+        iteration_coefficients=((1,),),
+        multiplicity=0,
+    )
+    from_rule = ScheduledInputRequirements.from_rule(raw)
+    affine = ScheduledInputRequirements.affine(
+        domain,
+        domain,
+        base=(0,),
+        iteration_coefficients=((1,),),
+        multiplicity=0,
+    )
+    explicit = ScheduledInputRequirements((), schedule_domain=domain, position_domain=domain)
+    _assert_equivalence_laws((from_rule, affine, explicit))
+
+    schedule = LogicalSchedule((ScheduleLevel("i", 2),))
+    operand = Operand("X", DataType["INT8"], (2,))
+    regions = tuple(
+        DataflowRegion(schedule, (InternalInput(operand, requirements),), ())
+        for requirements in (from_rule, affine, explicit)
+    )
+    assert all(not validate_region(region).issues for region in regions)
+    _assert_equivalence_laws(regions)
 
 
 def test_availability_bound_unbound_and_compact_equality_is_transitive() -> None:

@@ -1,0 +1,99 @@
+{
+  "build": {
+    "runtime_weight_range_contract": true,
+    "runtime_writable_weights": false,
+    "synth_clk_period_ns": 5.5,
+    "target_dsp": "DSP48E2"
+  },
+  "finn_head": "1806f69173a70c2a643bba020ccef707b894c2f7",
+  "fixtures": [
+    {
+      "bytes": 482,
+      "file": "replay-schema2-partial.onnx",
+      "operation": "ActivationReplayOp",
+      "problem_fingerprint": "5ece40256e7894493c19201d08c9420321ffca7fe0c05145975d2605a067adef",
+      "recorded_choices": {
+        "design.pe": 1
+      },
+      "schema_version": 2,
+      "scope_id": "legacy_replay_scope",
+      "sha256": "d6092612ad6a4958eaa184a9f7b34dba6968876bbee9936b03d25895b6a51631"
+    },
+    {
+      "bytes": 503,
+      "file": "replay-schema2-full.onnx",
+      "operation": "ActivationReplayOp",
+      "problem_fingerprint": "5ece40256e7894493c19201d08c9420321ffca7fe0c05145975d2605a067adef",
+      "recorded_choices": {
+        "design.pe": 1,
+        "design.simd": 3
+      },
+      "schema_version": 2,
+      "scope_id": "legacy_replay_scope",
+      "sha256": "ba0e50bb117bf18f77d98660fd93528131f2e98eeb98dfab811608c627331e28"
+    },
+    {
+      "bytes": 702,
+      "file": "mvau-schema3-partial.onnx",
+      "operation": "MvauDataflowOp",
+      "problem_fingerprint": "30d4ac7426cdb0b5557fcb773e89242c657bfccf1fa0fa2f5cd51e36a6115d7c",
+      "recorded_choices": {
+        "design.case": "dot_product"
+      },
+      "schema_version": 3,
+      "scope_id": "legacy_mvau_scope",
+      "sha256": "2346ded8e50f4cb69ead25993737be1e1e127b5a1015b51096731e79d5870b9e"
+    },
+    {
+      "bytes": 936,
+      "file": "mvau-schema3-dot-product.onnx",
+      "operation": "MvauDataflowOp",
+      "problem_fingerprint": "30d4ac7426cdb0b5557fcb773e89242c657bfccf1fa0fa2f5cd51e36a6115d7c",
+      "recorded_choices": {
+        "design.case": "dot_product",
+        "design.dot_product.compute.dotp_axi.compute_pumping": false,
+        "design.dot_product.compute.kernel": "dotp_axi",
+        "design.dot_product.pe": 2,
+        "design.dot_product.simd": 4,
+        "design.dot_product.weight_supply": "external"
+      },
+      "schema_version": 3,
+      "scope_id": "legacy_mvau_scope",
+      "sha256": "5e349b05a2445b6533a8b1ff01c800e31a127c7e885df33e08b8ed87902177e5"
+    },
+    {
+      "bytes": 920,
+      "file": "mvau-schema3-batch-interleaved.onnx",
+      "operation": "MvauDataflowOp",
+      "problem_fingerprint": "30d4ac7426cdb0b5557fcb773e89242c657bfccf1fa0fa2f5cd51e36a6115d7c",
+      "recorded_choices": {
+        "design.batch_interleaved.compute.dotp_axi_batch_interleaved.compute_pumping": false,
+        "design.batch_interleaved.interleave": 2,
+        "design.batch_interleaved.pe": 2,
+        "design.batch_interleaved.simd": 2,
+        "design.case": "batch_interleaved"
+      },
+      "schema_version": 3,
+      "scope_id": "legacy_mvau_scope",
+      "sha256": "96f564cbf49ebc2e68488fd495e5568fe9f0a53516c1cff751e56135311d3d61"
+    }
+  ],
+  "generated_at": "2026-09-12",
+  "generator_sha256": "2ae9ad15798395e60fbc902fd5fa1554ed0ce9c9ab6076ec0dd57a2b9e86e9ad",
+  "qonnx_head": "21d4c1a72334002aaf80ae099dbf5d167f001001",
+  "schema": "finn-step-4d-pre4c-legacy-fixtures-v1",
+  "source_sha256": {
+    "src/finn/dataflow/kernels/dotp_axi.py": "c1b3068c215fa26e5fd1b672431b013874484b4b218572c1e0d7dbec0a1621a3",
+    "src/finn/dataflow/ops/base.py": "d1a0c617e2d4ae8e16fd6deeddf4611012134b06a340c300ba97f364ae767c75",
+    "src/finn/dataflow/ops/mvau/designs/base.py": "f222524c238ad3d2350b31b0d326df7cfc7c1e1dfa0b2281c4e301f4391a9865",
+    "src/finn/dataflow/ops/mvau/designs/batch_interleaved.py": "dd37eaf888cd49a7d35299dcbbf5f294c6c34b7563247b0d2a1188a4f819414e",
+    "src/finn/dataflow/ops/mvau/designs/dot_product.py": "25216d367edde8b53b7c353a7248bdd84639ecc458e80da7bf7be41526ece4e8",
+    "src/finn/dataflow/ops/mvau/op.py": "6feb01d177ce9fa95abedad5d58b6353c8a90db396c02c854aa70bfe65207d98",
+    "src/finn/dataflow/ops/native.py": "fe43411b05937b2ed91f2dfcc2fbbb84371880d48e284e13b47229ee5b99c80f",
+    "src/finn/dataflow/ops/persistence.py": "7359a4f83ec3d14389ffb8f9fcce10b15bc978c75e3f21ef248252f74a54d8b0",
+    "src/finn/dataflow/ops/replay/design.py": "ff964207c47dff790bb7057606e8e305304b4293a51027d8e6e9bf456065ac44",
+    "src/finn/dataflow/ops/replay/op.py": "e59053e3c8a7f248de04f25cdcea7cb5122e64ce6869260b94c566a3ffdcf782",
+    "src/finn/dataflow/ops/schema.py": "29bb42934a51ae7095b767f91300aaa4340fd349cdef74905d95337584623155",
+    "src/finn/dataflow/ops/source.py": "463d6b778dcae1b4b007fa6922fd4b06e37c719c47f2531c37169029e74cae4e"
+  }
+}

@@ -40,7 +40,11 @@ def test_external_streaming_gives_the_matrix_a_boundary_and_no_supplier() -> Non
     network = _network(_occurrence(WeightSupply.EXTERNAL))
     assert {node.id for node in network.nodes} == {"replay", "compute"}
     assert {edge.id for edge in network.edges} == {"activation_replay"}
-    assert {item.id for item in network.boundaries} == {"activation", "weight", "output"}
+    assert {item.id for item in network.boundaries} == {
+        "activation",
+        "weight",
+        "output",
+    }
     weight = next(item for item in network.boundaries if item.id == "weight")
     assert weight.endpoint.node_id == "compute"
 
@@ -55,7 +59,7 @@ def test_embedded_supply_gives_the_compute_region_no_weight_port_at_all() -> Non
     compute = network.node("compute")
     assert {item.port.id for item in compute.region.input_interfaces} == {"activation"}
     assert design.selected("compute") == Decided("dotp_axi_embedded")
-    assert design.region_family("compute") == Decided(("mvau.dot_product.embedded", "1"))
+    assert design.region_family("compute") == Decided(("mvau.dot_product.embedded", "2"))
 
     # The matrix is still required, and still has no endpoint anywhere.
     weight = RegionInputRef("compute", "W")
@@ -70,7 +74,10 @@ def test_decoupled_supply_gives_the_matrix_its_own_node_and_edge() -> None:
     design = _occurrence(WeightSupply.DECOUPLED)
     network = _network(design)
     assert {node.id for node in network.nodes} == {"replay", "compute", "memory"}
-    assert {edge.id for edge in network.edges} == {"activation_replay", "weight_supply_edge"}
+    assert {edge.id for edge in network.edges} == {
+        "activation_replay",
+        "weight_supply_edge",
+    }
     # The matrix no longer crosses the Design's boundary; it is produced inside.
     assert {item.id for item in network.boundaries} == {"activation", "output"}
     edge = next(item for item in network.edges if item.id == "weight_supply_edge")
@@ -120,7 +127,7 @@ def test_the_compute_region_is_identical_in_external_and_decoupled_supply() -> N
     assert embedded != external
     assert embedded.schedule == external.schedule
     assert embedded.outputs == external.outputs
-    assert embedded.input("X") == external.input("X")
+    assert embedded.input("XR") == external.input("XR")
     # Same weight operand and the same requirement of it; only the port differs.
     assert embedded.input("W").operand == external.input("W").operand
     assert embedded.input("W").requirements == external.input("W").requirements
@@ -220,7 +227,9 @@ def test_inconsistent_supply_and_compute_candidates_are_refused(
 
 
 @pytest.mark.parametrize("supply", list(WeightSupply))
-def test_the_memory_role_is_present_exactly_when_the_mode_says(supply: WeightSupply) -> None:
+def test_the_memory_role_is_present_exactly_when_the_mode_says(
+    supply: WeightSupply,
+) -> None:
     design = _occurrence(supply)
     expected = supply is WeightSupply.DECOUPLED
     assert design.is_active("memory") == Decided(expected)

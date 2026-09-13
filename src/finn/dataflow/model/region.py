@@ -662,6 +662,18 @@ class ScheduledInputRequirements:
         return result
 
     @classmethod
+    def from_rule(
+        cls, rule: ZeroRequirements | SeparableAffineRequirements
+    ) -> ScheduledInputRequirements:
+        """Construct from one decoded compact requirement rule."""
+
+        if not isinstance(rule, (ZeroRequirements, SeparableAffineRequirements)):
+            raise TypeError("rule must be a supported compact requirement rule")
+        if isinstance(rule, SeparableAffineRequirements) and rule.is_zero_relation:
+            rule = ZeroRequirements(rule.schedule_domain, rule.position_domain)
+        return cls._from_rule(rule)
+
+    @classmethod
     def affine(
         cls,
         schedule_domain: RectangularDomain,
