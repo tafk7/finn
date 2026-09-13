@@ -219,7 +219,7 @@ ${FINN_CI_NFS_ROOT}/docker_images/<jobKey>/<BUILD>/
 The first two are the historical transport contract. The second two come from
 `ci/scripts/build-images.sh` and are what makes the transport checkable.
 
-`ci/scripts/load-shared-image.sh`, invoked by the launcher on each shard,
+`ci/scripts/load-shared-image.sh`, invoked explicitly by `ci/common.groovy` before `docker/run --no-build` on each shard,
 behaves as follows:
 
 - **Digest present.** The sidecar must hold exactly one image ID in

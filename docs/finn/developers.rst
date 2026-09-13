@@ -72,10 +72,9 @@ The container architecture has a deliberately small operational model:
   ``--sbx`` is selected.
 * ``docker/build`` prepares Docker images and sbx templates, or exports a
   Docker-built image as an Apptainer SIF.
-* The historical ``docker/finn-*`` commands are compatibility interfaces. New
-  host facts must never be derived there.
-* The root ``run-docker.sh`` exists only as a temporary Jenkins compatibility
-  bridge. It is not a user interface.
+* ``docker/config`` and ``docker/finn-env`` retain the current Python resolver
+  interface; reconsidering that interface is deferred.
+* CI prepares shared images explicitly before calling ``docker/run``.
 
 ``dev`` and ``build`` are grant tiers, not image tiers. ``build`` adds the
 read-only toolchain, platform and licence mounts. Accelerator userspace is
@@ -151,10 +150,13 @@ Launch sequence
 1. ``docker/run`` normalizes the Docker/sbx choice, FPGA grants, runtime set,
    dependency mode and command.
 2. ``docker/build`` or the selected runner prepares the required artifact.
+   Both use ``docker/lib.sh`` image preparation: ordinary runs reuse the selected
+   local image, explicit builds refresh it, and ``--rebuild`` disables build cache.
    Bake builds the underlying image. ``deps.env`` supplies repository pins;
-   the shared ``docker/pip-*.txt`` files supply Python pins.
+   the shared ``docker/pip-torch.txt and docker/requirements-dev.txt`` files supply Python pins.
 3. ``docker/config`` resolves the workspace, build directory, toolchain, platform,
-   licence, environment and mounts once.
+   licence, environment and mounts. It stays on the host; it is not installed
+   in the image or included in the image-content hash.
 4. ``docker/config compose`` renders an ephemeral Compose override. The static
    Compose file does not rediscover host state.
 5. Docker runs the image through Compose, while sbx imports its specialized

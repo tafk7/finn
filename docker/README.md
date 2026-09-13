@@ -40,7 +40,9 @@ name.
 
 Docker and sbx preparation is automatic when a run needs it. `--no-build`
 requires an existing Docker image or sbx template, while `--rebuild` rebuilds
-without using the BuildKit cache. SIF export always writes the requested path.
+without using the BuildKit cache. Ordinary runs and SIF export reuse a prepared
+Docker image with the selected environment tag; explicit `docker/build` refreshes
+its cached build. SIF export always writes the requested path.
 
 No registry is assumed. Docker images remain in the local daemon, sbx images
 are transferred to the sbx image store, and SIF files are explicit build
@@ -66,48 +68,122 @@ inspect its result or render Docker and sbx configuration:
 ./docker/config inspect --tier dev
 ./docker/config inspect --tier build --sbx
 ./docker/config compose --tier build --service build
-./docker/config sbx --tier build
+./docker/config sbx --tier build --output-dir /path/outside/workspace/finn-sbx
 ```
 
-## Workspace-controller profile
+## Native sandbox environments
 
-FINN publishes a provider-neutral development profile under `execution/`:
+`./docker/run --sbx` is the public FINN sandbox entry point. It prepares a local
+FINN template and writes a native environment bundle outside the mounted checkout.
+Docker and sbx execution are functions in the same launcher. No workspace controller is required.
 
-```bash
-./execution/plan --tier dev
-sbxc plan --canonical --config execution/sbx-compose.toml
-```
-
-`execution/plan` is the versioned machine-readable interface for workspace
-controllers. It combines the existing host resolver with FINN's environment
-and source identities, names the preparation command, and points to the public
-sbxc manifest and agent. Secret values are never emitted; only required secret
-names may appear. The initial public profile is deliberately the portable dev
-tier: frozen dependencies, no Xilinx toolchain, no licence, and no FINN
-workload egress grants.
-
-Prepare the local sbx image/template before first attachment:
+For direct sbx use, prepare the template, then render a bundle:
 
 ```bash
 ./docker/build --sbx
+export FINN_SBX_TEMPLATE=$(./docker/build --sbx --print-tag)
+export FINN_SBX_NAME=finn-native-dev
+./docker/config sbx --tier dev --output-dir "$HOME/.local/state/finn/native-dev"
+sbx env plan "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml"
+sbx env create "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml"
+sbx env exec "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml" -- python -c 'import finn'
+sbx env run "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml"
+sbx env rm "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml" --force
 ```
 
-The public sbxc profile carries no provider configuration. Company LLM
-gateways, certificates, licence servers, concrete toolchain paths, and model
-policy belong in private adapter overlays.
+First use requires native sbx approval. For a noninteractive job, review
+`sbx env plan` and explicitly use `sbx env create --auto-approve` before invoking
+the FINN runner. The runner does not approve native changes automatically.
+
+The renderer prints the environment as JSON (valid YAML) and writes the same file
+plus local v2 kits into the output directory. It specializes the checked-in
+`docker/sbx/sbxenv.yaml`, which is also directly usable with native environment
+arguments (`name`, `workspace`, `template`, and optional `agent`). For example,
+after preparing the template and setting `FINN_SBX_TEMPLATE` above:
+
+```bash
+sbx env run ./docker/sbx/sbxenv.yaml \
+  --env-arg name=finn-native-dev --env-arg workspace="$PWD" \
+  --env-arg template="$FINN_SBX_TEMPLATE"
+```
+
+Use the same file and arguments for subsequent native commands.
+The native environment supplies FINN defaults; an optional generated licence kit supplies site-specific network
+permissions. The dev tier omits toolchain mounts, licence configuration and FINN
+network grants. Existing machine/organization policy and agent kits still determine
+effective connectivity; absence of grants does not establish a closed network.
+
+Use sbx **0.42.1 or later**; 0.42.1 is the tested integration baseline. For FPGA
+work, set the existing host configuration variables and render `--tier build`.
+FLEXlm grants cover the server host unless the vendor-daemon port is pinned,
+in which case the kit requests the two required ports. Validate a real licence
+checkout at your site; `lmstat` only verifies the licence-manager connection.
+
+Remove and recreate a sandbox after changing its template, mounts or kit
+permissions. Editing the rendered files does not revoke grants on an existing
+sandbox. Keep site paths, licence settings, credentials, personal agent overlays,
+and external controller configuration outside the FINN repository. Shared writable
+agent skills are disabled by default. See Docker's
+[native environments](https://docs.docker.com/ai/sandboxes/configuration/environment-files/)
+and [kit reference](https://docs.docker.com/ai/sandboxes/customize/kit-reference/).
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
 advanced workflows. A direct Bake invocation must set
 `FINN_IMAGE_REVISION` explicitly; the supported `docker/build` path computes it
 from `docker/image-inputs.txt` automatically.
 
-## Compatibility
-
-The following historical commands remain available:
+## Implementation boundaries
 
 ```text
-docker/finn-env
-docker/finn-sbx
+docker/build + Docker/sbx/SIF consumers
+    -> docker/lib.sh: finn_prepare_image
+        -> docker-bake.hcl -> docker/Dockerfile.finn
+
+docker/config -> config.py                  host only
+    -> Compose overrides / native sbx bundles
+
+image                                      guest only
+    -> Dockerfile tool list + toolchain-shim
+    -> finn_entrypoint.sh / finn-bashenv.sh / finn-toolchain.sh
+    -> finn-live.pth / finn_paths.py
+
+Jenkins common helper -> shared-image loader -> docker/run
 ```
 
-New workflows should use `docker/run`, `docker/build`, and `docker/config`.
+Host rendering code and sandbox defaults are not image inputs. Editing them
+does not change image identity. The Dockerfile declares the tool list and sbx
+contract inline. The image does not install the host resolver.
+
+CI loads and verifies shared images before invoking `docker/run --no-build`.
+Repository callers use the public interface; the old runtime scripts and Jenkins
+bridge have been removed. Use `--fpga` instead of legacy grant-tier selection,
+`--runtime xrt` to select XRT, and `docker/build --print-tag` for image references.
+Commands after `--` are passed verbatim: use `pytest` and `quicktest.sh` explicitly.
+For external dataflow directories, supply an explicit mount through
+`FINN_DOCKER_EXTRA`; the launcher no longer interprets workload command names.
+
+Python dependencies use FINN's `requirements.txt` plus `docker/requirements-dev.txt`.
+`docker/pip-torch.txt` retains the CPU wheel source and pins; the shared
+`docker/pip-constraints.txt` applies to all installation steps. Native installation
+uses the same declarations. No packaging-format migration is required.
+
+The small guest entrypoint provides writable home/scratch directories and optional
+mounted Tcl initialization. Bash and bare vendor commands retain their respective
+hooks because those paths bypass normal startup.
+
+## Command migration
+
+| Removed interface | Replacement |
+| --- | --- |
+| `docker/run-docker` | `docker/run -- COMMAND` |
+| `docker/run-sbx`, `docker/finn-sbx` | `docker/run --sbx -- COMMAND` |
+| `run-docker.sh` | Explicit CI image preparation, then `docker/run` |
+| `docker/export-sif PATH` | `docker/build --export-sif PATH` |
+| Internal `print-tag sbx-dev` | `docker/build --sbx --print-tag` |
+| `test` / `quicktest` launch shortcuts | Explicit `pytest` / `quicktest.sh` commands |
+| `build_custom` shortcut | Explicit directory mount, working directory, and Python command |
+| `build-xrt` grant/image spelling | `--fpga --runtime xrt` |
+| Bake target `finn-xrt-slash` | `finn-slash-xrt` |
+
+The Python configuration interface remains unchanged for this pass:
+`docker/config` and its `docker/finn-env` alias are retained.

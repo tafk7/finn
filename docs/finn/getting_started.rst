@@ -139,7 +139,8 @@ workspace, build directory and capability mounts:
 
 The override is generated at launch and should not be committed. The ``dev``
 tier adds no toolchain, licence or secret mounts. Docker networking remains
-open; use ``./docker/run --sbx`` when egress must be denied.
+open; use ``./docker/run --sbx`` with a verified restrictive native policy
+when egress must be denied.
 
 If Docker is new to you, there are good `online resources <https://docker-curriculum.com/>`_.
 Read :ref:`getting_started:General FINN Docker tips` and
@@ -185,7 +186,7 @@ This will launch the `Jupyter notebook <https://jupyter.org/>`_ server inside a 
 Grant tiers and runtime layers
 ==============================
 
-``FINN_DOCKER_TARGET`` selects host grants, not image contents:
+``docker/run --fpga`` selects FPGA host grants, independently of image contents:
 
 .. list-table::
   :header-rows: 1
@@ -236,7 +237,6 @@ legacy callers. The most relevant are:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
 * (optional) ``FINN_SKIP_DEP_REPOS`` (default "0") skips the download of FINN dependency repos (uses the ones already downloaded under deps/.
-* (legacy) ``FINN_DOCKER_TARGET`` selects the ``dev`` or ``build`` grant tier. ``build-xrt`` is a compatibility spelling for ``build`` plus ``FINN_RUNTIMES=xrt``.
 * (optional) ``FINN_DEPS`` (default "frozen") selects the source of qonnx, brevitas and finn-experimental. ``frozen`` uses the wheels in the image, at the versions in ``deps.env``. ``live`` uses the checkouts in ``deps/``, so your edits take effect immediately; if a checkout is missing, FINN stops and tells you which one. ``auto`` uses a checkout if it is present, and the wheel if it is not.
 * (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
 * (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
@@ -280,7 +280,8 @@ Running FINN in an sbx sandbox
 ==============================
 
 Use this way when an autonomous agent does the development. The sandbox is a
-microVM with its own kernel. Network access is denied until you permit a host.
+microVM with its own kernel. Effective network access depends on native sbx
+machine/organization policy and the selected agent and kits.
 
 .. code-block:: bash
 
@@ -290,22 +291,23 @@ microVM with its own kernel. Network access is denied until you permit a host.
   ./docker/run --sbx -- pytest -m util       # one command
   ./docker/run --sbx --fpga --remove         # remove the sandbox
 
-You must have `sbx <https://docs.docker.com/ai/sandboxes/>`_ 0.39.0 or later,
-and you must be signed in. The ``sbx env`` command and file format are
-experimental in sbx 0.39.0. Environment-variable changes apply when reusing a
-sandbox; image, workspace and mount changes require removing and recreating it.
+Use `sbx <https://docs.docker.com/ai/sandboxes/>`_ 0.42.1 or later and sign in.
+Version 0.42.1 is the integration baseline; native environments and kits remain
+experimental. Remove and recreate a sandbox after changing images, workspaces,
+mounts or kit permissions.
 
 The ``dev`` tier in a sandbox has no toolchain, no licence and no network
-grant for the FINN workload. This is not because the variables are empty. It is
-because the tier does not read the file that adds them. sbx may separately use
-package-repository access while provisioning the microVM; audit logs can show
-that setup traffic even though commands run inside the finished sandbox have no
-egress.
+grant for the FINN workload. It does not inherit build-tier host configuration.
+This does not override existing machine policy or the selected agent's grants.
+sbx may separately use package-repository access while provisioning the microVM.
 
-The command builds the image, puts it into the image store of sbx, and then
-uses ``sbx env`` to make or connect to the sandbox.
-``docker/config sbx`` renders the complete sandbox environment file outside the
-workspace, including the build tier's toolchain, platform and licence mounts.
+The command builds and imports the template, then uses native ``sbx env``.
+``docker/config sbx --tier dev --output-dir /path/outside/workspace`` writes a
+native environment and local kits. The build tier additionally includes resolved
+toolchain/platform/licence mounts and a licence-network kit. The launcher prints
+the environment path; it can also be used directly with ``sbx env plan``,
+``create``, ``exec``, ``run`` and ``rm``. See ``docker/README.md`` for the complete
+standalone workflow. No external workspace controller is needed.
 
 The sbx template follows an ``env-<hash>`` of Docker image inputs, not the Git
 revision of the mounted FINN checkout. Committing source therefore reuses the
@@ -315,7 +317,8 @@ same template. ``FINN_SOURCE_REVISION``, ``FINN_SOURCE_DESCRIBE`` and
 .. note::
    Node-locked licences are not verified in a sandbox. FLEXlm connects a
    node-locked licence to an Ethernet host ID, and a sandbox does not show the
-   host ID of the machine. Floating licences (``port@host``) do operate.
+   host ID of the machine. Floating licences (``port@host``) require site-specific validation, including
+   an actual tool licence checkout.
 
 Native installation details
 ===========================
