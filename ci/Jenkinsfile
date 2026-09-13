@@ -377,8 +377,7 @@ void rotateBuildTrees() {
 // ============================================================================
 
 // The CI image tier. Python-only shards do not need Vivado, a licence or the
-// 267 GB Xilinx mount; before this was a knob, every shard paid for build-xrt
-// because that was run-docker.sh's default. Override per job.
+// large Xilinx mount. Select the grant tier explicitly per job.
 //
 // The tier no longer selects an IMAGE -- there is one -- it selects what the
 // shard mounts and is allowed to reach. It is still worth setting.
@@ -678,7 +677,7 @@ void runPytest(Map opts) {
       "#!/bin/bash\nset -eo pipefail\n${envLines.join('\n')}\n${cmd}\n"
   // invoke via bash so we do not depend on the workspace file having the
   // execute bit set (writeFile creates 0644 by default).
-  runDockerCommand('./run-docker.sh bash run-tests.sh')
+  runDockerCommand('bash run-tests.sh')
 }
 
 
@@ -704,7 +703,7 @@ void aggregateReports() {
   publishStageMap()
   catchError(buildResult: null, stageResult: 'UNSTABLE',
              message: 'pytest_html_merger failed, per-stage HTMLs still archived') {
-    runDockerCommand('./run-docker.sh pytest_html_merger -i reports/ -o reports/test_report_final.html')
+    runDockerCommand('pytest_html_merger -i reports/ -o reports/test_report_final.html')
   }
   catchError(buildResult: null, stageResult: 'UNSTABLE',
              message: 'archiveArtifacts (xml) failed') {
@@ -746,7 +745,7 @@ done
     '''
     // pytest-cov ships its own coverage. Run via the same docker image so
     // the merge uses the same Python/library versions as the per-shard runs.
-    runDockerCommand("./run-docker.sh bash -c 'cd coverage_data && coverage combine && " +
+    runDockerCommand("bash -c 'cd coverage_data && coverage combine && " +
                      "coverage html -d ../coverage_combined'")
     archiveArtifacts artifacts: 'coverage_combined/**/*', allowEmptyArchive: true
   }
@@ -1100,7 +1099,7 @@ void withAgentNfsEnv(Closure body) { withAgentNfsEnv([:], body) }
 // FINN_DOCKER_EXTRA is interpolated. Composes prepareAgentCaches +
 // agentCachesDockerExtra with the shared-image-dir or local-build toggle.
 // The Build-Docker-Image stage passes exposeSharedImage:false because imageDir
-// is not published there yet, so exposing it would make run-docker.sh log a
+// is not published there yet, so exposing it would make the CI image loader log a
 // spurious "no usable shared image" fallback. That stage relies on its own
 // FINN_DOCKER_PREBUILT=0 to build locally.
 void withAgentNfsEnv(Map opts, Closure body) {

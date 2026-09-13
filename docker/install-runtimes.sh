@@ -8,9 +8,7 @@
 # packages it declares. See docker/runtimes/README.md for the manifest format
 # and for what is allowed to be a runtime target.
 #
-# A separate script rather than a RUN block, for the same reason
-# sbx-contract.sh is one: this is the only place that knows how a runtime
-# target is installed, so it cannot be applied to one target and not another.
+# Shared installation logic for all selected runtime packages.
 #
 # POSIX sh. This runs before anything guarantees bash is the shell.
 

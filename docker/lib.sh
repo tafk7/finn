@@ -18,7 +18,7 @@
 #     present in the four launchers and MISSING from build-images.sh and
 #     ci/Jenkinsfile, so the two CI paths carried the fragile variant;
 #   - `-f docker-bake.hcl` was missing from ci/Jenkinsfile:421. Both
-#     docker/run-docker and docker-bake.hcl document that this is required
+#     docker/run and docker-bake.hcl document that this is required
 #     rather than tidy: without it bake auto-loads compose.yaml and dies on
 #     ${FINN_XILINX_PATH:?} interpolation, on any machine with no Xilinx
 #     configured.
@@ -171,11 +171,82 @@ finn_bake_tag () {
         | python3 -c "import json,sys;print(json.load(sys.stdin)['target']['$target']['tags'][0])" 2>/dev/null
 }
 
-# Build a target and echo its tag. Fails loudly; callers need not check twice.
+# Build one Bake target. Image references are resolved separately.
 finn_bake_build () {
     local target="$1"; shift
     gecho "Building $target"
     # shellcheck disable=SC2086
     docker buildx bake -f docker-bake.hcl --load "$@" "$target" \
         || { recho "docker buildx bake $target failed"; return 1; }
+}
+
+# Prepare a Docker-daemon image for any consumer. Sets FINN_IMAGE. Explicit
+# builds refresh cached layers; runs reuse the selected environment-input tag.
+finn_prepare_image () {
+    local target="$1" mode="${2:-ensure}"
+    local build_args=()
+    FINN_IMAGE=$(finn_bake_tag "$target") || return 1
+    [ -n "$FINN_IMAGE" ] || { recho "No image tag for $target"; return 1; }
+    export FINN_IMAGE
+    if [ "$mode" != build ] && { [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ] || [ "${FINN_DOCKER_PREBUILT:-0}" = 1 ]; }; then
+        docker image inspect "$FINN_IMAGE" >/dev/null 2>&1 || {
+            recho "No prepared Docker image for $FINN_IMAGE; run ./docker/build first."
+            return 1
+        }
+        return 0
+    fi
+    if [ "$mode" = ensure ] && [ "${FINN_CONTAINER_REBUILD:-0}" != 1 ] \
+       && [ -z "${FINN_DOCKER_BUILD_EXTRA:-}" ] \
+       && docker image inspect "$FINN_IMAGE" >/dev/null 2>&1; then
+        return 0
+    fi
+    [ "${FINN_CONTAINER_REBUILD:-0}" != 1 ] || build_args+=(--no-cache)
+    # Legacy build flags are a shell word list, never evaluated as shell code.
+    # shellcheck disable=SC2206
+    build_args+=(${FINN_DOCKER_BUILD_EXTRA:-})
+    finn_bake_build "$target" "${build_args[@]}"
+}
+
+# Ensure/import the sbx variant; sets FINN_SBX_TEMPLATE.
+finn_prepare_sbx () {
+    local mode="${1:-ensure}"
+    BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES" sbx)
+    FINN_SBX_TEMPLATE=$(finn_bake_tag "$BAKE_TARGET")
+    [ -n "$FINN_SBX_TEMPLATE" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
+    gecho "Environment $FINN_IMAGE_REVISION; source $FINN_SOURCE_DESCRIBE"
+
+    # sbx does not resolve the Docker Hub domain implicitly, so its store lists the
+    # template as docker.io/<tag>. Skipping the load when it is already there is
+    # what makes repeat runs fast; only a new tag pays the export.
+    TEMPLATES=$(sbx template ls --json)
+    TEMPLATE_LOADED=$(python3 -c '
+import json, sys
+expected = sys.argv[1]
+print(int(any(i["repository"] + ":" + i["tag"] == expected
+              for i in json.load(sys.stdin)["images"])))
+' "docker.io/$FINN_SBX_TEMPLATE" <<< "$TEMPLATES")
+
+    if [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ]; then
+        [ "$TEMPLATE_LOADED" = 1 ] || {
+            recho "No prepared sbx template for $FINN_SBX_TEMPLATE"
+            recho "Run ./docker/build --sbx first, or omit --no-build."
+            exit 1
+        }
+    elif [ "$TEMPLATE_LOADED" != 1 ] || [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] || [ "$mode" = build ]; then
+        PREPARE_MODE=ensure
+        [ "$mode" != build ] || PREPARE_MODE=build
+        finn_prepare_image "$BAKE_TARGET" "$PREPARE_MODE"
+        if [ "$TEMPLATE_LOADED" = 1 ]; then
+            sbx template rm "docker.io/$FINN_SBX_TEMPLATE" >/dev/null
+        fi
+        gecho "Loading $FINN_SBX_TEMPLATE into the sbx image store (first time is slow)"
+        TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
+        trap 'rm -f "$TAR"' EXIT
+        docker save -o "$TAR" "$FINN_SBX_TEMPLATE" \
+            || { recho "docker save failed"; exit 1; }
+        sbx template load "$TAR" || { recho "sbx template load failed"; exit 1; }
+        rm -f "$TAR"; trap - EXIT
+    else
+        gecho "Template already loaded: $FINN_SBX_TEMPLATE"
+    fi
 }

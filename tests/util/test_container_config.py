@@ -619,7 +619,7 @@ def test_sh_output_carries_xelab_thread_override():
 
 
 def test_slashkit_has_a_transparent_tool_shim():
-    assert "slashkit" in finn_env.SHIMMED_TOOLS
+    assert "slashkit" in (Path(REPO) / "docker/Dockerfile.finn").read_text()
 
 
 def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
@@ -694,13 +694,8 @@ def test_nothing_requests_host_privilege():
     added capability, or the docker socket.
     """
     launchers = [
-        "run-docker.sh",
         "compose.yaml",
         "docker/run",
-        "docker/run-docker",
-        "docker/run-sbx",
-        "docker/export-sif",
-        "docker/finn-sbx",
     ]
     offenders = []
     for rel in launchers:
@@ -850,20 +845,19 @@ def test_image_input_manifest_covers_dockerfile_sources():
         "docker/finn_entrypoint.sh",
         "docker/quicktest.sh",
         "docker/build_dataflow",
-        "docker/config.py",
-        "docker/finn-env",
         "docker/toolchain-shim",
         "docker/finn-bashenv.sh",
         "docker/finn-toolchain.sh",
         "docker/install-runtimes.sh",
         "docker/runtimes/*.env",
-        "docker/sbx-contract.sh",
     ):
         assert path in manifest
     patterns = {
         line.lstrip("?") for line in manifest.splitlines() if line and not line.startswith("#")
     }
     assert not any(path.startswith("src/") for path in patterns)
+    assert "docker/config.py" not in patterns
+    assert "docker/finn-env" not in patterns
     assert "docker/run" not in patterns
     assert "docs/finn/getting_started.rst" not in patterns
 
@@ -941,7 +935,15 @@ def test_sbx_overlay_consumes_resolved_mounts(tmp_path):
     platforms = tmp_path / "platforms"
     platforms.mkdir()
     proc = subprocess.run(
-        [sys.executable, FINN_ENV, "sbx", "--tier", "build"],
+        [
+            sys.executable,
+            FINN_ENV,
+            "sbx",
+            "--tier",
+            "build",
+            "--output-dir",
+            str(tmp_path / "bundle"),
+        ],
         capture_output=True,
         text=True,
         env={
@@ -972,7 +974,15 @@ def test_sbx_overlay_consumes_resolved_mounts(tmp_path):
 
 def test_sbx_dev_file_has_no_capability_mounts(tmp_path):
     proc = subprocess.run(
-        [sys.executable, FINN_ENV, "sbx", "--tier", "dev"],
+        [
+            sys.executable,
+            FINN_ENV,
+            "sbx",
+            "--tier",
+            "dev",
+            "--output-dir",
+            str(tmp_path / "bundle"),
+        ],
         capture_output=True,
         text=True,
         env={
@@ -1038,3 +1048,65 @@ def test_compose_uses_complete_image_references():
         compose = handle.read()
     assert "${FINN_IMAGE:-xilinx/finn:local}" in compose
     assert "FINN_RUNTIME_TAG" not in compose
+
+
+def test_sbx_bundle_preserves_flexlm_grants_and_drops_them_for_dev(tmp_path):
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    bundle = tmp_path / "bundle"
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "FINN_XILINX_PATH": root,
+        "FINN_XILINX_VERSION": "2025.1",
+        "XILINXD_LICENSE_FILE": "2100@licsrv.example",
+        "FINN_SBX_NAME": "test-native",
+        "FINN_SBX_TEMPLATE": "xilinx/finn:test",
+    }
+    for vendor_port, expected in [
+        ("", ["licsrv.example"]),
+        ("2101", ["licsrv.example:2100", "licsrv.example:2101"]),
+    ]:
+        env["FINN_LICENSE_VENDOR_PORT"] = vendor_port
+        proc = subprocess.run(
+            [sys.executable, FINN_ENV, "sbx", "--tier", "build", "--output-dir", str(bundle)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        config = json.loads(proc.stdout)
+        assert config == json.loads((bundle / "finn.sbxenv.yaml").read_text())
+        assert config["kits"] == ["./kits/finn-license"]
+        kit = json.loads((bundle / "kits/finn-license/spec.yaml").read_text())
+        assert kit["permissions"]["network"]["allow"] == expected
+        assert kit["schemaVersion"] == "2"
+        assert config["sandboxOptions"]["shareSkills"] is False
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "sbx", "--tier", "dev", "--output-dir", str(bundle)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    config = json.loads(proc.stdout)
+    assert config["kits"] == []
+    assert config["additionalWorkspaces"] == []
+    assert "XILINXD_LICENSE_FILE" not in config["env"]
+
+
+def test_sbx_bundle_rejects_output_inside_guest_mount(tmp_path):
+    proc = subprocess.run(
+        [sys.executable, FINN_ENV, "sbx", "--output-dir", str(tmp_path / "bundle")],
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FINN_ROOT": str(tmp_path),
+            "FINN_SBX_NAME": "test-native",
+            "FINN_SBX_TEMPLATE": "xilinx/finn:test",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 2
+    assert "outside mounted workspaces" in proc.stderr
+    assert not (tmp_path / "bundle").exists()

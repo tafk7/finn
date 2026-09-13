@@ -171,16 +171,6 @@ def transport(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_root_bridge_delegates_to_the_docker_launcher():
-    # test_container_cli.py pins the bridge's size and its "not a supported
-    # user interface" banner. What matters for transport compatibility is that
-    # it still forwards an unmodified argv to the same launcher, so a Jenkins
-    # caller's historical command syntax keeps working.
-    body = (REPO / "run-docker.sh").read_text()
-    assert 'exec "$ROOT/docker/run-docker" "$@"' in body
-    assert (REPO / "docker/run-docker").is_file()
-
-
 def test_loader_diagnostics_are_not_shell_escaped_twice(transport):
     # The colour setup had been through a shell-quoting layer one time too
     # many, so every message arrived as  "'\033[0;32m'"Loading...  Console
@@ -193,11 +183,11 @@ def test_loader_diagnostics_are_not_shell_escaped_twice(transport):
     assert "\"'" not in proc.stdout
 
 
-def test_docker_launcher_delegates_shared_image_loading_to_this_script():
-    # The loader is only reachable through run-docker, so a rename here would
-    # break every Jenkins shard without any test noticing.
-    body = (REPO / "docker/run-docker").read_text()
-    assert "./ci/scripts/load-shared-image.sh" in body
+def test_ci_explicitly_prepares_before_public_runner():
+    body = (REPO / "ci/common.groovy").read_text()
+    assert body.index("load-shared-image.sh") < body.index("--no-build -- ${command}")
+    assert "./docker/build ${runtimeArgs} --print-tag" in body
+    assert "run-docker.sh" not in body
 
 
 # ---------------------------------------------------------------------------

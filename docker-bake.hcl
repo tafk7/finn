@@ -224,11 +224,6 @@ target "finn-slash-xrt" {
   tags     = [tag("xrt,slash", false)]
 }
 
-# Compatibility alias for the pre-canonical target spelling.
-target "finn-xrt-slash" {
-  inherits = ["finn-slash-xrt"]
-}
-
 target "finn-slashkit-xrt" {
   inherits = ["_common"]
   target   = "runtime"

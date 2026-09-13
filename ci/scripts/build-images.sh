@@ -60,7 +60,7 @@ if [ "$FINN_SOURCE_DIRTY" = 1 ]; then
 fi
 
 echo "Building bake target $TARGET"
-docker buildx bake -f docker-bake.hcl --load "$TARGET"
+finn_prepare_image "$TARGET" build
 
 # Ask bake for the tag rather than recomputing it. This is the whole point of
 # moving the rule into docker-bake.hcl: there is exactly one implementation.
@@ -68,7 +68,7 @@ docker buildx bake -f docker-bake.hcl --load "$TARGET"
 # Through finn_bake_tag, which carries the `sed -n '/^{/,$p'` that strips bake's
 # progress lines before the JSON. This script's own copy omitted it and would
 # have died on any bake that printed one.
-TAG=$(finn_bake_tag "$TARGET")
+TAG="$FINN_IMAGE"
 [ -n "$TAG" ] || { recho "could not resolve a tag for $TARGET"; exit 1; }
 
 # Image ID, not RepoDigests. RepoDigests is populated only after a push, and is

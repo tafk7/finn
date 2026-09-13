@@ -19,15 +19,21 @@ String shellQuote(String s) {
   return "'" + (s ?: '').replace("'", "'\"'\"'") + "'"
 }
 
-// Sets FINN_DOCKER_PREBUILT=1 when a shared image is configured so non-builder
-// agents load the image from NFS instead of rebuilding.
+// Prepare shared images explicitly, then invoke the sole public runner.
 void runDockerCommand(String command) {
-  if (env.FINN_DOCKER_SHARED_IMAGE_DIR) {
+  String tier = env.FINN_CI_IMAGE_TIER ?: 'build'
+  if (!(tier in ['dev', 'build'])) { error "Invalid FINN_CI_IMAGE_TIER: ${tier}" }
+  String runtimes = env.FINN_RUNTIMES ?: 'xrt'
+  String runtimeArgs = "--runtime " + shellQuote(runtimes)
+  String flags = runtimeArgs + (tier == 'build' ? ' --fpga' : '')
+  if (env.FINN_DOCKER_SHARED_IMAGE_DIR || env.FINN_DOCKER_PREBUILT == '1') {
     withEnv(['FINN_DOCKER_PREBUILT=1']) {
-      sh command
+      String tag = sh(script: "./docker/build ${runtimeArgs} --print-tag", returnStdout: true).trim()
+      sh "./ci/scripts/load-shared-image.sh ${shellQuote(tag)}"
+      sh "./docker/run ${flags} --no-build -- ${command}"
     }
   } else {
-    sh command
+    sh "./docker/run ${flags} -- ${command}"
   }
 }
 

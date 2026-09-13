@@ -10,6 +10,7 @@ Diagnostics go to stderr because stdout is machine-readable data.
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import sys
 
@@ -59,23 +60,6 @@ def normalize_runtimes(runtimes=None):
 # docs for that reason.
 FIXED_WORKSPACE = "/workspace/finn"
 DEFAULT_DEV_WORKSPACE_POLICY = "fixed"
-
-# Vendor executables that get a transparent shim (stage 3). Listed here because
-# the shim needs the same toolchain resolution this file already performs.
-SHIMMED_TOOLS = (
-    "vivado",
-    "vitis",
-    "vitis_hls",
-    "vitis-run",
-    "v++",
-    "slashkit",
-    "xelab",
-    "xsim",
-    "xvlog",
-    "xsc",
-    "lmutil",
-    "xsct",
-)
 
 
 def warn(msg):
@@ -521,21 +505,52 @@ def cmd_sbx(args):
     agent = os.environ.get("FINN_SBX_AGENT", "shell")
     if not name or not template:
         die("FINN_SBX_NAME and FINN_SBX_TEMPLATE must be set", 2)
-    config = {
-        "schemaVersion": "1",
-        "name": name,
-        "agent": agent,
-        "workspace": data["workspace"]["source"],
-        "additionalWorkspaces": [
-            {"path": mount["source"], "readOnly": mount["mode"] == "ro"} for mount in data["mounts"]
-        ],
-        "env": dict(data["env"]),
-        "sandboxOptions": {
-            "template": template,
-            "pullPolicy": "never",
-        },
-    }
+    output = Path(args.output_dir).expanduser().resolve()
+    for mounted in [data["workspace"]["source"], *[m["source"] for m in data["mounts"]]]:
+        root = Path(mounted).resolve()
+        if output == root or root in output.parents:
+            die("sbx output directory must be outside mounted workspaces", 2)
+    output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config = json.loads((Path(__file__).parent / "sbx" / "sbxenv.yaml").read_text())
+    config.pop("args")
+    config.update(
+        {
+            "name": name,
+            "agent": agent,
+            "kits": [],
+            "workspace": data["workspace"]["source"],
+            "additionalWorkspaces": [
+                {"path": mount["source"], "readOnly": mount["mode"] == "ro"}
+                for mount in data["mounts"]
+            ],
+            "env": dict(data["env"]),
+        }
+    )
     config["env"]["FINN_BUILD_DIR"] = "/tmp/finn_build"
+    config["sandboxOptions"]["template"] = template
+    # FLEXlm needs lmgrd and the vendor daemon. Without a pinned vendor
+    # port retain the existing host-wide grant; lmstat alone cannot verify it.
+    allow = []
+    for grant in data["egress"]:
+        host, ports = grant["host"], grant.get("ports") or []
+        allow.extend([f"{host}:{port}" for port in ports] if ports else [host])
+    if allow:
+        network = output / "kits" / "finn-license"
+        network.mkdir(parents=True, exist_ok=True)
+        (network / "spec.yaml").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "2",
+                    "kind": "mixin",
+                    "name": "finn-license",
+                    "permissions": {"network": {"allow": allow}},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        config["kits"].append("./kits/finn-license")
+    (output / "finn.sbxenv.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
     json.dump(config, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
@@ -566,8 +581,9 @@ def main():
     )
     p.set_defaults(func=cmd_compose)
 
-    p = sub.add_parser("sbx", help="render a complete sbx environment file")
+    p = sub.add_parser("sbx", help="write a native sbx environment and local kits")
     p.add_argument("--tier", default="dev", choices=TIERS)
+    p.add_argument("--output-dir", required=True, help="host directory outside mounted workspaces")
     p.set_defaults(func=cmd_sbx)
 
     args = parser.parse_args()

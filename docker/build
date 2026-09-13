@@ -6,9 +6,44 @@ set -euo pipefail
 SCRIPT=$(readlink -f "$0")
 DOCKER_DIR=$(dirname "$SCRIPT")
 REPO=$(dirname "$DOCKER_DIR")
+CALLER_DIR="$PWD"
 
 # shellcheck source=/dev/null
 . "$DOCKER_DIR/lib.sh"
+
+export_sif () {
+    local OUTPUT="$SIF_OUTPUT"
+    RUNTIME=""
+    for candidate in apptainer singularity; do
+        command -v "$candidate" >/dev/null 2>&1 && { RUNTIME="$candidate"; break; }
+    done
+    [ -n "$RUNTIME" ] || {
+        recho "SIF export requires apptainer or singularity on PATH."
+        recho "  Ubuntu:  sudo apt install singularity-container"
+        recho "  Or:      https://github.com/apptainer/apptainer/releases"
+        exit 1
+    }
+
+    case "$OUTPUT" in
+        /*) ;;
+        *) OUTPUT="$CALLER_DIR/$OUTPUT" ;;
+    esac
+    OUTPUT=$(readlink -m "$OUTPUT")
+    [ ! -d "$OUTPUT" ] || { recho "SIF output path is a directory: $OUTPUT"; exit 2; }
+
+    finn_prepare_image "$target"
+    TAG="$FINN_IMAGE"
+    mkdir -p "$(dirname "$OUTPUT")"
+    TAR=$(mktemp -t finn-sif-XXXXXX.tar)
+    trap 'rm -f "$TAR"' EXIT
+    gecho "Exporting $TAG"
+    docker save "$TAG" -o "$TAR" || { recho "docker save failed"; exit 1; }
+    gecho "Converting to $OUTPUT"
+    "$RUNTIME" build --force "$OUTPUT" "docker-archive://$TAR" \
+        || { recho "$RUNTIME build failed"; exit 1; }
+    gecho "Exported SIF: $OUTPUT"
+    sha256sum "$OUTPUT"
+}
 
 usage () {
     cat <<'EOF'
@@ -19,6 +54,7 @@ Options:
   --export-sif PATH  export the Docker-built image as an Apptainer SIF
   --runtime NAME     add image content such as xrt; repeatable
   --rebuild          rebuild image layers without cache
+  --print-tag        print the image reference without building
   --print            print the resolved build request
   -h, --help         show this help
 EOF
@@ -29,6 +65,7 @@ SIF_OUTPUT=""
 SIF_REQUESTED=0
 RUNTIMES="${FINN_RUNTIMES:-}"
 PRINT_ONLY=0
+PRINT_TAG=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -44,6 +81,7 @@ while [ "$#" -gt 0 ]; do
             value=${1#*=}; RUNTIMES="${RUNTIMES:+$RUNTIMES,}$value"; shift ;;
         --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
         --print) PRINT_ONLY=1; shift ;;
+        --print-tag) PRINT_TAG=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --) shift; break ;;
         -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -75,6 +113,12 @@ elif [ "$SIF_REQUESTED" = 1 ]; then
 fi
 target=$(finn_bake_target "$RUNTIMES" "$variant")
 
+if [ "$PRINT_TAG" = 1 ]; then
+    cd "$REPO"
+    finn_bake_tag "$target"
+    exit $?
+fi
+
 if [ "$PRINT_ONLY" = 1 ]; then
     printf 'artifact=%s\n' "$artifact"
     printf 'runtimes=%s\n' "$RUNTIMES"
@@ -89,14 +133,12 @@ fi
 cd "$REPO"
 case "$artifact" in
     docker)
-        [ "${FINN_CONTAINER_REBUILD:-0}" != 1 ] \
-            || export FINN_DOCKER_BUILD_EXTRA="${FINN_DOCKER_BUILD_EXTRA:+$FINN_DOCKER_BUILD_EXTRA }--no-cache"
-        exec "$DOCKER_DIR/run-docker" build dev
+        finn_prepare_image "$target" build
         ;;
     sbx)
-        exec "$DOCKER_DIR/run-sbx" prepare dev
+        finn_prepare_sbx build
         ;;
     sif)
-        exec "$DOCKER_DIR/export-sif" "$SIF_OUTPUT"
+        export_sif
         ;;
 esac

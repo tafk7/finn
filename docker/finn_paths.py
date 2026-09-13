@@ -29,7 +29,7 @@ It is confined to five sites, all tagged ``LIMITATION(finn-root-absolute)``:
 
     docker/finn_paths.py        this module (workspace_root)
     docker/finn_entrypoint.sh   derives FINN_ROOT from $PWD
-    docker/run-docker           the host-path-mirroring mount
+    docker/run           the host-path-mirroring mount
     src/finn/util/basic.py      FINN_HLSLIB_PATH / FINN_BOARD_FILES_PATH
     src/finn/xsi/paths.py       finn_xsi source location
 

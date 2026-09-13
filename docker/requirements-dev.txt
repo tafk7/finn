@@ -1,5 +1,5 @@
 # Interaction and test stack for Python 3.10.
-# Pins match the pre-redesign Dockerfile exactly.
+# Shared by the reference image and native-install virtual environment.
 pygments==2.14.0
 ipykernel==6.21.2
 markupsafe==2.0.1
@@ -31,3 +31,10 @@ dependencies==2.0.1
 tokenize-rt==4.2.1
 
 setuptools==68.2.2
+
+# Notebook and plotting dependencies resolve with the rest of the environment.
+jupyter==1.0.0
+matplotlib==3.7.0
+
+# Small third-party package not published through FINN's normal requirements.
+-e git+https://github.com/fbcotter/dataset_loading.git@0.0.4#egg=dataset_loading

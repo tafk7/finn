@@ -13,16 +13,12 @@ docker/image-inputs.txt
 docker/Dockerfile.finn
 docker/pip-constraints.txt
 docker/pip-torch.txt
-docker/pip-tools.txt
-docker/pip-post.txt
-docker/pip-extra.txt
+docker/requirements-dev.txt
 docker/finn_paths.py
 docker/finn-live.pth
 docker/finn_entrypoint.sh
 docker/quicktest.sh
 docker/build_dataflow
-docker/config.py
-docker/finn-env
 docker/toolchain-shim
 docker/finn-bashenv.sh
 docker/finn-toolchain.sh
@@ -30,4 +26,3 @@ docker/install-runtimes.sh
 docker/runtimes/*.env
 ?docker/packages/*.deb
 ?docker/packages/*.rpm
-docker/sbx-contract.sh

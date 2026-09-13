@@ -10,6 +10,157 @@ REPO=$(dirname "$DOCKER_DIR")
 # shellcheck source=/dev/null
 . "$DOCKER_DIR/lib.sh"
 
+run_docker () {
+    : "${FINN_DOCKER_PREBUILT:=0}"
+    : "${FINN_DOCKER_EXTRA:=}"
+    : "${FINN_DOCKER_BUILD_EXTRA:=}"
+    : "${FINN_DOCKER_RUN_AS_ROOT:=0}"
+    : "${FINN_SKIP_DEP_REPOS:=0}"
+    : "${JUPYTER_PORT:=8888}"
+    : "${NETRON_PORT:=8081}"
+    : "${IMAGENET_VAL_PATH:=}"
+    : "${FINN_DOCKER_CACHE_DIR:=}"
+    : "${FINN_SSH_KEY_DIR:=}"
+    RUN_TMP=$(mktemp -d -t finn-compose-XXXXXX)
+    RUN_ENV="$RUN_TMP/env"
+    COMPOSE_OVERRIDE="$RUN_TMP/override.json"
+    cleanup_run_files () { rm -rf "$RUN_TMP"; }
+    trap cleanup_run_files EXIT
+
+    FINN_IMAGE=$(finn_bake_tag "$(finn_bake_target "$FINN_RUNTIMES")")
+    [ -n "$FINN_IMAGE" ] || { recho "could not resolve the image tag"; exit 2; }
+    export FINN_IMAGE
+
+    SERVICE="$TIER"
+    COMPOSE_TIER="$TIER"
+    COMPOSE_PROFILE=()
+    [ "$TIER" != "dev" ] && COMPOSE_PROFILE=(--profile fpga)
+
+    # Optional per-site mounts stay FLAGS rather than compose services, because
+    # compose cannot conditionally omit a bind mount and a `${VAR:-/dev/null}`
+    # placeholder is worse than an explicit flag.
+    RUN_OPTS=()
+    [ "$FINN_DOCKER_RUN_AS_ROOT" = "1" ] && RUN_OPTS+=(--user 0:0)
+    [ -z "${FINN_CONTAINER_NAME:-}" ] || RUN_OPTS+=(--name "$FINN_CONTAINER_NAME")
+    if [ -n "$FINN_SSH_KEY_DIR" ] && [ -d "$FINN_SSH_KEY_DIR" ]; then
+        # Opt-in now. It used to be mounted unconditionally from a directory this
+        # script created, which put a secret path into the default profile for a
+        # deployment feature most runs never use.
+        RUN_OPTS+=(-v "$FINN_SSH_KEY_DIR:$HOME/.ssh")
+    fi
+    if [ -n "$FINN_DOCKER_CACHE_DIR" ]; then
+        mkdir -p "$FINN_DOCKER_CACHE_DIR/torch" "$FINN_DOCKER_CACHE_DIR/huggingface"
+        RUN_OPTS+=(-v "$FINN_DOCKER_CACHE_DIR:/finn_cache"
+                   -e TORCH_HOME=/finn_cache/torch -e HF_HOME=/finn_cache/huggingface)
+    fi
+    if [ "${VERIFICATION_EN:-0}" = "1" ]; then
+        for v in FINN_EXAMPLES_ROOT VERIFICATION_IO; do
+            eval "val=\${$v:-}"
+            [ -n "$val" ] || { recho "VERIFICATION_EN=1 but $v is unset"; exit 1; }
+            [ -d "$val" ] || { recho "$v=$val is not a directory"; exit 1; }
+            RUN_OPTS+=(-e "$v=$val" -v "$val:$val")
+        done
+        RUN_OPTS+=(-e VERIFICATION_EN=1)
+    fi
+    # A site escape hatch, kept because sites depend on it. `docker compose run`
+    # accepts -v/-e/-p/--user/-w, which covers what it is actually used for.
+    # Word-split deliberately: it is a flag string, not a path.
+    # shellcheck disable=SC2206
+    [ -n "$FINN_DOCKER_EXTRA" ] && RUN_OPTS+=($FINN_DOCKER_EXTRA)
+
+    CMD=("$@")
+    if [ "$NOTEBOOK" = 1 ]; then
+        SERVICE=notebook
+        COMPOSE_TIER=dev
+        COMPOSE_PROFILE=(--profile notebook)
+    elif [ "$#" = 0 ]; then
+        CMD=(bash)
+        RUN_OPTS+=(-it)
+    fi
+
+    ./docker/config inspect --tier "$COMPOSE_TIER" --workspace-policy mirror \
+        --format sh > "$RUN_ENV" || { recho "docker/config inspect failed"; exit 1; }
+    printf "JUPYTER_PORT='%s'\n" "$JUPYTER_PORT" >> "$RUN_ENV"
+    printf "NETRON_PORT='%s'\n" "$NETRON_PORT" >> "$RUN_ENV"
+
+    ./docker/config compose --tier "$COMPOSE_TIER" --workspace-policy mirror \
+        --service "$SERVICE" > "$COMPOSE_OVERRIDE" \
+        || { recho "docker/config compose failed"; exit 1; }
+
+    finn_prepare_image "$(finn_bake_target "$FINN_RUNTIMES")" || exit 1
+
+    COMPOSE=(docker compose --env-file "$RUN_ENV" -f compose.yaml -f "$COMPOSE_OVERRIDE")
+    if [ "$SERVICE" = "notebook" ]; then
+        "${COMPOSE[@]}" "${COMPOSE_PROFILE[@]}" up notebook
+        exit $?
+    fi
+
+    "${COMPOSE[@]}" "${COMPOSE_PROFILE[@]}" run --rm \
+        "${RUN_OPTS[@]}" "$SERVICE" "${CMD[@]}"
+}
+
+run_sbx () {
+    : "${FINN_SBX_AGENT:=shell}"
+    # One sandbox per (tier, checkout). Lowercased; sbx requires it.
+    FINN_SBX_NAME="${FINN_SBX_NAME:-finn-$TIER-$(basename "$REPO")}"
+    FINN_SBX_NAME=$(printf '%s' "$FINN_SBX_NAME" | tr '[:upper:]' '[:lower:]')
+
+    # Outside every mounted workspace: an environment file the agent can edit is a
+    # file the agent can use to widen its own next sandbox.
+    STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/finn/sbxenv/$FINN_SBX_NAME"
+
+    if [ "$REMOVE" = 1 ]; then
+        if [ -f "$STATE_DIR/finn.sbxenv.yaml" ]; then
+            sbx env rm "$STATE_DIR/finn.sbxenv.yaml" --force
+        else
+            sbx rm --force "$FINN_SBX_NAME"
+        fi
+        rm -rf "$STATE_DIR"
+        gecho "Removed $FINN_SBX_NAME"
+        exit 0
+    fi
+
+    finn_prepare_sbx
+    export FINN_SBX_NAME FINN_SBX_TEMPLATE FINN_SBX_AGENT FINN_DEPS
+
+    umask 077
+    mkdir -p "$STATE_DIR"
+    rm -f "$STATE_DIR/base.sbxenv.yaml" "$STATE_DIR/fpga.sbxenv.yaml" "$STATE_DIR/host.sbxenv.yaml"
+    ENV_FILES=(finn.sbxenv.yaml)
+    "$DOCKER_DIR/config" sbx --tier "$TIER" --output-dir "$STATE_DIR" >/dev/null
+    gecho "Native environment: $STATE_DIR/finn.sbxenv.yaml"
+    if [ "$TIER" = "dev" ]; then
+        gecho "dev tier: no Xilinx mount, no licence, no FINN workload egress grants"
+    fi
+
+    cd "$STATE_DIR"
+
+    # --------------------------------------------------------------------------
+    # 3. Native lifecycle
+    # --------------------------------------------------------------------------
+
+    SANDBOXES=$(sbx ls --json)
+    EXISTS=$(python3 -c '
+import json, sys
+print(int(any(s["name"] == sys.argv[1] for s in json.load(sys.stdin)["sandboxes"])))
+' "$FINN_SBX_NAME" <<< "$SANDBOXES")
+    if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && [ "$EXISTS" = 1 ]; then
+        gecho "Removing $FINN_SBX_NAME so the rebuilt template and mounts take effect"
+        sbx env rm finn.sbxenv.yaml --force
+        EXISTS=0
+    fi
+
+    # Interactive run creates or attaches natively. Exec requires a sandbox first.
+    # Remove/recreate when changing image, mounts, or kit permissions.
+    if [ "$#" -gt 0 ]; then
+        if [ "$EXISTS" = 0 ]; then
+            sbx env create "${ENV_FILES[@]}"
+        fi
+        exec sbx env exec "${ENV_FILES[@]}" -- "$@"
+    fi
+    exec sbx env run "${ENV_FILES[@]}"
+}
+
 usage () {
     cat <<'EOF'
 Usage: docker/run [OPTIONS] [-- COMMAND...]
@@ -146,19 +297,8 @@ if [ "$PRINT_ONLY" = 1 ]; then
 fi
 
 cd "$REPO"
-if [ "$SBX" = 1 ]; then
-    if [ "$REMOVE" = 1 ]; then
-        exec "$DOCKER_DIR/run-sbx" rm "$TIER"
-    fi
-    exec "$DOCKER_DIR/run-sbx" "$TIER" -- "$@"
+if [ "$REMOVE" != 1 ] && [ "${FINN_SKIP_DEP_REPOS:-0}" = 0 ] \
+   && { [ "$DEPS" = live ] || [ "${FINN_FETCH_DEPS:-0}" = 1 ]; }; then
+    if [ "$TIER" = dev ]; then ./fetch-repos.sh python; else ./fetch-repos.sh; fi
 fi
-
-[ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ] && export FINN_DOCKER_PREBUILT=1
-if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ]; then
-    FINN_DOCKER_BUILD_EXTRA="${FINN_DOCKER_BUILD_EXTRA:+$FINN_DOCKER_BUILD_EXTRA }--no-cache"
-    export FINN_DOCKER_BUILD_EXTRA
-fi
-if [ "$NOTEBOOK" = 1 ]; then
-    exec "$DOCKER_DIR/run-docker" notebook
-fi
-exec "$DOCKER_DIR/run-docker" "$@"
+if [ "$SBX" = 1 ]; then run_sbx "$@"; else run_docker "$@"; fi

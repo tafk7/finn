@@ -220,13 +220,8 @@ export PIP_CONSTRAINT="$PIN_DIR/pip-constraints.txt"
 python -m pip install -r "$PIN_DIR/pip-torch.txt"
 gecho "  Installed PyTorch (CPU)"
 
-python -m pip install -r "${FINN_ROOT}/requirements.txt"
-gecho "  Installed requirements.txt"
-
-python -m pip install -r "$PIN_DIR/pip-tools.txt"
-python -m pip install --ignore-installed -r "$PIN_DIR/pip-post.txt"
-python -m pip install -r "$PIN_DIR/pip-extra.txt"
-gecho "  Installed the tool pins"
+python -m pip install -r "${FINN_ROOT}/requirements.txt" -r "$PIN_DIR/requirements-dev.txt"
+gecho "  Installed FINN and development requirements"
 
 # Install qonnx (with pyproject.toml workaround)
 # See: https://github.com/pypa/pip/issues/7953

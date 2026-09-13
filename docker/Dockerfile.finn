@@ -208,37 +208,8 @@ ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
 RUN python -m pip install --no-cache-dir -r /tmp/pip/pip-torch.txt
 
 COPY requirements.txt /tmp/requirements.txt
-COPY docker/pip-tools.txt docker/pip-post.txt docker/pip-extra.txt /tmp/pip/
-
-# Base FINN requirements, then the interaction and test stack. Grouped rather
-# than one RUN per package: ~30 sequential layers cost cache granularity that
-# was never used, since these pins move together in practice.
-#
-# The --ignore-installed sets are split by phase because the ordering genuinely
-# differs by release, and getting it wrong is a hard failure rather than a
-# nuisance:
-#
-#   pre   must precede the base requirements. noble ships typing_extensions as a
-#         Debian package with no RECORD file, so pip cannot uninstall it and any
-#         requirement wanting a newer one aborts the whole resolve.
-#   post  must follow the tool set. jammy's jupyter and matplotlib fight
-#         distro-provided copies, but installing them first would let the base
-#         requirements resolve against the wrong versions.
-#
-# The post phase is a shared pin file because setup-local.sh must install the
-# same versions in the same order.
-#
-# If a future base needs the PRE phase, add it here, before the requirements:
-#   noble ships typing_extensions as a Debian package with no RECORD file, so
-#   pip cannot uninstall it and any requirement wanting a newer one aborts the
-#   whole resolve. jammy does not need it.
-RUN set -eu; \
-    python -m pip install --no-cache-dir -r /tmp/requirements.txt; \
-    python -m pip install --no-cache-dir -r /tmp/pip/pip-tools.txt; \
-    python -m pip install --no-cache-dir --ignore-installed -r /tmp/pip/pip-post.txt
-
-RUN python -m pip install --no-cache-dir -r /tmp/pip/pip-extra.txt
-
+COPY docker/requirements-dev.txt /tmp/pip/
+RUN python -m pip install --no-cache-dir -r /tmp/requirements.txt -r /tmp/pip/requirements-dev.txt
 
 # --- base: FINN's dependency closure and build data. The publishable image. ---
 FROM python AS base
@@ -340,12 +311,10 @@ print('env consistent: numpy', numpy.__version__, '| torch', torch.__version__, 
 # incompatibility is a runtime import failure with no metadata conflict, so pip
 # check passes while every pytest invocation dies at plugin load.
 
-COPY docker/finn_entrypoint.sh docker/quicktest.sh docker/build_dataflow \
-     docker/config.py docker/finn-env /usr/local/bin/
+COPY docker/finn_entrypoint.sh docker/quicktest.sh docker/build_dataflow /usr/local/bin/
 RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
               /usr/local/bin/quicktest.sh \
-              /usr/local/bin/build_dataflow \
-              /usr/local/bin/finn-env
+              /usr/local/bin/build_dataflow
 
 # Transparent vendor-tool shims.
 #
@@ -358,8 +327,7 @@ RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
 # has no reason to know FINN's calling convention. The shim directory goes
 # EARLY on PATH so the bare command works with no caller cooperation.
 #
-# The tool list comes from config.py's SHIMMED_TOOLS, and the build asserts they
-# agree -- so adding a tool in one place cannot silently skip the other.
+# The tool list is guest build data; the host resolver is not installed.
 COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
 # The toolchain application itself: pure shell, sourced by all three delivery
@@ -371,9 +339,7 @@ RUN set -eu; \
     chmod 755 /usr/local/lib/finn/toolchain-shim; \
     chmod 644 /etc/finn-bashenv.sh /etc/finn-toolchain.sh; \
     mkdir -p /usr/local/lib/finn/toolchain-bin; \
-    for t in $(python -c 'import runpy,sys; \
-        m=runpy.run_path("/usr/local/bin/config.py"); \
-        print(" ".join(m["SHIMMED_TOOLS"]))'); do \
+    for t in vivado vitis vitis_hls vitis-run v++ slashkit xelab xsim xvlog xsc lmutil xsct; do \
         ln -sf /usr/local/lib/finn/toolchain-shim \
                /usr/local/lib/finn/toolchain-bin/"$t"; \
     done; \
@@ -442,7 +408,7 @@ RUN set -eu; \
 #
 # The shim directory is early on PATH but AFTER npm-global, so it shadows the
 # mounted toolchain's own bin (which settings64.sh prepends at source time)
-# without shadowing anything sbxc or a harness installs.
+# without shadowing tools installed by the selected sandbox agent.
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
     no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
     BASH_ENV=/etc/finn-bashenv.sh \
@@ -588,6 +554,14 @@ USER agent
 
 FROM runtime AS sbx
 USER root
-COPY docker/sbx-contract.sh /tmp/sbx-contract.sh
-RUN sh /tmp/sbx-contract.sh && rm -f /tmp/sbx-contract.sh
+RUN set -eu; \
+    usermod -aG sudo agent; \
+    echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
+    echo 'Defaults:%sudo env_keep += "http_proxy https_proxy ftp_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY SSL_CERT_FILE NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE JAVA_TOOL_OPTIONS"' >> /etc/sudoers.d/agent; \
+    chmod 0440 /etc/sudoers.d/agent; \
+    touch /etc/sandbox-persistent.sh; \
+    chmod 0644 /etc/sandbox-persistent.sh; \
+    id -nG agent | tr ' ' '\n' | grep -qx sudo; \
+    test -r /etc/sandbox-persistent.sh; \
+    echo "sbx template contract applied"
 USER agent

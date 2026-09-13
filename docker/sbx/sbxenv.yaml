@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1",
+  "args": {
+    "name": {
+      "required": true
+    },
+    "workspace": {
+      "required": true
+    },
+    "template": {
+      "required": true
+    },
+    "agent": {
+      "default": "shell"
+    }
+  },
+  "name": "${{ env.args.name }}",
+  "workspace": "${{ env.args.workspace }}",
+  "agent": "${{ env.args.agent }}",
+  "sandboxOptions": {
+    "template": "${{ env.args.template }}",
+    "pullPolicy": "never",
+    "shareSkills": false
+  },
+  "env": {
+    "FINN_BUILD_DIR": "/tmp/finn_build"
+  }
+}
