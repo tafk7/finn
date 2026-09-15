@@ -109,9 +109,9 @@ print(json.dumps({{
     assert decoded["adapter_id"] == (
         "finn.dataflow.legacy.activation_replay" if replay else "finn.dataflow.legacy.mvau"
     )
-    assert decoded["adapter_version"] == 1
+    assert decoded["adapter_version"] == (1 if replay else 2)
     assert decoded["from_schema_version"] == record["schema_version"]
-    assert decoded["to_schema_version"] == (3 if replay else 4)
+    assert decoded["to_schema_version"] == (3 if replay else 5)
     assert decoded["problem_fingerprint"] == record["problem_fingerprint"]
     assert decoded["choices"] == record["recorded_choices"]
     assert decoded["model_byte_identical"] is True
@@ -170,7 +170,7 @@ def test_unknown_schema_refuses_without_writing() -> None:
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 99)
     operation = bind_sources_only(model, Build())[0]
     before = _bytes(model)
-    with pytest.raises(LegacySelectionError, match="expects schema 2"):
+    with pytest.raises(LegacySelectionError, match="no legacy selection adapter"):
         inspect_legacy_selection(operation)
     assert _bytes(model) == before
 
