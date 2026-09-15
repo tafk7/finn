@@ -7,7 +7,7 @@ A ``Kernel`` answers exactly two questions about itself, and they are asked
 separately::
 
     kernel.dataflow   -> ProjectionAssessment[DataflowRegion]
-    kernel.physical   -> ProjectionAssessment[ModuleBuildSpec]
+    kernel.physical   -> ProjectionAssessment[ModuleBuildRequirements]
 
 The separation is the point.  The Region is the logical contract a peer or an
 enclosing Design reads, and it must resolve from semantic facts alone: no
@@ -28,29 +28,30 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from enum import Enum
 from functools import wraps
 from inspect import Parameter as _SignatureParameter, Signature, signature
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
-    Answer,
-    Decided,
     DependencyKind,
     DependencyRef,
-    DependencyView,
     DesignPoint,
     Engine,
-    EvaluatorSpec,
     QualifiedPath,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
+from finn.dataflow.artifacts.build import (
+    FixedModuleName,
+    ModuleABIRequirements,
+    ModuleBuildRequirements,
+    RenderedSourceRequirement,
+    RequirementContribution,
+    ScalarTable,
+)
 from finn.dataflow.artifacts.contributions import (
-    Contribution,
     CopiedSource,
     DataSlot,
-    RenderedSource,
 )
 from finn.dataflow.artifacts.derivation import Scalar
 from finn.dataflow.space.compiler import _CompiledSpace, _Ref
@@ -79,6 +80,9 @@ from finn.dataflow.model.region_validation import validate_region
 T = TypeVar("T")
 K = TypeVar("K", bound="Kernel")
 
+if TYPE_CHECKING:
+    from finn.dataflow.kernels.physical import KernelStreamBinding
+
 _MISSING = object()
 
 #: The member names ``Kernel.__init_subclass__`` writes onto every concrete
@@ -92,6 +96,7 @@ RESERVED_KERNEL_NAMES: frozenset[str] = frozenset(
         "dataflow_ready",
         "dataflow",
         "physical_result",
+        "physical_streams",
         "physical_ready",
         "physical",
     }
@@ -111,51 +116,6 @@ class PhysicallyUnsupported(ValueError):
     widths -- would make an unbuildable point look buildable right up until
     synthesis.
     """
-
-
-@dataclass(frozen=True, slots=True)
-class ModuleBuildSpec:
-    """The complete detached input to module artifact derivation.
-
-    Detached means what it says: no Engine, no point, no ``_Ref``, no compiled
-    record and no attached occurrence.  Everything here is a resolved value, so
-    an artifact function cannot reach back into the design space through it, and
-    an artifact key built from it cannot accidentally depend on where in a
-    namespace tree the Kernel happened to sit.
-
-    ``region`` is carried for witness association -- a physical result must be
-    attributable to the exact logical contract it realizes -- and for nothing
-    else.  Artifact code reads identity, parameters, ABI and contributions.
-
-    ``imported_decisions`` contains stable root-relative declaration names.
-    These strings are provenance, never Engine references or query handles.
-    Both scalar mappings are copied and frozen at construction, so a helper
-    retaining its render-context dictionary cannot change this spec later.
-    """
-
-    implementation_id: str
-    implementation_version: str
-    region: DataflowRegion
-    parameters: Mapping[str, Scalar]
-    abi: ComponentABI
-    contributions: tuple[Contribution, ...]
-    render_context: Mapping[str, Scalar]
-    imported_decisions: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        for name in ("parameters", "render_context"):
-            table = dict(getattr(self, name))
-            if any(
-                type(key) is not str
-                or not (type(value) in (bool, int, float, str) or isinstance(value, Enum))
-                for key, value in table.items()
-            ):
-                raise TypeError(f"ModuleBuildSpec.{name} must map strings to scalars")
-            object.__setattr__(self, name, MappingProxyType(table))
-        if any(type(name) is not str for name in self.imported_decisions):
-            raise TypeError("ModuleBuildSpec.imported_decisions must contain declaration names")
-        object.__setattr__(self, "imported_decisions", tuple(self.imported_decisions))
-        object.__setattr__(self, "contributions", tuple(self.contributions))
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False, kw_only=True)
@@ -325,8 +285,8 @@ class _KernelCompilation(Generic[K]):
     region_family: str
     region_version: str
     parameters: tuple[_CompiledParameter, ...]
-    contributions: tuple[Contribution, ...]
-    physical_result: _Ref[ModuleBuildSpec]
+    contributions: tuple[RequirementContribution, ...]
+    physical_result: _Ref[ModuleBuildRequirements]
     #: Local Decisions inside the Region's value/applicability closure.  Always
     #: empty while the ownership refusal stands; kept because "the rule held"
     #: and "the rule was never tested" are different facts.
@@ -347,7 +307,7 @@ class Kernel(Space):
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
-    sources: ClassVar[tuple[Contribution, ...]] = ()
+    sources: ClassVar[tuple[RequirementContribution, ...]] = ()
     #: A permanent refusal has no parameter or Decision dependencies. Subclasses
     #: that add an implementation explicitly reset this to None and supply an ABI.
     physical_unavailable: ClassVar[PhysicallyUnsupported | None] = None
@@ -357,8 +317,9 @@ class Kernel(Space):
 
     if TYPE_CHECKING:
         dataflow: Projection[DataflowRegion]
-        physical: Projection[ModuleBuildSpec]
-        physical_result: Derived[ModuleBuildSpec]
+        physical: Projection[ModuleBuildRequirements]
+        physical_result: Derived[ModuleBuildRequirements]
+        physical_streams: Derived[tuple[KernelStreamBinding, ...]]
         region_structurally_valid: Constraint
         dataflow_accepts: ConstraintGroup
         dataflow_ready: Readiness
@@ -379,6 +340,17 @@ class Kernel(Space):
         """
 
         raise NotImplementedError(f"{cls.__name__} does not declare a component ABI")
+
+    @classmethod
+    def local_stream_bindings(
+        cls,
+        *,
+        region: DataflowRegion,
+        parameters: ScalarTable,
+        abi: ModuleABIRequirements,
+    ) -> tuple[KernelStreamBinding, ...]:
+        """Author local port/layout/framing facts from detached physical inputs."""
+        raise PhysicallyUnsupported(f"{cls.__name__} has no composition stream bindings")
 
     @classmethod
     def render_context(
@@ -459,7 +431,7 @@ def _physical_result_property(
     kernel_type: type[Kernel],
     region: RegionDeclaration,
     parameters: tuple[tuple[str, ModuleParameter[object], str], ...],
-) -> Derived[ModuleBuildSpec]:
+) -> Derived[ModuleBuildRequirements]:
     """Assemble the detached build unit from resolved values and nothing else.
 
     Every input is an ordinary dependency, so the property is ``Unresolved``
@@ -477,7 +449,7 @@ def _physical_result_property(
         def unavailable() -> object:
             return _physical_refusal(kernel_type.id, reason)
 
-        return Derived(semantics_for(ModuleBuildSpec), None, (), unavailable)
+        return Derived(semantics_for(ModuleBuildRequirements), None, (), unavailable)
 
     dependencies: list[tuple[str, ValueSource[object]]] = [
         ("region", cast("ValueSource[object]", region))
@@ -520,14 +492,18 @@ def _physical_result_property(
                 f"{kernel_type.__name__}.component_abi() must expose its exact resolved "
                 "physical parameter table"
             )
-        return ModuleBuildSpec(
+        return ModuleBuildRequirements(
             kernel_type.id,
             kernel_type.version,
-            cast(DataflowRegion, values["region"]),
-            frozen_table,
-            abi,
+            tuple(sorted(frozen_table.items())),
+            ModuleABIRequirements(
+                FixedModuleName(abi.entry_point),
+                abi.ports,
+                abi.parameters,
+                abi.clock_alignments,
+            ),
             tuple(kernel_type.sources),
-            kernel_type.render_context(frozen_table),
+            tuple(sorted(kernel_type.render_context(frozen_table).items())),
         )
 
     # The compiler checks an evaluator's *signature* against its dependency
@@ -543,9 +519,39 @@ def _physical_result_property(
         ]
     )
     return Derived(
-        semantics_for(ModuleBuildSpec),
+        semantics_for(ModuleBuildRequirements),
         None,
         tuple(dependencies),
+        evaluate,
+    )
+
+
+def _physical_streams_property(
+    kernel_type: type[Kernel],
+    region: RegionDeclaration,
+    requirements: Derived[ModuleBuildRequirements],
+) -> Derived[tuple[KernelStreamBinding, ...]]:
+    from finn.dataflow.kernels.physical import validate_kernel_stream_bindings  # noqa: PLC0415
+
+    def evaluate(*, region: DataflowRegion, requirements: ModuleBuildRequirements) -> object:
+        try:
+            bindings = kernel_type.local_stream_bindings(
+                region=region,
+                parameters=requirements.parameters,
+                abi=requirements.abi,
+            )
+            validate_kernel_stream_bindings(region, requirements.abi, bindings)
+        except PhysicallyUnsupported as error:
+            return _physical_refusal(kernel_type.id, str(error))
+        return bindings
+
+    return Derived(
+        semantics_for(tuple),
+        None,
+        (
+            ("region", cast("ValueSource[object]", region)),
+            ("requirements", cast("ValueSource[object]", requirements)),
+        ),
         evaluate,
     )
 
@@ -662,12 +668,17 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         ),
     )
     setattr(kernel_type, "physical_result", physical_result)
+    setattr(
+        kernel_type,
+        "physical_streams",
+        _physical_streams_property(kernel_type, region, physical_result),
+    )
     setattr(kernel_type, "physical_ready", physical_ready)
     setattr(
         kernel_type,
         "physical",
         Projection(
-            cast("ValueSource[ModuleBuildSpec]", physical_result),
+            cast("ValueSource[ModuleBuildRequirements]", physical_result),
             readiness=physical_ready,
             constraints=projection_constraints,
             name="physical",
@@ -777,44 +788,6 @@ def _external_decisions(compiled: _CompiledSpace[K]) -> tuple[QualifiedPath, ...
     return tuple(dict.fromkeys(found))
 
 
-def _with_provenance(
-    specification: EvaluatorSpec[Answer[object]],
-    provenance: tuple[str, ...],
-) -> EvaluatorSpec[Answer[object]]:
-    """Stamp the compiled fragment's import provenance onto the physical result.
-
-    Done here and not in the declaration because the same Kernel class placed at
-    two roles reads two different sets of outside paths, and a closure written
-    in the class body would have to pretend otherwise.
-    """
-
-    inner = specification.evaluator
-
-    def evaluate(values: DependencyView) -> Answer[object]:
-        answer = inner(values)
-        if isinstance(answer, Decided) and isinstance(answer.value, ModuleBuildSpec):
-            return Decided(replace(answer.value, imported_decisions=provenance))
-        return answer
-
-    return EvaluatorSpec(specification.dependencies, evaluate)
-
-
-def _module_provenance(
-    compiled: _CompiledSpace[K], paths: tuple[QualifiedPath, ...]
-) -> tuple[str, ...]:
-    """Translate compiler paths to the same root-relative names persistence uses.
-
-    Input references retain their supplier's root for direct fragment compilation.
-    A composed tree shares one root, including a multi-segment occurrence namespace.
-    No occurrence or point is needed to name an imported declaration.
-    """
-
-    roots = {reference.path: reference.root_namespace for _name, reference in compiled.inputs}
-    return tuple(
-        str(path).removeprefix(f"{roots.get(path) or compiled.root_namespace}.") for path in paths
-    )
-
-
 def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
     if not kernel_type.id:
         raise AuthoringError(f"{kernel_type.__name__} must declare a non-empty id")
@@ -868,27 +841,15 @@ def _finalize_kernel(kernel_type: type[K], compiled: _CompiledSpace[K]) -> _Comp
 
     contributions = tuple(kernel_type.sources)
     if any(
-        not isinstance(item, (CopiedSource, RenderedSource, DataSlot)) for item in contributions
+        not isinstance(item, (CopiedSource, RenderedSourceRequirement, DataSlot))
+        for item in contributions
     ):
         raise AuthoringError(f"{kernel_type.__name__}.sources contains a non-Contribution")
 
-    physical_ref = cast("_Ref[ModuleBuildSpec]", compiled.member("physical_result"))
+    physical_ref = cast("_Ref[ModuleBuildRequirements]", compiled.member("physical_result"))
     physical_only = _physical_only_constraints(declarations, compiled)
     provenance = _external_decisions(compiled)
-    specification = replace(
-        compiled.spec,
-        properties=tuple(
-            replace(
-                declaration,
-                evaluator=_with_provenance(
-                    declaration.evaluator, _module_provenance(compiled, provenance)
-                ),
-            )
-            if declaration.path == physical_ref.path
-            else declaration
-            for declaration in compiled.spec.properties
-        ),
-    )
+    specification = compiled.spec
     metadata = _KernelCompilation(
         kernel_type,
         kernel_type.id,
@@ -1011,18 +972,18 @@ def kernel_physical(
     engine: Engine,
     compiled: _CompiledSpace[K],
     point: DesignPoint,
-) -> ProjectionAssessment[ModuleBuildSpec]:
+) -> ProjectionAssessment[ModuleBuildRequirements]:
     """Ask one compiled Kernel fragment for its detached build unit at one point."""
 
     return cast(
-        "ProjectionAssessment[ModuleBuildSpec]",
+        "ProjectionAssessment[ModuleBuildRequirements]",
         evaluate_projection(engine, point, compiled.projection("physical")),
     )
 
 
 __all__ = [
     "Kernel",
-    "ModuleBuildSpec",
+    "ModuleBuildRequirements",
     "ModuleParameter",
     "PhysicallyUnsupported",
     "RegionDeclaration",

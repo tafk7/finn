@@ -105,6 +105,39 @@ def render_template(roots: Sequence[Path], name: str, context: Mapping[str, obje
         raise RenderError(f"{name} failed to render: {error}") from error
 
 
+def render_template_bytes(
+    data: bytes, context: Mapping[str, object], *, name: str = "template"
+) -> str:
+    """Render frozen template bytes without a filesystem loader.
+
+    Prepared module builds use this entry point.  The template has already been
+    resolved to a ``ContentRef`` and a renderer must not regain checkout access
+    by resolving its former locator a second time.
+    """
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RenderError(f"{name} is not UTF-8 text") from error
+    renderer = SandboxedEnvironment(
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,
+        autoescape=False,
+    )
+    try:
+        template = renderer.from_string(text)
+        return str(template.render(**_flat(context)))
+    except UndefinedError as error:
+        raise RenderError(
+            f"{name} reads {error.message}, which the context does not define; "
+            "an undefined value must not render as an empty string into HDL"
+        ) from error
+    except TemplateError as error:
+        raise RenderError(f"{name} failed to render: {error}") from error
+
+
 #: ``$KEY$`` rather than ``$KEY``: FINN's existing marker convention.
 #:
 #: Written out rather than subclassing ``string.Template``, whose ``pattern``
@@ -162,5 +195,6 @@ __all__ = [
     "environment",
     "parameter_list",
     "render_template",
+    "render_template_bytes",
     "substitute_markers",
 ]

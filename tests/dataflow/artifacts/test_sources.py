@@ -195,6 +195,39 @@ def test_the_same_symbol_at_the_same_revision_is_not_a_collision() -> None:
     assert merge_closures((_compute(), _replay())).files
 
 
+def test_equal_symbol_bytes_under_different_compile_options_are_refused() -> None:
+    left = SourceDefinition((_file(ADD_MULTI, "left.sv", provides=("add_multi",)),), origin="left")
+    right = SourceDefinition(
+        (
+            _file(
+                ADD_MULTI,
+                "right.sv",
+                provides=("add_multi",),
+                options=CompileOptions(defines=(("MODE", "1"),)),
+            ),
+        ),
+        origin="right",
+    )
+    with pytest.raises(SourceError, match="different compilation units"):
+        merge_closures((left, right))
+
+
+def test_equal_units_with_conflicting_metadata_are_refused() -> None:
+    left = SourceDefinition((_file(ADD_MULTI, "left.sv", provides=("add_multi",)),), origin="left")
+    right = SourceDefinition(
+        (_file(ADD_MULTI, "right.sv", provides=("also_add_multi",)),), origin="right"
+    )
+    with pytest.raises(SourceError, match="incompatible language, standard, role"):
+        merge_closures((left, right))
+
+
+def test_one_staged_destination_cannot_select_between_two_sources() -> None:
+    left = SourceDefinition((_file(ADD_MULTI, "shared.sv"),), origin="left")
+    right = SourceDefinition((_file(DOTP, "shared.sv"),), origin="right")
+    with pytest.raises(SourceError, match="one destination"):
+        merge_closures((left, right))
+
+
 def test_one_definition_may_not_stage_a_path_twice_into_one_library() -> None:
     with pytest.raises(SourceError, match="twice"):
         SourceDefinition((_file(DOTP, "a.sv"), _file(ADD_MULTI, "a.sv")), origin="sloppy")

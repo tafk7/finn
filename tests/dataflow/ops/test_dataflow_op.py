@@ -336,8 +336,8 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     assert np.array_equal(region_values, context["expanded"].reshape(-1))
 
     spec = _replay_build_spec(operation)
-    assert spec.parameters["REP"] == folds
-    assert spec.parameters["LEN"] == matrix_width // simd
+    assert dict(spec.parameters)["REP"] == folds
+    assert dict(spec.parameters)["LEN"] == matrix_width // simd
     assert dict(operation.recorded()) == {"design.pe": 1, "design.simd": simd}
 
     path = tmp_path / f"replay-r{repetitions}-w{matrix_width}-f{folds}-s{simd}.onnx"
@@ -862,7 +862,7 @@ def test_a_plan_addressed_to_another_graph_is_refused() -> None:
 def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
     attrs = read_attributes(model.graph.node[0])
-    assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.problem_fingerprint
+    assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.local_problem_fingerprint
     assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 4)
     assert attrs["design__case"] == NativeAttribute("s", "dot_product")
     assert attrs["design__dot_product__pe"] == NativeAttribute("i", 2)
@@ -975,7 +975,7 @@ def test_commitment_stage_is_only_in_the_plan() -> None:
     model, operation = _configured_mvau()
     effects = operation.graph_effects(require=CommitmentStage.DATAFLOW)
     assert effects.commitment_stage is CommitmentStage.DATAFLOW
-    assert effects.expected_source_fingerprint == operation.problem_fingerprint
+    assert effects.expected_source_fingerprint == operation.local_problem_fingerprint
     assert "commitment_stage" not in read_attributes(model.graph.node[0])
 
 

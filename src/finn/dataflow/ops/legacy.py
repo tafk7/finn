@@ -277,8 +277,9 @@ def _decode_attribute(attribute: Any | None, kind: str, name: str) -> NativeAttr
 def _historical_problem_fingerprint(operation: DataflowOp) -> str:
     snapshot = operation.problem_snapshot
     problem = []
+    graph_problem = getattr(type(operation), "incoming_graph_context", None)
     for name, declaration in declared_members(type(operation)):
-        if not isinstance(declaration, Problem):
+        if not isinstance(declaration, Problem) or declaration is graph_problem:
             continue
         source_operand = declaration.canonical.identity == "finn.dataflow.source_operand"
         codec = (

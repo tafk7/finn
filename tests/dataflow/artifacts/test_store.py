@@ -100,7 +100,7 @@ def test_a_published_artifact_is_found_again_by_its_derivation(store: ArtifactSt
     published = _publish(store)
     found = store.lookup(_derivation())
     assert found is not None
-    assert found.key == published.key  # type: ignore[attr-defined]
+    assert found.key == published.key
     assert found.files == ("dotp_axi.sv", "replay_buffer.sv")
 
 
@@ -117,6 +117,11 @@ def test_the_returned_file_list_is_in_declared_order(store: ArtifactStore) -> No
     found = store.lookup(_derivation())
     assert found is not None
     assert found.files == ("dotp_axi.sv", "replay_buffer.sv")
+    assert found.artifact == ArtifactRef("kernel-source", build_key(_derivation()))
+    assert found.contents == (
+        ("dotp_axi.sv", ContentRef(content_digest(b"module a; endmodule\n"))),
+        ("replay_buffer.sv", ContentRef(content_digest(b"module b; endmodule\n"))),
+    )
 
 
 # -- blobs deduplicate by content ----------------------------------------------
@@ -138,6 +143,23 @@ def test_a_blob_whose_bytes_changed_underneath_the_store_is_refused(
     store.blob_path(reference).write_bytes(b"tampered")
     with pytest.raises(StoreError, match="the store is corrupt"):
         store.get_blob(reference)
+
+
+def test_publication_refuses_an_existing_corrupt_blob_before_installing_an_object(
+    store: ArtifactStore,
+) -> None:
+    derivation = _derivation()
+    expected = b"module a; endmodule\n"
+    reference = store.put_blob(expected)
+    store.blob_path(reference).write_bytes(b"tampered")
+    workspace = store.workspace(derivation)
+    _populate(workspace)
+
+    with pytest.raises(StoreError, match="the store is corrupt"):
+        store.publish(derivation, workspace)
+
+    assert not store.object_directory(derivation.kind, build_key(derivation)).exists()
+    assert (workspace / "dotp_axi.sv").read_bytes() == expected
 
 
 def test_a_blob_that_was_never_written_is_refused_rather_than_returned_empty(

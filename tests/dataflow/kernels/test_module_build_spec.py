@@ -13,16 +13,21 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, QualifiedPath, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.contributions import RenderedSource
+from finn.dataflow.artifacts.build import (
+    BuildError,
+    RenderedSourceRequirement,
+    SELF_CONTAINED_JINJA_RENDERER,
+    prepare_module_build,
+    module_source_derivation,
+)
+from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.artifacts.derivation import Scalar, build_key
 from finn.dataflow.kernels import (
     Kernel,
-    ModuleBuildSpec,
+    ModuleBuildRequirements,
     ModuleParameter,
     PhysicallyUnsupported,
     RegionDeclaration,
-    kernel_source_derivation,
-    resolve_kernel_contributions,
 )
 from finn.dataflow.model import (
     BeatSequence,
@@ -69,7 +74,11 @@ class ModuleKernel(Kernel):
     width = Input(int)
     region = RegionDeclaration(family="test.module", version="1", construct=_region, width=width)
     WIDTH = ModuleParameter(width)
-    sources = (RenderedSource("module.sv", "module.sv.j2"),)
+    sources = (
+        RenderedSourceRequirement(
+            "module.sv", "module.sv.j2", ("token",), SELF_CONTAINED_JINJA_RENDERER
+        ),
+    )
     context: ClassVar[dict[str, Scalar]] = {"token": "original"}
 
     @classmethod
@@ -94,7 +103,7 @@ class ModuleRoot(Space):
     )
 
 
-def _built(namespace: str) -> tuple[ModuleBuildSpec, ModuleRoot]:
+def _built(namespace: str) -> tuple[ModuleBuildRequirements, ModuleRoot]:
     root = ModuleRoot.start({}, namespace=namespace).assign(ModuleRoot.width, 2)
     choice = root.implementation
     root = cast(ModuleRoot, choice.select("first").root)
@@ -109,15 +118,13 @@ def test_build_spec_has_only_the_locked_detached_fields() -> None:
     assert {item.name for item in fields(spec)} == {
         "implementation_id",
         "implementation_version",
-        "region",
         "parameters",
         "abi",
         "contributions",
-        "render_context",
-        "imported_decisions",
+        "render_inputs",
     }
-    assert spec.region == _region(2)
-    assert spec.parameters == {"WIDTH": 2}
+    assert not hasattr(spec, "region")
+    assert spec.parameters == (("WIDTH", 2),)
     assert spec.abi.parameters == (("WIDTH", "2"),)
 
 
@@ -125,10 +132,10 @@ def test_import_provenance_matches_persistence_under_any_root_namespace() -> Non
     left, first = _built("one")
     right, second = _built("deeply.nested.node")
     assert left == right
-    for spec, root in ((left, first), (right, second)):
-        assert set(spec.imported_decisions) == {"lanes", "realization.case"}
-        assert all(type(name) is str for name in spec.imported_decisions)
-        assert set(spec.imported_decisions) <= {item.path for item in occurrence_persistable(root)}
+    assert not hasattr(left, "imported_decisions")
+    assert {item.path for item in occurrence_persistable(first)} == {
+        item.path for item in occurrence_persistable(second)
+    }
 
 
 def test_artifact_derivation_remains_independent_of_occurrence_and_provenance(
@@ -137,12 +144,13 @@ def test_artifact_derivation_remains_independent_of_occurrence_and_provenance(
     (tmp_path / "module.sv.j2").write_text("// {{ token }}\nmodule test_module; endmodule\n")
     first, _ = _built("one")
     second, _ = _built("other.namespace")
-    second = replace(second, imported_decisions=("another.design.lanes",))
-    resolved = resolve_kernel_contributions(first, roots={}, template_roots=(tmp_path,))
-    other = resolve_kernel_contributions(second, roots={}, template_roots=(tmp_path,))
+    assert first == second
+    store = ArtifactStore(tmp_path / "store")
+    resolved = prepare_module_build(first, roots={}, template_roots=(tmp_path,), blobs=store)
+    other = prepare_module_build(second, roots={}, template_roots=(tmp_path,), blobs=store)
     assert resolved == other
-    assert build_key(kernel_source_derivation(first, resolved)) == build_key(
-        kernel_source_derivation(second, other)
+    assert build_key(module_source_derivation(resolved)) == build_key(
+        module_source_derivation(other)
     )
 
 
@@ -150,21 +158,21 @@ def test_build_spec_snapshots_a_helpers_mutable_context() -> None:
     spec, _ = _built("node")
     try:
         ModuleKernel.context["token"] = "changed"
-        assert spec.render_context == {"token": "original"}
+        assert spec.render_inputs == (("token", "original"),)
         with pytest.raises(TypeError):
-            spec.render_context["token"] = "mutated"  # type: ignore[index]
+            spec.render_inputs[0] = ("token", "mutated")  # type: ignore[index]
         with pytest.raises(TypeError):
-            spec.parameters["WIDTH"] = 17  # type: ignore[index]
+            spec.parameters[0] = ("WIDTH", 17)  # type: ignore[index]
     finally:
         ModuleKernel.context["token"] = "original"
 
 
 def test_build_spec_refuses_query_handles_in_scalar_context_and_provenance() -> None:
     spec, root = _built("node")
-    with pytest.raises(TypeError, match="map strings to scalars"):
-        replace(spec, render_context={"undeclared": cast(Scalar, root)})
-    with pytest.raises(TypeError, match="declaration names"):
-        replace(spec, imported_decisions=(cast(str, QualifiedPath("node.lanes")),))
+    with pytest.raises(BuildError, match="not a scalar"):
+        replace(spec, render_inputs=(("token", cast(Scalar, root)),))
+    with pytest.raises(BuildError, match="not a scalar"):
+        replace(spec, parameters=(("WIDTH", cast(Scalar, QualifiedPath("node.lanes"))),))
 
 
 class UnavailableModule(ModuleKernel):

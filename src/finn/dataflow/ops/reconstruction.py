@@ -94,15 +94,44 @@ def _operations(model: Any, operations: Sequence[DataflowOp] | None) -> Sequence
 
 
 def bind_operations(
-    model: Any, build: Any, *, operations: Sequence[DataflowOp] | None = None
+    model: Any,
+    build: Any,
+    *,
+    operations: Sequence[DataflowOp] | None = None,
+    graph_context: Any = None,
 ) -> tuple[DataflowOp, ...]:
     """Reconstruct all selected operations against one initializer analysis."""
 
     with source_analysis(model) as summaries:
-        return tuple(
-            op._bind_with(model, op._build_values(build), summaries)
-            for op in _operations(model, operations)
-        )
+        result = []
+        for op in _operations(model, operations):
+            context_read = None
+            if graph_context is not None:
+                from finn.dataflow.ops.graph_context import require_context_read  # noqa: PLC0415
+
+                scope = op.recorded_scope_id()
+                if not scope:
+                    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+
+                    raise DataflowOpError(
+                        f"{op.onnx_node.name!r} has no dataflow scope id; "
+                        "run AssignDataflowScopeIds first"
+                    )
+                context_read = require_context_read(
+                    graph_context,
+                    model,
+                    build,
+                    consumer_scope_id=scope,
+                )
+            result.append(
+                op._bind_with(
+                    model,
+                    op._build_values(build),
+                    summaries,
+                    context_read=context_read,
+                )
+            )
+        return tuple(result)
 
 
 def bind_sources_only(

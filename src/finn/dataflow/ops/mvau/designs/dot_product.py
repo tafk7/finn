@@ -30,6 +30,23 @@ or without one.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import cast
+
+from finn.dataflow._engine import Answer, Decided
+from finn.dataflow.designs.physical import (
+    BoundaryBinding,
+    DECOMPOSED_PRODUCER,
+    DECOMPOSED_WRAPPER_TEMPLATE,
+    DesignPhysicalFacts,
+    EdgeBinding,
+    SemanticPortBinding,
+    compose_decomposed,
+    design_physical_refusal,
+    lower_module_structure,
+    selected_kernel_realization,
+    top_boundary_layout,
+    validate_design_physical_facts,
+)
 from finn.dataflow.designs.design import (
     EdgeSink,
     KernelChoice,
@@ -181,6 +198,117 @@ class DotProductDesign(WeightedDotProductDesign):
         local_weights_need_an_initializer,
         name="supply_available",
     )
+
+    def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
+        """Build the selected external Replay/Dotp composition only."""
+
+        supply = self.answer(type(self).weight_supply)
+        if not isinstance(supply, Decided):
+            return cast("Answer[DesignPhysicalFacts]", supply)
+        if supply.value is not WeightSupply.EXTERNAL:
+            return cast(
+                "Answer[DesignPhysicalFacts]",
+                design_physical_refusal(
+                    self,
+                    f"{supply.value.value} weight supply has no supported composed module",
+                ),
+            )
+
+        replay = selected_kernel_realization(self, "replay")
+        if not isinstance(replay, Decided):
+            return cast("Answer[DesignPhysicalFacts]", replay)
+        compute = selected_kernel_realization(self, "compute")
+        if not isinstance(compute, Decided):
+            return cast("Answer[DesignPhysicalFacts]", compute)
+
+        try:
+            structure = compose_decomposed(replay=replay.value, compute=compute.value)
+            requirements = lower_module_structure(
+                structure,
+                producer=DECOMPOSED_PRODUCER,
+                wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
+            )
+            port_bindings = (
+                *(
+                    SemanticPortBinding("replay", "u_replay", binding)
+                    for binding in replay.value.streams
+                ),
+                *(
+                    SemanticPortBinding("compute", "u_compute", binding)
+                    for binding in compute.value.streams
+                ),
+            )
+            replay_activation = next(
+                binding.local
+                for binding in port_bindings
+                if binding.node_id == "replay" and binding.local.region_port_id == "activation_in"
+            )
+            compute_weight = next(
+                binding.local
+                for binding in port_bindings
+                if binding.node_id == "compute" and binding.local.region_port_id == "weight"
+            )
+            compute_output = next(
+                binding.local
+                for binding in port_bindings
+                if binding.node_id == "compute" and binding.local.region_port_id == "output"
+            )
+            facts = DesignPhysicalFacts(
+                requirements,
+                port_bindings,
+                (
+                    BoundaryBinding(
+                        "activation",
+                        "in0_V",
+                        top_boundary_layout(structure.top_abi, "in0_V", replay_activation),
+                        "u_replay",
+                        replay_activation.abi_bus_id,
+                    ),
+                    BoundaryBinding(
+                        "weight",
+                        "in1_V",
+                        top_boundary_layout(structure.top_abi, "in1_V", compute_weight),
+                        "u_compute",
+                        compute_weight.abi_bus_id,
+                    ),
+                    BoundaryBinding(
+                        "output",
+                        "out0_V",
+                        top_boundary_layout(structure.top_abi, "out0_V", compute_output),
+                        "u_compute",
+                        compute_output.abi_bus_id,
+                    ),
+                ),
+                (
+                    EdgeBinding(
+                        "activation_replay",
+                        "u_replay",
+                        next(
+                            binding.local.abi_bus_id
+                            for binding in port_bindings
+                            if binding.node_id == "replay"
+                            and binding.local.region_port_id == "activation_out"
+                        ),
+                        "u_compute",
+                        next(
+                            binding.local.abi_bus_id
+                            for binding in port_bindings
+                            if binding.node_id == "compute"
+                            and binding.local.region_port_id == "activation"
+                        ),
+                    ),
+                ),
+            )
+            network = self.dataflow.accepted_answer
+            if not isinstance(network, Decided):  # guarded by DataflowDesign.physical
+                return cast("Answer[DesignPhysicalFacts]", network)
+            validate_design_physical_facts(network.value, structure, facts)
+        except (KeyError, StopIteration, ValueError) as error:
+            return cast(
+                "Answer[DesignPhysicalFacts]",
+                design_physical_refusal(self, str(error)),
+            )
+        return Decided(facts)
 
 
 DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present", "weight_initializer")

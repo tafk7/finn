@@ -869,7 +869,7 @@ def test_an_uncommitted_selector_leaves_the_network_unresolved() -> None:
     )
 
 
-def test_an_uncommitted_design_decision_leaves_the_network_unresolved() -> None:
+def test_an_unreferenced_design_decision_does_not_block_the_network() -> None:
     class Chosen(DataflowDesign):
         id = "chosen"
         version = "1"
@@ -880,9 +880,12 @@ def test_an_uncommitted_design_decision_leaves_the_network_unresolved() -> None:
         source = NetworkBoundary(produce.input("source"))
         stream = NetworkBoundary(produce.output("stream"))
 
-    assert isinstance(_occurrence(Chosen).dataflow.accepted_answer, Unresolved)
+    partial = _occurrence(Chosen).dataflow
+    assert isinstance(partial.accepted_answer, Decided)
+    assert all("spare" not in str(path) for path in partial.readiness.answers)
     complete = _occurrence(Chosen, design_decisions=((Chosen.spare, 1),))
     assert isinstance(complete.dataflow.accepted_answer, Decided)
+    assert complete.dataflow.accepted_answer == partial.accepted_answer
 
 
 def test_an_inactive_segment_contributes_no_node() -> None:

@@ -62,6 +62,7 @@ class CopiedSource:
     library: str = DEFAULT_LIBRARY
     language: Language = Language.SYSTEMVERILOG
     role: Role = Role.SOURCE
+    standard: str = ""
     options: CompileOptions = CompileOptions()
     provides: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
@@ -69,6 +70,10 @@ class CopiedSource:
     def __post_init__(self) -> None:
         if not self.root or not self.path:
             raise ContributionError("a copied source names a root and a path beneath it")
+        if self.path.startswith("/") or ".." in self.path.split("/"):
+            raise ContributionError(f"{self.path!r} is not relative beneath its source root")
+        object.__setattr__(self, "provides", tuple(sorted(set(self.provides))))
+        object.__setattr__(self, "requires", tuple(sorted(set(self.requires))))
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,7 @@ class RenderedSource:
     language: Language = Language.SYSTEMVERILOG
     library: str = DEFAULT_LIBRARY
     role: Role = Role.SOURCE
+    standard: str = ""
     options: CompileOptions = CompileOptions()
     provides: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
@@ -218,6 +224,7 @@ def resolve(
                     contribution.language,
                     library=contribution.library,
                     role=contribution.role,
+                    standard=contribution.standard,
                     options=contribution.options,
                     provides=contribution.provides,
                     requires=contribution.requires,

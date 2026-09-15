@@ -205,7 +205,8 @@ class SymbolCollision:
         origins = " and ".join(self.origins) or "two definitions"
         return (
             f"{origins} define {self.symbol!r} in library {self.library!r} with "
-            f"different contents ({', '.join(digest[:12] for digest in self.contents)}); "
+            "different compilation units over contents "
+            f"({', '.join(digest[:12] for digest in self.contents)}); "
             "isolate them by library or refuse"
         )
 
@@ -232,29 +233,67 @@ class Closure:
 
 
 def _collisions(definitions: Sequence[SourceDefinition]) -> tuple[SymbolCollision, ...]:
-    """Every symbol claimed twice in one library by unequal content."""
+    """Every symbol claimed by distinct compilation units in one library."""
 
-    claims: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    claims: dict[tuple[str, str], list[tuple[str, SourceFile]]] = {}
     for definition in definitions:
         for source in definition.files:
             for symbol in source.provides:
-                claims.setdefault((source.library, symbol), []).append(
-                    (definition.origin, source.content.digest)
-                )
+                claims.setdefault((source.library, symbol), []).append((definition.origin, source))
 
     found: list[SymbolCollision] = []
     for (library, symbol), claimed in claims.items():
-        digests = {digest for _, digest in claimed}
-        if len(digests) > 1:
+        units = {source.unit for _, source in claimed}
+        if len(units) > 1:
             found.append(
                 SymbolCollision(
                     symbol,
                     library,
-                    tuple(dict.fromkeys(origin for origin, _ in claimed if origin)),
-                    tuple(sorted(digests)),
+                    tuple(dict.fromkeys(origin for origin, _source in claimed if origin)),
+                    tuple(sorted({source.content.digest for _origin, source in claimed})),
                 )
             )
     return tuple(sorted(found, key=lambda item: (item.library, item.symbol)))
+
+
+def _metadata(source: SourceFile) -> tuple[object, ...]:
+    return (
+        source.language,
+        source.standard,
+        source.role,
+        source.provides,
+        source.requires,
+    )
+
+
+def _validate_merge_claims(definitions: Sequence[SourceDefinition]) -> None:
+    """Refuse every collision that unit-level deduplication would conceal."""
+
+    destinations: dict[tuple[str, str], tuple[str, SourceFile]] = {}
+    units: dict[CompilationUnit, tuple[str, SourceFile]] = {}
+    for definition in definitions:
+        origin = definition.origin or "a definition"
+        for source in definition.files:
+            coordinate = (source.library, source.path)
+            previous_destination = destinations.get(coordinate)
+            if previous_destination is not None and previous_destination[1] != source:
+                previous_origin, previous = previous_destination
+                raise SourceError(
+                    f"{previous_origin} and {origin} stage incompatible sources at "
+                    f"{source.library}/{source.path}; one destination cannot select between "
+                    "different content or compile metadata"
+                )
+            destinations.setdefault(coordinate, (origin, source))
+
+            previous_unit = units.get(source.unit)
+            if previous_unit is not None and _metadata(previous_unit[1]) != _metadata(source):
+                previous_origin, previous = previous_unit
+                raise SourceError(
+                    f"{previous_origin} and {origin} declare one compilation unit with "
+                    "incompatible language, standard, role, provides, or requires metadata "
+                    f"({previous.path!r} and {source.path!r})"
+                )
+            units.setdefault(source.unit, (origin, source))
 
 
 def merge_closures(definitions: Sequence[SourceDefinition]) -> Closure:
@@ -281,6 +320,7 @@ def merge_closures(definitions: Sequence[SourceDefinition]) -> Closure:
     collisions = _collisions(definitions)
     if collisions:
         raise SourceError("; ".join(str(collision) for collision in collisions))
+    _validate_merge_claims(definitions)
 
     ordered: list[SourceFile] = []
     position: dict[CompilationUnit, int] = {}
@@ -296,6 +336,22 @@ def merge_closures(definitions: Sequence[SourceDefinition]) -> Closure:
     for index, source in enumerate(ordered):
         for symbol in source.provides:
             providers[(source.library, symbol)] = index
+
+    missing = sorted(
+        {
+            (source.library, symbol, source.path)
+            for source in ordered
+            for symbol in source.requires
+            if not symbol.startswith(("tool:", "library:"))
+            and (source.library, symbol) not in providers
+        }
+    )
+    if missing:
+        detail = ", ".join(
+            f"{path} requires {symbol!r} in library {library!r}"
+            for library, symbol, path in missing
+        )
+        raise SourceError(f"the source closure has unresolved symbols: {detail}")
 
     # Edges point from provider to requirer, so a topological order compiles a
     # definition before whatever instantiates it.

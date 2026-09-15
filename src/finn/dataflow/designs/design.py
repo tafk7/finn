@@ -94,6 +94,7 @@ from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.region import BeatSequence, DataflowRegion, Port
 
 if TYPE_CHECKING:
+    from finn.dataflow.designs.physical import DesignPhysicalFacts
     from finn.dataflow.ops.selected import SelectedConstruction, SelectedGraphSnapshot
 
 D = TypeVar("D", bound="DataflowDesign")
@@ -171,6 +172,7 @@ RESERVED_DESIGN_NAMES: frozenset[str] = frozenset(
         "dataflow_accepts",
         "dataflow_ready",
         "dataflow",
+        "physical",
     }
 )
 
@@ -218,6 +220,32 @@ class DataflowDesign(Space):
         segments_match_network: DeclaredConstraint
         dataflow_accepts: ConstraintGroup
         dataflow_ready: Readiness
+
+    @property
+    def physical(self) -> ProjectionAssessment[DesignPhysicalFacts]:
+        """The selected implementation, evaluated only through its active branch."""
+
+        from finn.dataflow.designs.physical import assess_design_physical  # noqa: PLC0415
+
+        return assess_design_physical(self)
+
+    def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
+        """Implement one selected physical profile in a concrete Design.
+
+        The default is an ordinary unsupported result.  A concrete hook chooses
+        which selected child realizations it needs; the generic layer never
+        sweeps every candidate or forces unused standalone children.
+        """
+
+        from finn.dataflow.designs.physical import design_physical_refusal  # noqa: PLC0415
+
+        return cast(
+            "Answer[DesignPhysicalFacts]",
+            design_physical_refusal(
+                self,
+                f"{type(self).__name__} has no supported physical implementation",
+            ),
+        )
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -1325,12 +1353,16 @@ def _finalize_design(design_type: type[D], compiled: object) -> object:
             replace(item, constraints=accepted) if item.name == feasibility_name else item
             for item in design.spec.constraint_sets
         ),
+    )
+    specification = replace(
+        specification,
         readiness_profiles=tuple(
-            # The author's profile named the Network and the selected Regions.
-            # The Design's own Decisions are added here because they cannot be
-            # named in a class body: they include the segment selectors and any
-            # Decision nested in a Design-owned helper Space.
-            replace(item, decisions=tuple(sorted(design_decisions)), constraints=accepted)
+            # The Network property and accepted constraints already carry their
+            # complete value/applicability dependency graphs.  Naming Decisions
+            # again here would flatten those conditional graphs: a physical-only
+            # choice, or one used only by an inactive candidate, would become an
+            # unconditional logical prerequisite.
+            replace(item, decisions=(), constraints=accepted)
             if item.name == readiness_name
             else item
             for item in design.spec.readiness_profiles

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 from collections.abc import Callable, Mapping
 from typing import cast
 
@@ -40,7 +42,7 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.kernels.kernel import (
     Kernel,
-    ModuleBuildSpec,
+    ModuleBuildRequirements,
     ModuleParameter,
     PhysicallyUnsupported,
     RegionDeclaration,
@@ -152,7 +154,7 @@ def _compiled():
     )
 
 
-def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> ModuleBuildSpec:
+def _configured_values(*, extent: int = 8, lanes: int = 2, pumped: bool = False):
     harness, kernel = _compiled()
     engine = Engine()
     point = engine.start(
@@ -165,14 +167,24 @@ def _configured(*, extent: int = 8, lanes: int = 2, pumped: bool = False) -> Mod
     ).point
     answer = kernel_physical(engine, kernel, point).accepted_answer
     assert isinstance(answer, Decided), answer
-    return answer.value
+    logical = kernel_dataflow(engine, kernel, point).accepted_answer
+    assert isinstance(logical, Decided)
+    return answer.value, logical.value
+
+
+def _configured(**kwargs) -> ModuleBuildRequirements:
+    return _configured_values(**kwargs)[0]
+
+
+def _logical(**kwargs):
+    return _configured_values(**kwargs)[1]
 
 
 def test_kernel_configures_its_own_region_and_parameters() -> None:
     configured = _configured()
-    assert configured.region == _region(8, 2)
+    assert _logical() == _region(8, 2)
     assert dict(configured.parameters) == {"LANES": 2, "WIDTH": 16, "FLAG": 1}
-    assert configured.abi.entry_point == "toy"
+    assert configured.abi.entry_point.value == "toy"
     assert configured.implementation_id == "toy"
     assert configured.implementation_version == "1"
 
@@ -186,7 +198,7 @@ def test_region_dependency_closure_distinguishes_semantic_and_physical_decisions
 
 
 def test_two_configurations_may_resolve_different_regions() -> None:
-    assert _configured(lanes=1).region != _configured(lanes=2).region
+    assert _logical(lanes=1) != _logical(lanes=2)
 
 
 def test_kernel_feasibility_is_automatic() -> None:
@@ -212,7 +224,10 @@ def test_kernel_feasibility_is_automatic() -> None:
 
 def test_the_detached_physical_result_retains_no_engine_point_or_network() -> None:
     configured = _configured()
-    values = {name: getattr(configured, name) for name in ModuleBuildSpec.__slots__}
+    values = {
+        name: getattr(configured, name)
+        for name in (item.name for item in fields(ModuleBuildRequirements))
+    }
     assert not any(isinstance(value, Engine) for value in values.values())
     assert not any(hasattr(value, "design_space") for value in values.values())
     assert not any(isinstance(value, Space) for value in values.values())
@@ -375,7 +390,7 @@ def test_region_constructor_signature_must_match_its_dependencies() -> None:
 def test_region_family_and_version_belong_to_the_declaration() -> None:
     assert (ToyKernel.region.family, ToyKernel.region.version) == ("test.copy", "1")
     configured = _configured()
-    assert configured.region == _region(8, 2)
+    assert _logical() == _region(8, 2)
     assert not hasattr(configured, "region_family")
 
 
@@ -506,8 +521,8 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
 
 def test_a_supplied_decision_reaching_the_region_stays_valid() -> None:
     configured = _configured(lanes=2)
-    assert configured.region == _region(8, 2)
-    assert configured.imported_decisions == ("lanes",)
+    assert _logical() == _region(8, 2)
+    assert not hasattr(configured, "imported_decisions")
 
 
 def test_a_kernel_may_not_publish_exports_besides_its_region() -> None:
@@ -626,10 +641,10 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
     point = engine.commit_assignments(point, {"composite.pipeline.stages": 2}).point
     configured = kernel_physical(engine, compiled, point).accepted_answer
     assert isinstance(configured, Decided)
-    assert configured.value.parameters["STAGES"] == 2
+    assert dict(configured.value.parameters)["STAGES"] == 2
     # A Decision inside a helper Space the Kernel owns is the Kernel's, so it is
     # an assignment it carries and not an import it depends on.
-    assert configured.value.imported_decisions == ()
+    assert not hasattr(configured.value, "imported_decisions")
 
 
 def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
@@ -811,10 +826,8 @@ def test_a_valid_region_does_not_oblige_a_realizable_kernel() -> None:
     assert any(finding.code == "kernel-physically-unsupported" for finding in physical.findings)
 
 
-def test_the_physical_result_carries_its_import_provenance() -> None:
-    configured = _configured()
-    assert "lanes" in configured.imported_decisions
-    assert "toy.pumped" not in configured.imported_decisions
+def test_import_provenance_stays_in_compiler_metadata() -> None:
+    assert {str(path) for path in _compiled()[1].extension.imported_decisions} == {"test.lanes"}
 
 
 def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:

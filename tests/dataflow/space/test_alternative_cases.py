@@ -476,7 +476,8 @@ def test_committing_the_selector_changes_only_what_is_allowed_to_vary() -> None:
     buffered_id, buffered_built = _built(engine, design, buffered_point, "consume")
     assert plain_id != buffered_id
     assert isinstance(plain_built, Decided) and isinstance(buffered_built, Decided)
-    assert plain_built.value.region == buffered_built.value.region
+    assert not hasattr(plain_built.value, "region")
+    assert not hasattr(buffered_built.value, "region")
     assert segment.case(plain_id).metadata.region_family == (
         segment.case(buffered_id).metadata.region_family
     )

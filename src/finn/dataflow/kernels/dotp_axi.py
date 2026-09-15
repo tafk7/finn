@@ -13,6 +13,7 @@ from typing import ClassVar, cast
 from finn.dataflow.artifacts.abi import (
     Bus,
     Clock,
+    ClockAlignment,
     ComponentABI,
     Derived as DerivedClock,
     Direction,
@@ -24,6 +25,8 @@ from finn.dataflow.artifacts.abi import (
     StandardProtocol,
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
+from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
+from finn.dataflow.kernels.physical import KernelStreamBinding, PeriodicLast, low_fields_binding
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -40,7 +43,7 @@ from finn.dataflow.kernels.kernel import (
     PhysicallyUnsupported,
     RegionDeclaration,
 )
-from finn.dataflow.model.region import NumericElementType, element_width
+from finn.dataflow.model.region import DataflowRegion, NumericElementType, element_width
 from finn.dataflow.ops.mvau.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_dot_product_region,
@@ -430,6 +433,32 @@ class DotpAxiKernel(Kernel):
     )
 
     @classmethod
+    def local_stream_bindings(
+        cls,
+        *,
+        region: DataflowRegion,
+        parameters: ScalarTable,
+        abi: ModuleABIRequirements,
+    ) -> tuple[KernelStreamBinding, ...]:
+        del parameters
+        period = next(level.extent for level in region.schedule.levels if level.name == "sf")
+        return (
+            low_fields_binding(
+                region=region,
+                abi=abi,
+                region_port_id="activation",
+                abi_bus_id="s_axis_input",
+                framing=PeriodicLast("tlast", period, period - 1),
+            ),
+            low_fields_binding(
+                region=region, abi=abi, region_port_id="weight", abi_bus_id="s_axis_weights"
+            ),
+            low_fields_binding(
+                region=region, abi=abi, region_port_id="output", abi_bus_id="m_axis_output"
+            ),
+        )
+
+    @classmethod
     def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
         pe = cast(int, parameters["PE"])
         simd = cast(int, parameters["SIMD"])
@@ -445,7 +474,7 @@ class DotpAxiKernel(Kernel):
                     "ap_rst_n",
                     Direction.IN,
                     1,
-                    Reset(active_low=True, synchronous=True),
+                    Reset(active_low=True, synchronous=True, synchronous_to=("ap_clk", "ap_clk2x")),
                 ),
                 _axis(
                     "s_axis_weights",
@@ -465,6 +494,7 @@ class DotpAxiKernel(Kernel):
                 ),
             ),
             tuple((name, _rtl_scalar(value)) for name, value in parameters.items()),
+            clock_alignments=(ClockAlignment("ap_clk", "ap_clk2x"),),
         )
 
 

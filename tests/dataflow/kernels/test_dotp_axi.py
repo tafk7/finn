@@ -12,7 +12,7 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Decided, Engine
-from finn.dataflow.artifacts.abi import Reset, Signal
+from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
 from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -25,7 +25,7 @@ from finn.dataflow.kernels.dotp_axi import (
     EmbeddedDotpAxiKernel,
     FINNLIB_SOURCES,
 )
-from finn.dataflow.kernels.kernel import kernel_physical
+from finn.dataflow.kernels.kernel import kernel_physical, kernel_dataflow
 from finn.dataflow.ops.mvau import regions as mvau_regions
 from finn.dataflow.ops.mvau.regions import (
     construct_dot_product_region as baseline_region,
@@ -105,7 +105,7 @@ def _problem(
     }
 
 
-def _configure(
+def _configure_values(
     *,
     pe: int = 2,
     simd: int = 2,
@@ -126,7 +126,22 @@ def _configure(
             "dotp_test.kernel.compute_pumping": pumping,
         },
     ).point
-    return kernel_physical(engine, kernel, point).accepted_answer
+    return kernel_physical(engine, kernel, point).accepted_answer, kernel_dataflow(
+        engine, kernel, point
+    ).accepted_answer
+
+
+def _configure(**kwargs):
+    return _configure_values(**kwargs)[0]
+
+
+def _logical(**kwargs):
+    return _configure_values(**kwargs)[1]
+
+
+def _abi(requirements):
+    abi = requirements.abi
+    return ComponentABI(abi.entry_point.value, abi.ports, abi.parameters, abi.clock_alignments)
 
 
 def test_dotp_kernel_binds_the_region_constructor_inputs() -> None:
@@ -142,7 +157,7 @@ def test_dotp_kernel_binds_the_region_constructor_inputs() -> None:
         2,
         4,
     )
-    assert configured.value.region == expected
+    assert _logical(pe=2, simd=4) == Decided(expected)
 
 
 def test_dotp_parameter_table_remains_exact() -> None:
@@ -167,10 +182,10 @@ def test_dotp_parameter_table_remains_exact() -> None:
 def test_dotp_owns_only_its_physical_decision() -> None:
     configured = _configure(pe=2, simd=4, pumping=True)
     assert isinstance(configured, Decided)
-    assert set(configured.value.imported_decisions) == {
-        "pe",
-        "simd",
-    }
+    assert not hasattr(configured.value, "imported_decisions")
+    assert [str(x) for x in _compile()[1].extension.physical_decisions] == [
+        "dotp_test.kernel.compute_pumping"
+    ]
 
 
 def test_dotp_region_family_is_inspectable_without_the_kernel_id() -> None:
@@ -203,8 +218,8 @@ def test_dotp_sources_and_abi_are_exact() -> None:
     assert isinstance(configured, Decided)
     kernel = configured.value
     assert tuple(source.path for source in kernel.contributions) == FINNLIB_SOURCES
-    assert kernel.abi.entry_point == "dotp_axi"
-    assert set(kernel.abi.physical_names()) == {
+    assert kernel.abi.entry_point.value == "dotp_axi"
+    assert set(_abi(kernel).physical_names()) == {
         "ap_clk",
         "ap_clk2x",
         "ap_rst_n",
@@ -241,10 +256,12 @@ def test_dotp_reset_is_synchronous_in_ordinary_and_pumped_descriptors(
         for port in configured.value.abi.ports
         if isinstance(port, Signal) and port.name == "ap_rst_n"
     )
-    assert reset.role == Reset(active_low=True, synchronous=True)
-    encoded = _descriptor.encode(configured.value.abi)
+    assert reset.role == Reset(
+        active_low=True, synchronous=True, synchronous_to=("ap_clk", "ap_clk2x")
+    )
+    encoded = _descriptor.encode(_abi(configured.value))
     assert b'"synchronous":true' in encoded
-    assert _descriptor.decode(encoded) == configured.value.abi
+    assert _descriptor.decode(encoded) == _abi(configured.value)
 
 
 def test_dotp_abi_agrees_with_pinned_finnlib() -> None:
@@ -255,7 +272,7 @@ def test_dotp_abi_agrees_with_pinned_finnlib() -> None:
     if any(not path.is_file() for path in sources):
         return
     result = check_abi(
-        configured.value.abi,
+        _abi(configured.value),
         sources,
         "dotp_axi",
         configured.value.abi.parameters,

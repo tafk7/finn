@@ -501,7 +501,7 @@ def hydrate(operation: Any) -> Any:
                     f"this build writes schema version {operation.schema_version}, found {version}"
                 )
             fingerprint = written.get(FINGERPRINT_ATTRIBUTE)
-            if fingerprint != NativeAttribute("s", operation.problem_fingerprint):
+            if fingerprint != NativeAttribute("s", operation.local_problem_fingerprint):
                 raise DecodeError(
                     "node stores choices made against a different problem; reconstruct explicitly"
                 )

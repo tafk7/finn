@@ -34,7 +34,7 @@ import sys
 import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np  # type: ignore[import-not-found]
 
@@ -160,6 +160,185 @@ def drive(
         return cast("list[int]", payload["output"])
 
 
+def drive_observed(
+    top_module: str,
+    sources: list[str],
+    stimulus: dict[str, list[int]],
+    expected_outputs: dict[str, int],
+    observations: dict[str, dict[str, str]],
+    *,
+    stalls: bool,
+    directory: Path,
+    drain_cycles: int = LIVENESS,
+) -> dict[str, Any]:
+    """Run an observed production artifact, retaining request, response and compile files.
+
+    Stream names are complete ABI bus names. Each observation names actual
+    read-only data/valid/ready pins and optionally last; absent pins refuse.
+    """
+    directory.mkdir(parents=True, exist_ok=False)
+    request = directory / "request.json"
+    response = directory / "response.json"
+    request.write_text(
+        json.dumps(
+            {
+                "top_module": top_module,
+                "sources": sources,
+                "stimulus": stimulus,
+                "expected_outputs": expected_outputs,
+                "observations": observations,
+                "stalls": stalls,
+                "work_directory": str(directory / "compile"),
+                "drain_cycles": drain_cycles,
+            },
+            indent=2,
+        )
+    )
+    with (directory / "simulation.log").open("w") as log:
+        completed = subprocess.run(
+            [sys.executable, __file__, "--simulate", str(request), "--out", str(response)],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    if completed.returncode != 0 or not response.is_file():
+        detail = response.read_text() if response.is_file() else "no response"
+        raise AssertionError(
+            f"{top_module}: simulation subprocess exit {completed.returncode}: {detail}"
+        )
+    payload = json.loads(response.read_text())
+    if payload.get("error"):
+        raise AssertionError(f"{top_module}: {payload['error']}")
+    return cast("dict[str, Any]", payload)
+
+
+def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> dict[str, Any]:
+    sim = load_sim_obj(sim_dir, so_rel)
+    reset_rtlsim(sim)
+    stimulus = request["stimulus"]
+    expected = request["expected_outputs"]
+    drain_cycles = request["drain_cycles"]
+    if not expected or drain_cycles < LIVENESS:
+        raise ValueError("observed runs require outputs and at least 4000 drain cycles")
+
+    def pin(name: str) -> Any:
+        value = sim.top.getPort(name)
+        if value is None:
+            raise ValueError(f"missing observation/stream pin {name}")
+        return value
+
+    def bus(name: str) -> dict[str, Any]:
+        return {key: pin(f"{name}_{key}") for key in ("tdata", "tvalid", "tready")}
+
+    inputs = {name: bus(name) for name in stimulus}
+    outputs = {name: bus(name) for name in expected}
+    monitors = {
+        name: {key: pin(value) for key, value in names.items()}
+        for name, names in request["observations"].items()
+    }
+    for ports in monitors.values():
+        if not {"data", "valid", "ready"} <= set(ports) or set(ports) - {
+            "data",
+            "valid",
+            "ready",
+            "last",
+        }:
+            raise ValueError("an observation names exactly data/valid/ready and optional last")
+    for index, (name, values) in enumerate(stimulus.items()):
+        throttle = (2 + index % 2, 3 + index % 3) if request["stalls"] else (float("inf"), 0)
+        sim.stream_input(name, iter(f"{value:x}" for value in values), throttle=throttle)
+    watchdogs = {name: sim.create_watchdog(f"{name} timeout", LIVENESS) for name in outputs}
+
+    class ObservedCollector:
+        def __init__(self) -> None:
+            self.outputs: dict[str, list[int]] = {name: [] for name in outputs}
+            self.traces: dict[str, dict[str, list[int]]] = {
+                name: {"words": [], "last": []} for name in monitors
+            }
+            self.inputs = dict.fromkeys(inputs, 0)
+            self.stall = dict.fromkeys(outputs, 0)
+            self.drain = 0
+            self.held: dict[str, tuple[int, int | None]] = {}
+
+        def sample(self, name: str, ports: dict[str, Any]) -> tuple[int, int | None] | None:
+            valid = ports["valid"].read().as_bool()
+            ready = ports["ready"].read().as_bool()
+            value = (
+                (
+                    int(ports["data"].read().as_hexstr(), 16),
+                    int(ports["last"].read().as_bool()) if "last" in ports else None,
+                )
+                if valid
+                else None
+            )
+            if name in self.held and (not valid or self.held[name] != value):
+                raise AssertionError(f"{name}: payload/framing changed while stalled")
+            if valid and not ready:
+                assert value is not None
+                self.held[name] = value
+            else:
+                self.held.pop(name, None)
+            return value if valid and ready else None
+
+        def __call__(self, _sim: Any) -> dict[Any, str] | None:
+            updates = {}
+            for name, ports in inputs.items():
+                if ports["tvalid"].read().as_bool() and ports["tready"].read().as_bool():
+                    self.inputs[name] += 1
+                    if self.inputs[name] > len(stimulus[name]):
+                        raise AssertionError(f"{name}: extra accepted input")
+            for name, ports in monitors.items():
+                value = self.sample(name, ports)
+                if value is not None:
+                    self.traces[name]["words"].append(value[0])
+                    if value[1] is not None:
+                        self.traces[name]["last"].append(value[1])
+            for name, ports in outputs.items():
+                value = self.sample(
+                    name,
+                    {"data": ports["tdata"], "valid": ports["tvalid"], "ready": ports["tready"]},
+                )
+                if value is not None:
+                    self.outputs[name].append(value[0])
+                    watchdogs[name].reset()
+                    if len(self.outputs[name]) > expected[name]:
+                        raise AssertionError(
+                            f"{name}: extra output after expected {expected[name]} transfers"
+                        )
+                    if len(self.outputs[name]) == expected[name]:
+                        sim.remove_watchdog(watchdogs[name])
+                    elif request["stalls"]:
+                        self.stall[name] = BACKPRESSURE_TICKS
+                # Keep ready high after the expected prefix to observe extras.
+                if len(self.outputs[name]) >= expected[name]:
+                    self.stall[name] = 0
+                updates[ports["tready"]] = "0" if self.stall[name] else "1"
+                self.stall[name] = max(0, self.stall[name] - 1)
+            if all(self.inputs[name] == len(values) for name, values in stimulus.items()):
+                self.drain += 1
+                if self.drain >= drain_cycles:
+                    if any(len(self.outputs[name]) != count for name, count in expected.items()):
+                        raise AssertionError("missing output transfers after drain window")
+                    return None
+            return updates
+
+    collector = ObservedCollector()
+    sim.enlist(collector)
+    try:
+        timeouts = sim.run(cycles=20 * LIVENESS)
+        if timeouts:
+            raise AssertionError(f"deadlock or incomplete drain: {timeouts}")
+        return {
+            "outputs": collector.outputs,
+            "observations": collector.traces,
+            "input_counts": collector.inputs,
+            "drain_cycles": collector.drain,
+            "cycles": sim.ticks,
+        }
+    finally:
+        close_rtlsim(sim)
+
+
 def simulate_once(request_path: str, response_path: str) -> int:
     """Run exactly one simulation described by a JSON request, then exit.
 
@@ -170,6 +349,18 @@ def simulate_once(request_path: str, response_path: str) -> int:
     request = json.loads(Path(request_path).read_text())
     payload: dict[str, object]
     try:
+        if "observations" in request:
+            scratch = Path(request["work_directory"])
+            scratch.mkdir(parents=True, exist_ok=False)
+            sim_dir, so_rel = compile_sim_obj(
+                request["top_module"],
+                request["sources"],
+                str(scratch),
+                behav=True,
+            )
+            payload = _simulate_observed(sim_dir, so_rel, request)
+            Path(response_path).write_text(json.dumps(payload, indent=2))
+            return 0
         with tempfile.TemporaryDirectory() as scratch:
             for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
                 (Path(scratch) / name).write_text(contents)

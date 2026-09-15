@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from tempfile import TemporaryDirectory
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import import_module
@@ -19,22 +20,23 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 import finn.dataflow.designs.design as design_module
 import finn.dataflow.ops.mapping as mapping_module
 from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.artifacts.derivation import ArtifactRef, ContentRef, build_key
+from finn.dataflow.artifacts.derivation import ContentRef, build_key
 from finn.dataflow.artifacts.formats import RtlModuleDirectory
 from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
-from finn.dataflow.artifacts.projection import content_digest
 from finn.dataflow.conformance import (
     DataflowOpConformanceCase,
     assert_dataflow_op_conforms,
 )
 from finn.dataflow.designs import DataflowDesign
-from finn.dataflow.kernels import ModuleBuildSpec
-from finn.dataflow.kernels.artifacts import (
-    kernel_source_derivation,
-    portable_kernel_component,
-    resolve_kernel_contributions,
+from finn.dataflow.kernels import ModuleBuildRequirements
+from finn.dataflow.artifacts.build import (
+    prepare_module_build,
+    module_source_derivation,
+    materialize_module_sources,
+    portable_module_component,
 )
+from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.kernels.replay_buffer import FINNLIB_ROOT
 from finn.dataflow.model import (
     DataflowNetwork,
@@ -53,7 +55,6 @@ from finn.dataflow.ops.native import (
     SCHEMA_VERSION_ATTRIBUTE,
     SCOPE_ID_ATTRIBUTE,
     NativeAttribute,
-    attribute_name,
     read_attributes,
 )
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
@@ -77,7 +78,7 @@ _widen_the_activation: Any = _conformance_fixtures._widen_the_activation
 
 @dataclass(frozen=True)
 class _ArtifactObservation:
-    spec: ModuleBuildSpec
+    spec: ModuleBuildRequirements
     source_key: str
     source_paths: tuple[str, ...]
     package_key: str
@@ -99,40 +100,38 @@ def _finnlib_root() -> Path:
     return Path(__file__).parents[3] / "deps" / "finnlib"
 
 
-def _observe_artifacts(spec: ModuleBuildSpec) -> _ArtifactObservation:
+def _observe_artifacts(spec: ModuleBuildRequirements) -> _ArtifactObservation:
     root = _finnlib_root()
-    resolved = resolve_kernel_contributions(spec, roots={FINNLIB_ROOT: root})
-    blobs: dict[str, bytes] = {}
-    for source_file in resolved.definition.files:
-        data = (root / source_file.path).read_bytes()
-        assert source_file.content == ContentRef(content_digest(data))
-        blobs[source_file.content.digest] = data
-    derivation = kernel_source_derivation(spec, resolved)
-    source_key = build_key(derivation)
-    component = portable_kernel_component(spec, ArtifactRef(derivation.kind, source_key), resolved)
-    package = plan_package(
-        RtlModuleDirectory(),
-        component,
-        Target("test-part"),
-        RtlModuleOptions(),
-        _ResolvedContents(blobs),
-    )
-    return _ArtifactObservation(
-        spec,
-        source_key,
-        tuple(item.path for item in resolved.definition.files),
-        build_key(package.derivation),
-        package.contents,
-    )
+    with TemporaryDirectory() as temporary:
+        store = ArtifactStore(Path(temporary))
+        prepared = prepare_module_build(
+            spec, roots={FINNLIB_ROOT: root}, blobs=store, template_roots=()
+        )
+        source = materialize_module_sources(prepared, store)
+        component = portable_module_component(prepared, source)
+        package = plan_package(
+            RtlModuleDirectory(),
+            component,
+            Target("test-part"),
+            RtlModuleOptions(),
+            store,
+        )
+        return _ArtifactObservation(
+            spec,
+            build_key(module_source_derivation(prepared)),
+            source.files,
+            build_key(package.derivation),
+            package.contents,
+        )
 
 
-def _replay_spec(operation: Any) -> ModuleBuildSpec:
+def _replay_spec(operation: Any) -> ModuleBuildRequirements:
     kernel = operation.design.kernel("replay")
     assert isinstance(kernel, Decided)
     assert kernel.value.root is operation.root
     physical = kernel.value.physical.accepted_answer
     assert isinstance(physical, Decided)
-    return cast(ModuleBuildSpec, physical.value)
+    return cast(ModuleBuildRequirements, physical.value)
 
 
 class _NestedActivationReplayOp(ActivationReplayOp):
@@ -234,16 +233,14 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     assert checked == [network]
 
     spec = _replay_spec(restored)
-    assert spec.region == network.node("replay").region
+    assert not hasattr(spec, "region")
+    kernel = restored.design.kernel("replay")
+    assert isinstance(kernel, Decided)
+    assert kernel.value.dataflow.accepted_answer == Decided(network.node("replay").region)
     assert dict(spec.parameters) == {"LEN": 2, "REP": 4, "W": 32}
-    assert spec.abi.entry_point == "replay_buffer"
-    assert set(spec.imported_decisions) == {"design.pe", "design.simd"}
+    assert spec.abi.entry_point.value == "replay_buffer"
     persisted = {item.path for item in occurrence_persistable(restored)}
-    assert set(spec.imported_decisions) <= persisted
-    assert {attribute_name(path) for path in spec.imported_decisions} == {
-        "design__pe",
-        "design__simd",
-    }
+    assert {"design.pe", "design.simd"} <= persisted
 
     committed_spec = _replay_spec(result.committed)
     assert committed_spec == spec
@@ -257,7 +254,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     nested_unbound = _NestedActivationReplayOp(nested_model.graph.node[0])
     nested = _configure_replay(nested_unbound.bind(nested_model, build))
     nested_spec = _replay_spec(nested)
-    assert set(nested_spec.imported_decisions) == {"design.pe", "design.simd"}
+    assert not hasattr(nested_spec, "imported_decisions")
     assert {item.path for item in occurrence_persistable(nested)} == persisted
     assert _observe_artifacts(nested_spec) == restored_artifacts
 

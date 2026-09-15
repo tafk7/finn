@@ -18,7 +18,16 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import uuid4
 
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.dataflow._engine import (
+    Absent,
+    Answer,
+    Decided,
+    Finding,
+    FindingKind,
+    QualifiedPath,
+    Unresolved,
+)
+from finn.dataflow._engine.results import ordered_findings
 from finn.dataflow.ops.model_effects import (
     MODEL_READ_PRESENT,
     ModelEffects,
@@ -26,6 +35,7 @@ from finn.dataflow.ops.model_effects import (
     ModelReadKind,
     ModelReadSet,
     apply_model_effects,
+    merge_model_read_sets,
 )
 from finn.dataflow.ops.native import (
     SCOPE_ID_ATTRIBUTE,
@@ -100,10 +110,12 @@ class GraphEffects:
     read_set: ModelReadSet = ModelReadSet()
     tensor_datatypes: Mapping[str, Any] = field(default_factory=dict)
     tensor_shapes: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
+    require_graph: bool = False
+    expected_incoming: object | None = None
 
-    def model_effects(self) -> ModelEffects:
+    def model_effects(self, *, read_set: ModelReadSet | None = None) -> ModelEffects:
         return ModelEffects(
-            read_set=self.read_set,
+            read_set=self.read_set if read_set is None else read_set,
             remove_attributes=tuple((self.scope_id, name) for name in self.remove_attributes),
             set_attributes=tuple(
                 (self.scope_id, name, value) for name, value in sorted(self.set_attributes.items())
@@ -217,6 +229,17 @@ def check_commitment(
                 f"this operation offers no {stage.value!r} projection, so a commitment to "
                 f"{require.value!r} cannot be checked"
             )
+        refused, findings = _constraint_refusals(stage, assessment)
+        if refused:
+            from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+
+            paths = ", ".join(str(path) for path in refused)
+            raise DataflowOpError(
+                f"the {stage.value} projection refuses this point because constraints "
+                f"({paths}) refused; "
+                "an unresolved point may be saved, a refused one may not",
+                findings,
+            )
         answer = assessment.accepted_answer
         if isinstance(answer, Unresolved) or isinstance(answer, Decided):
             continue
@@ -229,6 +252,35 @@ def check_commitment(
                 "an unresolved point may be saved, a refused one may not",
                 answer.findings,
             )
+
+
+def _constraint_refusals(
+    stage: CommitmentStage,
+    assessment: ProjectionAssessment[Any],
+) -> tuple[tuple[QualifiedPath, ...], tuple[Finding, ...]]:
+    answers: dict[QualifiedPath, Answer[bool]] = {}
+    for constraint_assessment in assessment.constraints:
+        for path in constraint_assessment.refused:
+            answer = constraint_assessment.answers[path]
+            previous = answers.get(path)
+            if previous is None or (isinstance(previous, Decided) and isinstance(answer, Absent)):
+                answers[path] = answer
+
+    findings: list[Finding] = []
+    for path, answer in sorted(answers.items()):
+        if isinstance(answer, Absent):
+            findings.extend(answer.findings)
+            continue
+        findings.append(
+            Finding(
+                FindingKind.REJECTION,
+                "projection-constraint-refused",
+                path,
+                f"a {stage.value} commitment constraint refused this point",
+            )
+        )
+    unique_findings = list(dict.fromkeys(findings))
+    return tuple(sorted(answers)), ordered_findings(unique_findings)
 
 
 def _stages_through(require: CommitmentStage) -> tuple[CommitmentStage, ...]:
@@ -408,13 +460,21 @@ def source_read_set(
     return ModelReadSet(tuple(expectations))
 
 
-def apply_graph_effects(model: Any, effects: GraphEffects) -> Any:
+def apply_graph_effects(
+    model: Any,
+    effects: GraphEffects,
+    *,
+    graph_context: Any = None,
+    build: Any = None,
+) -> Any:
     """Apply the source-node adapter through the shared transaction engine."""
 
     return _apply_graph_effects(
         model,
         effects,
         lambda current: find_node(current, effects.scope_id),
+        graph_context=graph_context,
+        build=build,
     )
 
 
@@ -422,6 +482,9 @@ def _apply_graph_effects(
     model: Any,
     effects: GraphEffects,
     finish: Callable[[Any], T],
+    *,
+    graph_context: Any = None,
+    build: Any = None,
 ) -> T:
     """Validate current source facts, then apply through one rollback engine."""
 
@@ -432,8 +495,13 @@ def _apply_graph_effects(
         effects.opset_version,
         effects.build_facts,
     )
-    source = _source_only_operation(model, context, effects.scope_id)
-    if source.problem_fingerprint != effects.expected_source_fingerprint:
+    source = _source_only_operation(
+        model,
+        context,
+        effects.scope_id,
+        incoming=effects.expected_incoming,
+    )
+    if source.local_problem_fingerprint != effects.expected_source_fingerprint:
         raise DataflowOpError(
             "source facts now describe a different problem; rebind and plan again"
         )
@@ -443,10 +511,31 @@ def _apply_graph_effects(
     captured = tuple((schema[item.path], item.value) for item in records)
     canonical = selected_source.graph_effects(
         require=effects.commitment_stage,
+        require_graph=effects.require_graph,
         _captured_choices=captured,
     )
     if effects != canonical:
         raise DataflowOpError("source graph effects differ from the validated source plan")
+
+    current_read = None
+    combined_reads = effects.read_set
+    if effects.require_graph:
+        from finn.dataflow.ops.graph_context import require_context_read  # noqa: PLC0415
+
+        if graph_context is None:
+            raise DataflowOpError("graph-required effects need a GraphContext")
+        effective_build = _frozen_build_configuration(context) if build is None else build
+        current_read = require_context_read(
+            graph_context,
+            model,
+            effective_build,
+            consumer_scope_id=effects.scope_id,
+        )
+        if current_read.incoming != effects.expected_incoming:
+            raise DataflowOpError(
+                "current incoming graph contracts differ from the validated source plan"
+            )
+        combined_reads = merge_model_read_sets(effects.read_set, current_read.model_reads)
 
     def validate(candidate: Any) -> None:
         from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
@@ -459,8 +548,9 @@ def _apply_graph_effects(
                 build_values(context),
                 summaries,
                 recorded=False,
+                context_read=current_read,
             )
-        if fresh.problem_fingerprint != effects.expected_source_fingerprint:
+        if fresh.local_problem_fingerprint != effects.expected_source_fingerprint:
             raise DataflowOpError(
                 "source facts now describe a different problem; rebind and plan again"
             )
@@ -477,10 +567,24 @@ def _apply_graph_effects(
             raise DataflowOpError("recorded choices differ after source reconstruction")
         hydrated = _hydrate_candidate(fresh)
         _assert_expected_choices(hydrated, _recorded_choices(effects.expected_choices))
+        if effects.require_graph:
+            graph_answer = hydrated.graph_dataflow.accepted_answer
+            if not isinstance(graph_answer, Decided):
+                raise DataflowOpError(
+                    "written candidate has no accepted graph dataflow projection",
+                    getattr(graph_answer, "findings", ()),
+                )
+        if effects.commitment_stage is CommitmentStage.PHYSICAL:
+            physical_answer = hydrated.physical.accepted_answer
+            if not isinstance(physical_answer, Decided):
+                raise DataflowOpError(
+                    "written candidate has no accepted physical projection",
+                    getattr(physical_answer, "findings", ()),
+                )
 
     return apply_model_effects(
         model,
-        effects.model_effects(),
+        effects.model_effects(read_set=combined_reads),
         validate=validate,
         finish=finish,
     )
@@ -525,17 +629,47 @@ def _written_source_fingerprint(effects: ModelEffects) -> str:
     return values[0]
 
 
-def _source_only_operation(model: Any, context: SourcePublicationContext, scope_id: str) -> Any:
+def _source_only_operation(
+    model: Any,
+    context: SourcePublicationContext,
+    scope_id: str,
+    *,
+    incoming: object | None = None,
+) -> Any:
     from finn.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
 
     node = find_node(model, scope_id)
+    context_read = None
+    if incoming is not None:
+        from finn.dataflow.ops.graph_context import (  # noqa: PLC0415
+            ContextRead,
+            IncomingGraphContext,
+        )
+
+        if not isinstance(incoming, IncomingGraphContext):
+            from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+
+            raise DataflowOpError("graph effects contain an invalid incoming context")
+        context_read = ContextRead(incoming, ModelReadSet())
     with source_analysis(model, fresh=True) as summaries:
         return context.operation_type(node, context.opset_version)._bind_with(
             model,
             build_values(context),
             summaries,
             recorded=False,
+            context_read=context_read,
         )
+
+
+class _FrozenBuildConfiguration:
+    def __init__(self, context: SourcePublicationContext) -> None:
+        self._dataflow_frozen_build_values = MappingProxyType(
+            {item.member_name: item.value for item in context.build_facts}
+        )
+
+
+def _frozen_build_configuration(context: SourcePublicationContext) -> object:
+    return _FrozenBuildConfiguration(context)
 
 
 def _apply_expected_choices(
@@ -669,7 +803,7 @@ def plan_selected_publication(operation: DataflowOp) -> SelectedPublicationPlan:
         raise DataflowOpError(f"selected publication is unavailable ({codes})", findings)
     candidate = _infer_selected_candidate(selected.accepted_answer.value)
     decoded = candidate.declaration
-    if decoded.source.problem_fingerprint != operation.problem_fingerprint:
+    if decoded.source.problem_fingerprint != operation.local_problem_fingerprint:
         raise DataflowOpError("selected candidate source differs from the publication source")
     graph_effects = operation.graph_effects(
         require=CommitmentStage.DATAFLOW,
@@ -678,7 +812,7 @@ def plan_selected_publication(operation: DataflowOp) -> SelectedPublicationPlan:
     return SelectedPublicationPlan(
         graph_effects.model_effects(),
         source_publication_context(operation),
-        operation.problem_fingerprint,
+        operation.local_problem_fingerprint,
         _captured_records(captured),
         candidate,
     )
@@ -693,7 +827,7 @@ def apply_selected_publication(model: Any, plan: SelectedPublicationPlan) -> Pub
 
     scope_id = _source_scope(plan.source_effects)
     current = _source_only_operation(model, plan.context, scope_id)
-    if current.problem_fingerprint != plan.expected_problem_fingerprint:
+    if current.local_problem_fingerprint != plan.expected_problem_fingerprint:
         raise DataflowOpError(
             "source facts now describe a different problem; rebind and plan again"
         )
@@ -702,7 +836,7 @@ def apply_selected_publication(model: Any, plan: SelectedPublicationPlan) -> Pub
 
     def validate(candidate_model: Any) -> None:
         source = _source_only_operation(candidate_model, plan.context, scope_id)
-        if source.problem_fingerprint != plan.expected_problem_fingerprint:
+        if source.local_problem_fingerprint != plan.expected_problem_fingerprint:
             raise DataflowOpError(
                 "source facts now describe a different problem; rebind and plan again"
             )
@@ -853,7 +987,7 @@ def apply_selection_migration(
 
     def validate(candidate_model: Any) -> None:
         source = _source_only_operation(candidate_model, plan.context, scope_id)
-        if source.problem_fingerprint != _written_source_fingerprint(plan.source_effects):
+        if source.local_problem_fingerprint != _written_source_fingerprint(plan.source_effects):
             raise DataflowOpError("migrated source facts differ from the planned problem")
         migrated = _apply_expected_choices(source, plan.replacement_choices)
         check_commitment(

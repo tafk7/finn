@@ -36,10 +36,12 @@ from finn.dataflow.artifacts.abi import (
     StandardProtocol,
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
+from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
+from finn.dataflow.kernels.physical import KernelStreamBinding, PeriodicLast, low_fields_binding
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Input, derived
 from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration
-from finn.dataflow.model.region import NumericElementType, element_width
+from finn.dataflow.model.region import DataflowRegion, NumericElementType, element_width
 from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
 
 FINNLIB_ROOT = "finnlib"
@@ -96,6 +98,28 @@ class ReplayBufferKernel(Kernel):
     )
 
     @classmethod
+    def local_stream_bindings(
+        cls,
+        *,
+        region: DataflowRegion,
+        parameters: ScalarTable,
+        abi: ModuleABIRequirements,
+    ) -> tuple[KernelStreamBinding, ...]:
+        period = cast(int, dict(parameters)["LEN"])
+        return (
+            low_fields_binding(
+                region=region, abi=abi, region_port_id="activation_in", abi_bus_id="in0"
+            ),
+            low_fields_binding(
+                region=region,
+                abi=abi,
+                region_port_id="activation_out",
+                abi_bus_id="out0",
+                framing=PeriodicLast("tlast", period, period - 1),
+            ),
+        )
+
+    @classmethod
     def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
         width = cast(int, parameters["W"])
         return ComponentABI(
@@ -106,7 +130,7 @@ class ReplayBufferKernel(Kernel):
                     "rst",
                     Direction.IN,
                     1,
-                    Reset(active_low=False, synchronous=True),
+                    Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
                 ),
                 Bus(
                     "in0",

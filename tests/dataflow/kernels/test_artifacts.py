@@ -1,47 +1,59 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""K4: configured Kernels project only artifact-substrate-native values."""
+"""Configured Kernels cross the artifact boundary as model-free values."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
-
 
 import pytest
 
 from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
-from finn.dataflow.artifacts.contributions import CopiedSource, RenderedSource
-from finn.dataflow.artifacts.derivation import ArtifactRef, ContentRef, build_key
+from finn.dataflow.artifacts.build import (
+    SELF_CONTAINED_JINJA_RENDERER,
+    BuildError,
+    FixedModuleName,
+    ModuleABIRequirements,
+    ModuleBuildRequirements,
+    PreparedCopiedSource,
+    PreparedModuleBuild,
+    RenderedSourceRequirement,
+    materialize_module_sources,
+    module_build_fingerprint,
+    module_source_derivation,
+    portable_module_component,
+    prepare_module_build,
+)
+from finn.dataflow.artifacts.contributions import CopiedSource
+from finn.dataflow.artifacts.derivation import (
+    ArtifactRef,
+    Derivation,
+    OutputLayout,
+    ProducerIdentity,
+    Scalar,
+    build_key,
+)
 from finn.dataflow.artifacts.formats import RtlModuleDirectory
 from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
-from finn.dataflow.artifacts.projection import content_digest
-from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.space.compiler import _Ref, _compile_space
-from finn.dataflow.space.declarations import Decision, Input, Problem, Space
+from finn.dataflow.artifacts.store import ArtifactStore, StoredArtifact
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.kernels.kernel import (
     Kernel,
-    ModuleBuildSpec,
     ModuleParameter,
     RegionDeclaration,
     kernel_physical,
 )
-from finn.dataflow.kernels.artifacts import (
-    kernel_source_derivation,
-    portable_kernel_component,
-    resolve_kernel_contributions,
-)
+from finn.dataflow.space.compiler import _compile_space
+from finn.dataflow.space.declarations import Decision, Input, Problem, Space
 from finn.dataflow.space.spec_algebra import assemble_specs
 
-from dataflow.kernels.test_kernel import _region
 from dataflow.kernels.test_dotp_axi import _configure as _configure_dotp
+from dataflow.kernels.test_kernel import _region
 from dataflow.kernels.test_replay_buffer import _configure as _configure_replay
 
 
@@ -51,7 +63,6 @@ class ArtifactKernel(Kernel):
 
     extent = Input(int)
     lanes = Input(int)
-
     region = RegionDeclaration(
         family="test.artifact",
         version="1",
@@ -59,7 +70,6 @@ class ArtifactKernel(Kernel):
         extent=extent,
         lanes=lanes,
     )
-
     LANES = ModuleParameter(lanes)
     sources = (
         CopiedSource("fixture", "helper.sv", provides=("module:helper",)),
@@ -73,11 +83,7 @@ class ArtifactKernel(Kernel):
 
     @classmethod
     def component_abi(cls, parameters: Mapping[str, object]) -> ComponentABI:
-        return ComponentABI(
-            "core",
-            (),
-            (("LANES", str(parameters["LANES"])),),
-        )
+        return ComponentABI("core", (), (("LANES", str(parameters["LANES"])),))
 
 
 class Harness(Space):
@@ -85,12 +91,12 @@ class Harness(Space):
     lanes = Decision(int, values=(1, 2))
 
 
-def _configured(namespace: str, lanes: int) -> ModuleBuildSpec:
+def _configured(namespace: str, lanes: int) -> ModuleBuildRequirements:
     harness = _compile_space(Harness, "root", problem_namespace="problem.root")
     compiled = _compile_space(
         ArtifactKernel,
         namespace,
-        {name: cast("_Ref[object]", harness.member(name)) for name in ("extent", "lanes")},
+        {name: harness.member(name) for name in ("extent", "lanes")},
         _allow_problem=False,
     )
     engine = Engine()
@@ -104,19 +110,73 @@ def _configured(namespace: str, lanes: int) -> ModuleBuildSpec:
     return answer.value
 
 
-class _Contents:
-    def __init__(self, values: dict[str, bytes]) -> None:
-        self.values = values
-
-    def get_blob(self, reference: ContentRef) -> bytes:
-        return self.values[reference.digest]
+def _write_fixture(root: Path, *, core: str = "module core; endmodule\n") -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "helper.sv").write_text("module helper; endmodule\n")
+    (root / "core.sv").write_text(core)
 
 
-def _with_asynchronous_reset(abi: ComponentABI) -> ComponentABI:
+def _prepare(
+    requirements: ModuleBuildRequirements,
+    source_root: Path,
+    store: ArtifactStore,
+) -> PreparedModuleBuild:
+    return prepare_module_build(
+        requirements,
+        roots={"fixture": source_root, FINNLIB_ROOT: source_root},
+        template_roots=(source_root,),
+        blobs=store,
+    )
+
+
+def _ordinal(prefix: str, values: Sequence[str]) -> tuple[tuple[str, Scalar], ...]:
+    return tuple((f"{prefix}.{index:03d}", value) for index, value in enumerate(values))
+
+
+def _legacy_derivation(
+    requirements: ModuleBuildRequirements, prepared: PreparedModuleBuild
+) -> Derivation:
+    sources = tuple(
+        source.source for source in prepared.sources if isinstance(source, PreparedCopiedSource)
+    )
+    options: tuple[tuple[str, Scalar], ...] = ()
+    for index, source in enumerate(sources):
+        prefix = f"source.{index:03d}"
+        options += (
+            (f"{prefix}.path", source.path),
+            (f"{prefix}.language", source.language.value),
+            (f"{prefix}.library", source.library),
+            (f"{prefix}.role", source.role.value),
+            (f"{prefix}.standard", source.standard),
+        )
+        options += tuple(
+            (f"{prefix}.define.{name}", value) for name, value in source.options.defines
+        )
+        options += _ordinal(f"{prefix}.include", source.options.includes)
+        options += _ordinal(f"{prefix}.flag", source.options.flags)
+        options += _ordinal(f"{prefix}.provides", source.provides)
+        options += _ordinal(f"{prefix}.requires", source.requires)
+    return Derivation(
+        kind="kernel-source",
+        schema_version="kernel-source-v1",
+        producer=ProducerIdentity(
+            f"finn.kernel.{requirements.implementation_id}",
+            requirements.implementation_version,
+        ),
+        inputs=tuple(
+            (f"source.{index:03d}.{source.library}/{source.path}", source.content)
+            for index, source in enumerate(sources)
+        ),
+        options=options,
+        outputs=OutputLayout(tuple(source.path for source in sources)),
+    )
+
+
+def _with_legacy_reset(abi: ComponentABI) -> ComponentABI:
     return replace(
         abi,
         ports=tuple(
-            replace(port, role=replace(port.role, synchronous=False))
+            replace(port, role=replace(port.role, synchronous_to=None))
             if isinstance(port, Signal) and isinstance(port.role, Reset)
             else port
             for port in abi.ports
@@ -124,235 +184,193 @@ def _with_asynchronous_reset(abi: ComponentABI) -> ComponentABI:
     )
 
 
-def test_equal_occurrences_have_equal_artifact_values(tmp_path: Path) -> None:
-    (tmp_path / "helper.sv").write_text("module helper; endmodule\n")
-    (tmp_path / "core.sv").write_text("module core; endmodule\n")
+def test_equal_occurrences_have_equal_requirements_preparation_and_keys(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
     left = _configured("left", 1)
     right = _configured("right", 1)
-    left_resolved = resolve_kernel_contributions(left, roots={"fixture": tmp_path})
-    right_resolved = resolve_kernel_contributions(right, roots={"fixture": tmp_path})
-    assert left.abi == right.abi
-    assert left_resolved == right_resolved
-    assert kernel_source_derivation(left, left_resolved) == kernel_source_derivation(
-        right, right_resolved
-    )
+    store = ArtifactStore(tmp_path / "store")
+    left_prepared = _prepare(left, tmp_path, store)
+    right_prepared = _prepare(right, tmp_path, store)
+    assert left == right
+    assert module_build_fingerprint(left) == module_build_fingerprint(right)
+    assert left_prepared == right_prepared
+    assert module_source_derivation(left_prepared) == module_source_derivation(right_prepared)
 
 
 def test_copied_sources_share_a_source_key_across_parameterizations(tmp_path: Path) -> None:
-    (tmp_path / "helper.sv").write_text("module helper; endmodule\n")
-    (tmp_path / "core.sv").write_text("module core; endmodule\n")
-    narrow = _configured("narrow", 1)
-    wide = _configured("wide", 2)
-    narrow_resolved = resolve_kernel_contributions(narrow, roots={"fixture": tmp_path})
-    wide_resolved = resolve_kernel_contributions(wide, roots={"fixture": tmp_path})
-    narrow_derivation = kernel_source_derivation(narrow, narrow_resolved)
-    wide_derivation = kernel_source_derivation(wide, wide_resolved)
-    assert build_key(narrow_derivation) == build_key(wide_derivation)
+    _write_fixture(tmp_path)
+    store = ArtifactStore(tmp_path / "store")
+    narrow = _prepare(_configured("narrow", 1), tmp_path, store)
+    wide = _prepare(_configured("wide", 2), tmp_path, store)
     assert narrow.abi != wide.abi
+    assert module_source_derivation(narrow) == module_source_derivation(wide)
 
 
 def test_package_key_moves_with_resolved_abi_parameters(tmp_path: Path) -> None:
-    helper_data = b"module helper; endmodule\n"
-    core_data = b"module core; endmodule\n"
-    (tmp_path / "helper.sv").write_bytes(helper_data)
-    (tmp_path / "core.sv").write_bytes(core_data)
-    contents = _Contents(
-        {
-            content_digest(helper_data): helper_data,
-            content_digest(core_data): core_data,
-        }
-    )
-    narrow = _configured("narrow", 1)
-    wide = _configured("wide", 2)
-    resolved = resolve_kernel_contributions(narrow, roots={"fixture": tmp_path})
-    source_derivation = kernel_source_derivation(narrow, resolved)
-    source_ref = ArtifactRef(source_derivation.kind, build_key(source_derivation))
-    narrow_component = portable_kernel_component(narrow, source_ref, resolved)
-    wide_component = portable_kernel_component(wide, source_ref, resolved)
+    _write_fixture(tmp_path)
+    store = ArtifactStore(tmp_path / "store")
+    narrow = _prepare(_configured("narrow", 1), tmp_path, store)
+    wide = _prepare(_configured("wide", 2), tmp_path, store)
+    source = materialize_module_sources(narrow, store)
+    narrow_component = portable_module_component(narrow, source)
+    wide_component = portable_module_component(wide, source)
     packager = RtlModuleDirectory()
     target = Target("test-part")
-    narrow_plan = plan_package(packager, narrow_component, target, RtlModuleOptions(), contents)
-    wide_plan = plan_package(packager, wide_component, target, RtlModuleOptions(), contents)
+    narrow_plan = plan_package(packager, narrow_component, target, RtlModuleOptions(), store)
+    wide_plan = plan_package(packager, wide_component, target, RtlModuleOptions(), store)
     assert build_key(narrow_plan.derivation) != build_key(wide_plan.derivation)
 
 
 @pytest.mark.parametrize("mismatch", ("kind", "key"))
-def test_portable_component_refuses_a_source_reference_for_another_closure(
-    tmp_path: Path, mismatch: str
-) -> None:
-    (tmp_path / "helper.sv").write_text("module helper; endmodule\n")
-    (tmp_path / "core.sv").write_text("module core; endmodule\n")
-    kernel = _configured("source_binding", 1)
-    resolved = resolve_kernel_contributions(kernel, roots={"fixture": tmp_path})
-    derivation = kernel_source_derivation(kernel, resolved)
-    correct = ArtifactRef(derivation.kind, build_key(derivation))
-    stale = (
+def test_portable_component_refuses_another_source_artifact(tmp_path: Path, mismatch: str) -> None:
+    _write_fixture(tmp_path)
+    store = ArtifactStore(tmp_path / "store")
+    prepared = _prepare(_configured("source_binding", 1), tmp_path, store)
+    correct = materialize_module_sources(prepared, store)
+    stale_ref = (
         ArtifactRef("another-source-kind", correct.key)
         if mismatch == "kind"
-        else ArtifactRef(correct.kind, "f" * 64)
+        else ArtifactRef(correct.artifact.kind, "f" * 64)
     )
+    stale = StoredArtifact(stale_ref, correct.directory, correct.contents)
+    with pytest.raises(BuildError, match="does not identify"):
+        portable_module_component(prepared, stale)
+    assert portable_module_component(prepared, correct).artifact == correct.artifact
 
-    with pytest.raises(ValueError, match="does not identify its resolved source closure"):
-        portable_kernel_component(kernel, stale, resolved)
 
-    assert portable_kernel_component(kernel, correct, resolved).artifact == correct
-
-
-def test_changed_copied_source_requires_its_own_reference_and_package_identity(
-    tmp_path: Path,
-) -> None:
+def test_changed_copied_source_moves_source_and_package_identity(tmp_path: Path) -> None:
     left_root = tmp_path / "left"
     right_root = tmp_path / "right"
-    left_root.mkdir()
-    right_root.mkdir()
-    for root, core in (
-        (left_root, "module core; endmodule\n"),
-        (right_root, "module core; wire changed; endmodule\n"),
-    ):
-        (root / "helper.sv").write_text("module helper; endmodule\n")
-        (root / "core.sv").write_text(core)
-    kernel = _configured("copied_source_binding", 1)
-    left = resolve_kernel_contributions(kernel, roots={"fixture": left_root})
-    right = resolve_kernel_contributions(kernel, roots={"fixture": right_root})
-    left_derivation = kernel_source_derivation(kernel, left)
-    right_derivation = kernel_source_derivation(kernel, right)
-    left_ref = ArtifactRef(left_derivation.kind, build_key(left_derivation))
-    right_ref = ArtifactRef(right_derivation.kind, build_key(right_derivation))
-
-    with pytest.raises(ValueError, match="does not identify its resolved source closure"):
-        portable_kernel_component(kernel, left_ref, right)
-
-    contents = _Contents(
-        {
-            source.content.digest: (root / source.path).read_bytes()
-            for root, resolved in ((left_root, left), (right_root, right))
-            for source in resolved.definition.files
-        }
-    )
-    packager = RtlModuleDirectory()
-    target = Target("test-part")
+    _write_fixture(left_root)
+    _write_fixture(right_root, core="module core; wire changed; endmodule\n")
+    store = ArtifactStore(tmp_path / "store")
+    requirements = _configured("copied_source_binding", 1)
+    left = _prepare(requirements, left_root, store)
+    right = _prepare(requirements, right_root, store)
+    left_stored = materialize_module_sources(left, store)
+    right_stored = materialize_module_sources(right, store)
+    with pytest.raises(BuildError, match="does not identify"):
+        portable_module_component(right, left_stored)
     left_package = plan_package(
-        packager,
-        portable_kernel_component(kernel, left_ref, left),
-        target,
+        RtlModuleDirectory(),
+        portable_module_component(left, left_stored),
+        Target("test-part"),
         RtlModuleOptions(),
-        contents,
+        store,
     )
     right_package = plan_package(
-        packager,
-        portable_kernel_component(kernel, right_ref, right),
-        target,
+        RtlModuleDirectory(),
+        portable_module_component(right, right_stored),
+        Target("test-part"),
         RtlModuleOptions(),
-        contents,
+        store,
     )
-    assert left_ref != right_ref
+    assert left_stored.artifact != right_stored.artifact
     assert build_key(left_package.derivation) != build_key(right_package.derivation)
 
 
-def test_changed_rendered_source_requires_its_own_reference(tmp_path: Path) -> None:
+def test_changed_render_input_moves_the_pre_render_source_key(tmp_path: Path) -> None:
     (tmp_path / "module.sv.j2").write_text(
-        "module core; localparam int TOKEN = {{ token }}; endmodule\n"
+        "module core; localparam int TOKEN = {{ TOKEN }}; endmodule\n"
     )
     base = _configured("rendered_source_binding", 1)
-    base = replace(
-        base,
-        contributions=(RenderedSource("core.sv", "module.sv.j2"),),
+    contribution = RenderedSourceRequirement(
+        "core.sv",
+        "module.sv.j2",
+        ("TOKEN",),
+        SELF_CONTAINED_JINJA_RENDERER,
+        provides=("module:core",),
+        provides_entry_point=True,
     )
-    left_kernel = replace(base, render_context={"token": 1})
-    right_kernel = replace(base, render_context={"token": 2})
-    left = resolve_kernel_contributions(left_kernel, roots={}, template_roots=(tmp_path,))
-    right = resolve_kernel_contributions(right_kernel, roots={}, template_roots=(tmp_path,))
-    left_derivation = kernel_source_derivation(left_kernel, left)
-    right_derivation = kernel_source_derivation(right_kernel, right)
-    left_ref = ArtifactRef(left_derivation.kind, build_key(left_derivation))
-    right_ref = ArtifactRef(right_derivation.kind, build_key(right_derivation))
-
-    with pytest.raises(ValueError, match="does not identify its resolved source closure"):
-        portable_kernel_component(right_kernel, left_ref, right)
-
-    assert left_ref != right_ref
-    assert portable_kernel_component(left_kernel, left_ref, left).artifact == left_ref
-    assert portable_kernel_component(right_kernel, right_ref, right).artifact == right_ref
-
-
-def test_resolved_source_order_must_match_the_kernel_declaration(tmp_path: Path) -> None:
-    (tmp_path / "helper.sv").write_text("module helper; endmodule\n")
-    (tmp_path / "core.sv").write_text("module core; endmodule\n")
-    kernel = _configured("ordered", 1)
-    resolved = resolve_kernel_contributions(kernel, roots={"fixture": tmp_path})
-    wrong = replace(
-        resolved,
-        definition=replace(
-            resolved.definition,
-            files=tuple(reversed(resolved.definition.files)),
-        ),
-    )
-    try:
-        kernel_source_derivation(kernel, wrong)
-    except ValueError as error:
-        assert "declared source order" in str(error)
-    else:
-        raise AssertionError("a mismatched resolved source set was accepted")
-
-
-def test_dotp_source_closure_completes_and_round_trips_through_store(tmp_path: Path) -> None:
-    root = Path(__file__).parents[3] / "deps/finnlib"
-    if not root.is_dir():
-        pytest.skip("the pinned FinnLib checkout is unavailable")
-    answer = _configure_dotp(pe=2, simd=4, pumping=True)
-    assert isinstance(answer, Decided)
-    kernel = answer.value
-    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
-    derivation = kernel_source_derivation(kernel, resolved)
+    left_requirements = replace(base, contributions=(contribution,), render_inputs=(("TOKEN", 1),))
+    right_requirements = replace(base, contributions=(contribution,), render_inputs=(("TOKEN", 2),))
     store = ArtifactStore(tmp_path / "store")
-    workspace = store.workspace(derivation)
-    for source in resolved.definition.files:
-        destination = workspace / source.path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes((root / source.path).read_bytes())
-    published = store.publish(
-        derivation,
-        workspace,
-        entry_points=(kernel.abi.entry_point,),
+    left = prepare_module_build(
+        left_requirements, roots={}, template_roots=(tmp_path,), blobs=store
     )
-    found = store.lookup(derivation)
-    assert found == published
-    assert found.files == tuple(source.path for source in resolved.definition.files)
+    right = prepare_module_build(
+        right_requirements, roots={}, template_roots=(tmp_path,), blobs=store
+    )
+    assert module_source_derivation(left).schema_version == "module-source-v2"
+    assert build_key(module_source_derivation(left)) != build_key(module_source_derivation(right))
 
 
 @pytest.mark.parametrize("kernel_name", ("replay", "dotp"))
-def test_corrected_reset_metadata_moves_package_keys_but_not_source_keys(
-    kernel_name: str,
+def test_replay_and_dotp_preserve_the_complete_legacy_source_derivation(
+    tmp_path: Path, kernel_name: str
 ) -> None:
     root = Path(__file__).parents[3] / "deps/finnlib"
     if not root.is_dir():
         pytest.skip("the pinned FinnLib checkout is unavailable")
     if kernel_name == "replay":
-        kernel = _configure_replay(matrix_height=4, pe=1)
+        requirements = _configure_replay(matrix_height=4, pe=1)  # type: ignore[no-untyped-call]
     else:
-        answer = _configure_dotp(pe=2, simd=4, pumping=True)
+        answer = _configure_dotp(pe=2, simd=4, pumping=True)  # type: ignore[no-untyped-call]
         assert isinstance(answer, Decided)
-        kernel = answer.value
-    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
-    derivation = kernel_source_derivation(kernel, resolved)
-    source_ref = ArtifactRef(derivation.kind, build_key(derivation))
-    current = portable_kernel_component(kernel, source_ref, resolved)
-    old_abi = _with_asynchronous_reset(kernel.abi)
-    old_kernel = replace(kernel, abi=old_abi)
-    assert build_key(kernel_source_derivation(old_kernel, resolved)) == source_ref.key
-
-    contents = _Contents(
-        {
-            source.content.digest: (root / source.path).read_bytes()
-            for source in resolved.definition.files
-        }
+        requirements = answer.value
+    store = ArtifactStore(tmp_path / "store")
+    prepared = prepare_module_build(
+        requirements,
+        roots={FINNLIB_ROOT: root},
+        template_roots=(),
+        blobs=store,
     )
-    packager = RtlModuleDirectory()
-    target = Target("test-part")
-    current_package = plan_package(packager, current, target, RtlModuleOptions(), contents)
-    old_package = plan_package(
-        packager, replace(current, abi=old_abi), target, RtlModuleOptions(), contents
-    )
+    assert module_source_derivation(prepared) == _legacy_derivation(requirements, prepared)
+    published = materialize_module_sources(prepared, store)
+    assert store.lookup(module_source_derivation(prepared)) == published
 
-    assert build_key(current_package.derivation) != build_key(old_package.derivation)
-    assert packager.parse(dict(current_package.contents)) == kernel.abi
+
+@pytest.mark.parametrize("kernel_name", ("replay", "dotp"))
+def test_qualified_reset_metadata_moves_package_but_not_copied_source_keys(
+    tmp_path: Path, kernel_name: str
+) -> None:
+    root = Path(__file__).parents[3] / "deps/finnlib"
+    if not root.is_dir():
+        pytest.skip("the pinned FinnLib checkout is unavailable")
+    if kernel_name == "replay":
+        requirements = _configure_replay(matrix_height=4, pe=1)  # type: ignore[no-untyped-call]
+    else:
+        answer = _configure_dotp(pe=2, simd=4, pumping=True)  # type: ignore[no-untyped-call]
+        assert isinstance(answer, Decided)
+        requirements = answer.value
+    store = ArtifactStore(tmp_path / "store")
+    current = prepare_module_build(
+        requirements,
+        roots={FINNLIB_ROOT: root},
+        template_roots=(),
+        blobs=store,
+    )
+    legacy_component_abi = _with_legacy_reset(current.abi)
+    legacy_requirements = replace(
+        requirements,
+        abi=ModuleABIRequirements(
+            FixedModuleName(legacy_component_abi.entry_point),
+            legacy_component_abi.ports,
+            legacy_component_abi.parameters,
+            legacy_component_abi.clock_alignments,
+        ),
+    )
+    legacy = prepare_module_build(
+        legacy_requirements,
+        roots={FINNLIB_ROOT: root},
+        template_roots=(),
+        blobs=store,
+    )
+    assert module_source_derivation(current) == module_source_derivation(legacy)
+    source = materialize_module_sources(current, store)
+    current_package = plan_package(
+        RtlModuleDirectory(),
+        portable_module_component(current, source),
+        Target("test-part"),
+        RtlModuleOptions(),
+        store,
+    )
+    legacy_package = plan_package(
+        RtlModuleDirectory(),
+        portable_module_component(legacy, source),
+        Target("test-part"),
+        RtlModuleOptions(),
+        store,
+    )
+    assert build_key(current_package.derivation) != build_key(legacy_package.derivation)
+    assert RtlModuleDirectory().parse(dict(current_package.contents)) == current.abi

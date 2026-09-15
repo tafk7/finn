@@ -14,7 +14,7 @@ Artifact projection is downstream and one-way.  Nothing in
 
 A Kernel answers two questions separately -- ``kernel.dataflow`` for its
 Region, ``kernel.physical`` for its detached build unit -- and only the second
-crosses into artifact code.  ``ModuleBuildSpec`` is that boundary: an
+crosses into artifact code.  ``ModuleBuildRequirements`` is that boundary: an
 artifact function receives resolved identity, parameters, ABI and
 contributions, and no handle back into the design space.
 """
@@ -23,15 +23,10 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from finn.dataflow.kernels.artifacts import (
-        kernel_source_derivation,
-        portable_kernel_component,
-        resolve_kernel_contributions,
-    )
     from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
     from finn.dataflow.kernels.kernel import (
         Kernel,
-        ModuleBuildSpec,
+        ModuleBuildRequirements,
         ModuleParameter,
         PhysicallyUnsupported,
         RegionDeclaration,
@@ -44,7 +39,7 @@ _LAZY_EXPORTS = {
     name: ("finn.dataflow.kernels.kernel", name)
     for name in (
         "Kernel",
-        "ModuleBuildSpec",
+        "ModuleBuildRequirements",
         "ModuleParameter",
         "PhysicallyUnsupported",
         "RegionDeclaration",
@@ -52,16 +47,6 @@ _LAZY_EXPORTS = {
         "kernel_physical",
     )
 }
-_LAZY_EXPORTS.update(
-    {
-        name: ("finn.dataflow.kernels.artifacts", name)
-        for name in (
-            "kernel_source_derivation",
-            "portable_kernel_component",
-            "resolve_kernel_contributions",
-        )
-    }
-)
 _LAZY_EXPORTS.update(
     {name: ("finn.dataflow.kernels.dotp_axi", name) for name in ("DspBlock", "DotpAxiKernel")}
 )
@@ -90,13 +75,9 @@ __all__ = [
     "PhysicallyUnsupported",
     "RegionDeclaration",
     # the two projections, and the detached value the physical one produces
-    "ModuleBuildSpec",
+    "ModuleBuildRequirements",
     "kernel_dataflow",
     "kernel_physical",
-    # downstream artifact projection, one-way
-    "kernel_source_derivation",
-    "portable_kernel_component",
-    "resolve_kernel_contributions",
     # reusable implementations
     "DotpAxiKernel",
     "DspBlock",

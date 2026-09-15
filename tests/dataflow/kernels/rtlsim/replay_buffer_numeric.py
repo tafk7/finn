@@ -28,7 +28,7 @@ from finn.dataflow._engine import Decided, Engine
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
-from finn.dataflow.kernels.kernel import kernel_physical
+from finn.dataflow.kernels.kernel import kernel_physical, kernel_dataflow, ModuleBuildRequirements
 from finn.dataflow.kernels.replay_buffer import FINNLIB_SOURCES, ReplayBufferKernel
 from finn.dataflow.space.spec_algebra import assemble_specs
 
@@ -126,7 +126,7 @@ def record_identity() -> None:
     print(f"FinnLib: {library} ({'dirty' if library_dirty else 'clean'})")
 
 
-def _configure(case: Case) -> ReplayBufferKernel:
+def _configure_values(case: Case):
     harness = _compile_space(Harness, "fixture", problem_namespace="problem.replay")
     kernel = _compile_space(
         ReplayBufferKernel,
@@ -150,7 +150,13 @@ def _configure(case: Case) -> ReplayBufferKernel:
     answer = kernel_physical(engine, kernel, point).accepted_answer
     if not isinstance(answer, Decided):
         raise AssertionError(f"{case.label} did not configure: {answer.findings}")
-    return cast(ReplayBufferKernel, answer.value)
+    logical = kernel_dataflow(engine, kernel, point).accepted_answer
+    assert isinstance(logical, Decided)
+    return answer.value, logical.value
+
+
+def _configure(case: Case) -> ModuleBuildRequirements:
+    return _configure_values(case)[0]
 
 
 def _encode(value: int, width: int) -> int:
@@ -174,8 +180,7 @@ def _pack(
 
 
 def run_one(case: Case) -> int:
-    kernel = _configure(case)
-    region = kernel.region
+    kernel, region = _configure_values(case)
     datatype = DataType[case.activation]
     width = datatype.bitwidth()
     generator = np.random.RandomState(zlib.crc32(case.label.encode()) % (2**31))

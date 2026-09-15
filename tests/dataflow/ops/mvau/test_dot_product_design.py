@@ -32,7 +32,7 @@ from finn.dataflow.ops.mvau.designs.dot_product import (
     WeightSupply,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.kernels.kernel import ModuleBuildSpec, kernel_physical
+from finn.dataflow.kernels.kernel import ModuleBuildRequirements, kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.model.network import (
     DataflowNetwork,
@@ -189,12 +189,12 @@ def _configure(**kwargs: object) -> Answer[DataflowNetwork]:
     return _occurrence(**kwargs).dataflow.accepted_answer  # type: ignore[arg-type]
 
 
-def _built(role: str, **kwargs: object) -> Answer[ModuleBuildSpec]:
+def _built(role: str, **kwargs: object) -> Answer[ModuleBuildRequirements]:
     """The detached build unit at one role of one specialized Design."""
 
     kernel = _occurrence(**kwargs).kernel(role)  # type: ignore[arg-type]
     if not isinstance(kernel, Decided):
-        return cast("Answer[ModuleBuildSpec]", kernel)
+        return cast("Answer[ModuleBuildRequirements]", kernel)
     return kernel.value.physical.accepted_answer
 
 
@@ -345,10 +345,10 @@ def test_the_design_owns_pe_and_simd_and_the_kernels_import_them() -> None:
     for role in ("compute", "replay"):
         built = _built(role, pe=2, simd=4)
         assert isinstance(built, Decided)
-        assert set(built.value.imported_decisions) >= {
-            "dot_product.pe",
-            "dot_product.simd",
-        }
+        assert not hasattr(built.value, "imported_decisions")
+        assert dict(built.value.parameters)["W" if role == "replay" else "SIMD"] == (
+            32 if role == "replay" else 4
+        )
 
 
 def test_module_provenance_uses_the_converged_persistable_paths() -> None:
@@ -357,14 +357,9 @@ def test_module_provenance_uses_the_converged_persistable_paths() -> None:
     replay = _built("replay", pe=2, simd=4)
     compute = _built("compute", pe=2, simd=4)
     assert isinstance(replay, Decided) and isinstance(compute, Decided)
-    assert replay.value.imported_decisions == ("dot_product.pe", "dot_product.simd")
-    assert compute.value.imported_decisions == (
-        "dot_product.compute.kernel",
-        "dot_product.pe",
-        "dot_product.simd",
-    )
-    assert set(replay.value.imported_decisions) <= persistable
-    assert set(compute.value.imported_decisions) <= persistable
+    assert not hasattr(replay.value, "imported_decisions")
+    assert not hasattr(compute.value, "imported_decisions")
+    assert {"dot_product.pe", "dot_product.simd", "dot_product.compute.kernel"} <= persistable
 
 
 def test_the_physical_parameter_tables_stay_kernel_local() -> None:
@@ -480,4 +475,4 @@ def test_two_occurrences_of_the_design_stay_independent() -> None:
         segment = compiled.extension.segment("compute")
         built = kernel_physical(engine, segment.cases[0].compiled, point).accepted_answer
         assert isinstance(built, Decided)
-        assert built.value.parameters["PE"] == expected
+        assert dict(built.value.parameters)["PE"] == expected

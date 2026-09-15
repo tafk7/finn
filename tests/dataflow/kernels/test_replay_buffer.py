@@ -13,19 +13,19 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Decided, Engine, QualifiedPath
-from finn.dataflow.artifacts.abi import Reset, Signal
-from finn.dataflow.artifacts.derivation import ArtifactRef, build_key
+from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
 from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
-from finn.dataflow.kernels.kernel import ModuleBuildSpec, kernel_physical
-from finn.dataflow.kernels.artifacts import (
-    kernel_source_derivation,
-    portable_kernel_component,
-    resolve_kernel_contributions,
+from finn.dataflow.kernels.kernel import ModuleBuildRequirements, kernel_physical, kernel_dataflow
+from finn.dataflow.artifacts.build import (
+    prepare_module_build,
+    module_source_derivation,
+    materialize_module_sources,
+    portable_module_component,
 )
 from finn.dataflow.kernels.replay_buffer import (
     FINNLIB_ROOT,
@@ -72,7 +72,7 @@ def _compile() -> tuple[object, object]:
     return harness, kernel
 
 
-def _configure(
+def _configure_values(
     *,
     repetitions: int = 2,
     matrix_width: int = 8,
@@ -80,7 +80,7 @@ def _configure(
     activation: str = "INT8",
     pe: int = 2,
     simd: int = 2,
-) -> ModuleBuildSpec:
+) -> tuple[ModuleBuildRequirements, object]:
     harness, kernel = _compile()
     engine = Engine()
     point = engine.start(
@@ -95,7 +95,17 @@ def _configure(
     point = engine.commit_assignments(point, {"replay_test.pe": pe, "replay_test.simd": simd}).point
     answer = kernel_physical(engine, kernel, point).accepted_answer  # type: ignore[arg-type]
     assert isinstance(answer, Decided), answer
-    return answer.value
+    logical = kernel_dataflow(engine, kernel, point).accepted_answer
+    assert isinstance(logical, Decided)
+    return answer.value, logical.value
+
+
+def _configure(**kwargs):
+    return _configure_values(**kwargs)[0]
+
+
+def _logical(**kwargs):
+    return _configure_values(**kwargs)[1]
 
 
 def _finnlib_root() -> Path:
@@ -121,6 +131,11 @@ MATRIX = (
 )
 
 
+def _abi(requirements):
+    abi = requirements.abi
+    return ComponentABI(abi.entry_point.value, abi.ports, abi.parameters, abi.clock_alignments)
+
+
 @pytest.mark.parametrize(
     ("repetitions", "matrix_width", "matrix_height", "activation", "pe", "simd"), MATRIX
 )
@@ -132,7 +147,10 @@ def test_replay_kernel_binds_the_region_constructor_inputs(
     pe: int,
     simd: int,
 ) -> None:
-    configured = _configure(
+    expected = baseline_region(
+        repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
+    )
+    region = _logical(
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
@@ -140,11 +158,8 @@ def test_replay_kernel_binds_the_region_constructor_inputs(
         pe=pe,
         simd=simd,
     )
-    expected = baseline_region(
-        repetitions, matrix_width, matrix_height, DataType[activation], pe, simd
-    )
-    assert configured.region == expected
-    assert not validate_region(configured.region).issues
+    assert region == expected
+    assert not validate_region(region).issues
 
 
 @pytest.mark.parametrize(
@@ -174,12 +189,11 @@ def test_replay_parameters_restate_the_folding(
 
 
 def test_replay_owns_no_decision_at_all() -> None:
-    configured = _configure()
-    assert set(configured.imported_decisions) == {
-        "pe",
-        "simd",
-    }
     _harness, kernel = _compile()
+    assert {str(p) for p in kernel.extension.imported_decisions} == {
+        "replay_test.pe",
+        "replay_test.simd",
+    }
     assert kernel.spec.decisions == ()  # type: ignore[attr-defined]
 
 
@@ -192,16 +206,15 @@ def test_replay_declares_one_region_family() -> None:
 
 def test_replay_is_an_identity_at_one_neuron_fold_and_still_a_region() -> None:
     configured = _configure(matrix_height=4, pe=4)
-    region = configured.region
+    region = _logical(matrix_height=4, pe=4)
     inside = region.input_interface("activation_in").port.beat_sequence
     outside = region.output_interface("activation_out").port.beat_sequence
     assert inside == outside
-    assert configured.parameters["REP"] == 1
+    assert dict(configured.parameters)["REP"] == 1
 
 
 def test_several_neuron_folds_multiply_the_output_beats() -> None:
-    configured = _configure(repetitions=2, matrix_width=8, matrix_height=6, pe=2, simd=2)
-    region = configured.region
+    region = _logical(repetitions=2, matrix_width=8, matrix_height=6, pe=2, simd=2)
     compact = region.input_interface("activation_in").port.beat_sequence
     expanded = region.output_interface("activation_out").port.beat_sequence
     assert compact.beat_count == 2 * 4
@@ -216,8 +229,8 @@ def test_replay_sources_and_abi_are_exact() -> None:
     configured = _configure(simd=2, activation="INT8")
     assert {source.root for source in configured.contributions} == {FINNLIB_ROOT}
     assert tuple(source.path for source in configured.contributions) == FINNLIB_SOURCES
-    assert configured.abi.entry_point == "replay_buffer"
-    assert set(configured.abi.physical_names()) == {
+    assert configured.abi.entry_point.value == "replay_buffer"
+    assert set(_abi(configured).physical_names()) == {
         "clk",
         "rst",
         "idat",
@@ -248,10 +261,10 @@ def test_replay_reset_is_synchronous_in_identity_and_buffered_descriptors(
     reset = next(
         port for port in configured.abi.ports if isinstance(port, Signal) and port.name == "rst"
     )
-    assert reset.role == Reset(active_low=False, synchronous=True)
-    encoded = _descriptor.encode(configured.abi)
+    assert reset.role == Reset(active_low=False, synchronous=True, synchronous_to=("clk",))
+    encoded = _descriptor.encode(_abi(configured))
     assert b'"synchronous":true' in encoded
-    assert _descriptor.decode(encoded) == configured.abi
+    assert _descriptor.decode(encoded) == _abi(configured)
 
 
 def test_replay_abi_agrees_with_the_selected_finnlib_rtl() -> None:
@@ -261,7 +274,7 @@ def test_replay_abi_agrees_with_the_selected_finnlib_rtl() -> None:
     if any(not path.is_file() for path in sources):
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     result = check_abi(
-        configured.abi,
+        _abi(configured),
         sources,
         "replay_buffer",
         configured.abi.parameters,
@@ -312,18 +325,14 @@ def test_replay_source_closure_completes_and_round_trips_through_store(
     if not (root / FINNLIB_SOURCES[0]).is_file():
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     kernel = _configure()
-    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
-    derivation = kernel_source_derivation(kernel, resolved)
     store = ArtifactStore(tmp_path / "store")
-    workspace = store.workspace(derivation)
-    for source in resolved.definition.files:
-        destination = workspace / source.path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes((root / source.path).read_bytes())
-    published = store.publish(derivation, workspace, entry_points=(kernel.abi.entry_point,))
+    prepared = prepare_module_build(
+        kernel, roots={FINNLIB_ROOT: root}, blobs=store, template_roots=()
+    )
+    derivation = module_source_derivation(prepared)
+    published = materialize_module_sources(prepared, store)
     found = store.lookup(derivation)
     assert found == published
-    assert found.files == tuple(source.path for source in resolved.definition.files)
     assert found.files == FINNLIB_SOURCES
 
 
@@ -332,13 +341,13 @@ def test_replay_packages_into_a_portable_component(tmp_path: Path) -> None:
     if not (root / FINNLIB_SOURCES[0]).is_file():
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     kernel = _configure()
-    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: root})
-    derivation = kernel_source_derivation(kernel, resolved)
-    component = portable_kernel_component(
-        kernel, ArtifactRef(derivation.kind, build_key(derivation)), resolved
+    store = ArtifactStore(tmp_path / "store")
+    prepared = prepare_module_build(
+        kernel, roots={FINNLIB_ROOT: root}, blobs=store, template_roots=()
     )
+    component = portable_module_component(prepared, materialize_module_sources(prepared, store))
     assert component.entry_point == "replay_buffer"
-    assert component.abi is kernel.abi
+    assert component.abi == _abi(kernel)
     assert tuple(path for path, _content in component.files) == FINNLIB_SOURCES
     del tmp_path
 

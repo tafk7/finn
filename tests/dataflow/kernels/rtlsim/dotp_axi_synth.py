@@ -35,11 +35,12 @@ from finn.dataflow.artifacts.request import (
     ToolchainIdentity,
 )
 from finn.dataflow.kernels.dotp_axi import DspBlock
-from finn.dataflow.kernels.artifacts import (
-    kernel_source_derivation,
-    portable_kernel_component,
-    resolve_kernel_contributions,
+from finn.dataflow.artifacts.build import (
+    prepare_module_build,
+    materialize_module_sources,
+    portable_module_component,
 )
+from finn.dataflow.artifacts.store import ArtifactStore
 from finn.util.basic import get_vivado_version
 
 from dataflow.kernels.rtlsim.dotp_axi_numeric import (
@@ -83,20 +84,17 @@ def _package(case: Case, directory: Path):
     weights = np.zeros((case.matrix_width, case.matrix_height), dtype=np.float32)
     kernel = _configure(case, weights)
     finnlib = Path(os.environ["FINNLIB_ROOT"])
-    resolved = resolve_kernel_contributions(kernel, roots={"finnlib": finnlib})
-    source_derivation = kernel_source_derivation(kernel, resolved)
-    source_ref = ArtifactRef(source_derivation.kind, build_key(source_derivation))
-    component = portable_kernel_component(kernel, source_ref, resolved)
-    blobs = {
-        source.content.digest: (finnlib / source.path).read_bytes()
-        for source in resolved.definition.files
-    }
+    store = ArtifactStore(directory / "store")
+    prepared = prepare_module_build(
+        kernel, roots={"finnlib": finnlib}, blobs=store, template_roots=()
+    )
+    component = portable_module_component(prepared, materialize_module_sources(prepared, store))
     package = plan_package(
         RtlModuleDirectory(),
         component,
         Target(PARTS[case.target]),
         RtlModuleOptions(),
-        _Contents(blobs),
+        store,
     )
     package_dir = directory / "package"
     package_dir.mkdir()
@@ -151,7 +149,7 @@ def run_one(case: Case) -> int:
         )
         generic = " ".join(
             f"{name}={int(value) if isinstance(value, bool) else value}"
-            for name, value in kernel.parameters.items()
+            for name, value in kernel.parameters
         )
         script.write_text(
             "\n".join(

@@ -12,7 +12,9 @@ live model. Native attributes persist committed reachable Decisions only.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
+import json
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -22,14 +24,18 @@ from finn.dataflow._engine import (
     Answer,
     Decided,
     Unresolved,
+    ValueSemantics,
 )
 from finn.dataflow.space.declarations import (
     AuthoringError,
+    CanonicalValue,
+    CanonicalValueCodec,
     Constraint as DeclaredConstraint,
     ConstraintGroup,
     OccurrenceContext,
     Problem,
     Space,
+    declared_members,
 )
 from finn.dataflow.space.occurrence import (
     ProjectionAssessment,
@@ -104,6 +110,7 @@ class _BoundNode:
     outputs: tuple[SourceOperand, ...]
     output_value_info: tuple[bytes | None, ...]
     output_annotations: tuple[bytes | None, ...]
+    context_read: object | None = None
 
     def materialize(self) -> Any:
         from onnx import NodeProto  # noqa: PLC0415
@@ -133,6 +140,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     root_namespace: ClassVar[str] = "op"
     wants_model: ClassVar[bool] = True
     source_accepts: ClassVar[Any] = ConstraintGroup()
+    incoming_graph_context: ClassVar[Problem[Any]]
 
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
@@ -150,6 +158,8 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         _check_indices(cls, schema)
         _check_constraints_are_classified(cls, declarations)
         _check_attribute_names(cls)
+        if schema and not hasattr(cls, "incoming_graph_context"):
+            cls.incoming_graph_context = _incoming_graph_problem()
         for name, member in lower_source_schema(cls, schema).items():
             if name in declarations:
                 raise AuthoringError(
@@ -174,13 +184,18 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         instance._bound = state
         return instance
 
-    def bind(self, model: Any, build: Any) -> Any:
+    def bind(self, model: Any, build: Any, *, graph_context: Any = None) -> Any:
         """Reconstruct this operation through the model-level pass owner.
 
         For several operations use bind_operations(model, build), or wrap the
         caller's loop in source_analysis(model), to share its one bulk result.
         """
-        return bind_operations(model, build, operations=(self,))[0]
+        return bind_operations(
+            model,
+            build,
+            operations=(self,),
+            graph_context=graph_context,
+        )[0]
 
     def _build_values(self, build: Any) -> Mapping[Problem[Any], object]:
         return MappingProxyType(
@@ -208,6 +223,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         summaries: Mapping[str, Any],
         *,
         recorded: bool = True,
+        context_read: object | None = None,
     ) -> Any:
         node = self._live_node(model)
         source = self._read_source(model, node, summaries)
@@ -226,8 +242,15 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             source.outputs,
             tuple(_value_info_bytes(model, item.tensor) for item in source.outputs),
             tuple(_annotation_bytes(model, item.tensor) for item in source.outputs),
+            context_read,
         )
         values = dict(facts)
+        if context_read is not None:
+            from finn.dataflow.ops.graph_context import ContextRead  # noqa: PLC0415
+
+            if not isinstance(context_read, ContextRead):
+                raise TypeError("context_read must be a ContextRead")
+            values[type(self).incoming_graph_context] = context_read.incoming
         for name, declaration in source_declarations(type(self)):
             if isinstance(declaration, OpInput):
                 if source.has(name):
@@ -249,7 +272,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         )
         return root
 
-    def rebind(self, model: Any, build: Any = None) -> Any:
+    def rebind(self, model: Any, build: Any = None, *, graph_context: Any = None) -> Any:
         """Read current source facts by scope id; omitted build reuses root Problems."""
         from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415
 
@@ -257,7 +280,18 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         fresh = type(self)(find_node(model, state.scope_id), state.opset_version)
         with source_analysis(model) as summaries:
             facts = self._frozen_build_values() if build is None else self._build_values(build)
-            return fresh._bind_with(model, facts, summaries)
+            context_read = None
+            if graph_context is not None:
+                from finn.dataflow.ops.graph_context import require_context_read  # noqa: PLC0415
+
+                effective_build = _FrozenBuildConfiguration(self) if build is None else build
+                context_read = require_context_read(
+                    graph_context,
+                    model,
+                    effective_build,
+                    consumer_scope_id=state.scope_id,
+                )
+            return fresh._bind_with(model, facts, summaries, context_read=context_read)
 
     def reconstruct(self, problem: Any = None, **kwargs: Any) -> Any:
         """Drop choices while retaining this occurrence's existing ProblemSnapshot."""
@@ -281,12 +315,86 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         model, build = problem
         with source_analysis(model) as summaries:
             root = self._bind_with(model, self._build_values(build), summaries, recorded=False)
-        return bool(root.problem_fingerprint != self.problem_fingerprint)
+        return bool(root.local_problem_fingerprint != self.local_problem_fingerprint)
+
+    def is_graph_stale(self, model: Any, build: Any, *, graph_context: Any) -> bool:
+        """Return false only when current source, context, and choices still validate."""
+
+        from finn.dataflow.ops.graph_context import (  # noqa: PLC0415
+            capture_frozen_op_logical,
+            validate_frozen_op_logical,
+        )
+
+        try:
+            capture = capture_frozen_op_logical(self)
+            return bool(
+                validate_frozen_op_logical(
+                    self,
+                    capture,
+                    model=model,
+                    build=build,
+                    graph_context=graph_context,
+                )
+            )
+        except DataflowOpError as error:
+            from finn.dataflow.ops.model_effects import ObservationMutationError  # noqa: PLC0415
+
+            if isinstance(error, ObservationMutationError):
+                raise
+            return True
 
     def _bound_node(self) -> _BoundNode:
         if self._bound is None:
             raise DataflowOpError(f"{type(self).__name__} is not bound; call bind(model, build)")
         return self._bound
+
+    def _frozen_context_read(self) -> Any | None:
+        return self._bound_node().context_read
+
+    def _frozen_incoming_context(self) -> Any | None:
+        declaration = getattr(type(self), "incoming_graph_context", None)
+        return None if declaration is None else self.problem_snapshot.get(declaration)
+
+    @property
+    def local_problem_fingerprint(self) -> str:
+        """The byte-exact pre-graph source/build Problem fingerprint."""
+
+        problem = []
+        snapshot = self.problem_snapshot
+        graph_problem = getattr(type(self), "incoming_graph_context", None)
+        for name, declaration in declared_members(type(self)):
+            if not isinstance(declaration, Problem) or declaration is graph_problem:
+                continue
+            wrapped = (
+                {
+                    "present": declaration.canonical.encode(snapshot[declaration]),
+                }
+                if declaration in snapshot
+                else {"absent": True}
+            )
+            from finn.dataflow.space.declarations import check_canonical  # noqa: PLC0415
+
+            if declaration in snapshot:
+                wrapped = {
+                    "present": check_canonical(
+                        wrapped["present"],
+                        f"local problem {type(self).__name__}.{name}",
+                    )
+                }
+            problem.append(
+                {
+                    "name": name if declaration.stable_name is None else declaration.stable_name,
+                    "semantics": declaration.value_semantics.name,
+                    "codec": f"{declaration.canonical.identity}@{declaration.canonical.version}",
+                    "value": wrapped,
+                }
+            )
+        payload = {
+            "space": f"{type(self).__module__}.{type(self).__qualname__}",
+            "problem": problem,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @property
     def is_bound(self) -> bool:
@@ -467,8 +575,26 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return _root_projection(self)
 
     @property
+    def graph_dataflow(self) -> ProjectionAssessment[DataflowNetwork]:
+        from finn.dataflow.ops.graph_context import graph_dataflow_assessment  # noqa: PLC0415
+
+        return graph_dataflow_assessment(self)
+
+    @property
     def network(self) -> Answer[DataflowNetwork]:
         return self.dataflow.accepted_answer
+
+    @property
+    def outgoing_logical_contracts(self) -> Any:
+        from finn.dataflow.ops.graph_context import outgoing_logical_contracts  # noqa: PLC0415
+
+        return outgoing_logical_contracts(self)
+
+    @property
+    def physical(self) -> Any:
+        from finn.dataflow.ops.physical import op_physical  # noqa: PLC0415
+
+        return op_physical(self)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
         raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
@@ -549,7 +675,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             family=type(self).family,
             family_version=type(self).family_version,
             schema_version=type(self).schema_version,
-            problem_fingerprint=self.problem_fingerprint,
+            problem_fingerprint=self.local_problem_fingerprint,
             scope_id=self.recorded_scope_id(),
             operands=operands,
             semantics=semantics,
@@ -648,10 +774,35 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             semantic_id = declarations[name].operand
             if semantic_id and any(ref.operand_id != semantic_id for ref in refs):
                 raise NetworkOperandError(f"{name!r} declares semantic operand {semantic_id!r}")
+        expected_outputs = self.expected_outputs()
+
+        def expected_shape(operand: SourceOperand) -> tuple[int, ...]:
+            shape = expected_outputs.get(operand.id, (None, None))[0]
+            return operand.shape if shape is None else shape
+
+        def expected_datatype(operand: SourceOperand) -> Any:
+            datatype = expected_outputs.get(operand.id, (None, None))[1]
+            return operand.datatype if datatype is None else datatype
+
+        mapping_source = SourceNode(
+            source.node_name,
+            source.op_type,
+            source.domain,
+            source.inputs,
+            tuple(
+                replace(
+                    operand,
+                    shape=expected_shape(operand),
+                    datatype=expected_datatype(operand),
+                )
+                for operand in source.outputs
+            ),
+            source.attributes,
+        )
         return Decided(
             _derive_operand_mappings(
                 answer.value,
-                source,
+                mapping_source,
                 references,
                 {name: decl.correspondence for name, decl in declarations.items()},
             )
@@ -687,6 +838,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         self,
         *,
         require: Any = None,
+        require_graph: bool = False,
         _captured_choices: tuple[tuple[Any, object], ...] | None = None,
     ) -> Any:
         """Plan native attribute replacement and output repairs without writing."""
@@ -700,14 +852,33 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
         state = self._bound_node()
         stage = CommitmentStage.DATAFLOW if require is None else require
-        check_commitment({CommitmentStage.DATAFLOW: self.dataflow}, stage)
+        if stage is CommitmentStage.PHYSICAL:
+            require_graph = True
+        assessments = {CommitmentStage.DATAFLOW: self.dataflow}
+        if stage is CommitmentStage.PHYSICAL:
+            assessments[CommitmentStage.PHYSICAL] = self.physical
+        check_commitment(assessments, stage)
+        expected_incoming = None
+        if require_graph:
+            graph_answer = self.graph_dataflow.accepted_answer
+            if not isinstance(graph_answer, Decided):
+                findings = getattr(graph_answer, "findings", ())
+                raise DataflowOpError("graph dataflow is not accepted", findings)
+            expected_incoming = self._frozen_incoming_context()
+            if expected_incoming is None:
+                raise DataflowOpError("graph-required effects need a frozen incoming context")
+        if stage is CommitmentStage.PHYSICAL:
+            physical_answer = self.physical.accepted_answer
+            if not isinstance(physical_answer, Decided):
+                findings = getattr(physical_answer, "findings", ())
+                raise DataflowOpError("physical projection is not accepted", findings)
         schema = choice_schema(self)
         captured = capture_decided_choices(self) if _captured_choices is None else _captured_choices
         written = serialize_choice_values(captured)
         written.update(
             {
                 SCOPE_ID_ATTRIBUTE: NativeAttribute("s", state.scope_id),
-                FINGERPRINT_ATTRIBUTE: NativeAttribute("s", self.problem_fingerprint),
+                FINGERPRINT_ATTRIBUTE: NativeAttribute("s", self.local_problem_fingerprint),
                 SCHEMA_VERSION_ATTRIBUTE: NativeAttribute("i", self.schema_version),
             }
         )
@@ -719,7 +890,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return GraphEffects(
             scope_id=state.scope_id,
             commitment_stage=stage,
-            expected_source_fingerprint=self.problem_fingerprint,
+            expected_source_fingerprint=self.local_problem_fingerprint,
             expected_attributes=expected_attributes,
             remove_attributes=tuple(sorted(names - written.keys())),
             set_attributes=MappingProxyType(written),
@@ -744,9 +915,19 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             expected_outputs=tuple(node.output),
             expected_choices=tuple((item.choice.path, value) for item, value in captured),
             read_set=source_read_set(self, expected_attributes=expected_attributes),
+            require_graph=require_graph,
+            expected_incoming=expected_incoming,
         )
 
-    def commit(self, model: Any, build: Any = None, *, require: Any = None) -> Any:
+    def commit(
+        self,
+        model: Any,
+        build: Any = None,
+        *,
+        require: Any = None,
+        require_graph: bool = False,
+        graph_context: Any = None,
+    ) -> Any:
         from finn.dataflow.ops.persistence import _apply_graph_effects  # noqa: PLC0415
 
         if build is not None:
@@ -762,10 +943,31 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 raise DataflowOpError(
                     f"build facts differ at commit ({', '.join(names)}); rebind first"
                 )
+        from finn.dataflow.ops.persistence import CommitmentStage  # noqa: PLC0415
+
+        strong = require_graph or require is CommitmentStage.PHYSICAL
+        if strong and graph_context is None:
+            raise DataflowOpError("graph-required commit needs a GraphContext")
+        effective_build = _FrozenBuildConfiguration(self) if build is None else build
+        if strong:
+
+            def finish(current: Any) -> Any:
+                return self.rebind(
+                    current,
+                    effective_build,
+                    graph_context=graph_context,
+                )
+        else:
+
+            def finish(current: Any) -> Any:
+                return self.rebind(current)
+
         return _apply_graph_effects(
             model,
-            self.graph_effects(require=require),
-            lambda current: self.rebind(current),
+            self.graph_effects(require=require, require_graph=require_graph),
+            finish,
+            graph_context=graph_context,
+            build=effective_build,
         )
 
     def recorded(self) -> Mapping[str, object]:
@@ -968,6 +1170,9 @@ def _build_value(
     supplied nothing.
     """
 
+    frozen = getattr(build, "_dataflow_frozen_build_values", None)
+    if isinstance(frozen, Mapping) and member_name in frozen:
+        return frozen[member_name]
     try:
         value = declaration.accessor(build)
     except (AttributeError, KeyError, TypeError) as error:
@@ -1030,6 +1235,58 @@ def unresolved_reason(answer: Answer[Any]) -> str:
     kind = "unresolved" if isinstance(answer, Unresolved) else "absent"
     codes = ", ".join(sorted({finding.code for finding in findings})) or "no findings"
     return f"{kind}: {codes}"
+
+
+class _FrozenBuildConfiguration:
+    """Accessor-independent view of one occurrence's already frozen build facts."""
+
+    def __init__(self, operation: DataflowOp) -> None:
+        self._dataflow_frozen_build_values = MappingProxyType(
+            {
+                name: operation.problem_snapshot[declaration]
+                for name, declaration in source_declarations(type(operation))
+                if isinstance(declaration, BuildFact) and declaration in operation.problem_snapshot
+            }
+        )
+
+
+def _encode_incoming_graph_context(value: object) -> CanonicalValue:
+    from finn.dataflow.ops.graph_context import (  # noqa: PLC0415
+        IncomingGraphContext,
+        encode_incoming_graph_context,
+    )
+
+    if not isinstance(value, IncomingGraphContext):
+        raise TypeError("incoming graph context codec requires IncomingGraphContext")
+    return encode_incoming_graph_context(value)
+
+
+def _is_incoming_graph_context(value: object) -> bool:
+    from finn.dataflow.ops.graph_context import IncomingGraphContext  # noqa: PLC0415
+
+    return isinstance(value, IncomingGraphContext)
+
+
+# Installed after the class body so importing the transaction engine first does
+# not create a base -> graph_context -> model_effects -> base cycle.  Runtime
+# binding admits only IncomingGraphContext before this Problem is populated.
+def _incoming_graph_problem() -> Problem[Any]:
+    return Problem(
+        ValueSemantics(
+            object,
+            "IncomingGraphContext",
+            _is_incoming_graph_context,
+            lambda left, right: left == right,
+            lambda value: value,
+        ),
+        required=False,
+        canonical=CanonicalValueCodec(
+            "finn.dataflow.incoming_graph_context",
+            1,
+            _encode_incoming_graph_context,
+        ),
+        name="incoming_graph_context",
+    )
 
 
 __all__ = [

@@ -114,6 +114,22 @@ class Clock:
 class Reset:
     active_low: bool = True
     synchronous: bool = False
+    synchronous_to: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.synchronous_to is None:
+            return
+        domains = tuple(self.synchronous_to)
+        if len(domains) != len(set(domains)):
+            raise AbiError("a qualified reset names one synchronous clock twice")
+        if any(not domain for domain in domains):
+            raise AbiError("a qualified reset names non-empty synchronous clocks")
+        domains = tuple(sorted(domains))
+        if self.synchronous and not domains:
+            raise AbiError("a qualified synchronous reset names at least one clock")
+        if not self.synchronous and domains:
+            raise AbiError("a qualified asynchronous reset has no synchronous clocks")
+        object.__setattr__(self, "synchronous_to", domains)
 
 
 @dataclass(frozen=True)
@@ -342,6 +358,25 @@ class Bus:
 Port = Union[Signal, Bus]
 
 
+@dataclass(frozen=True, order=True)
+class ClockAlignment:
+    """The bounded aligned-2x environment contract for two input clocks.
+
+    Frequency remains a property of :class:`Derived`.  This value additionally
+    requires coincident rising edges at every reference-clock rising edge and
+    the other aligned-clock rising edge during the reference low half-cycle.
+    """
+
+    reference_clock: str
+    aligned_clock: str
+
+    def __post_init__(self) -> None:
+        if not self.reference_clock or not self.aligned_clock:
+            raise AbiError("a clock alignment names both clocks")
+        if self.reference_clock == self.aligned_clock:
+            raise AbiError("a clock cannot be aligned-2x to itself")
+
+
 @dataclass(frozen=True)
 class ComponentABI:
     """Everything a packaging format may read besides a target and its options.
@@ -354,6 +389,7 @@ class ComponentABI:
     entry_point: str
     ports: tuple[Port, ...]
     parameters: tuple[tuple[str, str], ...] = ()
+    clock_alignments: tuple[ClockAlignment, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.entry_point:
@@ -368,6 +404,87 @@ class ComponentABI:
         if len({name for name, _ in parameters}) != len(parameters):
             raise AbiError("an ABI names one parameter twice")
         object.__setattr__(self, "parameters", parameters)
+
+        ports_by_name = {port.name: port for port in self.ports}
+        clocks = {clock.name: clock for clock in self.clocks()}
+        for port in self.ports:
+            if not isinstance(port, Signal) or not isinstance(port.role, Reset):
+                continue
+            domains = port.role.synchronous_to
+            if domains is None:
+                continue
+            missing = tuple(domain for domain in domains if domain not in clocks)
+            if missing:
+                raise AbiError(
+                    f"reset {port.name!r} is synchronous to clocks this ABI does not have: "
+                    f"{missing!r}"
+                )
+
+        for port in self.ports:
+            if not isinstance(port, Bus):
+                continue
+            if port.associated_clock is not None:
+                associated = ports_by_name.get(port.associated_clock)
+                if associated is None:
+                    raise AbiError(
+                        f"bus {port.name!r} associated clock {port.associated_clock!r} "
+                        "does not name an ABI port"
+                    )
+                if not isinstance(associated, Signal) or not isinstance(associated.role, Clock):
+                    raise AbiError(
+                        f"bus {port.name!r} associated clock {port.associated_clock!r} "
+                        "does not name a clock signal"
+                    )
+            if port.associated_reset is not None:
+                associated = ports_by_name.get(port.associated_reset)
+                if associated is None:
+                    raise AbiError(
+                        f"bus {port.name!r} associated reset {port.associated_reset!r} "
+                        "does not name an ABI port"
+                    )
+                if not isinstance(associated, Signal) or not isinstance(associated.role, Reset):
+                    raise AbiError(
+                        f"bus {port.name!r} associated reset {port.associated_reset!r} "
+                        "does not name a reset signal"
+                    )
+                domains = associated.role.synchronous_to
+                if (
+                    associated.role.synchronous
+                    and domains is not None
+                    and port.associated_clock not in domains
+                ):
+                    raise AbiError(
+                        f"bus {port.name!r} uses clock {port.associated_clock!r}, but reset "
+                        f"{port.associated_reset!r} is synchronous to {domains!r}"
+                    )
+
+        alignments = tuple(self.clock_alignments)
+        if len(alignments) != len(set(alignments)):
+            raise AbiError("an ABI declares one clock alignment twice")
+        alignments = tuple(sorted(alignments))
+        for alignment in alignments:
+            reference = clocks.get(alignment.reference_clock)
+            aligned = clocks.get(alignment.aligned_clock)
+            if reference is None or aligned is None:
+                missing = tuple(
+                    name
+                    for name, clock in (
+                        (alignment.reference_clock, reference),
+                        (alignment.aligned_clock, aligned),
+                    )
+                    if clock is None
+                )
+                raise AbiError(f"clock alignment names clocks this ABI does not have: {missing!r}")
+            if reference.direction is not Direction.IN or aligned.direction is not Direction.IN:
+                raise AbiError("aligned clocks are input signals supplied by the environment")
+            if not isinstance(aligned.role, Clock) or aligned.role.rate != Derived(
+                alignment.reference_clock, 2
+            ):
+                raise AbiError(
+                    f"aligned clock {alignment.aligned_clock!r} must be "
+                    f"Derived({alignment.reference_clock!r}, 2)"
+                )
+        object.__setattr__(self, "clock_alignments", alignments)
 
     def physical_names(self) -> tuple[str, ...]:
         """Every pin the module actually has, in declared order."""
@@ -565,6 +682,7 @@ __all__ = [
     "AbiError",
     "Bus",
     "Clock",
+    "ClockAlignment",
     "ComponentABI",
     "Config",
     "CustomProtocol",

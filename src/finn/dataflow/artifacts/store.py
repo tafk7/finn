@@ -104,19 +104,34 @@ class StoreError(Exception):
 class StoredArtifact:
     """A previously built artifact, as this store reports it.
 
-    Structurally what ``hardware.store.StoredArtifact`` is -- a key, a
-    directory and an ordered file list -- so this store drops into the existing
-    ``ArtifactStore`` seam without either side importing the other.  That is
-    the seam being real rather than declared.
+    The artifact reference and ordered path-to-content table come from the
+    manifest that ``lookup`` just verified.  Consumers therefore cannot pair a
+    real key with an independently supplied file table.  ``key`` and ``files``
+    remain derived compatibility views for existing store callers.
     """
 
-    key: str
+    artifact: ArtifactRef
     directory: str
-    files: tuple[str, ...]
+    contents: tuple[tuple[str, ContentRef], ...]
 
     def __post_init__(self) -> None:
-        if not self.key or not self.directory:
-            raise StoreError("a stored artifact needs a key and a directory")
+        if not self.directory:
+            raise StoreError("a stored artifact needs a directory")
+        names = tuple(name for name, _ in self.contents)
+        if len(names) != len(set(names)):
+            raise StoreError("a stored artifact names one file twice")
+
+    @property
+    def key(self) -> str:
+        """The historical key-only view, retained for existing store callers."""
+
+        return self.artifact.key
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        """The ordered path view of the verified manifest contents."""
+
+        return tuple(name for name, _ in self.contents)
 
 
 class ArtifactStore:
@@ -142,11 +157,12 @@ class ArtifactStore:
     # -- blobs -----------------------------------------------------------------
 
     def put_blob(self, data: bytes) -> ContentRef:
-        """Write bytes once.  Writing them again is a no-op, by construction."""
+        """Write bytes once, refusing an existing corrupt blob."""
 
         reference = ContentRef(content_digest(data))
         target = self.blob_path(reference)
         if target.exists():
+            self.get_blob(reference)
             return reference
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(target, data)
@@ -351,57 +367,87 @@ class ArtifactStore:
         if not manifest_path.is_file():
             return None
 
-        try:
-            manifest = decode(manifest_path.read_bytes())
-        except ManifestError as error:
-            raise StoreError(f"{directory}: {error}") from error
-
-        if manifest.build_key != key:
-            raise StoreError(
-                f"{directory} is filed under {key} and its manifest says "
-                f"{manifest.build_key}; the store is inconsistent"
-            )
-        if manifest.kind != identity.kind:
-            raise StoreError(
-                f"{directory} holds a {manifest.kind!r} artifact and a {identity.kind!r} "
-                "one was asked for"
-            )
-        if manifest.contract_version != identity.producer.contract_version:
-            raise StoreError(
-                f"{directory} was validated under producer contract "
-                f"{manifest.contract_version!r}; this build speaks "
-                f"{identity.producer.contract_version!r}, so completion means something else"
-            )
-        issues = list(relative_path_issues(manifest.files))
-
-        materialization = Materialization(
-            directory, tuple((entry.path, entry.digest) for entry in manifest.files)
-        )
-        if identity.outputs is not None:
-            issues.extend(check_layout(materialization, identity.outputs))
-        issues.extend(verify_contents(materialization))
-        for entry in manifest.files:
-            located = directory / entry.path
-            if located.is_file() and located.stat().st_size != entry.size:
-                issues.append(
-                    f"{entry.path!r} is {located.stat().st_size} bytes and the manifest "
-                    f"records {entry.size}"
-                )
-        recomputed = digest(ordered_digests(materialization.entries))
-        if recomputed != manifest.tree_digest:
-            issues.append(
-                f"the tree hashes to {recomputed[:12]} and the manifest records "
-                f"{manifest.tree_digest[:12]}"
-            )
-        if issues:
-            raise StoreError(f"{directory} is a corrupt hit: " + "; ".join(issues))
-
-        return self._stored(manifest, directory)
+        return _verify_directory(identity, directory)
 
     def _stored(self, manifest: Manifest, directory: Path) -> StoredArtifact:
         return StoredArtifact(
-            manifest.build_key, str(directory), tuple(entry.path for entry in manifest.files)
+            ArtifactRef(manifest.kind, manifest.build_key),
+            str(directory),
+            tuple((entry.path, ContentRef(entry.digest)) for entry in manifest.files),
         )
+
+
+def verify_stored_artifact(identity: Derivation, stored: StoredArtifact) -> StoredArtifact:
+    """Revalidate a store result before consuming its manifest content table."""
+
+    verified = _verify_directory(identity, Path(stored.directory))
+    if verified.artifact != stored.artifact:
+        raise StoreError(
+            "the supplied stored artifact reference does not match its verified manifest"
+        )
+    if verified.contents != stored.contents:
+        raise StoreError("the supplied stored artifact contents do not match its verified manifest")
+    return verified
+
+
+def _verify_directory(identity: Derivation, directory: Path) -> StoredArtifact:
+    """Validate one exact artifact directory against its derivation and manifest."""
+
+    key = build_key(identity)
+    manifest_path = directory / MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise StoreError(f"{directory} has no readable manifest")
+
+    try:
+        manifest = decode(manifest_path.read_bytes())
+    except ManifestError as error:
+        raise StoreError(f"{directory}: {error}") from error
+
+    if manifest.build_key != key:
+        raise StoreError(
+            f"{directory} is filed under {key} and its manifest says "
+            f"{manifest.build_key}; the store is inconsistent"
+        )
+    if manifest.kind != identity.kind:
+        raise StoreError(
+            f"{directory} holds a {manifest.kind!r} artifact and a {identity.kind!r} "
+            "one was asked for"
+        )
+    if manifest.contract_version != identity.producer.contract_version:
+        raise StoreError(
+            f"{directory} was validated under producer contract "
+            f"{manifest.contract_version!r}; this build speaks "
+            f"{identity.producer.contract_version!r}, so completion means something else"
+        )
+    issues = list(relative_path_issues(manifest.files))
+
+    materialization = Materialization(
+        directory, tuple((entry.path, entry.digest) for entry in manifest.files)
+    )
+    if identity.outputs is not None:
+        issues.extend(check_layout(materialization, identity.outputs))
+    issues.extend(verify_contents(materialization))
+    for entry in manifest.files:
+        located = directory / entry.path
+        if located.is_file() and located.stat().st_size != entry.size:
+            issues.append(
+                f"{entry.path!r} is {located.stat().st_size} bytes and the manifest "
+                f"records {entry.size}"
+            )
+    recomputed = digest(ordered_digests(materialization.entries))
+    if recomputed != manifest.tree_digest:
+        issues.append(
+            f"the tree hashes to {recomputed[:12]} and the manifest records "
+            f"{manifest.tree_digest[:12]}"
+        )
+    if issues:
+        raise StoreError(f"{directory} is a corrupt hit: " + "; ".join(issues))
+
+    return StoredArtifact(
+        ArtifactRef(manifest.kind, manifest.build_key),
+        str(directory),
+        tuple((entry.path, ContentRef(entry.digest)) for entry in manifest.files),
+    )
 
 
 def _canonical_text(derivation: Derivation) -> str:
@@ -482,4 +528,5 @@ __all__ = [
     "StoreError",
     "StoredArtifact",
     "blob_layout",
+    "verify_stored_artifact",
 ]

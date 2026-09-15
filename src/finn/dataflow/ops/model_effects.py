@@ -26,6 +26,10 @@ from finn.dataflow.ops.native import NativeAttribute, SCOPE_ID_ATTRIBUTE, read_a
 T = TypeVar("T")
 
 
+class ObservationMutationError(DataflowOpError):
+    """An observational callback wrote through its detached or retained alias."""
+
+
 class ModelReadKind(str, Enum):
     """One supported address form for a plan's live-model preconditions."""
 
@@ -338,6 +342,92 @@ def model_snapshot_digest(model: Any) -> str:
 
     encoded = model.model.SerializeToString(deterministic=True)
     return hashlib.sha256(encoded).hexdigest()
+
+
+def merge_model_read_sets(*read_sets: ModelReadSet) -> ModelReadSet:
+    """Merge exact observations without weakening or last-wins behavior.
+
+    Equal keyed reads coalesce.  For one ``OPERAND_SLOT`` key, an exact tensor
+    name is stronger than the presence marker and replaces it.  Every other
+    unequal duplicate is contradictory and refuses the plan.
+    """
+
+    by_key: dict[tuple[ModelReadKind, str, str | int | None], ModelReadExpectation] = {}
+    for read_set in read_sets:
+        if not isinstance(read_set, ModelReadSet):
+            raise TypeError("merge_model_read_sets accepts ModelReadSet values")
+        for expectation in read_set.expectations:
+            key = (expectation.kind, expectation.owner, expectation.field)
+            previous = by_key.get(key)
+            if previous is None:
+                by_key[key] = expectation
+                continue
+            if previous.expected == expectation.expected and type(previous.expected) is type(
+                expectation.expected
+            ):
+                continue
+            if expectation.kind is ModelReadKind.OPERAND_SLOT:
+                if previous.expected == MODEL_READ_PRESENT and type(expectation.expected) is str:
+                    by_key[key] = expectation
+                    continue
+                if expectation.expected == MODEL_READ_PRESENT and type(previous.expected) is str:
+                    continue
+            raise DataflowOpError(
+                f"contradictory model reads for {expectation.kind.value} "
+                f"{expectation.owner!r} field {expectation.field!r}"
+            )
+    ordered = tuple(
+        by_key[key]
+        for key in sorted(
+            by_key,
+            key=lambda item: (
+                item[0].value,
+                item[1].encode("utf-8"),
+                "" if item[2] is None else f"{type(item[2]).__name__}:{item[2]}",
+            ),
+        )
+    )
+    return ModelReadSet(ordered)
+
+
+def validate_model_read_set(model: Any, read_set: ModelReadSet) -> None:
+    """Check a detached read set against the current wrapper."""
+
+    _check_read_set(model, read_set)
+
+
+def checked_model_observation(
+    model: Any,
+    observe: Callable[[Any], T],
+    *,
+    what: str = "model observer",
+) -> T:
+    """Run an observational callback on a detached view and guard live aliases."""
+
+    original = model.model.SerializeToString(deterministic=True)
+    detached = _wrapper_from_bytes(model, original)
+    detached_original = detached.model.SerializeToString(deterministic=True)
+    try:
+        try:
+            result = observe(detached)
+        except Exception as error:
+            if (
+                detached.model.SerializeToString(deterministic=True) != detached_original
+                or model.model.SerializeToString(deterministic=True) != original
+            ):
+                raise ObservationMutationError(
+                    f"the {what} mutated a model while raising"
+                ) from error
+            raise
+        if detached.model.SerializeToString(deterministic=True) != detached_original:
+            raise ObservationMutationError(f"the {what} mutated its detached validation model")
+        if model.model.SerializeToString(deterministic=True) != original:
+            raise ObservationMutationError(f"the {what} mutated the live model through an alias")
+        return result
+    except Exception:
+        if model.model.SerializeToString(deterministic=True) != original:
+            model.model.ParseFromString(original)
+        raise
 
 
 def apply_model_effects(
@@ -1291,6 +1381,10 @@ __all__ = [
     "ModelReadExpectation",
     "ModelReadKind",
     "ModelReadSet",
+    "ObservationMutationError",
     "apply_model_effects",
+    "checked_model_observation",
+    "merge_model_read_sets",
     "model_snapshot_digest",
+    "validate_model_read_set",
 ]

@@ -23,6 +23,7 @@ from finn.dataflow.artifacts.abi import (
     AbiError,
     Bus,
     Clock,
+    ClockAlignment,
     ComponentABI,
     CustomProtocol,
     Data,
@@ -40,6 +41,7 @@ from finn.dataflow.artifacts.abi import (
     flip,
     infer_buses,
 )
+from finn.dataflow.artifacts.formats import _descriptor
 
 # -- fixture copies, taken from the tree and not imported from it --------------
 #
@@ -99,7 +101,9 @@ def _generated_wrapper_ports() -> tuple[ObservedPort, ...]:
 DATA_WIDTHS = {"in1_V": 32, "in0_V": 16, "out0_V": 32}
 
 
-def _stream(prefix: str, *, initiator: bool = False, data_width: int = 0) -> Bus:
+def _stream(
+    prefix: str, *, initiator: bool = False, data_width: int = 0, associated: bool = True
+) -> Bus:
     width = data_width or DATA_WIDTHS[prefix]
     return Bus(
         prefix,
@@ -110,8 +114,8 @@ def _stream(prefix: str, *, initiator: bool = False, data_width: int = 0) -> Bus
             Member("tready", f"{prefix}_tready"),
         ),
         endpoint=Endpoint.INITIATOR if initiator else Endpoint.TARGET,
-        associated_clock="ap_clk",
-        associated_reset="ap_rst_n",
+        associated_clock="ap_clk" if associated else None,
+        associated_reset="ap_rst_n" if associated else None,
     )
 
 
@@ -213,7 +217,9 @@ def test_flipping_twice_is_the_identity() -> None:
 def test_a_flipped_direction_disagreement_is_caught() -> None:
     """The declared endpoint is a claim about the wires, and it can be wrong."""
 
-    wrong_way = ComponentABI(entry_point="m", ports=(_stream("in0_V", initiator=True),))
+    wrong_way = ComponentABI(
+        entry_point="m", ports=(_stream("in0_V", initiator=True, associated=False),)
+    )
     issues = check_against_rtl(wrong_way, _generated_wrapper_ports())
     assert any("in0_V_tdata" in issue and "output" in issue for issue in issues)
 
@@ -411,7 +417,7 @@ def test_a_bus_member_width_that_disagrees_with_the_source_is_caught() -> None:
     in the ABI unchecked.
     """
 
-    abi = ComponentABI("m", (_stream("in0_V", data_width=8),))
+    abi = ComponentABI("m", (_stream("in0_V", data_width=8, associated=False),))
     issues = check_against_rtl(abi, _generated_wrapper_ports())
     assert any("in0_V_tdata" in issue and "8 bits" in issue and "16" in issue for issue in issues)
 
@@ -419,7 +425,7 @@ def test_a_bus_member_width_that_disagrees_with_the_source_is_caught() -> None:
 def test_a_bus_member_width_that_agrees_is_not_reported() -> None:
     """Otherwise the check above would pass for the wrong reason."""
 
-    abi = ComponentABI("m", (_stream("in0_V"),))
+    abi = ComponentABI("m", (_stream("in0_V", associated=False),))
     assert all(
         "in0_V_tdata" not in issue for issue in check_against_rtl(abi, _generated_wrapper_ports())
     )
@@ -452,3 +458,149 @@ def test_a_bus_records_which_clock_and_reset_it_is_synchronous_to() -> None:
     assert stream.associated_clock == "ap_clk"
     assert stream.associated_reset == "ap_rst_n"
     assert isinstance(stream.role, Data)
+
+
+def _associated_stream(clock: str, reset: str) -> Bus:
+    return Bus(
+        "stream",
+        StandardProtocol.AXIS,
+        (Member("tdata", "data", 8), Member("tvalid", "valid"), Member("tready", "ready")),
+        associated_clock=clock,
+        associated_reset=reset,
+    )
+
+
+def test_a_bus_associated_clock_must_name_an_abi_clock() -> None:
+    with pytest.raises(AbiError, match="associated clock 'missing'.*does not name an ABI port"):
+        ComponentABI(
+            "m",
+            (
+                Signal("rst", Direction.IN, 1, Reset()),
+                _associated_stream("missing", "rst"),
+            ),
+        )
+
+
+def test_a_bus_associated_reset_must_name_an_abi_port() -> None:
+    with pytest.raises(AbiError, match="associated reset 'missing'.*does not name an ABI port"):
+        ComponentABI(
+            "m",
+            (
+                Signal("clk", Direction.IN, 1, Clock(Free())),
+                _associated_stream("clk", "missing"),
+            ),
+        )
+
+
+def test_a_bus_associated_reset_must_name_a_reset_signal() -> None:
+    with pytest.raises(AbiError, match="associated reset 'not_reset'.*reset signal"):
+        ComponentABI(
+            "m",
+            (
+                Signal("clk", Direction.IN, 1, Clock(Free())),
+                Signal("not_reset", Direction.IN, 1),
+                _associated_stream("clk", "not_reset"),
+            ),
+        )
+
+
+def test_a_bus_clock_must_belong_to_its_synchronous_reset_domains() -> None:
+    with pytest.raises(AbiError, match=r"uses clock 'other'.*synchronous to \('clk',\)"):
+        ComponentABI(
+            "m",
+            (
+                Signal("clk", Direction.IN, 1, Clock(Free())),
+                Signal("other", Direction.IN, 1, Clock(Free())),
+                Signal("rst", Direction.IN, 1, Reset(False, True, ("clk",))),
+                _associated_stream("other", "rst"),
+            ),
+        )
+
+
+def test_qualified_reset_domains_are_sorted_and_must_match_synchronous_mode() -> None:
+    assert Reset(False, True, ("clk2x", "clk")).synchronous_to == ("clk", "clk2x")
+    assert Reset(False, False, ()).synchronous_to == ()
+    with pytest.raises(AbiError, match="twice"):
+        Reset(False, True, ("clk", "clk"))
+    with pytest.raises(AbiError, match="at least one"):
+        Reset(False, True, ())
+    with pytest.raises(AbiError, match="asynchronous"):
+        Reset(False, False, ("clk",))
+
+
+def test_qualified_reset_domains_must_name_abi_clocks() -> None:
+    with pytest.raises(AbiError, match="does not have"):
+        ComponentABI(
+            "m",
+            (Signal("rst", Direction.IN, 1, Reset(False, True, ("missing",))),),
+        )
+
+
+def test_aligned_2x_relation_is_sorted_and_fully_validated() -> None:
+    ports = (
+        Signal("a", Direction.IN, 1, Clock(Free())),
+        Signal("a2x", Direction.IN, 1, Clock(Derived("a", 2))),
+        Signal("b", Direction.IN, 1, Clock(Free())),
+        Signal("b2x", Direction.IN, 1, Clock(Derived("b", 2))),
+    )
+    abi = ComponentABI(
+        "m",
+        ports,
+        clock_alignments=(ClockAlignment("b", "b2x"), ClockAlignment("a", "a2x")),
+    )
+    assert abi.clock_alignments == (
+        ClockAlignment("a", "a2x"),
+        ClockAlignment("b", "b2x"),
+    )
+    with pytest.raises(AbiError, match="twice"):
+        ComponentABI(
+            "m",
+            ports,
+            clock_alignments=(ClockAlignment("a", "a2x"), ClockAlignment("a", "a2x")),
+        )
+    with pytest.raises(AbiError, match="Derived"):
+        ComponentABI(
+            "m",
+            (ports[0], Signal("a2x", Direction.IN, 1, Clock(Derived("a", 3)))),
+            clock_alignments=(ClockAlignment("a", "a2x"),),
+        )
+
+
+def test_legacy_unqualified_descriptor_bytes_remain_exactly_v1() -> None:
+    abi = ComponentABI(
+        "m",
+        (
+            Signal("clk", Direction.IN, 1, Clock(Free())),
+            Signal("rst", Direction.IN, 1, Reset(active_low=False, synchronous=True)),
+        ),
+        (("W", "8"),),
+    )
+    expected = (
+        b'{"schema_version":"component-descriptor-v1","entry_point":"m","ports":['
+        b'{"kind":"signal","name":"clk","role":{"kind":"clock","derived_of":"",'
+        b'"ratio":0,"active_low":true,"synchronous":false},"direction":"input",'
+        b'"width":1,"protocol":"","protocol_spec":"","endpoint":"","signals":[],'
+        b'"associated_clock":null,"associated_reset":null},{"kind":"signal","name":'
+        b'"rst","role":{"kind":"reset","derived_of":"","ratio":0,"active_low":false,'
+        b'"synchronous":true},"direction":"input","width":1,"protocol":"",'
+        b'"protocol_spec":"","endpoint":"","signals":[],"associated_clock":null,'
+        b'"associated_reset":null}],"parameters":[["W","8"]]}\n'
+    )
+    encoded = _descriptor.encode(abi)
+    assert encoded == expected
+    assert _descriptor.decode(encoded) == abi
+
+
+def test_qualified_descriptor_v2_round_trips_domains_and_alignment() -> None:
+    abi = ComponentABI(
+        "m",
+        (
+            Signal("clk", Direction.IN, 1, Clock(Free())),
+            Signal("clk2x", Direction.IN, 1, Clock(Derived("clk", 2))),
+            Signal("rst", Direction.IN, 1, Reset(False, True, ("clk", "clk2x"))),
+        ),
+        clock_alignments=(ClockAlignment("clk", "clk2x"),),
+    )
+    encoded = _descriptor.encode(abi)
+    assert b'"schema_version":"component-descriptor-v2"' in encoded
+    assert _descriptor.decode(encoded) == abi

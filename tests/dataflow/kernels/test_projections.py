@@ -12,6 +12,8 @@ refused while the Region it would have realized stays exactly what it was.
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 from typing import cast
 
 import pytest
@@ -26,7 +28,7 @@ from finn.dataflow.kernels.dotp_axi import (
 )
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.kernel import (
-    ModuleBuildSpec,
+    ModuleBuildRequirements,
     _KernelCompilation,
     kernel_dataflow,
     kernel_physical,
@@ -148,7 +150,7 @@ def test_the_replay_region_resolves_with_no_physical_decision_at_all() -> None:
     # The buffer owns no Decision, so its build unit is available at once.
     physical = kernel_physical(engine, compiled, point).accepted_answer  # type: ignore[arg-type]
     assert isinstance(physical, Decided)
-    assert physical.value.parameters == {"LEN": 2, "REP": 2, "W": 32}
+    assert dict(physical.value.parameters) == {"LEN": 2, "REP": 2, "W": 32}
 
 
 def test_an_unsupported_target_refuses_the_build_unit_and_not_the_region() -> None:
@@ -188,12 +190,12 @@ def test_the_detached_build_unit_holds_no_handle_into_the_design_space() -> None
     assert isinstance(answer, Decided)
     result = answer.value
 
-    for name in ModuleBuildSpec.__slots__:
+    for name in (item.name for item in fields(ModuleBuildRequirements)):
         value = getattr(result, name)
         assert not isinstance(value, (Engine, Space))
         assert not hasattr(value, "design_space")
         assert not hasattr(value, "_occurrence_state")
-    assert result.abi.entry_point == "replay_buffer"
+    assert result.abi.entry_point.value == "replay_buffer"
 
 
 def test_the_kernel_layer_classifies_its_decisions_without_relaxing_ownership() -> None:

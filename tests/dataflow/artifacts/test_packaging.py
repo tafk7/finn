@@ -212,6 +212,7 @@ def test_the_extra_clock_alone_is_also_refused() -> None:
         ports=(
             Signal("ap_clk", Direction.IN, 1, Clock(Free())),
             Signal("ap_clk2x", Direction.IN, 1, Clock(Derived("ap_clk", 2))),
+            Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
             _stream("in0_V"),
         ),
     )

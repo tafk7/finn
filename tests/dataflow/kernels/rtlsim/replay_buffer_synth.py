@@ -39,12 +39,12 @@ from finn.dataflow.artifacts.request import (
     ResourceRequirements,
     ToolchainIdentity,
 )
-from finn.dataflow.kernels.artifacts import (
-    kernel_source_derivation,
-    portable_kernel_component,
-    resolve_kernel_contributions,
+from finn.dataflow.artifacts.build import (
+    prepare_module_build,
+    materialize_module_sources,
+    portable_module_component,
 )
-from finn.dataflow.kernels.replay_buffer import FINNLIB_ROOT
+from finn.dataflow.artifacts.store import ArtifactStore
 from finn.util.basic import get_vivado_version
 
 from dataflow.kernels.rtlsim.replay_buffer_numeric import (
@@ -83,20 +83,17 @@ def _toolchain() -> ToolchainIdentity:
 def _package(case: Case, directory: Path):
     kernel = _configure(case)
     finnlib = Path(os.environ["FINNLIB_ROOT"])
-    resolved = resolve_kernel_contributions(kernel, roots={FINNLIB_ROOT: finnlib})
-    source_derivation = kernel_source_derivation(kernel, resolved)
-    source_ref = ArtifactRef(source_derivation.kind, build_key(source_derivation))
-    component = portable_kernel_component(kernel, source_ref, resolved)
-    blobs = {
-        source.content.digest: (finnlib / source.path).read_bytes()
-        for source in resolved.definition.files
-    }
+    store = ArtifactStore(directory / "store")
+    prepared = prepare_module_build(
+        kernel, roots={"finnlib": finnlib}, blobs=store, template_roots=()
+    )
+    component = portable_module_component(prepared, materialize_module_sources(prepared, store))
     package = plan_package(
         RtlModuleDirectory(),
         component,
         Target(PART),
         RtlModuleOptions(),
-        _Contents(blobs),
+        store,
     )
     package_dir = directory / "package"
     package_dir.mkdir()
@@ -144,7 +141,7 @@ def run_one(case: Case) -> int:
             for name, _data in package.contents
             if Path(name).suffix in {".v", ".sv"}
         )
-        generic = " ".join(f"{name}={value}" for name, value in kernel.parameters.items())
+        generic = " ".join(f"{name}={value}" for name, value in kernel.parameters)
         script.write_text(
             "\n".join(
                 (
@@ -182,8 +179,8 @@ def run_one(case: Case) -> int:
         )
         print(
             f"{case.label}: {PART}, vivado {toolchain.version}, "
-            f"LEN={kernel.parameters['LEN']} REP={kernel.parameters['REP']} "
-            f"W={kernel.parameters['W']}, request {request.build_key[:16]}"
+            f"LEN={dict(kernel.parameters)['LEN']} REP={dict(kernel.parameters)['REP']} "
+            f"W={dict(kernel.parameters)['W']}, request {request.build_key[:16]}"
         )
         completed = subprocess.run(
             [
@@ -218,7 +215,7 @@ def run_one(case: Case) -> int:
         # neuron fold a store must actually appear -- accepting "any nonzero
         # storage category" would let a buffer that kept nothing but its
         # handshake registers pass, which is precisely the broken case.
-        replays = int(cast(int, kernel.parameters["REP"])) > 1
+        replays = int(cast(int, dict(kernel.parameters)["REP"])) > 1
         if replays and sum(memory.values()) <= 0:
             print(f"{case.label}: FAIL (a replaying buffer synthesized no memory; {cells})")
             return FAIL
