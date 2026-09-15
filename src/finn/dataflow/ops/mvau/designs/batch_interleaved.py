@@ -58,6 +58,8 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
     weight_type = WeightedDotProductDesign.weight_type
     accumulator_type = WeightedDotProductDesign.accumulator_type
     output_type = WeightedDotProductDesign.output_type
+    computation_profile = WeightedDotProductDesign.computation_profile
+    numerical_support = WeightedDotProductDesign.numerical_support
     narrow_weights = WeightedDotProductDesign.narrow_weights
     target_dsp = WeightedDotProductDesign.target_dsp
     clock_period_ns = WeightedDotProductDesign.clock_period_ns

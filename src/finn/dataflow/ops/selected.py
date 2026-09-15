@@ -1268,7 +1268,29 @@ def _validate_source_bindings(
             _fail("selected.source.shape", path, "source relation has the wrong source shape")
         if binding.relation.target_domain.extents != fact.shape:
             _fail("selected.source.shape", path, "source relation has the wrong selected shape")
-        if reference.carrier_dtype != fact.carrier_dtype:
+        converted_sources = {
+            owner.owner_id
+            for owner in declaration.ownership
+            if owner.kind is OwnerKind.SOURCE_BOUNDARY
+            and any(nodes[node_id].op_type == "Cast" for node_id in owner.node_ids)
+        }
+        converted_supplies = {
+            supply.source
+            for supply in declaration.supplies
+            if any(nodes[node_id].op_type == "Cast" for node_id in supply.derivation_nodes)
+        }
+        checked_integer_output = (
+            binding.source.direction is SourceDirection.OUTPUT
+            and declaration.construction.family == "finn.dataflow.selected.mvau.dot_product"
+            and declaration.construction.version == "2"
+            and fact.carrier_dtype in {TensorProto.INT32, TensorProto.INT64}
+        )
+        if (
+            reference.carrier_dtype != fact.carrier_dtype
+            and binding.source.operand_id not in converted_sources
+            and binding.source not in converted_supplies
+            and not checked_integer_output
+        ):
             _fail("selected.source.carrier_dtype", path, "carrier datatypes differ")
         if (
             reference.logical_datatype
@@ -1561,7 +1583,7 @@ def _validate_source_boundary_paths(
         reshape_seen = False
         for node_id in node_ids:
             node = nodes[node_id]
-            if node.domain or node.op_type not in {"Identity", "Reshape", "Transpose"}:
+            if node.domain or node.op_type not in {"Cast", "Identity", "Reshape", "Transpose"}:
                 _fail(
                     "selected.source.boundary_unsupported",
                     path,
@@ -1574,7 +1596,7 @@ def _validate_source_boundary_paths(
                     f"node {node_id!r} does not continue the source-boundary path",
                 )
             output = node.output[0]
-            if node.op_type == "Identity":
+            if node.op_type in {"Cast", "Identity"}:
                 output_shape = current_shape
             elif node.op_type == "Transpose":
                 attributes = {
@@ -1898,7 +1920,7 @@ def _validate_supply_derivation(
     reshape_seen = False
     for node_id in derivation_nodes:
         node = nodes[node_id]
-        if node.domain or node.op_type not in {"Identity", "Reshape", "Transpose"}:
+        if node.domain or node.op_type not in {"Cast", "Identity", "Reshape", "Transpose"}:
             _fail(
                 "selected.source.initializer_derivation_unsupported",
                 path,
@@ -1911,7 +1933,7 @@ def _validate_supply_derivation(
                 f"node {node_id!r} does not continue the declared initializer path",
             )
         output = node.output[0]
-        if node.op_type == "Identity":
+        if node.op_type in {"Cast", "Identity"}:
             output_shape = current_shape
         elif node.op_type == "Transpose":
             attributes = {
@@ -1954,9 +1976,9 @@ def _validate_supply_derivation(
             "initializer derivation uses an unsupported coordinate map",
         )
     allowed = {
-        RelationKind.DIRECT: {"Identity"},
-        RelationKind.ROW_MAJOR_RESHAPE: {"Identity", "Reshape"},
-        RelationKind.TRANSPOSE_2D: {"Identity", "Transpose"},
+        RelationKind.DIRECT: {"Cast", "Identity"},
+        RelationKind.ROW_MAJOR_RESHAPE: {"Cast", "Identity", "Reshape"},
+        RelationKind.TRANSPOSE_2D: {"Cast", "Identity", "Transpose"},
     }[relation_kind]
     if any(operation not in allowed for operation in operations):
         _fail(

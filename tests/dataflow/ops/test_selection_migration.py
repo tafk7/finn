@@ -64,7 +64,7 @@ def test_frozen_legacy_selections_migrate_atomically_and_reload(record) -> None:
     plan = plan_selection_migration(operation, legacy, assignments)
     migrated = apply_selection_migration(model, plan)
 
-    expected_schema = 3 if record["operation"] == "ActivationReplayOp" else 4
+    expected_schema = 3 if record["operation"] == "ActivationReplayOp" else 5
     assert read_attributes(model.graph.node[0])[SCHEMA_VERSION_ATTRIBUTE].value == expected_schema
     assert dict(migrated.recorded()) == assignments
     (rebound,) = bind_operations(model, LegacyBuild())

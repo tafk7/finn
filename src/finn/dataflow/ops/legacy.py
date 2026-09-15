@@ -83,6 +83,7 @@ class _LegacyAdapter:
     family: str
     from_schema_version: int
     to_schema_version: int
+    source_operand_codec_version: int
     choices: tuple[_LegacyChoice, ...]
 
     @property
@@ -104,58 +105,78 @@ _REPLAY = _LegacyAdapter(
     "finn.dataflow.activation_replay",
     2,
     3,
+    2,
     (
         _choice("design.pe", "design__pe", "i"),
         _choice("design.simd", "design__simd", "i"),
     ),
 )
 
-_MVAU = _LegacyAdapter(
-    "finn.dataflow.legacy.mvau",
-    1,
-    "finn.dataflow.mvau",
-    3,
-    4,
-    (
-        _choice("design.case", "design__case", "s"),
-        _choice("design.dot_product.pe", "design__dot_product__pe", "i"),
-        _choice("design.dot_product.simd", "design__dot_product__simd", "i"),
-        _choice(
-            "design.dot_product.weight_supply",
-            "design__dot_product__weight_supply",
-            "s",
-        ),
-        _choice(
-            "design.dot_product.compute.kernel",
-            "design__dot_product__compute__kernel",
-            "s",
-        ),
-        _choice(
-            "design.dot_product.compute.dotp_axi.compute_pumping",
-            "design__dot_product__compute__dotp_axi__compute_pumping",
-            "i",
-        ),
-        _choice(
-            "design.dot_product.compute.dotp_axi_embedded.compute_pumping",
-            "design__dot_product__compute__dotp_axi_embedded__compute_pumping",
-            "i",
-        ),
-        _choice("design.batch_interleaved.pe", "design__batch_interleaved__pe", "i"),
-        _choice("design.batch_interleaved.simd", "design__batch_interleaved__simd", "i"),
-        _choice(
-            "design.batch_interleaved.interleave",
-            "design__batch_interleaved__interleave",
-            "i",
-        ),
-        _choice(
-            "design.batch_interleaved.compute.dotp_axi_batch_interleaved.compute_pumping",
-            "design__batch_interleaved__compute__dotp_axi_batch_interleaved__compute_pumping",
-            "i",
-        ),
+_MVAU_CHOICES = (
+    _choice("design.case", "design__case", "s"),
+    _choice("design.dot_product.pe", "design__dot_product__pe", "i"),
+    _choice("design.dot_product.simd", "design__dot_product__simd", "i"),
+    _choice(
+        "design.dot_product.weight_supply",
+        "design__dot_product__weight_supply",
+        "s",
+    ),
+    _choice(
+        "design.dot_product.compute.kernel",
+        "design__dot_product__compute__kernel",
+        "s",
+    ),
+    _choice(
+        "design.dot_product.compute.dotp_axi.compute_pumping",
+        "design__dot_product__compute__dotp_axi__compute_pumping",
+        "i",
+    ),
+    _choice(
+        "design.dot_product.compute.dotp_axi_embedded.compute_pumping",
+        "design__dot_product__compute__dotp_axi_embedded__compute_pumping",
+        "i",
+    ),
+    _choice("design.batch_interleaved.pe", "design__batch_interleaved__pe", "i"),
+    _choice("design.batch_interleaved.simd", "design__batch_interleaved__simd", "i"),
+    _choice(
+        "design.batch_interleaved.interleave",
+        "design__batch_interleaved__interleave",
+        "i",
+    ),
+    _choice(
+        "design.batch_interleaved.compute.dotp_axi_batch_interleaved.compute_pumping",
+        "design__batch_interleaved__compute__dotp_axi_batch_interleaved__compute_pumping",
+        "i",
     ),
 )
 
-_ADAPTERS = MappingProxyType({_REPLAY.family: _REPLAY, _MVAU.family: _MVAU})
+_MVAU_V3 = _LegacyAdapter(
+    "finn.dataflow.legacy.mvau",
+    2,
+    "finn.dataflow.mvau",
+    3,
+    5,
+    2,
+    _MVAU_CHOICES,
+)
+
+_MVAU_V4 = _LegacyAdapter(
+    "finn.dataflow.legacy.mvau",
+    2,
+    "finn.dataflow.mvau",
+    4,
+    5,
+    3,
+    _MVAU_CHOICES,
+)
+
+_ADAPTERS = MappingProxyType(
+    {
+        (_REPLAY.family, _REPLAY.from_schema_version): _REPLAY,
+        (_MVAU_V3.family, _MVAU_V3.from_schema_version): _MVAU_V3,
+        (_MVAU_V4.family, _MVAU_V4.from_schema_version): _MVAU_V4,
+    }
+)
 
 
 def inspect_legacy_selection(operation: DataflowOp) -> LegacySelection:
@@ -164,10 +185,18 @@ def inspect_legacy_selection(operation: DataflowOp) -> LegacySelection:
     if not isinstance(operation, DataflowOp) or not operation.is_bound:
         raise LegacySelectionError("legacy inspection requires a source-only-bound DataflowOp")
     family = type(operation).family
+    schema_attributes = [
+        item for item in operation.onnx_node.attribute if item.name == SCHEMA_VERSION_ATTRIBUTE
+    ]
+    if len(schema_attributes) != 1:
+        raise LegacySelectionError("legacy selection needs exactly one schema version")
+    schema = _decode_attribute(schema_attributes[0], "i", SCHEMA_VERSION_ATTRIBUTE)
     try:
-        adapter = _ADAPTERS[family]
+        adapter = _ADAPTERS[(family, schema.value)]
     except KeyError as error:
-        raise LegacySelectionError(f"no legacy selection adapter for family {family!r}") from error
+        raise LegacySelectionError(
+            f"no legacy selection adapter for family {family!r} schema {schema.value!r}"
+        ) from error
     if type(operation).schema_version != adapter.to_schema_version:
         raise LegacySelectionError(
             f"adapter target schema {adapter.to_schema_version} differs from current "
@@ -188,7 +217,6 @@ def inspect_legacy_selection(operation: DataflowOp) -> LegacySelection:
             raise LegacySelectionError(f"duplicate legacy attribute {name!r}")
         present[name] = attribute
 
-    schema = _decode_attribute(present.get(SCHEMA_VERSION_ATTRIBUTE), "i", SCHEMA_VERSION_ATTRIBUTE)
     if schema.value != adapter.from_schema_version:
         raise LegacySelectionError(
             f"adapter expects schema {adapter.from_schema_version}, found {schema.value!r}"
@@ -196,7 +224,7 @@ def inspect_legacy_selection(operation: DataflowOp) -> LegacySelection:
     fingerprint = _decode_attribute(present.get(FINGERPRINT_ATTRIBUTE), "s", FINGERPRINT_ATTRIBUTE)
     if type(fingerprint.value) is not str or not fingerprint.value:
         raise LegacySelectionError("legacy problem fingerprint must be a non-empty string")
-    expected_fingerprint = _historical_problem_fingerprint(operation)
+    expected_fingerprint = _historical_problem_fingerprint(operation, adapter)
     if fingerprint.value != expected_fingerprint:
         raise LegacySelectionError(
             "legacy choices were recorded for different source/build facts: "
@@ -274,22 +302,24 @@ def _decode_attribute(attribute: Any | None, kind: str, name: str) -> NativeAttr
     return NativeAttribute(kind, value)
 
 
-def _historical_problem_fingerprint(operation: DataflowOp) -> str:
+def _historical_problem_fingerprint(operation: DataflowOp, adapter: _LegacyAdapter) -> str:
     snapshot = operation.problem_snapshot
     problem = []
     graph_problem = getattr(type(operation), "incoming_graph_context", None)
     for name, declaration in declared_members(type(operation)):
         if not isinstance(declaration, Problem) or declaration is graph_problem:
             continue
+        if name in {"invocation_scope", "runtime_weight_promise"}:
+            continue
         source_operand = declaration.canonical.identity == "finn.dataflow.source_operand"
         codec = (
-            "finn.dataflow.source_operand@2"
+            f"finn.dataflow.source_operand@{adapter.source_operand_codec_version}"
             if source_operand
             else f"{declaration.canonical.identity}@{declaration.canonical.version}"
         )
         if declaration in snapshot:
             value = snapshot[declaration]
-            if source_operand:
+            if source_operand and adapter.source_operand_codec_version == 2:
                 encoded = check_canonical(
                     _encode_source_operand_v2(value),
                     f"historical source operand {type(operation).__name__}.{name}",

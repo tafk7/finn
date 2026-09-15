@@ -74,9 +74,9 @@ from finn.dataflow.ops.selected_transforms import (
 )
 
 MVAU_CONSTRUCTION_FAMILY = "finn.dataflow.selected.mvau.dot_product"
-MVAU_CONSTRUCTION_VERSION = "1"
+MVAU_CONSTRUCTION_VERSION = "2"
 MVAU_SOURCE_SEMANTICS = "finn.dataflow.source.mvau"
-MVAU_SOURCE_SEMANTICS_VERSION = 1
+MVAU_SOURCE_SEMANTICS_VERSION = 2
 MVAU_GRAPH_NAME = "selected_mvau_dot_product"
 
 ACTIVATION_KEY = SourceOperandKey("activation", SourceDirection.INPUT, 0)
@@ -91,6 +91,8 @@ class MvauSourceSemantics:
     accumulator_datatype: str
     output_datatype: str
     activation_bias: int | None
+    integer_support_fingerprint: str | None = None
+    integer_output_carrier: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +112,8 @@ class MvauSelectionParameters:
     source_weight_shape: tuple[int, ...]
     source_output_shape: tuple[int, ...]
     source_weight_initializer_digest: str | None
+    integer_support_fingerprint: str | None
+    integer_output_carrier: str | None
 
 
 def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSemantics:
@@ -117,6 +121,13 @@ def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSem
         raise ValueError("an unfused MVAU semantic descriptor has no activation bias")
     if value.activation is ActivationMode.MULTITHRESHOLD and type(value.activation_bias) is not int:
         raise ValueError("a fused MVAU semantic descriptor needs an integer activation bias")
+    if value.accumulation is AccumulationMode.INTEGER and value.activation is ActivationMode.NONE:
+        if not value.integer_support_fingerprint:
+            raise ValueError("plain-integer MVAU semantics need a numerical premise fingerprint")
+        if value.integer_output_carrier not in {"INT32", "INT64"}:
+            raise ValueError("plain-integer MVAU semantics need an INT32 or INT64 carrier")
+    elif value.integer_support_fingerprint is not None or value.integer_output_carrier is not None:
+        raise ValueError("non-plain-integer MVAU semantics must not claim integer support")
     return EncodedSourceSemantics(
         MVAU_SOURCE_SEMANTICS,
         MVAU_SOURCE_SEMANTICS_VERSION,
@@ -126,6 +137,8 @@ def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSem
             "accumulator_datatype": value.accumulator_datatype,
             "output_datatype": value.output_datatype,
             "activation_bias": value.activation_bias,
+            "integer_support_fingerprint": value.integer_support_fingerprint,
+            "integer_output_carrier": value.integer_output_carrier,
         },
     )
 
@@ -137,6 +150,8 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
         "accumulator_datatype",
         "output_datatype",
         "activation_bias",
+        "integer_support_fingerprint",
+        "integer_output_carrier",
     }
     if (
         value.identity != MVAU_SOURCE_SEMANTICS
@@ -150,6 +165,8 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
     accumulator = value.payload["accumulator_datatype"]
     output = value.payload["output_datatype"]
     bias = value.payload["activation_bias"]
+    support_fingerprint = value.payload["integer_support_fingerprint"]
+    integer_output_carrier = value.payload["integer_output_carrier"]
     if type(accumulator) is not str or not accumulator or type(output) is not str or not output:
         raise ValueError("MVAU semantic datatypes must be non-empty strings")
     if activation is ActivationMode.NONE:
@@ -157,7 +174,22 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
             raise ValueError("an unfused MVAU semantic descriptor has no activation bias")
     elif type(bias) is not int:
         raise ValueError("a fused MVAU semantic descriptor needs an integer activation bias")
-    return MvauSourceSemantics(accumulation, activation, accumulator, output, bias)
+    if accumulation is AccumulationMode.INTEGER and activation is ActivationMode.NONE:
+        if type(support_fingerprint) is not str or not support_fingerprint:
+            raise ValueError("plain-integer MVAU semantics need a numerical support fingerprint")
+        if integer_output_carrier not in {"INT32", "INT64"}:
+            raise ValueError("plain-integer MVAU semantics need an INT32 or INT64 carrier")
+    elif support_fingerprint is not None or integer_output_carrier is not None:
+        raise ValueError("non-plain-integer MVAU semantics must not claim integer support")
+    return MvauSourceSemantics(
+        accumulation,
+        activation,
+        accumulator,
+        output,
+        bias,
+        support_fingerprint,
+        integer_output_carrier,
+    )
 
 
 def _choice(choices: tuple[RecordedChoice, ...], path: str) -> object:
@@ -192,6 +224,8 @@ def derive_mvau_facts(
         raise ValueError("unfused MVAU output datatype must equal accumulator datatype")
     if source.family != "finn.dataflow.mvau" or source.family_version != "1":
         raise ValueError("selected MVAU requires operation family version 1")
+    if source.schema_version != 5:
+        raise ValueError("version-2 selected MVAU requires native schema 5")
     activation = _operand(source, ACTIVATION_KEY)
     weight = _operand(source, WEIGHT_KEY)
     output = _operand(source, OUTPUT_KEY)
@@ -223,7 +257,12 @@ def derive_mvau_facts(
         activation.logical_datatype == "BIPOLAR" and weight.logical_datatype == "BIPOLAR"
     ):
         raise ValueError("BIPOLAR activation and weight operands require bipolar popcount")
-    if any(
+    if semantics.accumulation is AccumulationMode.INTEGER:
+        if semantics.integer_output_carrier not in {"INT32", "INT64"}:
+            raise ValueError("selected integer MVAU has no checked output carrier")
+        if not semantics.integer_support_fingerprint:
+            raise ValueError("selected integer MVAU has no numerical support fingerprint")
+    elif any(
         carrier != TensorProto.FLOAT
         for carrier in (
             activation.carrier_dtype,
@@ -231,7 +270,7 @@ def derive_mvau_facts(
             output.carrier_dtype,
         )
     ):
-        raise ValueError("version-1 selected MVAU supports FLOAT ONNX carriers")
+        raise ValueError("selected popcount MVAU supports FLOAT ONNX carriers")
     design_case = _choice(choices, "design.case")
     if design_case != "dot_product":
         raise ValueError("selected MVAU construction requires the dot_product Design")
@@ -267,6 +306,8 @@ def derive_mvau_facts(
         weight.shape,
         output.shape,
         weight.initializer_content_digest,
+        semantics.integer_support_fingerprint,
+        semantics.integer_output_carrier,
     )
     return SelectionFacts(identity, source, semantics, choices, parameters)
 
@@ -338,9 +379,19 @@ def construct_mvau_snapshot(
     construction_inputs: ConstructionInputs,
 ) -> SelectedGraphSnapshot:
     parameters = facts.parameters
-    activation_carrier = _operand(facts.source, ACTIVATION_KEY).carrier_dtype
-    weight_carrier = _operand(facts.source, WEIGHT_KEY).carrier_dtype
-    output_carrier = _operand(facts.source, OUTPUT_KEY).carrier_dtype
+    source_activation_carrier = _operand(facts.source, ACTIVATION_KEY).carrier_dtype
+    source_weight_carrier = _operand(facts.source, WEIGHT_KEY).carrier_dtype
+    source_output_carrier = _operand(facts.source, OUTPUT_KEY).carrier_dtype
+    integer_path = facts.source_semantics.accumulation is AccumulationMode.INTEGER
+    activation_carrier = TensorProto.INT64 if integer_path else source_activation_carrier
+    weight_carrier = TensorProto.INT64 if integer_path else source_weight_carrier
+    output_carrier = (
+        TensorProto.INT32
+        if integer_path and parameters.integer_output_carrier == "INT32"
+        else TensorProto.INT64
+        if integer_path and parameters.integer_output_carrier == "INT64"
+        else source_output_carrier
+    )
     required_inputs = () if parameters.weight_supply is WeightSupply.EXTERNAL else (WEIGHT_KEY,)
     frozen = validate_construction_inputs(facts, construction_inputs, required_inputs)
     activation_type = resolve_qonnx_datatype_name(parameters.activation_datatype)
@@ -372,18 +423,39 @@ def construct_mvau_snapshot(
         node_records.append(GraphNodeBinding(node_id, len(nodes) - 1))
         owner_nodes[(owner_kind, owner_id, rule)].append(node_id)
 
-    source_activation = "X"
-    if parameters.source_activation_shape != (parameters.rows, parameters.matrix_width):
-        source_activation = "X_source"
+    source_activation_shape = parameters.source_activation_shape
+    source_activation = (
+        "X" if source_activation_shape == (parameters.rows, parameters.matrix_width) else "X_source"
+    )
+    region_activation = source_activation
+    if integer_path:
+        region_activation = "X_integer"
+        add_node(
+            "source.activation.cast",
+            "Cast",
+            [source_activation],
+            [region_activation],
+            OwnerKind.SOURCE_BOUNDARY,
+            "activation",
+            "checked_integer_conversion.v1",
+            to=TensorProto.INT64,
+        )
+        add_value(
+            region_activation,
+            TensorProto.INT64,
+            source_activation_shape,
+            activation_type,
+        )
+    if source_activation_shape != (parameters.rows, parameters.matrix_width):
         constant_values["shape_X"] = (parameters.rows, parameters.matrix_width)
         add_node(
             "source.activation.reshape",
             "Reshape",
-            [source_activation, "shape_X"],
+            [region_activation, "shape_X"],
             ["X"],
             OwnerKind.SOURCE_BOUNDARY,
             "activation",
-            "row_major.v1",
+            "checked_integer_conversion.v1" if integer_path else "row_major.v1",
         )
         add_value(
             "X",
@@ -391,6 +463,7 @@ def construct_mvau_snapshot(
             (parameters.rows, parameters.matrix_width),
             activation_type,
         )
+        region_activation = "X"
 
     constant_values.update(
         {
@@ -409,7 +482,7 @@ def construct_mvau_snapshot(
     add_node(
         "replay.unsqueeze",
         "Unsqueeze",
-        ["X", "axes_replay"],
+        [region_activation, "axes_replay"],
         ["X1"],
         OwnerKind.REGION,
         "replay",
@@ -459,10 +532,27 @@ def construct_mvau_snapshot(
         if parameters.weight_supply is WeightSupply.EMBEDDED
         else (OwnerKind.REGION, "memory", "transpose_2d.v1")
     )
+    weight_source_value = "W_source"
+    if integer_path:
+        weight_source_value = "W_integer"
+        add_node(
+            "weight.to_integer",
+            "Cast",
+            ["W_source"],
+            [weight_source_value],
+            *weight_owner,
+            to=TensorProto.INT64,
+        )
+        add_value(
+            weight_source_value,
+            TensorProto.INT64,
+            parameters.source_weight_shape,
+            weight_type,
+        )
     add_node(
         "weight.to_region",
         "Transpose",
-        ["W_source"],
+        [weight_source_value],
         ["W"],
         *weight_owner,
         perm=[1, 0],
@@ -501,7 +591,7 @@ def construct_mvau_snapshot(
         activation_type,
     )
 
-    if facts.source_semantics.accumulation is AccumulationMode.INTEGER:
+    if integer_path:
         constant_values["shape_W_folded"] = (
             parameters.neuron_folds,
             parameters.pe,
@@ -549,7 +639,7 @@ def construct_mvau_snapshot(
         )
         add_value(
             "Y_folded_4d",
-            output_carrier,
+            TensorProto.INT64,
             (parameters.rows, parameters.neuron_folds, 1, parameters.pe),
             output_type,
         )
@@ -637,21 +727,39 @@ def construct_mvau_snapshot(
         folded_result = "Y_folded"
 
     constant_values["shape_Y"] = (parameters.rows, parameters.matrix_height)
+    reshaped_result = "Y_integer" if integer_path else "Y"
     add_node(
         "compute.output.reshape",
         "Reshape",
         [folded_result, "shape_Y"],
-        ["Y"],
+        [reshaped_result],
         OwnerKind.REGION,
         "compute",
         "dot_product.v1",
     )
     add_value(
-        "Y",
-        output_carrier,
+        reshaped_result,
+        TensorProto.INT64 if integer_path else output_carrier,
         (parameters.rows, parameters.matrix_height),
         output_type,
     )
+    if integer_path:
+        add_node(
+            "compute.output.cast",
+            "Cast" if output_carrier == TensorProto.INT32 else "Identity",
+            [reshaped_result],
+            ["Y"],
+            OwnerKind.REGION,
+            "compute",
+            "dot_product.v1",
+            **({"to": output_carrier} if output_carrier == TensorProto.INT32 else {}),
+        )
+        add_value(
+            "Y",
+            output_carrier,
+            (parameters.rows, parameters.matrix_height),
+            output_type,
+        )
 
     graph_output = "Y"
     if parameters.source_output_shape != (parameters.rows, parameters.matrix_height):
@@ -670,7 +778,7 @@ def construct_mvau_snapshot(
     graph_inputs = [
         _tensor(
             source_activation,
-            activation_carrier,
+            source_activation_carrier,
             parameters.source_activation_shape,
         )
     ]
@@ -678,7 +786,7 @@ def construct_mvau_snapshot(
         graph_inputs.append(
             _tensor(
                 "W_source",
-                weight_carrier,
+                source_weight_carrier,
                 parameters.source_weight_shape,
             )
         )
@@ -717,7 +825,7 @@ def construct_mvau_snapshot(
     interface_bindings = [
         InterfaceBinding(
             QualifiedInterfaceRef("replay", InterfaceDirection.INPUT, "X", "activation_in"),
-            "X",
+            region_activation,
             PositionRelation.direct(x_domain, x_domain),
             (GraphSlotRef(GraphSlotKind.NODE_INPUT, "replay.unsqueeze", 0),),
         ),
@@ -737,7 +845,13 @@ def construct_mvau_snapshot(
             QualifiedInterfaceRef("compute", InterfaceDirection.OUTPUT, "Y", "output"),
             "Y",
             PositionRelation.direct(y_domain, y_domain),
-            (GraphSlotRef(GraphSlotKind.NODE_OUTPUT, "compute.output.reshape", 0),),
+            (
+                GraphSlotRef(
+                    GraphSlotKind.NODE_OUTPUT,
+                    "compute.output.cast" if integer_path else "compute.output.reshape",
+                    0,
+                ),
+            ),
         ),
     ]
     weight_use = GraphSlotRef(GraphSlotKind.NODE_INPUT, "compute.weight.reshape", 0)
@@ -786,7 +900,7 @@ def construct_mvau_snapshot(
     source_bindings = [
         SourceValueBinding(
             ACTIVATION_KEY,
-            "X",
+            region_activation,
             (
                 PositionRelation.direct(
                     RectangularDomain(parameters.source_activation_shape), x_domain
@@ -797,7 +911,15 @@ def construct_mvau_snapshot(
                 )
             ),
             (
-                GraphSlotRef(GraphSlotKind.GRAPH_INPUT, MVAU_GRAPH_NAME, 0)
+                GraphSlotRef(
+                    GraphSlotKind.NODE_OUTPUT,
+                    "source.activation.reshape"
+                    if source_activation_shape != (parameters.rows, parameters.matrix_width)
+                    else "source.activation.cast",
+                    0,
+                )
+                if integer_path
+                else GraphSlotRef(GraphSlotKind.GRAPH_INPUT, MVAU_GRAPH_NAME, 0)
                 if source_activation == "X"
                 else GraphSlotRef(GraphSlotKind.NODE_OUTPUT, "source.activation.reshape", 0),
             ),
@@ -812,7 +934,13 @@ def construct_mvau_snapshot(
                     RectangularDomain(parameters.source_output_shape), y_domain
                 )
             ),
-            (GraphSlotRef(GraphSlotKind.NODE_OUTPUT, "compute.output.reshape", 0),),
+            (
+                GraphSlotRef(
+                    GraphSlotKind.NODE_OUTPUT,
+                    "compute.output.cast" if integer_path else "compute.output.reshape",
+                    0,
+                ),
+            ),
         ),
     ]
     if parameters.weight_supply is WeightSupply.EXTERNAL:
@@ -851,7 +979,11 @@ def construct_mvau_snapshot(
                 required_ref,
                 "W_source",
                 WEIGHT_KEY,
-                ("weight.to_region",),
+                (
+                    ("weight.to_integer", "weight.to_region")
+                    if integer_path
+                    else ("weight.to_region",)
+                ),
             ),
         )
 

@@ -54,7 +54,11 @@ from finn.dataflow.designs.design import (
     NetworkEdge,
     SelectedGraph,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, EmbeddedDotpAxiKernel
+from finn.dataflow.kernels.dotp_axi import (
+    DotpAxiKernel,
+    EmbeddedDotpAxiKernel,
+    require_dotp_axi_numerical_support,
+)
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
@@ -90,6 +94,8 @@ class DotProductDesign(WeightedDotProductDesign):
     weight_type = WeightedDotProductDesign.weight_type
     accumulator_type = WeightedDotProductDesign.accumulator_type
     output_type = WeightedDotProductDesign.output_type
+    computation_profile = WeightedDotProductDesign.computation_profile
+    numerical_support = WeightedDotProductDesign.numerical_support
     narrow_weights = WeightedDotProductDesign.narrow_weights
     target_dsp = WeightedDotProductDesign.target_dsp
     clock_period_ns = WeightedDotProductDesign.clock_period_ns
@@ -201,6 +207,19 @@ class DotProductDesign(WeightedDotProductDesign):
 
     def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
         """Build the selected external Replay/Dotp composition only."""
+
+        profile = self.answer(type(self).computation_profile)
+        if not isinstance(profile, Decided):
+            return cast("Answer[DesignPhysicalFacts]", profile)
+        numerical = self.answer(type(self).numerical_support)
+        report = numerical.value if isinstance(numerical, Decided) else None
+        try:
+            require_dotp_axi_numerical_support(report, profile.value)
+        except ValueError as error:
+            return cast(
+                "Answer[DesignPhysicalFacts]",
+                design_physical_refusal(self, str(error)),
+            )
 
         supply = self.answer(type(self).weight_supply)
         if not isinstance(supply, Decided):

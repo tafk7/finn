@@ -207,6 +207,19 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             }
         )
 
+    def _additional_problem_values(
+        self, source: SourceNode, *, scope_id: str
+    ) -> Mapping[Problem[Any], object]:
+        """Operation-specific immutable facts not represented by ONNX operands.
+
+        The generic source reader remains authoritative for tensors and
+        attributes.  A subclass may add a narrowly scoped occurrence fact such
+        as the stable invocation identity used by a runtime contract.
+        """
+
+        del source, scope_id
+        return MappingProxyType({})
+
     def _frozen_build_values(self) -> Mapping[Problem[Any], object]:
         return MappingProxyType(
             {
@@ -245,6 +258,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             context_read,
         )
         values = dict(facts)
+        values.update(self._additional_problem_values(source, scope_id=state.scope_id))
         if context_read is not None:
             from finn.dataflow.ops.graph_context import ContextRead  # noqa: PLC0415
 

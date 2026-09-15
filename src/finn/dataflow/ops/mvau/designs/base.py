@@ -14,6 +14,7 @@ does not merge choices across alternatives.
 from __future__ import annotations
 
 from finn.dataflow.designs.design import DataflowDesign
+from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -41,6 +42,7 @@ class WeightedDotProductDesign(DataflowDesign):
     target_dsp = Input(DspBlock)
     clock_period_ns = Input(float)
     computation_profile = Input(MvauComputationProfile)
+    numerical_support = Input(IntegerSupportReport, allow_absent=True)
 
     #: Owned here because each of them changes both Regions and their edge.
     pe = Decision(int, domain=divisors_of(matrix_height))
@@ -88,6 +90,7 @@ SHARED_INPUTS = (
     "target_dsp",
     "clock_period_ns",
     "computation_profile",
+    "numerical_support",
 )
 
 __all__ = ["SHARED_INPUTS", "WeightedDotProductDesign"]

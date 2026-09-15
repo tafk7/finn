@@ -34,6 +34,12 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow._engine import Decided
+from finn.dataflow.analysis.integer_dot import (
+    IntegerRange,
+    InvocationScope,
+    OperandIdentity,
+    RuntimeWeightPromise,
+)
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.space.declarations import AuthoringError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
@@ -366,7 +372,7 @@ def test_an_integer_node_computes_a_matrix_product() -> None:
         MATRIX_WIDTH, MATRIX_HEIGHT
     )
 
-    result = _executed(_model(), activation=activation, weight=weight)
+    result = _executed(_model(weights=weight), activation=activation, weight=weight)
 
     assert np.array_equal(result, np.matmul(activation, weight))
 
@@ -490,7 +496,7 @@ def test_a_bound_occurrence_executes_from_its_frozen_reading() -> None:
 
     activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
     weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
-    model = _model()
+    model = _model(weights=weight)
     operation = _bound(model)
 
     context: dict[str, Any] = {"activation": activation, "weight": weight}
@@ -701,6 +707,7 @@ class RuntimeBuild(Build):
 
     runtime_writable_weights: bool = True
     runtime_weight_range_contract: bool | None = None
+    runtime_weight_promise: RuntimeWeightPromise | None = None
 
 
 def _narrow(build: Build, *, weights: np.ndarray | None = None) -> Any:
@@ -742,6 +749,78 @@ def test_the_runtime_facts_are_part_of_the_problem_identity() -> None:
     runtime = _unbound(model, "mvau0").bind(model, RuntimeBuild())
 
     assert plain.problem_fingerprint != runtime.problem_fingerprint
+
+
+def _runtime_promise(
+    scope: str,
+    *,
+    source: OperandIdentity = OperandIdentity("weight", "input", 1),
+    covered: tuple[str, ...] | None = None,
+) -> RuntimeWeightPromise:
+    return RuntimeWeightPromise(
+        IntegerRange(-2, 2),
+        MATRIX_WIDTH * MATRIX_HEIGHT,
+        source,
+        tuple(InvocationScope(item) for item in (covered or (scope,))),
+        "source-test-runtime-weights",
+        "FLOAT32",
+    )
+
+
+def test_runtime_weight_promise_must_apply_before_source_execution() -> None:
+    weights = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    activation = np.full((REPETITIONS, MATRIX_WIDTH), 2, dtype=np.float32)
+    model = _model(weights=weights)
+    wrapper = _unbound(model, "mvau0")
+    scope = wrapper.recorded_scope_id()
+    assert scope is not None
+
+    valid = wrapper.bind(
+        model,
+        RuntimeBuild(runtime_weight_promise=_runtime_promise(scope)),
+    )
+    report = valid.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(report, Decided) and report.value.supported
+    context: dict[str, Any] = {"activation": activation, "weight": weights}
+    valid.execute_node(context, model.graph)
+    assert context["output"].dtype == np.int32
+    assert np.array_equal(
+        context["output"],
+        np.full((REPETITIONS, MATRIX_HEIGHT), 2 * MATRIX_WIDTH, dtype=np.int32),
+    )
+
+    wrong_scope = wrapper.bind(
+        model,
+        RuntimeBuild(runtime_weight_promise=_runtime_promise("unrelated-invocation-A")),
+    )
+    refused = wrong_scope.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(refused, Decided)
+    assert {item.code for item in refused.value.findings} == {"integer-runtime-promise-scope"}
+
+    wrong_source = wrapper.bind(
+        model,
+        RuntimeBuild(
+            runtime_weight_promise=_runtime_promise(
+                scope,
+                source=OperandIdentity("other-weight", "input", 1),
+            )
+        ),
+    )
+    refused = wrong_source.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(refused, Decided)
+    assert {item.code for item in refused.value.findings} == {"integer-runtime-promise-source"}
+
+    broad = wrapper.bind(
+        model,
+        RuntimeBuild(
+            runtime_weight_promise=_runtime_promise(
+                scope,
+                covered=("another-invocation", scope),
+            )
+        ),
+    )
+    accepted = broad.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(accepted, Decided) and accepted.value.supported
 
 
 # -- provenance ------------------------------------------------------------------

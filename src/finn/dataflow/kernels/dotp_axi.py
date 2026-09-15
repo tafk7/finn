@@ -24,6 +24,7 @@ from finn.dataflow.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
+from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
 from finn.dataflow.kernels.physical import KernelStreamBinding, PeriodicLast, low_fields_binding
@@ -49,6 +50,7 @@ from finn.dataflow.ops.mvau.regions import (
     construct_dot_product_region,
     construct_embedded_dot_product_region,
 )
+from finn.dataflow.ops.mvau.computation import AccumulationMode, MvauComputationProfile
 
 FINNLIB_ROOT = "finnlib"
 FINNLIB_SOURCES = (
@@ -82,6 +84,22 @@ _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
 _SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
 _SEGMENT_BASE_DELAY_NS = 0.741
 _SEGMENT_STAGE_DELAY_NS = 0.605
+
+
+def require_dotp_axi_numerical_support(
+    report: IntegerSupportReport | None,
+    profile: MvauComputationProfile,
+) -> None:
+    """Consume an invocation proof when a compiler-owned use supplies one."""
+
+    if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
+        return
+    if report is None:
+        # A standalone reusable core has no source invocation to prove.
+        return
+    if not report.supported:
+        reasons = ", ".join(item.code for item in report.findings) or "unsupported"
+        raise PhysicallyUnsupported(f"integer execution is unsupported: {reasons}")
 
 
 def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
@@ -591,4 +609,5 @@ __all__ = [
     "EmbeddedDotpAxiKernel",
     "FINNLIB_ROOT",
     "FINNLIB_SOURCES",
+    "require_dotp_axi_numerical_support",
 ]

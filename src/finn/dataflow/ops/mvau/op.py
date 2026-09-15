@@ -18,13 +18,21 @@ separate source Space and no wrapper between the node and the point.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import ABSENT, Decided
+from finn.dataflow.analysis.integer_dot import (
+    IntegerSupportReport,
+    InvocationScope,
+    RuntimeWeightPromise,
+)
 from finn.dataflow.model.datatypes import QONNXDataType
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
+    CanonicalValueCodec,
+    Problem,
     Space,
     Subspace,
     SubspaceChoice,
@@ -32,6 +40,7 @@ from finn.dataflow.space.declarations import (
     constraint,
     derived,
     reject,
+    reject_all,
 )
 from finn.dataflow.space.occurrence import ChoiceView, ProjectionAssessment
 from finn.dataflow.model.network import DataflowNetwork
@@ -40,9 +49,16 @@ from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionO
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError, unresolved_reason
 from finn.dataflow.ops.mvau.computation import (
+    AccumulationMode,
     MvauComputationProfile,
     computation_profile,
     execute_mvau,
+)
+from finn.dataflow.ops.mvau.numerics import (
+    check_mvau_integer_support,
+    check_mvau_integer_support_from_operands,
+    execute_mvau_integer,
+    integer_graph_profile_fingerprint,
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
@@ -108,6 +124,23 @@ def _runtime_weight_range_contract(build: Any) -> bool | None:
 
     value = getattr(build, "runtime_weight_range_contract", None)
     return None if value is None else bool(value)
+
+
+def _runtime_weight_promise(build: Any) -> RuntimeWeightPromise | None:
+    value = getattr(build, "runtime_weight_promise", None)
+    if value is None:
+        return None
+    if not isinstance(value, RuntimeWeightPromise):
+        raise TypeError("runtime_weight_promise must be RuntimeWeightPromise")
+    return value
+
+
+def _numerical_rejection(report: IntegerSupportReport) -> object:
+    if not report.findings:
+        return True
+    return reject_all(
+        reject(item.code, item.message, values=dict(item.values)) for item in report.findings
+    )
 
 
 def _design_view(root: Space) -> ChoiceView:
@@ -176,7 +209,7 @@ class MvauDataflowOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
-    schema_version: ClassVar[int] = 4
+    schema_version: ClassVar[int] = 5
 
     # -- the source schema ----------------------------------------------------
 
@@ -232,7 +265,27 @@ class MvauDataflowOp(DataflowOp):
     runtime_weight_range_contract = BuildFact(
         bool, accessor=_runtime_weight_range_contract, required=False
     )
+    runtime_weight_promise = BuildFact(
+        RuntimeWeightPromise,
+        accessor=_runtime_weight_promise,
+        required=False,
+    )
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
+
+    invocation_scope = Problem(
+        InvocationScope,
+        canonical=CanonicalValueCodec(
+            "finn.dataflow.invocation_scope.external_identity",
+            1,
+            lambda _scope: {"identity": "recorded-separately"},
+        ),
+    )
+
+    def _additional_problem_values(
+        self, source: SourceNode, *, scope_id: str
+    ) -> Mapping[Problem[Any], object]:
+        stable_scope = scope_id or f"source-node:{source.domain}:{source.node_name}"
+        return {type(self).invocation_scope: InvocationScope(stable_scope)}
 
     # -- what the composition below reads -------------------------------------
 
@@ -310,6 +363,94 @@ class MvauDataflowOp(DataflowOp):
             binary_xnor=xnor,
             activation_type=cast(Any, activation_type),
             weight_type=cast(Any, weight_type),
+        )
+
+    @derived(
+        IntegerSupportReport,
+        activation=activation,
+        weight=weight,
+        accumulator=accumulator_type,
+        output=output_type,
+        profile=profile,
+        scope=invocation_scope,
+        runtime_writable=allow_absent(runtime_writable_weights),
+        runtime_promise=allow_absent(runtime_weight_promise),
+    )
+    def source_numerical_report(
+        *,
+        activation: SourceOperand,
+        weight: SourceOperand,
+        accumulator: QONNXDataType,
+        output: QONNXDataType,
+        profile: MvauComputationProfile,
+        scope: InvocationScope,
+        runtime_writable: object,
+        runtime_promise: object,
+    ) -> IntegerSupportReport:
+        if (
+            profile.accumulation is not AccumulationMode.INTEGER
+            or profile.fuses_activation
+            or not activation.datatype_annotated
+            or not weight.datatype_annotated
+        ):
+            return IntegerSupportReport(None, ())
+        return check_mvau_integer_support_from_operands(
+            activation,
+            weight,
+            accumulator_datatype=accumulator,
+            output_datatype=output,
+            invocation_scope=scope,
+            runtime_writable=runtime_writable is not ABSENT and bool(runtime_writable),
+            runtime_promise=(
+                runtime_promise if isinstance(runtime_promise, RuntimeWeightPromise) else None
+            ),
+            target_max_bits=64,
+        )
+
+    @derived(
+        IntegerSupportReport,
+        activation=activation,
+        weight=weight,
+        accumulator=accumulator_type,
+        output=output_type,
+        profile=profile,
+        scope=invocation_scope,
+        runtime_writable=allow_absent(runtime_writable_weights),
+        runtime_promise=allow_absent(runtime_weight_promise),
+        target=target_dsp,
+    )
+    def numerical_support(
+        *,
+        activation: SourceOperand,
+        weight: SourceOperand,
+        accumulator: QONNXDataType,
+        output: QONNXDataType,
+        profile: MvauComputationProfile,
+        scope: InvocationScope,
+        runtime_writable: object,
+        runtime_promise: object,
+        target: DspBlock,
+    ) -> IntegerSupportReport:
+        if (
+            profile.accumulation is not AccumulationMode.INTEGER
+            or profile.fuses_activation
+            or not activation.datatype_annotated
+            or not weight.datatype_annotated
+        ):
+            return IntegerSupportReport(None, ())
+        from finn.dataflow.ops.mvau.numerics import target_accumulator_bits  # noqa: PLC0415
+
+        return check_mvau_integer_support_from_operands(
+            activation,
+            weight,
+            accumulator_datatype=accumulator,
+            output_datatype=output,
+            invocation_scope=scope,
+            runtime_writable=runtime_writable is not ABSENT and bool(runtime_writable),
+            runtime_promise=(
+                runtime_promise if isinstance(runtime_promise, RuntimeWeightPromise) else None
+            ),
+            target_max_bits=target_accumulator_bits(target),
         )
 
     @derived(
@@ -422,12 +563,21 @@ class MvauDataflowOp(DataflowOp):
             )
         return True
 
+    @constraint(report=source_numerical_report, profile=profile)
+    def source_integer_numerically_supported(
+        *, report: IntegerSupportReport, profile: MvauComputationProfile
+    ) -> object:
+        if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
+            return True
+        return _numerical_rejection(report)
+
     source_accepts = ConstraintGroup(
         unactivated_output_matches_accumulator,
         weight_is_a_matrix,
         activation_matches_the_matrix,
         threshold_present_iff_activated,
         threshold_shape_supported,
+        source_integer_numerically_supported,
     )
 
     # -- the composition ------------------------------------------------------
@@ -448,6 +598,7 @@ class MvauDataflowOp(DataflowOp):
                 output_type=output_type,
                 narrow_weights=effective_narrow_weights,
                 computation_profile=profile,
+                numerical_support=numerical_support,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
@@ -464,6 +615,7 @@ class MvauDataflowOp(DataflowOp):
                 output_type=output_type,
                 narrow_weights=effective_narrow_weights,
                 computation_profile=profile,
+                numerical_support=numerical_support,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
             ),
@@ -496,6 +648,32 @@ class MvauDataflowOp(DataflowOp):
             if profile.activation.value == "none"
             else int(cast(int, self.source.attributes["activation_bias"]))
         )
+        support_fingerprint = None
+        integer_output_carrier = None
+        if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
+            if any(
+                not self.source.operand(name).datatype_annotated
+                for name in ("activation", "weight")
+            ):
+                raise DataflowOpError(
+                    "selected integer construction requires an explicit logical datatype "
+                    "for each source input"
+                )
+            answer = self.answer(type(self).numerical_support)
+            if not isinstance(answer, Decided) or not answer.value.supported:
+                findings = getattr(answer, "findings", ())
+                if isinstance(answer, Decided):
+                    detail = ", ".join(item.code for item in answer.value.findings)
+                    raise DataflowOpError(
+                        f"selected integer construction is numerically unsupported: {detail}"
+                    )
+                raise DataflowOpError(
+                    "selected integer construction has no numerical support witness",
+                    findings,
+                )
+            assert answer.value.support is not None
+            support_fingerprint = integer_graph_profile_fingerprint(answer.value.support)
+            integer_output_carrier = answer.value.support.output_carrier
         return encode_mvau_source_semantics(
             MvauSourceSemantics(
                 profile.accumulation,
@@ -503,6 +681,8 @@ class MvauDataflowOp(DataflowOp):
                 accumulator.name,
                 output.name,
                 bias,
+                support_fingerprint,
+                integer_output_carrier,
             )
         )
 
@@ -566,14 +746,50 @@ class MvauDataflowOp(DataflowOp):
         thresholds = (
             context[node.input[2]] if source.has("threshold") and len(node.input) > 2 else None
         )
-        result = execute_mvau(
-            activation=context[node.input[0]],
-            weight=context[node.input[1]],
-            thresholds=thresholds,
-            profile=mvau_profile(source),
-            output_type=cast(Any, source.attributes["output_type"]),
-            activation_bias=int(cast(int, source.attributes["activation_bias"])),
-        )
+        profile = mvau_profile(source)
+        if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
+            if self.is_bound:
+                answer = self.answer(type(self).numerical_support)
+                if not isinstance(answer, Decided):
+                    raise DataflowOpError(
+                        "integer MVAU execution is numerically unsupported",
+                        getattr(answer, "findings", ()),
+                    )
+                report = answer.value
+                writable = self.answer(type(self).runtime_writable_weights)
+                runtime = isinstance(writable, Decided) and bool(writable.value)
+            else:
+                scope = InvocationScope(
+                    self.recorded_scope_id() or f"source-node:{source.domain}:{source.node_name}"
+                )
+                report = check_mvau_integer_support(
+                    source,
+                    invocation_scope=scope,
+                    runtime_writable=False,
+                    runtime_promise=None,
+                    target=DspBlock.DSP58,
+                )
+                runtime = False
+            try:
+                result = execute_mvau_integer(
+                    activation=context[node.input[0]],
+                    weights=context[node.input[1]],
+                    support_report=report,
+                    fixed_initializer=(
+                        None if runtime else source.operand("weight").initializer_value
+                    ),
+                )
+            except ValueError as error:
+                raise DataflowOpError(str(error)) from error
+        else:
+            result = execute_mvau(
+                activation=context[node.input[0]],
+                weight=context[node.input[1]],
+                thresholds=thresholds,
+                profile=profile,
+                output_type=cast(Any, source.attributes["output_type"]),
+                activation_bias=int(cast(int, source.attributes["activation_bias"])),
+            )
         expected = self.expected_for(source)["output"][0]
         if expected is None:
             raise DataflowOpError(f"{node.name} cannot state the shape of its own output")

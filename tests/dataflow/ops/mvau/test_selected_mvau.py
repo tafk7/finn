@@ -121,10 +121,21 @@ def _facts(
         assert mode is AccumulationMode.INTEGER
         expected = activation @ weight
     frozen = FrozenInitializer.from_tensor_proto(numpy_helper.from_array(weight, name="weight"))
+    integer_evidence = (
+        ("test-premise", "INT32") if mode is AccumulationMode.INTEGER else (None, None)
+    )
+    semantics = MvauSourceSemantics(
+        mode,
+        ActivationMode.NONE,
+        "INT32",
+        "INT32",
+        None,
+        *integer_evidence,
+    )
     source = SourceProvenance.create(
         family="finn.dataflow.mvau",
         family_version="1",
-        schema_version=4,
+        schema_version=5,
         problem_fingerprint="problem",
         scope_id="scope",
         operands=(
@@ -150,9 +161,7 @@ def _facts(
                 None,
             ),
         ),
-        semantics=encode_mvau_source_semantics(
-            MvauSourceSemantics(mode, ActivationMode.NONE, "INT32", "INT32", None)
-        ),
+        semantics=encode_mvau_source_semantics(semantics),
     )
     compute = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
     choices = (
@@ -162,7 +171,6 @@ def _facts(
         RecordedChoice("design.dot_product.weight_supply", supply, supply.value),
         RecordedChoice("design.dot_product.compute.kernel", compute),
     )
-    semantics = MvauSourceSemantics(mode, ActivationMode.NONE, "INT32", "INT32", None)
     facts = derive_mvau_facts(
         ConstructionIdentity(
             MVAU_CONSTRUCTION_FAMILY,
@@ -317,7 +325,7 @@ def test_source_boundary_validation_rejects_a_missing_weight_transpose() -> None
         if item.node_id == "weight.to_region"
     )
     node = model.graph.node[node_index]
-    node.CopyFrom(helper.make_node("Identity", ["W_source"], ["W"], name=node.name))
+    node.CopyFrom(helper.make_node("Identity", ["W_integer"], ["W"], name=node.name))
     graph_nodes = tuple(
         GraphNodeBinding(item.node_id, item.index) if item.node_id == "weight.to_region" else item
         for item in snapshot.declaration.graph_nodes
@@ -442,6 +450,8 @@ def test_selected_integer_refuses_implicit_bipolar_popcount_operands() -> None:
         "INT32",
         "INT32",
         None,
+        "test-premise",
+        "INT32",
     )
     with pytest.raises(ValueError, match="require bipolar popcount"):
         derive_mvau_facts(
@@ -482,6 +492,28 @@ def test_integer_selected_mvau_handles_r_not_equal_to_f_and_odd_height() -> None
     )
     assert np.array_equal(actual_xr, np.repeat(activation, 5, axis=0))
     assert np.array_equal(actual, expected)
+
+
+def test_integer_selected_mvau_uses_int64_matmul_and_checked_int32_result() -> None:
+    activation = np.asarray([[4097]], dtype=np.float32)
+    weight = np.asarray([[4097]], dtype=np.float32)
+    facts, inputs, _activation, _weight, _expected = _facts(
+        AccumulationMode.INTEGER,
+        WeightSupply.EXTERNAL,
+        activation_override=activation,
+        weight_override=weight,
+        pe=1,
+        simd=1,
+    )
+    snapshot = construct_mvau_snapshot(facts, inputs)
+    model = snapshot.model_copy()
+    nodes = {node.name: node for node in model.graph.node}
+    assert nodes["source.activation.cast"].attribute[0].i == TensorProto.INT64
+    assert nodes["weight.to_integer"].attribute[0].i == TensorProto.INT64
+    assert nodes["compute.output.cast"].attribute[0].i == TensorProto.INT32
+    (actual,) = ReferenceEvaluator(model.model).run(["Y"], {"X": activation, "W_source": weight})
+    assert actual.dtype == np.int32
+    assert actual.item() == 16_785_409
 
 
 def test_selected_mvau_keeps_explicit_replay_at_one_fold() -> None:
@@ -550,7 +582,8 @@ def test_batch_interleaved_keeps_source_support_and_refuses_selected_constructio
 
 def test_step_4c_versions_change_only_the_migrated_semantics() -> None:
     assert MvauDataflowOp.family_version == "1"
-    assert MvauDataflowOp.schema_version == 4
+    assert MvauDataflowOp.schema_version == 5
+    assert MVAU_CONSTRUCTION_VERSION == "2"
     assert DotProductDesign.version == "3"
     assert ReplayBufferKernel.version == "2"
     assert ReplayBufferKernel.region.version == "2"
@@ -568,12 +601,18 @@ def test_large_external_mvau_construction_and_decode_remain_compact(
 ) -> None:
     height = 1_048_576
     semantics = MvauSourceSemantics(
-        AccumulationMode.INTEGER, ActivationMode.NONE, "INT32", "INT32", None
+        AccumulationMode.INTEGER,
+        ActivationMode.NONE,
+        "INT32",
+        "INT32",
+        None,
+        "large-premise",
+        "INT32",
     )
     source = SourceProvenance.create(
         family="finn.dataflow.mvau",
         family_version="1",
-        schema_version=4,
+        schema_version=5,
         problem_fingerprint="large-problem",
         scope_id="large-scope",
         operands=(

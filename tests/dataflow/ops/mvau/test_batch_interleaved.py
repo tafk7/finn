@@ -22,6 +22,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
+from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
@@ -88,6 +89,7 @@ class Problem_(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
     computation_profile = Problem(MvauComputationProfile)
+    numerical_support = Problem(IntegerSupportReport, required=False)
 
 
 class Placed(Problem_):
@@ -465,7 +467,7 @@ def test_an_old_schema_two_batch_record_is_refused_without_writes() -> None:
     )
     schema.i = 2
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 4"):
+    with pytest.raises(DataflowOpError, match="writes schema version 5"):
         _unbound(model).bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -724,6 +726,11 @@ class _AliasedOp(DataflowOp):
         del shape
         return MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.NONE)
 
+    @derived(IntegerSupportReport, shape=weight.shape)
+    def numerical_support(*, shape: tuple[int, ...]) -> object:
+        del shape
+        return IntegerSupportReport(None, ())
+
     design = Subspace(
         _AliasedDesign,
         name="aliased",
@@ -738,6 +745,7 @@ class _AliasedOp(DataflowOp):
         target_dsp=target_dsp,
         clock_period_ns=clock_period_ns,
         computation_profile=profile,
+        numerical_support=numerical_support,
     )
 
     def selected_dataflow(self) -> Any:

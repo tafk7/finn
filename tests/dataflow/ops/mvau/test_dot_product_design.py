@@ -18,6 +18,7 @@ from finn.dataflow._engine import (
     QualifiedPath,
     Unresolved,
 )
+from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.space.dataflow_value_semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -73,6 +74,7 @@ class Problem_(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
     computation_profile = Problem(MvauComputationProfile)
+    numerical_support = Problem(IntegerSupportReport, required=False)
     initializer_present = Problem(bool)
     weight_initializer = Problem(FrozenInitializer, required=False)
 
