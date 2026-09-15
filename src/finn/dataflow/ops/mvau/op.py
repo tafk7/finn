@@ -25,6 +25,7 @@ from finn.dataflow._engine import ABSENT, Decided
 from finn.dataflow.analysis.integer_dot import (
     IntegerSupportReport,
     InvocationScope,
+    NumericalFinding,
     RuntimeWeightPromise,
 )
 from finn.dataflow.model.datatypes import QONNXDataType
@@ -387,13 +388,19 @@ class MvauDataflowOp(DataflowOp):
         runtime_writable: object,
         runtime_promise: object,
     ) -> IntegerSupportReport:
-        if (
-            profile.accumulation is not AccumulationMode.INTEGER
-            or profile.fuses_activation
-            or not activation.datatype_annotated
-            or not weight.datatype_annotated
-        ):
+        if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
             return IntegerSupportReport(None, ())
+        if not activation.datatype_annotated or not weight.datatype_annotated:
+            return IntegerSupportReport(
+                None,
+                (
+                    NumericalFinding(
+                        "integer-logical-datatype-annotation",
+                        "plain-integer execution requires explicit logical datatypes "
+                        "on both inputs",
+                    ),
+                ),
+            )
         return check_mvau_integer_support_from_operands(
             activation,
             weight,

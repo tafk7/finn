@@ -469,10 +469,14 @@ def test_selected_mvau_refuses_missing_input_logical_annotations() -> None:
     ]
     del model.graph.quantization_annotation[:]
     model.graph.quantization_annotation.extend(output_annotations)
-    _model, operation = _configured_mvau(model, supply=WeightSupply.EXTERNAL)
-    answer = operation.selected_snapshot
-    assert isinstance(answer, Absent)
-    assert "explicit logical datatype" in answer.findings[0].message
+    operation = MvauDataflowOp(model.graph.node[0]).bind(model, Build())
+    assessment = operation.assess(MvauDataflowOp.source_accepts)
+    assert assessment.verdict is False
+    assert {
+        finding.code
+        for answer in assessment.answers.values()
+        for finding in getattr(answer, "findings", ())
+    } == {"integer-logical-datatype-annotation"}
 
 
 def test_integer_selected_mvau_handles_r_not_equal_to_f_and_odd_height() -> None:
