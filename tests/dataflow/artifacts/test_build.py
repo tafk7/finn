@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import finn.dataflow.artifacts.build as artifact_build
 from finn.dataflow.artifacts.abi import (
     Clock,
     ClockAlignment,
@@ -317,7 +318,9 @@ def test_unknown_renderer_and_unconsumed_render_input_refuse(tmp_path: Path) -> 
         replace(requirement, render_inputs=requirement.render_inputs + (("EXTRA", 1),))
 
 
-def test_render_and_materialize_read_only_prepared_blobs(tmp_path: Path) -> None:
+def test_render_and_materialize_read_only_prepared_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source_root = tmp_path / "sources"
     _write_generated(source_root)
     store = ArtifactStore(tmp_path / "store")
@@ -341,15 +344,70 @@ def test_render_and_materialize_read_only_prepared_blobs(tmp_path: Path) -> None
         "module-source", build_key(module_source_derivation(prepared))
     )
     assert stored.files == tuple(path for path, _ in stored.contents)
-    template = next(
-        source.template for source in prepared.sources if isinstance(source, PreparedRenderedSource)
+    monkeypatch.setattr(
+        artifact_build,
+        "render_template_bytes",
+        lambda *_args, **_kwargs: pytest.fail("a cache hit rendered HDL"),
     )
-    store.blob_path(template).unlink()
-    # A verified hit does not render again or read the now-absent raw template.
+    # A valid template remains eligible for reuse without rendering HDL again.
     assert materialize_module_sources(prepared, store) == stored
     component = portable_module_component(prepared, stored)
     assert component.files == stored.contents
     assert component.abi == prepared.abi
+
+    template = next(
+        source.template for source in prepared.sources if isinstance(source, PreparedRenderedSource)
+    )
+    store.blob_path(template).unlink()
+    # Cache and component acceptance both require the frozen template for the
+    # current renderer eligibility check, even though neither route renders it.
+    with pytest.raises(BuildError, match="unavailable"):
+        materialize_module_sources(prepared, store)
+    with pytest.raises(BuildError, match="unavailable"):
+        portable_module_component(prepared, stored)
+
+
+def test_legacy_cached_rejected_template_refuses_reuse_and_component(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "constant.j2"
+    template_path.write_text("module constant_top; localparam X = {{ TOKEN }}; endmodule\n")
+    requirements = ModuleBuildRequirements(
+        "constant-filter",
+        "1",
+        (),
+        ModuleABIRequirements(FixedModuleName("constant_top"), (), ()),
+        (
+            RenderedSourceRequirement(
+                "constant_top.sv",
+                "constant.j2",
+                ("TOKEN",),
+                SELF_CONTAINED_JINJA_RENDERER,
+                provides=("module:constant_top",),
+            ),
+        ),
+        (("TOKEN", "01"),),
+    )
+    store = ArtifactStore(tmp_path / "store")
+    prepared = prepare_module_build(requirements, roots={}, template_roots=(tmp_path,), blobs=store)
+    legacy_template = b"module constant_top; localparam X = {{ TOKEN|random }}; endmodule\n"
+    legacy_reference = store.put_blob(legacy_template)
+    prepared_source = prepared.sources[0]
+    assert isinstance(prepared_source, PreparedRenderedSource)
+    legacy_source = replace(prepared_source, template=legacy_reference)
+    legacy_prepared = replace(prepared, sources=(legacy_source,))
+    derivation = module_source_derivation(legacy_prepared)
+    workspace = store.workspace(derivation)
+    (workspace / "constant_top.sv").write_text("module constant_top; localparam X = 1; endmodule\n")
+    stored = store.publish(derivation, workspace, entry_points=("constant_top",))
+
+    template_path.write_bytes(legacy_template)
+    with pytest.raises(BuildError, match="unsupported filter or test"):
+        prepare_module_build(requirements, roots={}, template_roots=(tmp_path,), blobs=store)
+    with pytest.raises(BuildError, match="unsupported filter or test"):
+        materialize_module_sources(legacy_prepared, store)
+    with pytest.raises(BuildError, match="unsupported filter or test"):
+        portable_module_component(legacy_prepared, stored)
 
 
 def test_render_refuses_a_missing_or_wrong_blob(tmp_path: Path) -> None:

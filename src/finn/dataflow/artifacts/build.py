@@ -933,6 +933,41 @@ def _checked_blob(contents: ContentSource, reference: ContentRef, *, label: str)
     return data
 
 
+def _checked_render_template(source: PreparedRenderedSource, contents: ContentSource) -> bytes:
+    """Return one frozen template after applying the current renderer contract."""
+
+    _check_renderer(source.renderer)
+    template = _checked_blob(contents, source.template, label=source.output_path + " template")
+    variables = _template_variables(template, name=source.output_path)
+    argument_names = {name for name, _ in source.arguments}
+    if variables != argument_names:
+        raise BuildError(
+            f"prepared template for {source.output_path!r} reads {sorted(variables)!r}, "
+            f"but its frozen arguments are {sorted(argument_names)!r}"
+        )
+    return template
+
+
+def _check_prepared_templates(prepared: PreparedModuleBuild, contents: ContentSource) -> None:
+    for source in prepared.sources:
+        if isinstance(source, PreparedRenderedSource):
+            _checked_render_template(source, contents)
+
+
+def _stored_artifact_store(source: StoredArtifact) -> ArtifactStore:
+    """Recover the ArtifactStore that issued a verified stored-artifact path."""
+
+    directory = Path(source.directory)
+    try:
+        root = directory.parents[3]
+    except IndexError as error:
+        raise BuildError("stored source directory is not an ArtifactStore object path") from error
+    store = ArtifactStore(root)
+    if store.object_directory(source.artifact.kind, source.artifact.key) != directory:
+        raise BuildError("stored source directory is not an ArtifactStore object path")
+    return store
+
+
 def _prepared_definition(
     prepared: PreparedModuleBuild, *, recipe_references: bool
 ) -> SourceDefinition:
@@ -996,15 +1031,7 @@ def render_module_sources(
             files.append(source.source)
             emitted.append((source.source.path, data))
             continue
-        _check_renderer(source.renderer)
-        template = _checked_blob(contents, source.template, label=source.output_path + " template")
-        variables = _template_variables(template, name=source.output_path)
-        argument_names = {name for name, _ in source.arguments}
-        if variables != argument_names:
-            raise BuildError(
-                f"prepared template for {source.output_path!r} reads {sorted(variables)!r}, "
-                f"but its frozen arguments are {sorted(argument_names)!r}"
-            )
+        template = _checked_render_template(source, contents)
         try:
             data = render_template_bytes(
                 template, dict(source.arguments), name=source.output_path
@@ -1047,6 +1074,7 @@ def materialize_module_sources(
     derivation = module_source_derivation(prepared)
     found = store.lookup(derivation)
     if found is not None:
+        _check_prepared_templates(prepared, store)
         return found
     rendered = render_module_sources(prepared, store)
     workspace = store.workspace(derivation)
@@ -1092,6 +1120,8 @@ def portable_module_component(
         source = verify_stored_artifact(derivation, source)
     except StoreError as error:
         raise BuildError(f"stored source is not verified: {error}") from error
+    if any(isinstance(item, PreparedRenderedSource) for item in prepared.sources):
+        _check_prepared_templates(prepared, _stored_artifact_store(source))
     return PortableComponent(
         source.artifact,
         prepared.abi,
