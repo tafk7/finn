@@ -90,6 +90,12 @@ from finn.dataflow.model.network import (
     RegionEndpoint,
     SinkContract,
 )
+from finn.dataflow.model.composition import (
+    ImplementationPath,
+    NetworkResult,
+    QualifiedChildResult,
+    RegionResult,
+)
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.region import BeatSequence, DataflowRegion, Port
 
@@ -172,7 +178,11 @@ RESERVED_DESIGN_NAMES: frozenset[str] = frozenset(
         "dataflow_accepts",
         "dataflow_ready",
         "dataflow",
+        "logical_result",
+        "logical_ready",
+        "logical",
         "physical",
+        "physical_relation",
     }
 )
 
@@ -207,7 +217,7 @@ class DataflowDesign(Space):
     #: This is what lets an operation compose a Design exactly as a Design
     #: composes a Kernel.
     network = SelectedNetwork()
-    _implicit_exports = ("network",)
+    _implicit_exports = ("network", "logical_result")
 
     if TYPE_CHECKING:
         # Written onto every concrete subclass by ``__init_subclass__``, which a
@@ -220,6 +230,9 @@ class DataflowDesign(Space):
         segments_match_network: DeclaredConstraint
         dataflow_accepts: ConstraintGroup
         dataflow_ready: Readiness
+        logical_result: Derived[NetworkResult]
+        logical_ready: Readiness
+        logical: Projection[NetworkResult]
 
     @property
     def physical(self) -> ProjectionAssessment[DesignPhysicalFacts]:
@@ -228,6 +241,14 @@ class DataflowDesign(Space):
         from finn.dataflow.designs.physical import assess_design_physical  # noqa: PLC0415
 
         return assess_design_physical(self)
+
+    @property
+    def physical_relation(self) -> ProjectionAssessment[Any]:
+        """The separately requested logical/physical correspondence claim."""
+
+        from finn.dataflow.designs.physical import assess_design_relation  # noqa: PLC0415
+
+        return assess_design_relation(self)
 
     def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
         """Implement one selected physical profile in a concrete Design.
@@ -1230,10 +1251,50 @@ def _synthesize_design_projection(design_type: type[DataflowDesign]) -> None:
         constraints=dataflow_accepts,
     )
 
+    child_dependencies = tuple(
+        (f"child_{index}", allow_absent(_segment_region(declaration)))
+        for index, (_role, _node, declaration) in enumerate(segments)
+    )
+
+    def logical_result_evaluate(**values: object) -> NetworkResult:
+        selected_network = cast(DataflowNetwork, values["network"])
+        children = tuple(
+            QualifiedChildResult(
+                ImplementationPath((role,)),
+                RegionResult(cast(DataflowRegion, values[f"child_{index}"])),
+            )
+            for index, (role, _node, _declaration) in enumerate(segments)
+            if values[f"child_{index}"] is not ABSENT
+        )
+        return NetworkResult(selected_network, children)
+
+    logical_dependencies = (
+        ("network", network_source),
+        *child_dependencies,
+    )
+    logical_result_evaluate.__signature__ = Signature(  # type: ignore[attr-defined]
+        [
+            _SignatureParameter(name, _SignatureParameter.KEYWORD_ONLY)
+            for name, _source in logical_dependencies
+        ]
+    )
+    logical_result: Derived[NetworkResult] = Derived(
+        semantics_for(NetworkResult),
+        None,
+        logical_dependencies,
+        logical_result_evaluate,
+    )
+    logical_ready = Readiness(
+        properties=(cast("ValueSource[object]", logical_result),),
+        constraints=dataflow_accepts,
+    )
+
     setattr(design_type, "network_structurally_valid", network_valid)
     setattr(design_type, "segments_match_network", correspondence)
     setattr(design_type, "dataflow_accepts", dataflow_accepts)
     setattr(design_type, "dataflow_ready", dataflow_ready)
+    setattr(design_type, "logical_result", logical_result)
+    setattr(design_type, "logical_ready", logical_ready)
     setattr(
         design_type,
         "dataflow",
@@ -1242,6 +1303,16 @@ def _synthesize_design_projection(design_type: type[DataflowDesign]) -> None:
             readiness=dataflow_ready,
             constraints=(dataflow_accepts,),
             name="dataflow",
+        ),
+    )
+    setattr(
+        design_type,
+        "logical",
+        Projection(
+            logical_result,
+            readiness=logical_ready,
+            constraints=(dataflow_accepts,),
+            name="logical",
         ),
     )
 

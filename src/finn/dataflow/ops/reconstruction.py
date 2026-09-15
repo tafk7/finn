@@ -186,7 +186,7 @@ def rebind_selected_graph(
     decoded = decode_selected_graph(snapshot, constructions=registry)
     if not isinstance(operation.dataflow.accepted_answer, Decided):
         raise DataflowOpError("current source has no accepted dataflow projection")
-    selected_design = operation.selected_design()
+    selected_design = operation.selected_implementation()
     declaration = getattr(type(selected_design), "selected_graph", None)
     if not isinstance(declaration, SelectedGraph):
         raise DataflowOpError("current source Design has no selected construction")

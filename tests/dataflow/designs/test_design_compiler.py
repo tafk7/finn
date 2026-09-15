@@ -845,10 +845,10 @@ def test_the_network_resolves_before_any_candidate_is_physically_ready() -> None
     """U3's claim: a Region is not waiting on a parameter, an ABI or a target."""
 
     design = _occurrence(Selectable, select={"consume": "pipelined_consumer"})
-    # `stages` is the chosen candidate's own physical Decision and is uncommitted.
+    # `stages` is uncommitted but unused by this physical capability.
     consume = design.kernel("consume")
     assert isinstance(consume, Decided)
-    assert isinstance(consume.value.physical.accepted_answer, Unresolved)
+    assert isinstance(consume.value.physical.accepted_answer, Decided)
 
     assessment = design.dataflow
     assert assessment.readiness.ready is True

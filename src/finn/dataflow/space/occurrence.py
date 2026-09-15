@@ -37,11 +37,14 @@ from types import MappingProxyType
 from typing import Any, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
+    ABSENT,
+    AbsenceMode,
     Absent,
     Answer,
     ConstraintAssessment,
     Decided,
     DependencyKind,
+    DependencyView,
     DesignPoint,
     Engine,
     Finding,
@@ -906,6 +909,51 @@ def evaluate_projection(
     caller inside a lineage already holds it.
     """
 
+    if compiled.applicability is not None:
+        values: dict[str, object] = {}
+        blocked: Answer[object] | None = None
+        for dependency in compiled.applicability.dependencies:
+            answer = answer_for(
+                engine,
+                point,
+                _Ref(dependency.path, dependency.kind, dependency.value_semantics),
+            )
+            if isinstance(answer, Decided):
+                values[dependency.name] = answer.value
+            elif isinstance(answer, Absent) and dependency.absence is AbsenceMode.ALLOWS_ABSENT:
+                values[dependency.name] = ABSENT
+            else:
+                blocked = cast("Answer[object]", answer)
+                break
+        applicability = (
+            blocked
+            if blocked is not None
+            else cast(
+                "Answer[object]",
+                compiled.applicability.evaluator(DependencyView(values)),
+            )
+        )
+        if not isinstance(applicability, (Decided, Absent, Unresolved)):
+            raise AuthoringError("a Projection applicability evaluator returned no Answer")
+        if isinstance(applicability, Decided) and type(applicability.value) is not bool:
+            raise AuthoringError("a Projection applicability evaluator must decide bool")
+        if not isinstance(applicability, Decided):
+            readiness = ReadinessAssessment(
+                compiled.name,
+                MappingProxyType({QualifiedPath(compiled.name): applicability}),
+                None,
+            )
+            return ProjectionAssessment(
+                compiled.name,
+                readiness,
+                (),
+                cast("Answer[T]", applicability),
+                cast("Answer[T]", applicability),
+            )
+        if not applicability.value:
+            absent: Answer[T] = Absent()
+            readiness = ReadinessAssessment(compiled.name, MappingProxyType({}), True)
+            return ProjectionAssessment(compiled.name, readiness, (), absent, absent)
     readiness = engine.check_readiness(point, compiled.readiness_profile)
     output = answer_for(engine, point, compiled.output)
     constraints = tuple(
@@ -985,6 +1033,7 @@ def combine_assessments(
         _Ref(owner, DependencyKind.PROPERTY, as_object_semantics(_PASSTHROUGH)),
         name,
         (),
+        None,
     )
     accepted = _reduce_projection(compiled, readiness, constraints, output)
     return ProjectionAssessment(

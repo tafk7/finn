@@ -45,7 +45,6 @@ from finn.dataflow.designs.physical import (
     lower_module_structure,
     selected_kernel_realization,
     top_boundary_layout,
-    validate_design_physical_facts,
 )
 from finn.dataflow.designs.design import (
     EdgeSink,
@@ -317,11 +316,8 @@ class DotProductDesign(WeightedDotProductDesign):
                         ),
                     ),
                 ),
+                structure,
             )
-            network = self.dataflow.accepted_answer
-            if not isinstance(network, Decided):  # guarded by DataflowDesign.physical
-                return cast("Answer[DesignPhysicalFacts]", network)
-            validate_design_physical_facts(network.value, structure, facts)
         except (KeyError, StopIteration, ValueError) as error:
             return cast(
                 "Answer[DesignPhysicalFacts]",

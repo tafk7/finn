@@ -610,7 +610,7 @@ def test_kernel_region_is_implicitly_exported() -> None:
 
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
     assert compiled.child("nested").exported("region").kind is DependencyKind.PROPERTY
-    assert tuple(exported_members(ToyKernel)) == ("region",)
+    assert tuple(exported_members(ToyKernel)) == ("region", "logical_result")
 
 
 def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> None:
@@ -787,9 +787,9 @@ def test_the_two_projections_ask_two_different_questions() -> None:
     )
     point = engine.commit_assignments(point, {"test.lanes": 2}).point
 
-    # `pumped` is uncommitted, so there is no build unit yet ...
+    # `pumped` is uncommitted but the build unit does not consume it.
     physical = kernel_physical(engine, kernel, point)
-    assert isinstance(physical.accepted_answer, Unresolved)
+    assert isinstance(physical.accepted_answer, Decided)
 
     # ... and the Region is nevertheless entirely decided.
     dataflow = kernel_dataflow(engine, kernel, point)
@@ -846,7 +846,7 @@ def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
     assert occurrence.FLAG == 1
     assert occurrence.region == _region(8, 2)
     assert occurrence.dataflow.accepted_answer == Decided(_region(8, 2))
-    assert isinstance(occurrence.physical.accepted_answer, Unresolved)
+    assert isinstance(occurrence.physical.accepted_answer, Decided)
     built = occurrence.assign(ToyKernel.pumped, True).physical.accepted_answer
     assert isinstance(built, Decided)
     assert built.value.implementation_id == "toy"

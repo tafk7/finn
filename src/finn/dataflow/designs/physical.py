@@ -17,7 +17,7 @@ hidden in the lowerer.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
@@ -247,11 +247,24 @@ class DesignPhysicalFacts:
     port_bindings: tuple[SemanticPortBinding, ...]
     boundary_bindings: tuple[BoundaryBinding, ...]
     edge_bindings: tuple[EdgeBinding, ...]
+    structure: PhysicalStructure | None = dataclass_field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "port_bindings", tuple(self.port_bindings))
         object.__setattr__(self, "boundary_bindings", tuple(self.boundary_bindings))
         object.__setattr__(self, "edge_bindings", tuple(self.edge_bindings))
+
+
+@dataclass(frozen=True, slots=True)
+class DesignPhysicalRelation:
+    network: DataflowNetwork
+    physical: DesignPhysicalFacts
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.network, DataflowNetwork):
+            raise TypeError("a physical relation contains one DataflowNetwork")
+        if not isinstance(self.physical, DesignPhysicalFacts):
+            raise TypeError("a physical relation contains DesignPhysicalFacts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1600,25 +1613,52 @@ def design_physical_refusal(design: DataflowDesign, reason: str) -> Absent:
 
 
 def assess_design_physical(design: DataflowDesign) -> ProjectionAssessment[DesignPhysicalFacts]:
-    """Evaluate a Design's selected physical hook without touching alternatives."""
+    """Evaluate only the Design's local physical dependency closure."""
 
     name = f"{layer_runtime(design).compiled.namespace}.physical"
-    logical = design.dataflow
-    if not isinstance(logical.accepted_answer, Decided):
-        blocked = cast("Answer[DesignPhysicalFacts]", logical.accepted_answer)
-        return ProjectionAssessment(name, logical.readiness, logical.constraints, blocked, blocked)
     answer = design.physical_implementation()
     if not isinstance(answer, (Decided, Absent, Unresolved)):
         raise TypeError("DataflowDesign.physical_implementation must return an Answer")
     marker = QualifiedPath(name)
-    answers = dict(logical.readiness.answers)
-    answers[marker] = cast("Answer[object]", answer)
+    answers = {marker: cast("Answer[object]", answer)}
     readiness = ReadinessAssessment(
         name,
         MappingProxyType(dict(sorted(answers.items()))),
         None if isinstance(answer, Unresolved) else True,
     )
-    return ProjectionAssessment(name, readiness, logical.constraints, answer, answer)
+    return ProjectionAssessment(name, readiness, (), answer, answer)
+
+
+def assess_design_relation(design: DataflowDesign) -> ProjectionAssessment[DesignPhysicalRelation]:
+    """Check correspondence only when a consumer explicitly requests it."""
+
+    name = f"{layer_runtime(design).compiled.namespace}.physical_relation"
+    logical = design.dataflow
+    physical = design.physical
+    constraints = (*logical.constraints, *physical.constraints)
+    if not isinstance(logical.accepted_answer, Decided):
+        blocked = cast("Answer[DesignPhysicalRelation]", logical.accepted_answer)
+        return ProjectionAssessment(name, logical.readiness, constraints, blocked, blocked)
+    if not isinstance(physical.accepted_answer, Decided):
+        blocked = cast("Answer[DesignPhysicalRelation]", physical.accepted_answer)
+        return ProjectionAssessment(name, physical.readiness, constraints, blocked, blocked)
+    try:
+        facts = physical.accepted_answer.value
+        if facts.structure is None:
+            raise PhysicalCompositionError(
+                "the local physical result carries no relation-validation structure"
+            )
+        validate_design_physical_facts(
+            logical.accepted_answer.value,
+            facts.structure,
+            facts,
+        )
+        relation = DesignPhysicalRelation(logical.accepted_answer.value, facts)
+    except (TypeError, ValueError) as error:
+        refused: Answer[DesignPhysicalRelation] = design_physical_refusal(design, str(error))
+        return ProjectionAssessment(name, physical.readiness, constraints, refused, refused)
+    answer: Answer[DesignPhysicalRelation] = Decided(relation)
+    return ProjectionAssessment(name, physical.readiness, constraints, answer, answer)
 
 
 def selected_kernel_realization(
@@ -1651,6 +1691,7 @@ __all__ = [
     "DECOMPOSED_PRODUCER",
     "DECOMPOSED_WRAPPER_TEMPLATE",
     "DesignPhysicalFacts",
+    "DesignPhysicalRelation",
     "EdgeBinding",
     "ModuleInstance",
     "PhysicalCompositionError",
@@ -1661,6 +1702,7 @@ __all__ = [
     "SemanticPortBinding",
     "UnusedOutput",
     "assess_design_physical",
+    "assess_design_relation",
     "compose_decomposed",
     "design_physical_refusal",
     "lower_module_structure",

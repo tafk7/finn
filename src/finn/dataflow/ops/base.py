@@ -614,9 +614,17 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
 
     def selected_design(self) -> object:
-        """The concrete Design occurrence that owns selected construction."""
+        """Compatibility delegate for the selected implementation occurrence."""
 
-        raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
+        return self.selected_implementation()
+
+    def selected_implementation(self) -> object:
+        """The selected implementation Space for compiler-owned use."""
+
+        legacy = type(self).selected_design
+        if legacy is not DataflowOp.selected_design:
+            return legacy(self)
+        raise NotImplementedError(f"{type(self).__name__} does not route to an implementation")
 
     def selected_source_semantics(self) -> object:
         """Encode the operation's normalized source meaning for reconstruction."""

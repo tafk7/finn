@@ -94,6 +94,8 @@ RESERVED_LIFECYCLE_NAMES: frozenset[str] = frozenset(
         "answer",
         "assess",
         "project",
+        "assess_view",
+        "capability_names",
         "diagnostics",
         "root",
         "problem_snapshot",
@@ -581,6 +583,28 @@ class Space:
         api = _occurrence_api()
         return cast("ProjectionAssessment[T]", api.occurrence_project(self, declaration))
 
+    def assess_view(self, capability: Projection[T] | str) -> ProjectionAssessment[T]:
+        """Evaluate one typed capability by declaration or stable member name."""
+
+        declaration: object = (
+            getattr(type(self), capability, None) if isinstance(capability, str) else capability
+        )
+        if not isinstance(declaration, Projection):
+            raise AuthoringError(
+                f"{type(self).__name__} has no Projection capability {capability!r}"
+            )
+        return self.project(cast("Projection[T]", declaration))
+
+    @classmethod
+    def capability_names(cls) -> tuple[str, ...]:
+        """The explicitly declared typed Projection capabilities on this Space."""
+
+        return tuple(
+            name
+            for name, declaration in declared_members(cls)
+            if isinstance(declaration, Projection)
+        )
+
     def diagnostics(
         self,
         subject: object,
@@ -994,6 +1018,7 @@ class Projection(Generic[T_co]):
     """
 
     output: ValueSource[T_co]
+    applicable_if: ValueSource[bool] | None
     readiness: Readiness
     constraints: tuple[ConstraintGroup, ...]
     stable_name: str | None
@@ -1002,6 +1027,7 @@ class Projection(Generic[T_co]):
         self,
         output: ValueSource[T_co],
         *,
+        applicable_if: ValueSource[bool] | None = None,
         readiness: Readiness,
         constraints: ConstraintGroup | Sequence[ConstraintGroup] = (),
         name: str | None = None,
@@ -1020,6 +1046,9 @@ class Projection(Generic[T_co]):
                 "Constraint belongs to a group, so that the group can be named and shared"
             )
         object.__setattr__(self, "output", output)
+        if applicable_if is not None and not isinstance(applicable_if, ValueSource):
+            raise AuthoringError("a Projection applicable_if= is a Boolean value declaration")
+        object.__setattr__(self, "applicable_if", applicable_if)
         object.__setattr__(self, "readiness", readiness)
         object.__setattr__(self, "constraints", groups)
         object.__setattr__(self, "stable_name", _declaration_name(name, "a Projection"))

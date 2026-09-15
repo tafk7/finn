@@ -150,7 +150,7 @@ def test_initial_bind_refuses_overrideable_initializer_without_writing() -> None
 def test_local_problem_fingerprint_keeps_exact_replay_and_mvau_vectors() -> None:
     expected = {
         "ActivationReplayOp": "97bd329c6cc31bd10a7e2616962d136ec9628809ac1d2d4b044a0ab4e513f11e",
-        "MvauDataflowOp": "aaa3b8846a09383cb254cbcf84ea4c0ce8b599079688f8868bb9ab45d610974a",
+        "MvauDataflowOp": "f290cf9b0fdb3ab3cf6a13c9e3f5921d44160b84ea7133a7d5118abab52f9dde",
     }
     build = Build()
     for make_model in (_replay_model, _mvau_model):

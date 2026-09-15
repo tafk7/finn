@@ -529,6 +529,7 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
         "target_dsp",
         "runtime_writable_weights",
         "runtime_weight_range_contract",
+        "runtime_weight_promise",
         "clock_period_ns",
     ]
     assert [name for name, _ in source_declarations(type(replay))] == [
@@ -863,7 +864,7 @@ def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
     attrs = read_attributes(model.graph.node[0])
     assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.local_problem_fingerprint
-    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 4)
+    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 5)
     assert attrs["design__case"] == NativeAttribute("s", "dot_product")
     assert attrs["design__dot_product__pe"] == NativeAttribute("i", 2)
     assert attrs["design__dot_product__simd"] == NativeAttribute("i", 4)
@@ -891,7 +892,7 @@ def test_old_mvau_schema_two_is_refused_without_writes() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 2)
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 4"):
+    with pytest.raises(DataflowOpError, match="writes schema version 5"):
         _unbound(model, "mvau0").bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 

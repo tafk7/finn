@@ -67,6 +67,11 @@ from finn.dataflow.space.branching import (
     CaseInfo,
 )
 from finn.dataflow.space.compiler import SpaceModel, compile_space, compile_space_model
+from finn.dataflow.space.capabilities import (
+    ImplementationIdentity,
+    View,
+    implementation_identity,
+)
 from finn.dataflow.space.declarations import (
     RESERVED_LIFECYCLE_NAMES,
     RESERVED_PROTOCOL_NAMES,
@@ -107,6 +112,7 @@ __all__ = [
     "ConstraintGroup",
     "Decision",
     "Input",
+    "ImplementationIdentity",
     "CanonicalValueCodec",
     "OccurrenceContext",
     "OccurrenceDiagnostic",
@@ -120,6 +126,7 @@ __all__ = [
     "Subspace",
     "RootFactory",
     "SubspaceChoice",
+    "View",
     "ChoiceView",
     "allow_absent",
     "constraint",
@@ -127,6 +134,7 @@ __all__ = [
     "divisors_of",
     "domain",
     "finite",
+    "implementation_identity",
     "reject",
     "unresolved",
     # lowering, and the policy-neutral seam specialization code reads

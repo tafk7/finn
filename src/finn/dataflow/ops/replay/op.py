@@ -122,8 +122,11 @@ class ActivationReplayOp(DataflowOp):
 
         return _design(self).dataflow
 
-    def selected_design(self) -> object:
+    def selected_implementation(self) -> object:
         return _design(self)
+
+    def selected_design(self) -> object:
+        return self.selected_implementation()
 
     def selected_source_semantics(self) -> object:
         from finn.dataflow.ops.replay.selected import (  # noqa: PLC0415

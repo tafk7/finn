@@ -182,6 +182,7 @@ class _CompiledProjection(Generic[T_co]):
     output: _Ref[T_co]
     readiness_profile: str
     constraint_sets: tuple[str, ...]
+    applicability: EvaluatorSpec[Answer[bool]] | None = None
     #: Final inapplicability of the output propagates as the output's own Absent.
     absence_policy: str = "propagate"
     #: The snapshot is the output declaration's own ``ValueSemantics``.
@@ -754,12 +755,25 @@ class _Compilation:
                 f"{self.space_type.__name__} {what} names an output that "
                 f"{self.space_type.__name__} cannot resolve"
             ) from None
+        local_gate = self._when_gate(
+            member_name,
+            declaration.applicable_if,
+            self._group_name(member_name, declaration),
+        )
+        applicability = (
+            self.applies_if
+            if local_gate is None
+            else local_gate
+            if self.applies_if is None
+            else combine_applicability(self.applies_if, local_gate)
+        )
         return _CompiledProjection(
             member_name,
             self._group_name(member_name, declaration),
             output,
             self._group_name(readiness_name, readiness),
             tuple(groups),
+            applicability,
         )
 
     def _when_gate(

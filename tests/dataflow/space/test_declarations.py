@@ -212,6 +212,7 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         "ConstraintGroup",
         "Decision",
         "Input",
+        "ImplementationIdentity",
         "OccurrenceContext",
         "OccurrenceDiagnostic",
         "PersistentCodec",
@@ -224,6 +225,7 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         "SpaceModel",
         "Subspace",
         "SubspaceChoice",
+        "View",
         "ChoiceView",
         "allow_absent",
         "compile_space",
@@ -233,6 +235,7 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         "divisors_of",
         "domain",
         "finite",
+        "implementation_identity",
         "reject",
         "unresolved",
     }

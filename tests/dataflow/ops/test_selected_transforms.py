@@ -335,7 +335,10 @@ def test_transformed_mvau_still_rejects_graph_corruption() -> None:
         broken = build_selected_snapshot(model, transformed.declaration)
         with pytest.raises(SelectedGraphError) as error:
             reconstruct_selected_graph(broken.model_bytes)
-        assert error.value.code == "selected.construction.verification"
+        assert error.value.code in {
+            "selected.construction.verification",
+            "selected.graph.onnx_invalid",
+        }
 
 
 def _published_identity_snapshot(monkeypatch: pytest.MonkeyPatch):

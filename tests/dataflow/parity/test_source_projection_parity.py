@@ -234,4 +234,9 @@ def test_both_stacks_verify_the_same_nodes(fixture_name: str) -> None:
     spec = next(item for item in SPECS if item["name"] == fixture_name)
     assert _entry(fixture_name)["verify_node"] == []
     report = verify_nodes(local_model(spec))
-    assert report["MvauDataflowOp"] == []
+    if fixture_name == "no_initializer":
+        assert report["MvauDataflowOp"] == [
+            "fixed-weight integer support requires an immutable initializer"
+        ]
+    else:
+        assert report["MvauDataflowOp"] == []

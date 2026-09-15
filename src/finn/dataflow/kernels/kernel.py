@@ -59,7 +59,6 @@ from finn.dataflow.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,
-    Decision,
     Derived,
     Problem,
     Projection,
@@ -75,6 +74,7 @@ from finn.dataflow.space.declarations import (
 from finn.dataflow.space.occurrence import ProjectionAssessment, evaluate_projection
 from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.model.region import DataflowRegion, RegionRefused
+from finn.dataflow.model.composition import RegionResult
 from finn.dataflow.model.region_validation import validate_region
 
 T = TypeVar("T")
@@ -95,6 +95,9 @@ RESERVED_KERNEL_NAMES: frozenset[str] = frozenset(
         "dataflow_accepts",
         "dataflow_ready",
         "dataflow",
+        "logical_result",
+        "logical_ready",
+        "logical",
         "physical_result",
         "physical_streams",
         "physical_ready",
@@ -313,7 +316,7 @@ class Kernel(Space):
     physical_unavailable: ClassVar[PhysicallyUnsupported | None] = None
 
     #: The Region is the one automatic Kernel output to a containing Design.
-    _implicit_exports = ("region",)
+    _implicit_exports = ("region", "logical_result")
 
     if TYPE_CHECKING:
         dataflow: Projection[DataflowRegion]
@@ -324,6 +327,9 @@ class Kernel(Space):
         dataflow_accepts: ConstraintGroup
         dataflow_ready: Readiness
         physical_ready: Readiness
+        logical_result: Derived[RegionResult]
+        logical_ready: Readiness
+        logical: Projection[RegionResult]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -526,6 +532,18 @@ def _physical_result_property(
     )
 
 
+def _logical_result_property(region: RegionDeclaration) -> Derived[RegionResult]:
+    def evaluate(*, region: DataflowRegion) -> RegionResult:
+        return RegionResult(region)
+
+    return Derived(
+        semantics_for(RegionResult),
+        None,
+        (("region", cast("ValueSource[object]", region)),),
+        evaluate,
+    )
+
+
 def _physical_streams_property(
     kernel_type: type[Kernel],
     region: RegionDeclaration,
@@ -599,12 +617,6 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         return
 
     parameters = _physical_names(kernel_type)
-    decisions = tuple(
-        (name, declaration)
-        for name, declaration in declarations.items()
-        if isinstance(declaration, Decision)
-    )
-
     dataflow_support = declarations.get("dataflow_support")
     physical_support = declarations.get("physical_support")
     for label, group in (
@@ -627,6 +639,11 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         constraints=dataflow_accepts,
     )
     physical_result = _physical_result_property(kernel_type, region, parameters)
+    logical_result = _logical_result_property(region)
+    logical_ready = Readiness(
+        properties=(cast("ValueSource[object]", logical_result),),
+        constraints=dataflow_accepts,
+    )
     physical_constraints = (
         ()
         if unavailable is not None
@@ -640,11 +657,6 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         )
     )
     physical_ready = Readiness(
-        decisions=(
-            ()
-            if unavailable is not None
-            else tuple(declaration for _name, declaration in decisions)
-        ),
         properties=(cast("ValueSource[object]", physical_result),),
         constraints=physical_constraints,
     )
@@ -668,6 +680,18 @@ def _synthesize_projections(kernel_type: type[Kernel]) -> None:
         ),
     )
     setattr(kernel_type, "physical_result", physical_result)
+    setattr(kernel_type, "logical_result", logical_result)
+    setattr(kernel_type, "logical_ready", logical_ready)
+    setattr(
+        kernel_type,
+        "logical",
+        Projection(
+            logical_result,
+            readiness=logical_ready,
+            constraints=(dataflow_accepts,),
+            name="logical",
+        ),
+    )
     setattr(
         kernel_type,
         "physical_streams",

@@ -12,11 +12,21 @@ import pytest
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
+from dataflow.ops.test_dataflow_op import _configure_mvau_point, _mvau_model, _unbound
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.ops import selected
 from finn.dataflow.ops.base import DataflowOpError
-from finn.dataflow.ops.legacy import inspect_legacy_selection
-from finn.dataflow.ops.native import NativeAttribute, SCHEMA_VERSION_ATTRIBUTE, read_attributes
+from finn.dataflow.ops.legacy import (
+    _MVAU_V4,
+    _historical_problem_fingerprint,
+    inspect_legacy_selection,
+)
+from finn.dataflow.ops.native import (
+    FINGERPRINT_ATTRIBUTE,
+    NativeAttribute,
+    SCHEMA_VERSION_ATTRIBUTE,
+    read_attributes,
+)
 from finn.dataflow.ops.persistence import (
     PublishedSelection,
     apply_selection_migration,
@@ -84,6 +94,37 @@ def test_legacy_migration_and_selected_publication_share_one_transaction() -> No
     assert isinstance(published, PublishedSelection)
     assert published.selected.declaration.version == 2
     assert dict(published.operation.recorded()) == assignments
+
+
+def test_native_schema_four_migrates_to_five_without_changing_choice_paths() -> None:
+    model = _mvau_model()
+    bound = _unbound(model, "mvau0").bind(model, LegacyBuild())
+    current = _configure_mvau_point(bound).commit(model, LegacyBuild())
+    assignments = dict(current.recorded())
+    node = model.graph.node[0]
+
+    def replace_attribute(name: str, value: object) -> None:
+        kept = [item for item in node.attribute if item.name != name]
+        del node.attribute[:]
+        node.attribute.extend((*kept, helper.make_attribute(name, value)))
+
+    replace_attribute(SCHEMA_VERSION_ATTRIBUTE, 4)
+    source_only = bind_sources_only(model, LegacyBuild())[0]
+    replace_attribute(
+        FINGERPRINT_ATTRIBUTE,
+        _historical_problem_fingerprint(source_only, _MVAU_V4),
+    )
+    source_only = bind_sources_only(model, LegacyBuild())[0]
+    legacy = inspect_legacy_selection(source_only)
+    assert (legacy.from_schema_version, legacy.to_schema_version) == (4, 5)
+    assert {item.path: item.value for item in legacy.choices} == assignments
+
+    migrated = apply_selection_migration(
+        model,
+        plan_selection_migration(source_only, legacy, assignments),
+    )
+    assert read_attributes(model.graph.node[0])[SCHEMA_VERSION_ATTRIBUTE].value == 5
+    assert dict(migrated.recorded()) == assignments
 
 
 def test_partial_legacy_selection_requires_explicit_missing_choices_for_publication() -> None:
